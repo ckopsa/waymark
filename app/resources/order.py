@@ -26,7 +26,7 @@ class OrderState(StrEnum):
 
 
 class LineItem(BaseModel):
-    sku: str
+    sku: str = Field(max_length=64)
     qty: int = Field(ge=1)
     price: float = Field(ge=0)
 
@@ -34,7 +34,7 @@ class LineItem(BaseModel):
 class OrderData(BaseModel):
     items: list[LineItem]
     total: float
-    currency: str = Field(pattern="^[A-Z]{3}$")
+    currency: str = Field(max_length=3, pattern="^[A-Z]{3}$")
     placed_at: AwareDatetime | None = None
     paid_at: AwareDatetime | None = None
 
@@ -45,12 +45,16 @@ class SubmitPayment(BaseModel):
 
 
 class CancelInput(BaseModel):
-    reason: str | None = Field(default=None, max_length=500)
+    reason: str | None = Field(default=None, max_length=500,
+                               json_schema_extra={"x-display": {
+                                   "widget": "prose"}})
 
 
 class RefundInput(BaseModel):
     amount: float | None = Field(default=None, ge=0)
-    reason: str | None = Field(default=None, max_length=500)
+    reason: str | None = Field(default=None, max_length=500,
+                               json_schema_extra={"x-display": {
+                                   "widget": "prose"}})
 
 
 # ── Guards ──────────────────────────────────────────────────────────────
@@ -112,6 +116,9 @@ class Order(Resource):
             input=SubmitPayment, guards=[payment_method_valid],
             idempotent=True, reversible=False, confirm=False,
             requires_if_match=True,
+            # payment methods live in an external vault: no enumerable set to
+            # advertise, the client brings the token id
+            waives=("open_input",),
             side_effects=emits("email:receipt", "webhook:order.paid"),
             display=dict(label="Pay now", style="primary", order=1))
     async def submit_payment(self, inp: SubmitPayment, ctx: Ctx) -> None:

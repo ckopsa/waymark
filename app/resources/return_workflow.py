@@ -22,14 +22,21 @@ class ReturnState(StrEnum):
 
 
 class ReturnData(BaseModel):
-    order_id: str
-    reason: str | None = Field(default=None, max_length=500)
-    condition_notes: str | None = None
+    order_id: str = Field(json_schema_extra={"x-display": {
+        "label": "Order", "widget": "resource", "kind": "order"}})
+    reason: str | None = Field(default=None, max_length=500,
+                               json_schema_extra={"x-display": {
+                                   "widget": "prose"}})
+    condition_notes: str | None = Field(
+        default=None, max_length=500,
+        json_schema_extra={"x-display": {"widget": "prose"}})
 
 
 class InspectionInput(BaseModel):
     condition_ok: bool
-    notes: str | None = Field(default=None, max_length=500)
+    notes: str | None = Field(default=None, max_length=500,
+                              json_schema_extra={"x-display": {
+                                  "widget": "prose"}})
 
 
 def order_is(state: OrderState) -> Guard:

@@ -2,7 +2,7 @@
 from enum import StrEnum
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from waymark import DefinitionError, Resource, action, guard, Allow, Deny
 
@@ -16,7 +16,7 @@ class S(StrEnum):
 
 
 class D(BaseModel):
-    name: str = "x"
+    name: str = Field(default="x", max_length=64)
 
 
 def define(**overrides):

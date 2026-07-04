@@ -109,6 +109,18 @@ class PostgresStorage:
             Column("media_type", String(128), nullable=False),
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
+        # per-principal partial input for draft=True actions: declared effort
+        # must not be losable — on any device, by any client
+        self.drafts = Table(
+            "waymark_drafts", self.metadata,
+            Column("kind", String(64), primary_key=True),
+            Column("resource_id", String(64), primary_key=True),
+            Column("action", String(128), primary_key=True),
+            Column("principal_id", String(128), primary_key=True),
+            Column("values", JSONB, nullable=False),
+            Column("base_version", Integer, nullable=False),
+            Column("saved_at", DateTime(timezone=True), nullable=False),
+        )
 
     def _build_table(self, rdef: ResourceDef) -> None:
         promoted = _promoted_fields(rdef)
@@ -308,6 +320,40 @@ class PostgresStorage:
             stmt = stmt.where(self.transitions.c.kind.in_(kinds))
         rows = (await s.execute(stmt)).mappings().all()
         return [TransitionRecord(**dict(r)) for r in rows]
+
+    # ── drafts (per-principal partial input for draft=True actions) ─────
+    async def save_draft(self, s: AsyncConnection, *, kind: str,
+                         resource_id: str, action: str, principal_id: str,
+                         values: dict, base_version: int, at: Any) -> None:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(self.drafts).values(
+            kind=kind, resource_id=resource_id, action=action,
+            principal_id=principal_id, values=values,
+            base_version=base_version, saved_at=at)
+        await s.execute(stmt.on_conflict_do_update(
+            index_elements=["kind", "resource_id", "action", "principal_id"],
+            set_={"values": values, "base_version": base_version,
+                  "saved_at": at}))
+
+    async def load_drafts(self, s: AsyncConnection, kind: str,
+                          resource_id: str,
+                          principal_id: str) -> dict[str, dict]:
+        stmt = select(self.drafts).where(and_(
+            self.drafts.c.kind == kind,
+            self.drafts.c.resource_id == resource_id,
+            self.drafts.c.principal_id == principal_id))
+        rows = (await s.execute(stmt)).mappings().all()
+        return {r["action"]: dict(r) for r in rows}
+
+    async def delete_draft(self, s: AsyncConnection, kind: str,
+                           resource_id: str, action: str,
+                           principal_id: str) -> None:
+        await s.execute(self.drafts.delete().where(and_(
+            self.drafts.c.kind == kind,
+            self.drafts.c.resource_id == resource_id,
+            self.drafts.c.action == action,
+            self.drafts.c.principal_id == principal_id)))
 
     # ── lifecycle ───────────────────────────────────────────────────────
     async def create_all(self) -> None:

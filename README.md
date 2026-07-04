@@ -170,6 +170,25 @@ hard stop, auto-manages `Idempotency-Key`s and `If-Match`, pre-validates via
 `?dry_run=1`, plans over learned `effect.to` graphs, and surfaces divergence
 instead of improvising.
 
+The same client is a CLI — one shell call per affordance, for humans and
+shell-driven agent harnesses alike:
+
+```bash
+export WAYMARK_AS=claude::Claude          # dev principal (id[:type[:Display]])
+waymark client index
+waymark client get /api/orders/8812
+waymark client act /api/orders/8812 submit_payment --json '{"payment_method_id":"…"}'
+waymark client act /api/orders/8812 cancel        # confirm-gated → exit 3, no-op
+waymark client act /api/orders/8812 cancel --confirmed   # the human said yes
+```
+
+Exit codes make the Part IV rules scriptable: `2` not afforded (with the
+server's reason), `3` confirmation required, `4` declared-effect divergence.
+A per-server session file (`~/.waymark/cli/`) persists idempotency keys and
+the learned state graph across invocations, so retries replay instead of
+duplicating and `waymark client plan <href> <goal-state>` can route over
+previously seen states.
+
 ## Layout
 
 ```

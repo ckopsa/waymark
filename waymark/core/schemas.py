@@ -78,6 +78,8 @@ def _ensure_field_labels(schema: dict[str, Any],
             continue
         merged = {**prop.get("x-display", {}), **field_display.get(name, {})}
         merged.setdefault("label", prop.get("title") or _humanize(name))
+        if prop.get("description"):
+            merged.setdefault("help", prop["description"])
         prop["x-display"] = merged
     return schema
 

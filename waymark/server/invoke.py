@@ -90,7 +90,8 @@ class Invoker:
         return Ctx(principal=principal, now=self.clock(), services=self.services,
                    session=session, locale=locale,
                    correlation_id=correlation_id, mode=mode,  # type: ignore[arg-type]
-                   _invoker=self._child_invoke, _reader=self._child_read)
+                   _invoker=self._child_invoke, _reader=self._child_read,
+                   _finder=self._child_find)
 
     # ── public entry points ─────────────────────────────────────────────
     async def invoke(self, kind: str, id: str, action_name: str,
@@ -108,9 +109,17 @@ class Invoker:
 
     async def create(self, kind: str, body: dict[str, Any] | None, *,
                      principal: Principal, idempotency_key: str | None = None,
-                     locale: str = "en") -> InvokeResult:
+                     dry_run: bool = False, locale: str = "en") -> InvokeResult:
         rdef = self._rdef(kind)
         digest = body_digest(body)
+        if dry_run:
+            # schema validation only: no insert, no on_create (its ctx.invoke
+            # side effects must not fire), no idempotency key demanded
+            self._validate(rdef.extra.get("create_model") or rdef.cls.Data,
+                           body, rdef)
+            return InvokeResult(status=200, body=_to_bytes({"valid": True}),
+                                media_type="application/json",
+                                doc={"valid": True})
         async with self.storage.session() as s:
             if idempotency_key is None:
                 raise IdempotencyKeyRequired(
@@ -129,6 +138,9 @@ class Invoker:
                 id=uuid.uuid4().hex, state=rdef.machine.initial, data=data,
                 version=1, created_at=ctx.now, updated_at=ctx.now,
             )
+            # on_create (§14): initial data that depends on other resources —
+            # runs with full ctx (read/find/invoke) before the first insert
+            await instance.on_create(ctx)
             await self.storage.insert(s, kind, instance)
             summary = render_summary(rdef.summary_template, instance)
             await self.storage.append_transition(
@@ -238,6 +250,10 @@ class Invoker:
         )
         await self.storage.save(s, kind, instance,
                                 expected_version=instance.version - 1)
+        if defn.draft:
+            # the effort landed; the draft has served its purpose
+            await self.storage.delete_draft(s, kind, id, action_name,
+                                            principal.id)
 
         doc = await render(instance, rdef, ctx=ctx, base=self.base)
         result = _result(doc)
@@ -509,6 +525,16 @@ class Invoker:
     async def _child_read(self, resource: Any, id: str, *, ctx: Ctx) -> Resource | None:
         kind = resource if isinstance(resource, str) else resource.kind
         return await self.storage.load(ctx.session, kind, id)
+
+    async def _child_find(self, resource: Any, filters: dict[str, Any], *,
+                          sort: str | None, limit: int,
+                          ctx: Ctx) -> list[Resource]:
+        """ctx.find (§14): the list half of cross-resource reads."""
+        kind = resource if isinstance(resource, str) else resource.kind
+        items, _total = await self.storage.query(
+            ctx.session, kind, filters=filters, sort=sort,
+            page_size=limit, page_number=1)
+        return items
 
     async def _child_invoke(self, resource: Any, id: str, action: str,
                             body: dict[str, Any] | None, *, ctx: Ctx) -> dict[str, Any]:

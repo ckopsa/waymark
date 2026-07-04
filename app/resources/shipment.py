@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import AwareDatetime, BaseModel
+from pydantic import AwareDatetime, BaseModel, Field
 
 from waymark import Ctx, Resource, action, filterable, link, profile, sortable
 
@@ -15,8 +15,9 @@ class ShipmentState(StrEnum):
 
 
 class ShipmentData(BaseModel):
-    order_id: str
-    carrier: str = "UPS"
+    order_id: str = Field(json_schema_extra={"x-display": {
+        "label": "Order", "widget": "resource", "kind": "order"}})
+    carrier: str = Field(default="UPS", max_length=100)
     shipped_at: AwareDatetime | None = None
 
 

@@ -186,3 +186,94 @@ async def test_collection_facets_merged_into_query_schema():
         {"open": 3, "closed": 9}
     # the cached registry schema must not be mutated
     assert "x-facets" not in RDEF.query_schema["properties"]["state"]
+
+
+async def test_admits_tightens_the_rendered_schema():
+    """A guard's admits declaration renders as an enum on the advertised
+    input schema (usability §10.2): the form never offers a value the
+    document-derivable guard would refuse."""
+    doc = await doc_for("open")
+    prop = doc["actions"]["assign"]["input"]["properties"]["assignee"]
+    assert prop["enum"] == ["alice", "bob"]
+    # injection is per-render; the registry's cached schema stays untouched
+    cached = RDEF.action_schemas["assign"][0]
+    assert "enum" not in cached["properties"]["assignee"]
+
+
+async def test_scoped_actions_render_as_parts():
+    """scope=(array, key) renders the action once per data item under
+    `parts`: key const-bound, {item.*} picker params resolved, per-item
+    availability driven by the admits intersection; the top-level entry
+    stays complete with templates stripped."""
+    from enum import StrEnum
+
+    from pydantic import BaseModel, Field
+
+    from waymark import Allow, Deny, Resource, action, guard
+
+    class S(StrEnum):
+        OPEN = "open"
+        DONE = "done"
+
+    class Row(BaseModel):
+        key: str
+        theme: str
+
+    class D(BaseModel):
+        rows: list[Row] = Field(default_factory=list)
+
+    class RowInput(BaseModel):
+        key: str
+        pick: str = Field(json_schema_extra={"x-display": {
+            "widget": "resource", "kind": "meal",
+            "params": {"state": "on_list", "theme": "{item.theme}"}}})
+
+    @guard(else_="{key} is not fillable.", vars=["key"],
+           admits=("key", lambda r: [row.key for row in r.data.rows
+                                     if row.theme != "skip"]))
+    async def row_ok(r, inp: RowInput, ctx):
+        if any(row.key == inp.key for row in r.data.rows):
+            return Allow()
+        return Deny(vars={"key": inp.key})
+
+    @action(from_=S.OPEN, to=S.OPEN, input=RowInput, scope=("rows", "key"),
+            guards=[row_ok], idempotent=True, reversible=False, confirm=False)
+    async def fill(self, inp: RowInput, ctx) -> None: ...
+
+    @action(from_=S.OPEN, to=S.DONE,
+            idempotent=True, reversible=False, confirm=False)
+    async def finish(self, inp: None, ctx) -> None: ...
+
+    Board = type("Board", (Resource,), dict(
+        kind="board", State=S, Data=D, initial=S.OPEN, terminal={S.DONE},
+        summary="Board {id}", fill=fill, finish=finish))
+    rdef = Registry().register(Board)
+    inst = Board(id="b-1", state="open",
+                 data=D(rows=[Row(key="a", theme="x"),
+                              Row(key="b", theme="skip")]))
+
+    doc = await render(inst, rdef, ctx=ctx())
+    group = doc["parts"]["rows"]
+    assert group["key"] == "key"
+    assert [e["key"] for e in group["items"]] == ["a"]  # b outside admits
+    props = group["items"][0]["actions"]["fill"]["input"]["properties"]
+    assert props["key"]["const"] == "a" and "enum" not in props["key"]
+    assert props["pick"]["x-display"]["params"] == {"state": "on_list",
+                                                    "theme": "x"}
+    top = doc["actions"]["fill"]["input"]["properties"]
+    assert top["key"]["enum"] == ["a"]  # complete truth, admits-tightened
+    assert top["pick"]["x-display"]["params"] == {"state": "on_list"}
+
+    summary_doc = await render(inst, rdef, ctx=ctx(), depth="summary")
+    assert "parts" not in summary_doc
+
+
+async def test_prefill_renders_current_value_as_default():
+    """Editing is not re-authoring: prefilled fields carry the document's
+    current value as the schema default (absent when the field is unset)."""
+    doc = await doc_for("open", assignee="alice")
+    prop = doc["actions"]["assign"]["input"]["properties"]["assignee"]
+    assert prop["default"] == "alice"
+    blank = await doc_for("open")
+    assert "default" not in \
+        blank["actions"]["assign"]["input"]["properties"]["assignee"]

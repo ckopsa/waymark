@@ -5,6 +5,10 @@ codebase: where the spec and the implementation differ, what was added beyond
 the spec, what's deliberately unfinished, and the operational caveats that
 aren't visible from the happy path.
 
+The human-usability program (admits, scope/parts, the `UsabilityWarning`
+checks) is catalogued here as shipped; where it goes next — the rules not yet
+verified and their proposed mechanisms — lives in `usability-roadmap.md`.
+
 ## Map
 
 | Area | Where | The one thing to know |
@@ -51,6 +55,20 @@ aren't visible from the happy path.
 
 - **`ctx.read(Resource, id)`** — the read half of cross-resource guards
   (§14 only shows `ctx.invoke`). Loads in the same transaction.
+- **`ctx.find(kind, **filters)`** — the list half of cross-resource reads:
+  a filtered query (collection query field names) in the same transaction.
+  Enables "the active rotation"-style lookups from guards and hooks.
+- **`Resource.on_create(ctx)`** — engine hook after create-validation,
+  before the first insert, with full `Ctx` (`read`/`find`/`invoke`); for
+  initial data that depends on other resources. Mutates `data` only — the
+  initial state stays the machine's. Not run on create dry-runs (its
+  `ctx.invoke` side effects must not fire).
+- **Create dry-run** — `POST /{plural}?dry_run=1` validates the create body
+  and returns `{"valid": true}` without creating (mirrors action dry-run;
+  the generic UI's blur-time validation needs it).
+- **`x-display` `{widget: "resource", kind, params?}`** — reference-field
+  hint (§8 reserves `widget`); the generic UI renders a picker populated
+  from that kind's collection.
 - **Server-synthesized `x-display.label`** — every action-input field and
   every query parameter carries a label (precedence: action `field_display`
   map → `Field(json_schema_extra={"x-display": …})` → title-cased field
@@ -67,6 +85,110 @@ aren't visible from the happy path.
   defer_over=N)` on the resource, rendered only on the collection.
 - **The generic HTML client** at `{base}/-/ui` — Part IV's "human generic
   client" made real; principal switching via the dev `X-Principal-*` headers.
+- **`@guard(admits=(field, fn))`** — a guard declares its acceptance set for
+  one input field. `fn(r)` derives it from the document; `fn(r, ctx)` (sync
+  or async) may `ctx.read`/`ctx.find` other resources or use services — the
+  GET render path carries an engine-wired ctx, so cross-resource sets (e.g.
+  the linked rotation's themes) advertise at render time. Returning `None`
+  declines to constrain that render. Render folds the result into the
+  advertised input schema as an `enum` (intersected when several guards
+  admit the same field). Advertisement only: the guard body stays the
+  enforcement, and the conformance gap check verifies the two agree (admits
+  guards are evaluated with an engine-wired ctx there too). This is the
+  "error prevention" usability rule made mechanical — the form never offers
+  a value the server already knows it will refuse, and never renders a blank
+  the server could have filled with choices.
+- **Usability warnings at import time** (`UsabilityWarning`, §10.1 layer):
+  `open_input` — a guard judges exactly one input field that carries no
+  guidance: no enum/const, no `admits`, no picker widget (checked against
+  the registry-grade schema, so `field_display`-granted widgets count). The
+  warning's hint depends on the guard: ctx-free → `admits=(f, fn(r))`;
+  ctx-reading → `admits=(f, fn(r, ctx))`, since the render ctx can read what
+  the guard reads (fix: `admits`, a tighter schema, a widget, or
+  `@action(waives=("open_input",))`); `altitude` — an input field judged by a
+  ctx-free guard mirrors the items of a `data` array, i.e. the form re-asks
+  which item the user is already looking at (fix: `scope` the action to the
+  item, or `waives=("altitude",)`). Guard purity and field usage come from
+  AST inspection of the guard source (`_scan_dependencies` in
+  `core/guards.py`), conservative on unreadable source or wholesale `inp`
+  escape.
+- **`prefill` and the edit-shape checks** — `@action(prefill=("recipe", …))`
+  renders the document's current values as schema `default`s (editing is not
+  re-authoring); the generic UI and agents get filled forms for free. Two
+  import-time warnings enforce the shape: `blank_edit` (input fields mirror
+  top-level Data fields — optionality ignored — but no prefill declared) and
+  `unfenced_edit` (prefill without `requires_if_match=True`: a prefilled form
+  is a snapshot, and without the etag fence editors silently clobber each
+  other). Conformance `test_prefill_truth` asserts rendered defaults equal
+  the document's current values.
+- **Server-side drafts (`draft=True`)** — declared effort must not be
+  losable. The engine persists per-principal partial input in
+  `waymark_drafts` (engine-owned, like idempotency), exposed at
+  `GET/PUT/DELETE {self}/-/{action}/draft` and advertised on the action entry
+  (`draft.href`, plus `values`/`saved_at`/`stale` for the author only).
+  Draft bodies are stored as-is (invalid-mid-edit is fine; full validation
+  happens on invoke); fields outside the action schema are 422. A successful
+  invoke consumes the draft in the same transaction; `stale` flags drafts
+  whose base version the resource has outrun. The generic UI autosaves
+  (debounced PUT, flushed on dismissal so keystrokes inside the debounce
+  window survive; disarmed on submit/discard so a pending save can't
+  resurrect a consumed draft), GETs the draft fresh on every form open (the
+  page envelope is a snapshot from before typing began), re-renders on
+  dialog close, and prefers draft values over prefill defaults. Because
+  drafts live in the envelope, they survive browsers and devices, and an
+  agent can see and finish a human's half-written effort. Import-time
+  `large_effort` warns when a *required* prose-widget input has no draft.
+  Caveats: drafts are per-action, not per-scope-key (a scoped draftable
+  action shares one draft across parts — don't combine yet); nothing purges
+  abandoned drafts (they're tiny; add a cron if it matters). `long_text` now
+  also covers action input models, so unbudgeted long-form inputs must
+  declare `widget: "prose"` — which is also what makes the generic UI render
+  a textarea instead of a one-line input.
+- **Long-form text and the `long_text` check** — a Data string field with no
+  `max_length`, or one admitting ≥ 280 chars (two summary budgets), warns at
+  import time unless it declares `x-display {widget: "prose"}` (the generic
+  UI renders a scrollable pre-wrap block on detail pages and keeps the
+  column out of every table), a real budget, or `hidden`/`raw`. The UI also
+  defensively drops any table column whose observed strings exceed ~120
+  chars — declared or not, a column of paragraphs orients nobody. Length
+  budgets are a wire contract, not a style preference.
+- **Reference fields and the `opaque_ref` check** — raw ids are machine
+  plumbing, not human information. Data fields (top-level or list-item)
+  declare `x-display {widget: "resource", kind, label_field?}`; the generic
+  UI renders them as navigable references — labeled by the denormalized
+  sibling (`label_field`, whose own column is then dropped) or by the
+  referenced resource's summary, lazily fetched. `hidden: true` drops a
+  field from human display; `raw: true` acknowledges a deliberate raw id.
+  Enforcement: `check_opaque_refs` runs at Engine assembly (it needs every
+  kind registered) and warns on any `{kind}_id` data field carrying none of
+  those hints; ids not matching a registered kind (external systems) are out
+  of scope. The UI reads hints from the published data schema
+  (`GET /schemas/{kind}`, cached), so this stays server-declared, never
+  client-invented; collection rows and breadcrumbs likewise identify
+  themselves by summary/title with the id relegated to href/tooltip.
+- **Scoped actions and the `parts` namespace** —
+  `@action(..., scope=("days", "date"))` re-renders the action once per item
+  of `data.days` under a new top-level envelope key:
+  `parts: {days: {key: "date", items: [{key, actions}, …]}}`. Per part, the
+  key field becomes a `const` (the generic UI submits it silently and never
+  asks), and picker params templated over the item —
+  `field_display={"meal_id": {"params": {"theme": "{item.theme}"}}}` —
+  resolve to that item's values, giving per-row, context-filtered pickers.
+  Per-item availability falls out of the `admits` intersection for the key
+  field (e.g. `set_sunday_theme` appears only on the Sunday part). Top-level
+  `actions` stays the complete truth (agents and old clients lose nothing;
+  unresolvable `{item.*}` params are stripped there); `parts` is a
+  refinement, omitted at `depth=summary`. The generic UI renders parts
+  actions as per-row buttons and drops them from the top action bar.
+- **Conformance `test_schema_guard_gap`** — fuzzes the *rendered* input
+  schema (hypothesis-jsonschema) and evaluates ctx-free guards directly:
+  a guard declaring `admits` must accept everything its own advertisement
+  emits; an undeclared ctx-free guard judging exactly one input field (the
+  static `open_input` scope, honoring the same waive token) refusing >50% of
+  schema-valid inputs fails as a schema-guard gap. Multi-field ctx-free
+  guards (cross-field constraints, decision inputs like `condition_ok`) are
+  out of scope — refusing a decision the user just made is honest workflow,
+  not a gap.
 
 ## Known gaps / not implemented
 
@@ -112,6 +234,12 @@ aren't visible from the happy path.
 - **Conformance registrations live in the *root* `conftest.py`** — the
   suite is collected from inside the installed package, so only rootdir
   conftests apply to it.
+- **`pytest -n auto` is supported and ~6× faster** — every DSN constant is
+  wrapped in `waymark.testing.per_worker_dsn`, which routes each xdist
+  worker to its own database (`waymark_test_gw0`, …, created on first use
+  with `synchronous_commit = off`; the schema-per-test fixtures make a
+  shared database worker-hostile). Serial runs are unaffected: without
+  `PYTEST_XDIST_WORKER` the DSN passes through untouched.
 - **`asyncio_default_fixture_loop_scope` must be `"function"`** (asyncpg
   connections are loop-bound; session-scoped fixture loops cause
   "another operation is in progress").

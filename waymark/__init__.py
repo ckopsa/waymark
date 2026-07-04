@@ -6,6 +6,7 @@ from .core import (
     Ctx,
     DefinitionError,
     Deny,
+    UsabilityWarning,
     Effect,
     Guard,
     Principal,
@@ -27,7 +28,7 @@ MEDIA_TYPE = "application/waymark+json; v=1"
 
 __all__ = [
     "ActionDef", "Allow", "Ctx", "DefinitionError", "Deny", "Effect", "Guard",
-    "Principal", "Registry", "Resource", "ResourceDef", "Safety", "action",
+    "Principal", "Registry", "Resource", "ResourceDef", "Safety", "UsabilityWarning", "action",
     "emits", "filterable", "guard", "link", "profile", "sortable",
     "FORMAT_VERSION", "MEDIA_TYPE",
 ]

@@ -50,6 +50,9 @@ class Engine:
             self.registry.register(cls)
         if "job" not in self.registry:  # deferred bulk lands on job resources
             self.registry.register(Job)
+        # cross-resource usability checks need every kind known (§10.1)
+        from ..core import checks
+        checks.check_opaque_refs(self.registry)
         self.storage = (storage if isinstance(storage, PostgresStorage)
                         else PostgresStorage(storage, self.registry))
         self.services = services
@@ -92,8 +95,12 @@ class Engine:
                         embeds[rel] = await render(
                             targets[0], target_rdef, ctx=ctx,
                             depth=target_depth, base=self.base_path)
+        drafts = None
+        if any(d.draft for d in rdef.machine.actions.values()):
+            drafts = await self.storage.load_drafts(
+                s, rdef.kind, instance.id, ctx.principal.id)
         return await render(instance, rdef, ctx=ctx, depth=depth,
-                            base=self.base_path, embeds=embeds)
+                            base=self.base_path, embeds=embeds, drafts=drafts)
 
     async def startup(self) -> None:
         await self.storage.create_all()

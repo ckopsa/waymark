@@ -171,11 +171,15 @@ async function render() {
   const view = $("#view");                       // blanks the screen
   if (!href) return renderHome(view, seq);
   const {res, body} = await api(href);
+  if (res.status < 400 && body.kind) {
+    // hints come from the item kind's data schema, cached per kind
+    var hints = await dataHints(body.kind.replace(/_collection$/, ""));
+  }
   if (seq !== renderSeq) return;
   view.textContent = "";
   if (res.status >= 400) return view.append(problemBox(body));
-  if (body.kind && body.kind.endsWith("_collection")) renderCollection(view, body);
-  else renderResource(view, body);
+  if (body.kind && body.kind.endsWith("_collection")) renderCollection(view, body, hints);
+  else renderResource(view, body, hints);
 }
 
 /* ── home: the .well-known index ────────────────────────────────────── */
@@ -197,7 +201,7 @@ async function renderHome(view, seq) {
 }
 
 /* ── collection screen ──────────────────────────────────────────────── */
-function renderCollection(view, doc) {
+function renderCollection(view, doc, hints) {
   const panel = el("div", {class:"panel"});
   const colName = title(doc.kind.replace("_collection", "")) + "s";
   panel.append(el("div", {class:"crumbs"},
@@ -218,7 +222,7 @@ function renderCollection(view, doc) {
       label:"New", onDone: b => go(b.self)}));
   panel.append(bar);
 
-  panel.append(itemTable(doc.data.items));
+  panel.append(itemTable(doc.data.items, hints));
 
   const pager = el("div", {class:"pager"});
   if (doc.links.prev) pager.append(el("a", {href:"#"+doc.links.prev.href}, "← prev"));
@@ -233,25 +237,35 @@ function renderCollection(view, doc) {
    envelopes: scalar data fields shared by the rows (in schema order), plus
    state and the honest per-row actions (§5). Compound fields (arrays,
    objects) stay behind the row link. */
-function itemTable(items) {
+function itemTable(items, hints) {
+  hints = hints || {};
   if (!items.length) return el("div", {class:"muted"}, "no rows");
   const isScalar = v => v === null || ["string","number","boolean"].includes(typeof v);
+  const consumed = new Set(Object.values(hints)
+    .map(h => h.xd?.label_field).filter(Boolean));
+  const rowsData = items.map(i => i.data);
   const columns = Object.keys(items[0].data)
-    .filter(k => items.every(i => isScalar(i.data[k])));
+    .filter(k => items.every(i => isScalar(i.data[k]))
+      && !hints[k]?.xd?.hidden && !consumed.has(k)
+      && !proseColumn(hints[k]?.xd, rowsData, k));
   const anyActions = items.some(i => i.actions && Object.keys(i.actions).length);
 
   const head = el("tr", {},
     el("th", {}, ""),
-    ...columns.map(c => el("th", {title: c}, title(c))),
+    ...columns.map(c => el("th", {title: c}, hints[c]?.xd?.label || title(c))),
     el("th", {}, "State"),
     anyActions ? el("th", {}, "") : null);
   const table = el("table", {class:"items"}, el("thead", {}, head));
   const tbody = el("tbody", {});
   for (const item of items) {
     const row = el("tr", {},
-      el("td", {}, el("a", {href:"#"+item.self, title: item.summary},
-        item.self.split("/").pop().slice(0, 8))),
-      ...columns.map(c => el("td", {}, fmt(item.data[c]))),
+      // the row names itself by its summary — the id stays in the href
+      el("td", {}, el("a", {href:"#"+item.self, title: item.self,
+        style:"display:inline-block;max-width:340px;overflow:hidden;" +
+              "text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom"},
+        item.summary)),
+      ...columns.map(c => el("td", {},
+        hintedValue(hints[c]?.xd || {}, item.data[c], item.data))),
       el("td", {}, el("span", {class:"chip "+tone(item), title: item.state},
         item.display?.state?.label ?? title(item.state))));
     if (anyActions) {
@@ -307,14 +321,17 @@ function filterBar(query, selfHref) {
 }
 
 /* ── resource screen ────────────────────────────────────────────────── */
-function renderResource(view, doc) {
+function renderResource(view, doc, hints) {
+  hints = hints || {};
   const panel = el("div", {class:"panel"});
   const col = doc.links.collection || doc.links.parent;
   panel.append(el("div", {class:"crumbs"},
     el("a", {href:"#"}, "Workspace"), " / ",
     col ? el("a", {href:"#"+col.href}, col.summary || title(doc.kind)+"s")
         : title(doc.kind),
-    " / ", doc.self.split("/").pop().slice(0,8)));
+    // the page names itself in human terms; the id stays hover-only
+    " / ", el("span", {title: doc.self},
+      doc.display?.title || doc.self.split("/").pop().slice(0,8))));
   panel.append(el("h2", {}, doc.display?.title || doc.kind),
     el("div", {}, el("span", {class:"chip "+tone(doc), title: doc.state},
       doc.display?.state?.label ?? title(doc.state)),
@@ -322,9 +339,15 @@ function renderResource(view, doc) {
         `v${doc.meta.version}`)));
   panel.append(el("div", {class:"summary"}, doc.summary));
 
-  // buttons = actions, styled by display, gated by confirm
+  // buttons = actions, styled by display, gated by confirm; actions the
+  // server scoped into parts render on their rows instead of up here
+  const scopedNames = new Set();
+  for (const group of Object.values(doc.parts || {}))
+    for (const it of group.items)
+      for (const n of Object.keys(it.actions)) scopedNames.add(n);
   const bar = el("div", {class:"actions"});
   const entries = Object.entries(doc.actions)
+    .filter(([n]) => !scopedNames.has(n))
     .sort((a,b) => (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5));
   for (const [name, entry] of entries)
     bar.append(actionButton({name, entry, doc, onDone: () => render()}));
@@ -346,13 +369,22 @@ function renderResource(view, doc) {
       el("summary", {class:"muted"}, `unavailable (${un.length})`), box));
   }
 
-  // data: grouped by display.groups if declared, else all fields
+  // data: grouped by display.groups if declared, else all fields; arrays
+  // with a parts group get their scoped actions as per-row buttons; fields
+  // render per their data-schema x-display hints (hidden, references)
   const groups = doc.display?.groups ||
     [{label: "Data", fields: Object.keys(doc.data)}];
   for (const g of groups) {
     const table = el("table", {class:"kv"});
-    for (const f of g.fields) table.append(el("tr", {},
-      el("td", {class:"k", title: f}, title(f)), el("td", {}, fmt(doc.data[f]))));
+    for (const f of g.fields) {
+      const h = hints[f] || {xd: {}};
+      if (h.xd.hidden) continue;
+      table.append(el("tr", {},
+        el("td", {class:"k", title: f}, h.xd.label || title(f)),
+        el("td", {}, Array.isArray(doc.data[f]) && (doc.parts?.[f] || h.items)
+          ? rowsTable(doc.data[f], doc, doc.parts?.[f], h.items)
+          : hintedValue(h.xd, doc.data[f], doc.data))));
+    }
     const d = el("details", g.collapsed ? {} : {open:""},
       el("summary", {class:"muted"}, g.label || g.id), table);
     panel.append(d);
@@ -380,9 +412,64 @@ function tone(doc) {
 }
 function fmt(v) {
   if (v === null || v === undefined) return el("span", {class:"muted"}, "—");
-  if (Array.isArray(v) || typeof v === "object")
-    return el("code", {}, JSON.stringify(v));
+  if (typeof v === "boolean")
+    return v ? "✓" : el("span", {class:"muted"}, "—");
+  if (Array.isArray(v)) {
+    if (!v.length) return el("span", {class:"muted"}, "—");
+    if (v.every(x => x && typeof x === "object" && !Array.isArray(x)))
+      return rowsTable(v);
+    return el("span", {}, ...v.map(x =>
+      el("span", {class:"chip", style:"margin-right:4px"}, String(x))));
+  }
+  if (typeof v === "object") return kvTable(v);
   return String(v);
+}
+
+/* A list of objects as a table: union of keys in first-appearance order,
+   all-null columns dropped (they appear once any row fills them in).
+   With a parts group (doc.parts[field]), each row gains the scoped actions
+   the server bound to it — honest per-row buttons, invented nowhere. */
+function rowsTable(rows, doc, partGroup, itemHints) {
+  itemHints = itemHints || {};
+  // a column consumed as another column's link label carries no extra
+  // information; hidden columns are machine plumbing
+  const consumed = new Set(Object.values(itemHints)
+    .map(xd => xd.label_field).filter(Boolean));
+  const cols = [];
+  for (const r of rows) for (const k of Object.keys(r))
+    if (!cols.includes(k)) cols.push(k);
+  const shown = cols.filter(c => rows.some(r => r[c] !== null && r[c] !== undefined)
+    && !itemHints[c]?.hidden && !consumed.has(c)
+    && !proseColumn(itemHints[c], rows, c));
+  const table = el("table", {class:"items"}, el("thead", {},
+    el("tr", {}, ...shown.map(c =>
+        el("th", {title: c}, itemHints[c]?.label || title(c))),
+      ...(partGroup ? [el("th", {})] : []))));
+  const tbody = el("tbody", {});
+  for (const r of rows) {
+    const tr = el("tr", {}, ...shown.map(c =>
+      el("td", {}, hintedValue(itemHints[c] || {}, r[c], r))));
+    if (partGroup) {
+      const part = partGroup.items.find(p => p.key === r[partGroup.key]);
+      const cell = el("td", {style:"white-space:nowrap"});
+      for (const [name, entry] of Object.entries(part?.actions || {})
+          .sort((a,b) => (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5)))
+        cell.append(actionButton({name, entry, doc, small: true,
+                                  onDone: () => render()}));
+      tr.append(cell);
+    }
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  return table;
+}
+
+function kvTable(obj) {
+  const table = el("table", {class:"kv"});
+  for (const [k, v] of Object.entries(obj))
+    table.append(el("tr", {},
+      el("td", {class:"k", title: k}, title(k)), el("td", {}, fmt(v))));
+  return table;
 }
 
 function actionButton({name, entry, doc, label: lbl, small, onDone}) {
@@ -406,6 +493,90 @@ function schemaFields(schema) {
   });
 }
 
+let wellKnownCache = null;
+async function wellKnown() {
+  if (!wellKnownCache)
+    wellKnownCache = (await api(`${BASE}/.well-known/waymark`)).body;
+  return wellKnownCache;
+}
+
+/* ── data-field display hints from the published data schema (§8) ──────
+   {field: {xd, items}}: xd = the field's x-display (widget/hidden/label/
+   label_field), items = per-column x-display for list-of-object fields. */
+const dataHintsCache = {};
+async function dataHints(kind) {
+  if (!(kind in dataHintsCache)) {
+    try {
+      const {res, body} = await api(`${BASE}/schemas/${kind}`);
+      dataHintsCache[kind] = res.ok ? body : {};
+    } catch { dataHintsCache[kind] = {}; }
+  }
+  const xdOf = p => {
+    if (!p || typeof p !== "object") return {};
+    const sub = p.anyOf ? p.anyOf.find(o => o.type !== "null") || {} : p;
+    return p["x-display"] || sub["x-display"] || {};
+  };
+  const out = {};
+  for (const [f, p] of Object.entries(dataHintsCache[kind].properties || {})) {
+    const sub = p.anyOf ? p.anyOf.find(o => o.type !== "null") || {} : p;
+    const itemProps = (sub.items || p.items || {}).properties;
+    out[f] = {xd: xdOf(p), items: itemProps ? Object.fromEntries(
+      Object.entries(itemProps).map(([k, v]) => [k, xdOf(v)])) : null};
+  }
+  return out;
+}
+
+/* A cross-resource reference: a link to the referenced resource, labeled by
+   the sibling label_field when the server denormalized a name, else by the
+   referenced resource's own summary (fetched lazily). Raw ids are machine
+   plumbing — humans get the thing, not the token. */
+function resourceRef(kind, id, text) {
+  const a = el("a", {href: "#", title: id},
+    text || `${pretty(kind)} · ${String(id).slice(0, 8)}`);
+  wellKnown().then(w => {
+    const col = w.collections?.[kind];
+    if (!col) return;
+    a.href = "#" + col + "/" + id;
+    if (!text) api(`${col}/${id}?depth=summary`).then(({res, body}) => {
+      if (res.ok && body.summary) a.textContent = body.summary;
+    }).catch(() => {});
+  });
+  return a;
+}
+
+/* Value cell for one data field/column, honoring its x-display hint. */
+function hintedValue(xd, value, row) {
+  if (xd.widget === "resource" && value)
+    return resourceRef(xd.kind, value, xd.label_field ? row?.[xd.label_field] : null);
+  if (xd.widget === "prose" && value)
+    return el("div", {style:"white-space:pre-wrap;max-width:640px;" +
+      "max-height:320px;overflow-y:auto"}, String(value));
+  return fmt(value);
+}
+
+/* Long-form text has no business in a table — declared prose is excluded,
+   and undeclared long strings are excluded defensively (the detail page
+   still shows them; a column of paragraphs orients nobody). */
+function proseColumn(xd, rows, col) {
+  if (xd?.widget === "prose") return true;
+  return rows.some(r => typeof r?.[col] === "string" && r[col].length > 120);
+}
+
+/* Fill a <select> from the collection behind a {widget:"resource", kind,
+   params?} field hint: option value = the id, label = the summary. */
+async function populateResourceOptions(input, kind, params) {
+  const index = await wellKnown();
+  let href = index.collections?.[kind];
+  if (!href) return;
+  if (params) href += (href.includes("?") ? "&" : "?") +
+    new URLSearchParams(params);
+  const {res, body} = await api(href);
+  if (!res.ok) return;
+  for (const item of body.data.items || [])
+    input.append(el("option", {value: item.self.split("/").pop(),
+                               title: item.self}, item.summary));
+}
+
 function formValue(field, raw) {
   if (raw === "" || raw == null) return undefined;
   const t = field.schema.type;
@@ -419,6 +590,16 @@ function formValue(field, raw) {
 async function actionDialog({name, entry, doc, onDone}) {
   const dlg = $("#dlg");
   dlg.textContent = "";
+  // the envelope's draft is a snapshot from page render; the form must open
+  // against the draft's CURRENT truth, or effort saved after that render
+  // looks lost on reopen
+  let draft = null;
+  if (entry.draft?.href) {
+    try {
+      const res = await fetch(entry.draft.href, {headers: principalHeaders()});
+      if (res.status === 200) draft = await res.json();
+    } catch { draft = entry.draft.values ? entry.draft : null; }
+  }
   const fields = schemaFields(entry.input);
   const needsConfirm = entry.safety?.confirm;
   const effect = entry.effect || {};
@@ -433,12 +614,20 @@ async function actionDialog({name, entry, doc, onDone}) {
   const errBox = el("div", {});
   const dry = el("div", {class:"dryrun muted"}, entry.input ? "" : "");
   for (const f of fields) {
+    // const = server pre-bound (a scoped action's key): submitted, never asked
+    if (f.schema.const !== undefined) continue;
     // label is the server-emitted x-display.label (§8); title() only guards
     // against a non-conformant server that omits it
     form.append(el("label", {for:"f_"+f.name, title: f.name},
       (f.display.label || title(f.name)) + (f.required ? " *" : "")));
     let input;
-    if (f.schema.enum) {
+    if (f.display.widget === "resource" && f.display.kind) {
+      // x-display {widget:"resource", kind, params?}: options come from the
+      // referenced collection — still envelope-driven (index → collection)
+      input = el("select", {name:f.name, id:"f_"+f.name});
+      if (!f.required) input.append(el("option", {value:""}, "—"));
+      populateResourceOptions(input, f.display.kind, f.display.params);
+    } else if (f.schema.enum) {
       input = el("select", {name:f.name, id:"f_"+f.name});
       if (!f.required) input.append(el("option", {value:""}, "—"));
       for (const v of f.schema.enum) input.append(el("option", {value:v}, pretty(v)));
@@ -447,12 +636,24 @@ async function actionDialog({name, entry, doc, onDone}) {
       if (!f.required) input.append(el("option", {value:""}, "—"));
       input.append(el("option", {value:"true"}, "true"),
                    el("option", {value:"false"}, "false"));
+    } else if (f.display.widget === "prose") {
+      // long-form gets a real editing surface, never a one-line input
+      input = el("textarea", {name:f.name, id:"f_"+f.name, rows: 12,
+        maxlength: f.schema.maxLength});
     } else {
       input = el("input", {name:f.name, id:"f_"+f.name,
-        type: ["number","integer"].includes(f.schema.type) ? "number" : "text",
+        type: f.schema.format === "date" ? "date"
+            : ["number","integer"].includes(f.schema.type) ? "number" : "text",
         step:"any", placeholder: f.schema.format || f.schema.type || "",
         maxlength: f.schema.maxLength});
     }
+    // precedence: the principal's saved draft, then the server default —
+    // which for prefill actions is the document's current value (§10.1)
+    const draftVal = draft?.values?.[f.name];
+    const initial = draftVal !== undefined ? draftVal : f.schema.default;
+    if (initial !== undefined && initial !== null)
+      input.value = typeof initial === "object"
+        ? JSON.stringify(initial) : String(initial);
     if (f.display.help) form.append(el("div", {class:"muted", style:"font-size:11px"}, f.display.help));
     form.append(input, el("div", {class:"field-error", id:"err_"+f.name}));
   }
@@ -461,11 +662,55 @@ async function actionDialog({name, entry, doc, onDone}) {
     if (!entry.input) return null;
     const out = {};
     for (const f of fields) {
+      if (f.schema.const !== undefined) { out[f.name] = f.schema.const; continue; }
       const v = formValue(f, new FormData(form).get(f.name));
       if (v !== undefined) out[f.name] = v;
     }
     return out;
   };
+
+  // server-side draft autosave: effort persists across dismissal, devices,
+  // and clients — the envelope advertised where (entry.draft.href)
+  let flushDraft = null, disarmDraft = null;
+  const draftBar = el("div", {class:"dryrun muted"});
+  if (entry.draft) {
+    const stamp = t => new Date(t).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+    if (draft?.stale)
+      draftBar.append(el("span", {class:"bad"},
+        `⚠ draft from an older version of this ${pretty(doc.kind)} — review before submitting · `));
+    if (draft?.saved_at)
+      draftBar.append(`draft saved ${stamp(draft.saved_at)}`);
+    let timer = null;
+    const saveDraft = async () => {
+      timer = null;
+      const res = await fetch(entry.draft.href, {
+        method: "PUT", headers: {"Content-Type": "application/json",
+                                 ...principalHeaders()},
+        body: JSON.stringify(collect())});
+      if (res.ok) {
+        const b = await res.json();
+        draftBar.textContent = `draft saved ${stamp(b.saved_at)}`;
+      }
+    };
+    form.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(saveDraft, 1000);
+    });
+    // a dismissal inside the debounce window must not lose the keystrokes —
+    // but a submit/discard must disarm, or the pending save resurrects a
+    // draft the server just consumed
+    flushDraft = () => { if (timer) { clearTimeout(timer); saveDraft(); } };
+    disarmDraft = () => { clearTimeout(timer); timer = null; flushDraft = null; };
+    const discard = el("button", {type: "button",
+      style: "font-size:11px;padding:2px 8px;margin-left:8px"}, "Discard draft");
+    discard.addEventListener("click", async () => {
+      disarmDraft && disarmDraft();
+      await fetch(entry.draft.href, {method: "DELETE",
+                                     headers: principalHeaders()});
+      dlg.close(); onDone && onDone(doc);
+    });
+    draftBar.append(discard);
+  }
 
   // blur-time dry_run = the inline-validation affordance (§7.1)
   const runDry = async () => {
@@ -496,14 +741,19 @@ async function actionDialog({name, entry, doc, onDone}) {
           const {res, body: b} = await invoke(entry, doc, collect(), {});
           if (!res.ok) { errBox.textContent = ""; errBox.append(problemBox(b));
                          showFieldErrors(b.errors || {}); return; }
+          disarmDraft && disarmDraft();  // the invoke consumed the draft
           dlg.close();
           maybeUndoToast(name, doc, b);
           onDone && onDone(b);
         }},
       needsConfirm ? label(name, entry) + "…" : label(name, entry)));
-  form.append(dry, errBox, buttons);
+  form.append(draftBar, dry, errBox, buttons);
   body.append(form);
   dlg.append(body);
+  // however the dialog is dismissed (Cancel, Escape), flush any keystrokes
+  // still inside the debounce window, then refresh the page's envelope
+  dlg.onclose = entry.draft
+    ? () => { flushDraft && flushDraft(); render(); } : null;
   dlg.showModal();
 }
 

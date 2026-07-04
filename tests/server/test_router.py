@@ -11,8 +11,10 @@ from waymark.server.engine import header_principal
 from app.resources.order import Order
 from app.services import VALID_METHOD, Services
 
-TEST_DSN = os.environ.get(
-    "WAYMARK_TEST_DSN", "postgresql+asyncpg://localhost/waymark_test")
+from waymark.testing import per_worker_dsn
+
+TEST_DSN = per_worker_dsn(os.environ.get(
+    "WAYMARK_TEST_DSN", "postgresql+asyncpg://localhost/waymark_test"))
 
 ORDER = {
     "items": [{"sku": "A-100", "qty": 2, "price": 12.10}],

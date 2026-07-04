@@ -17,17 +17,18 @@ class TicketState(StrEnum):
 
 
 class TicketData(BaseModel):
-    title: str
+    title: str = Field(max_length=200)
     priority: int = Field(ge=1, le=5, default=3)
-    assignee: str | None = None
+    assignee: str | None = Field(default=None, max_length=64)
     opened_at: AwareDatetime | None = None
 
 
 class AssignInput(BaseModel):
-    assignee: str
+    assignee: str = Field(max_length=64)
 
 
-@guard(else_="Assignee {assignee} is not on the team.", vars=["assignee"])
+@guard(else_="Assignee {assignee} is not on the team.", vars=["assignee"],
+       admits=("assignee", lambda r: ["alice", "bob"]))
 async def assignee_on_team(r, inp: AssignInput, ctx):
     if inp.assignee in ("alice", "bob"):
         return Allow()
@@ -61,6 +62,7 @@ class Ticket(Resource):
 
     @action(from_=TicketState.OPEN, to=TicketState.ASSIGNED,
             input=AssignInput, guards=[assignee_on_team],
+            prefill=("assignee",), waives=("unfenced_edit",),
             idempotent=True, reversible=True, confirm=False,
             display=dict(label="Assign", style="primary", order=1))
     async def assign(self, inp: AssignInput, ctx) -> None:

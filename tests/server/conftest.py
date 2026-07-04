@@ -10,8 +10,10 @@ from waymark.server.storage.postgres import PostgresStorage
 
 from ..core.sample import Ticket
 
-TEST_DSN = os.environ.get(
-    "WAYMARK_TEST_DSN", "postgresql+asyncpg://localhost/waymark_test")
+from waymark.testing import per_worker_dsn
+
+TEST_DSN = per_worker_dsn(os.environ.get(
+    "WAYMARK_TEST_DSN", "postgresql+asyncpg://localhost/waymark_test"))
 
 FIXED_NOW = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
 

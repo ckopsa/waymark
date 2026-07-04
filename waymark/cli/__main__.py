@@ -1,4 +1,5 @@
-"""The waymark CLI: check | routes | openapi | new-resource | extract-messages."""
+"""The waymark CLI: check | routes | openapi | new-resource | extract-messages
+| client."""
 from __future__ import annotations
 
 import importlib
@@ -8,8 +9,11 @@ from pathlib import Path
 
 import typer
 
+from .client import client_app
+
 app = typer.Typer(help="Waymark: affordance-oriented hypermedia framework tools.",
                   no_args_is_help=True)
+app.add_typer(client_app, name="client")
 
 
 def _load_engine(spec: str):
@@ -23,14 +27,25 @@ def _load_engine(spec: str):
 
 @app.command()
 def check(engine_spec: str = typer.Argument(
-        "app.main:engine", help="module:attr of the Engine")) -> None:
+        "app.main:engine", help="module:attr of the Engine"),
+        strict: bool = typer.Option(
+            False, "--strict", help="exit 1 on usability warnings too")) -> None:
     """Import the application (running every §10.1 import-time check) and
-    print the machine summary. Exit 1 on any DefinitionError — the CI fast path."""
+    print the machine summary. Exit 1 on any DefinitionError — the CI fast path.
+    Usability findings (open_input, altitude) print as warnings; --strict
+    promotes them to failures."""
+    import warnings as _warnings
+
+    from ..core.checks import UsabilityWarning
+
     try:
-        engine = _load_engine(engine_spec)
+        with _warnings.catch_warnings(record=True) as caught:
+            _warnings.simplefilter("always", UsabilityWarning)
+            engine = _load_engine(engine_spec)
     except Exception as exc:
         typer.secho(f"✗ {type(exc).__name__}: {exc}", fg="red")
         raise typer.Exit(1) from exc
+    usability = [w for w in caught if issubclass(w.category, UsabilityWarning)]
     for rdef in engine.registry.defs():
         m = rdef.machine
         typer.secho(f"✓ {rdef.kind}", fg="green", bold=True)
@@ -47,7 +62,18 @@ def check(engine_spec: str = typer.Argument(
             guards = ", ".join(g.name for g in defn.guards) or "—"
             typer.echo(f"    {name:<16} {arrows:<40} [{', '.join(flags) or '-'}] "
                        f"guards: {guards}")
-    typer.secho("all definitions pass import-time checks", fg="green")
+    if usability:
+        typer.echo()
+        for w in usability:
+            typer.secho(f"⚠ {w.message}", fg="yellow")
+        typer.echo()
+    verdict = "all definitions pass import-time checks"
+    if usability:
+        verdict += (f"; {len(usability)} usability warning"
+                    f"{'s' if len(usability) > 1 else ''}")
+    typer.secho(verdict, fg="yellow" if usability else "green")
+    if usability and strict:
+        raise typer.Exit(1)
 
 
 @app.command()

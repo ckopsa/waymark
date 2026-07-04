@@ -354,6 +354,183 @@ async def test_input_contract(wm, wm_action_case):
         "dry_run appended a transition"
 
 
+# ── Usability: the schema-guard gap ─────────────────────────────────────
+def _fuzz_schema(schema: dict[str, Any], n: int) -> list[dict[str, Any]]:
+    from hypothesis import HealthCheck, given, settings
+    from hypothesis_jsonschema import from_schema
+
+    out: list[dict[str, Any]] = []
+
+    @given(from_schema(schema))
+    @settings(max_examples=n, database=None, deadline=None,
+              suppress_health_check=list(HealthCheck))
+    def collect(value: dict[str, Any]) -> None:
+        out.append(value)
+
+    collect()
+    return out
+
+
+async def test_schema_guard_gap(wm, wm_action_case):
+    """Error prevention (Part III usability): the *rendered* input schema must
+    not offer values the server can refuse using only the document.
+
+    Guards that never read ctx are document-derivable — their verdict is a
+    pure function of (resource, input), so anything they refuse was knowable
+    at render time. Fuzz the rendered schema, evaluate those guards directly:
+
+    - a guard declaring ``admits`` must accept every input drawn from its own
+      advertisement (the enum it rendered) — any deny is a lying schema;
+    - an undeclared guard judging exactly one input field (the same scope the
+      import-time ``open_input`` warning covers, honoring the same waive
+      token) that refuses the majority of schema-valid inputs is a
+      schema-guard gap: the form is mostly dead ends. Declare ``admits``,
+      constrain the field, or scope the action.
+    """
+    kind, state, action = wm_action_case
+    defn = wm.registry[kind].machine.actions[action]
+    if defn.input is None or defn.bulk:
+        pytest.skip("no input schema to gap-check")
+    derivable = [
+        g for top in defn.guards for g in top.iter_leaves()
+        if g.admits is not None
+        or (not g.reads_ctx and g.input_fields and len(g.input_fields) == 1
+            and "open_input" not in defn.waives)]
+    if not derivable:
+        pytest.skip("no document-derivable guards")
+    cases = await principals_with(wm, kind, state, action, "actions")
+    if not cases:
+        pytest.skip(f"{action} not executable in {state} for any profile")
+    pname, instance, doc = cases[0]
+
+    samples = _fuzz_schema(doc["actions"][action]["input"], n=30)
+    parsed = []
+    for sample in samples:
+        try:
+            parsed.append(defn.input.model_validate(sample))
+        except Exception:
+            continue  # schema-valid but fails stricter pydantic parsing
+    if len(parsed) < 5:
+        pytest.skip("could not draw enough parseable samples from the schema")
+
+    from ..core.types import Deny
+
+    tallies: list[int] = []
+    # an engine-wired ctx (reader/finder/services) so ctx-reading guards and
+    # their admits declarations evaluate exactly as the render path does
+    async with wm.storage.session() as s:
+        ctx = wm.engine.invoker._ctx(wm.principals[pname], s, mode="dry_run")
+        for g in derivable:
+            denies = 0
+            for inp in parsed:
+                verdict, _ = await g.evaluate(instance, inp, ctx)
+                denies += isinstance(verdict, Deny)
+            tallies.append(denies)
+    for g, denies in zip(derivable, tallies):
+        if g.admits is not None:
+            assert denies == 0, (
+                f"guard {g.name!r} on {kind}.{action} refused {denies}/"
+                f"{len(parsed)} inputs drawn from its own admits advertisement "
+                "— the rendered enum offers values the guard denies")
+        else:
+            rate = denies / len(parsed)
+            assert rate <= 0.5, (
+                f"schema-guard gap on {kind}.{action}: guard {g.name!r} "
+                f"refused {rate:.0%} of schema-valid inputs using only the "
+                "document — the advertised schema is mostly dead ends. "
+                "Declare admits=(field, fn) on the guard, constrain the "
+                "field's schema, or scope the action to the item")
+
+
+# ── Usability: prefill truth and draft protection ───────────────────────
+async def test_prefill_truth(wm, wm_action_case):
+    """Editing is not re-authoring: a prefilled field's rendered ``default``
+    must equal the document's current value — a stale or invented default is
+    an advertisement lying about the resource."""
+    kind, state, action = wm_action_case
+    defn = wm.registry[kind].machine.actions[action]
+    if not defn.prefill:
+        pytest.skip("action declares no prefill")
+    cases = await principals_with(wm, kind, state, action, "actions")
+    if not cases:
+        pytest.skip(f"{action} not executable in {state} for any profile")
+    pname, instance, doc = cases[0]
+    props = doc["actions"][action]["input"]["properties"]
+    for f in defn.prefill:
+        current = doc["data"].get(f)
+        if current is None:
+            continue  # nothing to prefill from
+        assert props[f].get("default") == current, (
+            f"{kind}.{action} prefills {f!r} but the rendered default "
+            f"{props[f].get('default')!r} is not the document's current "
+            f"value {current!r}")
+
+
+async def test_draft_protection(wm, wm_action_case):
+    """Declared effort must not be losable: a draft=True action persists
+    partial input per principal, renders it back to its author (and only its
+    author), and consumes it when the action lands."""
+    kind, state, action = wm_action_case
+    defn = wm.registry[kind].machine.actions[action]
+    if not defn.draft:
+        pytest.skip("action declares no draft")
+    cases = await principals_with(wm, kind, state, action, "actions")
+    if not cases:
+        pytest.skip(f"{action} not executable in {state} for any profile")
+    pname, instance, doc = cases[0]
+    entry = doc["actions"][action]
+    assert entry.get("draft", {}).get("href"), \
+        "draft=True action must advertise its draft href"
+    assert "values" not in entry["draft"], "no draft saved yet"
+
+    href = entry["draft"]["href"]
+    empty = await wm.client.get(href, headers=H(pname))
+    assert empty.status_code == 204, \
+        f"GET with no draft must 204, got {empty.status_code}"
+
+    body = await build_input(wm, kind, defn)
+    res = await wm.client.put(href, json=body, headers=H(pname))
+    assert res.status_code == 200, res.text
+    assert res.json().get("saved_at")
+
+    # GET returns the draft's current truth — this is what a form open reads,
+    # so it must reflect the save even though the page envelope predates it
+    fresh = await wm.client.get(href, headers=H(pname))
+    assert fresh.status_code == 200 and fresh.json()["values"] == body, \
+        "GET draft must return what PUT stored"
+
+    refetched = await fetch(wm, kind, instance.id, pname)
+    d = refetched["actions"][action]["draft"]
+    assert d["values"] == body, "the draft must render back to its author"
+    assert d.get("stale") is False
+
+    for other in sorted(wm.principals):
+        if other == pname:
+            continue
+        other_doc = await fetch(wm, kind, instance.id, other)
+        other_entry = (other_doc["actions"] or {}).get(action)
+        if other_entry and "draft" in other_entry:
+            assert "values" not in other_entry["draft"], \
+                "a draft is private to its author"
+        other_get = await wm.client.get(href, headers=H(other))
+        assert other_get.status_code == 204, \
+            "GET draft must not expose another principal's draft"
+        break
+
+    junk = await wm.client.put(entry["draft"]["href"],
+                               json={"__not_a_field__": 1}, headers=H(pname))
+    assert junk.status_code == 422, \
+        "draft fields outside the action's schema must be rejected"
+
+    res = await post(wm, refetched, defn, pname, body)
+    fail_if_needs_example(res, kind, defn)
+    assert res.status_code == 200, res.text
+    after = res.json()
+    if action in (after["actions"] or {}):
+        assert "values" not in after["actions"][action].get("draft", {}), \
+            "a successful invoke must consume the draft"
+
+
 # ── Collection contract ─────────────────────────────────────────────────
 async def test_collection_contract(wm, wm_kind):
     kind = wm_kind

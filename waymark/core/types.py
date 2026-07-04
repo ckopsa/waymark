@@ -41,6 +41,7 @@ class Ctx:
     mode: Literal["probe", "invoke", "dry_run"] = "invoke"
     _invoker: Any = None  # set by the engine; enables ctx.invoke for workflows
     _reader: Any = None   # set by the engine; enables ctx.read for guards
+    _finder: Any = None   # set by the engine; enables ctx.find for guards/hooks
 
     async def invoke(self, resource: type | str, id: str, action: str,
                      body: dict[str, Any] | None = None) -> Any:
@@ -58,6 +59,16 @@ class Ctx:
         if self._reader is None:
             raise RuntimeError("ctx.read is only available inside an engine-managed invocation")
         return await self._reader(resource, id, ctx=self)
+
+    async def find(self, resource: type | str, *, sort: str | None = None,
+                   limit: int = 25, **filters: Any) -> list[Any]:
+        """Query another kind's instances in this transaction — the list half
+        of cross-resource reads (§14). Filters take the collection query's
+        field names (e.g. ``state="active"``)."""
+        if self._finder is None:
+            raise RuntimeError("ctx.find is only available inside an engine-managed invocation")
+        return await self._finder(resource, filters, sort=sort, limit=limit,
+                                  ctx=self)
 
 
 @dataclass(frozen=True)

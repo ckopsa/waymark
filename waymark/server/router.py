@@ -194,7 +194,8 @@ def build_router(engine: Any) -> APIRouter:
         body = await _json_body(request)
         result = await engine.invoker.create(
             rdef.kind, body, principal=principal,
-            idempotency_key=request.headers.get("Idempotency-Key"))
+            idempotency_key=request.headers.get("Idempotency-Key"),
+            dry_run=request.query_params.get("dry_run") in ("1", "true"))
         return _doc_response(result)
 
     @router.get("/{plural}/{id}")
@@ -229,6 +230,81 @@ def build_router(engine: Any) -> APIRouter:
             rdef.kind, action, body, principal=principal,
             idempotency_key=request.headers.get("Idempotency-Key"))
         return _doc_response(result)
+
+    def _draft_defn(rdef: Any, action: str) -> Any:
+        defn = rdef.machine.actions.get(action)
+        if defn is None or not defn.draft:
+            raise NotFound(f"{rdef.kind} has no draftable action {action!r}.")
+        return defn
+
+    @router.put("/{plural}/{id}/-/{action}/draft")
+    @_wire
+    async def save_draft(plural: str, id: str, action: str,
+                         request: Request) -> Response:
+        """Persist partial input for a draft=True action — declared effort
+        must not be losable. Values are stored as-is (a draft is allowed to
+        be invalid mid-edit); full validation happens on invoke, as ever."""
+        rdef = rdef_or_404(plural)
+        defn = _draft_defn(rdef, action)
+        principal = await engine.resolve_principal(request)
+        body = await _json_body(request)
+        if not isinstance(body, dict):
+            raise SchemaInvalid("A draft body must be a JSON object.",
+                                errors={"_root": ["expected an object"]})
+        known = set(rdef.action_schemas[action][0].get("properties", {}))
+        unknown = set(body) - known
+        if unknown:
+            raise SchemaInvalid(
+                f"Draft contains fields the action does not take: "
+                f"{sorted(unknown)}.",
+                errors={f: ["unknown field"] for f in sorted(unknown)})
+        async with engine.storage.session() as s:
+            instance = await engine.storage.load(s, rdef.kind, id)
+            if instance is None:
+                raise NotFound(f"No {rdef.kind} {id!r}.")
+            now = engine.invoker.clock()
+            await engine.storage.save_draft(
+                s, kind=rdef.kind, resource_id=id, action=action,
+                principal_id=principal.id, values=body,
+                base_version=instance.version, at=now)
+        return Response(content=json.dumps({"saved_at": now.isoformat()}),
+                        media_type="application/json")
+
+    @router.get("/{plural}/{id}/-/{action}/draft")
+    @_wire
+    async def get_draft(plural: str, id: str, action: str,
+                        request: Request) -> Response:
+        """The draft's current truth — clients fetch this on form open
+        rather than trusting an envelope rendered before typing began."""
+        rdef = rdef_or_404(plural)
+        _draft_defn(rdef, action)
+        principal = await engine.resolve_principal(request)
+        async with engine.storage.session() as s:
+            instance = await engine.storage.load(s, rdef.kind, id)
+            if instance is None:
+                raise NotFound(f"No {rdef.kind} {id!r}.")
+            rows = await engine.storage.load_drafts(s, rdef.kind, id,
+                                                    principal.id)
+        row = rows.get(action)
+        if row is None:
+            return Response(status_code=204)
+        return Response(content=json.dumps({
+            "values": row["values"],
+            "saved_at": row["saved_at"].isoformat(),
+            "stale": row["base_version"] != instance.version,
+        }, default=str), media_type="application/json")
+
+    @router.delete("/{plural}/{id}/-/{action}/draft")
+    @_wire
+    async def discard_draft(plural: str, id: str, action: str,
+                            request: Request) -> Response:
+        rdef = rdef_or_404(plural)
+        _draft_defn(rdef, action)
+        principal = await engine.resolve_principal(request)
+        async with engine.storage.session() as s:
+            await engine.storage.delete_draft(s, rdef.kind, id, action,
+                                              principal.id)
+        return Response(status_code=204)
 
     @router.post("/{plural}/{id}/-/{action}")
     @_wire

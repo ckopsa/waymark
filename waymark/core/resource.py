@@ -149,6 +149,14 @@ class Resource:
         self.created_at = created_at
         self.updated_at = updated_at
 
+    async def on_create(self, ctx: Any) -> None:
+        """Hook for initial data that depends on other resources (§14).
+
+        The engine calls this once, after validation and before the first
+        insert, with a full ``Ctx`` (``read``/``find``/``invoke``). Mutate
+        ``self.data`` only — the initial state is the machine's to declare.
+        """
+
     def __repr__(self) -> str:
         return (f"<{type(self).__name__} id={self.id} state={self.state} "
                 f"v{self.version}>")

@@ -101,12 +101,81 @@ Unknown top-level keys MUST be ignored by clients. Servers MUST NOT put semantic
 Normative rules:
 
 - **`method`** is always `POST` in v0.1. Uniform invocation deliberately trades REST-verb aesthetics for a single, cacheable client rule: *reads are GET on `links`, writes are POST on `actions`.* (`GET`-shaped affordances are `links` or collection queries, §5.)
-- **`input`** is inline JSON Schema (Draft 2020-12), generated from a Pydantic model (§10.3). Small schemas (< ~4 KB) MUST be inlined; larger ones MAY be `{"$ref": "/api/schemas/SubmitPayment"}`. Servers MUST validate submitted bodies against exactly this schema before guard evaluation. Absent `input` means the action takes an empty body.
+- **`input`** is inline JSON Schema (Draft 2020-12), generated from a Pydantic model (§10.3). Small schemas (< ~4 KB) MUST be inlined; larger ones MAY be `{"$ref": "/api/schemas/SubmitPayment"}`. Servers MUST validate submitted bodies against exactly this schema before guard evaluation. Absent `input` means the action takes an empty body. Servers SHOULD tighten a field to an instance-derived `enum` when a guard's acceptance set is knowable from the current document (§10.2 `admits`) — the rendered form MUST NOT offer a value the server already knows it will refuse. Edit-shaped actions SHOULD carry the document's current values as field `default`s (§10.1 `prefill`), fenced by `requires_if_match` — editing is not re-authoring.
 - **`effect.to`** names the destination state. `effect.terminal: true` marks entry into a terminal state. Optional `effect.emits` lists declared side-effect events (e.g. `"email:receipt"`) — informational, so clients and reviewers can see blast radius.
 - **`safety.idempotent`** — a client MAY silently retry on ambiguous network failure. Non-idempotent actions require an `Idempotency-Key` header (§7.3).
 - **`safety.reversible`** — `true` iff the destination state declares a transition back whose guard is unconditional-or-time-based. Renderers derive undo affordances from the *post-action* representation, not from this flag; the flag exists for pre-action client judgment.
 - **`safety.confirm`** — server-side judgment that a human should confirm and an agent MUST pause for user confirmation before invoking. Agents treat this as binding.
 - **`safety.requires_if_match`** — invocation MUST carry `If-Match` with the current etag; server responds `412` with a fresh representation on mismatch (§7.2).
+
+### 2.1 Scoped actions: the `parts` namespace
+
+An action whose input identifies an item of a `data` array MAY additionally be
+rendered per item, under the optional top-level `parts` key:
+
+```json
+"parts": {
+  "days": {
+    "key": "date",
+    "items": [
+      { "key": "2026-07-14",
+        "actions": {
+          "assign_meal": {
+            "method": "POST", "href": "/api/plans/88/-/assign_meal",
+            "input": { "type": "object",
+              "properties": {
+                "date": { "type": "string", "format": "date", "const": "2026-07-14" },
+                "meal_id": { "type": "string", "x-display": {
+                  "widget": "resource", "kind": "meal",
+                  "params": { "state": "on_list", "theme": "mexican" } } } } },
+            "…": "effect/safety/display as in §2" } } }
+    ]
+  }
+}
+```
+
+- `parts.<field>` mirrors `data.<field>` (an array of objects); `key` names the
+  item field that identifies a row, and each entry's `key` value matches it.
+- The scope key field is bound with `const`: clients submit it, humans are
+  never re-asked for context the screen already shows.
+- Picker `params` MAY be resolved per item (e.g. filtered by the row's theme).
+- `parts` is a *refinement*: top-level `actions` remains the complete truth,
+  and an item appears only when the action's advertised acceptance set admits
+  its key. Clients that ignore `parts` lose convenience, not capability.
+  Servers omit `parts` at `depth=summary`.
+
+### 2.2 Drafts: effort is server-state
+
+An action declared draftable persists per-principal partial input server-side,
+advertised on its entry:
+
+```json
+"actions": {
+  "update_recipe": {
+    "…": "…",
+    "draft": {
+      "href": "/api/meals/437d/-/update_recipe/draft",
+      "values": { "recipe": "half-written…" },
+      "saved_at": "2026-07-04T06:32:23Z",
+      "stale": false
+    }
+  }
+}
+```
+
+- `PUT {href}` stores partial input (fields must be a subset of the action's
+  schema; values may be invalid mid-edit — full validation happens on invoke,
+  as ever). `GET {href}` returns the draft's current truth (`204` when none)
+  — clients MUST read it when opening a form rather than trusting a document
+  rendered before typing began. `DELETE {href}` discards. A successful invoke
+  consumes the draft.
+- `values`/`saved_at`/`stale` appear only for the draft's author; other
+  principals see just the `href`. `stale: true` means the resource has
+  changed since the draft was saved — clients MUST surface this rather than
+  silently restore over newer edits.
+- Because the draft lives in the envelope, it survives devices and browsers,
+  and an agent reading the document can see and help finish a human's
+  half-written effort (or vice versa).
 
 ## 3. Unavailable
 
@@ -316,6 +385,8 @@ Everything humans need and agents ignore. Quarantine rule: **no client may chang
 ```
 
 Per-action `display`: `label`, `description`, `style ∈ {primary, default, danger}`, `group`, `order`, `icon`. Per-field hints ride the JSON Schema as `x-display: {label, help, widget, order}`. All display strings are server-localized via `Accept-Language`; `summary`, `unavailable.reason`, and problem `detail` are likewise localized. Conformance checks display-string coverage per declared locale (§12).
+
+One widget value is defined: `{widget: "resource", kind, params?}` marks a field holding another resource's id. Human clients SHOULD render it as a picker populated from that kind's collection (index → collection, optionally narrowed by `params` as query parameters), showing each item's `summary` and submitting its id — still envelope-driven, no invented affordances. Clients that don't implement it fall back to a plain text field, so the hint is purely progressive.
 
 ## 9. Discovery and the agent tool surface
 

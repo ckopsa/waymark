@@ -23,13 +23,14 @@ class JobState(StrEnum):
 
 
 class Refusal(BaseModel):
-    self: str
-    reason: str
+    # the report table must show these whatever their length (§7.4)
+    self: str = Field(json_schema_extra={"x-display": {"raw": True}})
+    reason: str = Field(json_schema_extra={"x-display": {"raw": True}})
 
 
 class JobData(BaseModel):
-    action: str
-    target_kind: str
+    action: str = Field(max_length=200)
+    target_kind: str = Field(max_length=200)
     total: int = Field(ge=0)
     processed: int = 0
     succeeded: int = 0

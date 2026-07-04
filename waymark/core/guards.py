@@ -71,6 +71,44 @@ def _scan_deny_vars(fn: Callable) -> frozenset[str]:
     return frozenset(found)
 
 
+def _scan_dependencies(fn: Callable) -> tuple[bool, frozenset[str] | None]:
+    """Statically classify what a guard's verdict can depend on.
+
+    Returns ``(reads_ctx, input_fields)``:
+
+    - ``reads_ctx`` — the ctx parameter is referenced anywhere in the body.
+      A guard that never touches ctx is *document-derivable*: its verdict is
+      a pure function of ``(resource, input)``, so everything it refuses was
+      knowable at render time.
+    - ``input_fields`` — the set of ``inp.<field>`` attributes accessed, or
+      ``None`` when ``inp`` escapes wholesale (passed to a helper, iterated…)
+      and the field set is unknowable.
+
+    Unreadable source degrades to ``(True, None)`` — conservatively impure.
+    """
+    try:
+        params = list(inspect.signature(fn).parameters.values())
+        src = textwrap.dedent(inspect.getsource(fn))
+        tree = ast.parse(src)
+    except (OSError, TypeError, ValueError, SyntaxError):
+        return True, None
+    inp_name = params[1].name if len(params) > 1 else None
+    ctx_name = params[2].name if len(params) > 2 else None
+
+    fields: set[str] = set()
+    attr_bases: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) \
+                and node.value.id == inp_name:
+            fields.add(node.attr)
+            attr_bases.add(id(node.value))
+
+    names = [n for n in ast.walk(tree) if isinstance(n, ast.Name)]
+    reads_ctx = any(n.id == ctx_name for n in names)
+    escapes = any(n.id == inp_name and id(n) not in attr_bases for n in names)
+    return reads_ctx, None if escapes else frozenset(fields)
+
+
 class Guard:
     def __init__(
         self,
@@ -84,6 +122,7 @@ class Guard:
         vars: Iterable[str] | None = None,
         name: str | None = None,
         needs_input: bool | None = None,
+        admits: tuple[str, Callable[[Any], Iterable[Any]]] | None = None,
     ):
         self.fn = fn
         self.else_ = else_
@@ -96,6 +135,28 @@ class Guard:
         self.declared_vars = (
             frozenset(vars) if vars is not None else _scan_deny_vars(fn)
         )
+        # ``admits=(field, fn)`` declares the guard's acceptance set for one
+        # input field. ``fn(r)`` derives it from the document; ``fn(r, ctx)``
+        # (sync or async) may read other resources/services at render time.
+        # Render folds the result into the advertised input schema as an
+        # enum, so clients never offer a value this guard would refuse.
+        # Advertisement only — the guard body stays the enforcement;
+        # conformance checks the two agree. Returning None declines to
+        # constrain that render (e.g. no rotation linked → any theme goes).
+        self.admits = admits
+        self.reads_ctx, self.input_fields = _scan_dependencies(fn)
+
+    async def admitted(self, r: Any, ctx: Any) -> list[Any] | None:
+        """Evaluate the admits declaration; None = no constraint declared or
+        the fn declined. Raises propagate — rendering decides tolerance."""
+        if self.admits is None:
+            return None
+        _, fn = self.admits
+        wants_ctx = len(inspect.signature(fn).parameters) >= 2
+        out = fn(r, ctx) if wants_ctx else fn(r)
+        if inspect.isawaitable(out):
+            out = await out
+        return None if out is None else list(out)
 
     async def evaluate(self, r: Any, inp: Any, ctx: Ctx) -> tuple[Allow | Deny, "Guard"]:
         """Return (verdict, denier). For a leaf guard the denier is itself."""
@@ -123,6 +184,9 @@ class Guard:
             return {"requires": self.requires_token}
         return None
 
+    def iter_leaves(self) -> Iterable["Guard"]:
+        yield self
+
     def __and__(self, other: "Guard") -> "Guard":
         return _AllGuard(self, other)
 
@@ -145,6 +209,12 @@ class _AllGuard(Guard):
             needs_input=any(p.needs_input for p in parts),
             vars=(),
         )
+        self.reads_ctx = any(p.reads_ctx for p in parts)
+        self.input_fields = None
+
+    def iter_leaves(self) -> Iterable[Guard]:
+        for part in self.parts:
+            yield from part.iter_leaves()
 
     @staticmethod
     async def _never(r: Any, inp: Any, ctx: Ctx) -> Allow | Deny:  # pragma: no cover
@@ -172,6 +242,14 @@ class _AnyGuard(Guard):
             needs_input=all(p.needs_input for p in parts),
             vars=(),
         )
+        self.reads_ctx = any(p.reads_ctx for p in parts)
+        self.input_fields = None
+
+    def iter_leaves(self) -> Iterable[Guard]:
+        # an OR's leaves can't tighten a schema independently (any one part
+        # allowing suffices), so the composite contributes no admits and its
+        # parts are not surfaced for schema-gap analysis
+        yield self
 
     async def evaluate(self, r: Any, inp: Any, ctx: Ctx) -> tuple[Allow | Deny, Guard]:
         first: tuple[Deny, Guard] | None = None
@@ -197,12 +275,13 @@ class _GuardFactory:
         becomes_available_at: Callable[[Any], datetime] | None = None,
         requires_token: str | None = None,
         vars: Iterable[str] | None = None,
+        admits: tuple[str, Callable[[Any], Iterable[Any]]] | None = None,
     ) -> Callable[[GuardFn], Guard]:
         def decorate(fn: GuardFn) -> Guard:
             return Guard(
                 fn, else_=else_, hide=hide, remedies=remedies,
                 becomes_available_at=becomes_available_at,
-                requires_token=requires_token, vars=vars,
+                requires_token=requires_token, vars=vars, admits=admits,
             )
         return decorate
 

@@ -109,10 +109,20 @@ class AgentClient:
         # persisted before first attempt so retries reuse the same key
         self.key_store: dict[str, str] = key_store if key_store is not None else {}
 
+    async def index(self, base: str = "/api") -> dict[str, Any]:
+        return await self._client.index(base)
+
     async def fetch(self, href: str, *, depth: str = "summary") -> Doc:
         doc = await self._client.get(href, depth=depth)
         self.graph.learn(doc)
         return doc
+
+    async def create(self, collection: Doc, body: dict[str, Any] | None = None,
+                     ) -> Doc | PendingConfirmation:
+        """Invoke a collection's ``create`` action. Same affordance rules as
+        ``act`` — including the idempotency-key store, so retrying an
+        identical create replays instead of duplicating."""
+        return await self.act(collection, "create", body)
 
     async def follow(self, doc: Doc, rel: str) -> Doc:
         out = await self._client.follow(doc, rel, depth="summary")

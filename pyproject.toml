@@ -32,6 +32,7 @@ waymark = "waymark.testing.pytest_plugin"
 dev = [
     "waymark[testing]",
     "uvicorn>=0.30",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.uv.sources]

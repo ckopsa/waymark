@@ -35,6 +35,17 @@ class ActionDef:
     defer_over: int | None = None  # ids beyond this → 202 + job resource
     terminal: bool = False  # filled in by the machine build
     field_display: Mapping[str, Any] = field(default_factory=dict)
+    waives: frozenset[str] = frozenset()  # acknowledged usability warnings (§10.1)
+    # scope=(data_array, key_field): render once per item of data.<array> in
+    # the envelope's `parts`, with <key_field> pre-bound to the item's value
+    scope: tuple[str, str] | None = None
+    # prefill: input fields whose rendered schema `default` is the document's
+    # current value — editing is not re-authoring
+    prefill: tuple[str, ...] = ()
+    # draft=True: the server persists per-principal partial input at
+    # {self}/-/{name}/draft, advertised on the action entry — declared effort
+    # must not be losable, on any device, by any client
+    draft: bool = False
 
     @property
     def effect(self) -> Effect:
@@ -65,6 +76,10 @@ def action(
     atomic: bool = False,
     max_items: int = 500,
     defer_over: int | None = None,
+    waives: Sequence[str] = (),
+    scope: tuple[str, str] | None = None,
+    prefill: Sequence[str] = (),
+    draft: bool = False,
 ) -> Callable:
     missing = [n for n, v in (("idempotent", idempotent), ("reversible", reversible),
                               ("confirm", confirm)) if v is _REQUIRED]
@@ -95,6 +110,10 @@ def action(
             max_items=max_items,
             defer_over=defer_over,
             field_display=dict(field_display or {}),
+            waives=frozenset(waives),
+            scope=tuple(scope) if scope else None,
+            prefill=tuple(prefill),
+            draft=draft,
         )
         return fn
 
