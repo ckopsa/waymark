@@ -46,6 +46,12 @@ class ActionDef:
     # {self}/-/{name}/draft, advertised on the action entry — declared effort
     # must not be losable, on any device, by any client
     draft: bool = False
+    # collab=True (requires draft=True): the draft is shared, not
+    # per-principal, and the entry advertises a live channel
+    # (draft.collab {href, protocol}) whose every accepted update drains
+    # into the persisted draft — effort may be spent off-wire, never
+    # stranded off-wire
+    collab: bool = False
 
     @property
     def effect(self) -> Effect:
@@ -80,6 +86,7 @@ def action(
     scope: tuple[str, str] | None = None,
     prefill: Sequence[str] = (),
     draft: bool = False,
+    collab: bool = False,
 ) -> Callable:
     missing = [n for n, v in (("idempotent", idempotent), ("reversible", reversible),
                               ("confirm", confirm)) if v is _REQUIRED]
@@ -87,6 +94,11 @@ def action(
         raise TypeError(
             f"@action requires explicit safety fields; missing: {', '.join(missing)} "
             "(safety is declared, not inferred — spec §0.4)"
+        )
+    if collab and not draft:
+        raise TypeError(
+            "collab=True requires draft=True: the channel is a property of "
+            "the draft it drains into (§2.2 — the seam must drain)"
         )
     froms = from_ if isinstance(from_, (set, frozenset, list, tuple)) else {from_}
     from_tokens = frozenset(str(s) for s in froms)
@@ -114,6 +126,7 @@ def action(
             scope=tuple(scope) if scope else None,
             prefill=tuple(prefill),
             draft=draft,
+            collab=collab,
         )
         return fn
 

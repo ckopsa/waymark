@@ -177,6 +177,57 @@ advertised on its entry:
   and an agent reading the document can see and help finish a human's
   half-written effort (or vice versa).
 
+### 2.3 The collab seam: a channel that drains into the draft
+
+Fine-grained simultaneous co-production (two humans typing in the same form)
+is below the envelope's resolution — the transition is the quantum of
+accountability, and no format guarantee survives keystroke granularity. The
+format therefore models it as a **declared seam**: a draftable action MAY
+additionally declare collaboration, in which case its draft entry advertises
+a live channel:
+
+```json
+"draft": {
+  "href": "/api/meals/437d/-/update_recipe/draft",
+  "collab": { "href": "/api/meals/437d/-/update_recipe/draft/collab",
+              "protocol": "waymark-relay/1" },
+  "values": { "recipe": "half-written…" },
+  "saved_at": "2026-07-04T06:32:23Z",
+  "stale": false
+}
+```
+
+- **The seam is a means declaration, never a demand change.** What the
+  action requires at invoke is untouched; the channel only changes how the
+  effort may be produced (together, live). Like `display`, no client may
+  change *what it does* based on `collab` — a client that cannot speak the
+  protocol loses liveness, not capability.
+- **Collab drafts are shared, not per-principal.** `values`/`saved_at`/
+  `stale` render for every principal who can see the action — collaborators
+  are looking at the same half-written effort. Plain `PUT`/`GET`/`DELETE` on
+  `draft.href` operate on the shared draft and remain first-class: a plain
+  PUT is broadcast into the channel like any other update.
+- **The drain rule (normative):** every update the channel accepts MUST be
+  persisted through the same path as a draft `PUT` before it is acknowledged
+  or relayed. Effort may be spent off-wire; it may never be *stranded*
+  off-wire — a dropped connection loses at most the frame in flight, and
+  `GET {draft.href}` is always the draft's current truth.
+- **The commit re-enters the machine as one ordinary transition** — one
+  actor, one audit entry, full validation. Co-authorship inside the seam is
+  application data if it matters; the committer owns the commitment.
+
+`waymark-relay/1` (JSON text frames over WebSocket): the server greets a
+joiner with `{"type": "state", values, saved_at, stale, participants}`;
+clients send `{"type": "update", "values": {field: value}}` (fields ⊆ the
+action's schema, values may be invalid mid-edit as ever; `null` clears a
+field); the server acks `{"type": "saved", saved_at}`, relays
+`{"type": "update", values, actor, saved_at}` to the rest of the room, and
+announces `{"type": "presence", event, actor, participants}` on join/leave.
+When the draft is consumed by a successful invoke or discarded, every
+participant receives `{"type": "closed", "reason": "consumed" |
+"discarded"}` and the socket closes. Richer protocols (CRDT/OT) may be
+declared under other `protocol` tokens; the drain rule binds them all.
+
 ## 3. Unavailable
 
 Transitions declared on the state machine but not currently executable:

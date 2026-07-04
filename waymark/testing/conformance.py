@@ -482,6 +482,10 @@ async def test_draft_protection(wm, wm_action_case):
     assert entry.get("draft", {}).get("href"), \
         "draft=True action must advertise its draft href"
     assert "values" not in entry["draft"], "no draft saved yet"
+    if defn.collab:
+        assert entry["draft"].get("collab", {}).get("href") and \
+            entry["draft"]["collab"].get("protocol"), \
+            "collab=True action must advertise its channel (href, protocol)"
 
     href = entry["draft"]["href"]
     empty = await wm.client.get(href, headers=H(pname))
@@ -509,12 +513,23 @@ async def test_draft_protection(wm, wm_action_case):
             continue
         other_doc = await fetch(wm, kind, instance.id, other)
         other_entry = (other_doc["actions"] or {}).get(action)
-        if other_entry and "draft" in other_entry:
-            assert "values" not in other_entry["draft"], \
-                "a draft is private to its author"
-        other_get = await wm.client.get(href, headers=H(other))
-        assert other_get.status_code == 204, \
-            "GET draft must not expose another principal's draft"
+        if defn.collab:
+            # collab drafts are shared (§2.3): every principal sees the same
+            # half-written effort, in the envelope and through the plain GET
+            if other_entry and "draft" in other_entry:
+                assert other_entry["draft"].get("values") == body, \
+                    "a collab draft is shared with every collaborator"
+            other_get = await wm.client.get(href, headers=H(other))
+            assert other_get.status_code == 200 and \
+                other_get.json()["values"] == body, \
+                "GET on a collab draft must return the shared truth"
+        else:
+            if other_entry and "draft" in other_entry:
+                assert "values" not in other_entry["draft"], \
+                    "a draft is private to its author"
+            other_get = await wm.client.get(href, headers=H(other))
+            assert other_get.status_code == 204, \
+                "GET draft must not expose another principal's draft"
         break
 
     junk = await wm.client.put(entry["draft"]["href"],

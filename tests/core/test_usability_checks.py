@@ -354,6 +354,14 @@ def test_large_effort_requires_draft():
                    str(w.message) for w in quiet)
 
 
+def test_collab_requires_draft():
+    # the channel is a property of the draft it drains into (§2.2)
+    with pytest.raises(TypeError, match="collab=True requires draft=True"):
+        @action(from_=S.A, to=S.B, collab=True,
+                idempotent=True, reversible=False, confirm=False)
+        async def go(self, inp: None, ctx) -> None: ...
+
+
 def test_prefill_and_draft_hard_validation():
     with pytest.raises(DefinitionError, match="prefills 'nope'"):
         define_edit(prefill=("nope",), if_match=True)

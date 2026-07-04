@@ -18,18 +18,25 @@ from .storage.postgres import PostgresStorage
 
 
 def header_principal(request: Request) -> Principal:
-    """Default dev principal: trusts X-Principal-* headers. Replace with a
-    real auth dependency in production (§15: authentication is upstream)."""
-    pid = request.headers.get("X-Principal-Id")
+    """Default dev principal: trusts X-Principal-* headers, falling back to
+    principal-* query params (browsers cannot set headers on a WebSocket
+    upgrade, so the collab seam needs the query form). Replace with a real
+    auth dependency in production (§15: authentication is upstream)."""
+
+    def get(header: str, param: str) -> str | None:
+        return request.headers.get(header) or request.query_params.get(param)
+
+    pid = get("X-Principal-Id", "principal-id")
     if not pid:
         return Principal.anonymous()
-    ptype = request.headers.get("X-Principal-Type", "human")
+    ptype = get("X-Principal-Type", "principal-type") or "human"
     roles = frozenset(r.strip() for r in
-                      request.headers.get("X-Principal-Roles", "").split(",")
-                      if r.strip())
+                      (get("X-Principal-Roles", "principal-roles") or "")
+                      .split(",") if r.strip())
     return Principal(id=pid, type=ptype,  # type: ignore[arg-type]
                      roles=roles,
-                     display=request.headers.get("X-Principal-Display", pid))
+                     display=get("X-Principal-Display",
+                                 "principal-display") or pid)
 
 
 class Engine:
@@ -61,6 +68,9 @@ class Engine:
         self.invoker = Invoker(registry=self.registry, storage=self.storage,
                                services=services, base=base_path, clock=clock)
         self.dispatcher: Any = None  # events dispatcher, attached at startup
+        from .collab import CollabRooms
+
+        self.collab = CollabRooms(self)  # live rooms for collab drafts
         self.router = build_router(self)
 
     async def resolve_principal(self, request: Request) -> Principal:
@@ -99,6 +109,19 @@ class Engine:
         if any(d.draft for d in rdef.machine.actions.values()):
             drafts = await self.storage.load_drafts(
                 s, rdef.kind, instance.id, ctx.principal.id)
+            if any(d.collab for d in rdef.machine.actions.values()):
+                # collab drafts are shared: stored under the "*" sentinel and
+                # rendered for every principal — collaborators are looking at
+                # the same half-written effort
+                from .collab import SHARED
+
+                shared = await self.storage.load_drafts(
+                    s, rdef.kind, instance.id, SHARED)
+                for name, d in rdef.machine.actions.items():
+                    if d.collab:
+                        drafts.pop(name, None)
+                        if name in shared:
+                            drafts[name] = shared[name]
         return await render(instance, rdef, ctx=ctx, depth=depth,
                             base=self.base_path, embeds=embeds, drafts=drafts)
 

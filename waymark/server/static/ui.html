@@ -671,30 +671,91 @@ async function actionDialog({name, entry, doc, onDone}) {
 
   // server-side draft autosave: effort persists across dismissal, devices,
   // and clients — the envelope advertised where (entry.draft.href)
-  let flushDraft = null, disarmDraft = null;
+  let flushDraft = null, disarmDraft = null, ws = null;
   const draftBar = el("div", {class:"dryrun muted"});
   if (entry.draft) {
     const stamp = t => new Date(t).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+    const savedNote = el("span", {},
+      draft?.saved_at ? `draft saved ${stamp(draft.saved_at)}` : "");
+    const peers = el("span", {class:"muted"});
     if (draft?.stale)
       draftBar.append(el("span", {class:"bad"},
         `⚠ draft from an older version of this ${pretty(doc.kind)} — review before submitting · `));
-    if (draft?.saved_at)
-      draftBar.append(`draft saved ${stamp(draft.saved_at)}`);
+    // the collab seam (§2.2): a live channel that drains into this draft.
+    // Presentation only — what the action demands is unchanged, and losing
+    // the socket just falls back to the plain PUT below
+    let lastKnown = {...(draft?.values || {})};
+    const applyRemote = (values) => {
+      for (const [k, v] of Object.entries(values || {})) {
+        lastKnown[k] = v;
+        const input = form.elements[k];
+        if (!input || input === document.activeElement) continue;
+        input.value = v == null ? ""
+          : typeof v === "object" ? JSON.stringify(v) : String(v);
+      }
+    };
+    const showPeers = (participants) => {
+      const me = principalHeaders()["X-Principal-Id"] || "anonymous";
+      const others = (participants || []).filter(p => p.id !== me);
+      peers.textContent = others.length
+        ? ` · editing with ${others.map(p => p.display || p.id).join(", ")}` : "";
+    };
+    if (entry.draft.collab) {
+      const h = principalHeaders();
+      const q = new URLSearchParams();
+      if (h["X-Principal-Id"]) {
+        q.set("principal-id", h["X-Principal-Id"]);
+        q.set("principal-type", h["X-Principal-Type"] || "human");
+        q.set("principal-display", h["X-Principal-Display"] || h["X-Principal-Id"]);
+        if (h["X-Principal-Roles"]) q.set("principal-roles", h["X-Principal-Roles"]);
+      }
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      try {
+        ws = new WebSocket(`${proto}//${location.host}${entry.draft.collab.href}?${q}`);
+        ws.onmessage = (ev) => {
+          const m = JSON.parse(ev.data);
+          if (m.type === "state") { applyRemote(m.values); showPeers(m.participants);
+            if (m.saved_at) savedNote.textContent = `draft saved ${stamp(m.saved_at)}`; }
+          else if (m.type === "update") { applyRemote(m.values);
+            savedNote.textContent = `${m.actor?.display || m.actor?.id} edited ${stamp(m.saved_at)}`; }
+          else if (m.type === "presence") showPeers(m.participants);
+          else if (m.type === "saved") savedNote.textContent = `draft saved ${stamp(m.saved_at)}`;
+          else if (m.type === "closed") { ws = null; disarmDraft && disarmDraft(); dlg.close(); }
+        };
+        ws.onclose = () => { ws = null; peers.textContent = ""; };
+      } catch { ws = null; }
+    }
     let timer = null;
     const saveDraft = async () => {
       timer = null;
+      const all = collect() || {};
+      if (ws && ws.readyState === 1) {
+        // send only what changed: overwriting fields this client didn't
+        // touch would clobber a collaborator's newer edits
+        const delta = {};
+        for (const f of fields) {
+          const v = all[f.name] === undefined ? null : all[f.name];
+          const known = lastKnown[f.name] === undefined ? null : lastKnown[f.name];
+          if (JSON.stringify(v) !== JSON.stringify(known)) {
+            delta[f.name] = v; lastKnown[f.name] = v;
+          }
+        }
+        if (Object.keys(delta).length)
+          ws.send(JSON.stringify({type: "update", values: delta}));
+        return;
+      }
       const res = await fetch(entry.draft.href, {
         method: "PUT", headers: {"Content-Type": "application/json",
                                  ...principalHeaders()},
-        body: JSON.stringify(collect())});
+        body: JSON.stringify(all)});
       if (res.ok) {
         const b = await res.json();
-        draftBar.textContent = `draft saved ${stamp(b.saved_at)}`;
+        savedNote.textContent = `draft saved ${stamp(b.saved_at)}`;
       }
     };
     form.addEventListener("input", () => {
       clearTimeout(timer);
-      timer = setTimeout(saveDraft, 1000);
+      timer = setTimeout(saveDraft, ws ? 400 : 1000);
     });
     // a dismissal inside the debounce window must not lose the keystrokes —
     // but a submit/discard must disarm, or the pending save resurrects a
@@ -709,7 +770,7 @@ async function actionDialog({name, entry, doc, onDone}) {
                                      headers: principalHeaders()});
       dlg.close(); onDone && onDone(doc);
     });
-    draftBar.append(discard);
+    draftBar.append(savedNote, discard, peers);
   }
 
   // blur-time dry_run = the inline-validation affordance (§7.1)
@@ -753,7 +814,9 @@ async function actionDialog({name, entry, doc, onDone}) {
   // however the dialog is dismissed (Cancel, Escape), flush any keystrokes
   // still inside the debounce window, then refresh the page's envelope
   dlg.onclose = entry.draft
-    ? () => { flushDraft && flushDraft(); render(); } : null;
+    ? () => { flushDraft && flushDraft();
+              if (ws) { try { ws.close(); } catch {} ws = null; }
+              render(); } : null;
   dlg.showModal();
 }
 

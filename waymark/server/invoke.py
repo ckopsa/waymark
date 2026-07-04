@@ -252,8 +252,11 @@ class Invoker:
                                 expected_version=instance.version - 1)
         if defn.draft:
             # the effort landed; the draft has served its purpose
-            await self.storage.delete_draft(s, kind, id, action_name,
-                                            principal.id)
+            from .collab import SHARED
+
+            await self.storage.delete_draft(
+                s, kind, id, action_name,
+                SHARED if defn.collab else principal.id)
 
         doc = await render(instance, rdef, ctx=ctx, base=self.base)
         result = _result(doc)

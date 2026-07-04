@@ -38,10 +38,42 @@ schema enums), `scope`/`parts` (affordances on the item the user is looking
 at, keys pre-bound, dependent picker params), `prefill` (edit forms open
 holding current values, fenced by If-Match), server-side drafts
 (`draft=True`: effort persists in the envelope, across devices, visible to
-assisting agents), the `open_input` / `altitude` / `opaque_ref` /
-`long_text` / `blank_edit` / `unfenced_edit` / `large_effort` warnings, and
-the conformance `schema_guard_gap` / `prefill_truth` / `draft_protection`
-tests.
+assisting agents), the collab seam (`collab=True`, format §2.3: a live
+channel that drains into the shared draft), the `open_input` / `altitude` /
+`opaque_ref` / `long_text` / `blank_edit` / `unfenced_edit` /
+`large_effort` warnings, and the conformance `schema_guard_gap` /
+`prefill_truth` / `draft_protection` tests.
+
+### The effort articulation (established alongside the case studies)
+
+Every input field is a demand the server makes of the human, and every
+action has a **knowledge floor** — the cheapest interaction that could
+complete it given what the server knows at render time. Effort demanded
+above that floor is dishonesty about what the server knows. The demand
+classes, computed from the declaration: **traversal** (links/summaries),
+**assent** (empty or const-only input), **selection** (every field
+enumerable — enum/admits/picker), **recall** (open but format-constrained
+typing), **composition** (unbounded text; drafts mandatory). Work that
+exceeds one *sitting* or one *principal* is not a heavier class — it
+decomposes into a resource (states = milestones, `unavailable
+.becomes_available` = what's missing, transitions per contributor). The
+shipped mechanisms are tier-demotion devices: `admits` demotes
+recall→selection, `parts` demotes selection→assent, `prefill` demotes
+composition→recall, drafts make composition durable.
+
+Two zones are declared out of scope, both below the transition — the
+quantum of accountability ("would it belong in the activity feed?"):
+implicit intent (hover/scroll/dwell) below traversal, and fine-grained
+simultaneous co-production below composition. The second gets a **declared
+seam** instead of a model (format §2.3): the draft entry advertises a
+channel, joining costs one click, the declared demand is unchanged (a means
+declaration, quarantined like `display`), and the **drain rule** binds it —
+every accepted update persists through the draft before it is acked or
+relayed. Effort may be spent off-wire; it may never be stranded off-wire.
+Follow-up rule worth shipping: `draft_drain` in conformance for any
+declared protocol, not just the reference relay (join, write, drop, assert
+the draft holds the effort — the server tests do this for
+`waymark-relay/1` today).
 
 ---
 

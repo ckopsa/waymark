@@ -90,7 +90,9 @@ class Meal(Resource):
             # editing is not re-authoring: the form opens holding the current
             # recipe, fenced by If-Match, with server-side draft autosave
             prefill=("recipe", "prep_minutes", "thaw_hours"),
-            draft=True, requires_if_match=True,
+            # the whole family can polish a recipe together: the draft is
+            # shared, and the advertised channel drains into it live
+            draft=True, collab=True, requires_if_match=True,
             idempotent=True, reversible=False, confirm=False,
             display=dict(label="Update recipe", order=2))
     async def update_recipe(self, inp: RecipeInput, ctx: Ctx) -> None:

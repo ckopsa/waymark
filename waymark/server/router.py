@@ -5,7 +5,7 @@ import functools
 import json
 from typing import Any, Callable
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, Request, Response, WebSocket
 
 from .. import FORMAT_VERSION, MEDIA_TYPE
 from ..core.registry import ResourceDef
@@ -237,6 +237,12 @@ def build_router(engine: Any) -> APIRouter:
             raise NotFound(f"{rdef.kind} has no draftable action {action!r}.")
         return defn
 
+    def _draft_principal(defn: Any, principal: Principal) -> str:
+        # collab drafts are shared: one row under the "*" sentinel
+        from .collab import SHARED
+
+        return SHARED if defn.collab else principal.id
+
     @router.put("/{plural}/{id}/-/{action}/draft")
     @_wire
     async def save_draft(plural: str, id: str, action: str,
@@ -265,8 +271,18 @@ def build_router(engine: Any) -> APIRouter:
             now = engine.invoker.clock()
             await engine.storage.save_draft(
                 s, kind=rdef.kind, resource_id=id, action=action,
-                principal_id=principal.id, values=body,
+                principal_id=_draft_principal(defn, principal), values=body,
                 base_version=instance.version, at=now)
+        if defn.collab:
+            # the plain-PUT fallback stays first-class: clients that don't
+            # speak the channel still land in the same shared draft, and
+            # everyone in the room sees it
+            from .collab import actor_of
+
+            await engine.collab.broadcast(
+                (rdef.kind, id, action),
+                {"type": "update", "values": body,
+                 "actor": actor_of(principal), "saved_at": now.isoformat()})
         return Response(content=json.dumps({"saved_at": now.isoformat()}),
                         media_type="application/json")
 
@@ -277,14 +293,14 @@ def build_router(engine: Any) -> APIRouter:
         """The draft's current truth — clients fetch this on form open
         rather than trusting an envelope rendered before typing began."""
         rdef = rdef_or_404(plural)
-        _draft_defn(rdef, action)
+        defn = _draft_defn(rdef, action)
         principal = await engine.resolve_principal(request)
         async with engine.storage.session() as s:
             instance = await engine.storage.load(s, rdef.kind, id)
             if instance is None:
                 raise NotFound(f"No {rdef.kind} {id!r}.")
-            rows = await engine.storage.load_drafts(s, rdef.kind, id,
-                                                    principal.id)
+            rows = await engine.storage.load_drafts(
+                s, rdef.kind, id, _draft_principal(defn, principal))
         row = rows.get(action)
         if row is None:
             return Response(status_code=204)
@@ -299,12 +315,29 @@ def build_router(engine: Any) -> APIRouter:
     async def discard_draft(plural: str, id: str, action: str,
                             request: Request) -> Response:
         rdef = rdef_or_404(plural)
-        _draft_defn(rdef, action)
+        defn = _draft_defn(rdef, action)
         principal = await engine.resolve_principal(request)
         async with engine.storage.session() as s:
-            await engine.storage.delete_draft(s, rdef.kind, id, action,
-                                              principal.id)
+            await engine.storage.delete_draft(
+                s, rdef.kind, id, action, _draft_principal(defn, principal))
+        if defn.collab:
+            await engine.collab.close((rdef.kind, id, action), "discarded")
         return Response(status_code=204)
+
+    @router.websocket("/{plural}/{id}/-/{action}/draft/collab")
+    async def draft_collab(websocket: WebSocket, plural: str, id: str,
+                           action: str) -> None:
+        """The declared seam (§2.2): a relay whose every accepted update
+        drains into the shared draft."""
+        from .collab import serve
+
+        rdef = registry.by_plural(plural)
+        defn = rdef.machine.actions.get(action) if rdef else None
+        if rdef is None or defn is None or not defn.collab:
+            await websocket.close(code=4404)
+            return
+        principal = await engine.resolve_principal(websocket)
+        await serve(engine, websocket, rdef, defn, id, principal)
 
     @router.post("/{plural}/{id}/-/{action}")
     @_wire
@@ -312,11 +345,17 @@ def build_router(engine: Any) -> APIRouter:
         rdef = rdef_or_404(plural)
         principal = await engine.resolve_principal(request)
         body = await _json_body(request)
+        dry_run = request.query_params.get("dry_run") in ("1", "true")
         result = await engine.invoker.invoke(
             rdef.kind, id, action, body, principal=principal,
             if_match=request.headers.get("If-Match"),
             idempotency_key=request.headers.get("Idempotency-Key"),
-            dry_run=request.query_params.get("dry_run") in ("1", "true"))
+            dry_run=dry_run)
+        defn = rdef.machine.actions.get(action)
+        if (defn is not None and defn.collab and not dry_run
+                and result.status == 200):
+            # the invoke consumed the shared draft; the room is over
+            await engine.collab.close((rdef.kind, id, action), "consumed")
         return _doc_response(result)
 
     return router

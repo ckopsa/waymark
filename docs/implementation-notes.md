@@ -98,6 +98,17 @@ verified and their proposed mechanisms — lives in `usability-roadmap.md`.
   "error prevention" usability rule made mechanical — the form never offers
   a value the server already knows it will refuse, and never renders a blank
   the server could have filled with choices.
+- **The collab seam** (`@action(draft=True, collab=True)`, format §2.3) —
+  the draft entry advertises `draft.collab {href, protocol:
+  "waymark-relay/1"}`, a WebSocket relay (`server/collab.py`) whose every
+  accepted update is persisted through the draft-PUT path *before* it is
+  acked or relayed (the drain rule). Collab drafts are **shared**: stored
+  under the `"*"` principal sentinel, rendered for every principal, and the
+  plain draft `PUT`/`GET`/`DELETE` route to the shared row (a PUT broadcasts
+  into the room). A successful invoke or a DELETE closes the room with
+  `{"type": "closed", reason}`. `collab=True` without `draft=True` is a
+  decoration-time TypeError — the channel is a property of the draft it
+  drains into.
 - **Usability warnings at import time** (`UsabilityWarning`, §10.1 layer):
   `open_input` — a guard judges exactly one input field that carries no
   guidance: no enum/const, no `admits`, no picker widget (checked against
@@ -243,6 +254,20 @@ verified and their proposed mechanisms — lives in `usability-roadmap.md`.
 - **`asyncio_default_fixture_loop_scope` must be `"function"`** (asyncpg
   connections are loop-bound; session-scoped fixture loops cause
   "another operation is in progress").
+- **Collab rooms are per-process.** Participants connected to different
+  uvicorn workers won't see each other's live updates (the *drain* still
+  makes every update visible via draft GET / envelope render — liveness
+  degrades, truth doesn't). Pin collab traffic to one worker or extend
+  `CollabRooms.broadcast` over LISTEN/NOTIFY like the event dispatcher.
+- **The collab endpoint gates on resource visibility, not per-principal
+  affordance** — a principal for whom the action is `unavailable` (or
+  hidden) can still join the room in v0.1. Gate at the principal dependency
+  if that matters before it's fixed properly.
+- **Browsers can't set headers on WebSocket upgrades**, so the dev
+  `header_principal` also accepts `principal-id`/`principal-type`/
+  `principal-roles`/`principal-display` query params (the generic UI uses
+  them for the collab channel). Production auth should use cookies or a
+  real dependency — §15 still applies.
 
 ## Adding a resource: the checklist
 

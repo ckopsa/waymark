@@ -76,6 +76,13 @@ def _action_entry(defn: ActionDef, rdef: ResourceDef, href: str,
     entry["safety"] = defn.safety.to_wire()
     if defn.draft:
         entry["draft"] = {"href": f"{href}/draft"}
+        if defn.collab:
+            # the declared seam (§2.2): a live channel whose updates drain
+            # into this draft — a means declaration, never a demand change
+            from .collab import PROTOCOL
+
+            entry["draft"]["collab"] = {"href": f"{href}/draft/collab",
+                                        "protocol": PROTOCOL}
         if draft_row is not None:
             entry["draft"].update(
                 values=draft_row["values"],

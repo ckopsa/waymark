@@ -148,7 +148,10 @@ envelope and invents no affordances: buttons are `actions` (styled by
 blur-time `dry_run` validation, the filter bar is the collection `query`
 schema (with live `x-facets` counts), collection rows are a table derived
 from the items' scalar data fields with honest per-row buttons, and the
-activity feed + live refresh come from the SSE stream. A principal switcher
+activity feed + live refresh come from the SSE stream. Forms for
+`collab=True` actions join the draft's live channel (format §2.3): presence,
+collaborators' edits applied as they land, every update drained into the
+shared server-side draft. A principal switcher
 (dev `X-Principal-*` headers) lets you watch the affordance surface change
 per role. Add a resource to the engine and the UI can browse and operate it
 with zero frontend changes.
