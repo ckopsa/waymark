@@ -542,6 +542,49 @@ def watch(ctx: typer.Context,
     _run(settings, go)
 
 
+@client_app.command("follow-link")
+def follow_link(ctx: typer.Context,
+                principal_id: str = typer.Argument(
+                    None, help="principal to follow; default: the CLI's own "
+                               "principal (--as / WAYMARK_AS)"),
+                name: str = typer.Option(
+                    None, "--name", help="display name shown in the "
+                                         "follower's chip"),
+                at: str = typer.Option(
+                    None, "--at", help="land the opener on this href "
+                                       "(e.g. /api/plans/…)"),
+                api_base: str = typer.Option("/api", help="API mount path")) -> None:
+    """Print a UI link that makes its opener follow a principal.
+
+    `follow-link` with no argument is "follow me" (the CLI's principal) —
+    useful for agents that announce their own supervision link when they
+    start work. The UI path comes from discovery, never hardcoded.
+    """
+    settings: Settings = ctx.obj
+
+    async def go(agent: AgentClient) -> int | None:
+        from urllib.parse import urlencode
+
+        index = await agent.index(api_base)
+        ui = index.get("ui") or f"{api_base}/-/ui"
+        own = settings.headers.get("X-Principal-Id")
+        pid = principal_id or own
+        if not pid:
+            typer.secho("✗ no principal: pass one, or set --as / WAYMARK_AS",
+                        fg="red")
+            return EXIT_NOT_AFFORDED
+        display = name or (settings.headers.get("X-Principal-Display")
+                           if pid == own else None) or pid
+        q = {"follow": pid}
+        if display != pid:
+            q["follow_name"] = display
+        typer.echo(f"{settings.base}{ui}?{urlencode(q)}"
+                   + (f"#{at}" if at else ""))
+        return None
+
+    _run(settings, go)
+
+
 @client_app.command()
 def plan(ctx: typer.Context, href: str, goal_state: str) -> None:
     """Route from HREF's current state to GOAL_STATE over the learned
