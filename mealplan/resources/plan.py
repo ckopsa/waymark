@@ -184,12 +184,13 @@ async def meal_matches_theme(r, inp: AssignInput, ctx: Ctx) -> Allow | Deny:
     meal = await ctx.read(Meal, inp.meal_id)
     if meal is None:
         return Deny(vars={"reason": "That meal no longer exists."})
-    if meal.data.theme != day.theme:
+    if day.theme not in meal.data.themes:
+        tagged = ", ".join(meal.data.themes)
         return Deny(
-            vars={"reason": f"'{meal.data.name}' is {meal.data.theme}; "
+            vars={"reason": f"'{meal.data.name}' is tagged {tagged}; "
                             f"{inp.date} is {day.theme} night. Use "
                             "the off-theme assignment to override."},
-            errors={"meal_id": [f"theme {meal.data.theme!r} does not match "
+            errors={"meal_id": [f"themes {tagged!r} do not include "
                                 f"{day.theme!r}"]})
     return Allow()
 
@@ -270,9 +271,9 @@ class MealPlan(Resource):
             guards=[date_in_plan, meal_is_listed, meal_matches_theme],
             safety=Safety(idempotent=True, reversible=False, confirm=False),
             # per-part rendering resolves {item.theme} to the day's theme, so
-            # the picker only offers meals that match the night
+            # the picker only offers meals tagged for the night
             field_display={"meal_id": {"params": {
-                "state": "on_list", "theme": "{item.theme}"}}},
+                "state": "on_list", "themes": "{item.theme}"}}},
             display=dict(label="Assign meal", style="primary", order=1))
     async def assign_meal(self, inp: AssignInput, ctx: Ctx) -> None:
         await self._assign(inp, ctx)

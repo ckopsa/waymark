@@ -31,7 +31,10 @@ it automatically at create time.
 - **`meal`** — the meal library. The AI creates suggestions (with a full
   markdown recipe, `prep_minutes`, `thaw_hours`); humans `accept` the keepers
   onto the list or `decline`. Recipes are never written by hand:
-  `update_recipe` exists so the AI can revise them.
+  `update_recipe` exists so the AI can revise them. A meal carries `themes`,
+  a tag list of every theme night it can serve (fajitas are `mexican` *and*
+  `american`); `update_themes` retags it, and filtering `themes=bbq` means
+  "tagged bbq" (membership, not equality).
 - **`rotation`** — the dynamic lists of Sunday themes. Several can exist
   (seasonal lists, experiments); `activate` stamps `activated_at` and new
   plans draw from the most recently activated `active` rotation — an

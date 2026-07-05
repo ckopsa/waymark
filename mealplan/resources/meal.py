@@ -7,12 +7,18 @@ onto the meal list, which is what a plan day can be assigned from.
 
 2.0: ``update_recipe`` is one ``Edit`` declaration — prefill, the If-Match
 fence, and the shared live draft are a single concept instead of four flags.
+
+A meal is tagged with every theme night it can serve (``themes``, a list —
+fajitas are mexican *and* american); ``update_themes`` retags, and the
+``themes`` filter is membership, not equality. Single-``theme`` rows and
+payloads from before the change still validate (folded into a one-tag list).
 """
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from waymark2 import (
     Acknowledged,
@@ -34,12 +40,27 @@ class MealState(StrEnum):
     RETIRED = "retired"       # declined or rotated out
 
 
+Theme = Annotated[str, Field(min_length=1, max_length=50)]
+
+
 class MealData(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    theme: str = Field(
-        min_length=1, max_length=50,
-        description="A weekday theme (italian, mexican, american, asian, "
-                    "pizza, bbq) or any theme from the Sunday rotation")
+    themes: list[Theme] = Field(
+        min_length=1, max_length=10,
+        description="Every theme night this meal can serve: weekday themes "
+                    "(italian, mexican, american, asian, pizza, bbq) and/or "
+                    "themes from the Sunday rotation")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_theme(cls, values: Any) -> Any:
+        # rows (and clients) from the single-theme era carry `theme`
+        if isinstance(values, dict) and "theme" in values:
+            values = dict(values)
+            theme = values.pop("theme")
+            if not values.get("themes"):
+                values["themes"] = [theme]
+        return values
     recipe: str | None = Field(
         default=None,
         description="Markdown recipe — written by the AI, never by hand",
@@ -62,6 +83,13 @@ class RecipeInput(BaseModel):
     thaw_hours: int | None = Field(default=None, ge=0)
 
 
+class ThemesInput(BaseModel):
+    themes: list[Theme] = Field(
+        min_length=1, max_length=10,
+        description="The full set of theme nights this meal can serve — "
+                    "replaces the current tags")
+
+
 class Meal(Resource):
     kind = "meal"
     State = MealState
@@ -70,13 +98,14 @@ class Meal(Resource):
     initial = MealState.SUGGESTED
     terminal = {MealState.RETIRED}
 
-    summary = "{data.name} · {data.theme} · {state.label}"
+    summary = "{data.name} · {data.themes|join} · {state.label}"
 
     filterable = filterable(
         state=filterable.Eq | filterable.In,
-        theme=filterable.Eq | filterable.In,
+        # membership: themes=bbq means "tagged bbq" (any other tags welcome)
+        themes=filterable.Eq | filterable.In,
     )
-    sortable = sortable("name", "theme", default="name")
+    sortable = sortable("name", default="name")
 
     display = {"title": "{data.name}"}
 
@@ -122,6 +151,16 @@ class Meal(Resource):
             self.data.prep_minutes = inp.prep_minutes
         if inp.thaw_hours is not None:
             self.data.thaw_hours = inp.thaw_hours
+
+    @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
+            input=ThemesInput,
+            edit=Edit(prefill=("themes",)),
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
+            display=dict(label="Update themes", order=3,
+                         description="Retag the meal with every theme night "
+                                     "it can serve"))
+    async def update_themes(self, inp: ThemesInput, ctx: Ctx) -> None:
+        self.data.themes = list(dict.fromkeys(inp.themes))
 
     @action(from_=MealState.ON_LIST, to=MealState.RETIRED,
             safety=Safety(idempotent=True, reversible=False, confirm=True,

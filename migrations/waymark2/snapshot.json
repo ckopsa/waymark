@@ -101,10 +101,10 @@
           "nullable": false,
           "type": "VARCHAR(64)"
         },
-        "theme": {
-          "generated": "(data->>'theme')",
+        "themes": {
+          "generated": "(data->'themes')",
           "nullable": true,
-          "type": "TEXT"
+          "type": "JSONB"
         },
         "updated_at": {
           "nullable": false,
@@ -122,8 +122,8 @@
         "ix_meals_state": [
           "state"
         ],
-        "ix_meals_theme": [
-          "theme"
+        "ix_meals_themes": [
+          "themes"
         ]
       }
     },
