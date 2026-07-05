@@ -1,12 +1,20 @@
-"""``waymark client``: the affordance-following agent client as a CLI.
+"""``waymark2 client``: the affordance-following agent client as a CLI.
 
-One shell call per affordance, driven by :class:`~waymark.client.AgentClient`
-so every Part IV rule stays *enforced* rather than remembered: no URL
-construction (actions are named, hrefs come from the envelope), automatic
-``Idempotency-Key`` and ``If-Match``, dry-run pre-validation, and
-``safety.confirm`` as a hard stop — a confirm-gated action exits with code 3
-and does nothing until re-run with ``--confirmed`` (the flag is the human
-approval, visible in whatever harness runs the command).
+One shell call per affordance, driven by
+:class:`~waymark2.client.AgentClient` so every Part IV rule stays *enforced*
+rather than remembered: no URL construction (actions are named, hrefs come
+from the envelope), automatic ``Idempotency-Key`` and ``If-Match``, dry-run
+pre-validation, and ``safety.confirm`` as a hard stop — a confirm-gated
+action exits with code 3 and does nothing until re-run with ``--confirmed``
+(the flag is the human approval, visible in whatever harness runs the
+command).
+
+2.0: action listings show each affordance's demand class and draftability,
+and the ``draft`` group joins in-progress effort — ``draft show`` reads a
+half-written form (yours or anyone's, when shared), ``draft save`` continues
+it through the same write path as every other client, ``draft discard``
+exits via the envelope's own action. ``--part`` addresses a placed action's
+per-part draft.
 
 A per-server session file persists the idempotency key store and the learned
 ``effect.to`` graph across invocations, so retries replay instead of
@@ -165,7 +173,10 @@ def _flags(entry: dict[str, Any]) -> str:
         ("if-match", safety.get("requires_if_match")),
         ("non-idempotent", not safety.get("idempotent", False)),
         ("bulk", effect.get("bulk")),
+        ("draftable", bool(entry.get("draft"))),
     ) if on]
+    if entry.get("effort"):
+        flags.insert(0, entry["effort"])  # the demand class, first
     return f" [{', '.join(flags)}]" if flags else ""
 
 
@@ -358,6 +369,88 @@ def create(ctx: typer.Context, collection_href: str,
            dry_run: bool = typer.Option(False, "--dry-run")) -> None:
     """Invoke a collection's create action (alias for `act … create`)."""
     _act(ctx, collection_href, "create", body_json, confirmed, dry_run)
+
+
+# ── drafts (design §4): effort is server-state a shell can join ─────────
+draft_app = typer.Typer(help="Read, continue, or discard in-progress draft "
+                             "effort on a draftable action.",
+                        no_args_is_help=True)
+client_app.add_typer(draft_app, name="draft")
+
+
+def _print_draft(env: Doc, *, raw: bool) -> None:
+    if raw:
+        typer.echo(json.dumps(env.body, indent=2, default=str))
+        return
+    typer.secho(f"{env.summary}", bold=True)
+    data = env.data
+    if data.get("stale"):
+        typer.secho("⚠ stale: the resource moved on since this draft was "
+                    "saved — review before committing", fg="yellow")
+    values = data.get("values") or {}
+    if not values:
+        typer.echo("(empty)")
+    for field_name, value in values.items():
+        rev = (data.get("revs") or {}).get(field_name)
+        author = ((data.get("authors") or {}).get(field_name) or {})
+        who = author.get("display") or author.get("id") or ""
+        meta = " · ".join(x for x in
+                          (f"rev {rev}" if rev else "", who) if x)
+        typer.secho(f"{field_name}" + (f"  ({meta})" if meta else ""),
+                    bold=True)
+        typer.echo(f"  {_trunc(value)}")
+
+
+@draft_app.command("show")
+def draft_show(ctx: typer.Context, href: str, action_name: str,
+               part: str | None = typer.Option(
+                   None, "--part", help="part key of a placed action")) -> None:
+    """Read a draft's current truth (an absent draft is an empty open one)."""
+    settings: Settings = ctx.obj
+
+    async def go(agent: AgentClient) -> None:
+        doc = await agent.fetch(href, depth="full" if part else "summary")
+        _print_draft(await agent.draft(doc, action_name, part=part),
+                     raw=settings.raw)
+
+    _run(settings, go)
+
+
+@draft_app.command("save")
+def draft_save(ctx: typer.Context, href: str, action_name: str,
+               body_json: str = typer.Option(
+                   ..., "--json", help="fields to merge as JSON ('-' reads "
+                                       "stdin; null clears a field)"),
+               part: str | None = typer.Option(
+                   None, "--part", help="part key of a placed action")) -> None:
+    """Merge fields into the draft — the same write path as every other
+    client, so collaborators watching the form see it arrive live."""
+    settings: Settings = ctx.obj
+    fields = _parse_body(body_json)
+
+    async def go(agent: AgentClient) -> None:
+        doc = await agent.fetch(href, depth="full" if part else "summary")
+        _print_draft(await agent.save_draft(doc, action_name, fields or {},
+                                            part=part),
+                     raw=settings.raw)
+
+    _run(settings, go)
+
+
+@draft_app.command("discard")
+def draft_discard(ctx: typer.Context, href: str, action_name: str,
+                  part: str | None = typer.Option(
+                      None, "--part",
+                      help="part key of a placed action")) -> None:
+    """Discard the draft via its envelope's own discard action."""
+    settings: Settings = ctx.obj
+
+    async def go(agent: AgentClient) -> None:
+        doc = await agent.fetch(href, depth="full" if part else "summary")
+        await agent.discard_draft(doc, action_name, part=part)
+        typer.secho("✓ draft discarded", fg="green")
+
+    _run(settings, go)
 
 
 @client_app.command()

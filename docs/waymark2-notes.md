@@ -60,12 +60,14 @@ build taught us, and the operational caveats. The same discipline as v1's
 - **`dangling_ref` conformance** (every rendered Ref resolves) is not yet
   a suite test; `check_refs` covers declaration-time validity only.
 - **`waymark2 extract-messages`** is still the v1 stub.
-- **The agent client is draft-aware and effort-aware**
-  (`agent.draft/save_draft/discard_draft`, part-scoped adverts, demand
-  classes and draftability in `mcp_tools` descriptions —
-  `tests/waymark2/test_agent_v2.py` proves the human-starts/agent-continues
-  loop). The **CLI** remains the v1 fork: wire-compatible, but no draft
-  subcommands and no relay client yet.
+- **The agent client and CLI are draft-aware and effort-aware**
+  (`agent.draft/save_draft/discard_draft` and `waymark2 client draft
+  show|save|discard`, part-scoped adverts, demand classes in `mcp_tools`
+  descriptions and CLI listings — `tests/waymark2/test_agent_v2.py` proves
+  the human-starts/agent-continues loop). Neither speaks the live relay
+  yet; scripted saves land through the drain path, which the room
+  broadcasts, so shell writes are visible live to socketed clients — the
+  reverse (a CLI *watching* a room) would need a relay/2 client.
 
 ## Operational caveats
 
