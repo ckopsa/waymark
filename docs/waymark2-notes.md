@@ -93,6 +93,14 @@ build taught us, and the operational caveats. The same discipline as v1's
   ``Engine(presence=False)`` turns the stream off entirely. Every GET costs
   one bus publish (a pg_notify under PostgresBus) — disable it if that ever
   matters at scale.
+- **Form engagement rides presence as ``engaged`` events — derived from
+  wire facts only.** A draft GET is "the form opened" (``via: form``), a
+  dry-run is "the form is being filled" (``via: dry_run``), a discard is a
+  deliberate abandon (``via: discard``). The framework never asks clients
+  to report UI gestures, so a modal closed without touching the wire is
+  invisible — by design: it cost nothing and told the server nothing.
+  Draft *saves* are deliberately not announced (autosave cadence would make
+  presence noise; the room and the envelope already carry that truth).
 - **The conformance walker acts as a `system` principal** (`WALKER`).
   Role-gated paths need a registered `@state_factory`; the skip/fail
   messages name the exact registration to add.

@@ -495,9 +495,14 @@ def watch(ctx: typer.Context,
         when = ev.get("at", "")[11:19]
         a = ev.get("actor", {})
         who_s = a.get("display") or a.get("id", "?")
-        typer.echo(typer.style(
-            f"{when}  {who_s} viewed  {ev.get('kind')}  {ev.get('self', '')}",
-            fg="bright_black"))
+        if ev.get("action"):
+            verb = {"form": "opened form", "dry_run": "filling form",
+                    "discard": "discarded draft"}.get(ev.get("via"), "engaged")
+            line = (f"{when}  {who_s} {verb} '{ev['action']}' on "
+                    f"{ev.get('kind')}  {ev.get('self', '')}")
+        else:
+            line = f"{when}  {who_s} viewed  {ev.get('kind')}  {ev.get('self', '')}"
+        typer.echo(typer.style(line, fg="bright_black"))
 
     async def _stream(agent: AgentClient, target: str,
                       params: dict[str, str],

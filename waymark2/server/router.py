@@ -184,15 +184,16 @@ def build_router(engine: Any) -> APIRouter:
             engine.presence, queue,
             actor=request.query_params.get("actor") or None, kinds=kinds))
 
-    async def _announce_view(principal: Principal, kind: str,
-                             self_href: str) -> None:
+    async def _announce_view(principal: Principal, kind: str, self_href: str,
+                             action: str | None = None,
+                             via: str | None = None) -> None:
         if engine.presence is None:
             return
         await engine.presence.publish(
             actor={"id": principal.id, "type": principal.type,
                    "display": principal.display or principal.id},
             self_href=self_href, kind=kind,
-            at=engine.invoker.clock().isoformat())
+            at=engine.invoker.clock().isoformat(), action=action, via=via)
 
     @router.get("/{plural}/{id}/-/events")
     async def resource_events(plural: str, id: str, request: Request) -> Any:
@@ -371,6 +372,11 @@ def build_router(engine: Any) -> APIRouter:
         principal = await engine.resolve_principal(request)
         async with engine.storage.session() as s:
             doc = await _draft_envelope(s, rdef, defn, id, part_key, principal)
+        # a draftable form opens by fetching the draft's truth — this GET is
+        # the server-visible fact of "the modal opened" (presence: engaged)
+        await _announce_view(principal, rdef.kind,
+                             f"{base}/{rdef.plural}/{id}",
+                             action=action, via="form")
         return Response(content=json.dumps(doc, default=str),
                         media_type=MEDIA_TYPE,
                         headers={"ETag": doc["meta"]["etag"]})
@@ -387,6 +393,9 @@ def build_router(engine: Any) -> APIRouter:
         if defn.collab:
             await engine.collab.close((rdef.kind, id, action, part_key),
                                       "discarded")
+        await _announce_view(principal, rdef.kind,
+                             f"{base}/{rdef.plural}/{id}",
+                             action=action, via="discard")
         return Response(status_code=204)
 
     router.delete("/{plural}/{id}/-/{action}/draft")(_wire(_discard_draft))
@@ -416,6 +425,12 @@ def build_router(engine: Any) -> APIRouter:
         principal = await engine.resolve_principal(request)
         body = await _json_body(request)
         dry_run = request.query_params.get("dry_run") in ("1", "true")
+        if dry_run:
+            # blur-time validation is the server-visible fact of "someone is
+            # filling this form right now" (presence: engaged)
+            await _announce_view(principal, rdef.kind,
+                                 f"{base}/{rdef.plural}/{id}",
+                                 action=action, via="dry_run")
         result = await engine.invoker.invoke(
             rdef.kind, id, action, body, principal=principal,
             if_match=request.headers.get("If-Match"),

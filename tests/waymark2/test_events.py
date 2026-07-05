@@ -212,3 +212,30 @@ async def test_presence_streams_navigation(env):
     assert payload["self"] == self_href
     assert payload["actor"]["id"] == "dana"  # rambler's view was filtered
     assert "id" not in events[0], "presence events carry no resumable id"
+
+
+async def test_presence_streams_form_engagement(env):
+    """Form engagement is derived from wire facts the server already sees —
+    a dry-run is 'someone is filling this form' — never from
+    client-reported gestures. It arrives as an `engaged` event naming the
+    action."""
+    engine, client = env
+    self_href = await _create(client)
+
+    async def engage():
+        await asyncio.sleep(0.2)
+        res = await client.post(self_href + "/-/finish?dry_run=1",
+                                headers=OWNER)
+        assert res.status_code == 200
+
+    async with client.stream("GET", "/api/-/presence?actor=dana",
+                             headers=OWNER, timeout=15) as response:
+        task = asyncio.create_task(engage())
+        events = await asyncio.wait_for(read_sse_events(response, 1),
+                                        timeout=10)
+        await task
+
+    assert events[0]["event"] == "engaged"
+    payload = json.loads(events[0]["data"])
+    assert payload["action"] == "finish" and payload["via"] == "dry_run"
+    assert payload["self"] == self_href

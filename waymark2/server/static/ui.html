@@ -1030,6 +1030,13 @@ async function presenceLoop(id, ctl) {
           const data = frame.split("\n").find(l => l.startsWith("data:"));
           if (!data) continue;
           const ev = JSON.parse(data.slice(5));
+          // form engagement (from wire facts: draft GET / dry-run /
+          // discard) shows in the chip; plain views clear it
+          if (followStatus)
+            followStatus.textContent = !ev.action ? ""
+              : ev.via === "discard" ? ` · discarded '${pretty(ev.action)}' draft`
+              : ev.via === "dry_run" ? ` · filling '${pretty(ev.action)}'`
+              : ` · in '${pretty(ev.action)}' form`;
           const here = location.hash.slice(1).split("?")[0];
           if (ev.self && ev.self !== here && !$("#dlg").open)
             location.hash = "#" + ev.self;
@@ -1039,12 +1046,15 @@ async function presenceLoop(id, ctl) {
     await new Promise(r => setTimeout(r, 2000));
   }
 }
+let followStatus = null;
 function followChip() {
   const chip = $("#followchip");
   chip.style.display = followId ? "inline-block" : "none";
   chip.textContent = "";
+  followStatus = null;
   if (followId) {
-    chip.append(`following ${followName}`,
+    followStatus = el("span", {class:"muted"}, "");
+    chip.append(`following ${followName}`, followStatus,
       el("button", {title: "stop following", onclick: unfollow}, "✕"));
   }
 }

@@ -173,9 +173,19 @@ class PresenceHub:
                 pass
 
     async def publish(self, *, actor: dict[str, Any], self_href: str,
-                      kind: str, at: str) -> None:
-        await self.bus.publish(PRESENCE_CHANNEL, {
-            "actor": actor, "self": self_href, "kind": kind, "at": at})
+                      kind: str, at: str, action: str | None = None,
+                      via: str | None = None) -> None:
+        """Plain views carry no ``action``; form engagement does — derived
+        from wire facts the server already sees (a draft GET is a form
+        opening, a dry-run is a form being filled, a discard is a form
+        abandoned deliberately). Never from client-reported gestures."""
+        message: dict[str, Any] = {"actor": actor, "self": self_href,
+                                   "kind": kind, "at": at}
+        if action:
+            message["action"] = action
+        if via:
+            message["via"] = via
+        await self.bus.publish(PRESENCE_CHANNEL, message)
 
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -199,7 +209,8 @@ async def presence_stream(hub: PresenceHub, queue: asyncio.Queue, *,
             if kinds is not None and m.get("kind") not in kinds:
                 continue
             payload = {k: v for k, v in m.items() if k != "_origin"}
-            yield f"event: viewed\ndata: {json.dumps(payload)}\n\n"
+            event = "engaged" if payload.get("action") else "viewed"
+            yield f"event: {event}\ndata: {json.dumps(payload)}\n\n"
     finally:
         hub.unsubscribe(queue)
 
