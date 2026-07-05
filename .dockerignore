@@ -1,0 +1,12 @@
+.git
+.venv
+.env
+.claude
+__pycache__
+**/__pycache__
+tests/
+docs/
+app/
+scratch/
+*.md
+!README.md

@@ -8,7 +8,18 @@ TEST_DSN     ?= postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/waymark_tes
 
 MEALPLAN_DSN ?= postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan_dev
 
-.PHONY: dev db test conformance check demo mealplan
+# The home cluster's only node is ARM64; cross-building needs qemu binfmt
+# (one-time: docker run --privileged --rm tonistiigi/binfmt --install arm64).
+IMAGE     ?= docker.kopsa.info/mealplan
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
+PLATFORM  ?= linux/arm64
+
+# Cluster access for `make deploy`, from the infra repo's secrets unless set.
+INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
+NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
+NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
+
+.PHONY: dev db test conformance check demo mealplan image deploy
 
 dev: db  ## run the example shop with auto-reload
 	@echo "ui  → http://localhost:$(PORT)/api/-/ui"
@@ -44,3 +55,13 @@ mealplan: db  ## run the family meal planner with auto-reload
 
 demo: db  ## agent demo (plans over effect.to, stops at safety.confirm)
 	WAYMARK_DSN=$(DEV_DSN) uv run python scripts/agent_demo.py
+
+image:  ## build and push the mealplan image for the home cluster
+	docker buildx build --platform $(PLATFORM) -t $(IMAGE):$(IMAGE_TAG) --push .
+	@echo "pushed $(IMAGE):$(IMAGE_TAG)"
+
+deploy: image  ## push image, then roll meals.kopsa.info onto it via nomad variable
+	@NOMAD_ADDR=$(NOMAD_ADDR) NOMAD_TOKEN=$(NOMAD_TOKEN) \
+		nomad var put -force nomad/jobs/mealplan/deploy image_tag=$(IMAGE_TAG) >/dev/null
+	@echo "deploying $(IMAGE):$(IMAGE_TAG) — nomad restarts the server task on the new image"
+	@echo "note: a repeat -dirty tag at the same commit will NOT redeploy; commit or pass IMAGE_TAG="

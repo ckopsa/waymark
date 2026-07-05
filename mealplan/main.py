@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import os
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 import waymark2 as waymark
 from waymark2.server.engine import header_principal
@@ -54,3 +56,27 @@ app.include_router(engine.router, prefix="/api")
 from waymark2.server import openapi as _openapi  # noqa: E402
 
 _openapi.install(app, engine.registry)
+
+# The server hands clients their client: built wheels (waymark2 CLI) are
+# served under /cli so a fresh agent can bootstrap with nothing but this
+# host's URL. Populated by `uv build` (repo-root dist/, or WAYMARK_CLI_DIR).
+CLI_DIR = os.environ.get(
+    "WAYMARK_CLI_DIR",
+    os.path.join(os.path.dirname(__file__), "..", "dist"),
+)
+
+if os.path.isdir(CLI_DIR):
+    @app.get("/cli", include_in_schema=False)
+    def cli_index(request: Request) -> PlainTextResponse:
+        base = str(request.base_url).rstrip("/")
+        wheels = sorted(f for f in os.listdir(CLI_DIR) if f.endswith(".whl"))
+        lines = ["# waymark2 client — install with one of:", ""]
+        for wheel in wheels:
+            lines += [f"uv tool install {base}/cli/{wheel}",
+                      f"pipx install {base}/cli/{wheel}"]
+        lines += ["", f"# then: WAYMARK_BASE={base} waymark2 client index",
+                  "# agent-link holders: also set WAYMARK_TOKEN=wmk_… "
+                  "(sent as Authorization: Bearer)"]
+        return PlainTextResponse("\n".join(lines) + "\n")
+
+    app.mount("/cli", StaticFiles(directory=CLI_DIR), name="cli")
