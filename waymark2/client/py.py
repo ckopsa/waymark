@@ -112,8 +112,13 @@ class WaymarkClient:
         return res.json()
 
     async def get(self, href: str, *, depth: str | None = None) -> Doc:
-        params = {"depth": depth} if depth else None
-        res = await self.http.get(href, params=params, headers=self.headers)
+        # merge depth into the href's own query — httpx `params` would
+        # REPLACE it, silently dropping e.g. ?state=active from a
+        # collection href (a follower watching an agent caught this one)
+        url = httpx.URL(href)
+        if depth:
+            url = url.copy_merge_params({"depth": depth})
+        res = await self.http.get(url, headers=self.headers)
         if res.status_code >= 400:
             raise Problem.from_response(res)
         return Doc(res.json(), res)
