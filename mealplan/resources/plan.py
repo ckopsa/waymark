@@ -9,6 +9,11 @@ The lifecycle mirrors how the family actually plans:
 - ``planned``: every day is covered; the grocery list and prep tasks hang
   off this state.
 - ``active`` → ``done``: the week runs its course.
+
+2.0: the day-shaped actions share one ``PartScope`` declared once;
+``date_in_plan`` / ``sunday_only`` / ``theme_in_rotation`` are pure
+acceptance-set declarations (the enum and the enforcement are the same
+set); references are ``Ref`` fields.
 """
 from __future__ import annotations
 
@@ -19,7 +24,23 @@ from enum import StrEnum
 from pydantic import BaseModel, Field, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-from waymark import Allow, Ctx, Deny, Resource, action, filterable, guard, sortable
+from waymark2 import (
+    Acknowledged,
+    Allow,
+    Ctx,
+    Deny,
+    Guard,
+    PartScope,
+    Query,
+    Ref,
+    RefField,
+    Resource,
+    Safety,
+    action,
+    filterable,
+    guard,
+    sortable,
+)
 
 from ..themes import ROTATING, WEEKDAY_THEMES
 from .meal import Meal, MealState
@@ -36,9 +57,7 @@ class PlanState(StrEnum):
 class DayPlan(BaseModel):
     date: date_t
     theme: str = Field(min_length=1, max_length=50)
-    meal_id: str | None = Field(default=None, json_schema_extra={"x-display": {
-        "label": "Meal", "widget": "resource", "kind": "meal",
-        "label_field": "meal_name"}})
+    meal_id: Ref["meal"] | None = RefField(default=None, label="meal_name")
     meal_name: str | None = Field(default=None, max_length=200)
     eating_out: bool = False
 
@@ -47,11 +66,8 @@ class PlanData(BaseModel):
     start_date: date_t = Field(description="Our week runs Tuesday to Tuesday")
     weeks: int = Field(default=1, ge=1, le=2,
                        description="Plan 2 weeks to save on grocery trips")
-    rotation_id: str | None = Field(
-        default=None, description="The Sunday-theme rotation to draw from",
-        json_schema_extra={"x-display": {
-            "label": "Sunday rotation",
-            "widget": "resource", "kind": "rotation"}})
+    rotation_id: Ref["rotation"] | None = RefField(
+        default=None, description="The Sunday-theme rotation to draw from")
     days: list[DayPlan] = Field(default_factory=list)
     notes: str | None = Field(default=None, max_length=2000,
                               json_schema_extra={"x-display": {
@@ -80,12 +96,9 @@ class PlanCreate(PlanData):
         default_factory=_next_tuesday,
         description="Our week runs Tuesday to Tuesday. "
                     "Leave blank for the coming Tuesday.")
-    rotation_id: str | None = Field(
+    rotation_id: Ref["rotation"] | None = RefField(
         default=None, description="The Sunday-theme rotation to draw from. "
-                                  "Leave blank for the active rotation.",
-        json_schema_extra={"x-display": {
-            "label": "Sunday rotation",
-            "widget": "resource", "kind": "rotation"}})
+                                  "Leave blank for the active rotation.")
     days: SkipJsonSchema[list[DayPlan]] = Field(default_factory=list)
 
 
@@ -95,9 +108,8 @@ class DayInput(BaseModel):
 
 class AssignInput(BaseModel):
     date: date_t
-    meal_id: str = Field(min_length=1, json_schema_extra={"x-display": {
-        "label": "Meal", "widget": "resource", "kind": "meal",
-        "params": {"state": "on_list"}}})
+    meal_id: Ref["meal"] = RefField(min_length=1,
+                                    pick=Query(state="on_list"))
 
 
 class SundayThemeInput(BaseModel):
@@ -110,89 +122,80 @@ def _day(r, d: date_t) -> DayPlan | None:
 
 
 # ── Guards ──────────────────────────────────────────────────────────────
-@guard(else_="{date} is not a day in this plan.", vars=["date"],
-       admits=("date", lambda r: [d.date.isoformat() for d in r.data.days]))
-async def date_in_plan(r, inp: DayInput, ctx: Ctx) -> Allow | Deny:
-    if _day(r, inp.date) is not None:
-        return Allow()
-    return Deny(vars={"date": inp.date.isoformat()},
-                errors={"date": ["not a day in this plan"]})
+# One acceptance set: the rendered enum, the per-part availability, and the
+# enforcement. There is no separate body to drift out of sync.
+date_in_plan = Guard(
+    name="date_in_plan",
+    judges=("date",),
+    accepts=lambda r: [d.date.isoformat() for d in r.data.days],
+    explain="{date} is not a day of this plan.",
+)
 
-
-@guard(else_="Meal {meal_id} is not on the meal list. Accept a suggestion "
-             "(or ask the AI for one) first.",
-       vars=["meal_id"], remedies=["meal.accept"])
-async def meal_is_listed(r, inp: AssignInput, ctx: Ctx) -> Allow | Deny:
-    meal = await ctx.read(Meal, inp.meal_id)
-    if meal is not None and meal.state == str(MealState.ON_LIST):
-        return Allow()
-    return Deny(vars={"meal_id": inp.meal_id},
-                errors={"meal_id": ["not an on-list meal"]})
-
-
-@guard(else_="{reason}", vars=["reason"],
-       remedies=["plan.set_sunday_theme", "plan.assign_off_theme"])
-async def meal_matches_theme(r, inp: AssignInput, ctx: Ctx) -> Allow | Deny:
-    day = _day(r, inp.date)
-    if day is None:
-        return Deny(vars={"reason": f"{inp.date} is not a day in this plan."})
-    if day.theme == ROTATING:
-        return Deny(vars={"reason": f"Pick {inp.date}'s Sunday theme from the "
-                                    "rotation first, then assign — or assign "
-                                    "off-theme with confirmation."})
-    meal = await ctx.read(Meal, inp.meal_id)
-    if meal is None:
-        return Deny(vars={"reason": f"Meal {inp.meal_id} does not exist."})
-    if meal.data.theme != day.theme:
-        return Deny(
-            vars={"reason": f"'{meal.data.name}' is {meal.data.theme}; "
-                            f"{inp.date} is {day.theme} night. Use "
-                            "assign_off_theme to override."},
-            errors={"meal_id": [f"theme {meal.data.theme!r} does not match "
-                                f"{day.theme!r}"]})
-    return Allow()
-
-
-@guard(else_="Only Sunday rotates; {date} is {theme} night.", vars=["date", "theme"],
-       admits=("date", lambda r: [d.date.isoformat() for d in r.data.days
-                                  if d.date.weekday() == 6]))
-async def sunday_only(r, inp: SundayThemeInput, ctx: Ctx) -> Allow | Deny:
-    if inp.date.weekday() == 6:
-        return Allow()
-    day = _day(r, inp.date)
-    return Deny(vars={"date": inp.date.isoformat(),
-                      "theme": day.theme if day else "not planned"},
-                errors={"date": ["not a Sunday"]})
+sunday_only = Guard(
+    name="sunday_only",
+    judges=("date",),
+    accepts=lambda r: [d.date.isoformat() for d in r.data.days
+                       if d.date.weekday() == 6],
+    explain="Only Sunday rotates; {date} has a fixed weeknight theme.",
+)
 
 
 async def _rotation_themes(r, ctx: Ctx) -> list[str] | None:
-    """The linked rotation's themes — evaluated server-side at render time so
+    """The linked rotation's themes — resolved server-side at render time so
     the theme field offers real choices. None (no constraint) when no
-    rotation is linked: the guard allows any theme then."""
+    rotation is linked: any theme goes then."""
     if r.data.rotation_id is None:
         return None
     rotation = await ctx.read("rotation", r.data.rotation_id)
     return list(rotation.data.themes) if rotation is not None else None
 
 
-@guard(else_="'{theme}' is not in the Sunday rotation. Add it there first.",
-       vars=["theme"], remedies=["rotation.add_theme"],
-       admits=("theme", _rotation_themes))
-async def theme_in_rotation(r, inp: SundayThemeInput, ctx: Ctx) -> Allow | Deny:
-    if r.data.rotation_id is None:
-        return Allow()  # no rotation linked — any theme goes
-    rotation = await ctx.read("rotation", r.data.rotation_id)
-    if rotation is None:
-        return Deny(vars={"theme": inp.theme},
-                    errors={"rotation_id": ["rotation not found"]})
-    if inp.theme in rotation.data.themes:
+theme_in_rotation = Guard(
+    name="theme_in_rotation",
+    judges=("theme",),
+    reads=("rotation",),
+    accepts=_rotation_themes,
+    explain="'{theme}' is not in the Sunday rotation. Add it there first.",
+    remedies=("rotation.add_theme",),
+)
+
+
+@guard("That meal is not on the family meal list yet. Accept a suggestion "
+       "(or ask the AI for one) first.",
+       judges=("meal_id",), reads=("meal",), remedies=("meal.accept",))
+async def meal_is_listed(r, inp: AssignInput, ctx: Ctx) -> Allow | Deny:
+    meal = await ctx.read(Meal, inp.meal_id)
+    if meal is not None and meal.state == str(MealState.ON_LIST):
         return Allow()
-    return Deny(vars={"theme": inp.theme},
-                errors={"theme": ["not in the Sunday rotation"]})
+    return Deny(errors={"meal_id": ["not an on-list meal"]})
 
 
-@guard(else_="Every day needs a meal or an eating-out mark before finalizing; "
-             "missing: {missing}.", vars=["missing"])
+@guard("{reason}", judges=("date", "meal_id"), reads=("meal",),
+       vars=("reason",),
+       remedies=("plan.set_sunday_theme", "plan.assign_off_theme"))
+async def meal_matches_theme(r, inp: AssignInput, ctx: Ctx) -> Allow | Deny:
+    day = _day(r, inp.date)
+    if day is None:
+        return Deny(vars={"reason": f"{inp.date} is not a day of this plan."})
+    if day.theme == ROTATING:
+        return Deny(vars={"reason": f"Pick {inp.date}'s Sunday theme from the "
+                                    "rotation first, then assign — or assign "
+                                    "off-theme with confirmation."})
+    meal = await ctx.read(Meal, inp.meal_id)
+    if meal is None:
+        return Deny(vars={"reason": "That meal no longer exists."})
+    if meal.data.theme != day.theme:
+        return Deny(
+            vars={"reason": f"'{meal.data.name}' is {meal.data.theme}; "
+                            f"{inp.date} is {day.theme} night. Use "
+                            "the off-theme assignment to override."},
+            errors={"meal_id": [f"theme {meal.data.theme!r} does not match "
+                                f"{day.theme!r}"]})
+    return Allow()
+
+
+@guard("Every day needs a meal or an eating-out mark before finalizing; "
+       "missing: {missing}.", vars=("missing",))
 async def all_days_covered(r, inp, ctx: Ctx) -> Allow | Deny:
     missing = [d.date.isoformat() for d in r.data.days
                if not d.eating_out and d.meal_id is None]
@@ -205,7 +208,7 @@ def _start_of(r) -> datetime:
     return datetime.combine(r.data.start_date, time.min, tzinfo=timezone.utc)
 
 
-@guard(else_="The plan starts {start}.", vars=["start"],
+@guard("The plan starts {start}.", vars=("start",), reads=("now",),
        becomes_available_at=_start_of)
 async def plan_started(r, inp, ctx: Ctx) -> Allow | Deny:
     if ctx.now.astimezone(timezone.utc).date() >= r.data.start_date:
@@ -233,12 +236,16 @@ class MealPlan(Resource):
 
     spans = (Meal,)
 
+    # the one place per-day placement is declared (design §3); every
+    # day-shaped action places itself on it and the key is pre-bound per part
+    days = PartScope("days", key="date")
+
     async def on_create(self, ctx: Ctx) -> None:
         """A blank rotation_id means the most recently activated active
-        rotation; each rotating
-        Sunday is pre-themed from it, walking the list from ``position``.
-        With no rotation at all, Sundays stay ``rotating`` and the old flow
-        (``set_sunday_theme`` first) still applies."""
+        rotation; each rotating Sunday is pre-themed from it, walking the
+        list from ``position``. With no rotation at all, Sundays stay
+        ``rotating`` and the old flow (``set_sunday_theme`` first) still
+        applies."""
         if self.data.rotation_id is None:
             active = await ctx.find("rotation", state="active", limit=100)
             if active:
@@ -259,10 +266,10 @@ class MealPlan(Resource):
                 sundays += 1
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
-            input=AssignInput, scope=("days", "date"),
+            input=AssignInput, place=days,
             guards=[date_in_plan, meal_is_listed, meal_matches_theme],
-            idempotent=True, reversible=False, confirm=False,
-            # scoped rendering resolves {item.theme} to the day's theme, so
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
+            # per-part rendering resolves {item.theme} to the day's theme, so
             # the picker only offers meals that match the night
             field_display={"meal_id": {"params": {
                 "state": "on_list", "theme": "{item.theme}"}}},
@@ -271,9 +278,11 @@ class MealPlan(Resource):
         await self._assign(inp, ctx)
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
-            input=AssignInput, scope=("days", "date"),
+            input=AssignInput, place=days,
             guards=[date_in_plan, meal_is_listed],
-            idempotent=True, reversible=False, confirm=True,
+            safety=Safety(idempotent=True, reversible=False, confirm=True,
+                          consequence="The day gets a meal that does not "
+                                      "match its theme night."),
             display=dict(label="Assign off-theme", order=5))
     async def assign_off_theme(self, inp: AssignInput, ctx: Ctx) -> None:
         await self._assign(inp, ctx)
@@ -287,9 +296,9 @@ class MealPlan(Resource):
         day.eating_out = False
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
-            input=SundayThemeInput, scope=("days", "date"),
+            input=SundayThemeInput, place=days,
             guards=[date_in_plan, sunday_only, theme_in_rotation],
-            idempotent=True, reversible=False, confirm=False,
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Pick Sunday theme", order=2))
     async def set_sunday_theme(self, inp: SundayThemeInput, ctx: Ctx) -> None:
         day = _day(self, inp.date)
@@ -297,8 +306,8 @@ class MealPlan(Resource):
         day.theme = inp.theme
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
-            input=DayInput, scope=("days", "date"), guards=[date_in_plan],
-            idempotent=True, reversible=False, confirm=False,
+            input=DayInput, place=days, guards=[date_in_plan],
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Eating out", order=3))
     async def mark_eating_out(self, inp: DayInput, ctx: Ctx) -> None:
         day = _day(self, inp.date)
@@ -308,8 +317,8 @@ class MealPlan(Resource):
         day.meal_name = None
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
-            input=DayInput, scope=("days", "date"), guards=[date_in_plan],
-            idempotent=True, reversible=False, confirm=False,
+            input=DayInput, place=days, guards=[date_in_plan],
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Clear day", order=4))
     async def clear_day(self, inp: DayInput, ctx: Ctx) -> None:
         day = _day(self, inp.date)
@@ -320,33 +329,43 @@ class MealPlan(Resource):
 
     @action(from_=PlanState.DRAFT, to=PlanState.PLANNED,
             guards=[all_days_covered],
-            idempotent=True, reversible=True, confirm=False,
+            safety=Safety(idempotent=True, reversible=True, confirm=False),
             display=dict(label="Finalize plan", style="primary", order=1))
     async def finalize(self, inp: None, ctx: Ctx) -> None:
         pass
 
     @action(from_=PlanState.PLANNED, to=PlanState.DRAFT,
-            idempotent=True, reversible=True, confirm=False,
+            safety=Safety(idempotent=True, reversible=True, confirm=False),
             display=dict(label="Reopen", order=2))
     async def reopen(self, inp: None, ctx: Ctx) -> None:
         pass
 
     @action(from_=PlanState.PLANNED, to=PlanState.ACTIVE,
             guards=[plan_started],
-            idempotent=True, reversible=False, confirm=False,
+            safety=Safety(idempotent=True, reversible=False, confirm=False,
+                          one_way=Acknowledged(
+                              "Starting the week only reflects the calendar; "
+                              "nothing is lost and the plan stays editable "
+                              "through its days.")),
             display=dict(label="Start the week", style="primary", order=1))
     async def begin(self, inp: None, ctx: Ctx) -> None:
         pass
 
     @action(from_=PlanState.ACTIVE, to=PlanState.DONE,
-            idempotent=True, reversible=False, confirm=False,
+            safety=Safety(idempotent=True, reversible=False, confirm=False,
+                          one_way=Acknowledged(
+                              "Completing records a finished week; the plan "
+                              "remains readable as history.")),
             display=dict(label="Week done", style="primary", order=1))
     async def complete(self, inp: None, ctx: Ctx) -> None:
         pass
 
     @action(from_={PlanState.DRAFT, PlanState.PLANNED, PlanState.ACTIVE},
             to=PlanState.ABANDONED,
-            idempotent=True, reversible=False, confirm=True,
+            safety=Safety(idempotent=True, reversible=False, confirm=True,
+                          consequence="The plan is discarded for good; its "
+                                      "days and any grocery list stay "
+                                      "readable as records."),
             display=dict(label="Abandon plan", style="danger", order=9))
     async def abandon(self, inp: None, ctx: Ctx) -> None:
         pass

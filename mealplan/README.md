@@ -64,7 +64,7 @@ it automatically at create time.
 
 The AI is a **client** of this app, not a service inside it. Point an agent
 at `/api/.well-known/waymark` (or project the tool surface with
-`waymark.client.mcp_tools`) and the whole workflow is just declared
+`waymark2.client.mcp_tools`) and the whole workflow is just declared
 affordances:
 
 1. *"Suggest three Asian meals for Thursday"* → the agent `create`s meals in
@@ -83,9 +83,15 @@ the agent only acts through these declared, guarded, confirm-gated actions.
 
 ## Conformance
 
-Factories and example inputs are registered in the repo-root `conftest.py`:
+This app runs on **waymark2** (see `docs/waymark2-design.md`). Meal,
+rotation, and prep task need no factories at all — the suite's derived
+walker reaches every state from their declarations; only the plan and
+grocery list register factories (their states need semantic setup), and the
+only example inputs left are the ones that need a *real* meal id. Everything
+is in the repo-root `conftest.py`:
 
 ```bash
-uv run waymark check mealplan.main:engine
-uv run pytest --waymark=plan          # or meal, rotation, grocery_list, prep_task
+uv run waymark2 check mealplan.main:engine
+uv run waymark2 migrate mealplan.main:engine   # emit the SQL revision delta
+uv run pytest --waymark2=plan         # or meal, rotation, grocery_list, prep_task
 ```

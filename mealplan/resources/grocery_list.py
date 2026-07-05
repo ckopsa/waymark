@@ -5,6 +5,9 @@ one list per plan (or per two-week stretch) in ``draft`` and fills it with
 ``add_item``. ``finalize`` is guarded on the plan actually being finalized —
 a list can't get ahead of the plan it shops for. In ``ready`` the humans
 shop, checking items off; ``complete`` refuses while anything is unchecked.
+
+2.0: the item-shaped actions share one ``PartScope``; ``item_on_list`` is a
+pure acceptance-set declaration; ``plan_id`` is a ``Ref``.
 """
 from __future__ import annotations
 
@@ -13,7 +16,23 @@ from enum import StrEnum
 from pydantic import BaseModel, Field
 from pydantic.json_schema import SkipJsonSchema
 
-from waymark import Allow, Ctx, Deny, Resource, action, filterable, guard, link, profile
+from waymark2 import (
+    Acknowledged,
+    Allow,
+    Ctx,
+    Deny,
+    Guard,
+    PartScope,
+    Ref,
+    RefField,
+    Resource,
+    Safety,
+    action,
+    filterable,
+    guard,
+    link,
+    profile,
+)
 
 
 class GroceryState(StrEnum):
@@ -32,11 +51,8 @@ class GroceryItem(BaseModel):
 
 
 class GroceryData(BaseModel):
-    plan_id: str = Field(min_length=1,
-                         description="The meal plan this list shops for",
-                         json_schema_extra={"x-display": {
-                             "label": "Plan",
-                             "widget": "resource", "kind": "plan"}})
+    plan_id: Ref["plan"] = RefField(
+        min_length=1, description="The meal plan this list shops for")
     items: list[GroceryItem] = Field(default_factory=list)
     notes: str | None = Field(default=None, max_length=2000,
                               json_schema_extra={"x-display": {
@@ -60,8 +76,8 @@ class NameInput(BaseModel):
 
 
 # ── Guards ──────────────────────────────────────────────────────────────
-@guard(else_="Finalize the meal plan first — the grocery list follows from it.",
-       remedies=["plan.finalize"])
+@guard("Finalize the meal plan first — the grocery list follows from it.",
+       reads=("plan",), remedies=("plan.finalize",))
 async def plan_is_planned(r, inp, ctx: Ctx) -> Allow | Deny:
     plan = await ctx.read("plan", r.data.plan_id)
     if plan is None:
@@ -69,16 +85,17 @@ async def plan_is_planned(r, inp, ctx: Ctx) -> Allow | Deny:
     return Allow() if plan.state in ("planned", "active") else Deny()
 
 
-@guard(else_="No item named '{name}' on this list.", vars=["name"],
-       admits=("name", lambda r: [i.name for i in r.data.items]))
-async def item_on_list(r, inp: NameInput, ctx: Ctx) -> Allow | Deny:
-    if any(i.name == inp.name for i in r.data.items):
-        return Allow()
-    return Deny(vars={"name": inp.name},
-                errors={"name": ["not on this list"]})
+# what's on the list: the rendered enum, the per-part availability, and the
+# enforcement, from one set
+item_on_list = Guard(
+    name="item_on_list",
+    judges=("name",),
+    accepts=lambda r: [i.name for i in r.data.items],
+    explain="No item named '{name}' on this list.",
+)
 
 
-@guard(else_="Still unchecked: {unchecked}.", vars=["unchecked"])
+@guard("Still unchecked: {unchecked}.", vars=("unchecked",))
 async def all_items_checked(r, inp, ctx: Ctx) -> Allow | Deny:
     unchecked = [i.name for i in r.data.items if not i.have]
     if not unchecked:
@@ -114,9 +131,11 @@ class GroceryList(Resource):
         "with_plan": profile(embed={"plan": "summary"}),
     }
 
+    items = PartScope("items", key="name")
+
     @action(from_=GroceryState.DRAFT, to=GroceryState.DRAFT,
             input=ItemInput,
-            idempotent=True, reversible=False, confirm=False,
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Add item", style="primary", order=1))
     async def add_item(self, inp: ItemInput, ctx: Ctx) -> None:
         existing = next((i for i in self.data.items if i.name == inp.name), None)
@@ -128,8 +147,8 @@ class GroceryList(Resource):
                 name=inp.name, quantity=inp.quantity, category=inp.category))
 
     @action(from_=GroceryState.DRAFT, to=GroceryState.DRAFT,
-            input=NameInput,
-            idempotent=True, reversible=False, confirm=False,
+            input=NameInput, place=items, guards=[item_on_list],
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Remove item", order=2))
     async def remove_item(self, inp: NameInput, ctx: Ctx) -> None:
         # removing an absent item is a no-op, so retries stay replay-safe
@@ -137,20 +156,20 @@ class GroceryList(Resource):
 
     @action(from_=GroceryState.DRAFT, to=GroceryState.READY,
             guards=[plan_is_planned],
-            idempotent=True, reversible=True, confirm=False,
+            safety=Safety(idempotent=True, reversible=True, confirm=False),
             display=dict(label="Ready to shop", style="primary", order=1))
     async def finalize(self, inp: None, ctx: Ctx) -> None:
         pass
 
     @action(from_=GroceryState.READY, to=GroceryState.DRAFT,
-            idempotent=True, reversible=True, confirm=False,
+            safety=Safety(idempotent=True, reversible=True, confirm=False),
             display=dict(label="Back to editing", order=3))
     async def reopen(self, inp: None, ctx: Ctx) -> None:
         pass
 
     @action(from_=GroceryState.READY, to=GroceryState.READY,
-            input=NameInput, scope=("items", "name"), guards=[item_on_list],
-            idempotent=True, reversible=False, confirm=False,
+            input=NameInput, place=items, guards=[item_on_list],
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Check off", style="primary", order=1))
     async def check_item(self, inp: NameInput, ctx: Ctx) -> None:
         for item in self.data.items:
@@ -159,7 +178,10 @@ class GroceryList(Resource):
 
     @action(from_=GroceryState.READY, to=GroceryState.DONE,
             guards=[all_items_checked],
-            idempotent=True, reversible=False, confirm=False,
+            safety=Safety(idempotent=True, reversible=False, confirm=False,
+                          one_way=Acknowledged(
+                              "Completing records a finished shop; the list "
+                              "stays readable as history.")),
             display=dict(label="Shopping done", order=2))
     async def complete(self, inp: None, ctx: Ctx) -> None:
         pass

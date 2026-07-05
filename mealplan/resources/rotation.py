@@ -3,12 +3,15 @@
 Several rotations can exist (seasonal lists, experiments); ``activate``
 stamps ``activated_at``, and new plans draw from the most recently activated
 ``active`` rotation — an action's effect belongs to this resource alone, so
-activating one never mutates its siblings. New plans
-auto-select that rotation and pre-theme their Sundays from it,
-starting at ``data.position`` (the next Sunday's suggested theme —
-``advance`` moves it after a theme gets used). A plan's ``set_sunday_theme``
-guard reads this resource, so a Sunday theme not in the rotation is refused
-with a remedy pointing at ``add_theme``.
+activating one never mutates its siblings. New plans auto-select that
+rotation and pre-theme their Sundays from it, starting at ``data.position``
+(``advance`` moves it after a theme gets used). A plan's
+``set_sunday_theme`` guard reads this resource, so a Sunday theme not in
+the rotation is refused with a remedy pointing at ``add_theme``.
+
+2.0: ``not_last_theme`` is a pure acceptance-set declaration — the set of
+removable themes is both the rendered enum and the enforcement; there is no
+separate check body to drift.
 """
 from __future__ import annotations
 
@@ -17,7 +20,7 @@ from enum import StrEnum
 from pydantic import AwareDatetime, BaseModel, Field
 from pydantic.json_schema import SkipJsonSchema
 
-from waymark import Allow, Ctx, Deny, Resource, action, filterable, guard
+from waymark2 import Ctx, Guard, Resource, Safety, action, filterable
 
 DEFAULT_THEMES = ["breakfast for dinner", "indian", "greek", "soup night"]
 
@@ -54,15 +57,16 @@ class ThemeInput(BaseModel):
     theme: str = Field(min_length=1, max_length=50)
 
 
-@guard(else_="'{theme}' is the last theme left; the rotation cannot be empty.",
-       vars=["theme"],
-       # removable = what's on the rotation, unless that would empty it
-       admits=("theme", lambda r: r.data.themes if len(r.data.themes) > 1 else []))
-async def not_last_theme(r, inp: ThemeInput, ctx: Ctx) -> Allow | Deny:
-    if len(r.data.themes) == 1 and inp.theme == r.data.themes[0]:
-        return Deny(vars={"theme": inp.theme},
-                    errors={"theme": ["cannot remove the last theme"]})
-    return Allow()
+# removable = what's on the rotation, unless that would empty it. One
+# declaration: the rendered enum, the enforcement, and the per-part
+# availability all come from this set.
+not_last_theme = Guard(
+    name="not_last_theme",
+    judges=("theme",),
+    accepts=lambda r: r.data.themes if len(r.data.themes) > 1 else [],
+    explain="'{theme}' cannot be removed; the rotation must keep at least "
+            "one theme.",
+)
 
 
 class SundayRotation(Resource):
@@ -80,7 +84,8 @@ class SundayRotation(Resource):
     display = {"title": "{data.name}"}
 
     @action(from_=RotationState.INACTIVE, to=RotationState.ACTIVE,
-            idempotent=True, reversible=False, confirm=False,
+            # honestly reversible: `deactivate` is the unconditional way back
+            safety=Safety(idempotent=True, reversible=True, confirm=False),
             display=dict(label="Make active", style="primary", order=1,
                          description="New plans draw Sunday themes from the "
                                      "most recently activated rotation"))
@@ -90,14 +95,14 @@ class SundayRotation(Resource):
         self.data.activated_at = ctx.now
 
     @action(from_=RotationState.ACTIVE, to=RotationState.INACTIVE,
-            idempotent=True, reversible=False, confirm=False,
+            safety=Safety(idempotent=True, reversible=True, confirm=False),
             display=dict(label="Deactivate", order=4))
     async def deactivate(self, inp: None, ctx: Ctx) -> None:
         pass
 
     @action(from_=RotationState.ACTIVE, to=RotationState.ACTIVE,
             input=ThemeInput,
-            idempotent=True, reversible=False, confirm=False,
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Add theme", style="primary", order=1))
     async def add_theme(self, inp: ThemeInput, ctx: Ctx) -> None:
         if inp.theme not in self.data.themes:
@@ -105,7 +110,7 @@ class SundayRotation(Resource):
 
     @action(from_=RotationState.ACTIVE, to=RotationState.ACTIVE,
             input=ThemeInput, guards=[not_last_theme],
-            idempotent=True, reversible=False, confirm=False,
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Remove theme", order=2))
     async def remove_theme(self, inp: ThemeInput, ctx: Ctx) -> None:
         # removing an absent theme is a no-op, so retries stay replay-safe
@@ -114,7 +119,7 @@ class SundayRotation(Resource):
             self.data.position %= len(self.data.themes)
 
     @action(from_=RotationState.ACTIVE, to=RotationState.ACTIVE,
-            idempotent=False, reversible=False, confirm=False,
+            safety=Safety(idempotent=False, reversible=False, confirm=False),
             display=dict(label="Next theme", order=3))
     async def advance(self, inp: None, ctx: Ctx) -> None:
         self.data.position = (self.data.position + 1) % len(self.data.themes)

@@ -11,7 +11,7 @@ import sys
 import uuid
 from datetime import date, timedelta
 
-from waymark.client import AgentClient, PendingConfirmation, Problem
+from waymark2.client import AgentClient, PendingConfirmation, Problem
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:8000"
 AGENT = {"X-Principal-Id": "claude", "X-Principal-Display": "Claude",

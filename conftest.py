@@ -12,18 +12,24 @@ from datetime import date, timedelta
 import pytest
 
 import waymark
+import waymark2
 from waymark import Principal
 from waymark.testing import example_input, per_worker_dsn, state_factory
+from waymark2.testing import (
+    conformance_resource as w2_conformance_resource,
+    example_input as w2_example_input,
+    state_factory as w2_state_factory,
+)
 
 from app.resources.order import Order, OrderState
 from app.resources.return_workflow import Return, ReturnState
 from app.resources.shipment import Shipment, ShipmentState
 from app.services import Services, mint_method
 from mealplan.resources.grocery_list import GroceryList, GroceryState
-from mealplan.resources.meal import Meal, MealState
+from mealplan.resources.meal import Meal
 from mealplan.resources.plan import MealPlan, PlanState
-from mealplan.resources.prep_task import PrepState, PrepTask
-from mealplan.resources.rotation import RotationState, SundayRotation
+from mealplan.resources.prep_task import PrepTask
+from mealplan.resources.rotation import SundayRotation
 
 TEST_DSN = per_worker_dsn(os.environ.get(
     "WAYMARK_TEST_DSN", "postgresql+asyncpg://localhost/waymark_test"))
@@ -47,10 +53,25 @@ class SuiteServices(Services):
 
 @pytest.fixture
 async def waymark_engine():
-    engine = waymark.Engine(resources=[Order, Shipment, Return, Meal,
-                                       SundayRotation, MealPlan, GroceryList,
-                                       PrepTask],
+    """The v1 suite covers the v1 example shop; the meal-plan app moved to
+    waymark2 (see waymark2_engine below)."""
+    engine = waymark.Engine(resources=[Order, Shipment, Return],
                             storage=TEST_DSN, services=SuiteServices())
+    await engine.storage.drop_all()
+    await engine.startup()
+    try:
+        yield engine
+    finally:
+        await engine.shutdown()
+
+
+@pytest.fixture
+async def waymark2_engine():
+    from waymark2.server.bus import InProcessBus
+
+    engine = waymark2.Engine(
+        resources=[Meal, SundayRotation, MealPlan, GroceryList, PrepTask],
+        storage=TEST_DSN, services=SuiteServices(), bus=InProcessBus())
     await engine.storage.drop_all()
     await engine.startup()
     try:
@@ -165,11 +186,34 @@ def reject_example(services) -> dict:
     return {"condition_ok": False, "notes": "damaged"}
 
 
-# ── Meal-plan app ────────────────────────────────────────────────────────
-# A fixed, always-past Tuesday so `plan_started` allows `begin` and the
-# example inputs can name dates that are honestly in every factory plan.
+# ── Meal-plan app (waymark2, design §9: derive more, register less) ─────
+# Meal, rotation, and prep task need no factories at all — the derived
+# walker reaches every state from a create example. Plan and grocery list
+# keep factories because their states need semantic setup (a linked
+# rotation, a covered week, a fixed always-past Tuesday so `plan_started`
+# allows `begin`). Example inputs remain only where a check-based guard
+# wants a real id the schema cannot invent.
 PLAN_START = date(2026, 6, 30)
 PLAN_SUNDAY = date(2026, 7, 5)
+
+w2_conformance_resource(Meal)
+w2_conformance_resource(SundayRotation)
+w2_conformance_resource(PrepTask)
+
+
+@w2_example_input(Meal, "create")
+def meal_create_example(services) -> dict:
+    return {"name": "Carnitas tacos", "theme": "mexican",
+            "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
+            "prep_minutes": 45, "thaw_hours": 12}
+
+
+@w2_example_input(PrepTask, "create")
+def prep_task_create_example(services) -> dict:
+    return {"plan_id": services.seeded.get("plan_id", "unlinked"),
+            "date": PLAN_SUNDAY.isoformat(), "meal_name": "Pulled pork",
+            "task_type": "thaw", "due_at": "2026-07-04T18:00:00+00:00",
+            "duration_minutes": 720}
 
 
 async def _mk(engine, kind: str, body: dict) -> str:
@@ -185,27 +229,6 @@ async def _step(engine, kind: str, id: str, action: str, body=None):
                                        idempotency_key=uuid.uuid4().hex)
 
 
-@state_factory(Meal)
-async def make_meal(state: str, engine, services) -> Meal:
-    mid = await _mk(engine, "meal", {
-        "name": "Carnitas tacos", "theme": "mexican",
-        "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
-        "prep_minutes": 45, "thaw_hours": 12})
-    if state == MealState.ON_LIST:
-        await _step(engine, "meal", mid, "accept")
-    elif state == MealState.RETIRED:
-        await _step(engine, "meal", mid, "decline")
-    return await _load(engine, "meal", mid)
-
-
-@state_factory(SundayRotation)
-async def make_rotation(state: str, engine, services) -> SundayRotation:
-    rid = await _mk(engine, "rotation", {})
-    if state == RotationState.ACTIVE:
-        await _step(engine, "rotation", rid, "activate")
-    return await _load(engine, "rotation", rid)
-
-
 async def _listed_meal(engine, services) -> str:
     """An on-list Taco-Tuesday meal; its id is stashed for example inputs."""
     mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
@@ -215,12 +238,13 @@ async def _listed_meal(engine, services) -> str:
     return mid
 
 
-@state_factory(MealPlan)
+@w2_state_factory(MealPlan)
 async def make_plan(state: str, engine, services) -> MealPlan:
     rid = await _mk(engine, "rotation", {})
     await _listed_meal(engine, services)
     pid = await _mk(engine, "plan", {"start_date": PLAN_START.isoformat(),
                                      "weeks": 1, "rotation_id": rid})
+    services.seeded["plan_id"] = pid
     target = PlanState(state)
     if target == PlanState.ABANDONED:
         await _step(engine, "plan", pid, "abandon")
@@ -236,29 +260,16 @@ async def make_plan(state: str, engine, services) -> MealPlan:
     return await _load(engine, "plan", pid)
 
 
-@example_input(MealPlan, "assign_meal")
+# the one genuinely semantic input left: a real on-list meal id (the guard
+# is check-based, reads another resource, and the schema cannot invent it)
+@w2_example_input(MealPlan, "assign_meal")
 def assign_meal_example(services) -> dict:
     return {"date": PLAN_START.isoformat(), "meal_id": services.seeded["meal_id"]}
 
 
-@example_input(MealPlan, "assign_off_theme")
+@w2_example_input(MealPlan, "assign_off_theme")
 def assign_off_theme_example(services) -> dict:
     return {"date": PLAN_START.isoformat(), "meal_id": services.seeded["meal_id"]}
-
-
-@example_input(MealPlan, "set_sunday_theme")
-def set_sunday_theme_example(services) -> dict:
-    return {"date": PLAN_SUNDAY.isoformat(), "theme": "indian"}
-
-
-@example_input(MealPlan, "mark_eating_out")
-def mark_eating_out_example(services) -> dict:
-    return {"date": PLAN_START.isoformat()}
-
-
-@example_input(MealPlan, "clear_day")
-def clear_day_example(services) -> dict:
-    return {"date": PLAN_START.isoformat()}
 
 
 GROCERY_ITEMS = [
@@ -267,7 +278,7 @@ GROCERY_ITEMS = [
 ]
 
 
-@state_factory(GroceryList)
+@w2_state_factory(GroceryList)
 async def make_grocery_list(state: str, engine, services) -> GroceryList:
     plan = await make_plan(PlanState.PLANNED, engine, services)
     gid = await _mk(engine, "grocery_list",
@@ -283,31 +294,9 @@ async def make_grocery_list(state: str, engine, services) -> GroceryList:
     return await _load(engine, "grocery_list", gid)
 
 
-@example_input(GroceryList, "check_item")
-def check_item_example(services) -> dict:
-    return {"name": "chicken thighs"}
-
-
-# remove_item's example must differ from check_item's: the walker may remove
-# then check, and only "paper towels" is safe to lose.
-@example_input(GroceryList, "remove_item")
+# remove_item's synthesized input comes from item_on_list's acceptance set,
+# whose first entry is "chicken thighs" — but the walker may remove then
+# check, and only "paper towels" is safe to lose.
+@w2_example_input(GroceryList, "remove_item")
 def remove_item_example(services) -> dict:
     return {"name": "paper towels"}
-
-
-@state_factory(PrepTask)
-async def make_prep_task(state: str, engine, services) -> PrepTask:
-    plan = await make_plan(PlanState.PLANNED, engine, services)
-    tid = await _mk(engine, "prep_task", {
-        "plan_id": plan.id, "date": PLAN_SUNDAY.isoformat(),
-        "meal_name": "Pulled pork", "task_type": "thaw",
-        "due_at": "2026-07-04T18:00:00+00:00", "duration_minutes": 720})
-    target = PrepState(state)
-    if target == PrepState.CANCELLED:
-        await _step(engine, "prep_task", tid, "cancel")
-    elif target in (PrepState.SCHEDULED, PrepState.DONE):
-        await _step(engine, "prep_task", tid, "schedule",
-                    {"calendar_event_id": "gcal-demo-1"})
-        if target == PrepState.DONE:
-            await _step(engine, "prep_task", tid, "complete")
-    return await _load(engine, "prep_task", tid)
