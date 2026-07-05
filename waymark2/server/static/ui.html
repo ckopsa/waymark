@@ -142,6 +142,9 @@
       <option value="agent-1|agent|">agent-1 (agent)</option>
     </select>
   </label>
+  <button id="sharefollow" style="font-size:12px;padding:4px 10px"
+          title="copy a link — whoever opens it starts following you, landing on your current page">
+    🔗 follow me</button>
 </header>
 <main>
   <section id="view"></section>
@@ -1055,11 +1058,54 @@ function followChip() {
   if (followId) {
     followStatus = el("span", {class:"muted"}, "");
     chip.append(`following ${followName}`, followStatus,
+      el("button", {title: `copy a link — whoever opens it also follows ${followName}`,
+                    onclick: () => copyFollowLink(followId, followName)}, "🔗"),
       el("button", {title: "stop following", onclick: unfollow}, "✕"));
   }
 }
+
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.style.display = "block";
+  setTimeout(() => t.style.display = "none", 4000);
+}
+
+/* A follow link: opening it follows the named principal and lands on the
+   sharer's current page (the hash rides along). It changes only the
+   opener's own screen — it grants nothing. */
+function followLink(id, name) {
+  const q = new URLSearchParams({follow: id});
+  if (name && name !== id) q.set("follow_name", name);
+  return `${location.origin}${location.pathname}?${q}${location.hash}`;
+}
+async function copyFollowLink(id, name) {
+  const url = followLink(id, name);
+  try {  // clipboard needs a secure context; prompt() is the LAN fallback
+    await navigator.clipboard.writeText(url);
+    toast(`link copied — opening it follows ${name || id}`);
+  } catch { prompt("copy this follow link:", url); }
+}
+$("#sharefollow").onclick = () => {
+  const id = principalHeaders()["X-Principal-Id"];
+  if (!id) { toast("pick a principal first"); return; }
+  copyFollowLink(id, id);
+};
+
+// a shared follow link: ?follow=<id> starts following on open, then the
+// query strips so reloads and copied URLs stay clean (the hash — the
+// sharer's page — survives)
+const bootParams = new URLSearchParams(location.search);
+if (bootParams.get("follow")) {
+  followId = bootParams.get("follow");
+  followName = bootParams.get("follow_name") || followId;
+  localStorage.setItem("wm-follow-id", followId);
+  localStorage.setItem("wm-follow-name", followName);
+  history.replaceState(null, "", location.pathname + location.hash);
+}
+
 followChip();
-startPresenceFollow();  // resume a persisted follow across reloads
+startPresenceFollow();  // resume a persisted (or link-started) follow
 
 const seen = new Set();  // dedupe on (self, version) — at-least-once delivery
 sse(`${BASE}/-/events`, ev => {
