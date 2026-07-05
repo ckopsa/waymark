@@ -167,6 +167,33 @@ def build_router(engine: Any) -> APIRouter:
             engine.dispatcher, sub, registry, base,
             last_event_id=request.headers.get("Last-Event-ID")))
 
+    @router.get("/-/presence")
+    async def presence(request: Request) -> Any:
+        """Ephemeral liveness: ``viewed`` events as principals GET resources.
+        ``?actor=`` follows one principal's navigation. Nothing here is
+        stored or replayable — supervision, not surveillance records."""
+        from .events import presence_stream, sse_response
+
+        if engine.presence is None:
+            raise NotFound("Presence is disabled on this engine.")
+        kinds_param = request.query_params.get("kinds")
+        kinds = (frozenset(k.strip() for k in kinds_param.split(",") if k.strip())
+                 if kinds_param else None)
+        queue = engine.presence.subscribe()
+        return sse_response(presence_stream(
+            engine.presence, queue,
+            actor=request.query_params.get("actor") or None, kinds=kinds))
+
+    async def _announce_view(principal: Principal, kind: str,
+                             self_href: str) -> None:
+        if engine.presence is None:
+            return
+        await engine.presence.publish(
+            actor={"id": principal.id, "type": principal.type,
+                   "display": principal.display or principal.id},
+            self_href=self_href, kind=kind,
+            at=engine.invoker.clock().isoformat())
+
     @router.get("/{plural}/{id}/-/events")
     async def resource_events(plural: str, id: str, request: Request) -> Any:
         from .events import sse_response, sse_stream
@@ -202,6 +229,8 @@ def build_router(engine: Any) -> APIRouter:
                 rdef, items, ctx=ctx, total=total, page_size=page_size,
                 page_number=page_number, applied_query=parsed, base=base,
                 facets=facets)
+        await _announce_view(principal, f"{rdef.kind}_collection",
+                             f"{base}/{rdef.plural}")
         return Response(content=json.dumps(doc, default=str),
                         media_type=MEDIA_TYPE)
 
@@ -235,6 +264,7 @@ def build_router(engine: Any) -> APIRouter:
             ctx = engine.invoker._ctx(principal, s, mode="probe")
             doc = await engine.render_with_depth(s, instance, rdef, ctx=ctx,
                                                  depth=depth)
+        await _announce_view(principal, rdef.kind, doc["self"])
         headers["ETag"] = doc["meta"]["etag"]
         return Response(content=json.dumps(doc, default=str),
                         media_type=MEDIA_TYPE, headers=headers)

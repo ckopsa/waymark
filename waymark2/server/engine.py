@@ -60,6 +60,7 @@ class Engine:
         base_path: str = "/api",
         clock: Callable[[], datetime] | None = None,
         bus: Any = None,
+        presence: bool = True,
     ):
         from .jobs import Job
 
@@ -83,6 +84,11 @@ class Engine:
                                services=services, base=base_path, clock=clock,
                                draft_store=self.draft_store)
         self.dispatcher: Any = None  # events dispatcher, attached at startup
+        # ephemeral who-is-looking-at-what (never stored; presence=False to
+        # run without it — reads then leave no live trace at all)
+        from .events import PresenceHub
+
+        self.presence = PresenceHub(self.bus) if presence else None
         from .collab import CollabRooms
 
         self.collab = CollabRooms(self)  # live rooms for collab drafts

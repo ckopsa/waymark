@@ -85,6 +85,14 @@ build taught us, and the operational caveats. The same discipline as v1's
   principal (available ⇒ join). A principal whose affordance *lapses*
   mid-session keeps the socket until the room closes — re-probe on frame
   receipt if that matters before it's fixed properly.
+- **Presence is liveness, deliberately not the log.** Resource/collection
+  GETs publish ``viewed`` events on the bus; ``GET /-/presence?actor=``
+  streams them (no ids, no replay, nothing stored) — this is what lets a
+  follower's screen track a principal's *navigation*, and it supervises any
+  client without its cooperation. Reads never enter the audit trail;
+  ``Engine(presence=False)`` turns the stream off entirely. Every GET costs
+  one bus publish (a pg_notify under PostgresBus) — disable it if that ever
+  matters at scale.
 - **The conformance walker acts as a `system` principal** (`WALKER`).
   Role-gated paths need a registered `@state_factory`; the skip/fail
   messages name the exact registration to add.

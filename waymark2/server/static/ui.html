@@ -988,12 +988,56 @@ function follow(actor) {
   localStorage.setItem("wm-follow-id", followId);
   localStorage.setItem("wm-follow-name", followName);
   followChip();
+  startPresenceFollow();
 }
 function unfollow() {
   followId = followName = null;
   localStorage.removeItem("wm-follow-id");
   localStorage.removeItem("wm-follow-name");
   followChip();
+  stopPresenceFollow();
+}
+
+/* Presence: the followed principal's NAVIGATION, not just their commits.
+   An ephemeral stream (never stored, never audited) — your screen goes
+   where they merely look, and lands before they even act. */
+let followAbort = null;
+function stopPresenceFollow() {
+  if (followAbort) { followAbort.abort(); followAbort = null; }
+}
+function startPresenceFollow() {
+  stopPresenceFollow();
+  if (!followId) return;
+  followAbort = new AbortController();
+  presenceLoop(followId, followAbort);
+}
+async function presenceLoop(id, ctl) {
+  while (followId === id && !ctl.signal.aborted) {
+    try {
+      const res = await fetch(
+        `${BASE}/-/presence?actor=${encodeURIComponent(id)}`,
+        {headers: principalHeaders(), signal: ctl.signal});
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, {stream: true});
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          const data = frame.split("\n").find(l => l.startsWith("data:"));
+          if (!data) continue;
+          const ev = JSON.parse(data.slice(5));
+          const here = location.hash.slice(1).split("?")[0];
+          if (ev.self && ev.self !== here && !$("#dlg").open)
+            location.hash = "#" + ev.self;
+        }
+      }
+    } catch (e) { if (ctl.signal.aborted) return; /* server restarting */ }
+    await new Promise(r => setTimeout(r, 2000));
+  }
 }
 function followChip() {
   const chip = $("#followchip");
@@ -1005,6 +1049,7 @@ function followChip() {
   }
 }
 followChip();
+startPresenceFollow();  // resume a persisted follow across reloads
 
 const seen = new Set();  // dedupe on (self, version) — at-least-once delivery
 sse(`${BASE}/-/events`, ev => {

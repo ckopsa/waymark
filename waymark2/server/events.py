@@ -145,6 +145,65 @@ class Dispatcher:
                             log.warning("subscriber queue full; dropping event %s", t.id)
 
 
+PRESENCE_CHANNEL = "waymark2_presence"
+
+
+class PresenceHub:
+    """Ephemeral liveness: who is looking at what, right now (design: the
+    middle layer between the transition log and nothing).
+
+    Deliberately NOT the transition log: never stored, never replayed, no
+    Last-Event-ID, and absent from every audit surface — reads stay free.
+    The server already sees every GET; this only makes that existing
+    knowledge followable live, so a supervisor's screen can go where a
+    followed principal goes. Rides the bus, so it works across workers and
+    for every kind of client — the followed party needs no cooperation.
+    """
+
+    def __init__(self, bus: Any):
+        self._subs: set[asyncio.Queue] = set()
+        self.bus = bus
+        bus.listen(PRESENCE_CHANNEL, self._on_bus)
+
+    def _on_bus(self, message: dict[str, Any]) -> None:
+        for q in list(self._subs):
+            try:
+                q.put_nowait(message)
+            except asyncio.QueueFull:  # liveness may be lost; truth may not
+                pass
+
+    async def publish(self, *, actor: dict[str, Any], self_href: str,
+                      kind: str, at: str) -> None:
+        await self.bus.publish(PRESENCE_CHANNEL, {
+            "actor": actor, "self": self_href, "kind": kind, "at": at})
+
+    def subscribe(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue(maxsize=200)
+        self._subs.add(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        self._subs.discard(q)
+
+
+async def presence_stream(hub: PresenceHub, queue: asyncio.Queue, *,
+                          actor: str | None = None,
+                          kinds: frozenset[str] | None = None
+                          ) -> AsyncIterator[str]:
+    """``viewed`` SSE events; no ids, no resume — this stream is liveness."""
+    try:
+        while True:
+            m = await queue.get()
+            if actor is not None and (m.get("actor") or {}).get("id") != actor:
+                continue
+            if kinds is not None and m.get("kind") not in kinds:
+                continue
+            payload = {k: v for k, v in m.items() if k != "_origin"}
+            yield f"event: viewed\ndata: {json.dumps(payload)}\n\n"
+    finally:
+        hub.unsubscribe(queue)
+
+
 async def sse_stream(dispatcher: Dispatcher, sub: Subscription,
                      registry: Registry, base: str,
                      last_event_id: str | None = None) -> AsyncIterator[str]:

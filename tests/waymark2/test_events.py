@@ -184,3 +184,31 @@ async def test_firehose_filters_by_kind_and_resumes(env):
             headers={**OWNER, "Last-Event-ID": "0"}, timeout=15) as response:
         with pytest.raises(asyncio.TimeoutError):
             await asyncio.wait_for(read_sse_events(response, 1), timeout=1.0)
+
+
+async def test_presence_streams_navigation(env):
+    """The presence stream is ephemeral liveness (design: supervision, not
+    surveillance records): a principal's GETs appear as `viewed` events for
+    followers, filtered by actor; nothing is stored or replayable."""
+    engine, client = env
+    self_href = await _create(client)
+
+    async def navigate():
+        await asyncio.sleep(0.2)
+        # dana views; the anonymous rambler must be filtered out
+        await client.get(self_href, headers={"X-Principal-Id": "rambler"})
+        await client.get(self_href, headers=OWNER)
+
+    async with client.stream("GET", "/api/-/presence?actor=dana",
+                             headers=OWNER, timeout=15) as response:
+        assert response.status_code == 200
+        task = asyncio.create_task(navigate())
+        events = await asyncio.wait_for(read_sse_events(response, 1),
+                                        timeout=10)
+        await task
+
+    assert events[0]["event"] == "viewed"
+    payload = json.loads(events[0]["data"])
+    assert payload["self"] == self_href
+    assert payload["actor"]["id"] == "dana"  # rambler's view was filtered
+    assert "id" not in events[0], "presence events carry no resumable id"

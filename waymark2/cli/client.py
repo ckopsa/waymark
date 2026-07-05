@@ -460,25 +460,48 @@ def watch(ctx: typer.Context,
                                     "(e.g. an agent you asked to work)"),
           kinds: str | None = typer.Option(
               None, "--kinds", help="comma-separated kind filter"),
+          presence: bool = typer.Option(
+              False, "--presence",
+              help="also stream navigation ('viewed' lines, ephemeral)"),
           api_base: str = typer.Option("/api", help="API mount path")) -> None:
     """Stream live transitions from the workspace firehose (Ctrl-C stops).
 
     Supervision from a shell: `watch --actor claude` prints every action
     that principal takes, as it lands in the audit log — the same events
-    that drive the UI's follow mode.
+    that drive the UI's follow mode. `--presence` interleaves where they
+    merely navigate (liveness only; never stored, never replayable).
     """
+    import asyncio as _asyncio
+
     settings: Settings = ctx.obj
 
-    async def go(agent: AgentClient) -> None:
-        params = {}
-        if actor:
-            params["actor"] = actor
-        if kinds:
-            params["kinds"] = kinds
-        target = f"{api_base}/-/events"
-        who = f" · actor={actor}" if actor else ""
-        typer.secho(f"watching {settings.base}{target}{who} — Ctrl-C stops",
-                    fg="cyan")
+    def _print_transition(ev: dict[str, Any]) -> None:
+        when = ev.get("at", "")[11:19]
+        a = ev.get("actor", {})
+        who_s = a.get("display") or a.get("id", "?")
+        typer.echo("".join([
+            typer.style(when, fg="bright_black"), "  ",
+            typer.style(f"{who_s}",
+                        fg="cyan" if a.get("type") == "agent" else None,
+                        bold=True),
+            f" {ev.get('action')}  ",
+            f"{ev.get('kind')} {ev.get('from') or '·'} → {ev.get('to')}  ",
+            typer.style(ev.get("self", ""), fg="bright_black"),
+        ]))
+        if settings.raw and ev.get("summary"):
+            typer.echo(f"          {ev['summary']}")
+
+    def _print_viewed(ev: dict[str, Any]) -> None:
+        when = ev.get("at", "")[11:19]
+        a = ev.get("actor", {})
+        who_s = a.get("display") or a.get("id", "?")
+        typer.echo(typer.style(
+            f"{when}  {who_s} viewed  {ev.get('kind')}  {ev.get('self', '')}",
+            fg="bright_black"))
+
+    async def _stream(agent: AgentClient, target: str,
+                      params: dict[str, str],
+                      printer: Callable[[dict[str, Any]], None]) -> None:
         async with agent._client.http.stream(
                 "GET", target, params=params,
                 headers=agent._client.headers, timeout=None) as res:
@@ -490,25 +513,26 @@ def watch(ctx: typer.Context,
                     key, _, value = line.partition(":")
                     frame[key.strip()] = value.strip()
                     continue
-                if "data" not in frame:
-                    frame = {}
-                    continue
-                ev = json.loads(frame["data"])
+                if "data" in frame:
+                    printer(json.loads(frame["data"]))
                 frame = {}
-                when = ev.get("at", "")[11:19]
-                a = ev.get("actor", {})
-                who_s = a.get("display") or a.get("id", "?")
-                typer.echo("".join([
-                    typer.style(when, fg="bright_black"), "  ",
-                    typer.style(f"{who_s}",
-                                fg="cyan" if a.get("type") == "agent" else None,
-                                bold=True),
-                    f" {ev.get('action')}  ",
-                    f"{ev.get('kind')} {ev.get('from') or '·'} → {ev.get('to')}  ",
-                    typer.style(ev.get("self", ""), fg="bright_black"),
-                ]))
-                if settings.raw and ev.get("summary"):
-                    typer.echo(f"          {ev['summary']}")
+
+    async def go(agent: AgentClient) -> None:
+        params = {}
+        if actor:
+            params["actor"] = actor
+        if kinds:
+            params["kinds"] = kinds
+        who = f" · actor={actor}" if actor else ""
+        extra = " + presence" if presence else ""
+        typer.secho(f"watching {settings.base}{api_base}/-/events{who}{extra}"
+                    " — Ctrl-C stops", fg="cyan")
+        streams = [_stream(agent, f"{api_base}/-/events", params,
+                           _print_transition)]
+        if presence:
+            streams.append(_stream(agent, f"{api_base}/-/presence", params,
+                                   _print_viewed))
+        await _asyncio.gather(*streams)
 
     _run(settings, go)
 
