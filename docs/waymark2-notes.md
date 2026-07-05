@@ -60,9 +60,12 @@ build taught us, and the operational caveats. The same discipline as v1's
 - **`dangling_ref` conformance** (every rendered Ref resolves) is not yet
   a suite test; `check_refs` covers declaration-time validity only.
 - **`waymark2 extract-messages`** is still the v1 stub.
-- **The agent/CLI clients are the v1 fork** — wire-compatible (they ignore
-  `effort` and the draft advert changes), but they don't yet *use* revs or
-  the draft envelope.
+- **The agent client is draft-aware and effort-aware**
+  (`agent.draft/save_draft/discard_draft`, part-scoped adverts, demand
+  classes and draftability in `mcp_tools` descriptions —
+  `tests/waymark2/test_agent_v2.py` proves the human-starts/agent-continues
+  loop). The **CLI** remains the v1 fork: wire-compatible, but no draft
+  subcommands and no relay client yet.
 
 ## Operational caveats
 

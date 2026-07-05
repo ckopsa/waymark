@@ -129,6 +129,58 @@ class AgentClient:
         self.graph.learn(out)
         return out
 
+    # ── drafts (design §4): effort is server-state an agent can join ────
+    def _draft_advert(self, doc: Doc, action: str,
+                      part: Any = None) -> dict[str, Any]:
+        """The draft sub-resource advert for an action — from the entry, or
+        from the named part's entry when the action is placed. Adverts are
+        followed, never constructed (Part IV rule 1)."""
+        if part is not None:
+            for group in (doc.body.get("parts") or {}).values():
+                for item in group.get("items", []):
+                    if str(item.get("key")) == str(part) \
+                            and action in item.get("actions", {}):
+                        advert = item["actions"][action].get("draft")
+                        if advert:
+                            return advert
+            raise AffordanceError(
+                f"{doc.kind} {doc.self_href}: no part {part!r} affords "
+                f"{action!r} with a draft")
+        advert = self._affordance(doc, action).get("draft")
+        if not advert:
+            raise AffordanceError(
+                f"{doc.kind} {doc.self_href}: action {action!r} declares "
+                "no draft")
+        return advert
+
+    async def draft(self, doc: Doc, action: str, *, part: Any = None) -> Doc:
+        """Fetch the draft envelope — a human's (or another agent's)
+        half-written effort, with per-field values/revs/authors in ``data``.
+        An absent draft is an empty open one, so this always returns a Doc."""
+        advert = self._draft_advert(doc, action, part)
+        return await self._client.get(advert["href"])
+
+    async def save_draft(self, doc: Doc, action: str,
+                         fields: dict[str, Any], *, part: Any = None) -> Doc:
+        """Continue the effort: merge fields into the draft through the same
+        write path as every other client (the drain rule works both ways —
+        a human watching the form sees the agent's help arrive live when the
+        draft is shared). Returns the updated draft envelope."""
+        advert = self._draft_advert(doc, action, part)
+        return await self._client.post(advert["href"], fields, {})
+
+    async def discard_draft(self, doc: Doc, action: str, *,
+                            part: Any = None) -> None:
+        """Discard via the draft envelope's own ``discard`` action."""
+        env = await self.draft(doc, action, part=part)
+        entry = env.actions.get("discard")
+        if entry is None:
+            raise AffordanceError(f"draft {env.self_href} affords no discard")
+        res = await self._client.http.post(
+            entry["href"], headers=self._client.headers)
+        if res.status_code >= 400:
+            raise Problem.from_response(res)
+
     async def dry_run(self, doc: Doc, action: str,
                       body: dict[str, Any] | None = None) -> tuple[bool, Problem | None]:
         entry = self._affordance(doc, action)
@@ -196,10 +248,23 @@ class AgentClient:
         await self._client.aclose()
 
 
+# the computed demand class (design §10), phrased for a tool-using model:
+# what kind of interaction this tool actually is
+_EFFORT_HINTS = {
+    "assent": "one call, no meaningful input",
+    "selection": "inputs are choices from the offered values",
+    "recall": "inputs are short, format-constrained values",
+    "composition": "takes long-form content; consider drafting first",
+}
+
+
 def mcp_tools(doc_or_body: Doc | dict[str, Any]) -> list[dict[str, Any]]:
     """Project a resource document's actions onto an MCP-style tool list (§9):
     'whatever this resource currently affords' as an agent tool surface.
-    Derived, never hand-maintained."""
+    Derived, never hand-maintained. 2.0 documents make this projection
+    richer for free: acceptance sets arrive as enums in the input schema,
+    confirm consequences arrive in the description, and the demand class
+    annotates what kind of interaction each tool is."""
     body = doc_or_body.body if isinstance(doc_or_body, Doc) else doc_or_body
     kind = body["kind"]
     tools = []
@@ -211,6 +276,12 @@ def mcp_tools(doc_or_body: Doc | dict[str, Any]) -> list[dict[str, Any]]:
             f"Transition this {kind} to state '{effect.get('to')}'")
         if safety.get("confirm"):
             description += " (requires human confirmation before invoking)"
+        hint = _EFFORT_HINTS.get(entry.get("effort", ""))
+        if hint:
+            description += f" [{entry['effort']}: {hint}]"
+        if entry.get("draft", {}).get("href"):
+            description += (" [draftable: partial input can be saved and "
+                            "resumed via the draft sub-resource]")
         tools.append({
             "name": f"{kind}.{name}",
             "description": description,
