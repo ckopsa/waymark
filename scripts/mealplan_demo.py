@@ -117,7 +117,7 @@ async def main() -> None:
         "task_type": "thaw",
         "due_at": f"{(TUESDAY - timedelta(days=1)).isoformat()}T18:00:00+00:00"})
     pending = await agent.act(task, "schedule",
-                              {"calendar_event_id": "gcal-demo-1"})
+                              {"event_id": "gcal-demo-1"})
     assert isinstance(pending, PendingConfirmation)
     print(f"→ HARD STOP before the family calendar: {pending.reason}")
     print(f"   would do: {pending.summary}")
