@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Waymark</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #1a2233; --muted: #66707f;
+    --line: #e3e6ea; --primary: #2456d6; --primary-ink: #ffffff;
+    --danger: #b52a37; --ok: #1c7c43; --warn: #9a6b00; --chip: #eef1f5;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  a { color: var(--primary); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { background: var(--chip); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 20px;
+           background: var(--panel); border-bottom: 1px solid var(--line);
+           position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
+  header h1 a { color: var(--ink); }
+  header .spacer { flex: 1; }
+  select, input, textarea, button {
+    font: inherit; color: inherit; border: 1px solid var(--line);
+    border-radius: 6px; padding: 6px 9px; background: var(--panel); }
+  button { cursor: pointer; }
+  button.primary { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
+  button.danger  { background: #fff; color: var(--danger); border-color: var(--danger); }
+  button.danger:hover { background: var(--danger); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  main { display: grid; grid-template-columns: minmax(0,1fr) 320px; gap: 18px;
+         max-width: 1200px; margin: 18px auto; padding: 0 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px; }
+  .crumbs { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+  .chip { display: inline-block; background: var(--chip); border-radius: 999px;
+          padding: 2px 10px; font-size: 12px; font-weight: 600; }
+  .chip.warning { background: #fff3d6; color: var(--warn); }
+  .chip.ok      { background: #dcf2e4; color: var(--ok); }
+  .chip.danger  { background: #fbe0e3; color: var(--danger); }
+  h2 { margin: 4px 0 2px; font-size: 20px; }
+  .summary { color: var(--muted); margin-bottom: 12px; }
+  table.kv { border-collapse: collapse; width: 100%; }
+  table.kv td { padding: 5px 10px 5px 0; vertical-align: top; border-bottom: 1px solid var(--line); }
+  table.kv td.k { color: var(--muted); width: 32%; }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+  .unavail { margin-top: 10px; }
+  .unavail .item { color: var(--muted); font-size: 13px; padding: 3px 0; }
+  .unavail .item b { color: var(--ink); font-weight: 600; }
+  .rows .row { display: flex; align-items: center; gap: 10px; padding: 9px 4px;
+               border-bottom: 1px solid var(--line); }
+  .rows .row .grow { flex: 1; min-width: 0; }
+  table.items { border-collapse: collapse; width: 100%; }
+  table.items th { text-align: left; font-size: 11px; color: var(--muted);
+                   font-weight: 600; padding: 6px 10px 6px 0;
+                   border-bottom: 2px solid var(--line); white-space: nowrap; }
+  table.items td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line);
+                   vertical-align: middle; }
+  table.items td.rowactions { display: flex; gap: 6px; justify-content: flex-end;
+                              border-bottom: none; }
+  table.items tr:hover td { background: #fafbfc; }
+  .filterbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-bottom: 12px; }
+  .filterbar label { display: flex; flex-direction: column; font-size: 11px;
+                     color: var(--muted); gap: 3px; }
+  .feed { max-height: 70vh; overflow-y: auto; }
+  .feed .ev { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .feed .ev .who { font-weight: 600; }
+  .feed .ev .when { color: var(--muted); font-size: 11px; }
+  .feed .ev .agent { color: var(--primary); }
+  #toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
+           background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 8px;
+           display: none; z-index: 20; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
+  #toast button { background: none; border: none; color: #9db8f7; margin-left: 10px; font-weight: 600; }
+  .problem { background: #fbe0e3; border: 1px solid var(--danger); color: var(--danger);
+             border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; }
+  .problem ul { margin: 6px 0 0; padding-left: 18px; }
+  dialog { border: 1px solid var(--line); border-radius: var(--radius); padding: 0;
+           width: min(440px, 92vw); }
+  dialog .body { padding: 18px; }
+  dialog h3 { margin: 0 0 4px; }
+  dialog .effect { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  dialog form label { display: block; margin: 10px 0 3px; font-size: 12px; color: var(--muted); }
+  dialog form input, dialog form textarea, dialog form select { width: 100%; }
+  dialog .field-error { color: var(--danger); font-size: 12px; margin-top: 2px; }
+  dialog .buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+  dialog .dryrun { font-size: 12px; margin-top: 10px; }
+  dialog .dryrun.ok { color: var(--ok); }
+  dialog .dryrun.bad { color: var(--danger); }
+  .pager { display: flex; gap: 10px; margin-top: 10px; }
+  .facet { color: var(--muted); }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="#">Waymark</a></h1>
+  <nav id="kinds"></nav>
+  <div class="spacer"></div>
+  <label class="muted" style="font-size:12px">acting as&nbsp;
+    <select id="principal">
+      <option value="">anonymous</option>
+      <option value="dana|human|" selected>dana (human)</option>
+      <option value="manager|human|manager">manager (human)</option>
+      <option value="agent-1|agent|">agent-1 (agent)</option>
+    </select>
+  </label>
+</header>
+<main>
+  <section id="view"></section>
+  <aside>
+    <div class="panel">
+      <b>Activity</b> <span class="muted" style="font-size:11px">(live, all kinds)</span>
+      <div class="feed" id="feed"></div>
+    </div>
+  </aside>
+</main>
+<div id="toast"></div>
+<dialog id="dlg"></dialog>
+
+<script>
+/* The generic human client (spec Part IV, informative):
+   route = self · screen = envelope · buttons = actions · disabled-with-tooltip
+   = unavailable · forms = input schema · filter bar = the collection query
+   schema · live updates + activity feed = the events stream.
+   It consumes only the envelope — it invents no affordances. */
+const BASE = document.location.pathname.replace(/\/-\/ui$/, "");
+const $ = (s, el=document) => el.querySelector(s);
+const pretty = s => String(s).replace(/_/g, " ");
+const title = s => { const t = pretty(s); return t.charAt(0).toUpperCase() + t.slice(1); };
+const el = (tag, attrs={}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k === "onclick") n.addEventListener("click", v);
+    else if (k === "html") n.innerHTML = v;
+    else if (v !== undefined && v !== null) n.setAttribute(k, v);
+  }
+  for (const kid of kids) if (kid != null)
+    n.append(kid.nodeType ? kid : document.createTextNode(kid));
+  return n;
+};
+
+function principalHeaders() {
+  const v = $("#principal").value;
+  if (!v) return {};
+  const [id, type, roles] = v.split("|");
+  const h = {"X-Principal-Id": id, "X-Principal-Type": type,
+             "X-Principal-Display": id};
+  if (roles) h["X-Principal-Roles"] = roles;
+  return h;
+}
+
+async function api(href, opts={}) {
+  const res = await fetch(href, {...opts,
+    headers: {...principalHeaders(), ...(opts.headers||{})}});
+  const body = res.status === 204 ? null : await res.json();
+  return {res, body};
+}
+
+/* ── routing: the URL hash IS the resource href ─────────────────────── */
+function go(href) { location.hash = href; }
+window.addEventListener("hashchange", render);
+$("#principal").addEventListener("change", render);
+
+let renderSeq = 0;
+async function render() {
+  const seq = ++renderSeq;               // fetch first, swap after — a
+  const href = location.hash.slice(1) || null;  // superseded render never
+  const view = $("#view");                       // blanks the screen
+  if (!href) return renderHome(view, seq);
+  const {res, body} = await api(href);
+  if (res.status < 400 && body.kind) {
+    // hints come from the item kind's data schema, cached per kind
+    var hints = await dataHints(body.kind.replace(/_collection$/, ""));
+  }
+  if (seq !== renderSeq) return;
+  view.textContent = "";
+  if (res.status >= 400) return view.append(problemBox(body));
+  if (body.kind && body.kind.endsWith("_collection")) renderCollection(view, body, hints);
+  else renderResource(view, body, hints);
+}
+
+/* ── home: the .well-known index ────────────────────────────────────── */
+async function renderHome(view, seq) {
+  const {body} = await api(`${BASE}/.well-known/waymark`);
+  if (seq !== renderSeq) return;
+  view.textContent = "";
+  const nav = $("#kinds"); nav.textContent = "";
+  for (const [kind, href] of Object.entries(body.collections)) {
+    nav.append(el("a", {href: "#"+href, style: "margin-right:12px"}, title(kind)+"s"));
+  }
+  view.append(el("div", {class:"panel"},
+    el("h2", {}, "Workspace"),
+    el("p", {class:"summary"}, `media type ${body.media_type}`),
+    ...Object.entries(body.collections).map(([kind, href]) =>
+      el("div", {class:"rows"}, el("div", {class:"row"},
+        el("a", {href:"#"+href, class:"grow"}, href),
+        el("span", {class:"chip", title: kind}, title(kind)))))));
+}
+
+/* ── collection screen ──────────────────────────────────────────────── */
+function renderCollection(view, doc, hints) {
+  const panel = el("div", {class:"panel"});
+  const colName = title(doc.kind.replace("_collection", "")) + "s";
+  panel.append(el("div", {class:"crumbs"},
+    el("a", {href:"#"}, "Workspace"), " / ", colName));
+  panel.append(el("h2", {}, colName));
+  panel.append(el("div", {class:"summary"}, doc.summary));
+
+  // filter bar = the query action's input schema (§5)
+  const query = doc.actions && doc.actions.query;
+  if (query) panel.append(filterBar(query, doc.self));
+
+  // create = the collection create affordance
+  const create = doc.actions && doc.actions.create;
+  const bulk = Object.entries(doc.actions || {})
+    .filter(([n, a]) => a.effect && a.effect.bulk);
+  const bar = el("div", {class:"actions"});
+  if (create) bar.append(actionButton({name:"create", entry:create, doc,
+      label:"New", onDone: b => go(b.self)}));
+  panel.append(bar);
+
+  panel.append(itemTable(doc.data.items, hints));
+
+  const pager = el("div", {class:"pager"});
+  if (doc.links.prev) pager.append(el("a", {href:"#"+doc.links.prev.href}, "← prev"));
+  pager.append(el("span", {class:"muted"},
+    `page ${doc.data.page.number} · ${doc.data.total} total`));
+  if (doc.links.next) pager.append(el("a", {href:"#"+doc.links.next.href}, "next →"));
+  panel.append(pager);
+  view.append(panel);
+}
+
+/* Collection items as a table. Columns are derived mechanically from the
+   envelopes: scalar data fields shared by the rows (in schema order), plus
+   state and the honest per-row actions (§5). Compound fields (arrays,
+   objects) stay behind the row link. */
+function itemTable(items, hints) {
+  hints = hints || {};
+  if (!items.length) return el("div", {class:"muted"}, "no rows");
+  const isScalar = v => v === null || ["string","number","boolean"].includes(typeof v);
+  const consumed = new Set(Object.values(hints)
+    .map(h => h.xd?.label_field).filter(Boolean));
+  const rowsData = items.map(i => i.data);
+  const columns = Object.keys(items[0].data)
+    .filter(k => items.every(i => isScalar(i.data[k]))
+      && !hints[k]?.xd?.hidden && !consumed.has(k)
+      && !proseColumn(hints[k]?.xd, rowsData, k));
+  const anyActions = items.some(i => i.actions && Object.keys(i.actions).length);
+
+  const head = el("tr", {},
+    el("th", {}, ""),
+    ...columns.map(c => el("th", {title: c}, hints[c]?.xd?.label || title(c))),
+    el("th", {}, "State"),
+    anyActions ? el("th", {}, "") : null);
+  const table = el("table", {class:"items"}, el("thead", {}, head));
+  const tbody = el("tbody", {});
+  for (const item of items) {
+    const row = el("tr", {},
+      // the row names itself by its summary — the id stays in the href
+      el("td", {}, el("a", {href:"#"+item.self, title: item.self,
+        style:"display:inline-block;max-width:340px;overflow:hidden;" +
+              "text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom"},
+        item.summary)),
+      ...columns.map(c => el("td", {},
+        hintedValue(hints[c]?.xd || {}, item.data[c], item.data))),
+      el("td", {}, el("span", {class:"chip "+tone(item), title: item.state},
+        item.display?.state?.label ?? title(item.state))));
+    if (anyActions) {
+      const cell = el("td", {class:"rowactions"});
+      if (item.actions) {           // honest per-row buttons (§5)
+        for (const [name, entry] of Object.entries(item.actions))
+          cell.append(actionButton({name, entry, doc:item, small:true,
+            onDone: () => render()}));
+      } else if (item.actions === null) {
+        cell.append(el("span", {class:"muted", title:"row_affordances=False"}, "…"));
+      }
+      row.append(cell);
+    }
+    tbody.append(row);
+  }
+  table.append(tbody);
+  return el("div", {style:"overflow-x:auto"}, table);
+}
+
+function filterBar(query, selfHref) {
+  const bar = el("form", {class:"filterbar"});
+  const params = new URLSearchParams((selfHref.split("?")[1]||""));
+  const props = query.input.properties || {};
+  for (const [name, schema] of Object.entries(props)) {
+    if (name.startsWith("page[")) continue;
+    let input;
+    if (schema.enum) {
+      input = el("select", {name});
+      input.append(el("option", {value:""}, "—"));
+      for (const v of schema.enum) {
+        const count = schema["x-facets"]?.[v];
+        input.append(el("option", {value:v},
+          count !== undefined ? `${pretty(v)} (${count})` : pretty(v)));
+      }
+      if (params.get(name)) input.value = params.get(name);
+    } else {
+      input = el("input", {name, value: params.get(name) || "",
+        type: schema.type === "integer" || schema.type === "number" ? "number" : "text",
+        step: "any", placeholder: schema.format || schema.type || ""});
+    }
+    bar.append(el("label", {title: name},
+      schema["x-display"]?.label || title(name), input));
+  }
+  bar.append(el("button", {class:"primary", type:"submit"}, "Filter"));
+  bar.addEventListener("submit", ev => {
+    ev.preventDefault();
+    const qs = new URLSearchParams();
+    for (const [k,v] of new FormData(bar).entries()) if (v) qs.set(k, v);
+    const base = selfHref.split("?")[0];
+    go(qs.size ? `${base}?${qs}` : base);
+  });
+  return bar;
+}
+
+/* ── resource screen ────────────────────────────────────────────────── */
+function renderResource(view, doc, hints) {
+  hints = hints || {};
+  const panel = el("div", {class:"panel"});
+  const col = doc.links.collection || doc.links.parent;
+  panel.append(el("div", {class:"crumbs"},
+    el("a", {href:"#"}, "Workspace"), " / ",
+    col ? el("a", {href:"#"+col.href}, col.summary || title(doc.kind)+"s")
+        : title(doc.kind),
+    // the page names itself in human terms; the id stays hover-only
+    " / ", el("span", {title: doc.self},
+      doc.display?.title || doc.self.split("/").pop().slice(0,8))));
+  panel.append(el("h2", {}, doc.display?.title || doc.kind),
+    el("div", {}, el("span", {class:"chip "+tone(doc), title: doc.state},
+      doc.display?.state?.label ?? title(doc.state)),
+      el("span", {class:"muted", style:"margin-left:8px;font-size:12px"},
+        `v${doc.meta.version}`)));
+  panel.append(el("div", {class:"summary"}, doc.summary));
+
+  // buttons = actions, styled by display, gated by confirm; actions the
+  // server scoped into parts render on their rows instead of up here
+  const scopedNames = new Set();
+  for (const group of Object.values(doc.parts || {}))
+    for (const it of group.items)
+      for (const n of Object.keys(it.actions)) scopedNames.add(n);
+  const bar = el("div", {class:"actions"});
+  const entries = Object.entries(doc.actions)
+    .filter(([n]) => !scopedNames.has(n))
+    .sort((a,b) => (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5));
+  for (const [name, entry] of entries)
+    bar.append(actionButton({name, entry, doc, onDone: () => render()}));
+  panel.append(bar);
+
+  // disabled-with-tooltip = unavailable, with the guard's honest reason
+  const un = Object.entries(doc.unavailable);
+  if (un.length) {
+    const box = el("div", {class:"unavail"});
+    for (const [name, entry] of un) {
+      const hope = entry.becomes_available;
+      const hopeTxt = hope?.in_states ? ` — available in: ${hope.in_states.map(pretty).join(", ")}`
+        : hope?.at ? ` — available at ${hope.at}`
+        : hope?.requires ? ` — requires ${hope.requires}` : "";
+      box.append(el("div", {class:"item", title: entry.reason},
+        el("b", {}, label(name, entry)), ` · ${entry.reason}${hopeTxt}`));
+    }
+    panel.append(el("details", {open:""},
+      el("summary", {class:"muted"}, `unavailable (${un.length})`), box));
+  }
+
+  // data: grouped by display.groups if declared, else all fields; arrays
+  // with a parts group get their scoped actions as per-row buttons; fields
+  // render per their data-schema x-display hints (hidden, references)
+  const groups = doc.display?.groups ||
+    [{label: "Data", fields: Object.keys(doc.data)}];
+  for (const g of groups) {
+    const table = el("table", {class:"kv"});
+    for (const f of g.fields) {
+      const h = hints[f] || {xd: {}};
+      if (h.xd.hidden) continue;
+      table.append(el("tr", {},
+        el("td", {class:"k", title: f}, h.xd.label || title(f)),
+        el("td", {}, Array.isArray(doc.data[f]) && (doc.parts?.[f] || h.items)
+          ? rowsTable(doc.data[f], doc, doc.parts?.[f], h.items)
+          : hintedValue(h.xd, doc.data[f], doc.data))));
+    }
+    const d = el("details", g.collapsed ? {} : {open:""},
+      el("summary", {class:"muted"}, g.label || g.id), table);
+    panel.append(d);
+  }
+
+  // links = the read surface
+  const rels = Object.entries(doc.links).filter(([r]) => r !== "events");
+  if (rels.length) {
+    const box = el("div", {class:"unavail"});
+    for (const [rel, l] of rels) if (l) box.append(el("div", {class:"item"},
+      el("a", {href:"#"+l.href}, rel), l.summary ? ` · ${l.summary}` : ""));
+    panel.append(el("details", {open:""},
+      el("summary", {class:"muted"}, "links"), box));
+  }
+  view.append(panel);
+  watchResource(doc);
+}
+
+/* ── actions: buttons, forms from input schema, confirm, dry-run ────── */
+function label(name, entry) { return entry.display?.label || title(name); }
+function tone(doc) {
+  const t = doc.display?.state?.tone;
+  if (t) return t;
+  return "";
+}
+function fmt(v) {
+  if (v === null || v === undefined) return el("span", {class:"muted"}, "—");
+  if (typeof v === "boolean")
+    return v ? "✓" : el("span", {class:"muted"}, "—");
+  if (Array.isArray(v)) {
+    if (!v.length) return el("span", {class:"muted"}, "—");
+    if (v.every(x => x && typeof x === "object" && !Array.isArray(x)))
+      return rowsTable(v);
+    return el("span", {}, ...v.map(x =>
+      el("span", {class:"chip", style:"margin-right:4px"}, String(x))));
+  }
+  if (typeof v === "object") return kvTable(v);
+  return String(v);
+}
+
+/* A list of objects as a table: union of keys in first-appearance order,
+   all-null columns dropped (they appear once any row fills them in).
+   With a parts group (doc.parts[field]), each row gains the scoped actions
+   the server bound to it — honest per-row buttons, invented nowhere. */
+function rowsTable(rows, doc, partGroup, itemHints) {
+  itemHints = itemHints || {};
+  // a column consumed as another column's link label carries no extra
+  // information; hidden columns are machine plumbing
+  const consumed = new Set(Object.values(itemHints)
+    .map(xd => xd.label_field).filter(Boolean));
+  const cols = [];
+  for (const r of rows) for (const k of Object.keys(r))
+    if (!cols.includes(k)) cols.push(k);
+  const shown = cols.filter(c => rows.some(r => r[c] !== null && r[c] !== undefined)
+    && !itemHints[c]?.hidden && !consumed.has(c)
+    && !proseColumn(itemHints[c], rows, c));
+  const table = el("table", {class:"items"}, el("thead", {},
+    el("tr", {}, ...shown.map(c =>
+        el("th", {title: c}, itemHints[c]?.label || title(c))),
+      ...(partGroup ? [el("th", {})] : []))));
+  const tbody = el("tbody", {});
+  for (const r of rows) {
+    const tr = el("tr", {}, ...shown.map(c =>
+      el("td", {}, hintedValue(itemHints[c] || {}, r[c], r))));
+    if (partGroup) {
+      const part = partGroup.items.find(p => p.key === r[partGroup.key]);
+      const cell = el("td", {style:"white-space:nowrap"});
+      for (const [name, entry] of Object.entries(part?.actions || {})
+          .sort((a,b) => (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5)))
+        cell.append(actionButton({name, entry, doc, small: true,
+                                  onDone: () => render()}));
+      tr.append(cell);
+    }
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  return table;
+}
+
+function kvTable(obj) {
+  const table = el("table", {class:"kv"});
+  for (const [k, v] of Object.entries(obj))
+    table.append(el("tr", {},
+      el("td", {class:"k", title: k}, title(k)), el("td", {}, fmt(v))));
+  return table;
+}
+
+function actionButton({name, entry, doc, label: lbl, small, onDone}) {
+  const btn = el("button",
+    {class: entry.display?.style === "primary" ? "primary"
+          : entry.display?.style === "danger" ? "danger" : "",
+     style: small ? "font-size:12px;padding:3px 8px" : "",
+     title: entry.display?.description || ""},
+    lbl || label(name, entry));
+  btn.addEventListener("click", () => actionDialog({name, entry, doc, onDone}));
+  return btn;
+}
+
+function schemaFields(schema) {
+  const props = schema?.properties || {};
+  return Object.entries(props).map(([fname, s]) => {
+    const sub = s.anyOf ? s.anyOf.find(o => o.type !== "null") || {} : s;
+    return {name: fname, schema: sub, raw: s,
+            required: (schema.required || []).includes(fname),
+            display: s["x-display"] || {}};
+  });
+}
+
+/* An array of plain strings: the schema already says everything a list
+   editor needs — demanding raw JSON for it would be dishonest effort. */
+function isStringList(schema) {
+  return schema.type === "array" &&
+    (schema.items?.type === "string" || schema.items === undefined);
+}
+
+let wellKnownCache = null;
+async function wellKnown() {
+  if (!wellKnownCache)
+    wellKnownCache = (await api(`${BASE}/.well-known/waymark`)).body;
+  return wellKnownCache;
+}
+
+/* ── data-field display hints from the published data schema (§8) ──────
+   {field: {xd, items}}: xd = the field's x-display (widget/hidden/label/
+   label_field), items = per-column x-display for list-of-object fields. */
+const dataHintsCache = {};
+async function dataHints(kind) {
+  if (!(kind in dataHintsCache)) {
+    try {
+      const {res, body} = await api(`${BASE}/schemas/${kind}`);
+      dataHintsCache[kind] = res.ok ? body : {};
+    } catch { dataHintsCache[kind] = {}; }
+  }
+  const xdOf = p => {
+    if (!p || typeof p !== "object") return {};
+    const sub = p.anyOf ? p.anyOf.find(o => o.type !== "null") || {} : p;
+    return p["x-display"] || sub["x-display"] || {};
+  };
+  const out = {};
+  for (const [f, p] of Object.entries(dataHintsCache[kind].properties || {})) {
+    const sub = p.anyOf ? p.anyOf.find(o => o.type !== "null") || {} : p;
+    const itemProps = (sub.items || p.items || {}).properties;
+    out[f] = {xd: xdOf(p), items: itemProps ? Object.fromEntries(
+      Object.entries(itemProps).map(([k, v]) => [k, xdOf(v)])) : null};
+  }
+  return out;
+}
+
+/* A cross-resource reference: a link to the referenced resource, labeled by
+   the sibling label_field when the server denormalized a name, else by the
+   referenced resource's own summary (fetched lazily). Raw ids are machine
+   plumbing — humans get the thing, not the token. */
+function resourceRef(kind, id, text) {
+  const a = el("a", {href: "#", title: id},
+    text || `${pretty(kind)} · ${String(id).slice(0, 8)}`);
+  wellKnown().then(w => {
+    const col = w.collections?.[kind];
+    if (!col) return;
+    a.href = "#" + col + "/" + id;
+    if (!text) api(`${col}/${id}?depth=summary`).then(({res, body}) => {
+      if (res.ok && body.summary) a.textContent = body.summary;
+    }).catch(() => {});
+  });
+  return a;
+}
+
+/* Value cell for one data field/column, honoring its x-display hint. */
+function hintedValue(xd, value, row) {
+  if (xd.widget === "resource" && value)
+    return resourceRef(xd.kind, value, xd.label_field ? row?.[xd.label_field] : null);
+  if (xd.widget === "prose" && value)
+    return el("div", {style:"white-space:pre-wrap;max-width:640px;" +
+      "max-height:320px;overflow-y:auto"}, String(value));
+  return fmt(value);
+}
+
+/* Long-form text has no business in a table — declared prose is excluded,
+   and undeclared long strings are excluded defensively (the detail page
+   still shows them; a column of paragraphs orients nobody). */
+function proseColumn(xd, rows, col) {
+  if (xd?.widget === "prose") return true;
+  return rows.some(r => typeof r?.[col] === "string" && r[col].length > 120);
+}
+
+/* Fill a <select> from the collection behind a {widget:"resource", kind,
+   params?} field hint: option value = the id, label = the summary. */
+async function populateResourceOptions(input, kind, params) {
+  const index = await wellKnown();
+  let href = index.collections?.[kind];
+  if (!href) return;
+  if (params) href += (href.includes("?") ? "&" : "?") +
+    new URLSearchParams(params);
+  const {res, body} = await api(href);
+  if (!res.ok) return;
+  for (const item of body.data.items || [])
+    input.append(el("option", {value: item.self.split("/").pop(),
+                               title: item.self}, item.summary));
+}
+
+function formValue(field, raw) {
+  if (raw === "" || raw == null) return undefined;
+  const t = field.schema.type;
+  if (t === "number") return Number(raw);
+  if (t === "integer") return parseInt(raw, 10);
+  if (t === "boolean") return raw === "true" || raw === "on";
+  if (isStringList(field.schema))
+    return raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  if (t === "array" || t === "object") { try { return JSON.parse(raw); } catch { return raw; } }
+  return raw;
+}
+
+async function actionDialog({name, entry, doc, onDone}) {
+  const dlg = $("#dlg");
+  dlg.textContent = "";
+  // the envelope's draft is a snapshot from page render; the form must open
+  // against the draft's CURRENT truth, or effort saved after that render
+  // looks lost on reopen
+  let draft = null;
+  if (entry.draft?.href) {
+    try {
+      const res = await fetch(entry.draft.href, {headers: principalHeaders()});
+      if (res.status === 200) {
+        // v2: the draft is a sub-resource envelope (kind: "draft")
+        const env = await res.json();
+        draft = {values: env.data?.values || {}, revs: env.data?.revs || {},
+                 saved_at: env.data?.saved_at, stale: env.data?.stale};
+      }
+    } catch { draft = null; }
+  }
+  const fields = schemaFields(entry.input);
+  const needsConfirm = entry.safety?.confirm;
+  const effect = entry.effect || {};
+  const body = el("div", {class:"body"});
+  body.append(el("h3", {}, label(name, entry)));
+  body.append(el("div", {class:"effect"},
+    `effect: ${doc.state ? pretty(doc.state) : "—"} → ${pretty(effect.to)}` +
+    (effect.terminal ? " (terminal)" : "") +
+    (effect.emits ? ` · emits ${effect.emits.join(", ")}` : "") +
+    (entry.effort ? ` · effort: ${entry.effort}` : "") +
+    (entry.safety?.idempotent === false ? " · not idempotent" : "")));
+  const form = el("form", {method:"dialog"});
+  const errBox = el("div", {});
+  const dry = el("div", {class:"dryrun muted"}, entry.input ? "" : "");
+  for (const f of fields) {
+    // const = server pre-bound (a scoped action's key): submitted, never asked
+    if (f.schema.const !== undefined) continue;
+    // label is the server-emitted x-display.label (§8); title() only guards
+    // against a non-conformant server that omits it
+    form.append(el("label", {for:"f_"+f.name, title: f.name},
+      (f.display.label || title(f.name)) + (f.required ? " *" : "")));
+    let input;
+    if (f.display.widget === "resource" && f.display.kind) {
+      // x-display {widget:"resource", kind, params?}: options come from the
+      // referenced collection — still envelope-driven (index → collection)
+      input = el("select", {name:f.name, id:"f_"+f.name});
+      if (!f.required) input.append(el("option", {value:""}, "—"));
+      populateResourceOptions(input, f.display.kind, f.display.params);
+    } else if (f.schema.enum) {
+      input = el("select", {name:f.name, id:"f_"+f.name});
+      if (!f.required) input.append(el("option", {value:""}, "—"));
+      for (const v of f.schema.enum) input.append(el("option", {value:v}, pretty(v)));
+    } else if (f.schema.type === "boolean") {
+      input = el("select", {name:f.name, id:"f_"+f.name});
+      if (!f.required) input.append(el("option", {value:""}, "—"));
+      input.append(el("option", {value:"true"}, "true"),
+                   el("option", {value:"false"}, "false"));
+    } else if (f.display.widget === "prose") {
+      // long-form gets a real editing surface, never a one-line input
+      input = el("textarea", {name:f.name, id:"f_"+f.name, rows: 12,
+        maxlength: f.schema.maxLength});
+    } else if (isStringList(f.schema)) {
+      // list of strings: one entry per line — the schema declared the
+      // shape, so the client never asks a human to type JSON
+      input = el("textarea", {name:f.name, id:"f_"+f.name, rows: 5,
+        placeholder: "one per line"});
+    } else if (["array", "object"].includes(f.schema.type)) {
+      input = el("textarea", {name:f.name, id:"f_"+f.name, rows: 5,
+        placeholder: "JSON " + f.schema.type});
+    } else {
+      input = el("input", {name:f.name, id:"f_"+f.name,
+        type: f.schema.format === "date" ? "date"
+            : ["number","integer"].includes(f.schema.type) ? "number" : "text",
+        step:"any", placeholder: f.schema.format || f.schema.type || "",
+        maxlength: f.schema.maxLength});
+    }
+    // precedence: the principal's saved draft, then the server default —
+    // which for prefill actions is the document's current value (§10.1)
+    const draftVal = draft?.values?.[f.name];
+    const initial = draftVal !== undefined ? draftVal : f.schema.default;
+    if (initial !== undefined && initial !== null)
+      input.value = isStringList(f.schema) && Array.isArray(initial)
+        ? initial.join("\n")
+        : typeof initial === "object"
+          ? JSON.stringify(initial) : String(initial);
+    if (f.display.help) form.append(el("div", {class:"muted", style:"font-size:11px"}, f.display.help));
+    form.append(input, el("div", {class:"field-error", id:"err_"+f.name}));
+  }
+
+  const collect = () => {
+    if (!entry.input) return null;
+    const out = {};
+    for (const f of fields) {
+      if (f.schema.const !== undefined) { out[f.name] = f.schema.const; continue; }
+      const v = formValue(f, new FormData(form).get(f.name));
+      if (v !== undefined) out[f.name] = v;
+    }
+    return out;
+  };
+
+  // server-side draft autosave: effort persists across dismissal, devices,
+  // and clients — the envelope advertised where (entry.draft.href)
+  let flushDraft = null, disarmDraft = null, ws = null;
+  const draftBar = el("div", {class:"dryrun muted"});
+  if (entry.draft) {
+    const stamp = t => new Date(t).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+    const savedNote = el("span", {},
+      draft?.saved_at ? `draft saved ${stamp(draft.saved_at)}` : "");
+    const peers = el("span", {class:"muted"});
+    if (draft?.stale)
+      draftBar.append(el("span", {class:"bad"},
+        `⚠ draft from an older version of this ${pretty(doc.kind)} — review before submitting · `));
+    // the collab seam: waymark-relay/2 — per-field revisions on the wire,
+    // so the merge discipline is the protocol's, not this form's. Losing
+    // the socket just falls back to the plain PUT below.
+    let lastKnown = {...(draft?.values || {})};
+    const revs = {...(draft?.revs || {})};
+    const dirty = new Set();  // fields with local edits not yet sent
+    const applyRemoteField = (k, v, rev) => {
+      if (rev !== undefined) {
+        if (rev <= (revs[k] || 0)) return;  // we already hold this or newer
+        revs[k] = rev;
+      }
+      lastKnown[k] = v;
+      const input = form.elements[k];
+      if (!input) return;
+      // hold off only while the user has unsent keystrokes in this exact
+      // field — a stale send comes back as a reject carrying the truth;
+      // a merely-focused field still receives edits, caret preserved
+      if (input === document.activeElement && dirty.has(k)) return;
+      const val = v == null ? ""
+        : typeof v === "object" ? JSON.stringify(v) : String(v);
+      if (input === document.activeElement) {
+        const s = input.selectionStart, e = input.selectionEnd;
+        input.value = val;
+        try { input.setSelectionRange(s, e); } catch {}
+      } else input.value = val;
+    };
+    const showPeers = (participants) => {
+      const me = principalHeaders()["X-Principal-Id"] || "anonymous";
+      const others = (participants || []).filter(p => p.id !== me);
+      peers.textContent = others.length
+        ? ` · editing with ${others.map(p => p.display || p.id).join(", ")}` : "";
+    };
+    if (entry.draft.collab) {
+      const h = principalHeaders();
+      const q = new URLSearchParams();
+      if (h["X-Principal-Id"]) {
+        q.set("principal-id", h["X-Principal-Id"]);
+        q.set("principal-type", h["X-Principal-Type"] || "human");
+        q.set("principal-display", h["X-Principal-Display"] || h["X-Principal-Id"]);
+        if (h["X-Principal-Roles"]) q.set("principal-roles", h["X-Principal-Roles"]);
+      }
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      const sep = entry.draft.collab.href.includes("?") ? "&" : "?";
+      try {
+        ws = new WebSocket(`${proto}//${location.host}${entry.draft.collab.href}${sep}${q}`);
+        ws.onmessage = (ev) => {
+          const m = JSON.parse(ev.data);
+          if (m.type === "state") {
+            for (const [k, v] of Object.entries(m.values || {}))
+              applyRemoteField(k, v, (m.revs || {})[k]);
+            showPeers(m.participants);
+            if (m.saved_at) savedNote.textContent = `draft saved ${stamp(m.saved_at)}`; }
+          else if (m.type === "update") { applyRemoteField(m.field, m.value, m.rev);
+            savedNote.textContent = `${m.actor?.display || m.actor?.id} edited ${stamp(m.saved_at)}`; }
+          else if (m.type === "reject") {
+            // our edit was based on a stale revision: the server sent the
+            // field's truth — show it and let the user continue from there
+            dirty.delete(m.field);
+            applyRemoteField(m.field, m.value, m.rev);
+            savedNote.textContent = "edit overtaken — showing the latest"; }
+          else if (m.type === "presence") showPeers(m.participants);
+          else if (m.type === "saved") { revs[m.field] = m.rev;
+            savedNote.textContent = `draft saved ${stamp(m.saved_at)}`; }
+          else if (m.type === "closed") { ws = null; disarmDraft && disarmDraft(); dlg.close(); }
+        };
+        ws.onclose = () => { ws = null; peers.textContent = ""; };
+      } catch { ws = null; }
+    }
+    let timer = null;
+    const saveDraft = async () => {
+      timer = null;
+      const all = collect() || {};
+      if (ws && ws.readyState === 1) {
+        // send only what changed, one relay/2 frame per field, each pinned
+        // to the revision it was based on — the server rejects stale edits
+        // with the truth instead of silently clobbering anyone
+        for (const f of fields) {
+          const v = all[f.name] === undefined ? null : all[f.name];
+          const known = lastKnown[f.name] === undefined ? null : lastKnown[f.name];
+          if (JSON.stringify(v) !== JSON.stringify(known)) {
+            lastKnown[f.name] = v;
+            ws.send(JSON.stringify({type: "update", field: f.name, value: v,
+                                    base_rev: revs[f.name] || 0}));
+          }
+        }
+        dirty.clear();
+        return;
+      }
+      const res = await fetch(entry.draft.href, {
+        method: "PUT", headers: {"Content-Type": "application/json",
+                                 ...principalHeaders()},
+        body: JSON.stringify(all)});
+      dirty.clear();
+      if (res.ok) {
+        // v2: the save returns the draft envelope
+        const b = await res.json();
+        if (b.data?.revs) Object.assign(revs, b.data.revs);
+        savedNote.textContent = `draft saved ${stamp(b.data?.saved_at || Date.now())}`;
+      }
+    };
+    form.addEventListener("input", (ev) => {
+      if (ev.target?.name) dirty.add(ev.target.name);
+      clearTimeout(timer);
+      timer = setTimeout(saveDraft, ws ? 400 : 1000);
+    });
+    // a dismissal inside the debounce window must not lose the keystrokes —
+    // but a submit/discard must disarm, or the pending save resurrects a
+    // draft the server just consumed
+    flushDraft = () => { if (timer) { clearTimeout(timer); saveDraft(); } };
+    disarmDraft = () => { clearTimeout(timer); timer = null; flushDraft = null; };
+    const discard = el("button", {type: "button",
+      style: "font-size:11px;padding:2px 8px;margin-left:8px"}, "Discard draft");
+    discard.addEventListener("click", async () => {
+      disarmDraft && disarmDraft();
+      await fetch(entry.draft.href, {method: "DELETE",
+                                     headers: principalHeaders()});
+      dlg.close(); onDone && onDone(doc);
+    });
+    draftBar.append(savedNote, discard, peers);
+  }
+
+  // blur-time dry_run = the inline-validation affordance (§7.1)
+  const runDry = async () => {
+    const {res, body: b} = await invoke(entry, doc, collect(), {dryRun: true});
+    if (res.ok) { dry.textContent = "✓ valid"; dry.className = "dryrun ok"; }
+    else {
+      dry.textContent = "✗ " + (b.detail || b.title);
+      dry.className = "dryrun bad";
+      showFieldErrors(b.errors || {});
+    }
+  };
+  if (entry.input) form.addEventListener("focusout", runDry);
+
+  const showFieldErrors = (errors) => {
+    for (const f of fields) $("#err_"+f.name).textContent =
+      (errors[f.name] || []).join("; ");
+  };
+
+  const buttons = el("div", {class:"buttons"},
+    el("button", {type:"button", onclick: () => dlg.close()}, "Cancel"),
+    el("button", {type:"button",
+        class: entry.display?.style === "danger" ? "danger" : "primary",
+        onclick: async () => {
+          if (needsConfirm && !confirm(
+            `Confirm: ${label(name, entry)} → state '${effect.to}'` +
+            (effect.terminal ? " (terminal — no way back)" : "") + "?"))
+            return;
+          const {res, body: b} = await invoke(entry, doc, collect(), {});
+          if (!res.ok) { errBox.textContent = ""; errBox.append(problemBox(b));
+                         showFieldErrors(b.errors || {}); return; }
+          disarmDraft && disarmDraft();  // the invoke consumed the draft
+          dlg.close();
+          maybeUndoToast(name, doc, b);
+          onDone && onDone(b);
+        }},
+      needsConfirm ? label(name, entry) + "…" : label(name, entry)));
+  form.append(draftBar, dry, errBox, buttons);
+  body.append(form);
+  dlg.append(body);
+  // however the dialog is dismissed (Cancel, Escape), flush any keystrokes
+  // still inside the debounce window, then refresh the page's envelope
+  dlg.onclose = entry.draft
+    ? () => { flushDraft && flushDraft();
+              if (ws) { try { ws.close(); } catch {} ws = null; }
+              render(); } : null;
+  dlg.showModal();
+}
+
+async function invoke(entry, doc, body, {dryRun}) {
+  const headers = {"Content-Type": "application/json"};
+  if (entry.safety?.requires_if_match && doc.meta?.etag)
+    headers["If-Match"] = doc.meta.etag;
+  if (entry.safety?.idempotent === false)
+    headers["Idempotency-Key"] = crypto.randomUUID();
+  const href = entry.href + (dryRun ? "?dry_run=1" : "");
+  return api(href, {method: entry.method || "POST", headers,
+                    body: JSON.stringify(body ?? {})});
+}
+
+/* undo toast = inverse action present in the post-action document */
+function maybeUndoToast(name, before, after) {
+  const backTo = before.state;
+  const inverse = Object.entries(after.actions || {})
+    .find(([, a]) => a.effect?.to === backTo);
+  const toast = $("#toast");
+  toast.textContent = `${name} ✓`;
+  if (inverse && backTo && after.state !== backTo) {
+    const [invName, invEntry] = inverse;
+    toast.append(el("button", {onclick: async () => {
+      await invoke(invEntry, after, invEntry.input ? {} : null, {});
+      toast.style.display = "none";
+      render();
+    }}, `undo (${label(invName, invEntry)})`));
+  }
+  toast.style.display = "block";
+  setTimeout(() => toast.style.display = "none", 6000);
+}
+
+function problemBox(p) {
+  const box = el("div", {class:"problem"},
+    el("b", {}, p.title || "Error"), " — ", p.detail || "");
+  if (p.errors) box.append(el("ul", {},
+    ...Object.entries(p.errors).map(([f, msgs]) =>
+      el("li", {}, `${f}: ${msgs.join("; ")}`))));
+  if (p.resource) box.append(el("div", {style:"margin-top:4px"},
+    el("a", {href:"#"+p.resource.self, onclick: () => setTimeout(render, 50)},
+      "view current state")));
+  return box;
+}
+
+/* ── events: activity feed + live re-render (§6) ────────────────────── */
+async function sse(href, onEvent) {
+  // fetch-based SSE so principal headers ride along
+  while (true) {
+    try {
+      const res = await fetch(href, {headers: principalHeaders()});
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, {stream: true});
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          const data = frame.split("\n").find(l => l.startsWith("data:"));
+          if (data) onEvent(JSON.parse(data.slice(5)));
+        }
+      }
+    } catch (e) { /* server restarting */ }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+
+const seen = new Set();  // dedupe on (self, version) — at-least-once delivery
+sse(`${BASE}/-/events`, ev => {
+  const key = `${ev.self}#${ev.version}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  const feed = $("#feed");
+  feed.prepend(el("div", {class:"ev"},
+    el("span", {class:"who " + (ev.actor.type === "agent" ? "agent" : "")},
+      ev.actor.display || ev.actor.id),
+    ` ${pretty(ev.action)} · `,
+    el("a", {href:"#"+ev.self, title: `${ev.from} → ${ev.to}`},
+      `${pretty(ev.kind)}: ${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to)}`),
+    el("div", {class:"when"}, new Date(ev.at).toLocaleTimeString())));
+  // live update: if we're looking at this resource (or its collection), refetch
+  const here = location.hash.slice(1);
+  if (here && (ev.self === here.split("?")[0] ||
+               ev.self.startsWith(here.split("?")[0] + "/") ||
+               here.split("?")[0] === ev.self.replace(/\/[^/]+$/, "")))
+    render();
+});
+
+let watched = null;
+function watchResource(doc) { watched = doc.self; }
+
+render();
+</script>
+</body>
+</html>

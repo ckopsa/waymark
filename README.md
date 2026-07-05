@@ -19,6 +19,20 @@ cannot drift**, because one guard function is both the advertisement
 (`unavailable.reason`) and the enforcement (the 409 detail), and the
 conformance suite proves it by invoking everything.
 
+## Waymark 2.0
+
+This repository also contains **`waymark2/`** — the 2.0 framework designed
+in [`docs/waymark2-design.md`](docs/waymark2-design.md) from v0.1's
+retrospective: declarative guards (one `accepts` set is both the rendered
+enum and the enforcement; no AST inspection), typed `Ref` fields, structured
+`@action` declarations (`Safety`/`Edit`/`Bulk`/`PartScope`), drafts as
+sub-resources with per-field revisions (`waymark-relay/2`), a project/resolve
+render split, one cross-process bus, emitted SQL migrations, and a
+conformance suite that synthesizes inputs from the acceptance sets
+(`pytest --waymark2`). The meal-plan app (`mealplan/`) runs on it; the v0.1
+example shop (`app/`) remains on `waymark/`. Build-time deviations and
+caveats: [`docs/waymark2-notes.md`](docs/waymark2-notes.md).
+
 ## Status
 
 Complete implementation of spec v0.1 **except i18n** (all human strings are
