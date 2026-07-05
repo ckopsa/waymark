@@ -166,6 +166,21 @@
    It consumes only the envelope — it invents no affordances. */
 const BASE = document.location.pathname.replace(/\/-\/ui$/, "");
 const $ = (s, el=document) => el.querySelector(s);
+// crypto.randomUUID needs a secure context (https or localhost); over plain
+// HTTP on a LAN IP it's undefined, which would silently break every
+// non-idempotent action. getRandomValues works everywhere; Math.random is
+// the last resort (idempotency keys need uniqueness, not cryptographic
+// strength).
+const uuid = () => {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = new Uint8Array(16);
+  (crypto.getRandomValues ? crypto.getRandomValues(b)
+    : b.forEach((_, i) => b[i] = Math.floor(Math.random() * 256)));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, "0"));
+  return `${h.slice(0,4).join("")}-${h.slice(4,6).join("")}-${h.slice(6,8).join("")}`
+       + `-${h.slice(8,10).join("")}-${h.slice(10,16).join("")}`;
+};
 const pretty = s => String(s).replace(/_/g, " ");
 const title = s => { const t = pretty(s); return t.charAt(0).toUpperCase() + t.slice(1); };
 const el = (tag, attrs={}, ...kids) => {
@@ -389,6 +404,66 @@ function renderResource(view, doc, hints) {
     .sort((a,b) => (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5));
   for (const [name, entry] of entries)
     bar.append(actionButton({name, entry, doc, onDone: () => render()}));
+  // an agent link (engine kind): the owner needs to copy its token to give
+  // to the agent, and can follow the agent before it ever acts
+  if (doc.kind === "agent_grant") {
+    if (doc.data?.token) {  // present only for the owner; the agent has it
+      const apiBase = `${location.origin}${BASE}`;
+      const link = `${apiBase}/.well-known/waymark?agent-token=${doc.data.token}`;
+      const grantHref = `${location.origin}${doc.self}`;
+      // what gets copied is a priming brief, not a bare URL: paste it into
+      // the agent's context and it can bootstrap (install the CLI from
+      // /cli), authenticate, and negotiate its own access — nothing here
+      // grants anything; it only tells the agent how to ask
+      const brief = [
+        `You are "${doc.data.agent_name}", an agent holding a Waymark agent link.`,
+        ``,
+        `Server: ${apiBase}`,
+        `Your token (keep it secret): ${doc.data.token}`,
+        `Discovery link (carries your token): ${link}`,
+        ``,
+        `## Install the CLI`,
+        `This host serves its own client. Fetch the install commands:`,
+        `    curl ${location.origin}/cli`,
+        `and run one of the lines it prints (uv tool install / pipx install of the served wheel).`,
+        ``,
+        `## Authenticate`,
+        `Send the token as \`Authorization: Bearer <token>\` on every request. The CLI does this for you:`,
+        `    export WAYMARK_BASE=${location.origin}`,
+        `    export WAYMARK_TOKEN=${doc.data.token}`,
+        `    waymark2 client index --api-base ${BASE || "/"}`,
+        ``,
+        `## Negotiate access`,
+        `Your token starts with nothing beyond the public catalog and your own grant resource.`,
+        `1. Read your grant:    waymark2 client get ${grantHref}`,
+        `2. See the ask shape:  waymark2 client schema ${grantHref} request_access`,
+        `3. Request the minimum your task needs — fields (clear|hashed), actions (open|approval), and a duration:`,
+        `    waymark2 client act ${grantHref} request_access --json '{"task": "<why>", "requested_fields": {"<kind>": {"<field>": "clear"}}, "requested_actions": {"<kind>": {"<action>": "open"}}, "requested_hours": 24}'`,
+        `4. A person reviews. Poll your grant until its state is "granted", then do your task.`,
+        ``,
+        `Actions shown as unavailable name request_access as the remedy — request more, don't retry.`,
+        `Actions granted as "approval" return 202 with a pending approval a human decides; once approved, invoke its run action.`,
+      ].join("\n");
+      bar.append(el("button", {
+        title: "copy a priming brief for the agent — its token, the discovery "
+             + "link, CLI install from /cli, and how to negotiate access",
+        onclick: async () => {
+          try { await navigator.clipboard.writeText(brief);
+                toast("agent brief copied — paste it into the agent's context"); }
+          catch { prompt("agent brief (give it to the agent):", brief); }
+        }}, "🔑 copy agent link"));
+    }
+    if (doc.data?.agent_principal) {
+      const who = {id: doc.data.agent_principal, display: doc.data.agent_name};
+      const on = followId === who.id;
+      bar.append(el("button", {
+        title: on ? `already following ${who.display}`
+                  : `watch ${who.display}'s actions and navigation live`,
+        onclick: on ? unfollow : () => { follow(who);
+          toast(`following ${who.display}`); render(); }},
+        on ? "✓ following this agent" : "👁 follow this agent"));
+    }
+  }
   panel.append(bar);
 
   // disabled-with-tooltip = unavailable, with the guard's honest reason
@@ -917,7 +992,7 @@ async function invoke(entry, doc, body, {dryRun}) {
   if (entry.safety?.requires_if_match && doc.meta?.etag)
     headers["If-Match"] = doc.meta.etag;
   if (entry.safety?.idempotent === false)
-    headers["Idempotency-Key"] = crypto.randomUUID();
+    headers["Idempotency-Key"] = uuid();
   const href = entry.href + (dryRun ? "?dry_run=1" : "");
   return api(href, {method: entry.method || "POST", headers,
                     body: JSON.stringify(body ?? {})});

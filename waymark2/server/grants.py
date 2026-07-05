@@ -82,6 +82,12 @@ class GrantData(BaseModel):
                                         "feeds and approvals)")
     token: str = Field(default_factory=_mint_token,
                        json_schema_extra={"x-display": {"hidden": True}})
+    # the actor id this link's holder acts under — so a supervisor can
+    # follow the agent from the moment the link exists, before it acts
+    agent_principal: str | None = Field(
+        default=None, max_length=64,
+        description="The principal this agent acts under (for following)",
+        json_schema_extra={"x-display": {"raw": True}})
     task: str | None = Field(default=None, max_length=240,
                              description="The agent's stated task — why it "
                                          "needs what it requests")
@@ -104,6 +110,7 @@ class GrantCreate(GrantData):
     Everything else is the agent's to request and the human's to approve."""
 
     token: SkipJsonSchema[str] = Field(default_factory=_mint_token)
+    agent_principal: SkipJsonSchema[str | None] = None
     task: SkipJsonSchema[str | None] = None
     requested_fields: SkipJsonSchema[FieldMap] = Field(default_factory=dict)
     requested_actions: SkipJsonSchema[ActionMap] = Field(default_factory=dict)
@@ -158,6 +165,11 @@ class AgentGrant(Resource):
                             token=filterable.Eq)
 
     display = {"title": "Agent link — {data.agent_name}"}
+
+    async def on_create(self, ctx: Ctx) -> None:
+        # the token resolves to this exact actor id (engine._token_principal);
+        # naming it here lets any client offer "follow this agent"
+        self.data.agent_principal = f"agent-link-{self.id[:8]}"
 
     @action(from_={GrantState.DRAFT, GrantState.GRANTED},
             to=GrantState.REQUESTED,
