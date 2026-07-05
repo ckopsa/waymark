@@ -217,6 +217,10 @@ class AgentClient:
             out = await self._client.post(entry["href"], body, headers)
 
         self.graph.learn(out)
+        if out.kind == "approval_request" and doc.kind != "approval_request":
+            # agent links: the invocation became a pending approval — hand
+            # the envelope back; a human decides, then `run` executes it
+            return out
         predicted = effect.get("to")
         if predicted and out.state != predicted:
             raise Divergence(action, predicted, out.state, out)
@@ -276,6 +280,9 @@ def mcp_tools(doc_or_body: Doc | dict[str, Any]) -> list[dict[str, Any]]:
             f"Transition this {kind} to state '{effect.get('to')}'")
         if safety.get("confirm"):
             description += " (requires human confirmation before invoking)"
+        if entry.get("access") == "approval":
+            description += (" (returns a pending approval; a human approves "
+                            "and it runs)")
         hint = _EFFORT_HINTS.get(entry.get("effort", ""))
         if hint:
             description += f" [{entry['effort']}: {hint}]"

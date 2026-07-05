@@ -25,8 +25,22 @@ from .. import FORMAT_VERSION, MEDIA_TYPE
 from ..core.registry import ResourceDef
 from ..core.types import Principal
 from .drafts import audience_of, render_draft
+from .grants import (
+    AGENT_APPROVAL_ACTIONS,
+    AGENT_GRANT_ACTIONS,
+    SCOPE_REASON,
+    action_mode,
+    apply_scope,
+    arg_mode,
+)
 from .invoke import InvokeResult
-from .problems import PROBLEM_MEDIA_TYPE, NotFound, Problem, SchemaInvalid
+from .problems import (
+    PROBLEM_MEDIA_TYPE,
+    Forbidden,
+    NotFound,
+    Problem,
+    SchemaInvalid,
+)
 
 
 def problem_response(exc: Problem) -> Response:
@@ -157,6 +171,10 @@ def build_router(engine: Any) -> APIRouter:
         anyone) is doing, as they do it."""
         from .events import sse_response, sse_stream
 
+        if _scope(await engine.resolve_principal(request)) is not None:
+            # streams carry every kind's summaries; scoped agents read
+            # documents they were granted, not the whole workspace's pulse
+            return problem_response(Forbidden(SCOPE_REASON))
         kinds_param = request.query_params.get("kinds")
         kinds = (frozenset(k.strip() for k in kinds_param.split(",") if k.strip())
                  if kinds_param else None)
@@ -175,7 +193,9 @@ def build_router(engine: Any) -> APIRouter:
         from .events import presence_stream, sse_response
 
         if engine.presence is None:
-            raise NotFound("Presence is disabled on this engine.")
+            return problem_response(NotFound("Presence is disabled on this engine."))
+        if _scope(await engine.resolve_principal(request)) is not None:
+            return problem_response(Forbidden(SCOPE_REASON))
         kinds_param = request.query_params.get("kinds")
         kinds = (frozenset(k.strip() for k in kinds_param.split(",") if k.strip())
                  if kinds_param else None)
@@ -183,6 +203,97 @@ def build_router(engine: Any) -> APIRouter:
         return sse_response(presence_stream(
             engine.presence, queue,
             actor=request.query_params.get("actor") or None, kinds=kinds))
+
+    # ── agent-link scope enforcement (design: grants.py) ────────────────
+    def _scope(principal: Principal) -> Any:
+        return getattr(principal, "scope", None)
+
+    def _now() -> Any:
+        return engine.invoker.clock()
+
+    def _scoped_response(result: InvokeResult, grant: Any) -> Response:
+        """Post-invoke documents (idempotent replays included) go through
+        the same redaction as a GET — a stored reply must not out-say a
+        live one."""
+        doc = result.doc
+        if doc is None:
+            try:
+                doc = json.loads(result.body)
+            except ValueError:
+                return _doc_response(result)
+        if isinstance(doc, dict) and doc.get("kind") and doc.get("self"):
+            doc = apply_scope(doc, grant, _now())
+        return Response(content=json.dumps(doc, default=str),
+                        status_code=result.status,
+                        media_type=result.media_type)
+
+    async def _owns_target(grant: Any, rdef: ResourceDef, id: str) -> bool:
+        if rdef.kind == "agent_grant":
+            return id == grant.id
+        if rdef.kind == "approval_request":
+            async with engine.storage.session() as s:
+                inst = await engine.storage.load(s, "approval_request", id)
+            return inst is not None and inst.data.grant_id == grant.id
+        return False
+
+    async def _enqueue_approval(request: Request, grant: Any,
+                                principal: Principal, rdef: ResourceDef,
+                                id: str, action: str,
+                                body: dict[str, Any] | None,
+                                missing: list[str]) -> Response:
+        """An approval-mode invocation becomes a pending approval resource:
+        the agent gets its envelope back (202) and a human decides."""
+        defn = rdef.machine.actions[action]
+        label = dict(defn.display).get("label") \
+            or action.replace("_", " ").capitalize()
+        title = f"{label} on {rdef.kind.replace('_', ' ')}"[:80]
+        create_body = {
+            "grant_id": grant.id,
+            "agent_principal": principal.id,
+            "agent_name": grant.data.agent_name,
+            "title": title,
+            "target_kind": rdef.kind,
+            "target_id": id,
+            "target_action": action,
+            "target_href": f"{base}/{rdef.plural}/{id}",
+            "target_input": dict(body or {}),
+            "missing": missing,
+        }
+        import uuid as _uuid
+
+        result = await engine.invoker.create(
+            "approval_request", create_body, principal=principal,
+            idempotency_key=request.headers.get("Idempotency-Key")
+            or _uuid.uuid4().hex)
+        doc = result.doc
+        if doc is not None:
+            doc = apply_scope(doc, grant, _now())
+        return Response(content=json.dumps(doc, default=str), status_code=202,
+                        media_type=MEDIA_TYPE)
+
+    def _check_args(grant: Any, rdef: ResourceDef, action: str,
+                    body: dict[str, Any] | None) -> tuple[bool, list[str]]:
+        """(needs_approval_because_of_args, missing_required). Present args
+        the grant says 'none' raise 422 — outside scope is outside scope."""
+        defn = rdef.machine.actions.get(action)
+        if defn is None or defn.input is None:
+            return False, []
+        schema = rdef.action_schemas[action][0]
+        required = set(schema.get("required") or [])
+        now = _now()
+        blocked = sorted(a for a in (body or {})
+                         if arg_mode(grant, now, rdef.kind, action, a) == "none")
+        if blocked:
+            raise SchemaInvalid(
+                "Arguments outside this agent link's granted scope.",
+                action_attempted=action,
+                errors={a: ["argument not granted"] for a in blocked})
+        missing = sorted(a for a in required if a not in (body or {})
+                         and arg_mode(grant, now, rdef.kind, action, a) == "none")
+        arg_approval = any(
+            arg_mode(grant, now, rdef.kind, action, a) == "approval"
+            for a in (body or {}))
+        return arg_approval, missing
 
     async def _announce_view(principal: Principal, kind: str, self_href: str,
                              action: str | None = None,
@@ -202,6 +313,8 @@ def build_router(engine: Any) -> APIRouter:
         rdef = registry.by_plural(plural)
         if rdef is None:
             return problem_response(NotFound(f"No collection {plural!r}."))
+        if _scope(await engine.resolve_principal(request)) is not None:
+            return problem_response(Forbidden(SCOPE_REASON))
         sub = engine.dispatcher.subscribe(
             resource=(rdef.kind, id),
             paused=bool(request.headers.get("Last-Event-ID")))
@@ -232,6 +345,9 @@ def build_router(engine: Any) -> APIRouter:
                 facets=facets)
         await _announce_view(principal, f"{rdef.kind}_collection",
                              f"{base}/{rdef.plural}")
+        grant = _scope(principal)
+        if grant is not None:
+            doc = apply_scope(doc, grant, _now())
         return Response(content=json.dumps(doc, default=str),
                         media_type=MEDIA_TYPE)
 
@@ -240,11 +356,23 @@ def build_router(engine: Any) -> APIRouter:
     async def create(plural: str, request: Request) -> Response:
         rdef = rdef_or_404(plural)
         principal = await engine.resolve_principal(request)
+        grant = _scope(principal)
+        if grant is not None:
+            mode = action_mode(grant, _now(), rdef.kind, "create")
+            if mode != "open":
+                raise Forbidden(
+                    SCOPE_REASON if mode == "none" else
+                    "Approval-mode create is not supported yet; request "
+                    "open access to create, or ask a person to create it.",
+                    action_attempted="create",
+                    remedies=["agent_grant.request_access"])
         body = await _json_body(request)
         result = await engine.invoker.create(
             rdef.kind, body, principal=principal,
             idempotency_key=request.headers.get("Idempotency-Key"),
             dry_run=request.query_params.get("dry_run") in ("1", "true"))
+        if grant is not None:
+            return _scoped_response(result, grant)
         return _doc_response(result)
 
     @router.get("/{plural}/{id}")
@@ -266,6 +394,9 @@ def build_router(engine: Any) -> APIRouter:
             doc = await engine.render_with_depth(s, instance, rdef, ctx=ctx,
                                                  depth=depth)
         await _announce_view(principal, rdef.kind, doc["self"])
+        grant = _scope(principal)
+        if grant is not None:
+            doc = apply_scope(doc, grant, _now())
         headers["ETag"] = doc["meta"]["etag"]
         return Response(content=json.dumps(doc, default=str),
                         media_type=MEDIA_TYPE, headers=headers)
@@ -296,6 +427,16 @@ def build_router(engine: Any) -> APIRouter:
                 errors={"part": ["action is not placed"]})
         return part
 
+    def _draft_scope_gate(principal: Principal, rdef: ResourceDef,
+                          action: str) -> None:
+        """Drafting is effort toward an action: allowed for open AND
+        approval modes (the invoke stays gated), denied for none."""
+        grant = _scope(principal)
+        if grant is not None \
+                and action_mode(grant, _now(), rdef.kind, action) == "none":
+            raise Forbidden(SCOPE_REASON, action_attempted=action,
+                            remedies=["agent_grant.request_access"])
+
     async def _draft_envelope(s: Any, rdef: Any, defn: Any, id: str,
                               part_key: str, principal: Principal) -> dict:
         instance = await engine.storage.load(s, rdef.kind, id)
@@ -315,6 +456,7 @@ def build_router(engine: Any) -> APIRouter:
         defn = _draft_defn(rdef, action)
         part_key = _part_key(defn, request)
         principal = await engine.resolve_principal(request)
+        _draft_scope_gate(principal, rdef, action)
         body = await _json_body(request)
         if not isinstance(body, dict):
             raise SchemaInvalid("A draft body must be a JSON object.",
@@ -370,6 +512,7 @@ def build_router(engine: Any) -> APIRouter:
         defn = _draft_defn(rdef, action)
         part_key = _part_key(defn, request)
         principal = await engine.resolve_principal(request)
+        _draft_scope_gate(principal, rdef, action)
         async with engine.storage.session() as s:
             doc = await _draft_envelope(s, rdef, defn, id, part_key, principal)
         # a draftable form opens by fetching the draft's truth — this GET is
@@ -387,6 +530,7 @@ def build_router(engine: Any) -> APIRouter:
         defn = _draft_defn(rdef, action)
         part_key = _part_key(defn, request)
         principal = await engine.resolve_principal(request)
+        _draft_scope_gate(principal, rdef, action)
         async with engine.storage.session() as s:
             await engine.draft_store.discard(
                 s, rdef, defn, id, part_key, audience_of(defn, principal))
@@ -416,6 +560,11 @@ def build_router(engine: Any) -> APIRouter:
             return
         part_key = websocket.query_params.get("part", "")
         principal = await engine.resolve_principal(websocket)
+        grant = _scope(principal)
+        if grant is not None \
+                and action_mode(grant, _now(), rdef.kind, action) != "open":
+            await websocket.close(code=4403)
+            return
         await serve(engine, websocket, rdef, defn, id, part_key, principal)
 
     @router.post("/{plural}/{id}/-/{action}")
@@ -425,6 +574,29 @@ def build_router(engine: Any) -> APIRouter:
         principal = await engine.resolve_principal(request)
         body = await _json_body(request)
         dry_run = request.query_params.get("dry_run") in ("1", "true")
+        grant = _scope(principal)
+        if grant is not None and rdef.machine.actions.get(action) is not None:
+            own = await _owns_target(grant, rdef, id)
+            passthrough = own and (
+                (rdef.kind == "agent_grant"
+                 and action in AGENT_GRANT_ACTIONS)
+                or (rdef.kind == "approval_request"
+                    and action in AGENT_APPROVAL_ACTIONS))
+            if own and not passthrough:
+                raise Forbidden(
+                    "Yours to request; a person's to decide.",
+                    action_attempted=action)
+            if not passthrough:
+                mode = action_mode(grant, _now(), rdef.kind, action)
+                if mode == "none":
+                    raise Forbidden(SCOPE_REASON, action_attempted=action,
+                                    remedies=["agent_grant.request_access"])
+                arg_approval, missing = _check_args(grant, rdef, action, body)
+                if not dry_run and (mode == "approval" or arg_approval
+                                    or missing):
+                    return await _enqueue_approval(
+                        request, grant, principal, rdef, id, action, body,
+                        missing)
         if dry_run:
             # blur-time validation is the server-visible fact of "someone is
             # filling this form right now" (presence: engaged)
@@ -442,6 +614,8 @@ def build_router(engine: Any) -> APIRouter:
             consumed_action, part_key = result.consumed_draft
             await engine.collab.close(
                 (rdef.kind, id, consumed_action, part_key), "consumed")
+        if grant is not None:
+            return _scoped_response(result, grant)
         return _doc_response(result)
 
     return router

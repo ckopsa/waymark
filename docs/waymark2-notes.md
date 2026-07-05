@@ -50,6 +50,16 @@ build taught us, and the operational caveats. The same discipline as v1's
    but the limiter doesn't ride it yet; `retry_at` rendering is honest
    either way.
 
+## Agent links
+
+Least-privilege agent access, negotiated as ordinary resources — see
+`agent-links.md` for the full model. The one-line map: `agent_grant` and
+`approval_request` are engine-owned kinds (auto-registered;
+`Engine(agent_links=False)` to opt out), token principals carry their
+grant on `Principal.scope`, `apply_scope` redacts envelopes (default deny
+is absence), and the router gates act/create/drafts/WS/streams. A
+presented `wmk_` token never falls through to the app resolver.
+
 ## Known gaps
 
 - **i18n** — unchanged deferral, same emission-point argument as v1.

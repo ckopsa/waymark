@@ -29,9 +29,13 @@ enum and the enforcement; no AST inspection), typed `Ref` fields, structured
 sub-resources with per-field revisions (`waymark-relay/2`), a project/resolve
 render split, one cross-process bus, emitted SQL migrations, and a
 conformance suite that synthesizes inputs from the acceptance sets
-(`pytest --waymark2`). The meal-plan app (`mealplan/`) runs on it; the v0.1
-example shop (`app/`) remains on `waymark/`. Build-time deviations and
-caveats: [`docs/waymark2-notes.md`](docs/waymark2-notes.md).
+(`pytest --waymark2`), and **agent links** — least-privilege agent access
+negotiated as ordinary resources (default-deny tokens, per-field
+clear/hashed views, per-action open/approval modes, human-filled arguments;
+[`docs/agent-links.md`](docs/agent-links.md)). The meal-plan app
+(`mealplan/`) runs on it; the v0.1 example shop (`app/`) remains on
+`waymark/`. Build-time deviations and caveats:
+[`docs/waymark2-notes.md`](docs/waymark2-notes.md).
 
 ## Status
 

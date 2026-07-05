@@ -61,6 +61,7 @@ class Engine:
         clock: Callable[[], datetime] | None = None,
         bus: Any = None,
         presence: bool = True,
+        agent_links: bool = True,
     ):
         from .jobs import Job
 
@@ -69,6 +70,15 @@ class Engine:
             self.registry.register(cls)
         if "job" not in self.registry:  # deferred bulk lands on job resources
             self.registry.register(Job)
+        self.agent_links = agent_links
+        if agent_links:
+            # least-privilege agent access, negotiated as ordinary resources
+            from .grants import AgentGrant, ApprovalRequest
+
+            if "agent_grant" not in self.registry:
+                self.registry.register(AgentGrant)
+            if "approval_request" not in self.registry:
+                self.registry.register(ApprovalRequest)
         # cross-resource reference checks need every kind known (design §2)
         from ..core import checks
         checks.check_refs(self.registry)
@@ -95,10 +105,44 @@ class Engine:
         self.router = build_router(self)
 
     async def resolve_principal(self, request: Request) -> Principal:
+        token = self._bearer_token(request)
+        if token is not None and self.agent_links:
+            # a presented token IS the credential — it never falls through
+            # to the app resolver, dead or alive
+            return await self._token_principal(token)
         result = self.principal(request)
         if inspect.isawaitable(result):
             result = await result
         return result
+
+    @staticmethod
+    def _bearer_token(request: Any) -> str | None:
+        from .grants import TOKEN_PREFIX
+
+        auth = request.headers.get("Authorization") or ""
+        if auth.startswith("Bearer " + TOKEN_PREFIX):
+            return auth.removeprefix("Bearer ").strip()
+        qp = request.query_params.get("agent-token")
+        if qp and qp.startswith(TOKEN_PREFIX):  # WS upgrades can't set headers
+            return qp
+        return None
+
+    async def _token_principal(self, token: str) -> Principal:
+        """An agent-link token resolves to a principal carrying its grant;
+        every enforcement decision reads the grant. Unknown tokens carry a
+        dead grant — scoped to nothing, never anonymous."""
+        from .grants import dead_grant
+
+        async with self.storage.session() as s:
+            grants, _ = await self.storage.query(
+                s, "agent_grant", filters={"token": token}, sort=None,
+                page_size=1, page_number=1)
+        if not grants:
+            return Principal(id="agent-link-unknown", type="agent",
+                             display="Unknown agent link", scope=dead_grant())
+        grant = grants[0]  # revoked stays scoped: revoked means nothing, everywhere
+        return Principal(id=f"agent-link-{grant.id[:8]}", type="agent",
+                         display=grant.data.agent_name, scope=grant)
 
     async def load_drafts_for(self, s: Any, rdef: Any, instance: Resource,
                               principal: Principal) -> dict[tuple[str, str], dict]:

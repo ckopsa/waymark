@@ -234,17 +234,37 @@ def reset() -> None:
 
 
 def register_builtin_resources() -> None:
-    """The engine provides the ``job`` resource, and 2.0's derived walker can
-    reach ``running``/``done``/``cancelled`` on its own — the job enrolls
-    with no hand-written factory. ``queued`` needs a create the walker can't
-    do over HTTP (jobs are engine-created), so a create example suffices."""
+    """Engine-provided kinds enroll with the derived walker — create
+    examples supply the prose the schemas can't invent."""
+    from ..server.grants import AgentGrant, ApprovalRequest
     from ..server.jobs import Job
 
     conformance_resource(Job)
+    conformance_resource(AgentGrant)
+    conformance_resource(ApprovalRequest)
 
     @example_input(Job, "create")
     def job_create(services: Any) -> dict[str, Any]:
         return {"action": "noop", "target_kind": "job", "total": 0}
+
+    @example_input(AgentGrant, "create")
+    def grant_create(services: Any) -> dict[str, Any]:
+        return {"agent_name": "Robo"}
+
+    @example_input(AgentGrant, "request_access")
+    def grant_request(services: Any) -> dict[str, Any]:
+        return {"task": "Exercise the conformance suite",
+                "requested_actions": {"job": {"start": "open"}},
+                "requested_hours": 1}
+
+    @example_input(ApprovalRequest, "create")
+    def approval_create(services: Any) -> dict[str, Any]:
+        return {"grant_id": "unlinked", "agent_principal": "agent-x",
+                "agent_name": "Robo", "title": "Start the demo job",
+                "target_kind": "job", "target_id": "missing",
+                "target_action": "start",
+                "target_href": "/api/jobs/missing", "target_input": {},
+                "missing": []}
 
 
 register_builtin_resources()

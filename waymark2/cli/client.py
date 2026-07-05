@@ -85,6 +85,10 @@ def _main(ctx: typer.Context,
               None, "--as", envvar="WAYMARK_AS",
               help="dev principal: 'id[:type[:Display]]' → X-Principal-* "
                    "headers (type defaults to 'agent')"),
+          token: str | None = typer.Option(
+              None, "--token", envvar="WAYMARK_TOKEN",
+              help="agent-link token (wmk_…) → Authorization: Bearer; "
+                   "scope enforcement applies"),
           header: list[str] = typer.Option(
               [], "--header", "-H", help="extra header, 'Name: value'"),
           session: Path | None = typer.Option(
@@ -93,7 +97,10 @@ def _main(ctx: typer.Context,
                    "default is per-server under ~/.waymark/cli/"),
           raw: bool = typer.Option(False, "--raw",
                                    help="print full JSON bodies")) -> None:
-    ctx.obj = Settings(base=base, headers=_parse_headers(header, principal),
+    headers = _parse_headers(header, principal)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    ctx.obj = Settings(base=base, headers=headers,
                        session_path=session or _default_session(base), raw=raw)
 
 

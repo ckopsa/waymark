@@ -569,12 +569,13 @@ class Invoker:
         return items
 
     async def _child_invoke(self, resource: Any, id: str, action: str,
-                            body: dict[str, Any] | None, *, ctx: Ctx) -> dict[str, Any]:
+                            body: dict[str, Any] | None, *, ctx: Ctx,
+                            if_match: str | None = None) -> dict[str, Any]:
         """ctx.invoke: child transition in the same txn + correlation."""
         kind = resource if isinstance(resource, str) else resource.kind
         result = await self._invoke_in_session(
             ctx.session, kind, id, action, body, principal=ctx.principal,
-            if_match=None, idempotency_key=None, dry_run=False,
+            if_match=if_match, idempotency_key=None, dry_run=False,
             locale=ctx.locale, correlation_id=ctx.correlation_id,
             require_key=False,  # the enclosing invocation's txn is the retry unit
         )

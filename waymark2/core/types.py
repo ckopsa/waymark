@@ -6,7 +6,7 @@ unacknowledged one-way door, cannot be expressed at all.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
 
@@ -24,6 +24,9 @@ class Principal:
     roles: frozenset[str] = frozenset()
     display: str = ""
     locale: str = "en"
+    # a token-resolved principal carries its AgentGrant (design: agent
+    # links); None = an unscoped principal, untouched by grant enforcement
+    scope: Any = field(default=None, compare=False)
 
     @classmethod
     def anonymous(cls) -> "Principal":
@@ -51,14 +54,19 @@ class Ctx:
     _finder: Any = None   # set by the engine; enables ctx.find for guards/hooks
 
     async def invoke(self, resource: type | str, id: str, action: str,
-                     body: dict[str, Any] | None = None) -> Any:
+                     body: dict[str, Any] | None = None, *,
+                     if_match: str | None = None) -> Any:
         """Invoke a transition on another resource through the engine.
 
-        Shares this invocation's transaction and correlation_id.
+        Shares this invocation's transaction and correlation_id. Fenced
+        actions still demand ``if_match`` — a cascade is not exempt from
+        the etag fence; pass the current etag if the caller holds consent
+        for the current state (e.g. an approval's ``run``).
         """
         if self._invoker is None:
             raise RuntimeError("ctx.invoke is only available inside an engine-managed invocation")
-        return await self._invoker(resource, id, action, body, ctx=self)
+        return await self._invoker(resource, id, action, body, ctx=self,
+                                   if_match=if_match)
 
     async def read(self, resource: type | str, id: str) -> Any:
         """Load another resource's current instance in this transaction —
