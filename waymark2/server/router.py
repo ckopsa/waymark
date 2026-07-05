@@ -152,13 +152,17 @@ def build_router(engine: Any) -> APIRouter:
 
     @router.get("/-/events")
     async def firehose(request: Request) -> Any:
+        """The workspace stream. ``?actor=`` narrows it to one principal's
+        transitions — the supervision affordance: follow what an agent (or
+        anyone) is doing, as they do it."""
         from .events import sse_response, sse_stream
 
         kinds_param = request.query_params.get("kinds")
         kinds = (frozenset(k.strip() for k in kinds_param.split(",") if k.strip())
                  if kinds_param else None)
         sub = engine.dispatcher.subscribe(
-            kinds=kinds, paused=bool(request.headers.get("Last-Event-ID")))
+            kinds=kinds, actor=request.query_params.get("actor") or None,
+            paused=bool(request.headers.get("Last-Event-ID")))
         return sse_response(sse_stream(
             engine.dispatcher, sub, registry, base,
             last_event_id=request.headers.get("Last-Event-ID")))

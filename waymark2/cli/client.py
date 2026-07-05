@@ -454,6 +454,66 @@ def draft_discard(ctx: typer.Context, href: str, action_name: str,
 
 
 @client_app.command()
+def watch(ctx: typer.Context,
+          actor: str | None = typer.Option(
+              None, "--actor", help="follow one principal's transitions "
+                                    "(e.g. an agent you asked to work)"),
+          kinds: str | None = typer.Option(
+              None, "--kinds", help="comma-separated kind filter"),
+          api_base: str = typer.Option("/api", help="API mount path")) -> None:
+    """Stream live transitions from the workspace firehose (Ctrl-C stops).
+
+    Supervision from a shell: `watch --actor claude` prints every action
+    that principal takes, as it lands in the audit log — the same events
+    that drive the UI's follow mode.
+    """
+    settings: Settings = ctx.obj
+
+    async def go(agent: AgentClient) -> None:
+        params = {}
+        if actor:
+            params["actor"] = actor
+        if kinds:
+            params["kinds"] = kinds
+        target = f"{api_base}/-/events"
+        who = f" · actor={actor}" if actor else ""
+        typer.secho(f"watching {settings.base}{target}{who} — Ctrl-C stops",
+                    fg="cyan")
+        async with agent._client.http.stream(
+                "GET", target, params=params,
+                headers=agent._client.headers, timeout=None) as res:
+            res.raise_for_status()
+            frame: dict[str, str] = {}
+            async for line in res.aiter_lines():
+                line = line.strip()
+                if line:
+                    key, _, value = line.partition(":")
+                    frame[key.strip()] = value.strip()
+                    continue
+                if "data" not in frame:
+                    frame = {}
+                    continue
+                ev = json.loads(frame["data"])
+                frame = {}
+                when = ev.get("at", "")[11:19]
+                a = ev.get("actor", {})
+                who_s = a.get("display") or a.get("id", "?")
+                typer.echo("".join([
+                    typer.style(when, fg="bright_black"), "  ",
+                    typer.style(f"{who_s}",
+                                fg="cyan" if a.get("type") == "agent" else None,
+                                bold=True),
+                    f" {ev.get('action')}  ",
+                    f"{ev.get('kind')} {ev.get('from') or '·'} → {ev.get('to')}  ",
+                    typer.style(ev.get("self", ""), fg="bright_black"),
+                ]))
+                if settings.raw and ev.get("summary"):
+                    typer.echo(f"          {ev['summary']}")
+
+    _run(settings, go)
+
+
+@client_app.command()
 def plan(ctx: typer.Context, href: str, goal_state: str) -> None:
     """Route from HREF's current state to GOAL_STATE over the learned
     effect.to graph (grows as this session sees more documents)."""

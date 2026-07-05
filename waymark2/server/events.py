@@ -41,6 +41,7 @@ def event_payload(t: TransitionRecord, registry: Registry, base: str) -> dict[st
 class Subscription:
     kinds: frozenset[str] | None = None      # None = all kinds
     resource: tuple[str, str] | None = None  # (kind, id)
+    actor: str | None = None                 # follow one principal's actions
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=1000))
     # Last-Event-ID replay: live events buffer in `pending` until the replayed
     # backlog is enqueued, so the stream stays ordered without losing events
@@ -48,6 +49,8 @@ class Subscription:
     pending: list = field(default_factory=list)
 
     def wants(self, t: TransitionRecord) -> bool:
+        if self.actor is not None and t.actor_id != self.actor:
+            return False
         if self.resource is not None:
             return (t.kind, t.resource_id) == self.resource
         return self.kinds is None or t.kind in self.kinds
@@ -96,8 +99,10 @@ class Dispatcher:
 
     def subscribe(self, *, kinds: frozenset[str] | None = None,
                   resource: tuple[str, str] | None = None,
+                  actor: str | None = None,
                   paused: bool = False) -> Subscription:
-        sub = Subscription(kinds=kinds, resource=resource, paused=paused)
+        sub = Subscription(kinds=kinds, resource=resource, actor=actor,
+                           paused=paused)
         self._subs.add(sub)
         return sub
 

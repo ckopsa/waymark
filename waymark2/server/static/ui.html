@@ -68,9 +68,17 @@
                      color: var(--muted); gap: 3px; }
   .feed { max-height: 70vh; overflow-y: auto; }
   .feed .ev { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
-  .feed .ev .who { font-weight: 600; }
+  .feed .ev .who { font-weight: 600; cursor: pointer; }
+  .feed .ev .who:hover { text-decoration: underline; }
   .feed .ev .when { color: var(--muted); font-size: 11px; }
   .feed .ev .agent { color: var(--primary); }
+  .feed .ev.followed { background: #eef4ff; border-left: 3px solid var(--primary);
+                       padding-left: 6px; }
+  #followchip { background: #eef4ff; color: var(--primary); border-radius: 999px;
+                padding: 3px 12px; font-size: 12px; font-weight: 600;
+                display: none; white-space: nowrap; }
+  #followchip button { border: none; background: none; color: var(--primary);
+                       padding: 0 0 0 6px; font-weight: 700; }
   #toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%);
            background: var(--ink); color: #fff; padding: 10px 18px; border-radius: 8px;
            display: none; z-index: 20; box-shadow: 0 6px 24px rgba(0,0,0,.25);
@@ -124,6 +132,7 @@
 <header>
   <h1><a href="#">Waymark</a></h1>
   <nav id="kinds"></nav>
+  <span id="followchip"></span>
   <div class="spacer"></div>
   <label class="muted" style="font-size:12px">acting as&nbsp;
     <select id="principal">
@@ -967,24 +976,63 @@ async function sse(href, onEvent) {
   }
 }
 
+/* ── follow a principal (supervision): their transitions steer this
+   screen. The stream already names the actor on every event; following is
+   a client-side filter plus navigation — no new affordances invented. ── */
+let followId = localStorage.getItem("wm-follow-id") || null;
+let followName = localStorage.getItem("wm-follow-name") || null;
+
+function follow(actor) {
+  followId = actor.id;
+  followName = actor.display || actor.id;
+  localStorage.setItem("wm-follow-id", followId);
+  localStorage.setItem("wm-follow-name", followName);
+  followChip();
+}
+function unfollow() {
+  followId = followName = null;
+  localStorage.removeItem("wm-follow-id");
+  localStorage.removeItem("wm-follow-name");
+  followChip();
+}
+function followChip() {
+  const chip = $("#followchip");
+  chip.style.display = followId ? "inline-block" : "none";
+  chip.textContent = "";
+  if (followId) {
+    chip.append(`following ${followName}`,
+      el("button", {title: "stop following", onclick: unfollow}, "✕"));
+  }
+}
+followChip();
+
 const seen = new Set();  // dedupe on (self, version) — at-least-once delivery
 sse(`${BASE}/-/events`, ev => {
   const key = `${ev.self}#${ev.version}`;
   if (seen.has(key)) return;
   seen.add(key);
   const feed = $("#feed");
-  feed.prepend(el("div", {class:"ev"},
-    el("span", {class:"who " + (ev.actor.type === "agent" ? "agent" : "")},
+  const isFollowed = followId && ev.actor.id === followId;
+  feed.prepend(el("div", {class: "ev" + (isFollowed ? " followed" : "")},
+    el("span", {class:"who " + (ev.actor.type === "agent" ? "agent" : ""),
+                title: `follow ${ev.actor.display || ev.actor.id}'s actions`,
+                onclick: () => follow(ev.actor)},
       ev.actor.display || ev.actor.id),
     ` ${pretty(ev.action)} · `,
     el("a", {href:"#"+ev.self, title: `${ev.from} → ${ev.to}`},
       `${pretty(ev.kind)}: ${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to)}`),
     el("div", {class:"when"}, new Date(ev.at).toLocaleTimeString())));
+  const here = location.hash.slice(1).split("?")[0];
+  // following: go where they went — unless a dialog is open (never yank a
+  // human out of a form they're typing in; the feed still highlights)
+  if (isFollowed && ev.self !== here && !$("#dlg").open) {
+    location.hash = "#" + ev.self;
+    return;  // hashchange triggers the render
+  }
   // live update: if we're looking at this resource (or its collection), refetch
-  const here = location.hash.slice(1);
-  if (here && (ev.self === here.split("?")[0] ||
-               ev.self.startsWith(here.split("?")[0] + "/") ||
-               here.split("?")[0] === ev.self.replace(/\/[^/]+$/, "")))
+  if (here && (ev.self === here ||
+               ev.self.startsWith(here + "/") ||
+               here === ev.self.replace(/\/[^/]+$/, "")))
     render();
 });
 
