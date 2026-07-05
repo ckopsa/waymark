@@ -39,7 +39,7 @@ from sqlalchemy import (
     text,
     update,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, array
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from ...core.registry import Registry, ResourceDef
@@ -96,6 +96,11 @@ def _generated_column(field: str, promoted_type: str) -> Column:
     if promoted_type == "date-time":
         return Column(field, DateTime(timezone=True),
                       Computed(f"{TS_FUNCTION}(data->>'{field}')", persisted=True))
+    if promoted_type == "array":
+        # stays JSONB (no ->> text cast): filtering is containment, and the
+        # GIN index below serves both @> (Eq) and ?| (In)
+        return Column(field, JSONB,
+                      Computed(f"(data->'{field}')", persisted=True))
     return Column(field, Text, Computed(f"(data->>'{field}')", persisted=True))
 
 
@@ -170,7 +175,11 @@ class PostgresStorage:
         indexes = []
         for field, promoted_type in promoted.items():
             columns.append(_generated_column(field, promoted_type))
-            indexes.append(Index(f"ix_{rdef.plural}_{field}", field))
+            if promoted_type == "array":
+                indexes.append(Index(f"ix_{rdef.plural}_{field}", field,
+                                     postgresql_using="gin"))
+            else:
+                indexes.append(Index(f"ix_{rdef.plural}_{field}", field))
         table = Table(rdef.plural, self.metadata, *columns, *indexes)
         self.tables[rdef.kind] = table
         rdef.row_model = table
@@ -254,6 +263,7 @@ class PostgresStorage:
     def _conditions(self, kind: str, table: Table, filters: dict[str, Any]) -> list[Any]:
         from decimal import Decimal
 
+        promoted = self._promoted.get(kind, {})
         conds: list[Any] = []
         for name, value in filters.items():
             if value is None:
@@ -262,7 +272,15 @@ class PostgresStorage:
                 # bind by decimal string: a float's binary expansion
                 # (84.2 → 84.2000…0028) must not defeat NUMERIC comparison
                 value = Decimal(str(value))
-            if name.endswith("_gte"):
+            if promoted.get(name) == "array":
+                # membership, not equality: Eq = tagged with the value (@>),
+                # In = tagged with any of them (?|) — both GIN-indexed
+                col = table.c[name]
+                if isinstance(value, (list, tuple)):
+                    conds.append(col.has_any(array([str(v) for v in value])))
+                else:
+                    conds.append(col.contains([value]))
+            elif name.endswith("_gte"):
                 conds.append(table.c[name.removesuffix("_gte")] >= value)
             elif name.endswith("_lte"):
                 conds.append(table.c[name.removesuffix("_lte")] <= value)

@@ -18,6 +18,7 @@ _FILTERS = {
     "len": len,
     "upper": lambda v: str(v).upper(),
     "lower": lambda v: str(v).lower(),
+    "join": lambda v: ", ".join(str(x) for x in v),
 }
 
 

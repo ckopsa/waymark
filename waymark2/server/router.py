@@ -102,6 +102,10 @@ def parse_query(rdef: ResourceDef, params: Any) -> dict[str, Any]:
                         raise ValueError(f"invalid values: {bad}")
                 elif raw not in schema["enum"]:
                     raise ValueError(f"must be one of {schema['enum']}")
+            elif schema.get("type") == "string":
+                ops = fspec.fields.get(name) if fspec else None
+                if "," in raw and ops and ops & FilterOp.IN:
+                    value = raw.split(",")
             parsed[name] = value
         except ValueError as e:
             errors[name] = [str(e)]

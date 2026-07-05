@@ -186,6 +186,10 @@ def query_schema(resource: type) -> tuple[dict[str, Any], bytes]:
             base = field_types.get(fname, {"type": "string"})
             if fname == "state":
                 base = {"type": "string", "enum": [str(s) for s in resource.State]}
+            if base.get("type") == "array":
+                # filtering an array field matches one element (membership),
+                # so the parameter is typed as a single item
+                base = base.get("items", {"type": "string"})
             if ops & (FilterOp.EQ | FilterOp.IN):
                 props[fname] = {**base,
                                 "x-display": {"label": _humanize(fname)}}
@@ -221,6 +225,9 @@ def _field_types(resource: type) -> dict[str, dict[str, Any]]:
             out[name] = {"type": sub["type"]}
             if "format" in sub:
                 out[name]["format"] = sub["format"]
+            if sub["type"] == "array" and isinstance(sub.get("items"), dict) \
+                    and "type" in sub["items"]:
+                out[name]["items"] = {"type": sub["items"]["type"]}
         elif "anyOf" in sub:
             for option in sub["anyOf"]:
                 if option.get("type") not in (None, "null"):
