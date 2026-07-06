@@ -463,3 +463,154 @@ Punted, with the rule kept — punt things that don't compound:
 - Not punted, on principle: parts visibility (§1), approval-create (§2),
   and the bus-backed rate limiter (§8) — each is a 2.0 caveat that 2.0's
   own history proves compounds.
+
+---
+
+## Appendix: before/after user stories
+
+One pair per numbered section, grounded in the mealplan app and cast with
+its actual users: **Colton** (app author/operator), **Dana** (family
+member in the generic UI), **the agent** (Claude on a `wmk_` token), and
+**a follower** (someone supervising the agent).
+
+### §1 Visibility is projection, not redaction
+
+**Before (v2):** Colton mints the agent a grant scoped to grocery lists
+and meal assignment. The agent GETs the plan and gets an envelope whose
+`parts` are simply gone — `apply_scope` pops them wholesale ("re-admit
+later if needed") — so even though the grant *allows* `assign_meal`, the
+agent can't see the per-day bindings it needs to use it. Meanwhile
+Colton, writing the grant, has to remember that an unlisted action means
+*denied*, an unlisted field means *hidden*, but an unlisted argument
+means *editable* — three defaults for three maps, and getting one wrong
+is silent.
+
+**After (v3):** The same grant compiles to one `Visibility`. The
+projector builds the agent's envelope with it in hand: the days the
+agent may act on render with their bound actions; the fields it can't
+see were never rendered, so there's nothing to strip and nothing to
+leak. One `unlisted=` rule, stated on the declaration. The agent's view
+of the plan is just… a smaller plan, parts and all.
+
+### §2 The router is assembled, not written
+
+**Before (v2):** Colton wants the agent to be able to *propose* new
+grocery items with human approval. The server answers with prose:
+*"Approval-mode create is not supported yet; request open access to
+create, or ask a person to create it."* Later he revokes a grant
+mid-session — but the agent had a collab socket open on the notes draft,
+and it keeps receiving the room until the draft closes, because the join
+gate only ran at join.
+
+**After (v3):** Approval capture is a stage on the write pipeline, and
+create is a write — so "propose an item, Dana approves it" works the day
+approval-mode ships, with no create-specific code. And revocation is an
+affordance-changing transition on the bus, which re-runs the
+authenticate stage on every route that principal holds open: the socket
+drops the moment the grant does.
+
+### §3 Two event classes, one taxonomy
+
+**Before (v2):** Dana follows the agent to watch it plan the week. Her
+screen whiplashes: the agent's client resolves eight meal-name labels
+and a picker's options, and every one of those GETs announces presence,
+so the follow view "visits" places the agent never looked. Three patches
+later (`viewed`, then `engaged`, then `peek=1`) it's mostly quiet — but
+only because every plumbing fetch now remembers to carry a flag.
+
+**After (v3):** Label and picker fetches ride lookup-class routes, which
+never emit observations — no flag to remember, nothing for a client to
+forget. Dana's follow view shows exactly the agent's narrative: *opened
+the active plan → opened assign-meal on Tuesday → dry-ran an input →
+committed.* The `engaged` beats come from the draft and dry-run stages
+themselves, so they're right by construction.
+
+### §4 Binding: parts stop being a parallel universe
+
+**Before (v2):** Colton declares the meal picker on the `Ref` with
+`state="on_list"`. Then he wants Tuesday's picker to prefer taco-night
+meals — but `{item.theme}` templates only work through a *second*
+declaration, `field_display`, which must repeat `state="on_list"`.
+Months later he tightens the first one and forgets the copy; the per-day
+picker silently offers off-list meals. Separately, `meal_name` labels
+are hand-copied in `_assign` — a new action that sets a meal but forgets
+the copy ships a day showing the *old* meal's name.
+
+**After (v3):** One declaration:
+`pick=Query(state="on_list", themes="{item.theme}")`, on the `Ref`,
+resolved against the binding at render. There is no second place to
+disagree with the first. And `label="meal_name"` means the engine
+maintains the denormalized label wherever the `Ref` lives — including
+inside the days array — so a stale label is no longer a bug an action
+can have.
+
+### §5 Guards grow relations and one-of groups
+
+**Before (v2):** Dana opens Tuesday, and the meal picker offers *every*
+on-list meal — the theme rule lives in a `check=` guard the renderer
+can't see into. She picks lasagna, submits, and gets a hand-written
+refusal: *"Lasagna doesn't serve tacos night."* Trial and error, on a
+form that knew the answer. And when she marks Friday as eating-out, the
+handler must remember to clear `meal_id` *and* `meal_name` — the one
+time a handler forgot, a day showed "Eating out — Lasagna."
+
+**After (v3):** The `Relation(("meal", "date"))` acceptance set folds
+into each bound form: Tuesday's picker *only offers meals that serve
+taco night*, and the demand class honestly drops from recall to
+selection — Dana can't submit a refusable combination.
+`OneOf("meal", "eating_out", clears=True)` renders as an actual
+either/or in the form, and choosing one arm clears the other atomically,
+in the engine, for every action ever written.
+
+### §6 Vocabularies are a type
+
+**Before (v2):** Colton wants meals to serve multiple theme nights.
+Getting there took: an engine feature (JSONB array columns + GIN +
+membership operators, four layers in one commit), a migration with
+backfill, a `faceted = ("themes",)` declaration *alongside*
+`filterable(themes=…)` plus a checker to keep them agreeing — and for a
+while, filter hrefs serialized as `['tacos', 'soup']`, a stringified
+Python list no client could re-read. Meanwhile Sunday renders its
+placeholder as if "rotating" were a cuisine.
+
+**After (v3):** `themes: Vocab[str]` with `open=True,
+filter=Membership, facet=Observed(counts=True), placeholder="rotating"`
+— one field declaration. Column, index, operators, comma-list wire
+format, facet counts, and picker behavior all fall out of it. Sunday
+renders as *"theme not chosen yet"* and is excluded from "covered" by
+declaration, not by four hand-threaded `ROTATING` branches.
+
+### §7 The query grammar is spec
+
+**Before (v2):** This one happened live. The agent fetched the
+advertised href `/api/plans?state=active` — but the client passed
+`depth` as request params, which *replaced* the query string. The filter
+vanished, "all plans" came back newest-first, and the agent linked a
+prep task to a draft plan nobody was cooking from. A human following the
+agent caught it; nothing else would have.
+
+**After (v3):** Hrefs are authoritative: clients merge parameters into
+an advertised href through one property-tested `merge_params` —
+rebuilding a query string is not a thing a conforming client does. And
+an unknown or malformed parameter is a Problem, not a silent no-op, so
+the failure mode is a loud 4xx on the agent's transcript instead of a
+quietly wrong plan.
+
+### §8 Ship the punts that compounded; kill the residual inference
+
+**Before (v2):** The `theme`→`themes` change left a
+`model_validator(mode="before")` in `meal.py` silently folding old rows
+forever — no version, no test replaying it, invisible to conformance.
+Colton scales the deployment to two Nomad workers and every rate limit
+silently doubles: the counter is per-process, and the bus that was built
+to prevent exactly this sits unused by it. And a new guard author
+watches `_wants_ctx` sniff their lambda's signature to decide what to
+pass it — v1's AST scanning wearing an `inspect` coat.
+
+**After (v3):** The fold is a declared upcast — `shape=2,
+upcasts={1: fold_theme}` — and conformance replays it against stored
+shape-1 fixtures every run, so it can't rot. The limiter coordinates
+over the bus, so two workers enforce one limit. And a guard's needs are
+read from its declaration (`reads=` already says whether it gets a ctx),
+so what the engine passes a callable is decided by what the author
+wrote, not by what a signature-sniffer guessed.
