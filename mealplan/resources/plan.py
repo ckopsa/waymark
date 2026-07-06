@@ -60,6 +60,9 @@ class DayPlan(BaseModel):
     meal_id: Ref["meal"] | None = RefField(default=None, label="meal_name")
     meal_name: str | None = Field(default=None, max_length=200)
     eating_out: bool = False
+    eating_out_where: str | None = Field(
+        default=None, max_length=120,
+        json_schema_extra={"x-display": {"label": "Where"}})
 
 
 class PlanData(BaseModel):
@@ -104,6 +107,14 @@ class PlanCreate(PlanData):
 
 class DayInput(BaseModel):
     date: date_t
+
+
+class EatingOutInput(BaseModel):
+    date: date_t
+    where: str | None = Field(
+        default=None, max_length=120,
+        description="Where you're eating — a restaurant, grandma's, the "
+                    "ward picnic… (optional)")
 
 
 class AssignInput(BaseModel):
@@ -295,6 +306,7 @@ class MealPlan(Resource):
         day.meal_id = inp.meal_id
         day.meal_name = meal.data.name
         day.eating_out = False
+        day.eating_out_where = None
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
             input=SundayThemeInput, place=days,
@@ -307,13 +319,14 @@ class MealPlan(Resource):
         day.theme = inp.theme
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
-            input=DayInput, place=days, guards=[date_in_plan],
+            input=EatingOutInput, place=days, guards=[date_in_plan],
             safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Eating out", order=3))
-    async def mark_eating_out(self, inp: DayInput, ctx: Ctx) -> None:
+    async def mark_eating_out(self, inp: EatingOutInput, ctx: Ctx) -> None:
         day = _day(self, inp.date)
         assert day is not None
         day.eating_out = True
+        day.eating_out_where = inp.where
         day.meal_id = None
         day.meal_name = None
 
@@ -327,6 +340,7 @@ class MealPlan(Resource):
         day.meal_id = None
         day.meal_name = None
         day.eating_out = False
+        day.eating_out_where = None
 
     @action(from_=PlanState.DRAFT, to=PlanState.PLANNED,
             guards=[all_days_covered],

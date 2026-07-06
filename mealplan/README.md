@@ -53,7 +53,7 @@ it automatically at create time.
   itself and names the remedies); Sundays refuse assignment until
   `set_sunday_theme` picks something from the rotation; `assign_off_theme`
   is the confirm-gated override; `mark_eating_out` covers a day without a
-  meal. `finalize` refuses until every day is covered — and the same guard
+  meal, optionally noting where (a restaurant, grandma's, …). `finalize` refuses until every day is covered — and the same guard
   is why the button is disabled, with the missing dates in the tooltip.
 - **`grocery_list`** — compiled by the AI from a finalized plan (`finalize`
   is guarded on the plan actually being `planned`). In `ready` you shop and
