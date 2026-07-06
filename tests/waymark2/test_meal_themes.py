@@ -120,6 +120,49 @@ async def test_update_themes_retags(env):
     assert resp.status_code in (409, 412, 428), resp.text
 
 
+async def test_theme_facets_render_as_the_filter_enum(env):
+    await _create_meal(env, "Fajitas", ["mexican", "american"])
+    await _create_meal(env, "Brisket", ["bbq"])
+    await _create_meal(env, "Tacos", ["mexican"])
+
+    resp = await env.get("/api/meals")
+    assert resp.status_code == 200, resp.text
+    themes = resp.json()["actions"]["query"]["input"]["properties"]["themes"]
+
+    # per-element counts: a twice-tagged meal counts once per tag
+    assert themes["x-facets"] == {"mexican": 2, "american": 1, "bbq": 1}
+    # the observed vocabulary is the dropdown; comma lists are advertised
+    assert themes["enum"] == ["american", "bbq", "mexican"]
+    assert themes["x-in"] is True
+
+    # state facets keep working alongside
+    state = resp.json()["actions"]["query"]["input"]["properties"]["state"]
+    assert state["x-facets"] == {"suggested": 3}
+
+
+async def test_faceted_must_be_filterable():
+    from enum import StrEnum
+
+    from pydantic import BaseModel
+
+    from waymark2.core.checks import DefinitionError
+
+    with pytest.raises(DefinitionError, match="faceted"):
+        class BadState(StrEnum):
+            OPEN = "open"
+
+        class BadData(BaseModel):
+            tags: list[str] = []
+
+        class Bad(waymark2.Resource):
+            kind = "bad_faceted"
+            State = BadState
+            Data = BadData
+            initial = BadState.OPEN
+            summary = "{state.label}"
+            faceted = ("tags",)  # not declared filterable
+
+
 async def test_multi_tagged_meal_assigns_on_any_of_its_nights(env):
     meal = await _accept(env, await _create_meal(
         env, "Fajitas", ["mexican", "american"]))

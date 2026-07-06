@@ -480,7 +480,11 @@ async def render_collection(
 ) -> dict[str, Any]:
     from urllib.parse import urlencode
 
-    applied_query = {k: v for k, v in (applied_query or {}).items() if v is not None}
+    # In filters parse to lists; on the wire they are comma strings, and the
+    # self href (what a client re-reads its own filters from) must say so
+    applied_query = {k: (",".join(str(x) for x in v)
+                         if isinstance(v, (list, tuple)) else v)
+                     for k, v in (applied_query or {}).items() if v is not None}
 
     def page_href(number: int) -> str:
         params = {**applied_query, "page[size]": page_size, "page[number]": number}
@@ -509,8 +513,12 @@ async def render_collection(
         query_schema = {**query_schema, "properties": dict(query_schema["properties"])}
         for fname, counts in facets.items():
             if fname in query_schema["properties"]:
-                query_schema["properties"][fname] = {
-                    **query_schema["properties"][fname], "x-facets": counts}
+                prop = {**query_schema["properties"][fname], "x-facets": counts}
+                if "enum" not in prop:
+                    # a dynamic vocabulary (faceted, not statically enumerable):
+                    # the observed values are the choices, refreshed per render
+                    prop["enum"] = sorted(counts)
+                query_schema["properties"][fname] = prop
 
     create_input = rdef.extra.get("create_schema") or rdef.data_schema
     actions: dict[str, Any] = {

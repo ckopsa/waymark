@@ -193,6 +193,9 @@ def query_schema(resource: type) -> tuple[dict[str, Any], bytes]:
             if ops & (FilterOp.EQ | FilterOp.IN):
                 props[fname] = {**base,
                                 "x-display": {"label": _humanize(fname)}}
+                if ops & FilterOp.IN:
+                    # a comma list of values is accepted (any-of)
+                    props[fname]["x-in"] = True
             if ops & FilterOp.RANGE:
                 num = base if base.get("type") in ("number", "integer") else {"type": "number"}
                 props[f"{fname}_gte"] = {

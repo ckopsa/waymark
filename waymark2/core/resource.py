@@ -95,6 +95,10 @@ class Resource:
     plural: ClassVar[str]
     filterable: ClassVar[filterable | None] = None
     sortable: ClassVar[SortableSpec | None] = None
+    # filter fields whose observed values render as the param's enum (with
+    # counts) on every collection — for dynamic vocabularies a static enum
+    # can't know. "state" is always faceted; declaring it here is redundant.
+    faceted: ClassVar[tuple[str, ...]] = ()
     profiles: ClassVar[dict[str, Profile]] = {}
     links: ClassVar[tuple[LinkDef, ...]] = ()
     display: ClassVar[dict[str, Any]] = {}

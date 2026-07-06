@@ -53,6 +53,27 @@ def run_all(cls: type, machine: StateMachine, *, allow_dead: frozenset[str],
     check_edit(cls, machine)
     check_altitude(cls, machine)
     check_long_text(cls, machine)
+    check_faceted(cls)
+
+
+def check_faceted(cls: type) -> None:
+    """``faceted`` fields must be Eq/In-filterable: a facet is a filter
+    value with a count, so a field the query cannot filter on has nothing
+    to facet."""
+    from .resource import FilterOp
+
+    faceted = tuple(getattr(cls, "faceted", ()) or ())
+    if not faceted:
+        return
+    fspec = getattr(cls, "filterable", None)
+    fields = fspec.fields if fspec is not None else {}
+    for f in faceted:
+        if f == "state":
+            continue  # state facets are automatic; the declaration is moot
+        ops = fields.get(f)
+        if ops is None or not ops & (FilterOp.EQ | FilterOp.IN):
+            raise _err(cls, f"faceted field {f!r} is not Eq/In-filterable; "
+                            "declare it in filterable(...) first")
 
 
 def _err(cls: type, msg: str) -> DefinitionError:

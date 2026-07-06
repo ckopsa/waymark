@@ -338,8 +338,12 @@ def build_router(engine: Any) -> APIRouter:
                 s, rdef.kind, filters=filters, sort=sort,
                 page_size=page_size, page_number=page_number)
             facets = None
-            if rdef.cls.filterable and "state" in rdef.cls.filterable.fields:
-                facets = {"state": await engine.storage.facets(s, rdef.kind, "state")}
+            faceted = [f for f in ("state", *rdef.cls.faceted)
+                       if rdef.cls.filterable
+                       and f in rdef.cls.filterable.fields]
+            if faceted:
+                facets = {f: await engine.storage.facets(s, rdef.kind, f)
+                          for f in dict.fromkeys(faceted)}
             ctx = engine.invoker._ctx(principal, s, mode="probe")
             from .render import render_collection
 

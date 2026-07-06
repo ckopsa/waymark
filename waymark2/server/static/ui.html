@@ -64,8 +64,21 @@
                               border-bottom: none; flex-wrap: wrap; }
   table.items tr:hover td { background: #fafbfc; }
   .filterbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; margin-bottom: 12px; }
-  .filterbar label { display: flex; flex-direction: column; font-size: 11px;
-                     color: var(--muted); gap: 3px; }
+  .filterbar label, .filterbar .flabel { display: flex; flex-direction: column;
+                     font-size: 11px; color: var(--muted); gap: 3px; }
+  .filterbar details.multi { position: relative; }
+  .filterbar details.multi summary { font: inherit; font-size: 13.33px; color: var(--ink);
+                     border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px;
+                     background: var(--panel); cursor: pointer; list-style: none;
+                     min-width: 80px; white-space: nowrap; }
+  .filterbar details.multi summary::after { content: " ▾"; color: var(--muted); }
+  .filterbar details.multi .options { position: absolute; z-index: 20; margin-top: 2px;
+                     background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+                     padding: 8px 10px; display: flex; flex-direction: column; gap: 5px;
+                     box-shadow: 0 4px 12px rgba(0,0,0,.10); max-height: 40vh;
+                     overflow-y: auto; }
+  .filterbar details.multi .options label { flex-direction: row; align-items: center;
+                     gap: 6px; font-size: 13px; color: var(--ink); white-space: nowrap; }
   .feed { max-height: 70vh; overflow-y: auto; }
   .feed .ev { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
   .feed .ev .who { font-weight: 600; cursor: pointer; }
@@ -345,28 +358,49 @@ function filterBar(query, selfHref) {
   for (const [name, schema] of Object.entries(props)) {
     if (name.startsWith("page[")) continue;
     let input;
-    if (schema.enum) {
+    const optionLabel = v => {
+      const count = schema["x-facets"]?.[v];
+      return count !== undefined ? `${pretty(v)} (${count})` : pretty(v);
+    };
+    if (schema.enum && schema["x-in"] && name !== "sort") {
+      // x-in: the server takes a comma list (any-of), so the control is a
+      // dropdown of checkboxes serialized back to that comma list
+      const chosen = new Set((params.get(name) || "").split(",").filter(Boolean));
+      const sum = el("summary", {});
+      const relabel = () => { sum.textContent = chosen.size
+        ? [...chosen].map(pretty).join(", ") : "—"; };
+      input = el("details", {class:"multi"}, sum,
+        el("div", {class:"options"}, ...schema.enum.map(v => {
+          const box = el("input", {type:"checkbox", name, value:v});
+          box.checked = chosen.has(v);
+          box.addEventListener("change", () => {
+            box.checked ? chosen.add(v) : chosen.delete(v); relabel(); });
+          return el("label", {}, box, optionLabel(v));
+        })));
+      input.addEventListener("focusout", ev => {
+        if (!input.contains(ev.relatedTarget)) input.open = false; });
+      relabel();
+    } else if (schema.enum) {
       input = el("select", {name});
       input.append(el("option", {value:""}, "—"));
-      for (const v of schema.enum) {
-        const count = schema["x-facets"]?.[v];
-        input.append(el("option", {value:v},
-          count !== undefined ? `${pretty(v)} (${count})` : pretty(v)));
-      }
+      for (const v of schema.enum) input.append(el("option", {value:v}, optionLabel(v)));
       if (params.get(name)) input.value = params.get(name);
     } else {
       input = el("input", {name, value: params.get(name) || "",
         type: schema.type === "integer" || schema.type === "number" ? "number" : "text",
         step: "any", placeholder: schema.format || schema.type || ""});
     }
-    bar.append(el("label", {title: name},
+    // checkboxes bring their own labels, so their wrapper must not be one
+    bar.append(el(input.tagName === "DETAILS" ? "div" : "label",
+      {title: name, class: input.tagName === "DETAILS" ? "flabel" : null},
       schema["x-display"]?.label || title(name), input));
   }
   bar.append(el("button", {class:"primary", type:"submit"}, "Filter"));
   bar.addEventListener("submit", ev => {
     ev.preventDefault();
     const qs = new URLSearchParams();
-    for (const [k,v] of new FormData(bar).entries()) if (v) qs.set(k, v);
+    for (const [k,v] of new FormData(bar).entries())  // same-name checked
+      if (v) qs.set(k, qs.has(k) ? `${qs.get(k)},${v}` : v);  // boxes join
     const base = selfHref.split("?")[0];
     go(qs.size ? `${base}?${qs}` : base);
   });

@@ -308,9 +308,18 @@ class PostgresStorage:
     async def facets(self, s: AsyncConnection, kind: str,
                      field: str) -> dict[str, int]:
         table = self.tables[kind]
-        rows = await s.execute(
-            select(table.c[field], func.count()).group_by(table.c[field]))
-        return {str(k): v for k, v in rows.all()}
+        if self._promoted.get(kind, {}).get(field) == "array":
+            # per-element counts: FROM <table>, jsonb_array_elements_text(col)
+            # (an implicit lateral) — a row tagged twice counts once per tag
+            fn = func.jsonb_array_elements_text(table.c[field]).table_valued(
+                "value", joins_implicitly=True).render_derived()
+            rows = await s.execute(
+                select(fn.c.value, func.count())
+                .select_from(table, fn).group_by(fn.c.value))
+        else:
+            rows = await s.execute(
+                select(table.c[field], func.count()).group_by(table.c[field]))
+        return {str(k): v for k, v in rows.all() if k is not None}
 
     async def append_transition(
         self, s: AsyncConnection, *, kind: str, instance: Resource, action: str,

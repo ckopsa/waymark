@@ -105,6 +105,9 @@ class Meal(Resource):
         # membership: themes=bbq means "tagged bbq" (any other tags welcome)
         themes=filterable.Eq | filterable.In,
     )
+    # the theme vocabulary is open (Sunday rotations mint new ones), so the
+    # filter's choices are the observed tags, faceted with counts per render
+    faceted = ("themes",)
     sortable = sortable("name", default="name")
 
     display = {"title": "{data.name}"}
