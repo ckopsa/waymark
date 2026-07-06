@@ -370,7 +370,140 @@ v1-style inference survived in new coats:
   per-transport declarations on the resolver, as §11 intended — the WS
   and SSE extractors are listed, not fallen back to.
 
-# 9. The scar table
+# 9. Identity is a resource; authority is a grant
+
+The 2.0 scar here is mostly an absence with one real scar inside it. The
+dev principal is a dropdown — a resolver implementation that was never
+joined by a second one. And agent links, the one authorization feature
+that exists, is a one-off: grants hold only token principals, select only
+whole kinds, and their self-negotiation actions are hardcoded string sets
+(`AGENT_GRANT_ACTIONS = {"request_access"}`) imported by the router and
+re-checked there. There is no member, no role, no owner, and no way to
+grant less than a kind.
+
+**AuthN is externalized; authZ never is.** Keycloak (or any OIDC IdP)
+owns login, passwords, MFA, federation. Waymark ships the relying-party
+dance — auth code + PKCE, session cookie, refresh — as one more
+implementation of 2.0 §11's credential-resolver interface; the dev
+dropdown becomes what it always secretly was, one resolver among several,
+kept for tests. Authorization cannot follow identity out the door, for a
+reason specific to this framework: affordances are advertised per
+principal. `project(instance, principal)` must know what you may do in
+order to render what you may do — an external policy engine cannot fold
+into projection. IdP claims (groups, roles) are *inputs* to the
+visibility computation; the computation stays in the engine, where
+advertisement and enforcement are one object (§1).
+
+**`member` is an engine-owned kind.** The pattern that made agent links
+snap in, applied to people: an admin's invite is a create into `invited`
+(the outbox sends the email); first OIDC login binds `sub` to the invited
+member → `active`; deactivation is a transition. Audit trail, generic UI,
+and conformance come free — the admin console is a collection view.
+
+**One `grant` kind, three holders.**
+
+```
+grant(holder, over, visibility, grantor)
+  holder ∈ member | token principal (agent) | role
+  over   ∈ Kind("meal_plan") | Resource("meal_plan", 88) | Owned(by=grantor)
+```
+
+- **RBAC**: a `Role` is a named, *declared* `Visibility` template —
+  policy belongs in code review — and a role *assignment* is a grant
+  whose holder is a member. What "admin" means is reviewable; who is
+  admin is auditable.
+- **Ownership** is a declared rule, not a mechanism: resources carry
+  `owner: Ref["member"]`, auto-set from the creating actor (which the
+  transition log already knows), and visibility entries may be relative —
+  `Where(owner=Self)`. The baseline role reads: full control over what
+  you created, nothing of anyone else's until granted.
+- **Sharing** is the negotiation loop agent links proved, with humans as
+  holders: request access → owner approves → a grant exists. Same state
+  machine, same UI, same audit.
+- **`agent_grant` folds in.** An agent link is a grant whose holder is a
+  token principal; the hardcoded self-negotiation sets become ordinary
+  declared actions on the `grant` kind.
+
+**Granularity is a selector; authority to grant derives from ownership.**
+The selector answers *what*; ownership answers *who may permission it*.
+The owner of plan 88 approves a grant over `Resource("meal_plan", 88)`;
+only a role holding kind-level authority approves `Kind("meal_plan")`.
+The request-access flow routes to whoever holds that authority — which
+the engine can compute, because authority is itself visibility. One
+constraint is law, not guidance: **selectors must be indexable** (kind,
+id, owner, a declared filterable field), because effective visibility
+must push into collection SQL as
+`WHERE owner = :me OR id IN (:granted)`. A "plans I can see" computed by
+post-filtering rendered envelopes is `apply_scope` reborn — the exact
+scar §1 exists to kill.
+
+**Delegation is attenuation.** A member granting their agent "a subset
+of my controls" is an invariant of the grant state machine —
+`granted ⊆ grantor's effective visibility` — checked at mint *and*
+evaluated as a live intersection at projection time. If your access to
+plan 88 lapses, your agent's lapses in the same render: revocation
+cascades by construction, not by cleanup job. (This is Macaroon-style
+capability attenuation expressed in resources instead of cryptography;
+the cryptographic form is a punt that doesn't compound — see below.)
+
+# 10. The world outside the envelope
+
+The 2.0 posture is that everything inside the boundary plays by the
+rules and nothing outside it exists. The one seam that acknowledges an
+outside — a guard's `reads=("services.x",)` — is a naming convention,
+2.0's own definition of a scar. External truth (a household todo list, a
+calendar) cannot be represented at all: the mealplan's prep tasks carry
+a raw `event_id` into a calendar the framework knows nothing about. And
+the only consumer of the transition log is a client that already speaks
+Waymark.
+
+3.0 cannot make third parties speak the format; it can be honest about
+the boundary in both directions.
+
+**Declared services (egress).** `Service` promotes the string convention
+to a declaration: name, operations, timeout/retry policy, credential
+reference. Conformance gets an auto-stub per declared service. The
+payoff is the honest one: when a service is down, every action that
+declared it renders in `unavailable` with a reason and `retry_at`. Most
+frameworks 500 at invoke; this one un-advertises the button.
+
+**The outbox is a product (subscriptions).** The transition log is
+already an outbox — expose it. A `subscription` is an engine-owned
+resource (url, kind filter, secret); delivery is at-least-once off the
+log with backoff, and each attempt is auditable. Third parties integrate
+by consuming signed transition JSON without ever learning the envelope.
+
+**Mirrors (the anti-corruption layer).** For truth that lives elsewhere,
+a `Mirror` is a resource whose adapter implements
+`pull(id) → (doc, etag)` / `push(doc) → etag` under a declared sync
+policy (TTL pull, push-on-write, webhook-fed). Inside the boundary it is
+a full citizen — envelope, guards, single-invoker writes, drafts,
+visibility. What keeps it honest rather than leaky:
+
+- Its state machine includes sync states —
+  `fresh / stale / conflicted / unreachable`. Staleness renders
+  (`meta.synced_at`); `conflicted` is a state with a `reconcile` action,
+  not a silent last-writer-wins.
+- External mutations we observe arrive as transitions by a `system`
+  actor, so audit, SSE, and even follow work over changes we didn't
+  make.
+- The envelope promises only what the adapter can: no idempotent-replay
+  claim beyond the external system's etag discipline.
+
+**MCP both ways; federation is already cheap.** Adapters may be MCP
+clients — a uniform wrapper for the growing set of services that already
+expose MCP. And Waymark-to-Waymark needs almost nothing new: links are
+URLs, discovery is `/.well-known/waymark`, and a cross-server grant is a
+grant whose holder authenticates with the other server's token.
+Hypermedia was always the federation story.
+
+The through-line, and the admission test passing: identity lands as
+resources (`member`, `grant`) plus declarations (`Role` templates,
+ownership rules); integration lands as declarations (`Service`,
+`Mirror`) plus an event discipline (system-actor observed transitions,
+subscriptions off the log). Neither needs a fourth kind of thing.
+
+# 11. The scar table
 
 2.0 closed its case with the fate of every v1 warning. The same table for
 2.0's own scars:
@@ -403,6 +536,19 @@ v1-style inference survived in new coats:
 | `fence` vs `requires_if_match` | one spelling (§8) |
 | header-or-query token sniffing | per-transport credential extractors (§8) |
 
+And the enterprise gaps — absences rather than scars, held to the same
+law:
+
+| 2.0 gap | 3.0 fate |
+|---|---|
+| dev principal dropdown is the only resolver | OIDC relying party ships; the dropdown is one resolver, kept for tests (§9) |
+| grants hold only token principals, select only kinds | one `grant` kind; member/agent/role holders; instance selectors (§9) |
+| `AGENT_GRANT_ACTIONS` hardcoded sets, imported by the router | ordinary declared actions on `grant` (§9) |
+| no member, no owner, no invite | `member` engine kind; `owner: Ref["member"]`; invite as transition (§9) |
+| `reads=("services.x",)` naming convention | declared `Service` (§10) |
+| external truth unrepresentable (`event_id` into the void) | `Mirror` with sync states; system-actor observed transitions (§10) |
+| transition log consumable only by Waymark clients | `subscription` resources; signed webhook delivery (§10) |
+
 ---
 
 ## Wire format delta (v2 → v3)
@@ -415,6 +561,8 @@ v1-style inference survived in new coats:
 | Field groups | — | `x-display.one_of` from `OneOf` |
 | Relations | `x-display.relation` (comparisons only) | + relation-derived per-binding enums |
 | Collection queries | ad-hoc; comma-lists de facto | spec'd grammar; unknown params are Problems |
+| Engine kinds | `agent_grant`, `approval_request` | + `member`, `grant` (agent links fold in), `subscription` |
+| Mirrors | — | sync state in `state`; `meta.synced_at` |
 | Everything else | | unchanged — envelope, parts, actions, `effort`, drafts, relay/2, problems, discovery |
 
 A v2 generic client pointed at a v3 server loses only the refinements: it
@@ -440,6 +588,10 @@ Mechanical and mostly deletion — the scars are things apps wrote *around*:
 - `filterable`+`faceted` pairs fold into `Vocab` fields; the emitted
   migration is a no-op on storage (same generated column, same index).
 - Before-validators doing shape folding become declared `upcasts`.
+- `agent_grant` rows migrate into `grant` with a token holder; the
+  negotiation flow is unchanged on the wire.
+- Apps adopting members backfill `owner` from each resource's first
+  transition actor — the log already knows who created everything.
 
 The engine tables version again (`waymark3_*`); resource tables migrate in
 place via the ordinary snapshot-diff, since §6 changes no column shapes.
@@ -460,6 +612,12 @@ Punted, with the rule kept — punt things that don't compound:
 - **Regret telemetry / comprehension judging** — still measurements, still
   post-1.0; §3's event classes give them a cleaner substrate (observations
   are the missing half of the human/agent split).
+- **Cryptographic attenuation (Macaroons/Biscuit)** — the grant-resource
+  model is the contract; offline-verifiable tokens are an implementation
+  someone can ship without changing it.
+- **A federation protocol beyond links + discovery** — cross-server
+  grants and mirrors cover the known cases; anything richer waits for a
+  second real Waymark server to exist.
 - Not punted, on principle: parts visibility (§1), approval-create (§2),
   and the bus-backed rate limiter (§8) — each is a 2.0 caveat that 2.0's
   own history proves compounds.
@@ -614,3 +772,38 @@ over the bus, so two workers enforce one limit. And a guard's needs are
 read from its declaration (`reads=` already says whether it gets a ctx),
 so what the engine passes a callable is decided by what the author
 wrote, not by what a signature-sniffer guessed.
+
+### §9 Identity is a resource; authority is a grant
+
+**Before (v2):** Login is a dropdown: anyone at the kitchen tablet can
+*be* Colton. Every family member sees every resource, and there is no
+way to invite grandma without her becoming everyone. Granting the agent
+"edit meal plans" means every meal plan there will ever be — and the
+grant keeps working even if the person who minted it loses that access
+themselves.
+
+**After (v3):** The tablet redirects to Keycloak; Dana is Dana. Colton
+invites his mom from the members view — she arrives `invited`, activates
+on first login, and sees nothing but what's shared with her. She
+requests access to next week's plan; Colton approves from the request
+feed, and the grant names `Resource("meal_plan", 88)`, not the kind.
+Dana delegates her agent a slice of her own rights — and when her access
+to a plan lapses, the agent's lapses in the same render.
+
+### §10 The world outside the envelope
+
+**Before (v2):** The grocery list lives twice — once as a Waymark
+resource, once as the household todo list — and the two drift until
+someone reconciles them at the store. A prep task carries an `event_id`
+into a calendar the framework cannot see: if the event moves, nothing
+here knows. And a budget app that wants to know when a plan is finalized
+has to poll an envelope format it doesn't speak.
+
+**After (v3):** The grocery list is a `Mirror` of the household todo
+list: checking an item off at the store arrives as a `system`-actor
+transition in the family's feed, and a sync conflict is a rendered state
+with a `reconcile` button, not a silent overwrite. The calendar is a
+declared `Service`, so when it's unreachable, `schedule` renders in
+`unavailable` with `retry_at` — the button un-advertises instead of
+failing at invoke. The budget app holds a `subscription` and receives
+signed transition JSON; it never learns the envelope.
