@@ -47,6 +47,8 @@ class GroceryItem(BaseModel):
                                  description='e.g. "2 lbs", "3 cans"')
     category: str | None = Field(default=None, max_length=50,
                                  description="produce, meat, pantry, …")
+    meals: list[str] = Field(default_factory=list,
+                             description="Meals this item shops for")
     have: bool = False
 
 
@@ -69,6 +71,8 @@ class ItemInput(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     quantity: str | None = Field(default=None, max_length=50)
     category: str | None = Field(default=None, max_length=50)
+    meals: list[str] = Field(default_factory=list,
+                             description="Meals this item shops for")
 
 
 class NameInput(BaseModel):
@@ -142,9 +146,11 @@ class GroceryList(Resource):
         if existing is not None:
             existing.quantity = inp.quantity or existing.quantity
             existing.category = inp.category or existing.category
+            existing.meals += [m for m in inp.meals if m not in existing.meals]
         else:
             self.data.items.append(GroceryItem(
-                name=inp.name, quantity=inp.quantity, category=inp.category))
+                name=inp.name, quantity=inp.quantity, category=inp.category,
+                meals=list(inp.meals)))
 
     @action(from_=GroceryState.DRAFT, to=GroceryState.DRAFT,
             input=NameInput, place=items, guards=[item_on_list],
