@@ -37,6 +37,29 @@ clear/hashed views, per-action open/approval modes, human-filled arguments;
 `waymark/`. Build-time deviations and caveats:
 [`docs/waymark2-notes.md`](docs/waymark2-notes.md).
 
+## Waymark 3.0
+
+**`waymark3/`** is the 3.0 framework designed in
+[`docs/waymark3-design.md`](docs/waymark3-design.md) from 2.0's
+retrospective — v2's law aimed at the delivery pipeline: *every concern is
+a declaration, a resource, or an event class*. What that buys, concretely:
+**visibility is projection, not redaction** (a grant-scoped principal's
+envelope is built already-narrowed; `apply_scope` is gone), grants take
+**instance selectors** ("edit access to *this* meal plan"), `Relation` and
+`OneOf` catch the cross-field logic that fell off v2's declaration cliff,
+`Vocab` folds filterable/faceted/membership into one field type, events
+split into declared **transition/observation classes** (the `peek=1` flag
+died to a lookup route class), the rate limiter rides the bus, data shapes
+carry declared **upcasts**, approval-mode create composes, and the
+enterprise seams land as engine kinds: **`member`** (invite → first-login
+bind via the **OIDC relying party** in `waymark3/server/oidc.py`),
+**`subscription`** (the transition log delivered as signed webhooks), and
+**`Mirror`** (external truth as a full citizen with honest sync states —
+observed external changes are system-actor transitions). The meal-plan
+app migrated per the design's sketch lives in **`mealplan3/`**
+(`make mealplan3`, `pytest --waymark3`). Build-time deviations and caveats:
+[`docs/waymark3-notes.md`](docs/waymark3-notes.md).
+
 ## Status
 
 Complete implementation of spec v0.1 **except i18n** (all human strings are

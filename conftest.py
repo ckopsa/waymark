@@ -13,12 +13,18 @@ import pytest
 
 import waymark
 import waymark2
+import waymark3
 from waymark import Principal
 from waymark.testing import example_input, per_worker_dsn, state_factory
 from waymark2.testing import (
     conformance_resource as w2_conformance_resource,
     example_input as w2_example_input,
     state_factory as w2_state_factory,
+)
+from waymark3.testing import (
+    conformance_resource as w3_conformance_resource,
+    example_input as w3_example_input,
+    state_factory as w3_state_factory,
 )
 
 from app.resources.order import Order, OrderState
@@ -30,6 +36,12 @@ from mealplan.resources.meal import Meal
 from mealplan.resources.plan import MealPlan, PlanState
 from mealplan.resources.prep_task import PrepTask
 from mealplan.resources.rotation import SundayRotation
+from mealplan3.resources.grocery_list import (
+    GroceryList as GroceryList3, GroceryState as GroceryState3)
+from mealplan3.resources.meal import Meal as Meal3
+from mealplan3.resources.plan import MealPlan as MealPlan3, PlanState as PlanState3
+from mealplan3.resources.prep_task import PrepTask as PrepTask3
+from mealplan3.resources.rotation import SundayRotation as SundayRotation3
 
 TEST_DSN = per_worker_dsn(os.environ.get(
     "WAYMARK_TEST_DSN", "postgresql+asyncpg://localhost/waymark_test"))
@@ -203,7 +215,7 @@ w2_conformance_resource(PrepTask)
 
 @w2_example_input(Meal, "create")
 def meal_create_example(services) -> dict:
-    return {"name": "Carnitas tacos", "theme": "mexican",
+    return {"name": "Carnitas tacos", "themes": ["mexican"],
             "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
             "prep_minutes": 45, "thaw_hours": 12}
 
@@ -230,9 +242,13 @@ async def _step(engine, kind: str, id: str, action: str, body=None):
 
 
 async def _listed_meal(engine, services) -> str:
-    """An on-list Taco-Tuesday meal; its id is stashed for example inputs."""
+    """An on-list Taco-Tuesday meal; its id is stashed for example inputs.
+
+    ``themes`` (plural): the wire's additionalProperties check rejects the
+    single-theme-era key before the model's fold can run — the factory must
+    speak the current shape."""
     mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
-                                     "theme": "mexican"})
+                                     "themes": ["mexican"]})
     await _step(engine, "meal", mid, "accept")
     services.seeded["meal_id"] = mid
     return mid
@@ -299,4 +315,121 @@ async def make_grocery_list(state: str, engine, services) -> GroceryList:
 # check, and only "paper towels" is safe to lose.
 @w2_example_input(GroceryList, "remove_item")
 def remove_item_example(services) -> dict:
+    return {"name": "paper towels"}
+
+
+# ── Meal-plan app on waymark3 (the 3.0 dogfood: same app, v3 declarations) ──
+
+@pytest.fixture
+async def waymark3_engine():
+    from waymark3.server.bus import InProcessBus
+
+    engine = waymark3.Engine(
+        resources=[Meal3, SundayRotation3, MealPlan3, GroceryList3, PrepTask3],
+        storage=TEST_DSN, services=SuiteServices(), bus=InProcessBus())
+    await engine.storage.drop_all()
+    await engine.startup()
+    try:
+        yield engine
+    finally:
+        await engine.shutdown()
+
+
+w3_conformance_resource(Meal3)
+w3_conformance_resource(SundayRotation3)
+w3_conformance_resource(PrepTask3)
+
+# 3.0 engine kinds: ordinary resources, ordinary conformance
+from waymark3.server.members import Member as Member3W  # noqa: E402
+from waymark3.server.subscriptions import (  # noqa: E402
+    WebhookSubscription as Subscription3W,
+)
+
+w3_conformance_resource(Member3W)
+w3_conformance_resource(Subscription3W)
+
+
+@w3_example_input(Member3W, "create")
+def w3_member_create_example(services) -> dict:
+    return {"email": "mom@example.com", "display_name": "Grandma",
+            "roles": ["reader"]}
+
+
+@w3_example_input(Subscription3W, "create")
+def w3_subscription_create_example(services) -> dict:
+    return {"url": "https://budget.example/hooks", "kinds": ["plan"]}
+
+
+@w3_example_input(Meal3, "create")
+def w3_meal_create_example(services) -> dict:
+    # 3.0 speaks only the current shape on the wire; the single-theme era
+    # is a declared upcast (Meal3.shape/upcasts), not a payload dialect
+    return {"name": "Carnitas tacos", "themes": ["mexican"],
+            "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
+            "prep_minutes": 45, "thaw_hours": 12}
+
+
+@w3_example_input(PrepTask3, "create")
+def w3_prep_task_create_example(services) -> dict:
+    return prep_task_create_example(services)
+
+
+async def _listed_meal3(engine, services) -> str:
+    mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
+                                     "themes": ["mexican"]})
+    await _step(engine, "meal", mid, "accept")
+    services.seeded["meal_id"] = mid
+    return mid
+
+
+@w3_state_factory(MealPlan3)
+async def w3_make_plan(state: str, engine, services) -> MealPlan3:
+    rid = await _mk(engine, "rotation", {})
+    await _listed_meal3(engine, services)
+    pid = await _mk(engine, "plan", {"start_date": PLAN_START.isoformat(),
+                                     "weeks": 1, "rotation_id": rid})
+    services.seeded["plan_id"] = pid
+    target = PlanState3(state)
+    if target == PlanState3.ABANDONED:
+        await _step(engine, "plan", pid, "abandon")
+    elif target != PlanState3.DRAFT:
+        for i in range(7):
+            await _step(engine, "plan", pid, "mark_eating_out",
+                        {"date": (PLAN_START + timedelta(days=i)).isoformat()})
+        await _step(engine, "plan", pid, "finalize")
+        if target in (PlanState3.ACTIVE, PlanState3.DONE):
+            await _step(engine, "plan", pid, "begin")
+        if target == PlanState3.DONE:
+            await _step(engine, "plan", pid, "complete")
+    return await _load(engine, "plan", pid)
+
+
+@w3_example_input(MealPlan3, "assign_meal")
+def w3_assign_meal_example(services) -> dict:
+    return {"date": PLAN_START.isoformat(), "meal_id": services.seeded["meal_id"]}
+
+
+@w3_example_input(MealPlan3, "assign_off_theme")
+def w3_assign_off_theme_example(services) -> dict:
+    return {"date": PLAN_START.isoformat(), "meal_id": services.seeded["meal_id"]}
+
+
+@w3_state_factory(GroceryList3)
+async def w3_make_grocery_list(state: str, engine, services) -> GroceryList3:
+    plan = await w3_make_plan(PlanState3.PLANNED, engine, services)
+    gid = await _mk(engine, "grocery_list",
+                    {"plan_id": plan.id, "items": GROCERY_ITEMS})
+    target = GroceryState3(state)
+    if target != GroceryState3.DRAFT:
+        await _step(engine, "grocery_list", gid, "finalize")
+    if target == GroceryState3.DONE:
+        for item in GROCERY_ITEMS:
+            await _step(engine, "grocery_list", gid, "check_item",
+                        {"name": item["name"]})
+        await _step(engine, "grocery_list", gid, "complete")
+    return await _load(engine, "grocery_list", gid)
+
+
+@w3_example_input(GroceryList3, "remove_item")
+def w3_remove_item_example(services) -> dict:
     return {"name": "paper towels"}

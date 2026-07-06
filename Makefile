@@ -1,5 +1,6 @@
 # Local Postgres runs in docker (host :5432 belongs to another project).
 PORT         ?= 8000
+PORT3        ?= 8001  # mealplan3 dev server; :8000 stays free for the waymark2 mealplan
 PG_CONTAINER ?= waymark-test-pg
 PG_USER      ?= ckopsa
 PG_PORT      ?= 5433
@@ -19,7 +20,10 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: dev db test conformance check demo mealplan image deploy
+.PHONY: dev db dist test conformance conformance3 check demo mealplan mealplan3 image deploy
+
+dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
+	uv build
 
 dev: db  ## run the example shop with auto-reload
 	@echo "ui  → http://localhost:$(PORT)/api/-/ui"
@@ -40,11 +44,14 @@ db:  ## start dockerized Postgres and ensure waymark_dev exists
 			docker exec $(PG_CONTAINER) createdb -U $(PG_USER) $$db; \
 	done
 
-test: db  ## framework tests
-	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest
+test: db  ## framework tests (xdist: one database per worker)
+	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest -n auto
 
 conformance: db  ## conformance suite against the example app
-	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark
+	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark -n auto
+
+conformance3: db  ## waymark3 conformance against the mealplan3 dogfood
+	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark3 -n auto
 
 check:  ## import-time definition checks (CI fast path)
 	uv run waymark check
@@ -52,6 +59,15 @@ check:  ## import-time definition checks (CI fast path)
 mealplan: db  ## run the family meal planner with auto-reload
 	@echo "ui  → http://localhost:$(PORT)/api/-/ui"
 	MEALPLAN_DSN=$(MEALPLAN_DSN) uv run uvicorn mealplan.main:app --reload --port $(PORT)
+
+mealplan3: db dist  ## run the meal planner on waymark3 (mealplan3_dev)
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d waymark_test -Atc \
+		"SELECT 1 FROM pg_database WHERE datname='mealplan3_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) createdb -U $(PG_USER) mealplan3_dev
+	@echo "ui  → http://localhost:$(PORT3)/api/-/ui"
+	MEALPLAN_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan3_dev \
+		uv run uvicorn mealplan3.main:app --reload --port $(PORT3) \
+		--timeout-graceful-shutdown 3  # open SSE streams otherwise wedge every reload
 
 demo: db  ## agent demo (plans over effect.to, stops at safety.confirm)
 	WAYMARK_DSN=$(DEV_DSN) uv run python scripts/agent_demo.py
