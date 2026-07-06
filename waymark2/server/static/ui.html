@@ -377,8 +377,16 @@ function filterBar(query, selfHref) {
             box.checked ? chosen.add(v) : chosen.delete(v); relabel(); });
           return el("label", {}, box, optionLabel(v));
         })));
-      input.addEventListener("focusout", ev => {
-        if (!input.contains(ev.relatedTarget)) input.open = false; });
+      // close on pointerdown outside — NOT focusout: closing the <details>
+      // while a label inside it is forwarding activation to its checkbox
+      // freezes Chromium's main thread solid. Self-removing once this
+      // render's DOM is gone.
+      const closeOnOutside = ev => {
+        if (!document.contains(input))
+          document.removeEventListener("pointerdown", closeOnOutside);
+        else if (!input.contains(ev.target)) input.open = false;
+      };
+      document.addEventListener("pointerdown", closeOnOutside);
       relabel();
     } else if (schema.enum) {
       input = el("select", {name});
