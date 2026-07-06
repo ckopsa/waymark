@@ -16,7 +16,14 @@ from pydantic import BaseModel
 
 from . import checks
 from .actions import ActionDef
+from .guards import Guard
 from .machine import StateMachine
+
+
+def unique_groups(cls: type["Resource"]) -> tuple[tuple[str, ...], ...]:
+    """The declared uniqueness entries, normalized to field tuples."""
+    return tuple((entry,) if isinstance(entry, str) else tuple(entry)
+                 for entry in cls.unique)
 
 
 class FilterOp(enum.Flag):
@@ -99,6 +106,23 @@ class Resource:
     # counts) on every collection — for dynamic vocabularies a static enum
     # can't know. "state" is always faceted; declaring it here is redundant.
     faceted: ClassVar[tuple[str, ...]] = ()
+    # declared uniqueness (design E2): each entry is a field or a tuple of
+    # fields whose combination must be unique across the kind. Enforced as
+    # a database constraint on the promoted columns; the refusal is a
+    # Problem carrying a link to the conflicting resource.
+    unique: ClassVar[tuple[str | tuple[str, ...], ...]] = ()
+    # create-time guards (design E9): each guard judges the VALIDATED
+    # CREATE INPUT — its check is called check(None, data, ctx) with
+    # r=None, because no instance exists yet; ``judges=`` names fields of
+    # the create model (Create, else Data); ``accepts=`` constrains the
+    # input as on any guard. Severity splits as on actions (design E1):
+    # refuse denies the create outright; a warning demands acknowledgment,
+    # and the override lands on the create's transition row.
+    create_guards: ClassVar[tuple[Guard, ...]] = ()
+    # declared ownership edges (design E4): Owns(child_kind, via=...) —
+    # cascade transitions and rollups hang off the one edge. Validated at
+    # engine assembly (checks.check_owns), where every kind is known.
+    owns: ClassVar[tuple[Any, ...]] = ()
     profiles: ClassVar[dict[str, Profile]] = {}
     links: ClassVar[tuple[LinkDef, ...]] = ()
     display: ClassVar[dict[str, Any]] = {}

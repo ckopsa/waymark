@@ -32,9 +32,12 @@ from waymark3 import (
     Deny,
     Guard,
     OneOf,
+    Owns,
     PartScope,
+    Predecessor,
     Query,
     Ref,
+    Rollup,
     VocabField,
     RefField,
     Relation,
@@ -43,6 +46,7 @@ from waymark3 import (
     action,
     filterable,
     guard,
+    rollup_is,
     sortable,
 )
 
@@ -88,6 +92,11 @@ class PlanData(BaseModel):
                        description="Plan 2 weeks to save on grocery trips")
     rotation_id: Ref["rotation"] | None = RefField(
         default=None, description="The Sunday-theme rotation to draw from")
+    # period chaining (design E7): the engine resolves the latest earlier
+    # plan at create — last week is data, not date arithmetic
+    previous_plan: Ref["plan"] | None = RefField(
+        default=None, predecessor=Predecessor(order="start_date"),
+        description="The plan this one follows (engine-resolved)")
     days: list[DayPlan] = Field(default_factory=list)
     notes: str | None = Field(default=None, max_length=2000,
                               json_schema_extra={"x-display": {
@@ -119,6 +128,7 @@ class PlanCreate(PlanData):
     rotation_id: Ref["rotation"] | None = RefField(
         default=None, description="The Sunday-theme rotation to draw from. "
                                   "Leave blank for the active rotation.")
+    previous_plan: SkipJsonSchema[str | None] = None
     days: SkipJsonSchema[list[DayPlan]] = Field(default_factory=list)
 
 
@@ -269,6 +279,14 @@ class MealPlan(Resource):
 
     spans = (Meal,)
 
+    # one ownership edge, two consumers (design E4): abandoning the plan
+    # cancels its open prep tasks (cascade), and the open-task count rides
+    # every envelope and gates `complete` below (rollup)
+    owns = (Owns("prep_task", via="plan_id",
+                 on={"abandon": "cancel"},
+                 rollups={"open_tasks": Rollup(
+                     filters={"state": ("pending", "scheduled")})}),)
+
     # the one place per-day placement is declared (design §3); every
     # day-shaped action places itself on it and the key is pre-bound per part
     days = PartScope("days", key="date")
@@ -384,6 +402,11 @@ class MealPlan(Resource):
         pass
 
     @action(from_=PlanState.ACTIVE, to=PlanState.DONE,
+            guards=[rollup_is(
+                "open_tasks", "==", 0,
+                explain="{open_tasks} prep task(s) are still open — finish "
+                        "or cancel them before closing the week.",
+                remedies=("prep_task.complete", "prep_task.cancel"))],
             safety=Safety(idempotent=True, reversible=False, confirm=False,
                           one_way=Acknowledged(
                               "Completing records a finished week; the plan "
@@ -396,6 +419,7 @@ class MealPlan(Resource):
             to=PlanState.ABANDONED,
             safety=Safety(idempotent=True, reversible=False, confirm=True,
                           consequence="The plan is discarded for good; its "
+                                      "open prep tasks are cancelled; its "
                                       "days and any grocery list stay "
                                       "readable as records."),
             display=dict(label="Abandon plan", style="danger", order=9))

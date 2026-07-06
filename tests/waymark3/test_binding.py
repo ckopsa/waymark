@@ -20,6 +20,7 @@ from waymark3.testing import per_worker_dsn
 
 from mealplan3.resources.meal import Meal
 from mealplan3.resources.plan import MealPlan
+from mealplan3.resources.prep_task import PrepTask
 from mealplan3.resources.rotation import SundayRotation
 
 pytestmark = pytest.mark.asyncio
@@ -33,7 +34,8 @@ TUESDAY = date(2026, 7, 7)  # mexican night
 @pytest.fixture
 async def env():
     engine = waymark3.Engine(
-        resources=[Meal, SundayRotation, MealPlan], storage=TEST_DSN,
+        resources=[Meal, SundayRotation, MealPlan, PrepTask],
+        storage=TEST_DSN,
         principal=header_principal, services=None, bus=InProcessBus())
     await engine.storage.drop_all()
     await engine.startup()

@@ -123,11 +123,14 @@ class ActionDef:
     terminal: bool = False  # filled in by the machine build
     field_display: Mapping[str, Any] = field(default_factory=dict)
     waives: frozenset[str] = frozenset()
+    # declared touches (design E8): what this transition may span beyond
+    # its own resource — rendered on effect, enforced by the handler's ctx
+    touches: tuple[Any, ...] = ()
 
     @property
     def effect(self) -> Effect:
         return Effect(to=self.to, terminal=self.terminal, emits=self.emits,
-                      bulk=self.bulk)
+                      bulk=self.bulk, touches=self.touches)
 
     def with_terminal(self, terminal: bool) -> "ActionDef":
         return replace(self, terminal=terminal)
@@ -188,6 +191,7 @@ def action(
     place: PartScope | None = None,
     bulk: Bulk | None = None,
     waives: Sequence[str] = (),
+    touches: Sequence[Any] = (),
 ) -> Callable:
     if safety is _REQUIRED:
         raise DefinitionError(
@@ -227,6 +231,7 @@ def action(
             place=place,
             field_display=dict(field_display or {}),
             waives=frozenset(waives),
+            touches=tuple(touches),
         )
         return fn
 

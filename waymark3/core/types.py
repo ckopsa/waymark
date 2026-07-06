@@ -57,6 +57,11 @@ class Ctx:
     _finder: Any = None   # set by the engine; enables ctx.find for guards/hooks
     _rate: Any = None     # set by the engine; the bus-shared rate window (§8)
     _creator: Any = None  # set by the engine; enables ctx.create (§2)
+    _actor_of: Any = None  # set by the engine; enables ctx.actor_of (E3)
+    _deferrer: Any = None  # set by the engine; enables ctx.defer (E6)
+    # (label, declared touches) while a handler runs (design E8): the same
+    # declaration the envelope advertises, enforced at this surface
+    _touch_scope: Any = None
 
     async def invoke(self, resource: type | str, id: str, action: str,
                      body: dict[str, Any] | None = None, *,
@@ -98,6 +103,26 @@ class Ctx:
             raise RuntimeError("ctx.find is only available inside an engine-managed invocation")
         return await self._finder(resource, filters, sort=sort, limit=limit,
                                   ctx=self)
+
+    async def actor_of(self, resource: type | str, id: str,
+                       action: str) -> str | None:
+        """The actor of a resource's latest ``action`` transition — the
+        log fact history-dependent authority reads (design E3)."""
+        if self._actor_of is None:
+            raise RuntimeError("ctx.actor_of is only available inside an engine-managed invocation")
+        return await self._actor_of(resource, id, action, ctx=self)
+
+    async def defer(self, service: Any,
+                    artifacts: list[tuple[str, tuple[Any, ...]]], *,
+                    action: str) -> str:
+        """Async egress as a job resource (design E6): each artifact is
+        ``(name, handler_args)`` run through ``service.call`` by a
+        background runner. Returns the job id — the handler's to store or
+        link; progress and outcomes live on the job."""
+        if self._deferrer is None:
+            raise RuntimeError("ctx.defer is only available inside an engine-managed invocation")
+        return await self._deferrer(service, artifacts, action=action,
+                                    ctx=self)
 
 
 @dataclass(frozen=True)
@@ -180,6 +205,8 @@ class Effect:
     terminal: bool = False
     emits: tuple[str, ...] = ()
     bulk: bool = False
+    # declared touches (design E8); duck-typed to avoid a types↔touches cycle
+    touches: tuple[Any, ...] = ()
 
     def to_wire(self) -> dict[str, Any]:
         out: dict[str, Any] = {"to": self.to}
@@ -189,4 +216,6 @@ class Effect:
             out["emits"] = list(self.emits)
         if self.bulk:
             out["bulk"] = True
+        if self.touches:
+            out["touches"] = [t.to_wire() for t in self.touches]
         return out

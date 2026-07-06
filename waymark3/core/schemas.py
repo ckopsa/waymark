@@ -206,10 +206,33 @@ def query_schema(resource: type) -> tuple[dict[str, Any], bytes]:
                 pname = fname.removesuffix("_at") + "_after"
                 props[pname] = {"type": "string", "format": "date-time",
                                 "x-display": {"label": _humanize(pname)}}
+    # declared rollups filter and sort the parent collection (design E4):
+    # the onboarding dashboard's status filter, as query params
+    from .owns import owns_of
+
+    rollup_names: list[str] = []
+    for edge in owns_of(resource):
+        for rname, rollup in edge.rollups.items():
+            rollup_names.append(rname)
+            num = ({"type": "integer"} if rollup.agg == "count"
+                   else {"type": "number"})
+            label = _humanize(rname)
+            props[rname] = {**num, "x-rollup": True,
+                            "x-display": {"label": label}}
+            props[f"{rname}_gte"] = {**num, "x-rollup": True,
+                                     "x-display": {"label": f"{label} ≥"}}
+            props[f"{rname}_lte"] = {**num, "x-rollup": True,
+                                     "x-display": {"label": f"{label} ≤"}}
     sspec = resource.sortable
+    sort_options = ([v for f in sspec.fields for v in (f, f"-{f}")]
+                    if sspec is not None else [])
+    sort_options += [v for r in rollup_names for v in (r, f"-{r}")]
     if sspec is not None:
-        options = [v for f in sspec.fields for v in (f, f"-{f}")]
-        props["sort"] = {"type": "string", "enum": options, "default": sspec.default,
+        props["sort"] = {"type": "string", "enum": sort_options,
+                         "default": sspec.default,
+                         "x-display": {"label": "Sort by"}}
+    elif sort_options:
+        props["sort"] = {"type": "string", "enum": sort_options,
                          "x-display": {"label": "Sort by"}}
     props["page[size]"] = {"type": "integer", "minimum": 1, "maximum": 100,
                            "default": 25, "x-display": {"label": "Page size"}}

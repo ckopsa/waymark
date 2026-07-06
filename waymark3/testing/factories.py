@@ -143,10 +143,16 @@ async def synthesize_input(engine: Any, rdef: ResourceDef, defn: ActionDef,
     async with engine.storage.session() as s:
         ctx = engine.invoker._ctx(WALKER, s, mode="probe")
         # intersect every guard's acceptance set per field — exactly what
-        # render does to the advertised enum
+        # render does to the advertised enum. Relations are handled after:
+        # their accepts is a *tuple* set, not a per-field one.
         admitted_by_field: dict[str, list[Any]] = {}
+        relations: list[Any] = []
         for top in defn.guards:
             for g in top.iter_leaves():
+                if g.is_relation:
+                    if g.relation_admits is not None:
+                        relations.append(g)
+                    continue
                 if g.accepts is None:
                     continue
                 field = g.judges[0]
@@ -167,6 +173,29 @@ async def synthesize_input(engine: Any, rdef: ResourceDef, defn: ActionDef,
                     "register a @state_factory that satisfies it")
             if str(sample.get(field)) not in {str(a) for a in admitted}:
                 sample[field] = admitted[0]
+        # relation tuple sets (design §5): overlay one admissible tuple,
+        # components in judges order — preferring a tuple that agrees with
+        # the single-field sets already applied
+        for g in relations:
+            allowed = await g.admitted(instance, ctx)
+            if allowed is None:
+                continue
+            if not allowed:
+                raise SkipState(
+                    f"{rdef.kind}.{defn.name}: relation {g.name!r} admits "
+                    "no tuples on the walked instance; register a "
+                    "@state_factory that satisfies it")
+            ordered = sorted((tuple(a) for a in allowed), key=str)
+
+            def _fits(tup: tuple) -> bool:
+                return all(
+                    f not in admitted_by_field
+                    or str(v) in {str(a) for a in admitted_by_field[f]}
+                    for f, v in zip(g.judges, tup))
+
+            chosen = next((t for t in ordered if _fits(t)), ordered[0])
+            for f, v in zip(g.judges, chosen):
+                sample[f] = v
     return sample
 
 
@@ -174,7 +203,7 @@ async def walk_to_state(kind: str, state: str, engine: Any) -> Resource:
     """The derived state factory: create via the schema, walk the machine's
     shortest path, inputs from acceptance sets. Honest about its limits —
     every dead end names the registration that fixes it."""
-    from ..server.problems import Problem
+    from ..server.problems import Problem, WarningRefused
 
     rdef = engine.registry[kind]
     path = rdef.machine.path_to(state)
@@ -185,9 +214,20 @@ async def walk_to_state(kind: str, state: str, engine: Any) -> Resource:
     if create_body is None:
         create_body = _schema_sample(rdef.extra["create_schema"])
     try:
-        result = await engine.invoker.create(
-            kind, create_body, principal=WALKER,
-            idempotency_key=f"walker-{uuid.uuid4().hex}")
+        try:
+            result = await engine.invoker.create(
+                kind, create_body, principal=WALKER,
+                idempotency_key=f"walker-{uuid.uuid4().hex}")
+        except WarningRefused as exc:
+            # advisory create guards (design E9) are acknowledged on retry,
+            # exactly as _walk_invoke does for actions — a warning is not
+            # a wall, and the walker is an honest client
+            names = frozenset(
+                (exc.extras.get("acknowledge") or {}).get("names") or ())
+            result = await engine.invoker.create(
+                kind, create_body, principal=WALKER,
+                idempotency_key=f"walker-{uuid.uuid4().hex}",
+                acknowledged=names)
     except Problem as exc:
         raise SkipState(
             f"schema-synthesized create for {kind} was refused "
@@ -199,12 +239,7 @@ async def walk_to_state(kind: str, state: str, engine: Any) -> Resource:
             instance = await engine.storage.load(s, kind, resource_id)
         body = await synthesize_input(engine, rdef, defn, instance)
         try:
-            await engine.invoker.invoke(
-                kind, resource_id, defn.name, body, principal=WALKER,
-                idempotency_key=None if defn.safety.idempotent
-                else f"walker-{uuid.uuid4().hex}",
-                if_match=(f'W/"{kind}-{resource_id}-v{instance.version}"'
-                          if defn.safety.fence else None))
+            await _walk_invoke(engine, kind, resource_id, defn, body, instance)
         except Problem as exc:
             raise SkipState(
                 f"walking {kind} to {state!r}: {defn.name} refused "
@@ -212,6 +247,28 @@ async def walk_to_state(kind: str, state: str, engine: Any) -> Resource:
                 f"or @example_input({kind}, {defn.name!r})") from exc
     async with engine.storage.session() as s:
         return await engine.storage.load(s, kind, resource_id)
+
+
+async def _walk_invoke(engine: Any, kind: str, resource_id: str, defn: Any,
+                       body: dict[str, Any] | None, instance: Any) -> None:
+    """One walker invocation; advisory guards (design E1) are acknowledged
+    on retry — the walker is an honest client, and a warning is not a wall."""
+    from ..server.problems import WarningRefused
+
+    kwargs = dict(
+        principal=WALKER,
+        idempotency_key=None if defn.safety.idempotent
+        else f"walker-{uuid.uuid4().hex}",
+        if_match=(f'W/"{kind}-{resource_id}-v{instance.version}"'
+                  if defn.safety.fence else None))
+    try:
+        await engine.invoker.invoke(kind, resource_id, defn.name, body,
+                                    **kwargs)
+    except WarningRefused as exc:
+        names = frozenset((exc.extras.get("acknowledge") or {}).get("names")
+                          or ())
+        await engine.invoker.invoke(kind, resource_id, defn.name, body,
+                                    acknowledged=names, **kwargs)
 
 
 async def make_state(kind: str, state: str, engine: Any) -> Resource:

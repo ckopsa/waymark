@@ -100,6 +100,23 @@ def diff_statements(storage: PostgresStorage,
         for ix_name in old_ix:
             if ix_name not in new_ix:
                 stmts.append(f"DROP INDEX IF EXISTS {ix_name};")
+        # declared uniqueness (design E2): constraints round-trip too — a
+        # constraint that exists only under create_all is a dev-only lie
+        old_uq = dict(oldt.get("unique", {}))
+        new_uq = dict(newt.get("unique", {}))
+        for uq_name, cols in new_uq.items():
+            if uq_name not in old_uq:
+                stmts.append(f"ALTER TABLE {name} ADD CONSTRAINT {uq_name} "
+                             f"UNIQUE ({', '.join(cols)});")
+            elif old_uq[uq_name] != cols:
+                stmts.append(
+                    f"-- REVIEW: constraint {uq_name} changed "
+                    f"{old_uq[uq_name]} → {cols}; existing rows may violate "
+                    "the new shape — write the migration by hand.")
+        for uq_name in old_uq:
+            if uq_name not in new_uq:
+                stmts.append(
+                    f"ALTER TABLE {name} DROP CONSTRAINT IF EXISTS {uq_name};")
     for name in old_tables:
         if name not in new_tables:
             stmts.append(

@@ -36,6 +36,16 @@ sketch, and is the dogfood for every new declaration.
 | Query grammar | `server/router.py` (`parse_query`) + `client/py.py` (`merge_params`) | unknown params are Problems; clients merge into hrefs through one property-tested helper |
 | Ownership | `storage/postgres.py` + `core/resource.py` | resource tables carry `owner` (creator principal, engine-stamped, `meta.owner` on the wire); `restrict()` pushes owner+granted ids into WHERE |
 | Members (scoped) | `server/grants.py` (`MemberVisibility`) | under `member_visibility="granted"`: full over owned, grant union otherwise; engine kinds stay open; member approval-mode actions route through `approval_request` via the matching grant |
+| Roles | `server/roles.py` (kind `role`) + `grants.py` (`role_registered`) | the role registry (rides `members=`): `active ⇄ retired`; a grant with `holder_kind="role"` must name an active role — enforced by the `role_registered` guard on `request_access` and by `create_guards = (role_registered_create,)` at create (design E9) |
+| Warning guards | `core/guards.py` (`severity=`) + `server/invoke.py` + `problems.py` (`WarningRefused`) | design E1: warning Denies ride the action entry (`warnings`), refuse with the `Waymark-Acknowledge` affordance, and record overridden names in the transitions row (`acknowledged`, nullable). Warnings gate create too via `create_guards` (design E9); the walker auto-acknowledges on retry for actions and creates alike |
+| Uniqueness | `core/resource.py` (`unique=`) + `storage/postgres.py` (`UniqueViolation`) + `invoke.py` (`_conflict`) | design E2: DB constraints on promoted columns; refusal = `already-exists` Problem with `existing.href` (looked up in a fresh session — the violating txn is aborted). Inside bulk items the plain Conflict (no href) is raised instead. Unique create examples for conformance must mint fresh values (see the role example) |
+| Four eyes | `core/guards.py` (`four_eyes(of=…)`) + `storage.transition_actor` + `ctx.actor_of` | design E3: denies the latest performer of `of`; probes at render so the performer sees `unavailable` with the same reason. System actors are NOT exempt — a cascade that performed `of` is barred like anyone; compose with a `system_only` bypass explicitly if an app wants otherwise |
+| Ownership | `core/owns.py` (`Owns`/`Rollup`/`Seed`/`rollup_is`) + `server/owns.py` (`CascadeRunner`, `compute_rollups`) + `server/consumers.py` (`LogConsumer`) | design E4: cascades drain `transitions_since` behind the `waymark3_cursors` row (seeded at head on first boot — no history replay); child transitions ride the parent's correlation id as `waymark-cascade`; rollups (count and sum-of-promoted-field) are a top-level envelope key, `vis.full` only, computed per render call site. `Seed` instantiates children at parent create, same txn, creator-audited, correlation shared; template edits never retro-propagate (recorded policy). Rollups are also collection query params (`?name=`, `_gte`/`_lte`, `?sort=±name`) compiled as correlated subqueries — names checked against parent param collisions at assembly. An `Owns` edge makes the child kind REQUIRED at assembly. `LogConsumer` is the shared cursor-drain base (cascade, blob janitor) |
+| Attachments | `server/attachments.py` (kind `attachment`, `BlobStore`, `Memory`/`File` stores, `BlobJanitor`) + router bytes routes | design E5: `reserved → uploaded → removed`; bytes via `PUT/GET /attachments/{id}/bytes`; size/sha stamped by the `attachment-bytes` system actor. Retention purges via the `blob-purge` log consumer — post-commit, durable, covering every invoke path. `duplicate` (design E5/E8) mints a `reserved` copy for a new target in the invoking txn+correlation (`Creates("attachment")`, provenance in hidden `copied_from`); the `blob-copy` consumer copies bytes post-commit via `BlobStore.copy` and marks the copy uploaded as the `attachment-bytes` actor — byte availability is eventual, and a purged-source copy honestly stays `reserved`. The memory store is the dev default; production must wire real blobs |
+| Service jobs | `ctx.defer` (`invoke.py`) + `jobs.py` (`JobArtifact`, `sweep_orphan_jobs`) + `ServiceDown.cause` / `ServiceCallError` | design E6: job created in the handler's txn (the runner waits out the commit — bounded 5s); artifacts run through `Service.call` — one failure downs the service and the rest fail fast with `retry at`, unless the service declares `down_on_error=False` (intake's independent sub-imports), where each artifact fails alone with the adapter's words and the service stays up. Multi-worker safe: runners hold a `waymark3_job_leases` row (claim-or-steal on expiry, 30s ttl renewed per item — a pathological item blocking past the ttl can lose it), the boot sweep skips a lease with a future expiry and cancels once it lapses. Resume-instead-of-cancel is the remaining punt |
+| Predecessor refs | `core/refs.py` (`Predecessor`, `ref_predecessor`) + `invoke._resolve_predecessors` | design E7: resolved at create before `on_create` (carry-forward reads the ref there); the ≤ comparison seeds from the new instance's own order value, so backdated creates slot in. The declaration home is `Data` — a `Create` override hiding the field from the form keeps the opts on `Data` |
+| Create guards | `core/resource.py` (`create_guards`) + `server/invoke.py` (`_create_guards`) | design E9: guards over the VALIDATED create input, `check(None, data, ctx)` with r=None; severity splits exactly as on actions (E1) — refuse is a `GuardRefused` with no `resource=` embed, a warning demands `Waymark-Acknowledge` and the override lands on the create transition's `acknowledged`. Enforced, not yet projected (dry-run is the preview); `vars_fn` never garnishes create refusals (r=None); `ctx.create` cannot acknowledge |
+| Touches | `core/touches.py` (`Creates`/`Advances`/`Delegated`) + `invoke.py` (`_touch_scope` around the handler; enforcement in `_child_create`/`_child_invoke`) | design E8: rendered inside `effect.touches`; undeclared ctx writes raise `DefinitionError` naming the missing declaration, aborting the txn. Exempt by construction: seeds, the cascade runner, `ctx.defer`'s job row; `approval_request.run` declares `Delegated`. Conformance `test_touch_truth` verifies declared-vs-log per correlation. There is deliberately no `Moves` — re-parenting is a child action |
 
 ## Deviations from the design text (deliberate, tested)
 
@@ -57,16 +67,19 @@ sketch, and is the dogfood for every new declaration.
    dev-header apps keep working unchanged; production identity should
    pair `"granted"` with the OIDC resolver, whose `member:<id>`
    principals are exactly what grants' `holder_id` names.
-3. **Engine kinds are open under member scoping.** Grants, approvals,
-   members, subscriptions, and jobs render for every member — they are
-   the negotiation and administration surface, and their guards
-   (`no_self_dealing`: a holder never judges their own access) still
-   judge. Finer-grained scoping of the admin surface itself is the next
-   refinement, not this one.
-4. **Facets are skipped under a restricted listing.** Facet counts are
-   storage-wide; a member whose view is owner-plus-granted-ids gets no
-   facets rather than a leak. Restricted-scope facet computation is a
-   follow-up.
+3. **Engine kinds are open under member scoping — except credentials.**
+   Grants, approvals, members, roles, subscriptions, and jobs render for
+   every member — they are the negotiation and administration surface,
+   and their guards (`no_self_dealing`: a holder never judges their own
+   access) still judge. The two credential fields are the exception:
+   `grant.data.token` and `subscription.data.secret` render only for the
+   resource's owner (`MemberVisibility.SECRET_FIELDS`); an agent still
+   reads its own grant's token through the negotiation surface. Finer-
+   grained scoping of the admin surface itself is the next refinement.
+4. **Facets are computed within the restricted scope.** `storage.facets`
+   takes the same `restrict` pushdown as `query()`: a member whose view
+   is owner-plus-granted-ids gets facet counts over exactly those rows —
+   the counts can neither leak nor lie.
 5. **Mirror staleness is pull-through, not a stored `stale` state.** A
    TTL-expired pull-on-read mirror re-pulls on every GET (no "observed,
    unchanged" transition — that would be audit noise) and only writes
@@ -89,28 +102,48 @@ sketch, and is the dogfood for every new declaration.
 9. **`AgentGrant` survives as an import alias.** The kind is `grant`
    (holder ∈ token|member|role, design §9); token-held grants keep the
    agent-link UX (minted token, `agent_principal` for following).
+10. **Concealment holds out-of-state.** An action a hide-flagged guard
+    conceals returns 404 on invoke even when the state check would have
+    said "wrong state" — the wire must not narrate what render hides.
+    Caught by conformance the first time a hide-guarded engine action
+    (`attachment.mark_uploaded`) was walked.
 
 ## Known gaps
 
-- **Vocab `values=` (closed vocabularies)** render as `x-vocab.values`
-  but do not yet emit a static schema enum or reject unknown members at
-  the storage layer; open vocabularies (the dogfood) are complete.
-- **`x-display.relation` UI behavior** — unchanged v2 gap: the generic
-  UI still doesn't set min/max between related inputs.
-- **Relation-aware input synthesis** — conformance's walker still leans
-  on `@example_input` for relation-guarded actions (the gap *fuzzer* is
-  relation-aware; the synthesizer is not).
+- **Closed vocabularies cover fields declared with `VocabField`.**
+  `VocabField(open=False, values=…)` emits `items.enum` on the wire and
+  the invoker refuses unknown members (create and action inputs, one
+  chokepoint: `_validate` → `closed_vocab_errors`). An input model that
+  declares a look-alike plain `list[str]` field is NOT chased — the
+  declaration is the enforcement's address; declare the input field with
+  the same `VocabField` to get the same judgment.
+- **`x-display.relation` UI behavior** — done for comparison relations:
+  the generic UI's action form wires related inputs so the left side of
+  `a<=b` takes `max` from the right and the right takes `min` from the
+  left (mirrored for `>=`/`>`); `==` stays enforcement-only. No UI test
+  harness exists — the change is minimal and untested by design.
+- **Relation-aware input synthesis** — done: `synthesize_input` overlays
+  one admissible relation tuple (components in `judges` order, preferring
+  tuples that agree with the single-field acceptance sets); an empty
+  tuple set raises `SkipState` naming the relation. `assign_meal` no
+  longer needs an `@example_input`; comparison relations (`op=`) still
+  synthesize from the schema alone.
 - **`waymark3 extract-messages`** — still the v1 stub (i18n punt).
-- **OIDC logout** clears the session cookie but does not call the IdP's
-  end-session endpoint (single logout).
+- **OIDC single logout** — done: `/auth/logout` 302s to the IdP's
+  `end_session_endpoint` (with `post_logout_redirect_uri` + `client_id`)
+  when discovery advertises one; the local cookie clears either way, and
+  an unreachable IdP falls back to the local-only logout.
 - **Mirror `list`/discovery sync** — mirrors sync per-resource; there is
   no "discover new external documents" sweep. Create mirrors explicitly.
-- **Member approval-mode** (a member-held grant saying `approval`) is
-  wired through the same `approval_request` machinery as token grants but
-  exercised by fewer tests than the token path.
-- **Closed-vocabulary role sets** — roles ride `Principal.roles` (dev
-  headers or OIDC member roles); there is no role *registry* resource,
-  so a typo'd role name in a grant silently grants nobody.
+- **Member approval-mode** (a member-held grant saying `approval`) runs
+  the same `approval_request` machinery as token grants, now covered
+  end-to-end (`test_member_approval_mode_runs_end_to_end`: 202 → approve
+  → run, audit actor = the runner).
+- **`Member.data.roles` entries are not validated against the role
+  registry** — grants to roles are (the `role_registered` guard +
+  `Grant.on_create`), but create runs no guards, so a typo'd role on an
+  *invite* still names nobody until a grant tries to use it. Validate at
+  the grant, where authority is actually conferred.
 
 ## Operational caveats
 

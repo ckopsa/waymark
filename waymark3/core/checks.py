@@ -45,6 +45,7 @@ def run_all(cls: type, machine: StateMachine, *, allow_dead: frozenset[str],
     check_one_way(cls, machine)
     check_guard_declarations(cls, machine)
     check_guard_templates(cls, machine)
+    check_create_guards(cls)
     check_closure(cls, machine)
     check_handler_signatures(cls, machine)
     check_summary_template(cls, summary_template)
@@ -55,6 +56,154 @@ def run_all(cls: type, machine: StateMachine, *, allow_dead: frozenset[str],
     check_long_text(cls, machine)
     check_faceted(cls)
     check_oneof(cls)
+    check_unique(cls)
+
+
+def check_unique(cls: type) -> None:
+    """Declared uniqueness (design E2) is enforced on promoted columns, so
+    every unique field must be filterable/sortable — and scalar: array
+    membership has no single-value uniqueness to promise."""
+    from .resource import unique_groups
+    from .vocab import model_vocabs
+
+    groups = unique_groups(cls)
+    if not groups:
+        return
+    promotable: set[str] = set()
+    fspec = getattr(cls, "filterable", None)
+    if fspec is not None:
+        promotable |= set(fspec.fields)
+    sspec = getattr(cls, "sortable", None)
+    if sspec is not None:
+        promotable |= set(sspec.fields)
+    promotable.discard("state")
+    vocabs = set(model_vocabs(cls.Data))
+    for fields in groups:
+        if not fields:
+            raise _err(cls, "unique declares an empty field group")
+        for f in fields:
+            if f not in cls.Data.model_fields:
+                raise _err(cls, f"unique field {f!r} is not a data field")
+            if f in vocabs:
+                raise _err(cls, f"unique field {f!r} is a Vocab (array) — "
+                                "membership has no single-value uniqueness")
+            if f not in promotable:
+                raise _err(cls, f"unique field {f!r} must be filterable or "
+                                "sortable — uniqueness is enforced on the "
+                                "promoted column")
+
+
+def check_owns(registry: Any) -> None:
+    """Ownership edges (design E4) validate at assembly, where every kind
+    is known: the child exists, ``via`` is a Ref to the parent and an
+    Eq-filterable (promoted) column, cascade endpoints are real actions the
+    runner can drive, and rollup filters name filterable child fields."""
+    from .refs import ref_meta
+    from .resource import FilterOp
+    from .owns import owns_of
+
+    for rdef in registry.defs():
+        cls = rdef.cls
+        for edge in owns_of(cls):
+            child = registry.get(edge.kind)
+            if child is None:
+                raise _err(cls, f"owns: child kind {edge.kind!r} is not "
+                                "registered on this engine")
+            via_field = child.cls.Data.model_fields.get(edge.via)
+            if via_field is None:
+                raise _err(cls, f"owns({edge.kind!r}): via={edge.via!r} is "
+                                "not a field of the child's Data")
+            meta = ref_meta(via_field)
+            if meta is None or meta.kind != cls.kind:
+                raise _err(cls, f"owns({edge.kind!r}): via={edge.via!r} must "
+                                f"be a Ref[{cls.kind!r}] on the child")
+            fspec = child.cls.filterable
+            ops = fspec.fields.get(edge.via) if fspec else None
+            if ops is None or not ops & FilterOp.EQ:
+                raise _err(cls, f"owns({edge.kind!r}): via={edge.via!r} must "
+                                "be Eq-filterable on the child — the cascade "
+                                "query and rollup GROUP BY run on the "
+                                "promoted column")
+            for parent_action, child_action in edge.on.items():
+                if parent_action not in cls.__waymark_machine__.actions:
+                    raise _err(cls, f"owns({edge.kind!r}): cascade key "
+                                    f"{parent_action!r} is not an action of "
+                                    f"{cls.kind!r}")
+                target = child.machine.actions.get(child_action)
+                if target is None:
+                    raise _err(cls, f"owns({edge.kind!r}): cascade target "
+                                    f"{child_action!r} is not an action of "
+                                    f"{edge.kind!r}")
+                if target.input is not None:
+                    raise _err(cls, f"owns({edge.kind!r}): cascade target "
+                                    f"{child_action!r} takes input — the "
+                                    "runner sends none (deferred, design E4)")
+                if target.safety.fence:
+                    raise _err(cls, f"owns({edge.kind!r}): cascade target "
+                                    f"{child_action!r} is fenced — the "
+                                    "runner holds no etag (deferred, "
+                                    "design E4)")
+            child_filterable = set(fspec.fields) if fspec else set()
+            child_promoted = set(child_filterable)
+            if child.cls.sortable is not None:
+                child_promoted |= set(child.cls.sortable.fields)
+            parent_params = {"sort", "state"}
+            if cls.filterable is not None:
+                parent_params |= set(cls.filterable.fields)
+            if cls.sortable is not None:
+                parent_params |= set(cls.sortable.fields)
+            for rollup_name, rollup in edge.rollups.items():
+                if rollup_name in parent_params:
+                    # rollups become the parent collection's query params;
+                    # a name collision would shadow a real filter
+                    raise _err(cls, f"owns({edge.kind!r}) rollup "
+                                    f"{rollup_name!r} collides with a "
+                                    "parent filter/sort name")
+                for f in rollup.filters:
+                    if f != "state" and f not in child_filterable:
+                        raise _err(cls, f"owns({edge.kind!r}) rollup "
+                                        f"{rollup_name!r}: filter field "
+                                        f"{f!r} is not filterable on the "
+                                        "child")
+                if rollup.agg == "sum":
+                    if rollup.of not in child.cls.Data.model_fields:
+                        raise _err(cls, f"owns({edge.kind!r}) rollup "
+                                        f"{rollup_name!r}: of={rollup.of!r} "
+                                        "is not a child data field")
+                    if rollup.of not in child_promoted:
+                        raise _err(cls, f"owns({edge.kind!r}) rollup "
+                                        f"{rollup_name!r}: of={rollup.of!r} "
+                                        "must be filterable or sortable — "
+                                        "the SUM runs on the promoted column")
+            if edge.seed is not None:
+                _check_seed(registry, cls, edge, child)
+
+
+def _check_seed(registry: Any, cls: type, edge: Any, child: Any) -> None:
+    """Seeds (design E4): the source kind exists, its filters are
+    queryable, and every copied/defaulted field is real on both sides."""
+    source = registry.get(edge.seed.kind)
+    if source is None:
+        raise _err(cls, f"owns({edge.kind!r}) seed: source kind "
+                        f"{edge.seed.kind!r} is not registered")
+    sspec = source.cls.filterable
+    source_filterable = set(sspec.fields) if sspec else set()
+    for f in edge.seed.where:
+        if f != "state" and f not in source_filterable:
+            raise _err(cls, f"owns({edge.kind!r}) seed: where field {f!r} "
+                            "is not filterable on the source")
+    for child_field, source_field in edge.seed.copy.items():
+        if child_field not in child.cls.Data.model_fields:
+            raise _err(cls, f"owns({edge.kind!r}) seed: copy target "
+                            f"{child_field!r} is not a child data field")
+        if source_field not in source.cls.Data.model_fields:
+            raise _err(cls, f"owns({edge.kind!r}) seed: copy source "
+                            f"{source_field!r} is not a data field of "
+                            f"{edge.seed.kind!r}")
+    for child_field in edge.seed.defaults:
+        if child_field not in child.cls.Data.model_fields:
+            raise _err(cls, f"owns({edge.kind!r}) seed: default "
+                            f"{child_field!r} is not a child data field")
 
 
 def check_oneof(cls: type) -> None:
@@ -206,6 +355,34 @@ def check_guard_templates(cls: type, machine: StateMachine) -> None:
                 raise _err(cls, f"guard {g.name!r} on action {name!r}: explain "
                                 f"template references {sorted(unknown)}, which "
                                 "neither vars=… nor its judged fields supply")
+
+
+def check_create_guards(cls: type) -> None:
+    """Create guards (design E9) judge the validated create input, so
+    their judged fields must exist on the create model — and their
+    explain templates obey the same coverage rule as action guards
+    (``check_guard_templates``): every placeholder is a declared var or
+    a judged field."""
+    guards = getattr(cls, "create_guards", ()) or ()
+    if not guards:
+        return
+    model = getattr(cls, "Create", None) or cls.Data
+    for top in guards:
+        for g in top.iter_leaves():
+            missing = [f for f in g.judges if f not in model.model_fields]
+            if missing:
+                raise _err(cls, f"create guard {g.name!r} judges {missing}, "
+                                f"not field(s) of {model.__name__}")
+            placeholders = {
+                field.partition(".")[0].partition("[")[0]
+                for _, field, _, _ in string.Formatter().parse(g.explain)
+                if field
+            }
+            unknown = placeholders - (set(g.declared_vars) | set(g.judges))
+            if unknown:
+                raise _err(cls, f"create guard {g.name!r}: explain template "
+                                f"references {sorted(unknown)}, which neither "
+                                "vars=… nor its judged fields supply")
 
 
 def check_closure(cls: type, machine: StateMachine) -> None:
@@ -466,6 +643,83 @@ def check_long_text(cls: type, machine: StateMachine) -> None:
                 UsabilityWarning, stacklevel=3)
 
 
+def check_touches(registry: Any) -> None:
+    """Declared touches (design E8) validate at assembly: every touched
+    kind is registered and every advanced action exists on its machine
+    and is invocable through ctx.invoke (non-bulk)."""
+    from .touches import Advances, Creates
+
+    for rdef in registry.defs():
+        for name, defn in rdef.machine.actions.items():
+            for t in defn.touches:
+                if isinstance(t, Creates):
+                    if registry.get(t.kind) is None:
+                        raise _err(rdef.cls,
+                                   f"{name}: Creates({t.kind!r}) names an "
+                                   "unregistered kind")
+                elif isinstance(t, Advances):
+                    target = registry.get(t.kind)
+                    if target is None:
+                        raise _err(rdef.cls,
+                                   f"{name}: Advances({t.kind!r}, …) names "
+                                   "an unregistered kind")
+                    tdefn = target.machine.actions.get(t.action)
+                    if tdefn is None:
+                        raise _err(rdef.cls,
+                                   f"{name}: Advances({t.kind!r}, "
+                                   f"{t.action!r}) names no action of "
+                                   f"{t.kind!r}")
+                    if tdefn.bulk:
+                        raise _err(rdef.cls,
+                                   f"{name}: Advances({t.kind!r}, "
+                                   f"{t.action!r}) targets a bulk action — "
+                                   "ctx.invoke drives per-resource "
+                                   "transitions")
+
+
+def _check_predecessor(registry: Any, rdef: Any, where: str, fname: str,
+                       field: Any, meta: Any) -> None:
+    """Predecessor refs (design E7): the resolving query runs on promoted
+    columns, so ``order`` must be filterable/sortable on the target and a
+    ``partition`` must be Eq-filterable there and a field of the declaring
+    Data (its value comes from the new instance)."""
+    from .refs import ref_predecessor
+    from .resource import FilterOp
+
+    pred = ref_predecessor(field)
+    if pred is None:
+        return
+    if where != "data":
+        raise _err(rdef.cls, f"{where}.{fname}: predecessor refs live on "
+                             "Data — inputs have no instance to resolve for")
+    target = registry.get(meta.kind)
+    promotable: set[str] = set()
+    if target.cls.filterable is not None:
+        promotable |= set(target.cls.filterable.fields)
+    if target.cls.sortable is not None:
+        promotable |= set(target.cls.sortable.fields)
+    if pred.order not in promotable:
+        raise _err(rdef.cls, f"data.{fname}: predecessor order "
+                             f"{pred.order!r} must be filterable or sortable "
+                             f"on {meta.kind!r}")
+    if pred.partition is not None:
+        fspec = target.cls.filterable
+        ops = fspec.fields.get(pred.partition) if fspec else None
+        if ops is None or not ops & FilterOp.EQ:
+            raise _err(rdef.cls, f"data.{fname}: predecessor partition "
+                                 f"{pred.partition!r} must be Eq-filterable "
+                                 f"on {meta.kind!r}")
+        if pred.partition not in rdef.cls.Data.model_fields:
+            raise _err(rdef.cls, f"data.{fname}: predecessor partition "
+                                 f"{pred.partition!r} is not a field of the "
+                                 "declaring Data")
+    if pred.order not in rdef.cls.Data.model_fields:
+        # the ≤ comparison seeds from the new instance's own value
+        raise _err(rdef.cls, f"data.{fname}: predecessor order "
+                             f"{pred.order!r} is not a field of the "
+                             "declaring Data")
+
+
 def check_refs(registry: Any) -> None:
     """Assembly-time reference checks (design §2).
 
@@ -492,6 +746,8 @@ def check_refs(registry: Any) -> None:
                         f"{rdef.cls.__module__}.{rdef.cls.__qualname__}: "
                         f"{where}.{fname} is Ref[{meta.kind!r}], but no such "
                         "kind is registered on this engine")
+                _check_predecessor(registry, rdef, where, fname,
+                                   model.model_fields[fname], meta)
             for fname, f in model.model_fields.items():
                 if fname in refs:
                     continue

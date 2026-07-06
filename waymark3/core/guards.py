@@ -82,10 +82,17 @@ class Guard:
         requires_token: str | None = None,
         name: str | None = None,
         needs_input: bool | None = None,
+        severity: str = "refuse",
     ):
         if not explain or not explain.strip():
             raise DefinitionError("Guard requires explain='…' — every refusal "
                                   "must come with its reason")
+        if severity not in ("refuse", "warning"):
+            raise DefinitionError(
+                f"guard severity must be 'refuse' or 'warning', got "
+                f"{severity!r} — a warning is a guard whose Deny a principal "
+                "may acknowledge past (design E1)")
+        self.severity = severity
         self.explain = explain
         self.judges: tuple[str, ...] = tuple(judges)
         self.reads: tuple[str, ...] = tuple(reads)
@@ -394,6 +401,31 @@ class _AnyGuard(Guard):
         return first
 
 
+def four_eyes(of: str, *, explain: str | None = None,
+              hide: bool = False, name: str | None = None) -> Guard:
+    """Authority conditioned on history (design E3): whoever performed the
+    ``of`` transition on this resource cannot perform the guarded one.
+
+    Reads the transition log through ``ctx.actor_of`` — the same fact the
+    log already keeps for audit — and probes at render, so the performer
+    sees the action honestly ``unavailable`` with this reason. The rule the
+    mapping series found enforced by display-name string equality in one
+    app and by nothing at all in two others."""
+
+    async def check(r: Any, inp: Any, ctx: Ctx) -> Allow | Deny:
+        actor = await ctx.actor_of(type(r), r.id, of)
+        if actor is not None and actor == ctx.principal.id:
+            return Deny()
+        return Allow()
+
+    return Guard(
+        explain=explain or (f"Whoever performed {of.replace('_', ' ')} "
+                            "cannot do this; someone else must."),
+        check=check, reads=("transitions", "principal"),
+        hide=hide, name=name or f"four_eyes:{of}",
+    )
+
+
 class _GuardFactory:
     """The ``guard`` module-level object: ``@guard(...)`` decorator sugar for
     check-based guards, plus the stock guards."""
@@ -412,6 +444,7 @@ class _GuardFactory:
         becomes_available_at: Callable[[Any], datetime] | None = None,
         requires_token: str | None = None,
         needs_input: bool | None = None,
+        severity: str = "refuse",
     ) -> Callable[[CheckFn], Guard]:
         def decorate(fn: CheckFn) -> Guard:
             return Guard(
@@ -420,7 +453,7 @@ class _GuardFactory:
                 hide=hide, remedies=remedies,
                 becomes_available_at=becomes_available_at,
                 requires_token=requires_token, name=fn.__name__,
-                needs_input=needs_input,
+                needs_input=needs_input, severity=severity,
             )
         return decorate
 

@@ -340,13 +340,52 @@ w3_conformance_resource(SundayRotation3)
 w3_conformance_resource(PrepTask3)
 
 # 3.0 engine kinds: ordinary resources, ordinary conformance
+from waymark3.server.attachments import (  # noqa: E402
+    Attachment as Attachment3W, BYTES_ACTOR as BYTES_ACTOR3W,
+)
 from waymark3.server.members import Member as Member3W  # noqa: E402
+from waymark3.server.roles import Role as Role3W  # noqa: E402
 from waymark3.server.subscriptions import (  # noqa: E402
     WebhookSubscription as Subscription3W,
 )
 
 w3_conformance_resource(Member3W)
+w3_conformance_resource(Role3W)
 w3_conformance_resource(Subscription3W)
+
+
+# an attachment's create must name a live target, so its states need a
+# factory rather than a schema-synthesized create (design E5)
+@w3_state_factory(Attachment3W)
+async def w3_make_attachment(state: str, engine, services) -> Attachment3W:
+    mid = await _mk(engine, "meal", {"name": "Attachment target",
+                                     "themes": ["mexican"]})
+    services.seeded["attachment_target"] = mid
+    aid = await _mk(engine, "attachment", {
+        "resource_kind": "meal", "resource_id": mid,
+        "name": "recipe.pdf", "mime": "application/pdf"})
+    if state in ("uploaded", "removed"):
+        await engine.invoker.invoke(
+            "attachment", aid, "mark_uploaded",
+            {"size": 3, "sha256": "a" * 64}, principal=BYTES_ACTOR3W)
+    if state == "removed":
+        await _step(engine, "attachment", aid, "remove")
+    return await _load(engine, "attachment", aid)
+
+
+@w3_example_input(Attachment3W, "duplicate")
+def w3_attachment_duplicate_example(services) -> dict:
+    # a synthesized target would dangle; duplicate onto the factory's meal
+    return {"resource_kind": "meal",
+            "resource_id": services.seeded["attachment_target"]}
+
+
+@w3_example_input(Role3W, "create")
+def w3_role_create_example(services) -> dict:
+    # role names are declared unique (design E2); the walker may create
+    # several per test, so the example must mint fresh spellings
+    return {"name": f"reader-{uuid.uuid4().hex[:8]}",
+            "description": "May read shared note titles"}
 
 
 @w3_example_input(Member3W, "create")
@@ -404,11 +443,8 @@ async def w3_make_plan(state: str, engine, services) -> MealPlan3:
     return await _load(engine, "plan", pid)
 
 
-@w3_example_input(MealPlan3, "assign_meal")
-def w3_assign_meal_example(services) -> dict:
-    return {"date": PLAN_START.isoformat(), "meal_id": services.seeded["meal_id"]}
-
-
+# assign_meal needs no example: its Relation's tuple set feeds the
+# synthesizer (waymark3.testing.factories.synthesize_input)
 @w3_example_input(MealPlan3, "assign_off_theme")
 def w3_assign_off_theme_example(services) -> dict:
     return {"date": PLAN_START.isoformat(), "meal_id": services.seeded["meal_id"]}

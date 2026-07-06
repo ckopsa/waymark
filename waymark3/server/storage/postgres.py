@@ -33,6 +33,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     and_,
     func,
     select,
@@ -40,6 +41,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.dialects.postgresql import JSONB, array
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 
 from ...core.registry import Registry, ResourceDef
@@ -122,6 +124,7 @@ class PostgresStorage:
         self.metadata = MetaData()
         self.tables: dict[str, Table] = {}
         self._promoted: dict[str, dict[str, str]] = {}
+        self._unique: dict[str, tuple[tuple[str, ...], ...]] = {}
         for rdef in registry.defs():
             self._build_table(rdef)
 
@@ -141,6 +144,9 @@ class PostgresStorage:
             Column("correlation_id", String(64), nullable=True),
             Column("summary", Text, nullable=False),
             Column("at", DateTime(timezone=True), nullable=False),
+            # warning-guard names the actor acknowledged past (design E1);
+            # NULL = nothing overridden — the common row costs nothing
+            Column("acknowledged", JSONB, nullable=True),
             Index("ix_waymark3_transitions_resource", "kind", "resource_id", "id"),
         )
         self.idempotency = Table(
@@ -164,6 +170,25 @@ class PostgresStorage:
             Column("last_id", BigInteger, nullable=False),
             Column("updated_at", DateTime(timezone=True), nullable=False),
         )
+        # engine-internal consumer cursors (design E4): the cascade runner
+        # (and future declared consumers) resume from where they left off —
+        # an outage drains instead of dropping
+        self.cursors = Table(
+            "waymark3_cursors", self.metadata,
+            Column("consumer", String(64), primary_key=True),
+            Column("last_id", BigInteger, nullable=False),
+            Column("updated_at", DateTime(timezone=True), nullable=False),
+        )
+        # job leases (design E6): a queued/running job belongs to exactly
+        # one live worker — claim-or-steal keyed on expiry, so a booting
+        # neighbor's orphan sweep cannot cancel a live job and a dead
+        # worker's job frees itself by clock
+        self.job_leases = Table(
+            "waymark3_job_leases", self.metadata,
+            Column("job_id", String(64), primary_key=True),
+            Column("worker", String(64), nullable=False),
+            Column("expires_at", DateTime(timezone=True), nullable=False),
+        )
         # the draft sub-resource's row (design §4): keyed per part and per
         # declared audience ("*" = shared, else a principal id); per-field
         # revs/authors are what make relay/2's base_rev/reject enforceable
@@ -182,8 +207,12 @@ class PostgresStorage:
         )
 
     def _build_table(self, rdef: ResourceDef) -> None:
+        from ...core.resource import unique_groups
+
         promoted = _promoted_fields(rdef)
         self._promoted[rdef.kind] = promoted
+        uniques = unique_groups(rdef.cls)
+        self._unique[rdef.kind] = uniques
         columns = [
             Column("id", String(64), primary_key=True),
             Column("state", String(64), nullable=False, index=True),
@@ -209,7 +238,13 @@ class PostgresStorage:
                                      postgresql_using="gin"))
             else:
                 indexes.append(Index(f"ix_{rdef.plural}_{field}", field))
-        table = Table(rdef.plural, self.metadata, *columns, *indexes)
+        # declared uniqueness (design E2): the constraint lives on the
+        # promoted columns; its name is how a violation maps back to fields
+        constraints = [UniqueConstraint(
+            *fields, name=f"uq_{rdef.plural}_{'_'.join(fields)}")
+            for fields in uniques]
+        table = Table(rdef.plural, self.metadata, *columns, *indexes,
+                      *constraints)
         self.tables[rdef.kind] = table
         rdef.row_model = table
 
@@ -256,37 +291,100 @@ class PostgresStorage:
 
     async def insert(self, s: AsyncConnection, kind: str, instance: Resource) -> None:
         table = self.tables[kind]
-        await s.execute(table.insert().values(
-            id=instance.id, state=instance.state, version=instance.version,
-            data=instance.data.model_dump(mode="json"),
-            shape=type(instance).shape, owner=instance.owner,
-            created_at=instance.created_at, updated_at=instance.updated_at,
-        ))
+        try:
+            await s.execute(table.insert().values(
+                id=instance.id, state=instance.state, version=instance.version,
+                data=instance.data.model_dump(mode="json"),
+                shape=type(instance).shape, owner=instance.owner,
+                created_at=instance.created_at, updated_at=instance.updated_at,
+            ))
+        except IntegrityError as exc:
+            self._raise_unique(kind, instance, exc)
+            raise
 
     async def save(self, s: AsyncConnection, kind: str, instance: Resource, *,
                    expected_version: int) -> None:
         table = self.tables[kind]
-        result = await s.execute(
-            update(table)
-            .where(and_(table.c.id == instance.id,
-                        table.c.version == expected_version))
-            .values(state=instance.state, version=instance.version,
-                    data=instance.data.model_dump(mode="json"),
-                    shape=type(instance).shape,
-                    updated_at=instance.updated_at)
-        )
+        try:
+            result = await s.execute(
+                update(table)
+                .where(and_(table.c.id == instance.id,
+                            table.c.version == expected_version))
+                .values(state=instance.state, version=instance.version,
+                        data=instance.data.model_dump(mode="json"),
+                        shape=type(instance).shape,
+                        updated_at=instance.updated_at)
+            )
+        except IntegrityError as exc:
+            self._raise_unique(kind, instance, exc)
+            raise
         if result.rowcount != 1:
             raise StaleWriteError(
                 f"{kind}/{instance.id}: expected version {expected_version} "
                 "was gone at write time")
+
+    def _raise_unique(self, kind: str, instance: Resource,
+                      exc: IntegrityError) -> None:
+        """Map a constraint violation back to its declared field group (by
+        the constraint's name); anything else re-raises unmapped."""
+        rdef = self.registry.get(kind)
+        plural = rdef.plural if rdef else f"{kind}s"
+        detail = str(exc.orig or exc)
+        dump = instance.data.model_dump(mode="json")
+        for fields in self._unique.get(kind, ()):
+            name = f"uq_{plural}_{'_'.join(fields)}"
+            if name in detail:
+                raise UniqueViolation(
+                    kind=kind, fields=fields,
+                    values={f: dump.get(f) for f in fields}) from exc
+
+    def _rollup_map(self, kind: str) -> dict[str, tuple[Any, Any]]:
+        from ...core.owns import owns_of
+
+        rdef = self.registry.get(kind)
+        if rdef is None:
+            return {}
+        return {name: (edge, rollup)
+                for edge in owns_of(rdef.cls)
+                for name, rollup in edge.rollups.items()}
+
+    def _rollup_expr(self, parent_table: Table, edge: Any, rollup: Any) -> Any:
+        """A declared rollup as a correlated scalar subquery — the same
+        aggregate the envelope renders, usable in WHERE and ORDER BY
+        (design E4: the dashboard's status filter compiles, never
+        post-filters)."""
+        child = self.tables[edge.kind]
+        conds = self._conditions(edge.kind, child, dict(rollup.filters))
+        conds.append(child.c[edge.via] == parent_table.c.id)
+        measure = (func.count() if rollup.agg == "count"
+                   else func.coalesce(func.sum(child.c[rollup.of]), 0))
+        return (select(measure).where(and_(*conds))
+                .correlate(parent_table).scalar_subquery())
 
     async def query(self, s: AsyncConnection, kind: str, *, filters: dict[str, Any],
                     sort: str | None, page_size: int,
                     page_number: int,
                     restrict: tuple[str, set[str] | frozenset[str]] | None = None,
                     ) -> tuple[list[Resource], int]:
+        from decimal import Decimal
+
         table = self.tables[kind]
-        conds = self._conditions(kind, table, filters)
+        rollups = self._rollup_map(kind)
+        column_filters, rollup_conds = dict(filters), []
+        for name, (edge, rollup) in rollups.items():
+            for param, op in ((name, "=="), (f"{name}_gte", ">="),
+                              (f"{name}_lte", "<=")):
+                value = column_filters.pop(param, None)
+                if value is None:
+                    continue
+                if isinstance(value, float):
+                    value = Decimal(str(value))
+                expr = self._rollup_expr(table, edge, rollup)
+                rollup_conds.append(expr == value if op == "==" else
+                                    expr >= value if op == ">=" else
+                                    expr <= value)
+        conds = self._conditions(kind, table, column_filters)
+        conds.extend(rollup_conds)
         if restrict is not None:
             # visibility pushdown (design §9): "what you own, plus what you
             # were granted" is WHERE, never post-filtering rendered envelopes
@@ -306,7 +404,10 @@ class PostgresStorage:
         if sort:
             descending = sort.startswith("-")
             field = sort.lstrip("-")
-            col = table.c[field]
+            if field in rollups:
+                col: Any = self._rollup_expr(table, *rollups[field])
+            else:
+                col = table.c[field]
             stmt = stmt.order_by(col.desc() if descending else col.asc())
         stmt = stmt.order_by(table.c.id)  # stable tiebreak: pagination walks exactly once
         stmt = stmt.limit(page_size).offset((page_number - 1) * page_size)
@@ -358,26 +459,37 @@ class PostgresStorage:
                 return candidate
         raise KeyError(param)
 
-    async def facets(self, s: AsyncConnection, kind: str,
-                     field: str) -> dict[str, int]:
+    async def facets(self, s: AsyncConnection, kind: str, field: str,
+                     restrict: tuple[str, set[str] | frozenset[str]] | None = None,
+                     ) -> dict[str, int]:
         table = self.tables[kind]
+        # the same pushdown as query() (design §9): a restricted principal's
+        # facet counts cover exactly the rows their listing covers
+        cond = None
+        if restrict is not None:
+            owner_id, granted_ids = restrict
+            cond = table.c.owner == owner_id
+            if granted_ids:
+                cond = cond | table.c.id.in_(sorted(granted_ids))
         if self._promoted.get(kind, {}).get(field) == "array":
             # per-element counts: FROM <table>, jsonb_array_elements_text(col)
             # (an implicit lateral) — a row tagged twice counts once per tag
             fn = func.jsonb_array_elements_text(table.c[field]).table_valued(
                 "value", joins_implicitly=True).render_derived()
-            rows = await s.execute(
-                select(fn.c.value, func.count())
-                .select_from(table, fn).group_by(fn.c.value))
+            stmt = (select(fn.c.value, func.count())
+                    .select_from(table, fn).group_by(fn.c.value))
         else:
-            rows = await s.execute(
-                select(table.c[field], func.count()).group_by(table.c[field]))
+            stmt = select(table.c[field], func.count()).group_by(table.c[field])
+        if cond is not None:
+            stmt = stmt.where(cond)
+        rows = await s.execute(stmt)
         return {str(k): v for k, v in rows.all() if k is not None}
 
     async def append_transition(
         self, s: AsyncConnection, *, kind: str, instance: Resource, action: str,
         from_state: str, principal: Principal, input_digest: str,
         summary: str, at: datetime, correlation_id: str | None = None,
+        acknowledged: list[str] | None = None,
     ) -> TransitionRecord:
         result = await s.execute(self.transitions.insert().returning(
             self.transitions.c.id).values(
@@ -387,7 +499,7 @@ class PostgresStorage:
             actor_type=principal.type, actor_id=principal.id,
             actor_display=principal.display,
             input_digest=input_digest, correlation_id=correlation_id,
-            summary=summary, at=at,
+            summary=summary, at=at, acknowledged=acknowledged,
         ))
         tid = result.scalar_one()
         # transactional outbox: NOTIFY is delivered iff this txn commits
@@ -401,8 +513,32 @@ class PostgresStorage:
             version=instance.version, actor_type=principal.type,
             actor_id=principal.id, actor_display=principal.display,
             input_digest=input_digest, correlation_id=correlation_id,
-            summary=summary, at=at,
+            summary=summary, at=at, acknowledged=acknowledged,
         )
+
+    async def transition_actor(self, s: AsyncConnection, kind: str,
+                               resource_id: str, action: str) -> str | None:
+        """The actor of the latest ``action`` transition on a resource —
+        what a four-eyes guard consults (design E3). Served by the
+        (kind, resource_id, id) index."""
+        stmt = (select(self.transitions.c.actor_id)
+                .where(and_(self.transitions.c.kind == kind,
+                            self.transitions.c.resource_id == resource_id,
+                            self.transitions.c.action == action))
+                .order_by(self.transitions.c.id.desc())
+                .limit(1))
+        return (await s.execute(stmt)).scalar_one_or_none()
+
+    async def transitions_by_correlation(
+            self, s: AsyncConnection,
+            correlation_id: str) -> list[TransitionRecord]:
+        """Every row of one correlated story (design E8's conformance
+        read). Test-surface query; deliberately unindexed."""
+        stmt = (select(self.transitions)
+                .where(self.transitions.c.correlation_id == correlation_id)
+                .order_by(self.transitions.c.id))
+        rows = (await s.execute(stmt)).mappings().all()
+        return [TransitionRecord(**dict(r)) for r in rows]
 
     async def last_transition(self, s: AsyncConnection, kind: str,
                               resource_id: str) -> TransitionRecord | None:
@@ -425,6 +561,88 @@ class PostgresStorage:
             stmt = stmt.where(self.transitions.c.kind.in_(kinds))
         rows = (await s.execute(stmt)).mappings().all()
         return [TransitionRecord(**dict(r)) for r in rows]
+
+    async def rollup_counts(self, s: AsyncConnection, kind: str, via: str,
+                            parent_ids: list[str],
+                            filters: dict[str, Any], *,
+                            agg: str = "count",
+                            of: str | None = None) -> dict[str, Any]:
+        """A declared rollup's aggregate per parent (design E4): one
+        GROUP BY per rollup per page, on promoted indexed columns."""
+        table = self.tables[kind]
+        conds = self._conditions(kind, table, filters)
+        conds.append(table.c[via].in_(parent_ids))
+        measure = (func.count() if agg == "count"
+                   else func.coalesce(func.sum(table.c[of]), 0))
+        stmt = (select(table.c[via], measure)
+                .where(and_(*conds)).group_by(table.c[via]))
+        out: dict[str, Any] = {}
+        for k, v in (await s.execute(stmt)).all():
+            # Numeric sums arrive as Decimal; the envelope speaks JSON
+            out[str(k)] = float(v) if agg == "sum" else v
+        return out
+
+    # ── consumer cursors (design E4; CascadeRunner is a writer) ─────────
+    async def cursor(self, s: AsyncConnection, consumer: str) -> int | None:
+        row = (await s.execute(
+            select(self.cursors.c.last_id).where(
+                self.cursors.c.consumer == consumer))).scalar_one_or_none()
+        return int(row) if row is not None else None
+
+    async def set_cursor(self, s: AsyncConnection, consumer: str,
+                         last_id: int, at: datetime) -> None:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(self.cursors).values(
+            consumer=consumer, last_id=last_id, updated_at=at)
+        await s.execute(stmt.on_conflict_do_update(
+            index_elements=["consumer"],
+            set_={"last_id": last_id, "updated_at": at}))
+
+    # ── job leases (design E6; the job runners are the writers) ─────────
+    async def claim_job_lease(self, s: AsyncConnection, job_id: str,
+                              worker: str, expires_at: datetime,
+                              now: datetime) -> bool:
+        """Claim-or-steal: an absent or expired lease moves to ``worker``;
+        a live lease held elsewhere stays put. True iff this worker holds
+        the lease after the attempt."""
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+
+        stmt = pg_insert(self.job_leases).values(
+            job_id=job_id, worker=worker, expires_at=expires_at)
+        await s.execute(stmt.on_conflict_do_update(
+            index_elements=["job_id"],
+            set_={"worker": worker, "expires_at": expires_at},
+            where=(self.job_leases.c.expires_at < now)))
+        held = (await s.execute(
+            select(self.job_leases.c.worker).where(
+                self.job_leases.c.job_id == job_id))).scalar_one_or_none()
+        return held == worker
+
+    async def renew_job_lease(self, s: AsyncConnection, job_id: str,
+                              worker: str, expires_at: datetime) -> None:
+        await s.execute(update(self.job_leases).where(
+            and_(self.job_leases.c.job_id == job_id,
+                 self.job_leases.c.worker == worker)
+        ).values(expires_at=expires_at))
+
+    async def release_job_lease(self, s: AsyncConnection, job_id: str,
+                                worker: str) -> None:
+        await s.execute(self.job_leases.delete().where(
+            and_(self.job_leases.c.job_id == job_id,
+                 self.job_leases.c.worker == worker)))
+
+    async def job_lease(self, s: AsyncConnection,
+                        job_id: str) -> tuple[str, datetime] | None:
+        row = (await s.execute(
+            select(self.job_leases.c.worker, self.job_leases.c.expires_at)
+            .where(self.job_leases.c.job_id == job_id))).one_or_none()
+        return (row[0], row[1]) if row is not None else None
+
+    async def max_transition_id(self, s: AsyncConnection) -> int:
+        return (await s.execute(
+            select(func.coalesce(func.max(self.transitions.c.id), 0)))
+        ).scalar_one()
 
     # ── webhook cursors (design §10; WebhookDeliverer is the writer) ────
     async def webhook_cursor(self, s: AsyncConnection,
@@ -525,7 +743,7 @@ class PostgresStorage:
                 if col.computed is not None:
                     entry["generated"] = str(col.computed.sqltext)
                 cols[col.name] = entry
-            tables[table.name] = {
+            entry_t: dict[str, Any] = {
                 "columns": cols,
                 # JSON-stable shape: a dict round-trips identically, so
                 # emit() can compare snapshots by equality
@@ -533,8 +751,29 @@ class PostgresStorage:
                             for ix in sorted(table.indexes,
                                              key=lambda i: i.name)},
             }
+            uniques = {c.name: [col.name for col in c.columns]
+                       for c in table.constraints
+                       if isinstance(c, UniqueConstraint)}
+            if uniques:
+                # declared uniqueness (design E2) must round-trip through
+                # migrate, or the constraint silently exists only in dev
+                entry_t["unique"] = dict(sorted(uniques.items()))
+            tables[table.name] = entry_t
         return {"function": TS_FUNCTION, "tables": tables}
 
 
 class StaleWriteError(RuntimeError):
     pass
+
+
+class UniqueViolation(Exception):
+    """A declared uniqueness group was violated (design E2). The invoker
+    turns this into the ``already-exists`` Problem carrying a link to the
+    conflicting resource."""
+
+    def __init__(self, *, kind: str, fields: tuple[str, ...],
+                 values: dict[str, Any]):
+        super().__init__(f"{kind}: {dict(values)!r} already exists")
+        self.kind = kind
+        self.fields = fields
+        self.values = values

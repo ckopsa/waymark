@@ -54,6 +54,67 @@
         ]
       }
     },
+    "attachments": {
+      "columns": {
+        "created_at": {
+          "nullable": false,
+          "type": "TIMESTAMP WITH TIME ZONE"
+        },
+        "data": {
+          "nullable": false,
+          "type": "JSONB"
+        },
+        "id": {
+          "nullable": false,
+          "primary_key": true,
+          "type": "VARCHAR(64)"
+        },
+        "owner": {
+          "nullable": true,
+          "type": "VARCHAR(128)"
+        },
+        "resource_id": {
+          "generated": "(data->>'resource_id')",
+          "nullable": true,
+          "type": "TEXT"
+        },
+        "resource_kind": {
+          "generated": "(data->>'resource_kind')",
+          "nullable": true,
+          "type": "TEXT"
+        },
+        "shape": {
+          "nullable": false,
+          "type": "INTEGER"
+        },
+        "state": {
+          "nullable": false,
+          "type": "VARCHAR(64)"
+        },
+        "updated_at": {
+          "nullable": false,
+          "type": "TIMESTAMP WITH TIME ZONE"
+        },
+        "version": {
+          "nullable": false,
+          "type": "INTEGER"
+        }
+      },
+      "indexes": {
+        "ix_attachments_owner": [
+          "owner"
+        ],
+        "ix_attachments_resource_id": [
+          "resource_id"
+        ],
+        "ix_attachments_resource_kind": [
+          "resource_kind"
+        ],
+        "ix_attachments_state": [
+          "state"
+        ]
+      }
+    },
     "grants": {
       "columns": {
         "created_at": {
@@ -465,6 +526,64 @@
         ]
       }
     },
+    "roles": {
+      "columns": {
+        "created_at": {
+          "nullable": false,
+          "type": "TIMESTAMP WITH TIME ZONE"
+        },
+        "data": {
+          "nullable": false,
+          "type": "JSONB"
+        },
+        "id": {
+          "nullable": false,
+          "primary_key": true,
+          "type": "VARCHAR(64)"
+        },
+        "name": {
+          "generated": "(data->>'name')",
+          "nullable": true,
+          "type": "TEXT"
+        },
+        "owner": {
+          "nullable": true,
+          "type": "VARCHAR(128)"
+        },
+        "shape": {
+          "nullable": false,
+          "type": "INTEGER"
+        },
+        "state": {
+          "nullable": false,
+          "type": "VARCHAR(64)"
+        },
+        "updated_at": {
+          "nullable": false,
+          "type": "TIMESTAMP WITH TIME ZONE"
+        },
+        "version": {
+          "nullable": false,
+          "type": "INTEGER"
+        }
+      },
+      "indexes": {
+        "ix_roles_name": [
+          "name"
+        ],
+        "ix_roles_owner": [
+          "owner"
+        ],
+        "ix_roles_state": [
+          "state"
+        ]
+      },
+      "unique": {
+        "uq_roles_name": [
+          "name"
+        ]
+      }
+    },
     "rotations": {
       "columns": {
         "created_at": {
@@ -555,6 +674,24 @@
         ]
       }
     },
+    "waymark3_cursors": {
+      "columns": {
+        "consumer": {
+          "nullable": false,
+          "primary_key": true,
+          "type": "VARCHAR(64)"
+        },
+        "last_id": {
+          "nullable": false,
+          "type": "BIGINT"
+        },
+        "updated_at": {
+          "nullable": false,
+          "type": "TIMESTAMP WITH TIME ZONE"
+        }
+      },
+      "indexes": {}
+    },
     "waymark3_drafts": {
       "columns": {
         "action": {
@@ -643,8 +780,30 @@
       },
       "indexes": {}
     },
+    "waymark3_job_leases": {
+      "columns": {
+        "expires_at": {
+          "nullable": false,
+          "type": "TIMESTAMP WITH TIME ZONE"
+        },
+        "job_id": {
+          "nullable": false,
+          "primary_key": true,
+          "type": "VARCHAR(64)"
+        },
+        "worker": {
+          "nullable": false,
+          "type": "VARCHAR(64)"
+        }
+      },
+      "indexes": {}
+    },
     "waymark3_transitions": {
       "columns": {
+        "acknowledged": {
+          "nullable": true,
+          "type": "JSONB"
+        },
         "action": {
           "nullable": false,
           "type": "VARCHAR(128)"

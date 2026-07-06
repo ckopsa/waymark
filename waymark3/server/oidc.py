@@ -249,7 +249,24 @@ class OIDCResolver:
 
         @router.get("/auth/logout")
         async def logout(request: Request) -> Any:
-            response = RedirectResponse("/", status_code=302)
+            # RP-initiated logout: an IdP that advertises
+            # end_session_endpoint gets the browser sent there (and back),
+            # so the IdP session dies with ours. The local cookie clears
+            # either way — an unreachable IdP must not pin a session.
+            target = "/"
+            try:
+                config = await self._configuration()
+            except Exception:
+                config = {}
+            end_session = config.get("end_session_endpoint")
+            if end_session:
+                from urllib.parse import urlencode
+
+                target = end_session + "?" + urlencode({
+                    "post_logout_redirect_uri": str(request.base_url),
+                    "client_id": self.client_id,
+                })
+            response = RedirectResponse(target, status_code=302)
             response.delete_cookie(SESSION_COOKIE)
             return response
 

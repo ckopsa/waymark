@@ -25,6 +25,9 @@ class TransitionRecord:
     correlation_id: str | None
     summary: str
     at: datetime
+    # names of warning guards the actor acknowledged past (design E1);
+    # None = nothing was overridden
+    acknowledged: list[str] | None = None
 
 
 @runtime_checkable

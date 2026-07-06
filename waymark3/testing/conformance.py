@@ -317,6 +317,66 @@ async def test_transition_truth_unavailable(wm3, wm3_action_case):
             f"{problem['detail']!r} != {doc['unavailable'][action]['reason']!r}")
 
 
+async def test_touch_truth(wm3, wm3_action_case):
+    """Declared touches (design E8) tell the truth twice: the advertised
+    entry carries the declaration's wire form, and the log's correlated
+    same-actor rows are exactly the declared touches (non-``may`` ones
+    must occur; undeclared ones cannot — the enforcer guarantees it, this
+    observes it). ``Delegated`` sets verify nothing here — the resource's
+    data is the declaration there."""
+    from ..core.touches import Advances, Creates, Delegated
+    from ..core.owns import owns_of
+
+    kind, state, action = wm3_action_case
+    rdef = wm3.registry[kind]
+    defn = rdef.machine.actions[action]
+    if not defn.touches:
+        pytest.skip("action declares no touches")
+    if any(isinstance(t, Delegated) for t in defn.touches):
+        pytest.skip("delegated touch set: the resource's data declares")
+    cases = await principals_with(wm3, kind, state, action, "actions")
+    if not cases:
+        pytest.skip(f"{action} not executable in {state} for any profile")
+
+    pname, instance, doc = cases[0]
+    assert doc["actions"][action]["effect"].get("touches") \
+        == [t.to_wire() for t in defn.touches], \
+        "the entry's effect must advertise the declared touches"
+    body = await build_input(wm3, kind, defn, instance)
+    res = await post(wm3, doc, defn, pname, body)
+    fail_if_needs_example(res, kind, defn)
+    assert res.status_code == 200, res.text
+
+    async with wm3.storage.session() as s:
+        root = await wm3.storage.last_transition(s, kind, instance.id)
+        story = await wm3.storage.transitions_by_correlation(
+            s, root.correlation_id)
+    actor = wm3.principals[pname].id
+    mine = [t for t in story if t.actor_id == actor
+            and not (t.kind == kind and t.resource_id == instance.id)]
+    # seeded descendants of created kinds are the child's own declaration
+    seeded = set()
+    for t in defn.touches:
+        if isinstance(t, Creates):
+            created = wm3.registry.get(t.kind)
+            for edge in owns_of(created.cls) if created else ():
+                if edge.seed is not None:
+                    seeded.add((edge.kind, "create"))
+    declared = {("create", t.kind) if isinstance(t, Creates)
+                else (t.action, t.kind) for t in defn.touches}
+    observed = {(t.action, t.kind) for t in mine
+                if (t.kind, t.action) not in seeded}
+    assert observed <= declared, (
+        f"undeclared touches reached the log: {observed - declared}")
+    required = {("create", t.kind) if isinstance(t, Creates)
+                else (t.action, t.kind)
+                for t in defn.touches if not t.may}
+    assert required <= observed, (
+        f"declared touches never happened: {required - observed} — "
+        "an advertised touch that cannot occur on a walked instance "
+        "needs may=True or a @state_factory that arranges it")
+
+
 # ── Safety truth ────────────────────────────────────────────────────────
 async def test_safety_idempotent_double_invoke(wm3, wm3_action_case):
     kind, state, action = wm3_action_case
@@ -902,6 +962,19 @@ async def test_migration_roundtrip(wm3):
                     f"migrated {table} has columns {sorted(got)}, declared "
                     f"{sorted(want)} — the emitted revision fell behind the "
                     "declaration")
+                # declared uniqueness (design E2) round-trips too
+                rows = await conn.execute(text(
+                    "SELECT constraint_name FROM "
+                    "information_schema.table_constraints WHERE "
+                    "table_schema = :s AND table_name = :t AND "
+                    "constraint_type = 'UNIQUE'"),
+                    {"s": scratch, "t": table})
+                got_uq = {r[0] for r in rows}
+                want_uq = set(spec.get("unique", {}))
+                assert want_uq <= got_uq, (
+                    f"migrated {table} lacks unique constraints "
+                    f"{sorted(want_uq - got_uq)} — the revision fell behind "
+                    "the declaration")
     finally:
         async with wm3.storage.engine.begin() as conn:
             await conn.execute(text(f'DROP SCHEMA IF EXISTS {scratch} CASCADE'))

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 import waymark3
 from waymark3 import Ctx, Resource, Safety, action
+from waymark3.core.vocab import Observed, Vocab, VocabField
 from waymark3.server.bus import InProcessBus
 from waymark3.server.engine import header_principal
 from waymark3.testing import per_worker_dsn
@@ -51,6 +52,22 @@ class Note(Resource):
         pass
 
 
+class RecipeData(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    themes: Vocab[str] = VocabField(
+        default_factory=list, open=True, facet=Observed(counts=True),
+        description="Theme nights this recipe serves")
+
+
+class Recipe(Resource):
+    kind = "recipe"
+    State = NoteState
+    Data = RecipeData
+    initial = NoteState.OPEN
+    terminal: set = set()
+    summary = "{data.name} · {state.label}"
+
+
 def H(pid: str, roles: str = "") -> dict[str, str]:
     h = {"X-Principal-Id": pid, "X-Principal-Display": pid.title()}
     if roles:
@@ -60,7 +77,7 @@ def H(pid: str, roles: str = "") -> dict[str, str]:
 
 @pytest.fixture
 async def env():
-    engine = waymark3.Engine(resources=[Note], storage=TEST_DSN,
+    engine = waymark3.Engine(resources=[Note, Recipe], storage=TEST_DSN,
                              principal=header_principal, services=None,
                              bus=InProcessBus(),
                              member_visibility="granted")
@@ -199,6 +216,9 @@ async def test_role_grants_reach_every_holder(env):
     await _note(dana, "Family recipes")
 
     admin = client("admin")
+    # the role must exist in the registry before a grant may name it
+    res = await _post(admin, "/api/roles", {"name": "reader"})
+    assert res.status_code == 201, res.text
     res = await _post(admin, "/api/grants",
                       {"holder_name": "Readers", "holder_kind": "role",
                        "holder_id": "reader"})
@@ -217,6 +237,94 @@ async def test_role_grants_reach_every_holder(env):
 
     # a member without the role stays restricted
     assert (await client("eve").get("/api/notes")).json()["data"]["total"] == 0
+
+
+async def test_facets_count_within_the_restricted_scope(env):
+    """Facet counts carry the same pushdown as the rows (design §9): a
+    member's counts cover owned + granted rows, never the whole table."""
+    engine, transport, client = env
+    dana, bob = client("dana"), client("bob")
+    await _post(dana, "/api/recipes", {"name": "Tacos", "themes": ["mexican"]})
+    await _post(dana, "/api/recipes",
+                {"name": "Fajitas", "themes": ["mexican", "soup"]})
+    await _post(bob, "/api/recipes", {"name": "Brisket", "themes": ["bbq"]})
+
+    listing = (await dana.get("/api/recipes")).json()
+    assert listing["data"]["total"] == 2
+    themes = listing["actions"]["query"]["input"]["properties"]["themes"]
+    assert themes["x-facets"] == {"mexican": 2, "soup": 1}
+
+    themes = (await bob.get("/api/recipes")).json()[
+        "actions"]["query"]["input"]["properties"]["themes"]
+    assert themes["x-facets"] == {"bbq": 1}
+
+
+async def test_secrets_render_only_for_their_owner(env):
+    """Engine kinds stay open as the negotiation surface, but a credential
+    is not negotiation material: grant tokens and subscription secrets
+    render only for the resource's owner (and, for its own grant, the
+    agent — the negotiation surface is the agent's to read)."""
+    engine, transport, client = env
+    dana, bob = client("dana"), client("bob")
+
+    res = await _post(dana, "/api/grants", {"holder_name": "Robo"})
+    grant_href = res.json()["self"]
+    token = res.json()["data"]["token"]
+    assert token, "the minting owner sees the credential"
+
+    doc = (await bob.get(grant_href)).json()
+    assert doc["data"]["holder_name"] == "Robo", "the surface stays open"
+    assert "token" not in doc["data"], "the credential is never rendered"
+    assert (await dana.get(grant_href)).json()["data"]["token"] == token
+
+    res = await _post(dana, "/api/subscriptions",
+                      {"url": "https://budget.example/hooks"})
+    sub_href = res.json()["self"]
+    assert res.json()["data"]["secret"].startswith("whsec_")
+    sub = (await bob.get(sub_href)).json()
+    assert sub["data"]["url"] == "https://budget.example/hooks"
+    assert "secret" not in sub["data"]
+
+    agent = AsyncClient(transport=transport, base_url="http://t",
+                        headers={"Authorization": f"Bearer {token}"})
+    own = (await agent.get(grant_href)).json()
+    assert own["data"]["token"] == token
+    await agent.aclose()
+
+
+async def test_member_approval_mode_runs_end_to_end(env):
+    """A member-held grant in approval mode routes the invocation through
+    an approval_request exactly like a token grant: bob's invoke 202s,
+    dana approves, bob runs — and the audit actor for the landed touch is
+    bob, the runner (design §9: same state machine, same audit)."""
+    engine, transport, client = env
+    dana, bob = client("dana"), client("bob")
+    shared = await _note(dana, "Approve to touch")
+    note_id = shared.rsplit("/", 1)[-1]
+    await _share(dana, bob, [note_id], actions={"touch": "approval"})
+
+    doc = (await bob.get(shared)).json()
+    assert doc["actions"]["touch"]["access"] == "approval"
+
+    res = await _act(bob, doc, "touch")
+    assert res.status_code == 202, res.text
+    approval = res.json()
+    assert approval["kind"] == "approval_request"
+    assert approval["data"]["target_action"] == "touch"
+
+    res = await _act(dana, (await dana.get(approval["self"])).json(), "approve")
+    assert res.status_code == 200, res.text
+
+    res = await _act(bob, (await bob.get(approval["self"])).json(), "run")
+    assert res.status_code == 200, res.text
+    ran = res.json()
+    assert ran["state"] == "closed"
+    assert ran["data"]["outcome"] == "Ran successfully."
+
+    async with engine.storage.session() as s:
+        last = await engine.storage.last_transition(s, "note", note_id)
+    assert last.action == "touch"
+    assert last.actor_id == "bob", "the runner is the accountable actor"
 
 
 async def test_delegation_attenuates_live(env):

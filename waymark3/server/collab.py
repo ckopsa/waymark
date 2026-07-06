@@ -137,7 +137,7 @@ class CollabRooms:
                         defn.name) == "none")
                 if not lapsed:
                     ctx = self.engine.invoker._ctx(principal, s, mode="probe")
-                    status, _, _ = await probe_transition(defn, instance, ctx)
+                    status, _, _, _ = await probe_transition(defn, instance, ctx)
                     lapsed = status != "available"
                 if lapsed:
                     room.members.pop(ws, None)
@@ -259,7 +259,7 @@ async def serve(engine: Any, ws: Any, rdef: Any, defn: Any,
         if instance.state not in defn.from_:
             await ws.close(code=4403)
             return
-        status, _, _ = await probe_transition(defn, instance, ctx)
+        status, _, _, _ = await probe_transition(defn, instance, ctx)
         if status != "available":
             await ws.close(code=4403)
             return

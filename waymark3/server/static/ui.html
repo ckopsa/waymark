@@ -846,6 +846,22 @@ async function actionDialog({name, entry, doc, onDone}) {
     form.append(input, el("div", {class:"field-error", id:"err_"+f.name}));
   }
 
+  // x-display.relation {op, with, side} (§5): comparison-related inputs
+  // constrain each other live — the left side of a<=b takes max from the
+  // right, the right takes min from the left (mirrored for >=/>)
+  for (const f of fields) {
+    const rel = f.display.relation;
+    if (!rel || rel.op === "==") continue;
+    const mine = form.elements[f.name], other = form.elements[rel.with];
+    if (!mine || !other || mine.tagName !== "INPUT") continue;
+    const lessOp = rel.op === "<=" || rel.op === "<";
+    const prop = (lessOp === (rel.side === "left")) ? "max" : "min";
+    const bound = () => other.value ? mine.setAttribute(prop, other.value)
+                                    : mine.removeAttribute(prop);
+    other.addEventListener("input", bound);
+    bound();
+  }
+
   const collect = () => {
     if (!entry.input) return null;
     const out = {};

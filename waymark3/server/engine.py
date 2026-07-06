@@ -65,9 +65,15 @@ class Engine:
         members: bool = True,
         webhooks: bool = True,
         member_visibility: str = "full",
+        attachments: bool = True,
+        blobs: Any = None,
+        blob_retention: str = "purge",
     ):
         if member_visibility not in ("full", "granted"):
             raise ValueError("member_visibility must be 'full' or 'granted'")
+        if blob_retention not in ("purge", "keep"):
+            raise ValueError("blob_retention must be 'purge' or 'keep'")
+        self.blob_retention = blob_retention
         # "granted" (design §9): human principals see what they own plus
         # what their member/role-held grants say — advertisement,
         # enforcement, and the collection SQL all read the same object.
@@ -93,9 +99,15 @@ class Engine:
             # identity is a resource (design §9): invite → first-login bind
             # → active, all ordinary audited transitions
             from .members import Member
+            from .roles import Role
 
             if "member" not in self.registry:
                 self.registry.register(Member)
+            # the role registry rides the same flag: roles are the other
+            # half of §9's identity surface, and grants' role_registered
+            # guard reads it
+            if "role" not in self.registry:
+                self.registry.register(Role)
         if webhooks:
             # the outbox is a product (design §10): subscriptions deliver
             # signed transition JSON to third parties
@@ -103,9 +115,22 @@ class Engine:
 
             if "subscription" not in self.registry:
                 self.registry.register(WebhookSubscription)
+        if attachments:
+            # bytes behind the envelope (design E5): metadata is a resource,
+            # the blob store is declared. The memory default is the dev
+            # resolver precedent — production wires a real store.
+            from .attachments import Attachment, MemoryBlobStore
+
+            if "attachment" not in self.registry:
+                self.registry.register(Attachment)
+            self.blobs = blobs if blobs is not None else MemoryBlobStore()
+        else:
+            self.blobs = blobs
         # cross-resource reference checks need every kind known (design §2)
         from ..core import checks
         checks.check_refs(self.registry)
+        checks.check_owns(self.registry)  # ownership edges too (design E4)
+        checks.check_touches(self.registry)  # declared touches (design E8)
         self.storage = (storage if isinstance(storage, PostgresStorage)
                         else PostgresStorage(storage, self.registry))
         self.services = services
@@ -240,9 +265,16 @@ class Engine:
                             targets[0], target_rdef, ctx=ctx,
                             depth=target_depth, base=self.base_path)
         drafts = await self.load_drafts_for(s, rdef, instance, ctx.principal)
+        rollups = None
+        from .owns import compute_rollups, has_rollups
+
+        if has_rollups(rdef):
+            computed = await compute_rollups(self.storage, s, rdef,
+                                             [instance.id])
+            rollups = computed.get(instance.id)
         return await render(instance, rdef, ctx=ctx, depth=depth,
                             base=self.base_path, embeds=embeds, drafts=drafts,
-                            resolved=True)
+                            resolved=True, rollups=rollups)
 
     async def startup(self) -> None:
         await self.storage.create_all()
@@ -262,8 +294,41 @@ class Engine:
 
             self.webhooks = WebhookDeliverer(self)
             self.webhooks.start(self.dispatcher)
+        # declared cascades ride the log (design E4); a no-edge registry
+        # starts nothing
+        from .owns import CascadeRunner
+
+        self.cascades = CascadeRunner(self)
+        self.cascades.start(self.dispatcher)
+        # purging retention rides the log (design E5): one consumer covers
+        # every invoke path, after commit, durably
+        self.blob_janitor = None
+        if "attachment" in self.registry and self.blob_retention == "purge":
+            from .attachments import BlobJanitor
+
+            self.blob_janitor = BlobJanitor(self)
+            self.blob_janitor.start(self.dispatcher)
+        # duplication's byte half rides the log too (design E5/E8): runs
+        # whenever attachments are on, whatever the retention
+        self.blob_copier = None
+        if "attachment" in self.registry:
+            from .attachments import BlobCopier
+
+            self.blob_copier = BlobCopier(self)
+            self.blob_copier.start(self.dispatcher)
+        # a queued/running job at boot has no live task — its worker died;
+        # cancel it honestly (design E6; jobs are per-process this wave)
+        from .jobs import sweep_orphan_jobs
+
+        await sweep_orphan_jobs(self)
 
     async def shutdown(self) -> None:
+        if getattr(self, "blob_copier", None) is not None:
+            await self.blob_copier.stop()
+        if getattr(self, "blob_janitor", None) is not None:
+            await self.blob_janitor.stop()
+        if getattr(self, "cascades", None) is not None:
+            await self.cascades.stop()
         if getattr(self, "webhooks", None) is not None:
             await self.webhooks.stop()
             self.webhooks = None

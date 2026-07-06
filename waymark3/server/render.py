@@ -33,10 +33,11 @@ from ..core.types import Allow, Ctx, Deny
 
 FORMAT_VERSION = "3"
 
+Warnings = list[tuple[Deny, Guard]]
 Probe = (
-    tuple[Literal["available"], None, None]
-    | tuple[Literal["unavailable"], Deny, Guard]
-    | tuple[Literal["hidden"], Deny, Guard]
+    tuple[Literal["available"], None, None, Warnings]
+    | tuple[Literal["unavailable"], Deny, Guard, Warnings]
+    | tuple[Literal["hidden"], Deny, Guard, Warnings]
 )
 
 
@@ -47,14 +48,21 @@ def make_etag(kind: str, id: str, version: int) -> str:
 async def probe_transition(defn: ActionDef, instance: Resource, ctx: Ctx,
                            *, resolved: bool = True) -> Probe:
     probe_ctx = _as_probe(ctx)
+    warnings: Warnings = []
     for g in defn.guards:
         if g.reads and not resolved:
             continue  # project(): ctx-dependent availability is resolve's job
         verdict, denier = await g.evaluate(instance, None, probe_ctx)
         if isinstance(verdict, Deny):
-            state = "hidden" if denier.hide else "unavailable"
-            return state, verdict, denier  # first Deny wins
-    return "available", None, None
+            if denier.severity == "warning":
+                # a warning does not un-advertise the action (design E1);
+                # it rides the entry so the client can confirm-with-reason
+                warnings.append((verdict, denier))
+                continue
+            if denier.hide:  # first refusal wins
+                return "hidden", verdict, denier, []
+            return "unavailable", verdict, denier, []
+    return "available", None, None, warnings
 
 
 async def probe_hidden_only(defn: ActionDef, instance: Resource, ctx: Ctx,
@@ -77,7 +85,8 @@ def _as_probe(ctx: Ctx) -> Ctx:
                session=ctx.session, locale=ctx.locale,
                correlation_id=ctx.correlation_id, mode="probe",
                _invoker=ctx._invoker, _reader=ctx._reader,
-               _finder=ctx._finder, _rate=ctx._rate, _creator=ctx._creator)
+               _finder=ctx._finder, _rate=ctx._rate, _creator=ctx._creator,
+               _actor_of=ctx._actor_of, _deferrer=ctx._deferrer)
 
 
 def _draft_advert(defn: ActionDef, rdef: ResourceDef, instance: Resource,
@@ -116,8 +125,15 @@ def _action_entry(defn: ActionDef, rdef: ResourceDef, href: str,
                   admitted: dict[str, list[Any]],
                   instance: Resource,
                   draft_row: dict[str, Any] | None,
-                  base: str) -> dict[str, Any]:
+                  base: str,
+                  warnings: "Warnings | None" = None) -> dict[str, Any]:
     entry: dict[str, Any] = {"method": "POST", "href": href}
+    if warnings:
+        # advisory guards (design E1): advertised, refusable-with-override —
+        # the entry says so up front, the same reason enforcement will give
+        entry["warnings"] = [{"name": g.name,
+                              "reason": g.render_reason(d, instance)}
+                             for d, g in warnings]
     schema: dict[str, Any] | None = None
     if defn.input is not None:
         schema = _admits_schema(rdef.action_schemas[defn.name][0], admitted)
@@ -456,6 +472,7 @@ async def render(
     embeds: dict[str, Any] | None = None,
     drafts: dict[Any, dict[str, Any]] | None = None,
     resolved: bool = True,
+    rollups: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Render the resource envelope.
 
@@ -491,7 +508,7 @@ async def render(
             unavailable[defn.name] = {"reason": NEGOTIATION_REASON}
             continue
         if instance.state in defn.from_:
-            status, deny, denier = await probe_transition(
+            status, deny, denier, warnings = await probe_transition(
                 defn, instance, ctx, resolved=resolved)
             if status == "available":
                 admitted = await _admitted_values(defn, instance, ctx,
@@ -501,7 +518,8 @@ async def render(
                     defn, instance, ctx, resolved=resolved)
                 entry = _action_entry(
                     defn, rdef, f"{self_href}/-/{defn.name}", admitted,
-                    instance, (drafts or {}).get((defn.name, "")), base)
+                    instance, (drafts or {}).get((defn.name, "")), base,
+                    warnings)
                 if mode == "approval":
                     entry["access"] = "approval"
                 actions[defn.name] = entry
@@ -556,6 +574,10 @@ async def render(
                                        admitted_by_action,
                                        relations_by_action, drafts, base)) else {}),
         "links": links,
+        # declared rollups (design E4): derived domain truth, kept apart
+        # from stored data. Scoped views drop them — a count over children
+        # the principal may not see is a leak (the display-drop precedent).
+        **({"rollups": rollups} if rollups is not None and vis.full else {}),
         # depth=summary is the agent default: presentation hints are
         # quarantined display-only payload, so agents don't pay for them.
         # A scoped view drops display entirely — its templates render over
@@ -621,6 +643,7 @@ async def render_collection(
     base: str = "/api",
     facets: dict[str, dict[str, int]] | None = None,
     resolved: bool = True,
+    rollups_by_id: dict[str, dict[str, int]] | None = None,
 ) -> dict[str, Any]:
     from urllib.parse import urlencode
 
@@ -640,7 +663,8 @@ async def render_collection(
     rendered_items: list[dict[str, Any]] = []
     for item in items:
         doc = await render(item, rdef, ctx=ctx, depth="summary", base=base,
-                           resolved=resolved)
+                           resolved=resolved,
+                           rollups=(rollups_by_id or {}).get(item.id))
         if not rdef.cls.row_affordances:
             doc["actions"] = None  # explicitly unknown, distinct from {} = none
             doc["unavailable"] = None

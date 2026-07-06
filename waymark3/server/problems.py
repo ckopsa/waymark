@@ -60,6 +60,25 @@ class WrongState(GuardRefused):
     slug = "wrong-state"
 
 
+class WarningRefused(GuardRefused):
+    """409: advisory guards denied and were not acknowledged (design E1).
+    The problem IS the override affordance: ``warnings`` carries each
+    guard's name and reason; ``acknowledge`` says how to proceed."""
+
+    slug = "warning-required"
+    title = "Acknowledgment required"
+
+
+class Conflict(Problem):
+    """409: a declared uniqueness group is already taken (design E2);
+    ``existing`` links the resource holding it — the refusal carries the
+    pointer, not just the no."""
+
+    slug = "already-exists"
+    title = "Already exists"
+    status = 409
+
+
 class VersionConflict(Problem):
     slug = "version-conflict"
     title = "Version conflict"

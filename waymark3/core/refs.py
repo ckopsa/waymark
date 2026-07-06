@@ -49,6 +49,16 @@ class Query(dict):
         super().__init__(params)
 
 
+@dataclass(frozen=True)
+class Predecessor:
+    """Period chaining (design E7): resolve this Ref at create to the
+    latest sibling by ``order`` (optionally within the same ``partition``
+    value) — the predecessor becomes data, not date arithmetic."""
+
+    order: str
+    partition: str | None = None
+
+
 def RefField(
     default: Any = ...,
     *,
@@ -56,6 +66,7 @@ def RefField(
     pick: Query | dict[str, str] | None = None,
     raw: bool = False,
     hidden: bool = False,
+    predecessor: Predecessor | None = None,
     **kwargs: Any,
 ) -> Any:
     """Field options for a ``Ref``-typed field.
@@ -65,6 +76,8 @@ def RefField(
     - ``pick`` — collection query params narrowing the picker.
     - ``raw`` — deliberate raw-id display (the acknowledged escape hatch).
     - ``hidden`` — machine-only plumbing, dropped from human display.
+    - ``predecessor`` — engine-resolved at create to the latest sibling
+      (design E7); a supplied value wins over resolution.
     """
     opts: dict[str, Any] = {}
     if label:
@@ -75,9 +88,19 @@ def RefField(
         opts["raw"] = True
     if hidden:
         opts["hidden"] = True
+    if predecessor is not None:
+        opts["predecessor"] = {"order": predecessor.order,
+                               "partition": predecessor.partition}
     extra = kwargs.pop("json_schema_extra", None) or {}
     extra["x-ref-opts"] = opts
     return Field(default, json_schema_extra=extra, **kwargs)
+
+
+def ref_predecessor(field_info: FieldInfo) -> Predecessor | None:
+    spec = ref_opts(field_info).get("predecessor")
+    if not isinstance(spec, dict):
+        return None
+    return Predecessor(order=spec["order"], partition=spec.get("partition"))
 
 
 def ref_meta(field_info: FieldInfo) -> RefMeta | None:

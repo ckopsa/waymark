@@ -83,6 +83,11 @@ def VocabField(
         spec["values"] = list(values)
     extra = kwargs.pop("json_schema_extra", None) or {}
     extra["x-vocab"] = spec
+    if not open:
+        # a closed vocabulary is an enum that also facets (design §6): the
+        # declared members ARE the item schema; enforcement reads the same
+        # declaration in the invoker's validate step
+        extra["items"] = {"type": "string", "enum": list(values or ())}
     return Field(default, json_schema_extra=extra, **kwargs)
 
 
@@ -103,3 +108,21 @@ def model_vocabs(model: type[BaseModel]) -> dict[str, dict[str, Any]]:
         if spec is not None:
             out[name] = spec
     return out
+
+
+def closed_vocab_errors(model: type[BaseModel],
+                        inst: BaseModel) -> dict[str, list[str]]:
+    """Members outside a closed vocabulary's declared set, per field —
+    the enforcement half of the ``items.enum`` the schema advertises."""
+    errors: dict[str, list[str]] = {}
+    for name, spec in model_vocabs(model).items():
+        if spec.get("open", True):
+            continue
+        allowed = set(spec.get("values") or ())
+        unknown = sorted({str(v) for v in (getattr(inst, name, None) or ())
+                          if v not in allowed})
+        if unknown:
+            errors[name] = [f"not in the declared vocabulary: "
+                            f"{', '.join(unknown)} (declared: "
+                            f"{', '.join(sorted(allowed))})"]
+    return errors

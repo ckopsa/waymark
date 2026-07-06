@@ -53,6 +53,7 @@ from pydantic.json_schema import SkipJsonSchema
 
 from ..core.actions import Edit, action
 from ..core.guards import Guard
+from ..core.touches import Delegated
 from ..core.resource import Resource, filterable
 from ..core.types import Acknowledged, Allow, Ctx, Deny, Safety
 
@@ -188,6 +189,57 @@ no_self_dealing = Guard(
     check=_not_the_holder,
 )
 
+ROLE_MISSING = ("No active role named {role}. A grant to an unregistered "
+                "role would grant nobody, silently — create the role first, "
+                "then grant to it.")
+
+
+async def _active_role_named(ctx: Ctx, name: str | None) -> bool:
+    if not name:
+        return False
+    try:
+        found = await ctx.find("role", name=name, state="active", limit=1)
+    except Exception:  # roles not registered on this engine: nothing matches
+        return False
+    return bool(found)
+
+
+async def _role_is_registered(r: Any, inp: Any, ctx: Ctx) -> Allow | Deny:
+    if r.data.holder_kind != "role":
+        return Allow()
+    if await _active_role_named(ctx, r.data.holder_id):
+        return Allow()
+    return Deny(vars={"role": r.data.holder_id})
+
+# the silent-grant gap (design §9): a role holder must name a registered,
+# active role resource — checked here for amendments and, over the create
+# input, by role_registered_create (design E9)
+role_registered = Guard(
+    name="role_registered", reads=("role",),
+    explain=ROLE_MISSING, vars=("role",),
+    check=_role_is_registered,
+    remedies=("role.create",),
+)
+
+
+async def _role_is_registered_create(r: Any, inp: Any, ctx: Ctx) -> Allow | Deny:
+    # a create guard's check runs with r=None (design E9): the holder is
+    # read off the validated create input
+    if inp.holder_kind != "role":
+        return Allow()
+    if await _active_role_named(ctx, inp.holder_id):
+        return Allow()
+    return Deny(vars={"role": inp.holder_id})
+
+# the same rule at create (design E9): a grant to an unregistered role
+# cannot exist even for a moment
+role_registered_create = Guard(
+    name="role_registered", reads=("role",),
+    explain=ROLE_MISSING, vars=("role",),
+    check=_role_is_registered_create,
+    remedies=("role.create",),
+)
+
 
 class Grant(Resource):
     kind = "grant"
@@ -207,6 +259,8 @@ class Grant(Resource):
 
     display = {"title": "Grant — {data.holder_name}"}
 
+    create_guards = (role_registered_create,)
+
     async def on_create(self, ctx: Ctx) -> None:
         if self.data.holder_kind == "token":
             # the token resolves to this exact actor id
@@ -219,6 +273,7 @@ class Grant(Resource):
     @action(from_={GrantState.DRAFT, GrantState.GRANTED},
             to=GrantState.REQUESTED,
             input=RequestAccessInput,
+            guards=[role_registered],
             edit=Edit(prefill=("task", "requested_fields",
                                "requested_actions", "requested_args",
                                "requested_hours")),
@@ -357,6 +412,9 @@ class ApprovalRequest(Resource):
         pass
 
     @action(from_=ApprovalState.APPROVED, to=ApprovalState.CLOSED,
+            touches=(Delegated(
+                "The approved proposal's data names the target; the human's "
+                "approve is the consent this run replays."),),
             safety=Safety(idempotent=True, reversible=False, confirm=False,
                           one_way=Acknowledged(
                               "Runs exactly what a human just approved; the "
@@ -586,8 +644,12 @@ class MemberVisibility:
 
     full = False
 
-    OPEN_KINDS = frozenset({"grant", "approval_request", "member",
+    OPEN_KINDS = frozenset({"grant", "approval_request", "member", "role",
                             "subscription", "job"})
+    # open kinds are the negotiation surface, but a credential is not
+    # negotiation material: it renders only for the resource's owner
+    # (an agent reads its own via GrantVisibility's negotiation surface)
+    SECRET_FIELDS = frozenset({("grant", "token"), ("subscription", "secret")})
 
     def __init__(self, principal_id: str, grants: list[Any], now: datetime):
         self.principal_id = principal_id
@@ -605,6 +667,8 @@ class MemberVisibility:
               owner: str | None = None) -> str:
         from ..core.visibility import FIELD_RANK
 
+        if (kind, name) in self.SECRET_FIELDS and not self.owns(owner):
+            return "hidden"
         if kind in self.OPEN_KINDS or self.owns(owner):
             return "clear"
         mode = "hidden"

@@ -37,10 +37,26 @@ from ..core.types import Acknowledged, Allow, Ctx, Deny, Principal, Safety
 
 
 class ServiceDown(RuntimeError):
-    def __init__(self, name: str, retry_at: datetime):
+    def __init__(self, name: str, retry_at: datetime,
+                 cause: str | None = None):
         super().__init__(f"service {name!r} is down; retry at {retry_at}")
         self.name = name
         self.retry_at = retry_at
+        # what the adapter actually raised — job artifacts record it
+        # (design E6); the unavailable rendering still says only retry_at
+        self.cause = cause
+
+
+class ServiceCallError(RuntimeError):
+    """One call failed against a service declared ``down_on_error=False``:
+    the failure belongs to the call, not the service — no outage, no
+    backoff, the service stays up (design E6: intake's independent
+    sub-imports, where one malformed export is not a Beacon outage)."""
+
+    def __init__(self, name: str, cause: str):
+        super().__init__(f"service {name!r} call failed: {cause}")
+        self.name = name
+        self.cause = cause
 
 
 class Service:
@@ -51,14 +67,21 @@ class Service:
     and every action guarded by :func:`service_up` renders
     ``unavailable`` with that ``retry_at`` until then. Conformance gets a
     stub for free — swap ``handler``; it is the only seam.
+
+    ``down_on_error=False`` declares failures independent (design E6):
+    a failed call raises :class:`ServiceCallError` with the adapter's own
+    words and the service stays up — for intake-shaped imports where one
+    malformed artifact is not an outage.
     """
 
     def __init__(self, name: str, handler: Any = None, *,
-                 timeout: float = 10.0, backoff_seconds: float = 60.0):
+                 timeout: float = 10.0, backoff_seconds: float = 60.0,
+                 down_on_error: bool = True):
         self.name = name
         self.handler = handler
         self.timeout = timeout
         self.backoff_seconds = backoff_seconds
+        self.down_on_error = down_on_error
         self.down_until: datetime | None = None
 
     def up(self, now: datetime) -> bool:
@@ -77,9 +100,14 @@ class Service:
             return out
         except ServiceDown:
             raise
-        except Exception:
+        except Exception as exc:
+            cause = f"{type(exc).__name__}: {exc}"[:240]
+            if not self.down_on_error:
+                # the failure is the call's, not the service's (design E6)
+                raise ServiceCallError(self.name, cause) from None
             self.down_until = now + timedelta(seconds=self.backoff_seconds)
-            raise ServiceDown(self.name, self.down_until) from None
+            raise ServiceDown(self.name, self.down_until,
+                              cause=cause) from None
 
 
 def service_up(service: Service, *, explain: str | None = None) -> Guard:

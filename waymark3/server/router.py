@@ -349,18 +349,25 @@ def build_router(engine: Any) -> APIRouter:
             faceted = [f for f in ("state", *rdef.cls.faceted)
                        if rdef.cls.filterable
                        and f in rdef.cls.filterable.fields]
-            if faceted and restrict is None:
-                # facets are storage-wide counts; a restricted view gets
-                # none rather than a leak
-                facets = {f: await engine.storage.facets(s, rdef.kind, f)
+            if faceted:
+                # facet counts carry the same pushdown as the rows (design
+                # §9): a restricted principal counts owned + granted, no leak
+                facets = {f: await engine.storage.facets(s, rdef.kind, f,
+                                                         restrict=restrict)
                           for f in dict.fromkeys(faceted)}
+            rollups_by_id = None
+            from .owns import compute_rollups, has_rollups
+
+            if has_rollups(rdef):
+                rollups_by_id = await compute_rollups(
+                    engine.storage, s, rdef, [i.id for i in items])
             ctx = engine.invoker._ctx(principal, s, mode="probe")
             from .render import render_collection
 
             return await render_collection(
                 rdef, items, ctx=ctx, total=total, page_size=page_size,
                 page_number=page_number, applied_query=parsed, base=base,
-                facets=facets)
+                facets=facets, rollups_by_id=rollups_by_id)
 
     @router.get("/-/lookup/{plural}")
     @_wire
@@ -409,7 +416,8 @@ def build_router(engine: Any) -> APIRouter:
         result = await engine.invoker.create(
             rdef.kind, body, principal=principal,
             idempotency_key=request.headers.get("Idempotency-Key"),
-            dry_run=request.query_params.get("dry_run") in ("1", "true"))
+            dry_run=request.query_params.get("dry_run") in ("1", "true"),
+            acknowledged=_acknowledged(request))
         return _doc_response(result)
 
     async def _resource_doc(rdef: ResourceDef, id: str, request: Request,
@@ -459,6 +467,62 @@ def build_router(engine: Any) -> APIRouter:
         return Response(content=json.dumps(doc, default=str),
                         media_type=MEDIA_TYPE, headers=headers)
 
+    if "attachment" in registry:
+        # bytes behind the envelope (design E5): two dedicated routes; the
+        # metadata resource stays the truth, stamped by a system transition
+        @router.put("/attachments/{id}/bytes")
+        @_wire
+        async def put_bytes(id: str, request: Request) -> Response:
+            from .attachments import BYTES_ACTOR, sha256_hex
+            from .invoke import make_etag
+            from .problems import GuardRefused
+
+            principal = await engine.resolve_principal(request)
+            rdef = registry["attachment"]
+            async with engine.storage.session() as s:
+                instance = await engine.storage.load(s, "attachment", id)
+            if instance is None:
+                raise NotFound(f"No attachment {id!r}.")
+            # the uploader must hold the resource: same act gate as any write
+            member_vis = getattr(principal, "visibility", None)
+            if member_vis is not None and member_vis.action(
+                    "attachment", "mark_uploaded", id,
+                    owner=instance.owner) == "none":
+                raise Forbidden(SCOPE_REASON, action_attempted="upload")
+            if instance.state != "reserved":
+                raise GuardRefused(
+                    "Bytes are written once, into a reserved attachment — "
+                    "reserve a new one to replace the file.",
+                    action_attempted="upload", state=instance.state)
+            data = await request.body()
+            await engine.blobs.put(id, data)
+            result = await engine.invoker.invoke(
+                "attachment", id, "mark_uploaded",
+                {"size": len(data), "sha256": sha256_hex(data)},
+                principal=BYTES_ACTOR,
+                if_match=make_etag("attachment", id, instance.version))
+            return _doc_response(result)
+
+        @router.get("/attachments/{id}/bytes")
+        @_wire
+        async def get_bytes(id: str, request: Request) -> Response:
+            principal = await engine.resolve_principal(request)
+            async with engine.storage.session() as s:
+                instance = await engine.storage.load(s, "attachment", id)
+            if instance is None or instance.state != "uploaded":
+                raise NotFound(f"No uploaded attachment {id!r}.")
+            from .grants import visibility_of
+
+            vis = visibility_of(principal, _now())
+            if vis.field("attachment", "name", id, instance.owner) == "hidden":
+                raise NotFound(f"No uploaded attachment {id!r}.")
+            data = await engine.blobs.get(id)
+            if data is None:
+                raise NotFound(f"The bytes for attachment {id!r} are gone.")
+            return Response(content=data, media_type=instance.data.mime,
+                            headers={"Content-Disposition":
+                                     f'attachment; filename="{instance.data.name}"'})
+
     @router.post("/{plural}/-/{action}")
     @_wire
     async def bulk(plural: str, action: str, request: Request) -> Response:
@@ -467,7 +531,8 @@ def build_router(engine: Any) -> APIRouter:
         body = await _json_body(request)
         result = await engine.invoker.bulk(
             rdef.kind, action, body, principal=principal,
-            idempotency_key=request.headers.get("Idempotency-Key"))
+            idempotency_key=request.headers.get("Idempotency-Key"),
+            acknowledged=_acknowledged(request))
         return _doc_response(result)
 
     # ── the draft sub-resource (design §4) ──────────────────────────────
@@ -692,7 +757,8 @@ def build_router(engine: Any) -> APIRouter:
             rdef.kind, id, action, body, principal=principal,
             if_match=request.headers.get("If-Match"),
             idempotency_key=request.headers.get("Idempotency-Key"),
-            dry_run=dry_run)
+            dry_run=dry_run,
+            acknowledged=_acknowledged(request))
         if result.consumed_draft is not None:
             # the invoke consumed the draft (invoker decided, from the
             # declaration); the room — on every worker — is over
@@ -711,6 +777,13 @@ def build_router(engine: Any) -> APIRouter:
         return _doc_response(result)
 
     return router
+
+
+def _acknowledged(request: Request) -> frozenset[str]:
+    """Waymark-Acknowledge: comma-separated warning-guard names the caller
+    accepts responsibility for (design E1). Recorded on the transition."""
+    raw = request.headers.get("Waymark-Acknowledge") or ""
+    return frozenset(n.strip() for n in raw.split(",") if n.strip())
 
 
 async def _json_body(request: Request) -> dict[str, Any] | None:

@@ -82,14 +82,18 @@ def _id_token(sub: str, email: str, name: str) -> str:
         _KEY, algorithm="RS256", headers={"kid": "k1"})
 
 
-def _fake_idp(sub: str, email: str, name: str) -> AsyncClient:
+def _fake_idp(sub: str, email: str, name: str,
+              end_session: bool = False) -> AsyncClient:
     def handler(request):
         if request.url.path.endswith("openid-configuration"):
-            return Response(200, json={
+            config = {
                 "authorization_endpoint": f"{ISSUER}/auth",
                 "token_endpoint": f"{ISSUER}/token",
                 "jwks_uri": f"{ISSUER}/certs",
-            })
+            }
+            if end_session:
+                config["end_session_endpoint"] = f"{ISSUER}/logout"
+            return Response(200, json=config)
         if request.url.path.endswith("/token"):
             return Response(200, json={
                 "id_token": _id_token(sub, email, name),
@@ -206,6 +210,47 @@ async def test_oidc_uninvited_is_refused(env):
     res = await browser.get(f"/auth/callback?code=xyz&state={state}")
     assert res.status_code == 403
     assert "invited" in res.json()["detail"]
+
+
+async def test_logout_ends_the_idp_session_too(env):
+    """RP-initiated logout: an IdP advertising end_session_endpoint gets
+    the browser (302) with post_logout_redirect_uri + client_id; the local
+    session cookie clears in the same response."""
+    engine, app, admin = env
+    oidc = OIDCResolver(issuer=ISSUER, client_id="mealplan",
+                        session_secret="s3cret",
+                        http=_fake_idp("idp|mom", "mom@example.com", "Grandma",
+                                       end_session=True),
+                        jwks_client=_FakeJWKSClient())
+    app.include_router(oidc.routes(engine))
+    browser = AsyncClient(transport=ASGITransport(app=app),
+                          base_url="http://t")
+    res = await browser.get("/auth/logout")
+    assert res.status_code == 302
+    from urllib.parse import parse_qs, urlsplit
+
+    parts = urlsplit(res.headers["location"])
+    assert res.headers["location"].startswith(f"{ISSUER}/logout?")
+    q = parse_qs(parts.query)
+    assert q["client_id"] == ["mealplan"]
+    assert q["post_logout_redirect_uri"] == ["http://t/"]
+    set_cookie = res.headers.get("set-cookie", "")
+    assert SESSION_COOKIE in set_cookie, "the local session clears too"
+
+
+async def test_logout_without_end_session_endpoint_stays_local(env):
+    engine, app, admin = env
+    oidc = OIDCResolver(issuer=ISSUER, client_id="mealplan",
+                        session_secret="s3cret",
+                        http=_fake_idp("idp|mom", "mom@example.com", "Grandma"),
+                        jwks_client=_FakeJWKSClient())
+    app.include_router(oidc.routes(engine))
+    browser = AsyncClient(transport=ASGITransport(app=app),
+                          base_url="http://t")
+    res = await browser.get("/auth/logout")
+    assert res.status_code == 302
+    assert res.headers["location"] == "/"
+    assert SESSION_COOKIE in res.headers.get("set-cookie", "")
 
 
 async def test_tampered_session_is_anonymous(env):
