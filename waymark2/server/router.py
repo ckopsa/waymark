@@ -77,7 +77,7 @@ def parse_query(rdef: ResourceDef, params: Any) -> dict[str, Any]:
     errors: dict[str, list[str]] = {}
     fspec = rdef.cls.filterable
     for name, raw in params.items():
-        if name in ("depth", "dry_run", "part"):
+        if name in ("depth", "dry_run", "part", "peek"):
             continue
         schema = props.get(name)
         if schema is None:
@@ -299,6 +299,13 @@ def build_router(engine: Any) -> APIRouter:
             for a in (body or {}))
         return arg_approval, missing
 
+    def _is_peek(request: Request) -> bool:
+        """``peek=1`` declares a sub-document resolution — a client filling
+        in a ref label or a picker's options, not a principal going
+        somewhere. Peeks never announce presence: a follower's screen goes
+        where the followed *looks*, and a peek is the client's plumbing."""
+        return request.query_params.get("peek") in ("1", "true")
+
     async def _announce_view(principal: Principal, kind: str, self_href: str,
                              action: str | None = None,
                              via: str | None = None) -> None:
@@ -351,8 +358,11 @@ def build_router(engine: Any) -> APIRouter:
                 rdef, items, ctx=ctx, total=total, page_size=page_size,
                 page_number=page_number, applied_query=parsed, base=base,
                 facets=facets)
-        await _announce_view(principal, f"{rdef.kind}_collection",
-                             f"{base}/{rdef.plural}")
+        if not _is_peek(request):
+            # doc["self"] keeps the applied filters, so a follower lands on
+            # the same slice the followed principal is actually looking at
+            await _announce_view(principal, f"{rdef.kind}_collection",
+                                 doc["self"])
         grant = _scope(principal)
         if grant is not None:
             doc = apply_scope(doc, grant, _now())
@@ -401,7 +411,8 @@ def build_router(engine: Any) -> APIRouter:
             ctx = engine.invoker._ctx(principal, s, mode="probe")
             doc = await engine.render_with_depth(s, instance, rdef, ctx=ctx,
                                                  depth=depth)
-        await _announce_view(principal, rdef.kind, doc["self"])
+        if not _is_peek(request):
+            await _announce_view(principal, rdef.kind, doc["self"])
         grant = _scope(principal)
         if grant is not None:
             doc = apply_scope(doc, grant, _now())

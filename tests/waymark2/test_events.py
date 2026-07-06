@@ -214,6 +214,34 @@ async def test_presence_streams_navigation(env):
     assert "id" not in events[0], "presence events carry no resumable id"
 
 
+async def test_presence_ignores_peeks(env):
+    """``peek=1`` declares a sub-document resolution (a ref label, a
+    picker's options) — the client's plumbing, not the principal going
+    somewhere. Peeks never appear on the presence stream, so a follower's
+    screen is not yanked toward every reference the page resolves."""
+    engine, client = env
+    self_href = await _create(client)
+
+    async def navigate():
+        await asyncio.sleep(0.2)
+        # peeks first — at the resource and the collection — then a real view
+        await client.get(self_href + "?depth=summary&peek=1", headers=OWNER)
+        await client.get("/api/tickets?peek=1", headers=OWNER)
+        await client.get(self_href, headers=OWNER)
+
+    async with client.stream("GET", "/api/-/presence?actor=dana",
+                             headers=OWNER, timeout=15) as response:
+        assert response.status_code == 200
+        task = asyncio.create_task(navigate())
+        events = await asyncio.wait_for(read_sse_events(response, 1),
+                                        timeout=10)
+        await task
+
+    # the first (and only) event is the real view; the peeks never streamed
+    payload = json.loads(events[0]["data"])
+    assert payload["self"] == self_href
+
+
 async def test_presence_streams_form_engagement(env):
     """Form engagement is derived from wire facts the server already sees —
     a dry-run is 'someone is filling this form' — never from

@@ -699,7 +699,7 @@ function resourceRef(kind, id, text) {
     const col = w.collections?.[kind];
     if (!col) return;
     a.href = "#" + col + "/" + id;
-    if (!text) api(`${col}/${id}?depth=summary`).then(({res, body}) => {
+    if (!text) api(`${col}/${id}?depth=summary&peek=1`).then(({res, body}) => {
       if (res.ok && body.summary) a.textContent = body.summary;
     }).catch(() => {});
   });
@@ -730,8 +730,9 @@ async function populateResourceOptions(input, kind, params) {
   const index = await wellKnown();
   let href = index.collections?.[kind];
   if (!href) return;
-  if (params) href += (href.includes("?") ? "&" : "?") +
-    new URLSearchParams(params);
+  // peek: option-filling is plumbing, not the principal going anywhere
+  href += (href.includes("?") ? "&" : "?") +
+    new URLSearchParams({...(params || {}), peek: "1"});
   const {res, body} = await api(href);
   if (!res.ok) return;
   for (const item of body.data.items || [])
@@ -1157,7 +1158,7 @@ async function presenceLoop(id, ctl) {
               : ev.via === "discard" ? ` · discarded '${pretty(ev.action)}' draft`
               : ev.via === "dry_run" ? ` · filling '${pretty(ev.action)}'`
               : ` · in '${pretty(ev.action)}' form`;
-          const here = location.hash.slice(1).split("?")[0];
+          const here = location.hash.slice(1);
           if (ev.self && ev.self !== here && !$("#dlg").open)
             location.hash = "#" + ev.self;
         }
