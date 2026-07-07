@@ -469,3 +469,173 @@ async def w3_make_grocery_list(state: str, engine, services) -> GroceryList3:
 @w3_example_input(GroceryList3, "remove_item")
 def w3_remove_item_example(services) -> dict:
     return {"name": "paper towels"}
+
+
+# ── Meal-plan app on waymark4 (the 4.0 dogfood: same app, v4 declarations) ──
+
+import waymark4  # noqa: E402
+from waymark4.testing import (  # noqa: E402
+    conformance_resource as w4_conformance_resource,
+    example_input as w4_example_input,
+    state_factory as w4_state_factory,
+)
+from mealplan4.resources.grocery_list import (  # noqa: E402
+    GroceryList as GroceryList4, GroceryState as GroceryState4)
+from mealplan4.resources.meal import Meal as Meal4  # noqa: E402
+from mealplan4.resources.plan import (  # noqa: E402
+    MealPlan as MealPlan4, PlanState as PlanState4)
+from mealplan4.resources.prep_task import PrepTask as PrepTask4  # noqa: E402
+from mealplan4.resources.rotation import (  # noqa: E402
+    SundayRotation as SundayRotation4)
+
+
+@pytest.fixture
+async def waymark4_engine():
+    from waymark4.server.bus import InProcessBus
+
+    engine = waymark4.Engine(
+        resources=[Meal4, SundayRotation4, MealPlan4, GroceryList4, PrepTask4],
+        storage=TEST_DSN, services=SuiteServices(), bus=InProcessBus())
+    await engine.storage.drop_all()
+    await engine.startup()
+    try:
+        yield engine
+    finally:
+        await engine.shutdown()
+
+
+w4_conformance_resource(Meal4)
+w4_conformance_resource(SundayRotation4)
+w4_conformance_resource(PrepTask4)
+
+# 4.0 engine kinds: ordinary resources, ordinary conformance
+from waymark4.server.attachments import (  # noqa: E402
+    Attachment as Attachment4W, BYTES_ACTOR as BYTES_ACTOR4W,
+)
+from waymark4.server.members import Member as Member4W  # noqa: E402
+from waymark4.server.roles import Role as Role4W  # noqa: E402
+from waymark4.server.subscriptions import (  # noqa: E402
+    WebhookSubscription as Subscription4W,
+)
+
+w4_conformance_resource(Member4W)
+w4_conformance_resource(Role4W)
+w4_conformance_resource(Subscription4W)
+
+
+# an attachment's create must name a live target, so its states need a
+# factory rather than a schema-synthesized create (design E5)
+@w4_state_factory(Attachment4W)
+async def w4_make_attachment(state: str, engine, services) -> Attachment4W:
+    mid = await _mk(engine, "meal", {"name": "Attachment target",
+                                     "themes": ["mexican"]})
+    services.seeded["attachment_target"] = mid
+    aid = await _mk(engine, "attachment", {
+        "resource_kind": "meal", "resource_id": mid,
+        "name": "recipe.pdf", "mime": "application/pdf"})
+    if state in ("uploaded", "removed"):
+        await engine.invoker.invoke(
+            "attachment", aid, "mark_uploaded",
+            {"size": 3, "sha256": "a" * 64}, principal=BYTES_ACTOR4W)
+    if state == "removed":
+        await _step(engine, "attachment", aid, "remove")
+    return await _load(engine, "attachment", aid)
+
+
+@w4_example_input(Attachment4W, "duplicate")
+def w4_attachment_duplicate_example(services) -> dict:
+    # a synthesized target would dangle; duplicate onto the factory's meal
+    return {"resource_kind": "meal",
+            "resource_id": services.seeded["attachment_target"]}
+
+
+@w4_example_input(Role4W, "create")
+def w4_role_create_example(services) -> dict:
+    # role names are declared unique (design E2); the walker may create
+    # several per test, so the example must mint fresh spellings
+    return {"name": f"reader-{uuid.uuid4().hex[:8]}",
+            "description": "May read shared note titles"}
+
+
+@w4_example_input(Member4W, "create")
+def w4_member_create_example(services) -> dict:
+    return {"email": "mom@example.com", "display_name": "Grandma",
+            "roles": ["reader"]}
+
+
+@w4_example_input(Subscription4W, "create")
+def w4_subscription_create_example(services) -> dict:
+    return {"url": "https://budget.example/hooks", "kinds": ["plan"]}
+
+
+@w4_example_input(Meal4, "create")
+def w4_meal_create_example(services) -> dict:
+    # 4.0 speaks only the current shape on the wire; the single-theme era
+    # is a declared upcast (Meal4.shape/upcasts), not a payload dialect
+    return {"name": "Carnitas tacos", "themes": ["mexican"],
+            "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
+            "prep_minutes": 45, "thaw_hours": 12}
+
+
+@w4_example_input(PrepTask4, "create")
+def w4_prep_task_create_example(services) -> dict:
+    return prep_task_create_example(services)
+
+
+async def _listed_meal3(engine, services) -> str:
+    mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
+                                     "themes": ["mexican"]})
+    await _step(engine, "meal", mid, "accept")
+    services.seeded["meal_id"] = mid
+    return mid
+
+
+@w4_state_factory(MealPlan4)
+async def w4_make_plan(state: str, engine, services) -> MealPlan4:
+    rid = await _mk(engine, "rotation", {})
+    await _listed_meal3(engine, services)
+    pid = await _mk(engine, "plan", {"start_date": PLAN_START.isoformat(),
+                                     "weeks": 1, "rotation_id": rid})
+    services.seeded["plan_id"] = pid
+    target = PlanState4(state)
+    if target == PlanState4.ABANDONED:
+        await _step(engine, "plan", pid, "abandon")
+    elif target != PlanState4.DRAFT:
+        for i in range(7):
+            await _step(engine, "plan", pid, "mark_eating_out",
+                        {"date": (PLAN_START + timedelta(days=i)).isoformat()})
+        await _step(engine, "plan", pid, "finalize")
+        if target in (PlanState4.ACTIVE, PlanState4.DONE):
+            await _step(engine, "plan", pid, "begin")
+        if target == PlanState4.DONE:
+            await _step(engine, "plan", pid, "complete")
+    return await _load(engine, "plan", pid)
+
+
+# assign_meal needs no example: its Relation's tuple set feeds the
+# synthesizer (waymark4.testing.factories.synthesize_input)
+@w4_example_input(MealPlan4, "assign_off_theme")
+def w4_assign_off_theme_example(services) -> dict:
+    return {"date": PLAN_START.isoformat(), "meal_id": services.seeded["meal_id"]}
+
+
+@w4_state_factory(GroceryList4)
+async def w4_make_grocery_list(state: str, engine, services) -> GroceryList4:
+    plan = await w4_make_plan(PlanState4.PLANNED, engine, services)
+    gid = await _mk(engine, "grocery_list",
+                    {"plan_id": plan.id, "items": GROCERY_ITEMS})
+    target = GroceryState4(state)
+    if target != GroceryState4.DRAFT:
+        await _step(engine, "grocery_list", gid, "finalize")
+    if target == GroceryState4.DONE:
+        for item in GROCERY_ITEMS:
+            await _step(engine, "grocery_list", gid, "check_item",
+                        {"name": item["name"]})
+        await _step(engine, "grocery_list", gid, "complete")
+    return await _load(engine, "grocery_list", gid)
+
+
+@w4_example_input(GroceryList4, "remove_item")
+def w4_remove_item_example(services) -> dict:
+    return {"name": "paper towels"}
+

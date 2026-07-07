@@ -50,6 +50,9 @@ test: db  ## framework tests (xdist: one database per worker)
 conformance: db  ## conformance suite against the example app
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark -n auto
 
+conformance4: db  ## waymark4 conformance against the mealplan4 dogfood
+	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark4 -n auto
+
 conformance3: db  ## waymark3 conformance against the mealplan3 dogfood
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark3 -n auto
 
