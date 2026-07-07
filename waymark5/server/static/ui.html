@@ -162,6 +162,48 @@
   .unavail { margin-top: 10px; }
   .unavail .item { color: var(--muted); font-size: 13px; padding: 3px 0; }
   .unavail .item b { color: var(--ink); font-weight: 600; }
+
+  /* remedies: the wire names the way out as "kind.action" chips — a walk
+     to the button when the action is on this page, a link to the kind's
+     collection for a create, plain mono text when neither resolves
+     (never a dead link) */
+  .remedies { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+  a.chip.remedy, button.chip.remedy {
+    background: var(--verdigris-wash); color: var(--verdigris-deep);
+    border: 1px solid var(--verdigris-wash); }
+  a.chip.remedy:hover, button.chip.remedy:hover {
+    border-color: var(--verdigris); text-decoration: none; }
+  /* an action the wire's own remedies point at: it keeps its style and
+     gains a quiet ring plus the "suggested" marker — emphasis only,
+     nothing is demoted */
+  button.suggested { border-color: var(--verdigris);
+                     box-shadow: 0 0 0 2px var(--verdigris-wash); }
+  .suggest-chip { font: 600 9.5px var(--sans); border-radius: 3px;
+                  padding: 1px 5px; margin-left: 6px; vertical-align: 1px;
+                  background: var(--verdigris-wash);
+                  color: var(--verdigris-deep); }
+  button.primary .suggest-chip { background: rgba(255,255,255,.25);
+                                 color: #fff; }
+  /* the remedy chip's walk: one short pulse where the eye should land —
+     reduced motion stills the pulse, the outline still marks the spot */
+  @keyframes remedy-pulse {
+    50% { box-shadow: 0 0 0 6px var(--verdigris-wash); } }
+  button.pulse { outline: 2px solid var(--verdigris); outline-offset: 1px;
+                 animation: remedy-pulse .7s ease-in-out 2; }
+  /* a link badge: a count the wire sent riding the link — 0 still
+     renders (0 is information) */
+  .badge { font-family: var(--mono); font-size: 10px; color: var(--muted);
+           background: var(--chip); border-radius: 999px; padding: 1px 6px;
+           margin-left: 6px; vertical-align: 1px; }
+  /* embedded collections (links with embed:true): the rows live on the
+     detail page itself; the full collection stays one ↗ away */
+  .embed { border-top: 1px solid var(--line); margin-top: 14px;
+           padding-top: 10px; }
+  .embed-head { display: flex; align-items: baseline; gap: 8px;
+                flex-wrap: wrap; margin-bottom: 6px; }
+  .embed-head b { font-size: 13px; }
+  .embed-head .open { font-size: 12px; margin-left: auto;
+                      white-space: nowrap; }
   .rows .row { display: flex; align-items: center; gap: 10px; padding: 9px 4px;
                border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   .rows .row .grow { flex: 1; min-width: 0; }
@@ -872,13 +914,16 @@ function renderCollection(view, doc, hints) {
   const query = doc.actions && doc.actions.query;
   if (query) panel.append(filterBar(query, doc.self));
 
-  // create = the collection create affordance
+  // create = the collection create affordance; active scalar filters that
+  // name a create-schema property prefill the form — the user was already
+  // looking at that slice, so the form starts there (still editable)
   const create = doc.actions && doc.actions.create;
   const bulk = Object.entries(doc.actions || {})
     .filter(([n, a]) => a.effect && a.effect.bulk);
   const bar = el("div", {class:"actions"});
   if (create) bar.append(actionButton({name:"create", entry:create, doc,
-      label:"New", onDone: b => go(b.self)}));
+      label:"New", prefill: filterPrefill(doc.self, create),
+      onDone: b => go(b.self)}));
   panel.append(bar);
 
   panel.append(itemTable(doc.data.items, hints,
@@ -1081,6 +1126,21 @@ function filterBar(query, selfHref) {
   return bar;
 }
 
+/* Active scalar filters whose names exactly match create-input properties
+   become prefills. A comma list, a _gte/_lte bound, and paging/sort
+   plumbing are queries, not values — they stay out of the form. */
+function filterPrefill(selfHref, entry) {
+  const props = entry.input?.properties || {};
+  const out = {};
+  for (const [k, v] of new URLSearchParams(selfHref.split("?")[1] || "")) {
+    if (["page", "sort", "rows"].includes(k) || k.startsWith("page[")) continue;
+    if (/_(gte|lte)$/.test(k)) continue;
+    if (!v || v.includes(",")) continue;
+    if (k in props) out[k] = v;
+  }
+  return out;
+}
+
 /* ── resource screen ────────────────────────────────────────────────── */
 function renderResource(view, doc, hints) {
   hints = hints || {};
@@ -1111,11 +1171,35 @@ function renderResource(view, doc, hints) {
     for (const it of group.items)
       for (const n of Object.keys(it.actions)) scopedNames.add(n);
   const bar = el("div", {class:"actions"});
+  // suggested actions (co-presence): remedies on this doc's own warnings
+  // and unavailable reasons may name a same-kind action that IS here —
+  // the way out gains a ring and a marker; nothing is demoted
+  const suggested = new Set();
+  const noteRemedies = list => {
+    for (const t of list || []) {
+      const dot = String(t).indexOf(".");
+      if (dot > 0 && t.slice(0, dot) === doc.kind
+          && doc.actions[t.slice(dot + 1)])
+        suggested.add(t.slice(dot + 1));
+    }
+  };
+  for (const entry of Object.values(doc.actions))
+    for (const w of entry.warnings || []) noteRemedies(w.remedies);
+  for (const entry of Object.values(doc.unavailable))
+    noteRemedies(entry.remedies);
   const entries = Object.entries(doc.actions)
     .filter(([n]) => !scopedNames.has(n))
     .sort((a,b) => (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5));
-  for (const [name, entry] of entries)
-    bar.append(actionButton({name, entry, doc, onDone: () => render()}));
+  for (const [name, entry] of entries) {
+    const btn = actionButton({name, entry, doc, onDone: () => render()});
+    if (suggested.has(name)) {
+      btn.classList.add("suggested");
+      btn.append(el("span", {class:"suggest-chip",
+        title: "an advisory on this page names this action as the remedy"},
+        "suggested"));
+    }
+    bar.append(btn);
+  }
   // an agent link (engine kind): the owner needs to copy its token to give
   // to the agent, and can follow the agent before it ever acts
   if (doc.kind === "grant") {
@@ -1186,7 +1270,8 @@ function renderResource(view, doc, hints) {
     for (const [name, entry] of un) {
       const item = el("div", {class:"item"},
         el("b", {}, label(name, entry)),
-        el("div", {class:"why"}, entry.reason || ""));
+        el("div", {class:"why"}, entry.reason || ""),
+        remedyChips(entry.remedies, doc));
       const hope = entry.becomes_available;
       if (hope?.at) item.append(countdownEl(hope.at));
       else if (hope?.in_states) item.append(el("div", {class:"hope muted"},
@@ -1223,12 +1308,21 @@ function renderResource(view, doc, hints) {
     panel.append(d);
   }
 
-  // links = the read surface
+  // embedded collections: links that declare embed:true render their rows
+  // right here, in links order — the same table the collection page uses
+  for (const [rel, l] of Object.entries(doc.links))
+    if (l && l.embed) panel.append(embedSection(rel, l));
+
+  // links = the read surface; a badge is the wire's count riding the link
   const rels = Object.entries(doc.links).filter(([r]) => r !== "events");
   if (rels.length) {
     const box = el("div", {class:"unavail"});
     for (const [rel, l] of rels) if (l) box.append(el("div", {class:"item"},
-      el("a", {href:"#"+l.href}, rel), l.summary ? ` · ${l.summary}` : ""));
+      el("a", {href:"#"+l.href}, rel),
+      l.badge != null
+        ? el("span", {class:"badge", title:"count, per the server"},
+            String(l.badge)) : null,
+      l.summary ? ` · ${l.summary}` : ""));
     panel.append(el("details", {open:""},
       el("summary", {class:"muted"}, "links"), box));
   }
@@ -1267,6 +1361,105 @@ function dur(ms) {
   if (h) return `${h}h ${m % 60}m`;
   if (m) return `${m}m ${s % 60}s`;
   return `${s}s`;
+}
+
+/* ── remedies: the wire names the way out as "kind.action" tokens ──────
+   Same kind and the action is on this page → a chip that walks to the
+   button (scroll, focus, pulse). A create elsewhere → a link to that
+   kind's collection, once discovery resolves it. Anything else stays a
+   plain mono chip — never a dead link. onAct runs before the walk or the
+   navigation (a dialog hosting the chip closes itself there). */
+function remedyChips(remedies, doc, onAct) {
+  if (!remedies || !remedies.length) return null;
+  const docKind = (doc.kind || "").replace(/_collection$/, "");
+  const box = el("div", {class:"remedies"});
+  for (const token of remedies) {
+    const dot = String(token).indexOf(".");
+    const kind = dot > 0 ? token.slice(0, dot) : "";
+    const action = dot > 0 ? String(token).slice(dot + 1) : String(token);
+    if (kind === docKind && doc.actions?.[action]) {
+      box.append(el("button", {type:"button", class:"chip remedy",
+        title: `${token} — this action is on this page`,
+        onclick: () => { onAct && onAct(); pulseAction(action); }},
+        "→ " + label(action, doc.actions[action])));
+    } else if (action === "create") {
+      const chip = el("span", {class:"chip",
+        title: `${token} — a remedy elsewhere`}, String(token));
+      box.append(chip);
+      wellKnown().then(w => {
+        const col = w.collections?.[kind];
+        if (col) chip.replaceWith(el("a", {class:"chip remedy",
+          href: "#"+col, onclick: () => { onAct && onAct(); },
+          title: `${token} — opens the ${pretty(kind)}s page`},
+          `+ new ${pretty(kind)}`));
+      }).catch(() => {});
+    } else {
+      box.append(el("span", {class:"chip",
+        title: `${token} — a remedy this page can't reach directly`},
+        String(token)));
+    }
+  }
+  return box;
+}
+
+/* The chip's walk: take the eye to the named action's button. */
+function pulseAction(name) {
+  const btn = $(`#view button[data-action="${CSS.escape(name)}"]`);
+  if (!btn) return;
+  btn.scrollIntoView({behavior:"smooth", block:"center"});
+  btn.focus({preventScroll: true});
+  btn.classList.add("pulse");
+  setTimeout(() => btn.classList.remove("pulse"), 1500);
+}
+
+/* ── an embedded collection (a link with embed:true): the rows render on
+   the detail page itself, with the same table — and the same honest
+   per-row buttons — the collection screen uses. The fetch is best-effort:
+   a failure is a quiet line, never a broken page. Embeds refresh with the
+   page render, not on their own stream. ─────────────────────────────── */
+function embedSection(rel, link) {
+  const head = el("div", {class:"embed-head"},
+    el("b", {}, link.summary || title(rel)),
+    link.badge != null
+      ? el("span", {class:"badge", title:"count, per the server"},
+          String(link.badge)) : null,
+    el("a", {class:"open", href:"#"+link.href}, "open ↗"));
+  const bodyBox = el("div", {}, el("span", {class:"muted"}, "…"));
+  const sec = el("div", {class:"embed"}, head, bodyBox);
+  (async () => {
+    let env;
+    try {
+      const {res, body} = await api(link.href);
+      if (!res.ok) throw new Error(body?.title || `HTTP ${res.status}`);
+      env = body;
+    } catch (e) {
+      bodyBox.textContent = "";
+      bodyBox.append(el("div", {class:"muted"},
+        `couldn't load — ${e.message || e}`));
+      return;
+    }
+    const hints = await dataHints((env.kind || "").replace(/_collection$/, ""));
+    const total = env.data?.total ?? (env.data?.items || []).length;
+    head.insertBefore(el("span", {class:"muted mono",
+      style:"font-size:11px", title:"fetched just now"}, `${total} total`),
+      head.lastChild);
+    bodyBox.textContent = "";
+    const items = env.data?.items || [];
+    if (!items.length) {
+      bodyBox.append(el("span", {class:"kc-none"}, "none yet"));
+      const create = env.actions?.create;
+      if (create) {
+        const btn = actionButton({name:"create", entry:create, doc:env,
+          label:"New", small:true, onDone: b => go(b.self)});
+        btn.classList.add("primary");
+        bodyBox.append(" ", btn);
+      }
+      return;
+    }
+    bodyBox.append(itemTable(items, hints,
+      new Set(env.meta?.recomputing || [])));
+  })();
+  return sec;
 }
 
 /* ── actions: buttons, forms from input schema, confirm, dry-run ────── */
@@ -1362,18 +1555,20 @@ function kvTable(obj) {
   return table;
 }
 
-function actionButton({name, entry, doc, label: lbl, small, onDone}) {
+function actionButton({name, entry, doc, label: lbl, small, onDone, prefill}) {
   const btn = el("button",
     {class: entry.display?.style === "primary" ? "primary"
           : entry.display?.style === "danger" ? "danger" : "",
      style: small ? "font-size:12px;padding:3px 8px" : "",
+     "data-action": name,   // the remedy chip's walk finds it by name
      title: entry.display?.description || ""},
     lbl || label(name, entry));
   // effort as a subtle chip (assent is the floor and stays unmarked)
   if (!small && entry.effort && entry.effort !== "assent")
     btn.append(el("span", {class:"effort-chip",
       title: `effort: ${entry.effort}`}, entry.effort));
-  btn.addEventListener("click", () => actionDialog({name, entry, doc, onDone}));
+  btn.addEventListener("click", () =>
+    actionDialog({name, entry, doc, onDone, prefill}));
   return btn;
 }
 
@@ -1689,7 +1884,7 @@ function condWord(cond) {
   return "crosses the line";
 }
 
-async function actionDialog({name, entry, doc, onDone}) {
+async function actionDialog({name, entry, doc, onDone, prefill}) {
   const dlg = $("#dlg");
   dlg.textContent = "";
   // the envelope's draft is a snapshot from page render; the form must open
@@ -1729,11 +1924,14 @@ async function actionDialog({name, entry, doc, onDone}) {
     body.append(el("div", {class:"blast"},
       el("b", {}, "this action is a compound act"),
       ...blast.map(l => el("div", {class:"consequence"}, l))));
-  // advisory warnings (E1): the server's own sentences, up front
+  // advisory warnings (E1): the server's own sentences, up front — each
+  // with its remedies as chips (the chip closes this dialog before it
+  // walks or navigates)
   if (entry.warnings?.length)
     body.append(el("div", {class:"warnbox"},
-      ...entry.warnings.map(w =>
-        el("div", {class:"consequence"}, `⚠ ${w.reason}`))));
+      ...entry.warnings.flatMap(w => [
+        el("div", {class:"consequence"}, `⚠ ${w.reason}`),
+        remedyChips(w.remedies, doc, () => dlg.close())])));
   const form = el("form", {method:"dialog"});
   const errBox = el("div", {});
   const dry = el("div", {class:"dryrun muted"}, entry.input ? "" : "");
@@ -1753,13 +1951,14 @@ async function actionDialog({name, entry, doc, onDone}) {
       f.display.label || title(f.name),
       el("span", {class:"req", style: f.required ? "" : "display:none"},
         " *")));
-    let input;
+    let input, optionsReady = null;
     if (f.display.widget === "resource" && f.display.kind) {
       // x-display {widget:"resource", kind, params?}: options come from the
       // referenced collection — still envelope-driven (index → collection)
       input = el("select", {name:f.name, id:"f_"+f.name});
       if (!f.required) input.append(el("option", {value:""}, "—"));
-      populateResourceOptions(input, f.display.kind, f.display.params);
+      optionsReady = populateResourceOptions(input, f.display.kind,
+                                             f.display.params);
     } else if (f.schema.enum) {
       input = el("select", {name:f.name, id:"f_"+f.name});
       if (!f.required) input.append(el("option", {value:""}, "—"));
@@ -1788,15 +1987,25 @@ async function actionDialog({name, entry, doc, onDone}) {
         step:"any", placeholder: f.schema.format || f.schema.type || "",
         maxlength: f.schema.maxLength});
     }
-    // precedence: the principal's saved draft, then the server default —
+    // precedence: the principal's saved draft, then the caller's prefill
+    // (the collection filter already in view), then the server default —
     // which for prefill actions is the document's current value (§10.1)
     const draftVal = draft?.values?.[f.name];
-    const initial = draftVal !== undefined ? draftVal : f.schema.default;
-    if (initial !== undefined && initial !== null)
-      input.value = isStringList(f.schema) && Array.isArray(initial)
+    const initial = draftVal !== undefined ? draftVal
+      : prefill?.[f.name] !== undefined ? prefill[f.name]
+      : f.schema.default;
+    if (initial !== undefined && initial !== null) {
+      const val = isStringList(f.schema) && Array.isArray(initial)
         ? initial.join("\n")
         : typeof initial === "object"
           ? JSON.stringify(initial) : String(initial);
+      input.value = val;
+      // a resource select's options land async — re-assert the value once
+      // they have (a select can't hold a value its options don't offer)
+      if (optionsReady) optionsReady
+        .then(() => { if (!input.value) input.value = val; })
+        .catch(() => {});
+    }
     if (f.display.help) wrap.append(el("div", {class:"muted", style:"font-size:11px"}, f.display.help));
     wrap.append(input, el("div", {class:"field-error", id:"err_"+f.name}));
     form.append(wrap);
