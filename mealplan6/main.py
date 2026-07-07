@@ -18,7 +18,7 @@ from waymark6.server.engine import header_principal
 from .resources.event import Event
 from .resources.grocery_list import GroceryList
 from .resources.meal import Meal
-from .resources.plan import MealPlan
+from .resources.plan import MealPlan, WeekBoard
 from .resources.prep_task import PrepTask
 from .resources.rotation import SundayRotation
 from .services import Services
@@ -46,6 +46,7 @@ DSN = _dsn()
 
 engine = waymark.Engine(
     resources=[Meal, SundayRotation, MealPlan, GroceryList, PrepTask, Event],
+    surfaces=[WeekBoard],
     storage=DSN,
     principal=header_principal,
     services=Services(),

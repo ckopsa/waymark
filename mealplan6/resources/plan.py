@@ -27,6 +27,8 @@ from pydantic.json_schema import SkipJsonSchema
 
 from waymark6 import (
     Acknowledged,
+    Member,
+    Surface,
     Allow,
     Count,
     Ctx,
@@ -508,3 +510,16 @@ class MealPlan(Resource):
             display=dict(label="Abandon plan", style="danger", order=9))
     async def abandon(self, inp: None, ctx: Ctx) -> None:
         pass
+
+
+class WeekBoard(Surface):
+    """The week's decision surface (design 6.0 §4): the plan anchor with
+    the family calendar co-present — the exact composition the finalize
+    decision consults, declared once and served as a resource."""
+
+    name = "week-board"
+    anchor = "plan"
+    title = "Week board — {anchor.data.start_date}"
+    members = (Member("calendar", table=("date", "title", "kind")),)
+    showcase = ("finalize",)
+    attention = {"has_conflicts": True}
