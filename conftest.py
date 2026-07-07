@@ -986,15 +986,57 @@ from mealplan6.resources.prep_task import PrepTask as PrepTask6  # noqa: E402
 from mealplan6.resources.rotation import (  # noqa: E402
     SundayRotation as SundayRotation6)
 
+# ── Cash reconciliation on waymark6 (the 6.0 dogfood: ledger6) ──────────
+from ledger6.resources.account import Account as CR6Account  # noqa: E402
+from ledger6.resources.account import (  # noqa: E402
+    AccountState as CR6AccountState)
+from ledger6.resources.account_template import (  # noqa: E402
+    AccountTemplate as CR6AccountTemplate)
+from ledger6.resources.break_ import BreakState as CR6BreakState  # noqa: E402
+from ledger6.resources.break_ import ReconBreak as CR6ReconBreak  # noqa: E402
+from ledger6.resources.transaction import (  # noqa: E402
+    Transaction as CR6Transaction)
+from ledger6.resources.transaction import (  # noqa: E402
+    TransactionState as CR6TransactionState)
+from ledger6.resources.workbook import Workbook as CR6Workbook  # noqa: E402
+from ledger6.resources.workbook import (  # noqa: E402
+    WorkbookState as CR6WorkbookState)
+from ledger6.services import FakeBeacon as FakeBeacon6  # noqa: E402
+from ledger6.surfaces import (  # noqa: E402
+    CloseReview as CloseReview6, ReconcileAccount as ReconcileAccount6)
+
+
+@dataclass
+class SuiteServices6(SuiteServices):
+    """mealplan6's services plus the Beacon boundary ledger6 declares —
+    one shared engine/services pair covers both v6 dogfood apps, since
+    `pytest --waymark6` walks a single ``waymark6_engine`` fixture."""
+
+    beacon_backend: FakeBeacon6 = field(default_factory=FakeBeacon6)
+    beacon: Any = None
+
+    def __post_init__(self) -> None:
+        if self.beacon is None:
+            from waymark6.server.external import Service
+
+            self.beacon = Service("beacon", handler=self.beacon_backend.pull,
+                                 timeout=30.0, backoff_seconds=60.0,
+                                 down_on_error=True)
+
 
 @pytest.fixture
 async def waymark6_engine():
     from waymark6.server.bus import InProcessBus
 
+    services = SuiteServices6()
     engine = waymark6.Engine(
         resources=[Meal6, SundayRotation6, MealPlan6, GroceryList6,
-                   PrepTask6, Event6],
-        storage=TEST_DSN, services=SuiteServices(), bus=InProcessBus())
+                   PrepTask6, Event6,
+                   CR6AccountTemplate, CR6Workbook, CR6Account,
+                   CR6ReconBreak, CR6Transaction],
+        surfaces=[CloseReview6, ReconcileAccount6],
+        storage=TEST_DSN, services=services, bus=InProcessBus())
+    services.beacon_backend.engine = engine
     await engine.storage.drop_all()
     await engine.startup()
     try:
@@ -1140,3 +1182,76 @@ async def w6_make_grocery_list(state: str, engine, services) -> GroceryList6:
 @w6_example_input(GroceryList6, "remove_item")
 def w6_remove_item_example(services) -> dict:
     return {"name": "paper towels"}
+
+
+# no cross-resource refs and every field is schema-synthesizable — the
+# derived walker needs no factory (mirrors Meal6/PrepTask6)
+w6_conformance_resource(CR6AccountTemplate)
+
+# The ledger helpers below (_step_as, _cr_accounts_of, _cr_job_done,
+# _make_cr_workbook_id, _make_cr_account_id) and the CR_PREPARER /
+# CR_REVIEWER principals are version-agnostic — they only touch the
+# engine passed in — so the w6 factories reuse them directly.
+
+
+@w6_state_factory(CR6Workbook)
+async def w6_make_cr_workbook(state: str, engine, services) -> CR6Workbook:
+    # fresh fund + fresh workbook every call, never cached: a factory runs
+    # once per candidate principal per case, and a cached id already at
+    # the target state can't be re-driven (unique=(fund, period) would
+    # also 409) — see _make_cr_workbook_id's docstring
+    wid = await _make_cr_workbook_id(engine)
+    target = CR6WorkbookState(state)
+    if target == CR6WorkbookState.ABANDONED:
+        await _step(engine, "workbook", wid, "abandon")
+        return await _load(engine, "workbook", wid)
+    if target in (CR6WorkbookState.PREPARED, CR6WorkbookState.REVIEWED):
+        # freshen the sync first: beacon_fresh is a warning guard on
+        # prepare, and refresh stamps last_synced_at synchronously.
+        # Wait for the deferred job to finish before moving on — a
+        # conformance case calls this factory once per candidate
+        # principal, and a job still running in the background would
+        # otherwise race a *later* case's before/after transition count.
+        refreshed = await _step(engine, "workbook", wid, "refresh")
+        await _cr_job_done(engine, refreshed.doc["data"]["sync_job_id"])
+        for acc in await _cr_accounts_of(engine, wid):
+            if acc.state == "open":
+                await _step(engine, "account", acc.id, "reconcile")
+        await _step_as(engine, "workbook", wid, "prepare", CR_PREPARER)
+        if target == CR6WorkbookState.REVIEWED:
+            await _step_as(engine, "workbook", wid, "review", CR_REVIEWER)
+    return await _load(engine, "workbook", wid)
+
+
+@w6_state_factory(CR6Account)
+async def w6_make_cr_account(state: str, engine, services) -> CR6Account:
+    aid = await _make_cr_account_id(engine)
+    target = CR6AccountState(state)
+    if target == CR6AccountState.REMOVED:
+        await _step(engine, "account", aid, "remove")
+    elif target == CR6AccountState.BALANCED:
+        # a freshly seeded account is already reconciled (0 - 0 + 0 == 0)
+        await _step(engine, "account", aid, "reconcile")
+    return await _load(engine, "account", aid)
+
+
+@w6_state_factory(CR6ReconBreak)
+async def w6_make_cr_break(state: str, engine, services) -> CR6ReconBreak:
+    aid = await _make_cr_account_id(engine)
+    bid = await _mk(engine, "break",
+                    {"account_id": aid, "amount": 12.34,
+                     "note": "conformance"})
+    if CR6BreakState(state) == CR6BreakState.REMOVED:
+        await _step(engine, "break", bid, "remove")
+    return await _load(engine, "break", bid)
+
+
+@w6_state_factory(CR6Transaction)
+async def w6_make_cr_transaction(state: str, engine, services) -> CR6Transaction:
+    aid = await _make_cr_account_id(engine)
+    tid = await _mk(engine, "transaction",
+                    {"account_id": aid, "transaction_date": "2026-06-15",
+                     "amount": -42.0, "memo": "conformance"})
+    if CR6TransactionState(state) == CR6TransactionState.REMOVED:
+        await _step(engine, "transaction", tid, "remove")
+    return await _load(engine, "transaction", tid)

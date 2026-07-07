@@ -5,6 +5,7 @@ PORT4        ?= 8002  # mealplan4 dev server
 PORT5        ?= 8003  # mealplan5 dev server
 PORT6        ?= 8004  # mealplan6 dev server
 PORT_LEDGER5 ?= 8010  # ledger5 dev server
+PORT_LEDGER6 ?= 8011  # ledger6 dev server
 PG_CONTAINER ?= waymark-test-pg
 PG_USER      ?= ckopsa
 PG_PORT      ?= 5433
@@ -30,7 +31,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: dev db dist test conformance conformance3 conformance4 conformance5 conformance6 check demo mealplan mealplan3 mealplan4 mealplan5 mealplan6 ledger5 image deploy
+.PHONY: dev db dist test conformance conformance3 conformance4 conformance5 conformance6 check demo mealplan mealplan3 mealplan4 mealplan5 mealplan6 ledger5 ledger6 image deploy
 
 dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
 	uv build
@@ -126,6 +127,22 @@ ledger5: dist  ## run cash reconciliation on waymark5 (its own Postgres on :1543
 	@echo "ui  → http://localhost:$(PORT_LEDGER5)/"
 	LEDGER_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT_LEDGER5)/ledger5_dev \
 		uv run uvicorn ledger5.main:app --reload --port $(PORT_LEDGER5) \
+		--timeout-graceful-shutdown 3
+
+ledger6: dist  ## run cash reconciliation on waymark6 (shares ledger5's Postgres on :15433)
+	@docker start $(PG_CONTAINER_LEDGER5) >/dev/null 2>&1 || \
+		docker run -d --name $(PG_CONTAINER_LEDGER5) \
+			-e POSTGRES_USER=$(PG_USER) \
+			-e POSTGRES_DB=ledger5_dev \
+			-e POSTGRES_HOST_AUTH_METHOD=trust \
+			-p $(PG_PORT_LEDGER5):5432 postgres:16 >/dev/null
+	@until docker exec $(PG_CONTAINER_LEDGER5) pg_isready -U $(PG_USER) -q; do sleep 0.5; done
+	@docker exec $(PG_CONTAINER_LEDGER5) psql -U $(PG_USER) -d ledger5_dev -Atc \
+		"SELECT 1 FROM pg_database WHERE datname='ledger6_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER_LEDGER5) createdb -U $(PG_USER) ledger6_dev
+	@echo "ui  → http://localhost:$(PORT_LEDGER6)/"
+	LEDGER_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT_LEDGER5)/ledger6_dev \
+		uv run uvicorn ledger6.main:app --reload --port $(PORT_LEDGER6) \
 		--timeout-graceful-shutdown 3
 
 demo: db  ## agent demo (plans over effect.to, stops at safety.confirm)
