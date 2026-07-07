@@ -5,90 +5,99 @@ itself is becoming. Companion documents: `waymark7-seeds.md` (the four
 punts this aligns and the question that aligned them),
 `waymark6-design.md`, and the dogfood findings series.
 
-**Epistemic status, stated up front.** The house discipline is that a
-design earns itself from dogfood friction, and this one is written ahead
-of it, on an explicit premise: *we are willing to change the laws the
-seeds document named as blocking.* The seeds marked one law inviolate —
-one fact, one definition, one value per row — and this design's first
-job is to show that the premise does not actually require shattering it,
-or the one-current-law anchor either. Both laws **generalize**: they
-were written against a world where the law changes only *sequentially*,
-and 5.0 already built every mechanism needed for laws to coexist —
-across *time*. 7.0 lets exactly two coexist across *principals*, using
-the same mechanisms. When real friction arrives, this document gets
-rewritten against it; until then it is the strongest sketch the premise
-supports, not settled law.
+**Epistemic status.** Written ahead of dogfood evidence, on an explicit
+premise — willingness to change the laws the seeds document named as
+blocking — and revised once already: the first draft piloted law
+per-*principal* (feature-flag shaped, with shadow-column dual
+materialization to keep one-fact-one-value honest per reader). A
+user-story pass across the actual domains killed that center. Cash
+reconciliation's controls broke it — four-eyes exists so two people
+confirm one judgment, and a preparer and reviewer under different laws
+are not confirming anything — and the stories the domains genuinely
+demand (effective-dated regulation, grandfathered workflows, population
+pilots) all share one shape the first draft missed: **the law is a
+property of the row, not the reader.** This revision makes that the
+core. The finding strengthens the seeds' inviolate law rather than
+bending it: one fact, one definition, one value per row survives
+*untouched*, because a row lives under exactly one law. When
+implementation friction arrives, this document gets rewritten again;
+that is what it is for.
 
 ## Why 7.0
 
-A developer ships a feature and wants three users living under it before
-everyone does. 6.0's honest answers are two: if the feature is new
-surface area, gate it on a role — rollout as authorization, one law,
-already free. If the feature changes *meaning* — a guard's threshold, a
-derived field's `fn`, a machine's shape — the answer is a second engine
-on a second database: environments. Environments work, and they forfeit
-everything this framework exists for: one log, one identity, one audit
-trail, provable truth. The pilot users' actions land in a database that
-will be thrown away; the compliance question "what did the pilot
-reviewer see, under which law?" has no resource for an answer; the
-promotion is a re-deploy whose relationship to the pilot is a matter of
-discipline, not record.
+Three stories, all real in the domains already ported, all currently
+expressible only as woven code:
 
-Look at what 5.0 already built. Every transition is stamped
-`defined_by` — the fingerprint of the law that governed it. The replay
-conformance walks history written under superseded laws and finds it
-legal *under the law of its day*. Continuity maps carry renamed actions
-and states across revisions. The log, in other words, is **already
-multi-law** — sequentially. Two revisions already coexist in every
-system that has ever deployed twice; they merely never coexist *at the
-same moment*. The entire apparatus for answering "which law governed
-this?" exists and is load-bearing. What 6.0 lacks is only the present
-tense: two revisions live at once, one of them for a declared few.
+*The regulator moves.* A rule changes effective March 1. The February
+close must close under February's law even though March's law deploys
+mid-February — which law governs is a fact about *the period being
+closed*, not about when the code shipped or who is looking. Today that
+is `if period >= date(2026, 3, 1)` inside a guard: two laws hiding in
+one, invisible to the fingerprint, the diff, and the audit trail.
+
+*The workflow outlives the law.* An onboarding started under checklist
+v3 must not sprout v4 steps mid-flight; an in-flight wire approval
+finishes under the chain it began under. `Seed(retro=Never)` already
+grants this to seeded children — template edits govern future
+instantiations only — but guard and machine changes still strike
+in-flight rows immediately. Grandfathering is the single most common
+rollout need in workflow domains, and it has no declaration.
+
+*The pilot is a population.* "The new close process pilots with
+fund-alpha's workbooks this quarter." Marcus *and* Elena both see
+fund-alpha under the new law and fund-beta under the old — the controls
+stay coherent because everyone at a given workbook shares its law. The
+cohort that works in control-heavy domains is a set of rows, never a
+set of readers.
 
 And the definition is already a resource (5.0's thesis) — with a
-degenerate machine. Boot writes it; it is current; its predecessor is
-superseded. A resource whose machine has no intermediate states is a
-resource that cannot represent *becoming* — and a deploy IS a becoming:
-authored, reviewed, tried by a few, adopted or abandoned. Every shop
-re-invents this lifecycle outside the system — feature-flag dashboards,
-deploy runbooks, canary configs — precisely the woven-concern shape
-every prior version exists to delete. The law changes the way nothing
-else in the system is permitted to change: silently, totally, and
-without a workflow. 7.0 ends the exemption.
+degenerate machine. Boot writes it; it is current; the predecessor is
+superseded. A resource whose machine has no intermediate states cannot
+represent *becoming*, and a deploy IS a becoming: authored, reviewed,
+tried against a bounded population, adopted or withdrawn. Every shop
+rebuilds this lifecycle outside the system — effective-date branches,
+version columns, flag dashboards, runbooks — precisely the
+woven-concern shape every prior version exists to delete. The law
+changes the way nothing else in the system is permitted to change:
+silently, totally, and without a workflow. 7.0 ends the exemption.
 
-> **A change of law nobody could live under before it bound everyone is
-> a design error, not a deployment detail.**
+> **A row that cannot name the law it lives under is a design error,
+> not a deployment detail.**
 
 The admission test for any 7.0 feature: can a client watching the event
-stream see the proposal arrive, its blast radius measured, a cohort
-begin living under it, and the promotion bind everyone — each as an
-ordinary transition on the definition resource? A revision that reaches
+stream see the proposal arrive, its blast radius measured, a declared
+population begin living under it, and the promotion — each as an
+ordinary transition on the definition resource — while every envelope
+names the revision that governs its row? A revision that reaches
 `current` with none of that history in the log fails the test.
 
 2.0 unified advertisement and enforcement for guards; 3.0 for
 visibility; 4.0 for facts; 5.0 for history's relationship to the law;
 6.0 for the surface a decision is made on. 7.0 unifies them for **the
 law's own becoming**: the deploy gets the machine, the guards, the
-audit trail, and the pilot that every other change in the system always
-had.
+audit trail, and the bounded trial that every other change in the
+system always had.
 
 ## What carries over unchanged
 
 - The envelope, invocation, invoker, idempotency, drafts, jobs,
   attachments, events — untouched.
-- 4.0's field origins and the materialization law — kept, and §4 leans
-  on the law's exact wording: a stored fact never disagrees with what
-  its law selects. §4's move is to be precise about *whose law*.
+- 4.0's field origins and the materialization law — untouched, and this
+  revision restores the seeds' inviolate reading: one value per row,
+  because one law per row.
 - 5.0's anchor — fingerprints, `defined_by`, continuity maps, backfill,
-  stale-by-definition — not only kept but promoted: these are 7.0's
-  load-bearing mechanisms, exercised in the present tense.
-- 6.0's Related, Surfaces, the co-presence wave — untouched. Surfaces
-  gain one dividend for free: "what did the reviewer see" already has a
-  law stamp; §3 makes the stamp cohort-honest.
-- Rollout as authorization (the seeds' Case 1) — kept as the documented
-  **first resort**. A feature that is new surface area needs a role
-  guard, not a pilot. The pilot machinery below is for changes of
-  meaning, and the design says so at every entrance.
+  stale-by-definition — promoted from mechanism to load-bearing wall.
+  §3 is `defined_by` applied to rows' *lives*, not only their writes.
+- 6.0's Related, Surfaces, the co-presence wave — untouched.
+- Rollout as authorization — kept as the documented **first resort**. A
+  feature that is new surface area (an action, a kind, a surface) pilots
+  as a role or grant: one law, no lifecycle needed. The machinery below
+  is for changes of *meaning*, and the design says so at every entrance.
+- Per-principal semantic pilots — **demoted to a punt** (see there; the
+  agent-canary is the one recorded trigger). The multi-participant
+  control argument above is structural, not incidental: reader-scoped
+  law breaks four-eyes by construction; row-scoped law satisfies it by
+  construction.
 
 Everything below is what changes.
 
@@ -96,285 +105,272 @@ Everything below is what changes.
 
 # 1. The definition has a machine
 
-The Definition resource's degenerate machine grows honest states:
-
 ```
 draft → proposed → piloted → current → superseded
             ↘         ↘
             withdrawn  withdrawn
 ```
 
-- **draft**: a revision being authored. Where serializable declarations
-  are concerned (states, actions' shapes, guards' declared facets,
-  filterable/sortable, links, surfaces, summaries), a draft is editable
-  through the API like any resource — 5.0 §7's "definition as editable
-  resource", finally with a state to be edited *in*. Where code is
-  concerned (`fn=`, `check=`), a draft arrives the way code arrives: a
-  deploy whose boot finds a fingerprint the store does not know and —
-  under the 7.0 regime — registers it as *proposed* instead of seizing
-  `current`. The API edits what is data; the repo edits what is code;
-  both meet in the same proposed revision.
-- **proposed**: validated (the full import-time check suite runs at
-  propose time — a proposal that could not boot cannot be proposed),
-  diffed against current (the diff is data on the definition row, as
-  revisions' diffs already are), and reviewable. Promotion out of
-  `proposed` is **four-eyes guarded by default**: whoever authored the
-  revision cannot promote it. The law's own E3, applied to the law.
-- **piloted**: live for a declared cohort (§3). At most **one** piloted
-  revision per engine: the lifecycle is a *stage*, not a branch. There
-  is no merge, no lattice, no flag combinatorics — revision N+1 pilots
-  while N is current, and nothing else is representable. This single
-  restriction is what keeps the rest of the design small.
-- **current / superseded / withdrawn**: as today, plus the honest exit —
-  a pilot that fails is withdrawn by a transition, with a reason, in
-  the log. Feature-flag systems bury their dead; this one records them.
+- **draft**: a revision being authored. Declarations that are data
+  (machines, guards' declared facets, `Tolerance`, acceptance sets,
+  `where=` filters, seeds, links, surfaces, summaries) are editable
+  through the API — 5.0 §7's "definition as editable resource", finally
+  with a state to be edited in. Declarations that are code (`fn=`,
+  `check=`) arrive the way code arrives: a deploy whose boot finds an
+  unknown fingerprint registers it as *proposed* instead of seizing
+  `current`. Data edits and code deploys meet in the same proposed
+  revision. (The data/code split returns with teeth in §4.)
+- **proposed**: validated — the full import-time check suite runs at
+  propose time; a proposal that could not boot cannot be proposed —
+  diffed against current (the diff is data on the definition row), and
+  reviewable. Promotion is **four-eyes guarded by default**: whoever
+  authored the revision cannot promote it. The law's own E3.
+- **piloted**: live for a declared *population of rows* (§3). At most
+  one piloted revision per engine: the lifecycle is a stage, not a
+  branch — no lattice, no merge, no flag combinatorics. Revision N+1
+  pilots while N is current; nothing else is representable.
+- **current**: the law of new rows (and of every population promoted
+  into it). **superseded**: reached only when *no row lives under the
+  revision* — laws die the way states do, when they are empty. A
+  revision with grandfathered rows still living under it is not
+  history; it is law, and the envelope of every such row says so.
+- **withdrawn**: the honest exit, a transition with a reason, in the
+  log. Flag systems bury their dead; this one records them.
 
 # 2. Proposals show their blast radius
 
-Before anyone lives under a proposal, the system can say what it would
-do — because recomputation against declared inputs is already a pure
-function the conformance replay uses. On demand (an action on the
-proposed definition, deferred as an ordinary job):
+Before any row lives under a proposal, the system can say what it would
+do — recomputation against declared inputs is already the pure function
+the conformance replay uses. On demand (an action on the proposed
+definition, deferred as an ordinary job): for each fact the proposal
+redefines, the flip count over live rows — "`reconciled` changes on 3
+of 4,102 accounts, these three"; for each tightened guard, the
+newly-refused count; for each machine change, the §3 continuity
+verdict. The report is a job artifact, linkable from the review. The
+reviewer promoting a revision finally has what every other reviewer in
+the system has had since 3.0: the decision's inputs co-present with the
+affordance. Nothing here requires two live laws; this section could
+ship as a 6.x wave, and if 7.0 stalls, should.
 
-- for each fact the proposal redefines: recompute over the live rows (or
-  a declared sample) and report the flip count — "`reconciled` changes
-  on 3 of 4,102 accounts, these three";
-- for each guard the proposal tightens: evaluate against current rows
-  and report newly-refused counts;
-- for each machine change: the continuity check (§3) verdict.
+# 3. The law binds rows
 
-The report is a job artifact — data, linkable from the review. The
-reviewer approving a promotion has, for the first time, the same thing
-every other reviewer in the system has had since 3.0: the decision's
-inputs co-present with the affordance. Nothing in this section requires
-two live laws; it could ship as a 6.x wave, and if 7.0 stalls, should.
+Every row carries its law: a `law_revision` stamp, set at create to the
+revision whose population claims it, changed only by an explicit
+transition. This is not a new idea in the architecture — every
+*transition* has carried `defined_by` since 5.0; 7.0 extends the stamp
+from the row's writes to the row's *life*.
 
-# 3. Two laws, one log
-
-Piloting begins with a declaration on the promotion:
+Piloting begins with a declaration on the pilot transition:
 
 ```
-pilot = Cohort(role="beta")        # membership is authorization, §Case 1
+Population(after=True)                    # grandfathering: rows created
+                                          # from now on; existing rows
+                                          # keep their law
+Population(where={"fund": "fund-alpha"})  # a bounded pilot population
+Population(where={"period_gte": "2026-03"})   # effective-dated law
 ```
 
-- **Reads are law-honest.** A pilot principal's envelopes render under
-  the piloted revision — its actions, guards, surfaces, summaries — and
-  say so: `meta.law` already exists; it now tells each reader the truth
-  about *their* law. A non-pilot reader's envelope is untouched. "What
-  did Elena see" was answered by 6.0's surfaces; "under which law" was
-  already stamped; 7.0 makes the stamp vary honestly.
-- **Writes are law-stamped — which they already are.** A transition
-  performed by a pilot principal is judged by the piloted law and
-  recorded with `defined_by` = the piloted fingerprint. This is not new
-  machinery; it is the 5.0 stamp doing in the present tense what it has
-  always done for the past. The replay conformance needs no new theory:
-  it already judges each transition under the law of its stamp.
-- **The one new invariant** (replacing "one current law per engine"):
-  **every row must be renderable under every live law.** Rows are
-  shared; a pilot user's write lands in the same storage everyone
-  reads. So a proposal may enter `piloted` only if its continuity map
-  covers both directions — every state/action it adds is mapped for
-  current-law renderers, every one it removes is mapped for its own.
-  The check runs at the pilot transition, not at promote: you may not
-  begin the experiment whose results the control group cannot see.
-  (This is v1's `renames` and v5's `renamed_actions`, load-bearing at
-  last.) A machine change too radical to map is too radical to pilot —
-  environments remain the honest fallback, and the design says so
-  rather than pretending.
+- **Reads are row-honest.** A workbook under revision 41 renders under
+  41 — its machine, guards, surfaces, summaries — for *everyone*;
+  `meta.law_revision` says so, as it always has, now varying by row
+  rather than only by deploy date. A collection may list rows under two
+  laws; each item's envelope is self-describing, which is what
+  envelopes have been for since 1.0 — the generic client needs nothing.
+- **Writes are judged by the row's law.** Marcus preparing a fund-alpha
+  workbook is judged by revision 41's guards; preparing fund-beta's, by
+  40's. Elena reviews each under the law of its row — both eyes, one
+  law, per decision. Creates are judged by the revision whose
+  population claims the input (the §-of-6.x create-time evaluation,
+  pointed at populations).
+- **Adoption is a transition.** A row moves to the newer law by
+  `adopt` — explicit, guarded (the domain says when a February workbook
+  may adopt March's rules: usually never; a draft onboarding, perhaps
+  freely), bulk-capable, and recorded. Adoption triggers the row's
+  recompute under its new law — 5.0's stale-by-definition machinery,
+  applied per-row instead of per-boot. Promotion of a population is
+  bulk adoption with the same honesty (`meta.recomputing` while a large
+  population settles — the §4-of-6.0 discipline, unchanged).
+- **The continuity requirement.** Two revisions live means one storage
+  serving both: a proposal may enter `piloted` only if its continuity
+  map covers both directions — states and actions it adds or removes
+  are mapped, so a mixed collection renders and the replay conformance
+  walks every row under the law of its stamp. A machine change too
+  radical to map is too radical to pilot; environments remain the
+  honest fallback, and the design says so rather than pretending.
 
-The log stays single. The audit trail stays single. Identity stays
-single. That is the entire point: what environments forfeit, piloting
-keeps.
+The log stays single. Identity stays single. The audit trail answers
+"under which law?" for every row and every write, because both carry
+the stamp. What environments forfeit, populations keep.
 
-# 4. Truth under two laws
+# 4. One row, one law, one process
 
-The seeds called one law inviolate: one fact, one definition, one value
-per row. The premise of this document is willingness to break it; the
-finding is that it **generalizes instead**: one fact, one definition,
-one value per row *per live law* — and there are at most two live laws,
-by §1's single-pilot rule. Concretely:
+The first draft's hardest apparatus — shadow columns, dual
+materialization, asymmetric maintenance with lag markers — existed only
+to serve reader-scoped cohorts, and dies with them. Row-scoped law
+needs none of it: a row's facts are computed under the row's law and
+stored once. The seeds' inviolate law holds as written.
 
-- A fact the piloted revision redefines is materialized **twice**: the
-  current column (untouched, serving everyone as today) and a **shadow
-  column** owned by the piloted revision. Facts the pilot does not
-  redefine have one column, as today. The shadow set is bounded by the
-  diff, not the schema.
-- Pilot readers' envelopes, filters, sorts, and guards read the shadow
-  where one exists; everyone else never sees it. The 4.0 law holds for
-  each reader exactly as written: *their* stored fact never disagrees
-  with *their* law.
-- **Maintenance topology is asymmetric, and honest about it.** Two code
-  versions cannot share a process (a piloted `fn` is code), so the
-  pilot runs as a second process over the same database — blue/green,
-  except the green half is not an environment: same rows, same log,
-  same identity. Writes processed by the pilot process materialize both
-  column sets in the causing commit (it has both laws' code — the old
-  fns ride the current fingerprint's source, or the previous image).
-  Writes processed by the current process materialize the current
-  columns in-commit and *announce*; the pilot process recomputes
-  shadows from the bus. Shadow facts therefore carry the honest-lag
-  marker the framework already owns (`meta.recomputing` /
-  `synced_at`-style bookkeeping, the §4-of-6.0 and Mirror precedents):
-  a pilot reader can see that a shadow fact is settling. Stated as law:
-  **current-law truth rides the commit, always; pilot-law truth rides
-  the commit when the pilot's engine wrote, and follows honestly
-  marked when it didn't.** A pilot is an experiment; an experiment
-  that says "this number may be seconds old" is telling the truth. A
-  *promotion* may not: see next.
-- **Promotion is a pre-paid backfill.** The shadow columns ARE the
-  backfill 5.0 would run at boot — run early, amortized across the
-  pilot, settled before the flip (the promote transition refuses while
-  any shadow lags, the §4 `Deferred` discipline inverted). Promote
-  renames shadow to primary and retires the old columns; the flip is
-  O(catalog), not O(rows). Withdrawal drops shadows and nothing else
-  changed: the pilot's *writes* remain — legal under the law of their
-  stamp, exactly like every transition ever recorded under a
-  now-superseded law. A withdrawn pilot is history, not a rollback.
+What row-scoped law does demand is that one process *interpret* two
+revisions. The §1 data/code split becomes the capability boundary:
+
+- **The declared law is data, and data interprets per-row.** Machines,
+  guards' declared facets, acceptance sets, `Tolerance`, `where=`
+  filters, seeds, surfaces — the definition store already holds every
+  revision's serialized form (the fingerprint's source material). The
+  engine evaluates the row's revision the way it already evaluates the
+  *current* one: from declarations. The cash-recon tolerance story, the
+  effective-dated threshold, the checklist template, the machine
+  reshape — all data, all pilotable per-row.
+- **Code does not interpret per-row.** A changed `fn=` or `check=` body
+  is one Python function resident in one process; two revisions of it
+  live at once is the blue/green problem the first draft paid for with
+  its worst section. Refused at the pilot gate instead: a revision that
+  changes derivation or check *code* cannot pilot per-population — it
+  previews (§2) and promotes totally, as today. In the ported domains
+  this bites rarely: the meaningful changes were tolerances, gates,
+  machines, and templates — data all. Where it bites, the punt names
+  the fallback (environments), and the honest long-term answer is
+  making more of the law data (the `within=Tolerance` precedent:
+  every fn made declarative is a fn made pilotable).
 
 # 5. The log decides what it is
 
-As-of rendering — "show me this workbook as Elena saw it" — has been
-possible-for-law and impossible-for-data since 5.0, because transition
-rows store `input_digest`, not payloads (friction #8, standing since the
-v3 port). 7.0 must finally take the question, because a lifecycle
-multiplies its value: the review of a proposal (§2), the audit of a
-pilot (§3), and the forensics of a withdrawal all want yesterday's
-envelope. The answer is declared, per action, opt-in:
+As-of rendering has been possible-for-law and impossible-for-data since
+5.0, because transition rows store `input_digest`, not payloads
+(friction #8, standing since the v3 port). A lifecycle multiplies its
+value — reviewing a proposal, auditing a pilot population, forensics on
+a withdrawal — so 7.0 finally takes the question, declared per action,
+opt-in:
 
 ```
-@action(..., record=Inputs())     # this action's inputs are retained,
-                                  # readable, under the row's visibility
+@action(..., record=Inputs())
 ```
 
-Compliance domains declare it on the actions whose reasons must be
-readable (cash recon's `reject`, the promotion itself — the definition's
-own transitions record their inputs unconditionally; the law does not
-get privacy from its subjects). Everything else keeps the digest.
-Historical as-of ships exactly as far as retention was declared —
-honest, partial, and stated, rather than total and imaginary. The log
-remains an audit trail that can *optionally* afford replay, not a
+Compliance domains declare it where reasons must be readable (cash
+recon's `reject`; the definition's own transitions record
+unconditionally — the law does not get privacy from its subjects).
+Everything else keeps the digest. Historical as-of ships exactly as far
+as retention was declared — honest, partial, stated — and the log
+remains an audit trail that can optionally afford replay, not a
 database pretending otherwise.
 
 # 6. The scar table
 
 | Strain (recorded, cited) | 7.0 fate |
 | --- | --- |
-| v5 §7: definition-as-editable-resource, "the natural end state of this line" | §1 `draft`/`proposed` — with the honest code/data split |
-| The seeds' developer question: pilot a feature for a few users | §3 for changes of meaning; rollout-as-authorization kept as first resort for surface area |
-| Environments forfeit the log, identity, audit trail | §3–§4: one database, one log, two laws — the forfeit was the design error |
-| v5 §7 as-of reads; v3 friction #8 digest-not-payload | §5: declared retention; the definition's own transitions record unconditionally |
-| Feature-flag systems: unrecorded pilots, buried failures, flag debt | §1: pilots are states with transitions; withdrawal is a recorded death; at most one pilot exists, so flag debt is unrepresentable |
-| "One current law per engine" | Generalized: one law per *transition* (already true), one *ordered* pipeline of revisions, at most two live |
-| "One value per row" (marked inviolate in the seeds) | Generalized, not broken: one value per row per live law, bounded at two, shadows dying at promote/withdraw |
+| Effective-dated regulation as `if period >= date` woven inside guards | §3 `Population(where={"period_gte": ...})` — two laws, declared, diffed, audited |
+| In-flight workflows struck by guard/machine changes; `Seed(retro=Never)` covering children only | §3 `Population(after=True)` — grandfathering as law; the row finishes under its birth law |
+| "Pilot the new close with fund-alpha" — today an environment with diverging data | §3 bounded populations over one log, one identity |
+| v5 §7 definition-as-editable-resource | §1 draft/proposed, with the data/code split |
+| Deploys reviewed in pull requests the audit trail never sees | §1 four-eyes promotion + §2 blast radius, as transitions |
+| v3 friction #8: digest-not-payload | §5 declared retention |
+| First draft of this design: reader-scoped cohorts + shadow columns | Withdrawn by the user-story pass; §4 records what replaced it; per-principal survives only as the agent-canary punt |
+| Seeds' inviolate law (one value per row), marked at risk by the premise | Untouched — one law per row restores it exactly |
 
 ## Wire format delta
 
 | Surface | v6 | v7 |
 | --- | --- | --- |
-| `meta.law` / `law_revision` | the engine's current law | the *reader's* law — piloted for cohort members, with `meta.pilot: true` |
-| Definition envelopes | `current`/`superseded` | the §1 machine, its transitions carrying diffs and blast-radius artifacts |
-| Derivation events | flips | flips tagged with the revision that computed them; pilot consumers filter to their law |
-| Shadow lag | n/a | `meta.recomputing`-style marker on pilot envelopes whose shadow facts are settling |
-| Recorded inputs (§5) | digest only | `record=Inputs()` actions expose readable inputs under row visibility |
+| `meta.law` / `law_revision` | one value engine-wide per deploy | the row's — varies within a collection; the envelope was always self-describing, now it has a reason to be |
+| Definition envelopes | current/superseded | the §1 machine; transitions carry diffs, blast-radius artifacts, population declarations |
+| Row lifecycle | — | `adopt` transitions (single and bulk), recorded like any other |
+| Recorded inputs | digest only | `record=Inputs()` actions expose readable inputs under row visibility |
 
-A v6 client keeps working: it never holds the beta role, so it never
-sees a piloted law, a pilot marker, or a shadow value.
+A v6 client keeps working: every row it sees is under the current
+revision until someone pilots one, and a mixed collection is just
+envelopes that differ — which they always could.
 
 ## Migration sketch (v6 apps)
 
-- Nothing mandatory. An app that never proposes a revision through the
-  lifecycle behaves exactly as on 6.0 — boot's auto-revise remains the
-  degenerate path (propose+promote in one breath, recorded as such).
-- Where a team runs staging environments to test semantic changes:
-  adopt the lifecycle; retire the second database; keep the second
-  process (it becomes the pilot half of §4's topology).
-- Where reject-style actions denormalize their reasons into data
-  (cash recon's `reject_notes`): declare `record=Inputs()` and delete
-  the denormalization — friction #8's workaround finally dies.
+- Mechanical: every existing row is stamped with the current revision
+  at upgrade. An app that never uses the lifecycle behaves exactly as
+  on 6.0 — boot's auto-revise becomes propose+promote in one recorded
+  breath, and every row adopts immediately (today's behavior, now
+  spelled out in the log).
+- Where a guard branches on an effective date: split into two revisions
+  with a `Population(where=...)`, delete the branch.
+- Where a kind carries a `template_version` column: that column was
+  `law_revision` wearing app clothes; migrate and delete.
+- Where reject-style actions denormalize reasons into data: declare
+  `record=Inputs()`, delete the denormalization.
 
 ## Explicit 7.0 punts
 
-- **More than one concurrent pilot / branching lattices** — the
-  single-pilot rule is the design's load-bearing simplification;
-  evidence that a real team needs two concurrent semantic pilots on one
-  engine is evidence they need two engines.
-- **Piloting machine changes with no possible continuity map** —
-  refused at the pilot gate by design, punted to environments, honestly.
-- **Federation** — unchanged from v6; the second real server is still
-  the trigger. (Two *processes* over one database, §4, is not
-  federation — it is one engine with two bodies.)
-- **Editing `fn=`/`check=` code through the API** — code arrives by
-  deploy, forever. The API edits declarations that are data; the
-  lifecycle governs both once they are proposed.
-- **Cohort predicates beyond authorization** (percentage rollouts,
-  sticky sampling) — a cohort is a role or grant, full stop. Percentage
-  rollout is a *process* for granting roles, and processes that assign
-  authorization belong to the apps (or an agent), not the engine.
+- **Per-principal semantic pilots** — the first draft's center, demoted
+  by the user-story pass: reader-scoped law structurally breaks
+  multi-participant controls, and the domains' real stories are all
+  row-scoped. One recorded trigger could revive a narrow form: the
+  **agent canary** (agent principals living under the proposal first —
+  read-heavy, tireless, not co-signing human controls). It would drag
+  the shadow-column apparatus back with it; the trigger had better be
+  real.
+- **Piloting code changes per-population** (§4) — refused at the gate;
+  preview-then-promote-totally, or environments. The pressure this
+  creates is deliberate: it rewards making law data.
+- **More than one concurrent pilot / branching** — a stage, not a
+  lattice. Two concurrent semantic experiments on one engine is
+  evidence you need two engines.
+- **Percentage rollouts, sticky sampling** — a population is a declared
+  predicate over rows. Randomized assignment is a *process* for
+  choosing populations and belongs to apps or agents, not the engine.
+- **Federation** — unchanged; still waits for the second real server.
 
-Not punted, on principle: **the single log.** Any variant of this
-design in which pilot writes land somewhere other than the one
-transition log — a branch, a staging table, a replayed queue — is the
-environments pattern wearing a costume, and forfeits the only thing
-that makes the rest worth building.
+Not punted, on principle: **the single log** (pilot writes landing
+anywhere else is the environments pattern in a costume), and now its
+twin: **every row names its law.** A row served under a revision its
+envelope does not admit to would be the old silent deploy, rebuilt one
+row at a time.
 
 ---
 
 ## Appendix: before/after stories
 
-### §1–§2 — Colton proposes a tolerance change
+### §1–§2 — Colton proposes, Elena promotes
 
 **Before (v6):** The reconciliation tolerance is wrong for one fund
-class; Colton edits `TOLERANCE`, deploys to staging, eyeballs a few
-workbooks, deploys to production. The boot auto-revises; the deploy IS
-the rollout; the first person to live under the new law is everyone.
-The review happened in a pull request the audit trail has never heard
-of.
+class; Colton edits `Tolerance`, deploys to staging, eyeballs a few
+workbooks, deploys to production. The boot auto-revises; the first
+person to live under the new law is everyone; the review happened in a
+pull request the audit trail has never heard of.
 
-**After (v7):** The deploy lands as a *proposed* revision. Its
-blast-radius job reports: `reconciled` flips on 3 of 4,102 accounts —
-named, linked. Elena (not Colton — four-eyes on the law) reviews the
-diff and the three accounts, and promotes to *piloted* for the
-ops-beta role. The proposal, the report, the review, and the promotion
-are four transitions on the definition resource, in the same log as
-everything they will govern.
+**After (v7):** The deploy lands as *proposed*. Its blast-radius job
+reports: `reconciled` flips on 3 of 4,102 accounts — named, linked.
+Elena (not Colton — four-eyes on the law) reviews the diff and the
+three accounts, and pilots it for
+`Population(where={"fund": "fund-alpha"})`. Proposal, report, review,
+pilot: four transitions on the definition resource, in the same log as
+everything they govern.
 
-### §3–§4 — Marcus pilots, Priya doesn't
+### §3 — two laws, both eyes coherent
 
-**Before (v6):** Marcus tests the new close flow in the staging
-environment, against copied data that diverged two weeks ago, as a
-user that isn't quite him. His test sign-offs are thrown away with the
-database.
+**Before (v6, first draft of v7):** Marcus pilots the new tolerance
+personally; he prepares a workbook his law calls reconciled and Elena
+reviews it under a law that disagrees — four-eyes confirming nothing.
 
-**After (v7):** Marcus holds `ops-beta`; his envelopes render under
-revision 41 and say so (`meta.law_revision: 41, meta.pilot: true`). He
-prepares a real workbook under the piloted guard; the transition is
-stamped with the law that judged it. Priya, no role, sees the same
-workbook under revision 40 — same row, her law, her columns; Marcus's
-prepare is in her audit view too, stamped as pilot-law. When the shadow
-`reconciled` is still settling after a write Priya's engine processed,
-Marcus's envelope says it is settling. Nothing is hidden; two laws, one
-log, every sentence true.
+**After (v7):** fund-alpha's workbooks are under revision 41 for
+*everyone*. Marcus prepares and Elena reviews the same workbook under
+the same law; fund-beta's close proceeds under 40, likewise coherent.
+`meta.law_revision` on each envelope says which — the auditor can
+group-by it.
 
-### §4 — the promotion that was already paid for
+### §3 — the February close closes under February's law
 
-**Before (v6):** Promoting a redefined fact means boot-time backfill —
-4,102 rows recomputed while the deploy holds the door (or a `Deferred`
-un-advertises the fact while it drains).
+**Before (v6):** The March rule change ships as `if period >= date(2026,
+3, 1)` inside the prepare guard — invisible to the fingerprint, the
+diff, and the reviewer.
 
-**After (v7):** The shadow columns have been current for the whole
-pilot. Promote refuses until the last lag settles, then flips shadow to
-primary — a catalog operation. The rollout's cost was paid during the
-rollout, which is where it belonged.
+**After (v7):** Revision 42 pilots with
+`Population(where={"period_gte": "2026-03"})`. February workbooks live
+and die under 41 — no adoption path, by domain choice. Revision 41 is
+superseded months later, on the day its last workbook closes: laws die
+when they are empty, and the log knows the day.
 
 ### §5 — the auditor, one year later
 
-**Before (v6):** "Why was this workbook rejected?" — the notes were
-denormalized into `data.reject_notes` and cleared on the next prepare;
-the transition row holds a digest. The answer is a shrug with a
-checksum.
+**Before (v6):** "Why was this workbook rejected?" — a digest and a
+shrug; the notes were denormalized into data and cleared on the next
+prepare.
 
 **After (v7):** `reject` declared `record=Inputs()`. The transition row
-holds the reviewer's words, readable under the row's visibility, next
-to the `defined_by` stamp naming the law that demanded them. The
-auditor's question has what it has needed since the v3 port: a
-resource for an answer.
+holds the reviewer's words next to the `defined_by` stamp naming the
+law that demanded them. A resource for an answer.
