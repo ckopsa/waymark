@@ -315,6 +315,71 @@ async def resolve_inputs(spec: DerivedSpec, r: Any, ctx: Any) -> list[Any]:
     return args
 
 
+class _InputView:
+    """The create-input view of the anchor's own fields: values already
+    computed THIS pass shadow the input's (a derived join key must be
+    read at this pass's value — the maintainer's ``_FreshView``
+    discipline, applied to inputs)."""
+
+    def __init__(self, fresh: Mapping[str, Any], inp: Any):
+        self._fresh = fresh
+        self._inp = inp
+
+    def __getattr__(self, name: str) -> Any:
+        if name in self._fresh:
+            return self._fresh[name]
+        return getattr(self._inp, name, None)
+
+
+async def compute_from_input(model: type[BaseModel], inp: Any,
+                             ctx: Any) -> tuple[dict[str, Any],
+                                                dict[str, list[Any]]]:
+    """Every derived value of ``model``, computed from a validated CREATE
+    input (the inputs-and-identities wave, the E9 precedent extended):
+    own fields read off the input (a field the create model does not
+    carry resolves None, exactly as the row would hold); ``ChildField``
+    → an empty list — a new row owns nothing yet, which is true, not a
+    fallback; ``RelatedField`` → the forward read with the INPUT's join
+    values (identity joins included: a break's create input carries
+    ``account_id``, so the parent load works); ``Clock`` → the ctx's
+    ``now``. The same ordered specs and the same pure ``apply`` that
+    materialization and the conformance replay use — one truth, third
+    calling context — which is what makes the value a create guard
+    judges equal the value the same create materializes into the row.
+
+    Returns ``(values, args)``: every derived value by field name, and
+    the resolved input args per field (the ``vars=`` garnish consumes
+    the latter without a second read)."""
+    values: dict[str, Any] = {}
+    resolved: dict[str, list[Any]] = {}
+    for name, spec in ordered_specs(model):
+        args: list[Any] = []
+        for i in spec.over:
+            if i is Clock:
+                args.append(ctx.now)
+            elif isinstance(i, ChildField):
+                args.append([])
+            elif isinstance(i, RelatedField):
+                filters = forward_filters(i.on, _InputView(values, inp))
+                rows: list[Any] = []
+                page = 1
+                while filters is not None:
+                    batch = await ctx.find(i.kind, limit=200, page=page,
+                                           **filters, **dict(i.where))
+                    rows.extend(batch)
+                    if len(batch) < 200:
+                        break
+                    page += 1
+                args.append([_row_field(row, i.field) for row in rows])
+            elif i in values:  # a derivation over a derivation
+                args.append(values[i])
+            else:
+                args.append(getattr(inp, i, None))
+        resolved[name] = args
+        values[name] = spec.apply(args)
+    return values, resolved
+
+
 def _row_field(row: Any, name: str) -> Any:
     """One edge-input value off one related/owned row — ``state`` and
     ``id`` live on the instance, everything else on its Data."""

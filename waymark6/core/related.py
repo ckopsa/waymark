@@ -29,6 +29,17 @@ either side, would make §2's materialization guarantee a lie on a
 timer — ``On`` takes stored field names only, and the stored-boundaries
 discipline (a plan's week is ``start_date``/``end_date``, not "the
 current week") covers every case the dogfoods produced. Recorded punt.
+
+Identity joins (the "relations evaluate against inputs and identities"
+wave, closing ledger6 seam #2): ``On(theirs="id", op="==")`` joins a
+stored field of ours against the target's *identity* — the child→parent
+direction (a break's ``account_id`` selecting its account) that every
+port so far hand-wrote three versions of. The promoted-fields law holds,
+not bends: the primary key is THE indexed column, and the inverted
+predicate is a point lookup on our (promoted) ref column. Only equality
+is representable — an ordered comparison against an identity is
+nonsense — and ``ours="id"`` stays refused: the parent→children
+direction is ``Owns``'s job, obligations included.
 """
 from __future__ import annotations
 
@@ -71,6 +82,18 @@ class On:
         if self.op not in RELATED_OPS:
             raise DefinitionError(
                 f"On(op={self.op!r}) is not one of {list(RELATED_OPS)}")
+        if self.ours == "id":
+            raise DefinitionError(
+                "On(ours='id') — our identity selecting target rows is the "
+                "parent→children direction, which is Owns's job (declare "
+                "Owns(kind, via=...) and take cascade/seed with it); a "
+                "Related identity join reads child→parent: "
+                "On(ours=<ref field>, op='==', theirs='id')")
+        if self.theirs == "id" and self.op != "==":
+            raise DefinitionError(
+                f"On(theirs='id', op={self.op!r}) — an ordered comparison "
+                "against an identity is nonsense; the only predicate an id "
+                "can serve is equality (op='==')")
 
 
 @dataclass(frozen=True)
@@ -139,7 +162,13 @@ def inverted_filters(on: tuple[On, ...],
     rows related to one target row, from that row's field values —
     ``values`` may be the live data or a ``before`` dump, which is how a
     single helper serves both halves of the old/new-set union. ``None``
-    when a join value is null."""
+    when a join value is null.
+
+    Identity is not in the data dumps: a ``model_dump`` of Data never
+    carries ``id``, so for identity joins (``theirs="id"``) the caller
+    rides the target row's id alongside both value sets — it never
+    changes between old and new, but this builder must be able to read
+    it (``server/derived._recompute_related`` injects it)."""
     filters: dict[str, Any] = {}
     for cond in on:
         value = values.get(cond.theirs)

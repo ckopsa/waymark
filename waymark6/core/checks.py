@@ -84,27 +84,44 @@ def check_require(cls: type, machine: StateMachine) -> None:
     """``require()`` gates on a declared bool derivation (design §5): a
     non-derived field has no maintainer keeping the judged truth fresh,
     and a non-bool fact is not a gate — both are definition bugs, not
-    runtime surprises."""
+    runtime surprises. Create guards are held to the same rule (the
+    inputs-and-identities wave, closing ledger6 seam #1): at create
+    the fact is computed from the validated input through the same spec,
+    so the spec must exist all the same.
+
+    This is also where a ``FactRequired`` learns its owning class: with
+    ``r=None`` there is no ``type(r)`` to find the Data model on, so the
+    binding happens here, where the class is known — each ``require()``
+    call site makes a fresh Guard, so per-class binding is safe, and an
+    instance that ends up on two unrelated classes is refused."""
     from .derived import derived_specs
     from .guards import FactRequired
 
     data_cls = getattr(cls, "Data", None)
     specs = derived_specs(data_cls) if data_cls is not None else {}
+
+    def _validate(where: str, g: FactRequired) -> None:
+        if g.fact not in specs:
+            raise _err(cls, f"{where}: require({g.fact!r}) "
+                            "names no derived field of Data — only a "
+                            "maintained fact can gate a transition "
+                            "(design §5)")
+        ann = _sans_none(data_cls.model_fields[g.fact].annotation)
+        if ann is not bool:
+            raise _err(cls, f"{where}: require({g.fact!r}) "
+                            "gates on a non-bool derivation — a gate "
+                            "judges a truth, not a value; derive the "
+                            "predicate as its own bool field")
+        g.bind_data(data_cls)
+
     for name, defn in machine.actions.items():
         for g in _leaf_guards(defn):
-            if not isinstance(g, FactRequired):
-                continue
-            if g.fact not in specs:
-                raise _err(cls, f"action {name!r}: require({g.fact!r}) "
-                                "names no derived field of Data — only a "
-                                "maintained fact can gate a transition "
-                                "(design §5)")
-            ann = _sans_none(data_cls.model_fields[g.fact].annotation)
-            if ann is not bool:
-                raise _err(cls, f"action {name!r}: require({g.fact!r}) "
-                                "gates on a non-bool derivation — a gate "
-                                "judges a truth, not a value; derive the "
-                                "predicate as its own bool field")
+            if isinstance(g, FactRequired):
+                _validate(f"action {name!r}", g)
+    for top in getattr(cls, "create_guards", ()) or ():
+        for g in top.iter_leaves():
+            if isinstance(g, FactRequired):
+                _validate("create guard", g)
 
 
 def check_when(cls: type, machine: StateMachine) -> None:
@@ -294,6 +311,29 @@ def _check_related_edge(registry: Any, cls: type, where: str, kind: str,
         raise _err(cls, f"{where}: Related target kind {kind!r} is not "
                         "registered on this engine")
     for cond in on:
+        if cond.theirs == "id":
+            # identity join (the inputs-and-identities wave): the target's
+            # primary key IS the indexed column — the promoted-fields law
+            # is about what storage can serve, and nothing serves better.
+            # op == "==" and ours != "id" were refused at On declaration;
+            # the ours side still answers to the promotion rules, because
+            # the inverted map is a point lookup on OUR column.
+            fam = _join_family(cls, cond.ours)
+            if fam == "missing":
+                raise _err(cls, f"{where}: join field {cond.ours!r} (ours) "
+                                f"is not a data field of {cls.kind!r}")
+            if fam == "unpromoted":
+                raise _err(cls, f"{where}: join field {cond.ours!r} (ours) "
+                                f"is not a promoted (filterable or "
+                                f"sortable) column on {cls.kind!r} — the "
+                                "identity join's reverse map is an indexed "
+                                "point lookup on it (design §1)")
+            if fam != "string":
+                raise _err(cls, f"{where}: identity join across mismatched "
+                                f"column types ({cond.ours!r} is {fam}, "
+                                f"'id' is string) — join an id against a "
+                                "string (ideally Ref) column")
+            continue
         sides = (("ours", cond.ours, cls, cls.kind),
                  ("theirs", cond.theirs, target.cls, kind))
         families = {}
@@ -377,6 +417,82 @@ def check_related(registry: Any) -> None:
                                     "no query parameter — the compiled "
                                     "href speaks the public range grammar "
                                     "(_gte/_lte); use '<=', '>=', or '=='")
+                if cond.theirs == "id":
+                    raise _err(cls, f"link {ld.rel!r}: theirs='id' has no "
+                                    "collection query parameter — an "
+                                    "identity join serves §2 facts; the "
+                                    "Ref field itself already renders the "
+                                    "navigable reference to the parent")
+
+
+def check_derived_cycles(registry: Any) -> None:
+    """Cross-kind derived-fact cycles are refused at assembly (the
+    inputs-and-identities wave): with identity joins, facts can flow both
+    parent→child and child→parent for the first time, so two kinds could
+    each derive over the other's derived fact. The maintainer's chained
+    recompute (``recompute_owners`` propagating flips) terminates exactly
+    because this graph is a DAG — each hop settles a strictly deeper
+    fact, and the depth is bounded by the graph's longest path. A cycle
+    would flip forever, so it is unrepresentable, not throttled.
+
+    Nodes are ``kind.field`` derived facts; edges are the derived fields
+    a fact reads — own-field derivation deps, plus the *derived* target
+    fields reached through ``ChildField``/``RelatedField`` inputs (the
+    read field, the ``theirs`` join keys, and ``where=`` filters — each
+    is a value whose flip moves this fact). Same-kind cycles through own
+    inputs are already refused at import (``ordered_specs``); everything
+    caught here runs through an edge."""
+    from .derived import ChildField, derived_specs
+    from .related import RelatedField
+
+    all_specs = {rdef.kind: derived_specs(rdef.cls.Data)
+                 for rdef in registry.defs()}
+    graph: dict[tuple[str, str], set[tuple[str, str]]] = {}
+    for kind, specs in all_specs.items():
+        for name, spec in specs.items():
+            deps = graph.setdefault((kind, name), set())
+            for inp in spec.over:
+                if isinstance(inp, str):
+                    if inp in specs:
+                        deps.add((kind, inp))
+                elif isinstance(inp, (ChildField, RelatedField)):
+                    tspecs = all_specs.get(inp.kind, {})
+                    if inp.field in tspecs:
+                        deps.add((inp.kind, inp.field))
+                    for f in inp.where:
+                        if f in tspecs:
+                            deps.add((inp.kind, f))
+                    for cond in getattr(inp, "on", ()) or ():
+                        if cond.ours in specs:
+                            deps.add((kind, cond.ours))
+                        if cond.theirs in tspecs:
+                            deps.add((inp.kind, cond.theirs))
+
+    state: dict[tuple[str, str], int] = {}  # 1 = walking, 2 = done
+    stack: list[tuple[str, str]] = []
+
+    def visit(node: tuple[str, str]) -> None:
+        state[node] = 1
+        stack.append(node)
+        for dep in sorted(graph.get(node, ())):
+            mark = state.get(dep)
+            if mark == 2:
+                continue
+            if mark == 1:
+                loop = stack[stack.index(dep):] + [dep]
+                pretty = " → ".join(f"{k}.{f}" for k, f in loop)
+                raise DefinitionError(
+                    f"derived facts form a cross-kind cycle: {pretty} — "
+                    "a fact defined in terms of itself defines nothing, "
+                    "and the maintainer's chained recompute could never "
+                    "settle it (design 6.0 §2)")
+            visit(dep)
+        stack.pop()
+        state[node] = 2
+
+    for node in sorted(graph):
+        if state.get(node) != 2:
+            visit(node)
 
 
 def check_unique(cls: type) -> None:

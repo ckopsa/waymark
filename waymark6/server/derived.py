@@ -351,7 +351,19 @@ class DerivedMaintainer:
         carve-out move dirties two wires, and both must tell the truth.
         For ``Related`` inputs the same discipline generalizes from two
         ids to two sets (design 6.0 §2). Rides the same commit; every
-        dirtied row is taken FOR UPDATE so concurrent writes serialize."""
+        dirtied row is taken FOR UPDATE so concurrent writes serialize.
+
+        Chaining (the inputs-and-identities wave): a dirtied row whose
+        facts FLIPPED is itself a write someone may derive over —
+        break → account.unexplained → workbook.all_accounts_reconciled,
+        or, in the new child→parent direction, a workbook transition
+        flipping an account's fact flipping a break's gate. Each flip
+        propagates through this same method, same commit, same cause (the
+        causing transition), so every fact downstream of one act tells
+        the truth in that act's own response. Termination is the
+        assembly-checked acyclicity of the cross-kind fact graph
+        (``checks.check_derived_cycles``): a row with no flips propagates
+        nothing, and each hop settles a strictly deeper fact."""
         for parent_kind, via in sorted(self._reverse.get(rdef.kind, ())):
             ids: set[str] = set()
             current = getattr(instance.data, via, None)
@@ -366,11 +378,15 @@ class DerivedMaintainer:
                 if parent is None:
                     continue
                 prdef = self.registry[parent_kind]
+                parent_before = parent.data.model_dump(mode="json")
                 flips = await self.materialize(s, parent, prdef, now=now)
                 if flips:
                     await self.storage.update_data(s, parent_kind, parent)
                     self.record(s, prdef, parent.id, flips, cause=cause,
                                 at=now)
+                    await self.recompute_owners(s, parent, prdef,
+                                                parent_before,
+                                                now=now, cause=cause)
         await self._recompute_related(s, instance, rdef, before,
                                       now=now, cause=cause)
 
@@ -391,14 +407,21 @@ class DerivedMaintainer:
         descriptors = self._reverse_related.get(rdef.kind, ())
         if not descriptors:
             return
+        # identity is not in the data dumps: model_dump never carries the
+        # primary key, but an identity join's inverted filter reads
+        # values["id"] — ride the row's id alongside both value sets (it
+        # never changes between old and new, so the two identity filters
+        # dedupe below exactly as any unmoved join value does)
         current = instance.data.model_dump(mode="json")
+        current["id"] = instance.id
         for anchor_kind, on in descriptors:
             queries = []
             filters_new = inverted_filters(on, current)
             if filters_new is not None:
                 queries.append(filters_new)
             if before is not None:
-                filters_old = inverted_filters(on, before)
+                filters_old = inverted_filters(on, {**before,
+                                                    "id": instance.id})
                 if filters_old is not None and filters_old not in queries:
                     queries.append(filters_old)
             ids: set[str] = set()
@@ -420,11 +443,17 @@ class DerivedMaintainer:
                                                  for_update=True)
                 if anchor is None:
                     continue
+                anchor_before = anchor.data.model_dump(mode="json")
                 flips = await self.materialize(s, anchor, ardef, now=now)
                 if flips:
                     await self.storage.update_data(s, anchor_kind, anchor)
                     self.record(s, ardef, anchor.id, flips, cause=cause,
                                 at=now)
+                    # chaining, same as the Owns direction: a flipped
+                    # anchor is a write someone may derive over
+                    await self.recompute_owners(s, anchor, ardef,
+                                                anchor_before,
+                                                now=now, cause=cause)
 
     # ── flips: collected in the commit, published after it ───────────────
     def open_sink(self, s: Any) -> list[dict[str, Any]]:

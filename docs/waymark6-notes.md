@@ -109,3 +109,109 @@ as its badge. `make mealplan6` (port 8004), `make conformance6`.
   caps nominations — fine at one or two surfaces, unstudied at twenty.
 - Cross-engine members, clock-referencing predicates, aggregates beyond
   Count/Sum: the design's punts, untouched.
+
+## Extension wave: relations evaluate against inputs and identities
+
+The two ledger6 findings-doc seams (#1 and #2 under "Seams, named")
+pointed one direction — the relation machinery judged only *stored
+rows*, never the input a create carries or the identity a ref names —
+and this wave closes both. Coverage grows; every §1–§2 law holds at
+full strength.
+
+**Identity joins (seam #2).** `On(theirs="id", op="==")` is now legal:
+a `Related` predicate may compare a stored field of ours against the
+target's primary key — the child→parent direction (`Related("account",
+on=(On(ours="account_id", op="==", theirs="id"),))`) that every port
+hand-wrote as `workbook_open`/`account_open` prose. The promoted-fields
+law is unweakened, re-read: it exists because a predicate storage cannot
+index cannot be honored, and the id IS the indexed column. Only equality
+is representable (`op` other than `==` against an identity is refused at
+`On` declaration), `ours="id"` stays refused pointing the author at
+`Owns` (that direction carries obligations), and the `ours` side must
+still be a promoted string column — the inverted map is an indexed point
+lookup on it. Pitfalls resolved by name:
+
+- *Identity is not in the data dumps.* The inverted predicate runs over
+  `model_dump` value sets, and `id` appears in no dump —
+  `_recompute_related` now rides the target row's id alongside both the
+  old and new values (it never changes between them, so the two identity
+  filters dedupe like any unmoved join value).
+- *The forward read needed no special case.* `storage.query` (and
+  `ctx.find` over it) accepts an `id` filter — the conditions builder
+  binds `table.c["id"]` like any column — so the forward read, the
+  garnish resolver, and the backfill all speak the one query path;
+  no `load` carve-out exists to drift.
+- *Edge-cited links refuse identity predicates.* The public collection
+  grammar has no `id` param, and the Ref field already renders the
+  navigable reference — a `link(edge=)` over an identity join is a
+  `DefinitionError`, not a 422 at click time.
+- The predicate rides `_derived_fp` as data like any `on=`; moving a
+  join from a data field to the identity is a redefinition, and the
+  fingerprint (and therefore backfill-on-revise) says so.
+
+**Chained recompute, built where "verify" found it missing.** The brief
+for this wave assumed derived-over-derived already chained across kinds;
+an empirical probe (a break create explaining an account under a
+workbook) showed it did not — `recompute_owners` materialized one hop
+and stopped, so ledger6's `workbook.open_unexplained` was silently
+stale after any break write. The maintainer now propagates: a dirtied
+row whose facts *flipped* runs `recompute_owners` itself — same commit,
+same cause, `before`-dump discipline intact — so
+break → account.unexplained → workbook.all_accounts_reconciled settles
+in the causing request, and the new parent→child direction rides the
+identical mechanism. The transition path also refreshes the written
+row's in-memory data after the chain (the create path's post-seed
+discipline, applied to transitions), because the chain can now circle
+back to the very row being rendered.
+
+**Cross-kind cycles are refused at assembly.** With facts flowing both
+directions, two kinds could each derive over the other's derived fact
+for the first time. `check_derived_cycles` (engine assembly, beside
+`check_related`) builds the cross-kind fact graph — own-field derivation
+deps plus the *derived* target fields reached through
+`ChildField`/`RelatedField` inputs (read field, `theirs` join keys,
+`where=` filters) — and refuses cycles with the loop named. This is the
+chain's termination proof, not a lint: each propagation hop settles a
+strictly deeper fact of a DAG. Legitimate chains of any length pass.
+
+**require() evaluates at create (seam #1).** `FactRequired` read the
+materialized fact off `r.data`; at create `r is None` and no row exists
+for the maintainer to have written, so a Related fact could not gate its
+own create and the relation-fact and the create-guard stayed two
+spellings of one predicate. Extended on the E9 precedent (guards already
+judge inputs): with `r=None` the fact is computed from the validated
+create input by `compute_from_input` — the spec's own `over=` resolved
+input-side (own fields off the input; `ChildField` → empty list, because
+a new row owning nothing is *true*, not a fallback; `RelatedField` → the
+forward read with the input's join values, identity joins included;
+`Clock` → the ctx's now) and folded through the same pure `apply` that
+materialization and the conformance replay run. One truth, third calling
+context — which is the consistency guarantee, tested: the value the
+create guard judged equals the value the same create materializes.
+Pitfalls resolved by name:
+
+- *Class binding.* With `r=None` there is no `type(r)` to find the Data
+  model on; `checks.check_require` — which already validated `require()`
+  facts per class, and now covers `create_guards` too — binds the owning
+  Data model onto the guard instance where the class is known. Each
+  `require()` call site is a fresh instance, so the binding is
+  per-class; one instance reaching two unrelated classes is a
+  `DefinitionError`.
+- `require(..., severity=...)` passes through (the registry gate wants a
+  warning at create), the `explain=`/`vars=` garnish resolves from the
+  same input-computed args (no second read), and the acknowledge path is
+  the standard `Waymark-Acknowledge` header with the guard's
+  `require:{fact}` name on the create's own transition row.
+- `ctx.find` grew a `page=` keyword so the create-time fact walks every
+  match exactly as the maintainer does (200 a page), instead of trusting
+  one truncated read.
+
+Tests: `tests/waymark6/test_identity_joins.py` (12) and
+`tests/waymark6/test_require_at_create.py` (8); `tests/waymark6` at 332,
+`--waymark6` conformance 2348/0, ledger6 + the Priya dogfood
+untouched and green. Recorded for the wave after: the clock sweep
+(`tick()`) still materializes per row without chaining into cross-kind
+facts — a clocked fact someone derives over goes stale until the next
+write on either side; the gap predates this wave (it exists for `Owns`
+too) and no dogfood shape hits it yet, but the chain now exists to wire
+it to.

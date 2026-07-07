@@ -153,6 +153,11 @@ class Engine:
         # indexable on both sides, or the declaration is refused here —
         # invertibility is §2's guarantee, so there is no runtime tier
         checks.check_related(self.registry)
+        # cross-kind fact cycles (the inputs-and-identities wave): facts
+        # flow parent→child and child→parent now, so two kinds could each
+        # derive over the other — the chained recompute terminates only
+        # because this graph is a DAG, so a cycle is refused here, named
+        checks.check_derived_cycles(self.registry)
         # edge-cited links compile their hrefs from the checked predicate
         # (design 6.0 §1): the target collection filtered by the §3 grammar
         from ..core.related import compile_edge_links

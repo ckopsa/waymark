@@ -444,6 +444,18 @@ class FactRequired(Guard):
     here; ``explain=`` on require() overrides for the rare gate whose
     sentence isn't the fact's own.
 
+    At create there is no stored fact — ``r is None`` — and the E9
+    precedent already has guards judging inputs there. The
+    inputs-and-identities wave extends this guard the same way: the fact
+    is computed from the validated create input through the spec's own
+    declared inputs and pure ``apply``
+    (:func:`~.derived.compute_from_input` — the same function
+    materialization and the conformance replay run), so the value the
+    guard judges IS the value the same create materializes into the row.
+    The Data model to find the spec on cannot come from ``type(r)`` with
+    ``r=None``; ``checks.check_require`` binds it here per class, where
+    the class is known.
+
     When the gating derivation is clocked, the refusal carries
     ``becomes_available.at`` for free: the declaration's ``flips_at=``
     callable, or the row's maintained ``next_flip_at`` column — read, not
@@ -452,22 +464,49 @@ class FactRequired(Guard):
     """
 
     def __init__(self, fact: str, *, explain: str | None = None,
-                 hide: bool = False, remedies: tuple[str, ...] = ()):
+                 hide: bool = False, remedies: tuple[str, ...] = (),
+                 severity: str = "refuse"):
         self.fact = fact
         self._own_explain = explain is not None
+        self._owner_data: type | None = None  # bound by checks.check_require
         super().__init__(
             explain=explain or (f"Not yet: {fact.replace('_', ' ')} "
                                 "does not hold."),
             check=self._check_fact, reads=("storage",),
             hide=hide, name=f"require:{fact}", remedies=remedies,
+            severity=severity,
         )
+
+    def bind_data(self, data_cls: type) -> None:
+        """Bind the owning class's Data model (``checks.check_require``):
+        the r-None path has no ``type(r)`` to find the spec on. Each
+        ``require()`` call site makes a fresh instance, so the binding is
+        per-class; one instance shared by two unrelated classes would
+        judge one class's fact under the other's law — refused."""
+        bound = self._owner_data
+        if bound is None:
+            self._owner_data = data_cls
+            return
+        if bound is data_cls or issubclass(data_cls, bound) \
+                or issubclass(bound, data_cls):
+            return  # re-registration / subclassing shares the field specs
+        raise DefinitionError(
+            f"require({self.fact!r}) is already bound to "
+            f"{bound.__name__} and cannot also serve {data_cls.__name__} "
+            "— one Guard instance judges one class's fact; call "
+            "require() once per class")
 
     def _spec(self, r: Any) -> Any:
         from .derived import derived_specs
 
-        return derived_specs(type(r).Data).get(self.fact)
+        data_cls = type(r).Data if r is not None else self._owner_data
+        if data_cls is None:
+            return None
+        return derived_specs(data_cls).get(self.fact)
 
     async def _check_fact(self, r: Any, inp: Any, ctx: Ctx) -> Allow | Deny:
+        if r is None:
+            return await self._check_fact_at_create(inp, ctx)
         if getattr(r.data, self.fact, None):
             return Allow()
         spec = self._spec(r)
@@ -481,8 +520,39 @@ class FactRequired(Guard):
                 vars = None  # the garnish must never block the refusal
         return Deny(vars=vars)
 
+    async def _check_fact_at_create(self, inp: Any, ctx: Ctx) -> Allow | Deny:
+        """The r-None path (the inputs-and-identities wave): compute the
+        fact from the validated create input via the spec's declared
+        inputs and pure ``apply`` — the value judged here is the value
+        the same create materializes. The garnish resolves from the same
+        pass's args; no second read, no drift."""
+        if inp is None:
+            # nothing to judge yet — the create surface probes checks only
+            # when the declaration says needs_input=False, and this one
+            # grades input by definition
+            return Allow(pending_input=True)
+        if self._owner_data is None:
+            raise DefinitionError(
+                f"require({self.fact!r}) evaluated at create without a "
+                "bound class — create_guards bind in checks.check_require; "
+                "a guard evaluated outside its declared resource has no "
+                "Data model to compute the fact from")
+        from .derived import compute_from_input, derived_specs
+
+        values, args = await compute_from_input(self._owner_data, inp, ctx)
+        if values.get(self.fact):
+            return Allow()
+        spec = derived_specs(self._owner_data).get(self.fact)
+        vars: dict[str, Any] | None = None
+        if spec is not None and spec.vars is not None:
+            try:
+                vars = dict(spec.vars(*args[self.fact]))
+            except Exception:
+                vars = None  # the garnish must never block the refusal
+        return Deny(vars=vars)
+
     def render_reason(self, deny: Deny, r: Any = None) -> str:
-        if not self._own_explain and r is not None:
+        if not self._own_explain:
             spec = self._spec(r)
             if spec is not None and spec.explain:
                 return spec.explain.format_map(
@@ -507,15 +577,20 @@ class FactRequired(Guard):
 
 
 def require(fact: str, *, explain: str | None = None,
-            hide: bool = False, remedies: tuple[str, ...] = ()) -> Guard:
+            hide: bool = False, remedies: tuple[str, ...] = (),
+            severity: str = "refuse") -> Guard:
     """Gate a transition on a declared boolean derived field (design §5).
     Import checks (``checks.check_require``) refuse a ``fact`` that is not
     a bool derivation of the resource's Data — a gate over a fact nobody
     maintains would judge nothing. ``remedies`` names the affordances that
     change the fact (``"kind.action"``), exactly as on any Guard — a
     refusal that says only what's wrong when the declaration knows what
-    to do about it is half a sentence."""
-    return FactRequired(fact, explain=explain, hide=hide, remedies=remedies)
+    to do about it is half a sentence. ``severity="warning"`` joins the
+    E1 acknowledge protocol like any guard — including in
+    ``create_guards``, where the fact is computed from the create input
+    (the inputs-and-identities wave)."""
+    return FactRequired(fact, explain=explain, hide=hide, remedies=remedies,
+                        severity=severity)
 
 
 class _GuardFactory:

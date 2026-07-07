@@ -101,14 +101,18 @@ class Ctx:
         return await self._reader(resource, id, ctx=self)
 
     async def find(self, resource: type | str, *, sort: str | None = None,
-                   limit: int = 25, **filters: Any) -> list[Any]:
+                   limit: int = 25, page: int = 1,
+                   **filters: Any) -> list[Any]:
         """Query another kind's instances in this transaction — the list half
         of cross-resource reads. Filters take the collection query's field
-        names (e.g. ``state="active"``)."""
+        names (e.g. ``state="active"``). ``page`` walks further pages of
+        ``limit`` rows — what lets a caller that must see *every* match
+        (the create-time fact computation) page exactly as the maintainer
+        does instead of trusting one truncated read."""
         if self._finder is None:
             raise RuntimeError("ctx.find is only available inside an engine-managed invocation")
         return await self._finder(resource, filters, sort=sort, limit=limit,
-                                  ctx=self)
+                                  page=page, ctx=self)
 
     async def actor_of(self, resource: type | str, id: str,
                        action: str) -> str | None:

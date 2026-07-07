@@ -810,6 +810,19 @@ class Invoker:
         # old and new parent when the via ref itself moved
         await self.derived.recompute_owners(s, instance, rdef, before,
                                             now=ctx.now, cause=transition.id)
+        if any(spec.child_inputs or spec.related_inputs
+               for _, spec in self.derived.specs(rdef.cls)):
+            # the chained recompute (inputs-and-identities wave) may have
+            # circled back to THIS row — a transition here flips a fact
+            # over there, and a fact here derives over it (account.close →
+            # break.account_is_open → account gate count). The chain wrote
+            # and recorded through its own FOR UPDATE copy; refresh the
+            # in-memory instance so the response doesn't lag its own
+            # commit — the create path's post-seed discipline, applied to
+            # transitions
+            refreshed = await self.storage.load(s, kind, instance.id)
+            if refreshed is not None:
+                instance.data = refreshed.data
         consumed: tuple[str, str] | None = None
         if defn.draft and self.draft_store is not None:
             # the effort landed; the draft has served its purpose. The
@@ -1865,13 +1878,13 @@ class Invoker:
                                                    action)
 
     async def _child_find(self, resource: Any, filters: dict[str, Any], *,
-                          sort: str | None, limit: int,
+                          sort: str | None, limit: int, page: int = 1,
                           ctx: Ctx) -> list[Resource]:
         """ctx.find: the list half of cross-resource reads."""
         kind = resource if isinstance(resource, str) else resource.kind
         items, _total = await self.storage.query(
             ctx.session, kind, filters=filters, sort=sort,
-            page_size=limit, page_number=1)
+            page_size=limit, page_number=page)
         return items
 
     async def _child_invoke(self, resource: Any, id: str, action: str,
