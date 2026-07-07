@@ -130,10 +130,13 @@ def _action_entry(defn: ActionDef, rdef: ResourceDef, href: str,
     entry: dict[str, Any] = {"method": "POST", "href": href}
     if warnings:
         # advisory guards (design E1): advertised, refusable-with-override —
-        # the entry says so up front, the same reason enforcement will give
-        entry["warnings"] = [{"name": g.name,
-                              "reason": g.render_reason(d, instance)}
-                             for d, g in warnings]
+        # the entry says so up front, the same reason enforcement will give,
+        # with the guard's declared remedies riding it like a refusal's
+        entry["warnings"] = [
+            {"name": g.name,
+             "reason": g.render_reason(d, instance),
+             **({"remedies": list(g.remedies)} if g.remedies else {})}
+            for d, g in warnings]
     schema: dict[str, Any] | None = None
     if defn.input is not None:
         schema = _admits_schema(rdef.action_schemas[defn.name][0], admitted)
@@ -463,9 +466,19 @@ def render_links(instance: Resource, rdef: ResourceDef, *, base: str,
     links: dict[str, Any] = {}
     for ld in rdef.cls.links:
         href = _SummaryFormatter(instance).vformat(ld.href, (), {})
-        links[ld.rel] = {"href": base + href if href.startswith("/") else href,
-                         "kind": ld.kind,
-                         **({"summary": ld.summary} if ld.summary else {})}
+        entry = {"href": base + href if href.startswith("/") else href,
+                 "kind": ld.kind,
+                 **({"summary": ld.summary} if ld.summary else {})}
+        if ld.embed:
+            # an invitation to co-present, not a substitute for the href
+            entry["embed"] = True
+        if ld.badge is not None:
+            # scent (§4): the named Data field's current value rides the
+            # link; None is absence, not a zero to render
+            value = getattr(instance.data, ld.badge, None)
+            if value is not None:
+                entry["badge"] = value
+        links[ld.rel] = entry
     links.setdefault("collection", {
         "href": f"{base}/{rdef.plural}",
         "kind": f"{rdef.kind}_collection",
@@ -841,7 +854,8 @@ async def render_collection(
         # advisory create guards (design E1 via §10): advertised up front,
         # refusable-with-override — the same shape action entries carry
         create_entry["warnings"] = [
-            {"name": g.name, "reason": g.render_reason(d, None)}
+            {"name": g.name, "reason": g.render_reason(d, None),
+             **({"remedies": list(g.remedies)} if g.remedies else {})}
             for d, g in create_warnings]
     place("create", create_entry)
     actions["query"] = {

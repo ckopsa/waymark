@@ -452,14 +452,14 @@ class FactRequired(Guard):
     """
 
     def __init__(self, fact: str, *, explain: str | None = None,
-                 hide: bool = False):
+                 hide: bool = False, remedies: tuple[str, ...] = ()):
         self.fact = fact
         self._own_explain = explain is not None
         super().__init__(
             explain=explain or (f"Not yet: {fact.replace('_', ' ')} "
                                 "does not hold."),
             check=self._check_fact, reads=("storage",),
-            hide=hide, name=f"require:{fact}",
+            hide=hide, name=f"require:{fact}", remedies=remedies,
         )
 
     def _spec(self, r: Any) -> Any:
@@ -507,12 +507,15 @@ class FactRequired(Guard):
 
 
 def require(fact: str, *, explain: str | None = None,
-            hide: bool = False) -> Guard:
+            hide: bool = False, remedies: tuple[str, ...] = ()) -> Guard:
     """Gate a transition on a declared boolean derived field (design §5).
     Import checks (``checks.check_require``) refuse a ``fact`` that is not
     a bool derivation of the resource's Data — a gate over a fact nobody
-    maintains would judge nothing."""
-    return FactRequired(fact, explain=explain, hide=hide)
+    maintains would judge nothing. ``remedies`` names the affordances that
+    change the fact (``"kind.action"``), exactly as on any Guard — a
+    refusal that says only what's wrong when the declaration knows what
+    to do about it is half a sentence."""
+    return FactRequired(fact, explain=explain, hide=hide, remedies=remedies)
 
 
 class _GuardFactory:

@@ -57,6 +57,7 @@ def run_all(cls: type, machine: StateMachine, *, allow_dead: frozenset[str],
     check_faceted(cls)
     check_oneof(cls)
     check_unique(cls)
+    check_links(cls)
     check_derived(cls, machine)
     check_authored(cls, machine)
     check_unless(cls, machine)
@@ -290,6 +291,19 @@ def check_unique(cls: type) -> None:
                 raise _err(cls, f"unique field {f!r} must be filterable or "
                                 "sortable — uniqueness is enforced on the "
                                 "promoted column")
+
+
+def check_links(cls: type) -> None:
+    """A link ``badge`` is scent (§4): the render reads the named field's
+    current value off the instance's Data, so the declaration must name a
+    real field — a typo'd badge would ride nothing, silently, forever."""
+    for ld in getattr(cls, "links", ()) or ():
+        if ld.badge is None:
+            continue
+        if ld.badge not in cls.Data.model_fields:
+            raise _err(cls, f"link {ld.rel!r}: badge={ld.badge!r} is not a "
+                            "data field — the badge renders the instance's "
+                            "current value of that field")
 
 
 def check_owns(registry: Any) -> None:

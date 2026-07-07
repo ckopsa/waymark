@@ -268,6 +268,21 @@ Safe traversals. Each link carries enough context to decide whether to follow it
 
 Reserved link relations: `self` (top-level, not in `links`), `parent` (breadcrumb chain), `events` (subscription affordance, §6), `collection` (containing collection). All other relation names are application vocabulary.
 
+A link MAY carry two more keys, both declaration-driven:
+
+- **`embed`** (`true`, omitted otherwise) — the server invites the client to co-present the target inline with this document (a workbook's accounts, an account's breaks). An invitation to fetch-and-inline, never a substitute for the `href`.
+- **`badge`** — scent: the current value of a declared field of *this* resource (typically a count) riding the link, so a client can render "Breaks · 3" before the traversal instead of after it. Omitted when undeclared or when the value is `null` — absence is absence, not zero.
+
+```json
+"breaks": {
+  "href": "/api/breaks?account_id=a91",
+  "kind": "break_collection",
+  "summary": "Breaks explaining this account's difference",
+  "embed": true,
+  "badge": 3
+}
+```
+
 **Embedding.** A link MAY carry an `embedded` key containing a full resource document at the negotiated depth. Embedding is *always* the server honoring a depth request (§4.1), never a substitute for the `href`.
 
 ### 4.1 Depth negotiation

@@ -79,16 +79,24 @@ class LinkDef:
 
     ``href`` is a template over the instance (e.g. "/customers/{data.customer_id}",
     relative to the API base); ``kind`` names the target resource kind.
+    ``embed=True`` invites the client to co-present the target inline with
+    this document; ``badge`` names a Data field whose current value rides
+    the rendered link as scent (a count the client can show before the
+    traversal, not after).
     """
 
     rel: str
     kind: str
     href: str
     summary: str | None = None
+    embed: bool = False
+    badge: str | None = None
 
 
-def link(rel: str, *, kind: str, href: str, summary: str | None = None) -> LinkDef:
-    return LinkDef(rel=rel, kind=kind, href=href, summary=summary)
+def link(rel: str, *, kind: str, href: str, summary: str | None = None,
+         embed: bool = False, badge: str | None = None) -> LinkDef:
+    return LinkDef(rel=rel, kind=kind, href=href, summary=summary,
+                   embed=embed, badge=badge)
 
 
 class Resource:

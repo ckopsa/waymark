@@ -313,7 +313,8 @@ class Invoker:
             doc: dict[str, Any] = {"valid": True}
             if warned:
                 doc["warnings"] = [
-                    {"name": d.name, "reason": d.render_reason(v, None)}
+                    {"name": d.name, "reason": d.render_reason(v, None),
+                     **({"remedies": list(d.remedies)} if d.remedies else {})}
                     for v, d in warned]
             return InvokeResult(status=200, body=_to_bytes(doc),
                                 media_type="application/json", doc=doc)
@@ -387,7 +388,9 @@ class Invoker:
                 action_attempted="create",
                 severity="warning",
                 warnings=[{"name": d.name,
-                           "reason": d.render_reason(v, None)}
+                           "reason": d.render_reason(v, None),
+                           **({"remedies": list(d.remedies)}
+                              if d.remedies else {})}
                           for v, d in warned],
                 acknowledge={"header": "Waymark-Acknowledge",
                              "names": sorted(d.name for _, d in warned)})
@@ -719,7 +722,8 @@ class Invoker:
             doc: dict[str, Any] = {"valid": True}
             if warned:
                 doc["warnings"] = [
-                    {"name": d.name, "reason": d.render_reason(v, instance)}
+                    {"name": d.name, "reason": d.render_reason(v, instance),
+                     **({"remedies": list(d.remedies)} if d.remedies else {})}
                     for v, d in warned]
             return InvokeResult(status=200, body=_to_bytes(doc),
                                 media_type="application/json", doc=doc)
@@ -731,7 +735,9 @@ class Invoker:
                 action_attempted=action_name,
                 severity="warning",
                 warnings=[{"name": d.name,
-                           "reason": d.render_reason(v, instance)}
+                           "reason": d.render_reason(v, instance),
+                           **({"remedies": list(d.remedies)}
+                              if d.remedies else {})}
                           for v, d in warned],
                 acknowledge={"header": "Waymark-Acknowledge",
                              "names": sorted(d.name for _, d in warned)})
