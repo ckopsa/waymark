@@ -874,7 +874,11 @@ class PostgresStorage:
             for kind, action in rows:
                 history.setdefault(kind, set()).add(action)
             for rdef in self.registry.defs():
-                known = set(rdef.machine.actions) | ENGINE_ACTIONS
+                # a kind's declared create spellings (Resource.created_as,
+                # design §2 — the definition kind's `revise`) are part of
+                # its action vocabulary like the engine's own tails
+                known = (set(rdef.machine.actions) | ENGINE_ACTIONS
+                         | set(rdef.cls.create_action_names))
                 renames = dict(rdef.cls.renamed_actions)
                 orphaned = sorted(
                     a for a in history.get(rdef.kind, ())

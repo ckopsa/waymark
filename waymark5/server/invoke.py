@@ -409,8 +409,19 @@ class Invoker:
         await self.derived.materialize(s, instance, rdef, now=ctx.now)
         await self.storage.insert(s, rdef.kind, instance)
         summary = render_summary(rdef.summary_template, instance)
+        # the declared create spelling (design §2): one path, one label
+        # per kind — the definition kind logs its non-first revisions as
+        # `revise`, the deploy transition, without a second create path
+        create_action = instance.created_as()
+        if create_action not in rdef.cls.create_action_names:
+            from ..core.types import DefinitionError
+
+            raise DefinitionError(
+                f"{rdef.kind}.created_as() returned {create_action!r}, "
+                "which create_action_names does not declare — the log's "
+                "vocabulary is declared, never improvised")
         created = await self._append(
-            s, kind=rdef.kind, instance=instance, action="create",
+            s, kind=rdef.kind, instance=instance, action=create_action,
             from_state="", principal=ctx.principal, input_digest=digest,
             summary=summary, at=ctx.now, correlation_id=ctx.correlation_id,
             acknowledged=sorted(overridden) or None,

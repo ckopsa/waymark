@@ -34,7 +34,9 @@ contract — declaration, enforcement, and advertisement are one object:
   ledger; deferred compounds ride the E6 job kind).
 - The blast radius renders: ``blast_radius()`` folds
   ``creates``/``advances``/``effects`` summaries into the action entry's
-  ``effect`` — what E8 enforced, the envelope now advertises.
+  ``effect`` — what E8 enforced, the envelope now advertises. Each effect
+  entry names ``{service, op, compensate}``: the compensator is part of
+  the advertised contract, not a server-side secret.
 
 Template values resolve over a declared scope: ``{id}`` and ``{data.*}``
 (the parent), ``{input.*}`` (the validated input), and
@@ -377,15 +379,19 @@ class Compound:
 
     def blast_radius(self) -> dict[str, Any]:
         """What the act spans, for the action entry's ``effect`` — kind
-        and action names and service ops, so a client sees the whole act
-        before confirming it (design §6)."""
+        and action names, and per external write the service, the op, AND
+        the declared compensator: the whole honest contract of the act
+        (design §6). A client confirming a compound sees not only what it
+        calls but what an abort would call to undo it."""
         out: dict[str, Any] = {}
         if self.creates:
             out["creates"] = [c.kind for c in self.creates]
         if self._steps:
             out["advances"] = [f"{s.kind}.{s.action}" for s in self._steps]
         if self.effects:
-            out["effects"] = [e.name for e in self.effects]
+            out["effects"] = [{"service": e.service, "op": e.op,
+                               "compensate": e.compensate.op}
+                              for e in self.effects]
             if self.defer:
                 out["deferred"] = True
         return out

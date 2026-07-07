@@ -198,14 +198,24 @@ async def test_changed_guard_explain_is_a_judgment_revision():
         assert set(changed.values()) == {"judgment"}, changed
         assert "reverts_to" not in diff
 
-        # one correlation: the new revision's create and the old one's
-        # supersede are one deploy in the log, by the deploy actor
+        # one correlation: the new revision's revise and the old one's
+        # supersede are one deploy in the log, by the deploy actor. The
+        # deploy is nameable on the wire (design §2): the create of a
+        # non-first revision is logged as `revise` — the definition kind's
+        # declared create spelling — while revision 1's row (nothing was
+        # revised) stays `create`
         async with e2.storage.session() as s:
             created = await e2.storage.last_transition(s, "definition", rev2.id)
             superseded = await e2.storage.last_transition(s, "definition",
                                                           rev1.id)
-        assert created.action == "create"
+            first = await e2.storage.transitions_since(
+                s, 0, kinds=["definition"], limit=500)
+        assert created.action == "revise"
         assert superseded.action == "supersede"
+        rev1_create = next(t for t in first
+                           if t.resource_id == rev1.id and t.from_state == "")
+        assert rev1_create.action == "create", \
+            "revision 1 recorded the law; nothing was revised"
         assert created.correlation_id == superseded.correlation_id
         assert superseded.actor_type == "system"
         assert superseded.actor_id == "waymark5-deploy"
@@ -342,6 +352,35 @@ async def test_definition_collection_is_the_deploy_history():
         assert minted.status_code == 409, \
             "a wire client must not mint law"
         assert minted.json()["detail"] == reason
+    finally:
+        await client.aclose()
+        await engine.shutdown()
+
+
+async def test_discovery_marks_engine_kinds():
+    """Discovery distinguishes the machinery from the domain: kinds the
+    engine itself contributed (definition, job, grant, member, …) are
+    advertised as ``engine_kinds`` — marked where they were registered,
+    not re-derived from a hardcoded list — so a client can fold the
+    plumbing behind the app's own kinds."""
+    engine = await _boot(make_doc(EXPLAIN_V1, OVERDUE_V1), drop=True)
+    app = FastAPI()
+    app.include_router(engine.router, prefix="/api")
+    client = AsyncClient(transport=ASGITransport(app=app),
+                         base_url="http://t", headers=OWNER)
+    try:
+        doc = (await client.get("/api/.well-known/waymark")).json()
+        engine_kinds = doc["engine_kinds"]
+        assert "doc" not in engine_kinds, \
+            "an app-supplied kind is the domain, never the machinery"
+        assert "doc" in doc["kinds"]
+        assert {"definition", "job"} <= set(engine_kinds)
+        assert set(engine_kinds) <= set(doc["kinds"]), \
+            "every engine kind is still a kind — the flag folds, " \
+            "it does not hide"
+        assert set(engine_kinds) == {
+            k for k in doc["kinds"]
+            if engine.registry[k].engine_owned}
     finally:
         await client.aclose()
         await engine.shutdown()

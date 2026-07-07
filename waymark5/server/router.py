@@ -185,6 +185,10 @@ def build_router(engine: Any) -> APIRouter:
             "waymark": FORMAT_VERSION,
             "media_type": MEDIA_TYPE,
             "kinds": registry.kinds(),
+            # the kinds the engine itself contributed (definition, grant,
+            # member, …) vs. the app's domain — marked at registration,
+            # advertised here so a client can fold the plumbing away
+            "engine_kinds": sorted(registry.engine_kinds()),
             "collections": {rdef.kind: f"{base}/{rdef.plural}"
                             for rdef in registry.defs()},
             "schemas": f"{base}/schemas/{{name}}",

@@ -188,6 +188,18 @@ class Definition(Resource):
 
     create_guards = (_deploy_only(),)
 
+    # deploys are `revise` transitions (design §2): the create of revision
+    # N+1 IS the deploy, and the log names it honestly. Revision 1 stays
+    # `create` — nothing was revised; the law was first recorded. The
+    # declared vocabulary covers both spellings, so history from boots
+    # that logged every revision as `create` stays reachable (`create`
+    # is an engine action for every kind) while new deploys read as what
+    # they are. One invoker path either way — see Resource.created_as.
+    create_action_names = frozenset({"create", "revise"})
+
+    def created_as(self) -> str:
+        return "revise" if self.data.revision > 1 else "create"
+
     @action(from_=DefinitionState.CURRENT, to=DefinitionState.SUPERSEDED,
             guards=(_deploy_only(),),
             safety=Safety(idempotent=True, reversible=False, confirm=False,
@@ -250,10 +262,12 @@ def _still_declared(target_kind: str, marked: Any,
 
 async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
                        fp: dict[str, Any], fp_hash: str
-                       ) -> tuple[str, tuple[str, ...]]:
+                       ) -> tuple[str, int, tuple[str, ...]]:
     """Compare one target's stored law to the fresh fingerprint; write
     nothing, or write revision N+1 and supersede N in one transaction.
-    Returns the id of the target's current definition row, plus the
+    Returns the id of the target's current definition row and its
+    revision NUMBER (the human spelling ``meta.law_revision`` renders
+    beside the id, design §3), plus the
     derived facts awaiting recompute under it: the facts this revise
     marked **stale by definition** (design §4: the diff touched their
     semantic surface — fn source, ``over=``, ``Tolerance``,
@@ -278,7 +292,8 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
         current.data.backfill_pending if current is not None else (),
         declared)
     if current is not None and current.data.fingerprint_hash == fp_hash:
-        return current.id, carried  # unchanged: a restart costs nothing
+        # unchanged: a restart costs nothing
+        return current.id, current.data.revision, carried
 
     revision = rows[0].data.revision + 1 if rows else 1
     diff = None
@@ -328,7 +343,7 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
                 principal=DEPLOY, if_match=None, idempotency_key=None,
                 dry_run=False, locale="en", correlation_id=correlation,
                 require_key=False)
-    return new_id, pending
+    return new_id, revision, pending
 
 
 async def settle_backfill(invoker: Any, row_id: str) -> None:
@@ -383,6 +398,7 @@ async def revise_definitions(engine: Any
                 sort=None, page_size=1, page_number=1)
         if rows:
             ddef.current_law = rows[0].id
+            ddef.current_law_revision = rows[0].data.revision
     # the definition kind revises first, so every later kind's revision
     # rows anchor to the fresh law of the law
     for rdef in sorted(engine.registry.defs(),
@@ -390,15 +406,18 @@ async def revise_definitions(engine: Any
         fp = fingerprint_of(rdef)
         fp_hash = fingerprint_hash(fp)
         hashes[rdef.kind] = fp_hash
-        law[rdef.kind], kind_stale = await _revise_kind(
+        law[rdef.kind], law_revision, kind_stale = await _revise_kind(
             engine.invoker, correlation, rdef.kind, fp, fp_hash)
         if kind_stale:
             stale[rdef.kind] = kind_stale
         # the §3 anchor seam: the invoker's _law() and render's meta.law
-        # read this attribute on every write and every envelope
+        # read this attribute on every write and every envelope — and the
+        # revision NUMBER rides beside the id (meta.law_revision), so a
+        # human client renders "rev N" without resolving the row
         rdef.current_law = law[rdef.kind]
+        rdef.current_law_revision = law_revision
     registry_fp = {"kinds": {k: hashes[k] for k in sorted(hashes)}}
-    law[REGISTRY_KIND], _ = await _revise_kind(
+    law[REGISTRY_KIND], _, _ = await _revise_kind(
         engine.invoker, correlation, REGISTRY_KIND, registry_fp,
         fingerprint_hash(registry_fp))
     return law, stale

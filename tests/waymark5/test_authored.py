@@ -240,7 +240,11 @@ async def test_schema_marks_authored_fields(env):
     prop = schema["properties"]["name"]
     assert prop["readOnly"] is True
     assert prop["x-source"] == "authored"
+    # the authority is named on the wire (design §8): a client shows WHO
+    # owns the value, not merely that somebody external does
+    assert prop["x-authority"] == "hubspot"
     assert "x-source" not in schema["properties"]["crosswalk_id"]
+    assert "x-authority" not in schema["properties"]["crosswalk_id"]
 
 
 async def test_handler_assigning_authored_field_is_refused(env):

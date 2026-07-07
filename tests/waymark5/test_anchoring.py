@@ -301,26 +301,34 @@ async def test_meta_law_on_envelopes_and_collections():
         nid = await _mk_note(engine)
         law = engine.current_law("anote")
 
+        # the revision NUMBER rides beside the id (design §3): a human
+        # client stamps "⚖ rev N" straight off the envelope, no deploy-
+        # history resolution fetch — a fresh boot is revision 1
         doc = (await client.get(f"/api/anotes/{nid}")).json()
         assert doc["meta"]["law"] == law
+        assert doc["meta"]["law_revision"] == 1
 
         collection = (await client.get("/api/anotes")).json()
         assert collection["meta"]["law"] == law
+        assert collection["meta"]["law_revision"] == 1
 
         # the invoke response is the post-transition document — same law
         invoked = await engine.invoker.invoke("anote", nid, "set_due",
                                               {"new_due": 0.5}, principal=DANA)
         assert invoked.doc["meta"]["law"] == law
+        assert invoked.doc["meta"]["law_revision"] == 1
 
         # the definition kind's own envelopes carry the definition kind's
-        # current revision id — the law of the law
+        # current revision id (and number) — the law of the law
         deflaw = engine.current_law("definition")
         defs = (await client.get(
             "/api/definitions?target_kind=anote")).json()
         assert defs["meta"]["law"] == deflaw
+        assert defs["meta"]["law_revision"] == 1
         item = (await client.get(
             defs["data"]["items"][0]["self"])).json()
         assert item["meta"]["law"] == deflaw
+        assert item["meta"]["law_revision"] == 1
     finally:
         await client.aclose()
         await engine.shutdown()

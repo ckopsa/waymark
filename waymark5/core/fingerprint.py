@@ -394,6 +394,13 @@ def fingerprint_of(rdef: ResourceDef) -> dict[str, Any]:
         # names it, so the audit trail reads continuously across renames
         "renamed_actions": dict(sorted(cls.renamed_actions.items())),
         "renamed_fields": dict(sorted(cls.renamed_fields.items())),
+        # the declared create spellings (design §2, Resource.created_as):
+        # what the log may name a creation is vocabulary, and vocabulary
+        # is law. Emitted only when a kind declares beyond the default —
+        # adding the mechanism must not re-hash every kind that never
+        # touched it.
+        **({"created_as": sorted(cls.create_action_names)}
+           if set(cls.create_action_names) != {"create"} else {}),
         "storage": _storage_fp(rdef),
     }
     return _norm(raw)

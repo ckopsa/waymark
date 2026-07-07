@@ -86,14 +86,14 @@ class Engine:
         for cls in resources:
             self.registry.register(cls)
         if "job" not in self.registry:  # deferred bulk lands on job resources
-            self.registry.register(Job)
+            self.registry.register(Job, engine_owned=True)
         # the law is a resource (design §1): always registered, like job —
         # an engine without a deploy history would be an engine whose
         # meaning changes silently, which 5.0 exists to refuse
         from .definitions import Definition
 
         if "definition" not in self.registry:
-            self.registry.register(Definition)
+            self.registry.register(Definition, engine_owned=True)
         # kind → current definition revision row id, filled by the boot
         # revise (design §2); engine.current_law() reads it — the seam §3's
         # defined_by anchoring writes through
@@ -108,9 +108,9 @@ class Engine:
             from .grants import ApprovalRequest, Grant
 
             if "grant" not in self.registry:
-                self.registry.register(Grant)
+                self.registry.register(Grant, engine_owned=True)
             if "approval_request" not in self.registry:
-                self.registry.register(ApprovalRequest)
+                self.registry.register(ApprovalRequest, engine_owned=True)
         if members:
             # identity is a resource (design §9): invite → first-login bind
             # → active, all ordinary audited transitions
@@ -118,19 +118,19 @@ class Engine:
             from .roles import Role
 
             if "member" not in self.registry:
-                self.registry.register(Member)
+                self.registry.register(Member, engine_owned=True)
             # the role registry rides the same flag: roles are the other
             # half of §9's identity surface, and grants' role_registered
             # guard reads it
             if "role" not in self.registry:
-                self.registry.register(Role)
+                self.registry.register(Role, engine_owned=True)
         if webhooks:
             # the outbox is a product (design §10): subscriptions deliver
             # signed transition JSON to third parties
             from .subscriptions import WebhookSubscription
 
             if "subscription" not in self.registry:
-                self.registry.register(WebhookSubscription)
+                self.registry.register(WebhookSubscription, engine_owned=True)
         if attachments:
             # bytes behind the envelope (design E5): metadata is a resource,
             # the blob store is declared. The memory default is the dev
@@ -138,7 +138,7 @@ class Engine:
             from .attachments import Attachment, MemoryBlobStore
 
             if "attachment" not in self.registry:
-                self.registry.register(Attachment)
+                self.registry.register(Attachment, engine_owned=True)
             self.blobs = blobs if blobs is not None else MemoryBlobStore()
         else:
             self.blobs = blobs

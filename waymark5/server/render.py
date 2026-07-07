@@ -661,6 +661,11 @@ async def render(
             # v4 client ignores it. The definition kind's own envelopes
             # carry the definition kind's current revision id.
             **({"law": rdef.current_law} if rdef.current_law else {}),
+            # the same law's revision NUMBER — the human spelling ("rev
+            # N") beside the machine id, stamped by the boot revise so no
+            # client resolves the deploy history just to say which rev
+            **({"law_revision": rdef.current_law_revision}
+               if rdef.current_law_revision else {}),
             # facts catching up with a redefinition (design §4): the value
             # in data was materialized under a superseded law and a
             # declared Deferred is recomputing it — served as data,
@@ -891,6 +896,8 @@ async def render_collection(
         # runs, the same recomputing mark (design §4)
         "meta": {"version": 0, "etag": 'W/"collection"',
                  **({"law": rdef.current_law} if rdef.current_law else {}),
+                 **({"law_revision": rdef.current_law_revision}
+                    if rdef.current_law_revision else {}),
                  **({"recomputing": list(rdef.recomputing)}
                     if rdef.recomputing else {})},
     }

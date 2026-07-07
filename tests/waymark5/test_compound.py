@@ -412,19 +412,29 @@ async def test_compensators_run_in_reverse_order_and_are_audited(env):
 async def test_blast_radius_renders_on_the_effect(env):
     """What E8 enforced, §6 advertises: the action entry's effect carries
     creates/advances/effects summaries AND the compiled touches — one
-    declaration, both faces."""
+    declaration, both faces. Each effect entry names {service, op,
+    compensate}: the undo is part of the advertised contract, so a client
+    renders "calls: blob.copy (compensated by blob.delete)" before anyone
+    confirms."""
     engine, client, services = env
     wire, _ = await _setup_wire(client)
     doc = (await client.get(wire["self"])).json()
     effect = doc["actions"]["carve_out"]["effect"]
     assert effect["creates"] == ["cevent"]
     assert effect["advances"] == ["crow.reassign", "ccounter.decrement"]
-    assert effect["effects"] == ["blob.copy", "blob.copy", "notify.send"]
+    assert effect["effects"] == [
+        {"service": "blob", "op": "copy", "compensate": "delete"},
+        {"service": "blob", "op": "copy", "compensate": "delete"},
+        {"service": "notify", "op": "send", "compensate": "recall"},
+    ]
     assert effect["touches"] == [
         {"creates": "cevent"}, {"advances": "crow.reassign"},
         {"advances": "ccounter.decrement"}]
     snap = doc["actions"]["snapshot"]["effect"]
-    assert snap["effects"] == ["blob.copy", "notify.send"]
+    assert snap["effects"] == [
+        {"service": "blob", "op": "copy", "compensate": "delete"},
+        {"service": "notify", "op": "send", "compensate": "recall"},
+    ]
     assert snap["deferred"] is True
 
 

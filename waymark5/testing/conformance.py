@@ -996,7 +996,16 @@ async def replay_history(storage: Any, registry: Any, kind: str) -> int:
                  f"{t.from_state!r} → {t.to_state!r}) under its anchored "
                  f"revision {t.defined_by}")
         name = t.action
-        known = set(machine["actions"]) | ENGINE_ACTIONS
+        # the kind's declared create spellings (Resource.created_as,
+        # design §2): read from the CURRENT class like renamed_actions —
+        # the continuity vocabulary covers history written under
+        # revisions that predate the declaration (a `revise` row anchors
+        # to the previous law of the law, whose fingerprint cannot have
+        # known the new spelling), and older boots' plain `create` rows
+        # for revisions >1 stay legal because `create` never leaves the
+        # engine vocabulary
+        create_names = set(rdef.cls.create_action_names) | {"create"}
+        known = set(machine["actions"]) | ENGINE_ACTIONS | create_names
         if name not in known:
             # the anchored revision postdates a rename: the declared
             # chain must carry the old spelling forward
@@ -1004,7 +1013,7 @@ async def replay_history(storage: Any, registry: Any, kind: str) -> int:
             assert name is not None, (
                 f"{where}: the action is not legal and no declared "
                 "rename chain reaches one")
-        if name == "create":
+        if name in create_names:
             assert t.from_state == "", f"{where}: create must come from ''"
             assert resolve_renamed(t.to_state, state_renames,
                                    {machine["initial"]}) is not None, (

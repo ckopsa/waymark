@@ -141,6 +141,23 @@ class Resource:
     # in the revise's diff).
     renamed_actions: ClassVar[dict[str, str]] = {}
     renamed_fields: ClassVar[dict[str, str]] = {}
+    # The create spelling (design §2): the action name the engine's create
+    # path records when it writes an instance of this kind. One code path,
+    # one declared label — a kind whose creation MEANS something more
+    # specific than "create" (the definition kind's non-first revisions
+    # are the design's `revise` deploy transition) declares the honest
+    # name here instead of forking the invoker. ``created_as()`` picks the
+    # spelling per instance; ``create_action_names`` declares every name
+    # it may return, and is what the continuity check and the replay
+    # conformance read (the ``renamed_actions`` precedent: the vocabulary
+    # lives on the current class, covering history written before it).
+    create_action_names: ClassVar[frozenset[str]] = frozenset({"create"})
+
+    def created_as(self) -> str:
+        """The action name this instance's creation is logged under. Must
+        return a member of ``create_action_names`` — the invoker refuses
+        an undeclared spelling at write time."""
+        return "create"
     # Declared data-shape versioning (design §8): rows are stamped with the
     # shape they were written at; a row older than the declared shape is
     # upcast at read through the chain — upcasts[n] takes a shape-n data

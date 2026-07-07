@@ -71,6 +71,11 @@ def event_payload(t: TransitionRecord, registry: Registry, base: str) -> dict[st
     """
     rdef = registry[t.kind]
     return {
+        # one taxonomy, every event names its class (design 4.0 §3):
+        # observation and derivation payloads declare theirs at the emit
+        # site; the transition class is declared here, not left for
+        # consumers to infer from the frame that carried it
+        "class": "transition",
         "kind": t.kind,
         "self": f"{base}/{rdef.plural}/{t.resource_id}",
         "action": t.action,

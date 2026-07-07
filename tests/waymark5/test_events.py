@@ -156,6 +156,9 @@ async def test_per_resource_stream_delivers_transition(env):
 
     assert event["event"] == "transition"
     payload = json.loads(event["data"])
+    # one taxonomy, on the wire (design 4.0 §3): every event names its
+    # class — transitions included, not just observation/derivation
+    assert payload["class"] == "transition"
     assert payload["self"] == self_href
     assert payload["from"] == "open" and payload["to"] == "done"
     assert payload["actor"] == {"type": "human", "id": "dana",

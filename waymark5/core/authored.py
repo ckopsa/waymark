@@ -19,7 +19,9 @@ authority, and only that authority's sync path writes it::
 Authored fields join the same per-field discovery path as ``Derived``
 (:func:`authored_spec` beside :func:`~.derived.derived_spec`): the
 declaration rides the pydantic field, the published schema marks the
-field ``readOnly: true`` with ``x-source: "authored"``, and the origins
+field ``readOnly: true`` with ``x-source: "authored"`` and
+``x-authority: "<service>"`` (the authority is nameable on the wire, not
+just in the module), and the origins
 are exclusive and checked at import (``checks.check_authored``) — an
 action input model naming an authored field is a
 :class:`DefinitionError`, a create body supplying one is refused at
@@ -82,6 +84,10 @@ def Authored(*, by: Any, follows: Mapping[Any, str] | None = None,
         schema.pop("default", None)  # an authority-owned value offers none
         schema["readOnly"] = True
         schema["x-source"] = "authored"
+        # the authority is named on the wire, not just in the module: a
+        # client shows WHO owns the value ("hubspot"), not merely that
+        # somebody external does
+        schema["x-authority"] = spec.by
 
     mark.__waymark_authored__ = spec  # type: ignore[attr-defined]
     return Field(default, json_schema_extra=mark, **kwargs)

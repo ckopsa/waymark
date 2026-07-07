@@ -38,6 +38,16 @@ class ResourceDef:
     # ``defined_by`` anchor and by render as ``meta.law``. None before the
     # first revise — the pre-law horizon the migration sketch names.
     current_law: str | None = None
+    # the same law's revision NUMBER (design §3): stamped beside the row
+    # id by the boot revise, rendered as ``meta.law_revision`` so a human
+    # client shows "rev N" without resolving the deploy history first
+    current_law_revision: int | None = None
+    # whether the engine itself contributed this kind (definition, grant,
+    # member, job, …) as opposed to the app's ``resources=[...]`` — set at
+    # registration, where the distinction is a fact rather than a list to
+    # maintain; discovery advertises it so a client can fold engine
+    # plumbing behind the domain kinds
+    engine_owned: bool = False
     # the derived facts still catching up with the current law (design §4):
     # stamped by the boot when a Deferred backfill is declared, cleared as
     # the background task drains each kind. While non-empty, envelopes of
@@ -61,7 +71,8 @@ class Registry:
         self._by_plural: dict[str, ResourceDef] = {}
         self._schemas: dict[str, tuple[dict[str, Any], bytes]] = {}
 
-    def register(self, cls: type[Resource]) -> ResourceDef:
+    def register(self, cls: type[Resource], *,
+                 engine_owned: bool = False) -> ResourceDef:
         if cls.kind in self._by_kind:
             existing = self._by_kind[cls.kind]
             if existing.cls is cls:
@@ -84,6 +95,7 @@ class Registry:
             data_schema=data_dict, data_schema_bytes=data_bytes,
             action_schemas=action_schemas,
             query_schema=query_dict, query_schema_bytes=query_bytes,
+            engine_owned=engine_owned,
         )
         rdef.extra["create_model"] = create_model
         rdef.extra["create_schema"] = create_schema
@@ -113,6 +125,12 @@ class Registry:
 
     def defs(self) -> list[ResourceDef]:
         return list(self._by_kind.values())
+
+    def engine_kinds(self) -> list[str]:
+        """Kinds the engine itself contributed (vs. app-supplied
+        ``resources=[...]``) — the registry knows because registration
+        said so; nothing re-derives the list from a hardcoded set."""
+        return [k for k, rdef in self._by_kind.items() if rdef.engine_owned]
 
     def schema(self, name: str) -> tuple[dict[str, Any], bytes] | None:
         return self._schemas.get(name)
