@@ -1,6 +1,8 @@
 # Local Postgres runs in docker (host :5432 belongs to another project).
 PORT         ?= 8000
 PORT3        ?= 8001  # mealplan3 dev server; :8000 stays free for the waymark2 mealplan
+PORT4        ?= 8002  # mealplan4 dev server
+PORT5        ?= 8003  # mealplan5 dev server
 PG_CONTAINER ?= waymark-test-pg
 PG_USER      ?= ckopsa
 PG_PORT      ?= 5433
@@ -20,7 +22,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: dev db dist test conformance conformance3 check demo mealplan mealplan3 image deploy
+.PHONY: dev db dist test conformance conformance3 conformance4 conformance5 check demo mealplan mealplan3 mealplan4 mealplan5 image deploy
 
 dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
 	uv build
@@ -74,6 +76,24 @@ mealplan3: db dist  ## run the meal planner on waymark3 (mealplan3_dev)
 	MEALPLAN_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan3_dev \
 		uv run uvicorn mealplan3.main:app --reload --port $(PORT3) \
 		--timeout-graceful-shutdown 3  # open SSE streams otherwise wedge every reload
+
+mealplan4: db dist  ## run the meal planner on waymark4 (mealplan4_dev)
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d waymark_test -Atc \
+		"SELECT 1 FROM pg_database WHERE datname='mealplan4_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) createdb -U $(PG_USER) mealplan4_dev
+	@echo "ui  → http://localhost:$(PORT4)/api/-/ui"
+	MEALPLAN_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan4_dev \
+		uv run uvicorn mealplan4.main:app --reload --port $(PORT4) \
+		--timeout-graceful-shutdown 3
+
+mealplan5: db dist  ## run the meal planner on waymark5 (mealplan5_dev)
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d waymark_test -Atc \
+		"SELECT 1 FROM pg_database WHERE datname='mealplan5_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) createdb -U $(PG_USER) mealplan5_dev
+	@echo "ui  → http://localhost:$(PORT5)/api/-/ui"
+	MEALPLAN_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan5_dev \
+		uv run uvicorn mealplan5.main:app --reload --port $(PORT5) \
+		--timeout-graceful-shutdown 3
 
 demo: db  ## agent demo (plans over effect.to, stops at safety.confirm)
 	WAYMARK_DSN=$(DEV_DSN) uv run python scripts/agent_demo.py
