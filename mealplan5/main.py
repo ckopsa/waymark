@@ -52,6 +52,7 @@ engine = waymark.Engine(
 
 app = FastAPI(title="Family meal planner", lifespan=engine.lifespan)
 app.include_router(engine.router, prefix="/api")
+app.include_router(engine.landing())  # the UI at /, the API under /api
 
 from waymark5.server import openapi as _openapi  # noqa: E402
 

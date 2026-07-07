@@ -90,7 +90,7 @@ mealplan5: db dist  ## run the meal planner on waymark5 (mealplan5_dev)
 	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d waymark_test -Atc \
 		"SELECT 1 FROM pg_database WHERE datname='mealplan5_dev'" | grep -q 1 || \
 		docker exec $(PG_CONTAINER) createdb -U $(PG_USER) mealplan5_dev
-	@echo "ui  → http://localhost:$(PORT5)/api/-/ui"
+	@echo "ui  → http://localhost:$(PORT5)/"
 	MEALPLAN_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan5_dev \
 		uv run uvicorn mealplan5.main:app --reload --port $(PORT5) \
 		--timeout-graceful-shutdown 3

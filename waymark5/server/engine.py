@@ -515,3 +515,31 @@ class Engine:
             yield
         finally:
             await self.shutdown()
+
+    def landing(self) -> Any:
+        """A router serving the generic client at the site root.
+
+        ``include_router(engine.landing())`` puts the human entry point at
+        ``/`` while the API keeps its prefix — the page is the same file
+        ``{base}/-/ui`` serves, with the API base injected so the client
+        stops deriving it from its own URL. Mount it or don't; the
+        ``/-/ui`` route keeps working either way.
+        """
+        import json as _json
+        from pathlib import Path
+
+        from fastapi import APIRouter
+        from fastapi.responses import Response
+
+        router = APIRouter()
+        base = self.base_path
+
+        @router.get("/", include_in_schema=False)
+        async def landing() -> Response:
+            html = (Path(__file__).parent / "static" / "ui.html").read_text()
+            inject = ("<script>window.WAYMARK_BASE = "
+                      f"{_json.dumps(base)};</script>")
+            html = html.replace("<head>", "<head>" + inject, 1)
+            return Response(content=html, media_type="text/html")
+
+        return router
