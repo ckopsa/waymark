@@ -4,10 +4,12 @@ schema generation can't satisfy semantic guards.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import Any
 
 import pytest
 
@@ -657,14 +659,53 @@ from mealplan5.resources.prep_task import PrepTask as PrepTask5  # noqa: E402
 from mealplan5.resources.rotation import (  # noqa: E402
     SundayRotation as SundayRotation5)
 
+# ── Cash reconciliation on waymark5 (the 5.0 dogfood: ledger5) ──────────
+from ledger5.resources.account import Account as CRAccount  # noqa: E402
+from ledger5.resources.account import AccountState as CRAccountState  # noqa: E402
+from ledger5.resources.account_template import (  # noqa: E402
+    AccountTemplate as CRAccountTemplate)
+from ledger5.resources.break_ import BreakState as CRBreakState  # noqa: E402
+from ledger5.resources.break_ import ReconBreak as CRReconBreak  # noqa: E402
+from ledger5.resources.transaction import Transaction as CRTransaction  # noqa: E402
+from ledger5.resources.transaction import (  # noqa: E402
+    TransactionState as CRTransactionState)
+from ledger5.resources.workbook import Workbook as CRWorkbook  # noqa: E402
+from ledger5.resources.workbook import WorkbookState as CRWorkbookState  # noqa: E402
+from ledger5.services import FakeBeacon  # noqa: E402
+
+CR_PREPARER = Principal(id="marcus", type="human", display="Marcus")
+CR_REVIEWER = Principal(id="elena", type="human", display="Elena")
+
+
+@dataclass
+class SuiteServices5(SuiteServices):
+    """mealplan5's services plus the Beacon boundary ledger5 declares —
+    one shared engine/services pair covers both v5 dogfood apps, since
+    `pytest --waymark5` walks a single ``waymark5_engine`` fixture."""
+
+    beacon_backend: FakeBeacon = field(default_factory=FakeBeacon)
+    beacon: Any = None
+
+    def __post_init__(self) -> None:
+        if self.beacon is None:
+            from waymark5.server.external import Service
+
+            self.beacon = Service("beacon", handler=self.beacon_backend.pull,
+                                 timeout=30.0, backoff_seconds=60.0,
+                                 down_on_error=True)
+
 
 @pytest.fixture
 async def waymark5_engine():
     from waymark5.server.bus import InProcessBus
 
+    services = SuiteServices5()
     engine = waymark5.Engine(
-        resources=[Meal5, SundayRotation5, MealPlan5, GroceryList5, PrepTask5],
-        storage=TEST_DSN, services=SuiteServices(), bus=InProcessBus())
+        resources=[Meal5, SundayRotation5, MealPlan5, GroceryList5, PrepTask5,
+                   CRAccountTemplate, CRWorkbook, CRAccount, CRReconBreak,
+                   CRTransaction],
+        storage=TEST_DSN, services=services, bus=InProcessBus())
+    services.beacon_backend.engine = engine
     await engine.storage.drop_all()
     await engine.startup()
     try:
@@ -807,3 +848,121 @@ async def w5_make_grocery_list(state: str, engine, services) -> GroceryList5:
 @w5_example_input(GroceryList5, "remove_item")
 def w5_remove_item_example(services) -> dict:
     return {"name": "paper towels"}
+
+
+# no cross-resource refs and every field is schema-synthesizable — the
+# derived walker needs no factory (mirrors Meal5/PrepTask5)
+w5_conformance_resource(CRAccountTemplate)
+
+
+async def _step_as(engine, kind: str, id: str, action: str, principal,
+                   body=None):
+    return await engine.invoker.invoke(kind, id, action, body,
+                                       principal=principal,
+                                       idempotency_key=uuid.uuid4().hex)
+
+
+async def _cr_accounts_of(engine, workbook_id: str) -> list[Any]:
+    async with engine.storage.session() as s:
+        rows, _ = await engine.storage.query(
+            s, "account", filters={"workbook_id": workbook_id},
+            sort=None, page_size=50, page_number=1)
+    return rows
+
+
+async def _cr_job_done(engine, job_id: str, *, timeout: float = 5.0) -> None:
+    """Wait for a deferred refresh job to finish before the factory
+    returns. Without this, ``principals_with`` (which calls a state
+    factory once per candidate principal) leaves several jobs' async
+    start/finish transitions racing in the background — one can land
+    inside a *later*, unrelated conformance case's before/after window
+    and look like that case's action wrote an extra transition."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while True:
+        async with engine.storage.session() as s:
+            job = await engine.storage.load(s, "job", job_id)
+        if job is not None and job.state in ("done", "cancelled"):
+            return
+        if asyncio.get_event_loop().time() > deadline:
+            raise AssertionError(f"job {job_id} never finished")
+        await asyncio.sleep(0.02)
+
+
+async def _make_cr_workbook_id(engine) -> str:
+    """A fresh fund + workbook every call — never cached in
+    ``services.seeded``, since a state factory may run several times in
+    one test (once per principal, per conformance case) and a cached id
+    already at the target state can't be re-driven through the same
+    from-open recipe (design E2's unique=(("fund","period")) would also
+    409 on a repeat fund otherwise)."""
+    fund = f"fund-cr5-{uuid.uuid4().hex[:8]}"
+    await _mk(engine, "account_template",
+              {"fund": fund, "name": "Ops checking",
+               "bank_name": "First Bank", "last4": "4321",
+               "beacon_coa_id": "COA-1"})
+    return await _mk(engine, "workbook", {"fund": fund, "period": "2026-06"})
+
+
+@w5_state_factory(CRWorkbook)
+async def make_cr_workbook(state: str, engine, services) -> CRWorkbook:
+    wid = await _make_cr_workbook_id(engine)
+    target = CRWorkbookState(state)
+    if target == CRWorkbookState.ABANDONED:
+        await _step(engine, "workbook", wid, "abandon")
+        return await _load(engine, "workbook", wid)
+    if target in (CRWorkbookState.PREPARED, CRWorkbookState.REVIEWED):
+        # freshen the sync first: beacon_fresh is a warning guard on
+        # prepare, and refresh stamps last_synced_at synchronously.
+        # Wait for the deferred job to finish before moving on — a
+        # conformance case calls this factory once per candidate
+        # principal, and a job still running in the background would
+        # otherwise race a *later* case's before/after transition count.
+        refreshed = await _step(engine, "workbook", wid, "refresh")
+        await _cr_job_done(engine, refreshed.doc["data"]["sync_job_id"])
+        for acc in await _cr_accounts_of(engine, wid):
+            if acc.state == "open":
+                await _step(engine, "account", acc.id, "reconcile")
+        await _step_as(engine, "workbook", wid, "prepare", CR_PREPARER)
+        if target == CRWorkbookState.REVIEWED:
+            await _step_as(engine, "workbook", wid, "review", CR_REVIEWER)
+    return await _load(engine, "workbook", wid)
+
+
+async def _make_cr_account_id(engine) -> str:
+    wid = await _make_cr_workbook_id(engine)
+    accounts = await _cr_accounts_of(engine, wid)
+    return accounts[0].id
+
+
+@w5_state_factory(CRAccount)
+async def make_cr_account(state: str, engine, services) -> CRAccount:
+    aid = await _make_cr_account_id(engine)
+    target = CRAccountState(state)
+    if target == CRAccountState.REMOVED:
+        await _step(engine, "account", aid, "remove")
+    elif target == CRAccountState.BALANCED:
+        # a freshly seeded account is already reconciled (0 - 0 + 0 == 0)
+        await _step(engine, "account", aid, "reconcile")
+    return await _load(engine, "account", aid)
+
+
+@w5_state_factory(CRReconBreak)
+async def make_cr_break(state: str, engine, services) -> CRReconBreak:
+    aid = await _make_cr_account_id(engine)
+    bid = await _mk(engine, "break",
+                    {"account_id": aid, "amount": 12.34,
+                     "note": "conformance"})
+    if CRBreakState(state) == CRBreakState.REMOVED:
+        await _step(engine, "break", bid, "remove")
+    return await _load(engine, "break", bid)
+
+
+@w5_state_factory(CRTransaction)
+async def make_cr_transaction(state: str, engine, services) -> CRTransaction:
+    aid = await _make_cr_account_id(engine)
+    tid = await _mk(engine, "transaction",
+                    {"account_id": aid, "transaction_date": "2026-06-15",
+                     "amount": -42.0, "memo": "conformance"})
+    if CRTransactionState(state) == CRTransactionState.REMOVED:
+        await _step(engine, "transaction", tid, "remove")
+    return await _load(engine, "transaction", tid)

@@ -3,9 +3,16 @@ PORT         ?= 8000
 PORT3        ?= 8001  # mealplan3 dev server; :8000 stays free for the waymark2 mealplan
 PORT4        ?= 8002  # mealplan4 dev server
 PORT5        ?= 8003  # mealplan5 dev server
+PORT_LEDGER5 ?= 8010  # ledger5 dev server
 PG_CONTAINER ?= waymark-test-pg
 PG_USER      ?= ckopsa
 PG_PORT      ?= 5433
+# a native Postgres + an SSH tunnel already squat on 127.0.0.1:5433 on this
+# machine, silently shadowing the docker container's published port — the
+# `db` container never actually gets talked to over :5433 from the host.
+# ledger5 gets its own container on a port nothing else claims.
+PG_CONTAINER_LEDGER5 ?= ledger5-pg
+PG_PORT_LEDGER5       ?= 15433
 DEV_DSN      ?= postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/waymark_dev
 TEST_DSN     ?= postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/waymark_test
 
@@ -22,7 +29,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: dev db dist test conformance conformance3 conformance4 conformance5 check demo mealplan mealplan3 mealplan4 mealplan5 image deploy
+.PHONY: dev db dist test conformance conformance3 conformance4 conformance5 check demo mealplan mealplan3 mealplan4 mealplan5 ledger5 image deploy
 
 dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
 	uv build
@@ -52,7 +59,7 @@ test: db  ## framework tests (xdist: one database per worker)
 conformance: db  ## conformance suite against the example app
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark -n auto
 
-conformance5: db  ## waymark5 conformance against the mealplan5 dogfood
+conformance5: db  ## waymark5 conformance against the mealplan5 + ledger5 dogfoods
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark5 -n auto
 
 conformance4: db  ## waymark4 conformance against the mealplan4 dogfood
@@ -93,6 +100,19 @@ mealplan5: db dist  ## run the meal planner on waymark5 (mealplan5_dev)
 	@echo "ui  → http://localhost:$(PORT5)/"
 	MEALPLAN_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan5_dev \
 		uv run uvicorn mealplan5.main:app --reload --port $(PORT5) \
+		--timeout-graceful-shutdown 3
+
+ledger5: dist  ## run cash reconciliation on waymark5 (its own Postgres on :15433)
+	@docker start $(PG_CONTAINER_LEDGER5) >/dev/null 2>&1 || \
+		docker run -d --name $(PG_CONTAINER_LEDGER5) \
+			-e POSTGRES_USER=$(PG_USER) \
+			-e POSTGRES_DB=ledger5_dev \
+			-e POSTGRES_HOST_AUTH_METHOD=trust \
+			-p $(PG_PORT_LEDGER5):5432 postgres:16 >/dev/null
+	@until docker exec $(PG_CONTAINER_LEDGER5) pg_isready -U $(PG_USER) -q; do sleep 0.5; done
+	@echo "ui  → http://localhost:$(PORT_LEDGER5)/"
+	LEDGER_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT_LEDGER5)/ledger5_dev \
+		uv run uvicorn ledger5.main:app --reload --port $(PORT_LEDGER5) \
 		--timeout-graceful-shutdown 3
 
 demo: db  ## agent demo (plans over effect.to, stops at safety.confirm)
