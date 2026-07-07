@@ -3,6 +3,7 @@ PORT         ?= 8000
 PORT3        ?= 8001  # mealplan3 dev server; :8000 stays free for the waymark2 mealplan
 PORT4        ?= 8002  # mealplan4 dev server
 PORT5        ?= 8003  # mealplan5 dev server
+PORT6        ?= 8004  # mealplan6 dev server
 PORT_LEDGER5 ?= 8010  # ledger5 dev server
 PG_CONTAINER ?= waymark-test-pg
 PG_USER      ?= ckopsa
@@ -29,7 +30,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: dev db dist test conformance conformance3 conformance4 conformance5 check demo mealplan mealplan3 mealplan4 mealplan5 ledger5 image deploy
+.PHONY: dev db dist test conformance conformance3 conformance4 conformance5 conformance6 check demo mealplan mealplan3 mealplan4 mealplan5 mealplan6 ledger5 image deploy
 
 dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
 	uv build
@@ -58,6 +59,9 @@ test: db  ## framework tests (xdist: one database per worker)
 
 conformance: db  ## conformance suite against the example app
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark -n auto
+
+conformance6: db  ## waymark6 conformance against the mealplan6 dogfood
+	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark6 -n auto
 
 conformance5: db  ## waymark5 conformance against the mealplan5 + ledger5 dogfoods
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark5 -n auto
@@ -100,6 +104,15 @@ mealplan5: db dist  ## run the meal planner on waymark5 (mealplan5_dev)
 	@echo "ui  → http://localhost:$(PORT5)/"
 	MEALPLAN_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan5_dev \
 		uv run uvicorn mealplan5.main:app --reload --port $(PORT5) \
+		--timeout-graceful-shutdown 3
+
+mealplan6: db dist  ## run the meal planner on waymark6 (mealplan6_dev)
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d waymark_test -Atc \
+		"SELECT 1 FROM pg_database WHERE datname='mealplan6_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) createdb -U $(PG_USER) mealplan6_dev
+	@echo "ui  → http://localhost:$(PORT6)/"
+	MEALPLAN_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan6_dev \
+		uv run uvicorn mealplan6.main:app --reload --port $(PORT6) \
 		--timeout-graceful-shutdown 3
 
 ledger5: dist  ## run cash reconciliation on waymark5 (its own Postgres on :15433)

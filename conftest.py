@@ -966,3 +966,177 @@ async def make_cr_transaction(state: str, engine, services) -> CRTransaction:
     if CRTransactionState(state) == CRTransactionState.REMOVED:
         await _step(engine, "transaction", tid, "remove")
     return await _load(engine, "transaction", tid)
+
+
+# ── Meal-plan app on waymark6 (the 6.0 dogfood: same app + the calendar) ──
+
+import waymark6  # noqa: E402
+from waymark6.testing import (  # noqa: E402
+    conformance_resource as w6_conformance_resource,
+    example_input as w6_example_input,
+    state_factory as w6_state_factory,
+)
+from mealplan6.resources.event import Event as Event6  # noqa: E402
+from mealplan6.resources.grocery_list import (  # noqa: E402
+    GroceryList as GroceryList6, GroceryState as GroceryState6)
+from mealplan6.resources.meal import Meal as Meal6  # noqa: E402
+from mealplan6.resources.plan import (  # noqa: E402
+    MealPlan as MealPlan6, PlanState as PlanState6)
+from mealplan6.resources.prep_task import PrepTask as PrepTask6  # noqa: E402
+from mealplan6.resources.rotation import (  # noqa: E402
+    SundayRotation as SundayRotation6)
+
+
+@pytest.fixture
+async def waymark6_engine():
+    from waymark6.server.bus import InProcessBus
+
+    engine = waymark6.Engine(
+        resources=[Meal6, SundayRotation6, MealPlan6, GroceryList6,
+                   PrepTask6, Event6],
+        storage=TEST_DSN, services=SuiteServices(), bus=InProcessBus())
+    await engine.storage.drop_all()
+    await engine.startup()
+    try:
+        yield engine
+    finally:
+        await engine.shutdown()
+
+
+w6_conformance_resource(Meal6)
+w6_conformance_resource(SundayRotation6)
+w6_conformance_resource(PrepTask6)
+# the 6.0 calendar kind: every field is schema-synthesizable (the closed
+# ``kind`` vocab is a Literal with a default) — the derived walker suffices
+w6_conformance_resource(Event6)
+
+# 6.0 engine kinds: ordinary resources, ordinary conformance
+from waymark6.server.attachments import (  # noqa: E402
+    Attachment as Attachment6W, BYTES_ACTOR as BYTES_ACTOR6W,
+)
+from waymark6.server.members import Member as Member6W  # noqa: E402
+from waymark6.server.roles import Role as Role6W  # noqa: E402
+from waymark6.server.subscriptions import (  # noqa: E402
+    WebhookSubscription as Subscription6W,
+)
+
+w6_conformance_resource(Member6W)
+w6_conformance_resource(Role6W)
+w6_conformance_resource(Subscription6W)
+
+
+# an attachment's create must name a live target, so its states need a
+# factory rather than a schema-synthesized create (design E5)
+@w6_state_factory(Attachment6W)
+async def w6_make_attachment(state: str, engine, services) -> Attachment6W:
+    mid = await _mk(engine, "meal", {"name": "Attachment target",
+                                     "themes": ["mexican"]})
+    services.seeded["attachment_target"] = mid
+    aid = await _mk(engine, "attachment", {
+        "resource_kind": "meal", "resource_id": mid,
+        "name": "recipe.pdf", "mime": "application/pdf"})
+    if state in ("uploaded", "removed"):
+        await engine.invoker.invoke(
+            "attachment", aid, "mark_uploaded",
+            {"size": 3, "sha256": "a" * 64}, principal=BYTES_ACTOR6W)
+    if state == "removed":
+        await _step(engine, "attachment", aid, "remove")
+    return await _load(engine, "attachment", aid)
+
+
+@w6_example_input(Attachment6W, "duplicate")
+def w6_attachment_duplicate_example(services) -> dict:
+    # a synthesized target would dangle; duplicate onto the factory's meal
+    return {"resource_kind": "meal",
+            "resource_id": services.seeded["attachment_target"]}
+
+
+@w6_example_input(Role6W, "create")
+def w6_role_create_example(services) -> dict:
+    # role names are declared unique (design E2); the walker may create
+    # several per test, so the example must mint fresh spellings
+    return {"name": f"reader-{uuid.uuid4().hex[:8]}",
+            "description": "May read shared note titles"}
+
+
+@w6_example_input(Member6W, "create")
+def w6_member_create_example(services) -> dict:
+    return {"email": "mom@example.com", "display_name": "Grandma",
+            "roles": ["reader"]}
+
+
+@w6_example_input(Subscription6W, "create")
+def w6_subscription_create_example(services) -> dict:
+    return {"url": "https://budget.example/hooks", "kinds": ["plan"]}
+
+
+@w6_example_input(Meal6, "create")
+def w6_meal_create_example(services) -> dict:
+    # 6.0 speaks only the current shape on the wire; the single-theme era
+    # is a declared upcast (Meal6.shape/upcasts), not a payload dialect
+    return {"name": "Carnitas tacos", "themes": ["mexican"],
+            "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
+            "prep_minutes": 45, "thaw_hours": 12}
+
+
+@w6_example_input(PrepTask6, "create")
+def w6_prep_task_create_example(services) -> dict:
+    return prep_task_create_example(services)
+
+
+async def _listed_meal6(engine, services) -> str:
+    mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
+                                     "themes": ["mexican"]})
+    await _step(engine, "meal", mid, "accept")
+    services.seeded["meal_id"] = mid
+    return mid
+
+
+@w6_state_factory(MealPlan6)
+async def w6_make_plan(state: str, engine, services) -> MealPlan6:
+    rid = await _mk(engine, "rotation", {})
+    await _listed_meal6(engine, services)
+    pid = await _mk(engine, "plan", {"start_date": PLAN_START.isoformat(),
+                                     "weeks": 1, "rotation_id": rid})
+    services.seeded["plan_id"] = pid
+    target = PlanState6(state)
+    if target == PlanState6.ABANDONED:
+        await _step(engine, "plan", pid, "abandon")
+    elif target != PlanState6.DRAFT:
+        for i in range(7):
+            await _step(engine, "plan", pid, "mark_eating_out",
+                        {"date": (PLAN_START + timedelta(days=i)).isoformat()})
+        await _step(engine, "plan", pid, "finalize")
+        if target in (PlanState6.ACTIVE, PlanState6.DONE):
+            await _step(engine, "plan", pid, "begin")
+        if target == PlanState6.DONE:
+            await _step(engine, "plan", pid, "complete")
+    return await _load(engine, "plan", pid)
+
+
+# assign_meal needs no example: its Relation's tuple set feeds the
+# synthesizer (waymark6.testing.factories.synthesize_input)
+@w6_example_input(MealPlan6, "assign_off_theme")
+def w6_assign_off_theme_example(services) -> dict:
+    return {"date": PLAN_START.isoformat(), "meal_id": services.seeded["meal_id"]}
+
+
+@w6_state_factory(GroceryList6)
+async def w6_make_grocery_list(state: str, engine, services) -> GroceryList6:
+    plan = await w6_make_plan(PlanState6.PLANNED, engine, services)
+    gid = await _mk(engine, "grocery_list",
+                    {"plan_id": plan.id, "items": GROCERY_ITEMS})
+    target = GroceryState6(state)
+    if target != GroceryState6.DRAFT:
+        await _step(engine, "grocery_list", gid, "finalize")
+    if target == GroceryState6.DONE:
+        for item in GROCERY_ITEMS:
+            await _step(engine, "grocery_list", gid, "check_item",
+                        {"name": item["name"]})
+        await _step(engine, "grocery_list", gid, "complete")
+    return await _load(engine, "grocery_list", gid)
+
+
+@w6_example_input(GroceryList6, "remove_item")
+def w6_remove_item_example(services) -> dict:
+    return {"name": "paper towels"}
