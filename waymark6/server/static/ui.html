@@ -374,6 +374,21 @@
   a.surface-link:hover { border-color: var(--law); text-decoration: none; }
   .surface-mark { color: var(--law); font-family: var(--mono);
                   font-size: 12px; }
+  /* ordinary rels ride the same band as scent: rel + the wire's badge,
+     up front where they inform the read instead of trailing it */
+  a.link-chip { font-family: var(--mono); font-size: 11px;
+                color: var(--ink); background: var(--chip);
+                border: 1px solid var(--line); border-radius: 3px;
+                padding: 2px 8px; white-space: nowrap; }
+  a.link-chip:hover { border-color: var(--muted); text-decoration: none; }
+  /* a guard-refused action keeps its seat in the bar, dimmed; its
+     honest reason renders just below, at the point of intent */
+  button.blocked { opacity: .55; cursor: not-allowed; }
+  .blockedwhy { margin: 2px 0 4px; }
+  .blockedwhy .item { font-size: 13px; padding: 3px 0; }
+  .blockedwhy .item b { font-weight: 700; }
+  .blockedwhy .why { font-family: var(--serif); font-size: 14px;
+                     color: var(--ink); }
 
   #followchip { background: var(--verdigris-wash); color: var(--verdigris-deep);
                 border-radius: 999px; padding: 3px 12px; font-size: 12px;
@@ -1193,6 +1208,97 @@ function filterPrefill(selfHref, entry) {
 }
 
 /* ── resource screen ────────────────────────────────────────────────── */
+/* ── the read surface, up front ────────────────────────────────────────
+   One chip band under the summary: declared surfaces (the law's violet)
+   then ordinary rels with their badges — scent before the scroll, per
+   the wire's own badge rationale. Crumb-covered rels (collection,
+   parent, anchor), the event stream, and embedded rels' duplicates stay
+   out; embeds still render inline with their own heads. */
+const CHIP_SKIP = new Set(["events", "collection", "parent", "anchor"]);
+function linkChips(doc) {
+  const rels = Object.entries(doc.links || {})
+    .filter(([r, l]) => l && !CHIP_SKIP.has(r));
+  if (!rels.length) return null;
+  rels.sort(([a], [b]) =>
+    (a.startsWith("surface:") ? 0 : 1) - (b.startsWith("surface:") ? 0 : 1));
+  const row = el("div", {class:"surface-row"});
+  for (const [r, l] of rels)
+    row.append(r.startsWith("surface:")
+      ? el("a", {class:"surface-link", href:"#"+l.href, title:l.summary || r},
+          "⧉ " + pretty(r.slice("surface:".length)) + " ↗")
+      : el("a", {class:"link-chip", href:"#"+l.href, title:l.summary || r},
+          pretty(r), l.badge != null
+            ? el("span", {class:"badge", title:"count, per the server"},
+                String(l.badge)) : null));
+  return row;
+}
+
+/* ── refusals, ranked by what the reader can do with them ──────────────
+   A countdown or a singular guard reason is decision fuel — it stays at
+   the action bar (a dimmed button plus its honest reason). State gates
+   and repeated identical reasons (the scoped-view case) carry no news
+   per entry, so they compress into a closed "not now" footer. */
+function splitRefusals(doc) {
+  const timed = [], gated = [], byReason = new Map();
+  for (const [name, entry] of Object.entries(doc.unavailable || {})) {
+    const hope = entry.becomes_available;
+    if (hope?.at) timed.push([name, entry]);
+    else if (hope?.in_states) gated.push([name, entry]);
+    else {
+      const k = entry.reason || "";
+      if (!byReason.has(k)) byReason.set(k, []);
+      byReason.get(k).push([name, entry]);
+    }
+  }
+  const blocked = [...timed], grouped = [];
+  for (const g of byReason.values())
+    if (g.length === 1) blocked.push(g[0]); else grouped.push(g);
+  blocked.sort((a, b) =>
+    (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5));
+  return {blocked, grouped, gated};
+}
+
+function blockedNotes(blocked, doc) {
+  if (!blocked.length) return null;
+  const box = el("div", {class:"blockedwhy"});
+  for (const [name, entry] of blocked) {
+    const item = el("div", {class:"item"},
+      el("b", {}, label(name, entry)), " — ",
+      el("span", {class:"why"}, entry.reason || ""),
+      remedyChips(entry.remedies, doc));
+    if (entry.becomes_available?.at)
+      item.append(countdownEl(entry.becomes_available.at));
+    else if (entry.becomes_available?.requires)
+      item.append(el("div", {class:"hope muted"},
+        `requires ${entry.becomes_available.requires}`));
+    box.append(item);
+  }
+  return box;
+}
+
+function notNowFooter(grouped, gated, doc) {
+  const n = grouped.reduce((s, g) => s + g.length, 0) + gated.length;
+  if (!n) return null;
+  const box = el("div", {class:"cantyet"});
+  for (const g of grouped)          // one reason, many actions: say it once
+    box.append(el("div", {class:"item"},
+      el("b", {}, g.map(([nm, e]) => label(nm, e)).join(", ")),
+      el("div", {class:"why"}, g[0][1].reason || ""),
+      remedyChips(g[0][1].remedies, doc)));
+  const byStates = new Map();       // state gates: one line per destination
+  for (const [nm, e] of gated) {
+    const k = e.becomes_available.in_states.map(pretty).join(", ");
+    if (!byStates.has(k)) byStates.set(k, []);
+    byStates.get(k).push(label(nm, e));
+  }
+  for (const [states, names] of byStates)
+    box.append(el("div", {class:"item"},
+      el("b", {}, names.join(", ")),
+      el("span", {class:"muted"}, ` — available in ${states}`)));
+  return el("details", {class:"unavail"},
+    el("summary", {class:"muted"}, `not now (${n})`), box);
+}
+
 function renderResource(view, doc, hints) {
   hints = hints || {};
   const panel = el("div", {class:"panel"});
@@ -1215,15 +1321,10 @@ function renderResource(view, doc, hints) {
   if (banner) panel.append(banner);
   const recomputing = new Set(doc.meta?.recomputing || []);
 
-  // declared decision surfaces anchored here (design 6.0 §4): the named
-  // views render distinctly, up front — they are law, not app chrome
-  const surfaceRels = Object.entries(doc.links || {})
-    .filter(([r, l]) => l && r.startsWith("surface:"));
-  if (surfaceRels.length)
-    panel.append(el("div", {class:"surface-row"},
-      ...surfaceRels.map(([r, l]) => el("a", {class:"surface-link",
-        href: "#"+l.href, title: l.summary || r},
-        "⧉ " + pretty(r.slice("surface:".length)) + " ↗"))));
+  // the read surface up front: declared surfaces (design 6.0 §4) then
+  // ordinary rels, badges riding — scent before the scroll
+  const chips = linkChips(doc);
+  if (chips) panel.append(chips);
 
   // buttons = actions, styled by display, gated by confirm; actions the
   // server scoped into parts render on their rows instead of up here
@@ -1261,6 +1362,12 @@ function renderResource(view, doc, hints) {
     }
     bar.append(btn);
   }
+  // guard-refused actions keep their seats in the bar, dimmed; their
+  // honest reasons render just below, at the point of intent
+  const {blocked, grouped, gated} = splitRefusals(doc);
+  for (const [name, entry] of blocked)
+    bar.append(el("button", {class:"blocked", disabled:"",
+      title: entry.reason || ""}, label(name, entry)));
   // an agent link (engine kind): the owner needs to copy its token to give
   // to the agent, and can follow the agent before it ever acts
   if (doc.kind === "grant") {
@@ -1322,28 +1429,8 @@ function renderResource(view, doc, hints) {
     }
   }
   panel.append(bar);
-
-  // the can't-yet section = unavailable, with the guard's honest reason —
-  // server prose, so it reads in the serif; a clock-gated hope counts down
-  const un = Object.entries(doc.unavailable);
-  if (un.length) {
-    const box = el("div", {class:"cantyet"});
-    for (const [name, entry] of un) {
-      const item = el("div", {class:"item"},
-        el("b", {}, label(name, entry)),
-        el("div", {class:"why"}, entry.reason || ""),
-        remedyChips(entry.remedies, doc));
-      const hope = entry.becomes_available;
-      if (hope?.at) item.append(countdownEl(hope.at));
-      else if (hope?.in_states) item.append(el("div", {class:"hope muted"},
-        `available in: ${hope.in_states.map(pretty).join(", ")}`));
-      else if (hope?.requires) item.append(el("div", {class:"hope muted"},
-        `requires ${hope.requires}`));
-      box.append(item);
-    }
-    panel.append(el("details", {open:"", class:"unavail"},
-      el("summary", {class:"muted"}, `can't yet (${un.length})`), box));
-  }
+  const notes = blockedNotes(blocked, doc);
+  if (notes) panel.append(notes);
 
   // data: grouped by display.groups if declared, else all fields; arrays
   // with a parts group get their scoped actions as per-row buttons; fields
@@ -1374,21 +1461,10 @@ function renderResource(view, doc, hints) {
   for (const [rel, l] of Object.entries(doc.links))
     if (l && l.embed) panel.append(embedSection(rel, l));
 
-  // links = the read surface; a badge is the wire's count riding the
-  // link. Surface links already rendered up top, distinctly.
-  const rels = Object.entries(doc.links)
-    .filter(([r]) => r !== "events" && !r.startsWith("surface:"));
-  if (rels.length) {
-    const box = el("div", {class:"unavail"});
-    for (const [rel, l] of rels) if (l) box.append(el("div", {class:"item"},
-      el("a", {href:"#"+l.href}, rel),
-      l.badge != null
-        ? el("span", {class:"badge", title:"count, per the server"},
-            String(l.badge)) : null,
-      l.summary ? ` · ${l.summary}` : ""));
-    panel.append(el("details", {open:""},
-      el("summary", {class:"muted"}, "links"), box));
-  }
+  // the compressed refusals: state gates and repeated identical reasons,
+  // closed by default — derivable, not decision fuel
+  const footer = notNowFooter(grouped, gated, doc);
+  if (footer) panel.append(footer);
   view.append(panel);
   watchResource(doc);
 }
@@ -1550,6 +1626,11 @@ function renderSurface(view, doc, hints) {
   if (banner) panel.append(banner);
   const recomputing = new Set(doc.meta?.recomputing || []);
 
+  // the read surface up front, as on the resource page (members arrive
+  // embedded below with their own heads; the chips are the scent)
+  const chips = linkChips(doc);
+  if (chips) panel.append(chips);
+
   // the server already ordered showcase-then-declared; the flag only
   // adds the prominence ring — order is the definition's, not this
   // client's to re-derive
@@ -1563,26 +1644,15 @@ function renderSurface(view, doc, hints) {
     }
     bar.append(btn);
   }
+  // the anchor's honest refusals, ranked exactly as the resource page
+  // ranks them: reasons at the bar, boilerplate compressed to the footer
+  const {blocked, grouped, gated} = splitRefusals(doc);
+  for (const [name, entry] of blocked)
+    bar.append(el("button", {class:"blocked", disabled:"",
+      title: entry.reason || ""}, label(name, entry)));
   panel.append(bar);
-
-  // can't-yet: the anchor's honest refusals, verbatim
-  const un = Object.entries(doc.unavailable || {});
-  if (un.length) {
-    const box = el("div", {class:"cantyet"});
-    for (const [name, entry] of un) {
-      const item = el("div", {class:"item"},
-        el("b", {}, label(name, entry)),
-        el("div", {class:"why"}, entry.reason || ""),
-        remedyChips(entry.remedies, doc));
-      const hope = entry.becomes_available;
-      if (hope?.at) item.append(countdownEl(hope.at));
-      else if (hope?.in_states) item.append(el("div", {class:"hope muted"},
-        `available in: ${hope.in_states.map(pretty).join(", ")}`));
-      box.append(item);
-    }
-    panel.append(el("details", {class:"unavail"},
-      el("summary", {class:"muted"}, `can't yet (${un.length})`), box));
-  }
+  const notes = blockedNotes(blocked, doc);
+  if (notes) panel.append(notes);
 
   // the anchor's data, through the anchor kind's own field renderer
   const table = el("table", {class:"kv"});
@@ -1604,16 +1674,8 @@ function renderSurface(view, doc, hints) {
   for (const [rel, m] of Object.entries(doc.embedded || {}))
     panel.append(memberSection(rel, m));
 
-  const rels = Object.entries(doc.links)
-    .filter(([r]) => r !== "events" && !r.startsWith("surface:"));
-  if (rels.length) {
-    const box = el("div", {class:"unavail"});
-    for (const [rel, l] of rels) if (l) box.append(el("div", {class:"item"},
-      el("a", {href:"#"+l.href}, rel),
-      l.summary ? ` · ${l.summary}` : ""));
-    panel.append(el("details", {},
-      el("summary", {class:"muted"}, "links"), box));
-  }
+  const footer = notNowFooter(grouped, gated, doc);
+  if (footer) panel.append(footer);
   view.append(panel);
   watchResource(doc);
 }
