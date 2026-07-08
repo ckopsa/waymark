@@ -450,6 +450,44 @@ def _unavailable_entry(defn: ActionDef, deny: Deny, denier: Guard,
     return entry
 
 
+def _row_law(instance: Resource, rdef: ResourceDef) -> str | None:
+    """The definition revision row id the row's ``law_revision`` stamp
+    resolves to (design 7.0 §3) — the kind's current law for an unstamped
+    row or an unresolvable stamp (the same fallback the write anchor
+    uses, so meta.law and defined_by cannot disagree)."""
+    stamp = getattr(instance, "law_revision", None)
+    if stamp is not None and stamp != rdef.current_law_revision:
+        row_law = (rdef.law_ids or {}).get(stamp)
+        if row_law is not None:
+            return row_law
+    return rdef.current_law
+
+
+def _adopt_entry(instance: Resource, self_href: str) -> dict[str, Any]:
+    """The engine-injected ``adopt`` affordance (design 7.0 §3): offered
+    exactly when the current law has passed this row by — a same-state
+    transition that restamps and recomputes. No ActionDef exists (the
+    engine injects it on every kind, like ``create``); the entry is built
+    to the same wire shape."""
+    from ..core.types import Effect, Safety
+
+    return {
+        "method": "POST",
+        "href": f"{self_href}/-/adopt",
+        "effect": Effect(to=instance.state).to_wire(),
+        "safety": Safety(idempotent=True, reversible=False, confirm=True,
+                         consequence="This row moves to the current "
+                                     "revision of its kind's law and its "
+                                     "facts recompute under it.").to_wire(),
+        "effort": "assent",
+        "display": {"label": "Adopt the current law",
+                    "description": "The law moved on while this row lived "
+                                   "under an older revision; adopting "
+                                   "restamps it and recomputes its facts "
+                                   "(design 7.0 §3)."},
+    }
+
+
 def _out_of_state_entry(defn: ActionDef, current_state: str) -> dict[str, Any]:
     states = sorted(defn.from_)
     # prose is human-facing: humanized labels; tokens stay in the
@@ -618,6 +656,18 @@ async def render(
                 continue
             unavailable[defn.name] = _out_of_state_entry(defn, instance.state)
 
+    # the engine-injected adopt (design 7.0 §3): advertised exactly when
+    # the current law has passed this row by — never on terminal rows (the
+    # finished keep their law) and never over a machine that declares its
+    # own `adopt` (the app owns its vocabulary)
+    _stamp = getattr(instance, "law_revision", None)
+    if (vis.full and _stamp is not None
+            and rdef.current_law_revision is not None
+            and _stamp < rdef.current_law_revision
+            and instance.state not in rdef.machine.terminal
+            and "adopt" not in rdef.machine.actions):
+        actions.setdefault("adopt", _adopt_entry(instance, self_href))
+
     # the agent's own negotiation surface renders in the clear — it is the
     # agent's to read; everything else projects through the visibility
     own = (None if vis.full
@@ -677,18 +727,22 @@ async def render(
             **({"updated_at": instance.updated_at.isoformat()}
                if instance.updated_at else {}),
             **({"owner": instance.owner} if instance.owner else {}),
-            # the law (design §3): the definition revision id governing
-            # this kind, so a client — or a follower reading a transcript
-            # — can correlate what it saw with the law that produced it.
-            # Additive: absent before the first revise (pre-law), and a
-            # v4 client ignores it. The definition kind's own envelopes
-            # carry the definition kind's current revision id.
-            **({"law": rdef.current_law} if rdef.current_law else {}),
+            # the law (design 7.0 §3): the definition revision id governing
+            # THIS ROW — the row's ``law_revision`` stamp resolved to its
+            # revision row id, varying within a collection when a pilot or
+            # grandfathered population is live; the kind's current law for
+            # an unstamped row. A client — or a follower reading a
+            # transcript — correlates what it saw with the law that
+            # produced it. Additive: absent before the first revise
+            # (pre-law), and a v4 client ignores it.
+            **({"law": row_law} if (row_law := _row_law(instance, rdef))
+               else {}),
             # the same law's revision NUMBER — the human spelling ("rev
-            # N") beside the machine id, stamped by the boot revise so no
+            # N") beside the machine id, the row's stamp itself, so no
             # client resolves the deploy history just to say which rev
-            **({"law_revision": rdef.current_law_revision}
-               if rdef.current_law_revision else {}),
+            **({"law_revision": row_rev}
+               if (row_rev := (getattr(instance, "law_revision", None)
+                               or rdef.current_law_revision)) else {}),
             # facts catching up with a redefinition (design §4): the value
             # in data was materialized under a superseded law and a
             # declared Deferred is recomputing it — served as data,

@@ -430,6 +430,13 @@ def fingerprint_of(rdef: ResourceDef) -> dict[str, Any]:
         # unconditional input retention (design 7.0 §5): a kind whose whole
         # log keeps payloads changed what the engine stores
         **({"record_inputs": True} if cls.record_inputs else {}),
+        # the declared adoption policy (design 7.0 §3): whether a newer
+        # current law strikes every row at once (Immediate, the default)
+        # or grandfathers the living (Never). Emitted only when declared
+        # beyond the default — adding the mechanism must not re-hash every
+        # kind that never touched it.
+        **({"adoption": cls.adoption.__name__}
+           if cls.adoption.__name__ != "Immediate" else {}),
         "storage": _storage_fp(rdef),
     }
     return _norm(raw)

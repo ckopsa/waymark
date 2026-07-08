@@ -54,12 +54,14 @@ from .protocol import TransitionRecord
 NOTIFY_CHANNEL = "waymark7_transitions"
 
 # action names the engine's own write tails append outside any declared
-# machine: creation, and the authority's same-state sync bookkeeping
-# (design §8). Part of every kind's action vocabulary for the continuity
-# check (design §5) and the replay conformance.
+# machine: creation, the authority's same-state sync bookkeeping (design
+# §8), and the row's law adoption (design 7.0 §3 — a same-state restamp,
+# injected on every kind). Part of every kind's action vocabulary for the
+# continuity check (design §5) and the replay conformance.
 ENGINE_ACTIONS = frozenset({
     "create", "observe_authored",
     "mark_stale", "mark_conflicted", "mark_unreachable",
+    "adopt",
 })
 
 
@@ -306,6 +308,14 @@ class PostgresStorage:
             # ("full over what you created") evaluate at projection and push
             # into collection SQL. Indexed for exactly that pushdown.
             Column("owner", String(128), nullable=True, index=True),
+            # the row's law (design 7.0 §3): the definition revision NUMBER
+            # governing this row — stamped at create, moved only by an
+            # explicit adopt/pilot restamp. Nullable so the upgrade ALTER is
+            # a plain ADD COLUMN; the boot stamps NULLs to the revision the
+            # rows were living under (migration sketch). Indexed: the pilot
+            # restamp, the supersede-when-empty survivor count, and the
+            # bulk adopt all filter on it.
+            Column("law_revision", Integer, nullable=True, index=True),
             Column("created_at", DateTime(timezone=True), nullable=False),
             Column("updated_at", DateTime(timezone=True), nullable=False),
         ]
@@ -367,6 +377,7 @@ class PostgresStorage:
             created_at=row["created_at"], updated_at=row["updated_at"],
             owner=row["owner"],
         )
+        instance.law_revision = row["law_revision"]
         if kind in self._clocked:
             instance.next_flip_at = row["next_flip_at"]
         return instance
@@ -391,6 +402,7 @@ class PostgresStorage:
                 id=instance.id, state=instance.state, version=instance.version,
                 data=instance.data.model_dump(mode="json"),
                 shape=type(instance).shape, owner=instance.owner,
+                law_revision=getattr(instance, "law_revision", None),
                 created_at=instance.created_at, updated_at=instance.updated_at,
                 **self._clock_values(kind, instance),
             ))
@@ -409,6 +421,7 @@ class PostgresStorage:
                 .values(state=instance.state, version=instance.version,
                         data=instance.data.model_dump(mode="json"),
                         shape=type(instance).shape,
+                        law_revision=getattr(instance, "law_revision", None),
                         updated_at=instance.updated_at,
                         **self._clock_values(kind, instance))
             )
@@ -431,6 +444,7 @@ class PostgresStorage:
         await s.execute(
             update(table).where(table.c.id == instance.id)
             .values(data=instance.data.model_dump(mode="json"),
+                    law_revision=getattr(instance, "law_revision", None),
                     **self._clock_values(kind, instance)))
 
     async def id_page(self, s: AsyncConnection, kind: str, *,
@@ -457,6 +471,32 @@ class PostgresStorage:
                 .limit(limit).with_for_update())
         rows = (await s.execute(stmt)).mappings().all()
         return [self._hydrate(kind, r) for r in rows]
+
+    async def stamp_null_law(self, s: AsyncConnection, kind: str,
+                             revision: int) -> int:
+        """The upgrade stamping (design 7.0 §3, migration sketch): rows
+        with no ``law_revision`` were written before the stamp existed —
+        they were living under the stored current law, and the boot says
+        so once, in one UPDATE. Returns the number of rows stamped."""
+        table = self.tables[kind]
+        result = await s.execute(
+            update(table).where(table.c.law_revision.is_(None))
+            .values(law_revision=revision))
+        return result.rowcount
+
+    async def law_survivors(self, s: AsyncConnection, kind: str,
+                            revision: int,
+                            terminal: frozenset[str] | set[str]) -> int:
+        """How many rows of ``kind`` still LIVE under ``revision`` —
+        stamped to it and not in a terminal state. The supersede-when-empty
+        check (design 7.0 §1: laws die when they are empty) and the
+        promote-time grandfather decision both read this count."""
+        table = self.tables[kind]
+        stmt = (select(func.count()).select_from(table)
+                .where(table.c.law_revision == revision))
+        if terminal:
+            stmt = stmt.where(table.c.state.notin_(sorted(terminal)))
+        return (await s.execute(stmt)).scalar_one()
 
     def _raise_unique(self, kind: str, instance: Resource,
                       exc: IntegrityError) -> None:

@@ -9,7 +9,7 @@ from .guards import Guard, Relation, four_eyes, guard, require
 from .groups import OneOf
 from .history import Unless, actor_of
 from .when import Field, When
-from .owns import Never, Owns, Rollup, Seed, rollup_is
+from .owns import Immediate, Never, Owns, Rollup, Seed, rollup_is
 from .related import On, Related, RelatedField
 from .surface import Member, Surface
 from .vocab import Observed, Vocab, VocabField
@@ -39,7 +39,8 @@ __all__ = [
     "Predecessor", "Principal", "Profile", "Query", "Ref", "RefField", "Registry", "Resource",
     "ResourceDef", "Safety", "SortableSpec", "StateMachine",
     "UsabilityWarning", "Vocab", "VocabField", "Observed",
-    "Member", "Never", "On", "Owns", "Related", "RelatedField", "Rollup",
+    "Immediate", "Member", "Never", "On", "Owns", "Related", "RelatedField",
+    "Rollup",
     "Seed", "Surface",
     "Authored", "Clock", "Count", "Deferred", "Derived", "Sum", "Tolerance",
     "Advances", "Creates", "Delegated",

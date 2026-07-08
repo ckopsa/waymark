@@ -18,6 +18,7 @@ from . import checks
 from .actions import ActionDef
 from .guards import Guard
 from .machine import StateMachine
+from .owns import Immediate, Never
 
 
 def unique_groups(cls: type["Resource"]) -> tuple[tuple[str, ...], ...]:
@@ -209,6 +210,16 @@ class Resource:
         machine's initial state or a member of ``create_state_names`` —
         where a creation lands is declared, never improvised."""
         return type(self).__waymark_machine__.initial
+    # Declared adoption policy (design 7.0 §3): what a newer current
+    # revision of this kind's law means for rows already living. Immediate
+    # (the default) is today's behavior spelled out — the promote/revise
+    # backfill restamps and recomputes every row at once. Never
+    # grandfathers: rows finish under their birth law, the old revision is
+    # `grandfathered` until its last stamped non-terminal row adopts or
+    # closes, and the engine-injected `adopt` action is each row's
+    # explicit, recorded way forward. Fingerprinted — changing the policy
+    # is a law change.
+    adoption: ClassVar[type] = Immediate
     # Unconditional input retention (design 7.0 §5): every transition of
     # this kind stores its validated input payload, not only the digest.
     # The definition kind declares it ("the law does not get privacy from
@@ -272,6 +283,11 @@ class Resource:
             observed = tuple(f for f, s in vocabs.items() if s.get("facet"))
             cls.faceted = tuple(dict.fromkeys((*cls.faceted, *observed)))
 
+        if cls.adoption not in (Immediate, Never):
+            raise checks.DefinitionError(
+                f"{cls.__qualname__}: adoption= takes the Immediate or "
+                "Never policy token (design 7.0 §3)")
+
         if cls.shape < 1:
             raise checks.DefinitionError(
                 f"{cls.__qualname__}: shape={cls.shape} — shapes start at 1")
@@ -316,6 +332,12 @@ class Resource:
         # the creating actor (design §9), stamped by the engine at create;
         # never the handler's to set
         self.owner = owner
+        # the row's law (design 7.0 §3): the definition revision NUMBER of
+        # this kind's law that governs this row — stamped by the engine at
+        # create (to the revision whose population claims it), changed only
+        # by an explicit adopt/pilot restamp. None = pre-stamp (an upgraded
+        # row before its boot stamping, or a bare instance outside storage).
+        self.law_revision: int | None = None
 
     async def on_create(self, ctx: Any) -> None:
         """Hook for initial data that depends on other resources (§14).

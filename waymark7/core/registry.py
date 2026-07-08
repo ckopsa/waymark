@@ -49,6 +49,24 @@ class ResourceDef:
     # read it. At most one per kind — a stage, not a lattice.
     proposed_law: str | None = None
     proposed_law_revision: int | None = None
+    # the piloted revision (design 7.0 §3): the ``piloted`` definition row
+    # whose declared population's rows live under it while the current law
+    # governs the rest. The resident code IS the piloted law (the pilot
+    # gate admits data-law diffs only, and the propose-mode hold keeps the
+    # current law served from stored parameters). At most one per kind —
+    # the same stage-not-lattice rule as the hold.
+    piloted_law: str | None = None
+    piloted_law_revision: int | None = None
+    # the pilot's Population declaration, as recorded on the pilot
+    # transition: {"where": {...}} or {"after": True}. The create path
+    # routes new rows by it (design 7.0 §3: creates are judged by the
+    # revision whose population claims the input).
+    piloted_population: dict[str, Any] | None = None
+    # revision NUMBER → definition revision row id, every stored revision
+    # of this kind (design 7.0 §3): how a row's integer stamp resolves to
+    # the law id its envelope (meta.law) and its writes (defined_by) name.
+    # Filled by the boot revise; promote/pilot append to it.
+    law_ids: dict[int, str] = field(default_factory=dict)
     # whether the engine itself contributed this kind (definition, grant,
     # member, job, …) as opposed to the app's ``resources=[...]`` — set at
     # registration, where the distinction is a fact rather than a list to

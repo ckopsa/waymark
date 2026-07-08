@@ -65,6 +65,21 @@ class Never:
                         "retro=")
 
 
+class Immediate:
+    """The adoption policy that is today's behavior, spelled out (design
+    7.0 §3): when a newer revision of this kind's law becomes current,
+    every row adopts it at once — the promote/revise backfill restamps
+    and recomputes, exactly as every pre-7.0 deploy always did. The
+    default; declaring it changes nothing but says so. The other policy
+    is :class:`Never` (grandfathering): rows finish under their birth
+    law, and the old revision is ``grandfathered`` until its last
+    stamped row adopts or reaches terminal."""
+
+    def __init__(self) -> None:  # pragma: no cover - the class IS the token
+        raise TypeError("Immediate is a policy token; use the class itself "
+                        "in adoption=")
+
+
 @dataclass(frozen=True)
 class Seed:
     """Template instantiation (design E4): creating the parent creates

@@ -53,7 +53,7 @@ from dataclasses import dataclass, field as dc_field
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..core.actions import Inputs, action
 from ..core.fingerprint import (
@@ -126,15 +126,21 @@ def _resident_only() -> Guard:
 class DefinitionState(StrEnum):
     """The definition's machine (design 7.0 §1):
     ``draft → proposed → piloted → current → superseded``, plus
-    ``withdrawn`` from proposed and piloted. ``draft`` (API-authored data
-    revisions) and ``piloted`` (row populations) are declared now and
-    arrive with Phase 2 — both annotated ``allow_dead``; ``proposed`` is
-    entered at creation by a propose-mode boot (``created_in``)."""
+    ``withdrawn`` from proposed and piloted, plus ``grandfathered``
+    between current and superseded — the state of a law whose successor
+    is current while rows still live under it (design §3: laws die when
+    they are empty, so a revision with survivors is not history yet; the
+    design implied a lingering ``current``, but two current rows per kind
+    would be a lie — a distinct state is more honest, recorded
+    deviation). ``draft`` (API-authored data revisions) is declared now
+    and remains unwired (``allow_dead``); ``proposed`` is entered at
+    creation by a propose-mode boot (``created_in``)."""
 
     DRAFT = "draft"
     PROPOSED = "proposed"
     PILOTED = "piloted"
     CURRENT = "current"
+    GRANDFATHERED = "grandfathered"
     SUPERSEDED = "superseded"
     WITHDRAWN = "withdrawn"
 
@@ -145,6 +151,32 @@ class WithdrawInput(BaseModel):
         description="Why this proposal is withdrawn — recorded on the "
                     "transition (the honest exit, in the log)",
         json_schema_extra={"x-display": {"widget": "prose"}})
+
+
+class Population(BaseModel):
+    """The pilot's declared population of rows (design 7.0 §3): either a
+    bounded predicate over the target kind's query grammar (``where``) or
+    grandfathering-forward (``after=True`` — rows created from now on;
+    existing rows keep their law). Exactly one; a pilot that names no
+    rows and a pilot that names them two ways are both refused."""
+
+    where: dict[str, Any] | None = Field(
+        default=None,
+        description="A bounded population: rows the target kind's query "
+                    "grammar admits (promoted stored fields; Eq/In and "
+                    "the _gte/_lte range suffixes)",
+        json_schema_extra={"x-display": {"raw": True}})
+    after: bool = Field(
+        default=False,
+        description="Grandfathering: rows created from now on live under "
+                    "the piloted revision; existing rows keep their law")
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> "Population":
+        if bool(self.where) == bool(self.after):
+            raise ValueError(
+                "a Population is where={...} or after=true — exactly one")
+        return self
 
 
 class DefinitionData(BaseModel):
@@ -223,6 +255,15 @@ class DefinitionData(BaseModel):
         default=None, max_length=120,
         description="Deploy-mode marker, e.g. 'promoted without hold: "
                     "diff exceeds data-law'")
+    # the pilot's population (design 7.0 §3), as validated and recorded on
+    # the pilot transition: {"where": {...}} or {"after": true}. None
+    # outside a pilot. The create path routes new rows by it and the boot
+    # re-installs it on re-detection.
+    population: dict[str, Any] | None = Field(
+        default=None,
+        description="The declared population of rows living under this "
+                    "piloted revision (design §3)",
+        json_schema_extra={"x-display": {"raw": True}})
     # §2's report, linkable from the review: the most recent blast-radius
     # job this proposal deferred (measure writes it)
     measure_job: str | None = Field(
@@ -295,7 +336,8 @@ class Definition(Resource):
         return (str(DefinitionState.PROPOSED) if self.data.held
                 else str(DefinitionState.CURRENT))
 
-    @action(from_=DefinitionState.CURRENT, to=DefinitionState.SUPERSEDED,
+    @action(from_={DefinitionState.CURRENT, DefinitionState.GRANDFATHERED},
+            to=DefinitionState.SUPERSEDED,
             guards=(_deploy_only(),),
             safety=Safety(idempotent=True, reversible=False, confirm=False,
                           one_way=Acknowledged(
@@ -305,9 +347,34 @@ class Definition(Resource):
                               "never an un-supersede.")),
             display=dict(label="Supersede", order=9,
                          description="A newer revision of this law has "
-                                     "taken effect"))
+                                     "taken effect and no row lives under "
+                                     "this one"))
     async def supersede(self, inp: None, ctx: Ctx) -> None:
         pass
+
+    @action(from_=DefinitionState.CURRENT, to=DefinitionState.GRANDFATHERED,
+            guards=(_deploy_only(),),
+            safety=Safety(idempotent=True, reversible=False, confirm=False,
+                          one_way=Acknowledged(
+                              "Grandfathering is the engine's bookkeeping "
+                              "at a promote or revise whose kind declares "
+                              "adoption=Never: rows still live under this "
+                              "revision, so it is law, not history — it "
+                              "supersedes the day its last row adopts or "
+                              "closes.")),
+            display=dict(label="Grandfather", order=9,
+                         description="A newer revision took effect but "
+                                     "rows still live under this one "
+                                     "(design §3: laws die when they are "
+                                     "empty)"))
+    async def grandfather(self, inp: None, ctx: Ctx) -> None:
+        """The row half of supersede-when-empty (design 7.0 §1/§3): a
+        revision with survivors cannot honestly supersede, and two
+        ``current`` rows per kind would be a lie — this state names the
+        in-between. The lazy check on every adopt/terminal transition of
+        the target kind supersedes it the moment its last stamped
+        non-terminal row is gone (the February story: the old revision
+        supersedes the day its last workbook closes)."""
 
     @action(from_=DefinitionState.CURRENT, to=DefinitionState.CURRENT,
             guards=(_deploy_only(),),
@@ -327,7 +394,8 @@ class Definition(Resource):
         ``current`` — the law did not move, the truth caught up."""
         self.data.backfill_pending = None
 
-    @action(from_=DefinitionState.PROPOSED, to=DefinitionState.CURRENT,
+    @action(from_={DefinitionState.PROPOSED, DefinitionState.PILOTED},
+            to=DefinitionState.CURRENT,
             guards=(_resident_only(), four_eyes(of="propose")),
             safety=Safety(idempotent=True, reversible=False, confirm=True,
                           consequence="This proposal becomes the served law "
@@ -348,6 +416,65 @@ class Definition(Resource):
         stale-by-definition backfill (the existing §4 machinery — promote
         triggers what a boot revise triggers)."""
         await ctx._lifecycle.supersede_prior(self, ctx)
+
+    @action(from_=DefinitionState.PROPOSED, to=DefinitionState.PILOTED,
+            input=Population, record=Inputs(),
+            guards=(_resident_only(), four_eyes(of="propose")),
+            safety=Safety(idempotent=False, reversible=False, confirm=True,
+                          consequence="The declared population's rows "
+                                      "begin living under this revision — "
+                                      "existing matches restamp and "
+                                      "recompute; the current law keeps "
+                                      "governing everything else. The way "
+                                      "back is withdraw, which returns "
+                                      "the population to the current "
+                                      "law."),
+            display=dict(label="Pilot", order=2,
+                         description="Try the proposal on a declared "
+                                     "population of rows (design §3)"))
+    async def pilot(self, inp: Population, ctx: Ctx) -> None:
+        """The pilot is a population (design 7.0 §3): a set of rows, never
+        a set of readers — Marcus and Elena both see fund-alpha under the
+        new law, so the controls stay coherent. Four-eyes with propose
+        (the law's E3 covers the trial, not only the adoption); the input
+        is recorded (§5) — the population declaration IS the pilot's
+        meaning. The gate (design §4): only a data-law diff may pilot —
+        code does not interpret per-row — and only one live pilot or
+        grandfathered predecessor at a time (a stage, never a lattice).
+        The restamp of existing matches runs post-commit through the
+        lifecycle seam, paged like the §4 backfill."""
+        from .problems import GuardRefused, SchemaInvalid
+
+        if self.data.diff_class != "data_law":
+            raise GuardRefused(
+                "Only a data-law diff can pilot per-population — code does "
+                "not interpret per-row (design §4); preview and promote "
+                "totally instead.",
+                action_attempted="pilot")
+        engine = ctx._lifecycle.engine
+        rdef = engine.registry.get(self.data.target_kind)
+        if rdef is None:
+            raise GuardRefused(
+                f"{self.data.target_kind!r} has no rows; there is nothing "
+                "a population could claim.",
+                action_attempted="pilot")
+        lingering = await ctx.find(
+            "definition", limit=2, target_kind=self.data.target_kind,
+            state=str(DefinitionState.GRANDFATHERED))
+        if lingering:
+            raise GuardRefused(
+                "A grandfathered revision of this kind still has rows "
+                "living under it; two live revisions is the maximum "
+                "(a stage, not a lattice) — the pilot must wait until "
+                "that law is empty.",
+                action_attempted="pilot")
+        if inp.where:
+            errors = check_population(rdef, inp.where)
+            if errors:
+                raise SchemaInvalid("Input failed validation.",
+                                    action_attempted="pilot", errors=errors)
+        self.data.population = inp.model_dump(mode="json",
+                                              exclude_defaults=True)
 
     @action(from_={DefinitionState.PROPOSED, DefinitionState.PILOTED},
             to=DefinitionState.WITHDRAWN,
@@ -434,7 +561,10 @@ class KindRevise:
     """One target's boot-revise outcome (design §1/§2): which revision is
     the served law, the facts awaiting recompute under it, and — in
     propose mode — the held proposal plus the §1 overlay's parameter
-    overrides for it."""
+    overrides for it. Phase 2 rides the row halves alongside (design §3):
+    the live pilot (if any) with its population, the revision → row-id
+    map every stamp resolves through, and the per-revision parameter
+    overlays for laws that are not the resident code's."""
 
     law_id: str
     law_revision: int
@@ -443,6 +573,15 @@ class KindRevise:
     proposed_revision: int | None = None
     # (kind, fact) → LawOverride: the CURRENT law's stored parameters
     overrides: dict[tuple[str, str], Any] = dc_field(default_factory=dict)
+    # the live pilot (design §3), re-detected across boots
+    piloted_id: str | None = None
+    piloted_revision: int | None = None
+    population: dict[str, Any] | None = None
+    # revision NUMBER → definition row id (rdef.law_ids)
+    law_ids: dict[int, str] = dc_field(default_factory=dict)
+    # revision NUMBER → {fact → LawOverride}: grandfathered revisions (and
+    # a parameter-served pilot) — the maintainer's law_overlay entries
+    law_overlays: dict[int, dict[str, Any]] = dc_field(default_factory=dict)
 
 
 async def _withdraw(invoker: Any, correlation: str, row_id: str,
@@ -485,6 +624,95 @@ def _overrides_for(target_kind: str, current_fp: dict[str, Any],
     return out
 
 
+def check_population(rdef: Any, where: dict[str, Any]) -> dict[str, list[str]]:
+    """Validate a pilot population's ``where`` against the target kind's
+    query grammar (design 7.0 §3) — the surface ``attention=`` checker's
+    discipline, applied at pilot time instead of import time because the
+    population is input, not declaration. Returns field-keyed errors
+    (empty = valid). Beyond grammar membership, populations claim rows by
+    **promoted stored input fields** only: ``state`` moves and derived
+    facts are computed under the very law being piloted — a population
+    over either would be circular — so both are refused."""
+    from ..core.derived import derived_specs
+
+    props = rdef.query_schema.get("properties", {})
+    derived = derived_specs(rdef.cls.Data)
+    errors: dict[str, list[str]] = {}
+    for param, value in where.items():
+        schema = props.get(param)
+        if schema is None:
+            errors.setdefault(param, []).append(
+                f"not in the query grammar of {rdef.kind!r} — a population "
+                "claims rows the collection route could list")
+            continue
+        stem = param[:-4] if param.endswith(("_gte", "_lte")) else param
+        if stem == "state":
+            errors.setdefault(param, []).append(
+                "populations claim rows by stored input fields; a state "
+                "moves under the very machine being piloted")
+            continue
+        if stem in derived:
+            errors.setdefault(param, []).append(
+                "populations claim rows by stored input fields; a derived "
+                "fact is computed under the very law being piloted")
+            continue
+        if "enum" in schema and isinstance(value, str):
+            parts = value.split(",") if schema.get("x-in") else [value]
+            bad = [v for v in parts if v not in schema["enum"]]
+            if bad:
+                errors.setdefault(param, []).append(
+                    f"admits {schema['enum']}; got {bad}")
+    return errors
+
+
+def population_claims(where: dict[str, Any],
+                      dump: dict[str, Any]) -> bool:
+    """Does this population's ``where`` claim a row with these (validated
+    create) values? The Python half of the one grammar the SQL restamp
+    query runs — Eq, In (a list), the ``_gte``/``_lte`` range suffixes,
+    and membership for a list-valued (Vocab) field. The require-at-create
+    precedent: creates are judged by the revision whose population claims
+    the input (design §3), so the same predicate must be answerable from
+    the input alone."""
+    for param, expected in where.items():
+        if param.endswith(("_gte", "_lte")):
+            value = dump.get(param[:-4])
+            if value is None:
+                return False
+            try:
+                if param.endswith("_gte"):
+                    if not value >= expected:
+                        return False
+                elif not value <= expected:
+                    return False
+            except TypeError:
+                return False
+            continue
+        value = dump.get(param)
+        if isinstance(expected, (list, tuple)):
+            hits = (set(value) & set(expected) if isinstance(value, list)
+                    else value in expected)
+            if not hits:
+                return False
+        elif isinstance(value, list):
+            if expected not in value:
+                return False
+        elif value != expected:
+            return False
+    return True
+
+
+def _overrides_all(target_kind: str,
+                   fp: dict[str, Any]) -> dict[tuple[str, str], Any]:
+    """Every derived fact's stored parameters from one revision's
+    fingerprint — the row-law overlay's source (design 7.0 §3): a
+    grandfathered or parameter-served piloted revision computes its rows'
+    facts from these, whatever subset actually differs from the resident
+    declaration (overlaying an identical parameter is harmless)."""
+    derived = fp.get("derived") or {}
+    return _overrides_for(target_kind, fp, tuple(sorted(derived)))
+
+
 async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
                        fp: dict[str, Any], fp_hash: str, *,
                        mode: str = "auto") -> KindRevise:
@@ -509,13 +737,37 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
     crashed prior boot left. A held proposal contributes nothing to it —
     the stored values already agree with the law still being served; its
     own row carries the debt promote will owe."""
+    from ..core.owns import Never
+
     async with invoker.storage.session() as s:
         rows, _ = await invoker.storage.query(
             s, "definition", filters={"target_kind": target_kind},
             sort="-revision", page_size=REVISION_SCAN, page_number=1)
     current = next((r for r in rows if r.state == "current"), None)
     proposed_rows = [r for r in rows if r.state == "proposed"]
+    piloted_rows = [r for r in rows if r.state == "piloted"]
     declared = fp.get("derived") or {}
+    has_table = target_kind in getattr(invoker.storage, "tables", {})
+    # the upgrade stamping (design §3, migration sketch): rows written
+    # before the stamp existed were living under the stored current law —
+    # say so once, before anything decides by the stamps
+    if has_table and current is not None:
+        async with invoker.storage.session() as s:
+            stamped = await invoker.storage.stamp_null_law(
+                s, target_kind, current.data.revision)
+        if stamped:
+            log.info("stamped %d unstamped %s row(s) to revision %d (the "
+                     "law they were living under)", stamped, target_kind,
+                     current.data.revision)
+    # the stamp-resolution map (design §3): every stored revision, so a
+    # grandfathered row's envelope and writes can name their law
+    law_ids = {r.data.revision: r.id for r in rows}
+    # grandfathered laws serve their rows from stored parameters (§3/§4)
+    law_overlays = {
+        r.data.revision: {f: ov for (_, f), ov in
+                          _overrides_all(target_kind,
+                                         r.data.fingerprint).items()}
+        for r in rows if r.state == "grandfathered"}
     # the durable marker survives a crash between revise and backfill:
     # matching hashes on the re-boot write nothing, but the debt reports
     carried = _still_declared(
@@ -530,7 +782,24 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
             await _withdraw(invoker, correlation, p.id,
                             "the resident code matches the current law; "
                             "this proposal's code is no longer deployed")
-        return KindRevise(current.id, current.data.revision, carried)
+        outcome = KindRevise(current.id, current.data.revision, carried,
+                             law_ids=law_ids, law_overlays=law_overlays)
+        if piloted_rows:
+            # a live pilot whose code is no longer resident (the current
+            # law's code was redeployed): the pilot is a data-law diff by
+            # the pilot gate, so its rows keep computing from its STORED
+            # parameters — the row-law overlay — while promote honestly
+            # requires its code back (the residency guard). Withdraw
+            # remains available either way.
+            pilot = piloted_rows[0]
+            law_overlays[pilot.data.revision] = {
+                f: ov for (_, f), ov in
+                _overrides_all(target_kind,
+                               pilot.data.fingerprint).items()}
+            outcome.piloted_id = pilot.id
+            outcome.piloted_revision = pilot.data.revision
+            outcome.population = pilot.data.population
+        return outcome
 
     revision = rows[0].data.revision + 1 if rows else 1
     diff = None
@@ -555,6 +824,42 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
 
     pending = tuple(sorted(set(stale) | set(carried)))
     diff_class = classify_diff(diff) if diff is not None else None
+
+    pilot_match = next((p for p in piloted_rows
+                        if p.data.fingerprint_hash == fp_hash), None)
+    if pilot_match is not None and current is not None:
+        # the pilot continues across a re-boot (design §3): the resident
+        # code IS the piloted law — the propose-mode hold's shape, with a
+        # population living under the resident revision. The current law
+        # keeps serving everything else from stored parameters (the §1
+        # overlay); no revision is minted, whatever the deploy mode — the
+        # deploy already happened and this boot is its restart.
+        for p in proposed_rows:
+            await _withdraw(invoker, correlation, p.id,
+                            "a piloted revision holds this kind's stage; "
+                            "this proposal was replaced")
+        return KindRevise(
+            current.id, current.data.revision, carried,
+            proposed_id=pilot_match.id,
+            proposed_revision=pilot_match.data.revision,
+            # `stale` was diffed against `previous`, which IS the current
+            # row whenever one exists — the §1 overlay's fact set
+            overrides=_overrides_for(target_kind, current.data.fingerprint,
+                                     stale),
+            piloted_id=pilot_match.id,
+            piloted_revision=pilot_match.data.revision,
+            population=pilot_match.data.population,
+            law_ids=law_ids, law_overlays=law_overlays)
+    if piloted_rows:
+        # a genuinely new deploy while a pilot is live would strand the
+        # pilot's rows under a law the process can neither run nor
+        # parameter-serve against the new resident code — refused, loudly:
+        # the stage is occupied (design §1: a stage, never a lattice)
+        raise RuntimeError(
+            f"{target_kind}: revision {piloted_rows[0].data.revision} is "
+            "piloted with rows living under it, but the resident code "
+            "matches neither it nor the current law — promote or withdraw "
+            "the pilot before deploying different code")
 
     if mode == "propose" and current is not None \
             and diff_class == "data_law":
@@ -592,10 +897,12 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
             proposed_revision = match.data.revision
         overrides = _overrides_for(target_kind, current.data.fingerprint,
                                    stale)
+        law_ids[proposed_revision] = proposed_id
         return KindRevise(current.id, current.data.revision, carried,
                           proposed_id=proposed_id,
                           proposed_revision=proposed_revision,
-                          overrides=overrides)
+                          overrides=overrides,
+                          law_ids=law_ids, law_overlays=law_overlays)
 
     # auto mode — or a propose-mode diff the gate refused to hold, or the
     # first law: revise to current, exactly as v6. Lingering proposals
@@ -621,7 +928,7 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
         **({"deploy_note": deploy_note} if deploy_note else {}),
     }
     # one transaction, one correlation: the new revision's create and the
-    # old one's supersede commit together and read as one deploy in the
+    # old one's retirement commit together and read as one deploy in the
     # log — the _record_effect_job pattern, applied to the law
     async with invoker._flip_session() as s:
         ctx = invoker._ctx(DEPLOY, s, correlation_id=correlation)
@@ -629,12 +936,40 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
             s, ctx, invoker._rdef("definition"), body, body_digest(body))
         new_id = doc["self"].rsplit("/", 1)[-1]
         if current is not None:
+            # supersede-when-empty (design §1/§3): an adoption=Never kind
+            # whose rows still live under the prior revision grandfathers
+            # it instead — the rows finish under their birth law, and the
+            # lazy check retires the revision when the last one closes.
+            # Immediate kinds supersede as always: the backfill about to
+            # run IS the bulk adopt, so no row survives the prior law.
+            retire = "supersede"
+            trdef = invoker.registry.get(target_kind)
+            if has_table and trdef is not None \
+                    and trdef.cls.adoption is Never:
+                survivors = await invoker.storage.law_survivors(
+                    s, target_kind, current.data.revision,
+                    trdef.machine.terminal)
+                if survivors:
+                    retire = "grandfather"
             await invoker._invoke_in_session(
-                s, "definition", current.id, "supersede", None,
+                s, "definition", current.id, retire, None,
                 principal=DEPLOY, if_match=None, idempotency_key=None,
                 dry_run=False, locale="en", correlation_id=correlation,
                 require_key=False)
-    return KindRevise(new_id, revision, pending)
+            if retire == "grandfather":
+                law_overlays[current.data.revision] = {
+                    f: ov for (_, f), ov in
+                    _overrides_all(target_kind,
+                                   current.data.fingerprint).items()}
+    law_ids[revision] = new_id
+    if has_table and not rows:
+        # the first law of a kind whose table already has rows (an
+        # upgraded store): they were living under what just became
+        # revision 1 — the migration sketch's stamping
+        async with invoker.storage.session() as s:
+            await invoker.storage.stamp_null_law(s, target_kind, revision)
+    return KindRevise(new_id, revision, pending,
+                      law_ids=law_ids, law_overlays=law_overlays)
 
 
 async def settle_backfill(invoker: Any, row_id: str) -> None:
@@ -713,6 +1048,21 @@ async def revise_definitions(engine: Any
         # overlay — the maintainer's specs_for consults both
         rdef.proposed_law = outcome.proposed_id
         rdef.proposed_law_revision = outcome.proposed_revision
+        # the row halves (design §3): the stamp-resolution map, the live
+        # pilot with its population, and the per-revision parameter
+        # overlays for grandfathered (or parameter-served piloted) laws
+        rdef.law_ids = dict(outcome.law_ids)
+        rdef.piloted_law = outcome.piloted_id
+        rdef.piloted_law_revision = outcome.piloted_revision
+        rdef.piloted_population = outcome.population
+        for rev, per_fact in outcome.law_overlays.items():
+            engine.invoker.derived.law_overlay[(rdef.kind, rev)] = per_fact
+            engine._grandfathered_kinds.add(rdef.kind)
+        if outcome.piloted_id is not None:
+            log.info(
+                "revision %s of %s is piloted (population %s); the current "
+                "law (revision %s) governs the rest", outcome.piloted_revision,
+                rdef.kind, outcome.population, outcome.law_revision)
         if outcome.overrides:
             engine.invoker.derived.overlay.update(outcome.overrides)
             log.info(
@@ -846,37 +1196,77 @@ class DefinitionLifecycle:
 
     async def supersede_prior(self, row: Any, ctx: Ctx) -> None:
         """The in-transaction half of promote (design §1): the previous
-        current revision supersedes as the deploy actor, in the promote's
+        current revision retires as the deploy actor, in the promote's
         own transaction and correlation — the boot-revise discipline
-        (one deploy, one story in the log) applied to a human promote."""
+        (one deploy, one story in the log) applied to a human promote.
+        Supersede-when-empty (§3): an ``adoption=Never`` kind whose rows
+        still live under the prior revision grandfathers it instead —
+        rows finish under their birth law; the lazy check retires the
+        revision when the last one adopts or closes. Immediate kinds
+        supersede: the post-commit backfill IS the bulk adopt."""
+        from ..core.owns import Never
+
+        target = row.data.target_kind
+        rdef = self.engine.registry.get(target)
         priors = await ctx.find("definition", limit=10,
-                                target_kind=row.data.target_kind,
-                                state="current")
+                                target_kind=target, state="current")
         for prior in priors:
             if prior.id == row.id:
                 continue
+            retire = "supersede"
+            if rdef is not None and rdef.cls.adoption is Never \
+                    and target in getattr(self.engine.storage, "tables", {}):
+                survivors = await self.engine.storage.law_survivors(
+                    ctx.session, target, prior.data.revision,
+                    rdef.machine.terminal)
+                if survivors:
+                    retire = "grandfather"
             await self.engine.invoker._invoke_in_session(
-                ctx.session, "definition", prior.id, "supersede", None,
+                ctx.session, "definition", prior.id, retire, None,
                 principal=DEPLOY, if_match=None, idempotency_key=None,
                 dry_run=False, locale="en",
                 correlation_id=ctx.correlation_id, require_key=False)
 
     async def after_commit(self, kind: str, id: str, action: str,
                            result: Any) -> None:
-        """The post-commit half of promote (design §1): flip the served
-        law, drop the §1 overlay, and run the standard stale-by-definition
-        backfill + settle — the existing §4 machinery; the promote
-        transition triggers what a boot revise triggers. Idempotent by
-        construction (a replayed promote finds the law already flipped
-        and no unsettled marker), so natural replays cost a row load.
-        Runs only on the entry-point invoke path — promote is a wire act,
-        never a nested ``ctx.invoke``. A crash inside this window is the
-        boot-revise crash window, already closed: the next boot finds the
-        promoted row current with its durable ``backfill_pending`` marker
-        and resumes the debt."""
-        if kind != "definition" or action != "promote" \
-                or getattr(result, "status", None) != 200:
+        """The post-commit half of the lifecycle (design §1/§3), on the
+        entry-point invoke path only. For the definition kind: a committed
+        ``promote`` flips the served law; a ``pilot`` installs the
+        population and restamps its existing matches; a ``withdraw`` of a
+        piloted revision returns its rows to the current law. For every
+        other kind: the lazy supersede-when-empty check — an ``adopt`` or
+        a terminal landing may have emptied a grandfathered revision
+        (laws die when they are empty, and the log knows the day)."""
+        if getattr(result, "status", None) != 200:
             return
+        if kind == "definition":
+            if action == "promote":
+                await self._after_promote(id)
+            elif action == "pilot":
+                await self._after_pilot(id)
+            elif action == "withdraw":
+                await self._after_withdraw(id)
+            return
+        if kind not in self.engine._grandfathered_kinds:
+            return
+        doc = getattr(result, "doc", None) or {}
+        rdef = self.engine.registry.get(kind)
+        if rdef is None:
+            return
+        if action == "adopt" or doc.get("state") in rdef.machine.terminal:
+            await self._sweep_empty_laws(kind, rdef)
+
+    async def _after_promote(self, id: str) -> None:
+        """Flip the served law, drop the §1 overlay, and run the standard
+        stale-by-definition backfill + settle — the existing §4 machinery;
+        the promote transition triggers what a boot revise triggers (and
+        for an Immediate kind that backfill IS the bulk adopt, design §3).
+        Idempotent by construction (a replayed promote finds the law
+        already flipped and no unsettled marker), so natural replays cost
+        a row load. A crash inside this window is the boot-revise crash
+        window, already closed: the next boot finds the promoted row
+        current with its durable ``backfill_pending`` marker and resumes
+        the debt."""
         engine = self.engine
         async with engine.storage.session() as s:
             row = await engine.storage.load(s, "definition", id)
@@ -890,14 +1280,36 @@ class DefinitionLifecycle:
         # all read these attributes
         rdef.current_law = row.id
         rdef.current_law_revision = row.data.revision
+        rdef.law_ids[row.data.revision] = row.id
         engine._law[target] = row.id
         if rdef.proposed_law == row.id:
             rdef.proposed_law = None
             rdef.proposed_law_revision = None
-        # the overlay drops: the resident law becomes the served law
         maintainer = engine.invoker.derived
+        if rdef.piloted_law == row.id:
+            # the piloted population's trial ended in adoption: the pilot
+            # seams clear — its rows are simply under the current law now
+            rdef.piloted_law = None
+            rdef.piloted_law_revision = None
+            rdef.piloted_population = None
+            maintainer.law_overlay.pop((target, row.data.revision), None)
+        # the overlay drops: the resident law becomes the served law
         for key in [k for k in maintainer.overlay if k[0] == target]:
             del maintainer.overlay[key]
+        # the prior revision may have grandfathered in-transaction
+        # (supersede_prior, adoption=Never with survivors): its rows keep
+        # computing under it, from its stored parameters
+        async with engine.storage.session() as s:
+            lingering, _ = await engine.storage.query(
+                s, "definition",
+                filters={"target_kind": target,
+                         "state": str(DefinitionState.GRANDFATHERED)},
+                sort=None, page_size=50, page_number=1)
+        for old in lingering:
+            maintainer.law_overlay[(target, old.data.revision)] = {
+                f: ov for (_, f), ov in
+                _overrides_all(target, old.data.fingerprint).items()}
+            engine._grandfathered_kinds.add(target)
         # the standard stale-by-definition backfill (design §4), then the
         # settle that clears the durable marker. Runs inside the promote
         # request (a declared Deferred is honored at boot only — recorded
@@ -908,3 +1320,131 @@ class DefinitionLifecycle:
         if pending:
             await maintainer.backfill(target)
             await settle_backfill(engine.invoker, row.id)
+
+    async def _after_pilot(self, id: str) -> None:
+        """Install the pilot (design §3): the population routes creates
+        from this commit on, and existing rows the ``where`` claims
+        restamp to the piloted revision and recompute under it — paged
+        like the §4 backfill, run inline in the pilot request (acceptable
+        for 7.0; a deferred variant is future work, recorded).
+        ``after=True`` moves no existing row — grandfathering forward."""
+        engine = self.engine
+        async with engine.storage.session() as s:
+            row = await engine.storage.load(s, "definition", id)
+        if row is None or row.state != str(DefinitionState.PILOTED):
+            return
+        target = row.data.target_kind
+        rdef = engine.registry.get(target)
+        if rdef is None:
+            return
+        rdef.piloted_law = row.id
+        rdef.piloted_law_revision = row.data.revision
+        rdef.piloted_population = row.data.population
+        rdef.law_ids[row.data.revision] = row.id
+        where = (row.data.population or {}).get("where")
+        if where:
+            await self._restamp(target, rdef, dict(where),
+                                row.data.revision)
+
+    async def _after_withdraw(self, id: str) -> None:
+        """A withdrawn PILOT returns its rows to the current law (design
+        §1's honest exit, applied to §3's populations): every row stamped
+        to the withdrawn revision restamps to current and recomputes
+        under it — the served law, which the §1 overlay keeps honest
+        while the withdrawn code sits resident. A withdrawn PROPOSAL
+        changes nothing (no row ever lived under it); the overlay stays,
+        exactly as Phase 1 recorded."""
+        engine = self.engine
+        async with engine.storage.session() as s:
+            row = await engine.storage.load(s, "definition", id)
+        if row is None or row.state != str(DefinitionState.WITHDRAWN):
+            return
+        target = row.data.target_kind
+        rdef = engine.registry.get(target)
+        if rdef is None or rdef.piloted_law != row.id:
+            return
+        rdef.piloted_law = None
+        rdef.piloted_law_revision = None
+        rdef.piloted_population = None
+        engine.invoker.derived.law_overlay.pop(
+            (target, row.data.revision), None)
+        if rdef.current_law_revision is not None:
+            await self._restamp(target, rdef,
+                                {"law_revision": row.data.revision},
+                                rdef.current_law_revision)
+
+    async def _restamp(self, kind: str, rdef: Any, filters: dict[str, Any],
+                       revision: int, *, batch: int = 200) -> int:
+        """Move a filtered population to ``revision`` and recompute each
+        row under it — the §4 backfill's discipline (pages, FOR UPDATE,
+        no events, no version bumps: recomputation is maintenance) with a
+        stamp move riding it. Returns the number of rows moved."""
+        storage = self.engine.storage
+        maintainer = self.engine.invoker.derived
+        clock = self.engine.invoker.clock
+        # ids first, then batched writes: a restamp can move a row out of
+        # (or keep it inside) its own filter set, and paging a result set
+        # the loop is mutating would skip or repeat rows
+        ids: list[str] = []
+        page = 1
+        while True:
+            async with storage.session() as s:
+                rows, _ = await storage.query(
+                    s, kind, filters=filters, sort=None,
+                    page_size=batch, page_number=page)
+            ids.extend(r.id for r in rows)
+            if len(rows) < batch:
+                break
+            page += 1
+        total = 0
+        for start in range(0, len(ids), batch):
+            now = clock()
+            async with storage.session() as s:
+                for row_id in ids[start:start + batch]:
+                    instance = await storage.load(s, kind, row_id,
+                                                  for_update=True)
+                    if instance is None or instance.law_revision == revision:
+                        continue
+                    instance.law_revision = revision
+                    await maintainer.materialize(s, instance, rdef, now=now)
+                    await storage.update_data(s, kind, instance)
+                    total += 1
+        return total
+
+    async def _sweep_empty_laws(self, kind: str, rdef: Any) -> None:
+        """Supersede-when-empty, checked lazily (design §1/§3): on every
+        adopt or terminal transition of a kind with grandfathered
+        revisions, count each one's survivors — stamped, non-terminal
+        rows — and supersede the empty, as the system deploy actor. The
+        February story's last line: revision 41 is superseded months
+        later, on the day its last workbook closes, and the log knows
+        the day. (Nested cascade terminals miss this check until the
+        next entry-point trigger or boot — lazy is the declaration.)"""
+        engine = self.engine
+        async with engine.storage.session() as s:
+            rows, _ = await engine.storage.query(
+                s, "definition",
+                filters={"target_kind": kind,
+                         "state": str(DefinitionState.GRANDFATHERED)},
+                sort=None, page_size=50, page_number=1)
+        remaining = False
+        for row in rows:
+            async with engine.storage.session() as s:
+                survivors = await engine.storage.law_survivors(
+                    s, kind, row.data.revision, rdef.machine.terminal)
+            if survivors:
+                remaining = True
+                continue
+            async with engine.invoker._flip_session() as s:
+                await engine.invoker._invoke_in_session(
+                    s, "definition", row.id, "supersede", None,
+                    principal=DEPLOY, if_match=None, idempotency_key=None,
+                    dry_run=False, locale="en",
+                    correlation_id=uuid.uuid4().hex, require_key=False)
+            engine.invoker.derived.law_overlay.pop(
+                (kind, row.data.revision), None)
+            log.info("revision %d of %s superseded: its last stamped row "
+                     "adopted or closed (laws die when they are empty)",
+                     row.data.revision, kind)
+        if not remaining:
+            engine._grandfathered_kinds.discard(kind)

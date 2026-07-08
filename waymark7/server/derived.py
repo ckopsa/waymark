@@ -186,9 +186,20 @@ class DerivedMaintainer:
         # the law overlay (design 7.0 §1): (kind, fact) → the CURRENT
         # revision's stored parameters, installed by a propose-mode boot
         # that held a data-law diff at ``proposed``, dropped at promote.
-        # Engine-wide in this phase (one served law per kind); Phase 2's
-        # per-row law threads a revision through ``specs_for`` instead.
+        # This is the SERVED law's overlay — what a row under the current
+        # revision computes through while the resident code is a held
+        # proposal or a live pilot.
         self.overlay: dict[tuple[str, str], LawOverride] = {}
+        # the row-law overlay (design 7.0 §3): (kind, revision NUMBER) →
+        # {fact → LawOverride}, one entry per NON-current revision that
+        # still has rows living under it (a grandfathered law). Built from
+        # that revision's stored fingerprint — recoverable exactly because
+        # a grandfathered/piloted law's diff is data (design §4); a code
+        # diff's rows compute under the resident fn with their revision's
+        # stored parameters, which is as far as the overlay can honestly
+        # reach (recorded deviation). Installed by the boot revise and the
+        # promote/grandfather flow; dropped when the revision supersedes.
+        self.law_overlay: dict[tuple[str, int], dict[str, LawOverride]] = {}
 
     # ── declaration views ────────────────────────────────────────────────
     def specs(self, cls: type) -> tuple[tuple[str, DerivedSpec], ...]:
@@ -197,20 +208,45 @@ class DerivedMaintainer:
         :meth:`specs_for`, which resolves the law."""
         return ordered_specs(cls.Data)
 
-    def specs_for(self, rdef: Any, *, revision: str | None = None
+    def specs_for(self, rdef: Any, *, revision: str | int | None = None
                   ) -> tuple[tuple[str, DerivedSpec], ...]:
-        """Spec resolution under a law (design 7.0 §1/§4 — THE seam Phase
-        2 makes per-row). ``revision=None`` means the law the engine
-        serves: the resident declaration, parameter-overlaid with the
-        current revision's stored ``Tolerance``/``where=`` values while a
-        data-law proposal is held. Passing the held proposal's revision
-        row id returns the resident declaration verbatim — in propose
-        mode the resident code IS the proposed law. Any other revision id
-        resolves to the served law in this phase."""
+        """Spec resolution under a law (design 7.0 §1/§3/§4 — THE per-row
+        seam). ``revision`` is the ROW's ``law_revision`` stamp (an int),
+        or None for the law the engine serves. Three cases, kept honest:
+
+        - the row is under the CURRENT revision (or None): the resident
+          declaration, parameter-overlaid with the current revision's
+          stored ``Tolerance``/``where=`` values while a data-law proposal
+          is held or a pilot is live;
+        - the row is under the PILOTED revision: the resident declaration
+          verbatim — the resident code IS the piloted/proposed law;
+        - the row is under any OTHER revision (grandfathered): the
+          resident declaration with THAT revision's stored parameters
+          (``law_overlay``, built from its fingerprint).
+
+        The held proposal's revision row *id* (a str) is also accepted and
+        returns the resident declaration verbatim — the Phase 1 spelling,
+        kept for the blast-radius seam."""
         base = ordered_specs(rdef.cls.Data)
         if revision is not None \
                 and revision == getattr(rdef, "proposed_law", None):
             return base
+        if isinstance(revision, int):
+            per = self.law_overlay.get((rdef.kind, revision))
+            if per:
+                # a non-resident revision with rows living under it — a
+                # grandfathered law, or a pilot riding its stored
+                # parameters while the current law's code is resident
+                return tuple(
+                    (name, _overlaid(spec, ov)
+                     if (ov := per.get(name)) is not None else spec)
+                    for name, spec in base)
+            if revision == getattr(rdef, "piloted_law_revision", None):
+                return base
+            # any other non-current revision with no installed overlay
+            # (nothing about its data-law parameters differs, or it
+            # superseded while this row was in flight): the served law is
+            # the honest fallback
         if not self.overlay:
             return base
         return tuple(
@@ -251,15 +287,18 @@ class DerivedMaintainer:
 
     # ── computation ──────────────────────────────────────────────────────
     async def compute(self, s: Any, instance: Any, rdef: Any, *,
-                      now: datetime, revision: str | None = None,
+                      now: datetime, revision: str | int | None = None,
                       specs: tuple[tuple[str, DerivedSpec], ...] | None = None
                       ) -> dict[str, Any]:
         """Every derived value, fresh from its declared inputs — the pure
         function the conformance walk replays against stored rows.
         ``revision`` resolves which law's parameters compute (design 7.0
-        §1; None = the served law); ``specs`` bypasses resolution with an
-        explicit set — the §2 blast-radius meter's "compute this row under
-        the proposed parameters" read."""
+        §1/§3; None defaults to the ROW's ``law_revision`` stamp — every
+        fact computes under the law of its row, everywhere); ``specs``
+        bypasses resolution with an explicit set — the §2 blast-radius
+        meter's "compute this row under the proposed parameters" read."""
+        if revision is None:
+            revision = getattr(instance, "law_revision", None)
         values: dict[str, Any] = {}
         for name, spec in (specs if specs is not None
                            else self.specs_for(rdef, revision=revision)):
@@ -339,13 +378,17 @@ class DerivedMaintainer:
             page += 1
 
     async def materialize(self, s: Any, instance: Any, rdef: Any, *,
-                          now: datetime, revision: str | None = None
+                          now: datetime, revision: str | int | None = None
                           ) -> list[tuple[str, Any, Any]]:
         """Recompute every derived field onto the instance and refresh its
         clock index. Returns the flips ``(field, from, to)``; the caller
         persists (the write always rides the causing commit).
-        ``revision`` is the §1 law seam, threaded to :meth:`compute` —
-        None materializes under the served law (overlay included)."""
+        ``revision`` is the law seam, threaded to :meth:`compute` — None
+        defaults to the ROW's ``law_revision`` stamp (design 7.0 §3: one
+        row, one law, on every write path), which for a current-stamped
+        row is the served law, overlay included."""
+        if revision is None:
+            revision = getattr(instance, "law_revision", None)
         specs = self.specs_for(rdef, revision=revision)
         if not specs:
             return []
@@ -390,10 +433,23 @@ class DerivedMaintainer:
         sink is open and nothing records, so the backfill emits no
         derivation events and bumps no versions (see the module
         docstring); ``next_flip_at`` refreshes with the values. Returns
-        the number of rows recomputed."""
+        the number of rows recomputed.
+
+        The law's row half (design 7.0 §3): for an ``adoption=Immediate``
+        kind the backfill IS the bulk adopt — each row restamps to the
+        current revision before recomputing, which is today's behavior
+        spelled out (per-row adopt transitions would be noise; the revise
+        or promote is the one loud event). An ``adoption=Never`` kind's
+        rows keep their stamp and their values: only rows already under
+        the current revision recompute — the grandfathered live under
+        their birth law until an explicit ``adopt``."""
         import asyncio
 
+        from ..core.owns import Never
+
         rdef = self.registry[kind]
+        grandfathers = rdef.cls.adoption is Never
+        current = getattr(rdef, "current_law_revision", None)
         after: str | None = None
         total = 0
         while True:
@@ -406,6 +462,18 @@ class DerivedMaintainer:
                                                        for_update=True)
                     if instance is None:
                         continue
+                    stamp = getattr(instance, "law_revision", None)
+                    if stamp is not None and stamp == getattr(
+                            rdef, "piloted_law_revision", None):
+                        # a live pilot's rows are under the resident law
+                        # already — a backfill of the kind must neither
+                        # restamp nor recompute them out of the pilot
+                        continue
+                    if grandfathers and stamp is not None \
+                            and stamp != current:
+                        continue  # the row finishes under its birth law
+                    if not grandfathers and current is not None:
+                        instance.law_revision = current  # the bulk adopt
                     await self.materialize(s, instance, rdef, now=now)
                     await self.storage.update_data(s, kind, instance)
                     total += 1

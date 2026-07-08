@@ -107,6 +107,11 @@ class Engine:
         # revise (design §2); engine.current_law() reads it — the seam §3's
         # defined_by anchoring writes through
         self._law: dict[str, str] = {}
+        # kinds with a grandfathered revision still carrying rows (design
+        # 7.0 §3): the supersede-when-empty check's cheap gate — the
+        # lifecycle's after-commit sweep runs only for members, and boot,
+        # promote, and the sweep itself maintain the set
+        self._grandfathered_kinds: set[str] = set()
         # kinds whose stale-by-definition facts a declared Deferred pushed
         # past boot (design §4): drained by the background backfill task
         self._deferred_backfills: list[tuple[str, Any]] = []

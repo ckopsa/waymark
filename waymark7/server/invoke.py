@@ -189,6 +189,42 @@ class Invoker:
         rdef = self.registry.get(kind)
         return rdef.current_law if rdef is not None else None
 
+    def _law_for(self, kind: str, instance: Any) -> str | None:
+        """The ROW's law (design 7.0 §3): the definition revision id its
+        ``law_revision`` stamp resolves to — what this write's
+        ``defined_by`` anchors to, because writes are judged by the row's
+        law, not the deploy date's. Falls back to the kind's current law
+        for an unstamped row or an unresolvable stamp."""
+        rdef = self.registry.get(kind)
+        if rdef is None:
+            return None
+        stamp = getattr(instance, "law_revision", None)
+        if stamp is not None and stamp != rdef.current_law_revision:
+            row_law = rdef.law_ids.get(stamp)
+            if row_law is not None:
+                return row_law
+        return rdef.current_law
+
+    def _birth_revision(self, rdef: ResourceDef, instance: Any) -> int | None:
+        """The revision whose population claims this creation (design 7.0
+        §3): the piloted revision when a live pilot's declared population
+        matches the validated input — ``after=True`` claims every new row;
+        a ``where=`` claims the rows its filter admits — else the kind's
+        current revision."""
+        piloted = rdef.piloted_law_revision
+        population = rdef.piloted_population
+        if piloted is not None and population:
+            if population.get("after"):
+                return piloted
+            where = population.get("where") or {}
+            if where:
+                from .definitions import population_claims
+
+                if population_claims(where,
+                                     instance.data.model_dump(mode="json")):
+                    return piloted
+        return rdef.current_law_revision
+
     async def _append(self, s: Any, *, kind: str, instance: Any, action: str,
                       from_state: str, principal: Principal,
                       input_digest: str, summary: str, at: datetime,
@@ -206,7 +242,7 @@ class Invoker:
             from_state=from_state, principal=principal,
             input_digest=input_digest, summary=summary, at=at,
             correlation_id=correlation_id, acknowledged=acknowledged,
-            defined_by=self._law(kind), inputs=inputs)
+            defined_by=self._law_for(kind, instance), inputs=inputs)
 
     def spawn(self, coro: Any) -> None:
         import asyncio
@@ -437,6 +473,12 @@ class Invoker:
         # runs with full ctx (read/find/invoke) before the first insert
         await instance.on_create(ctx)
         await self._maintain_ref_labels(instance, None, ctx)
+        # the birth stamp (design 7.0 §3): the row's law is the revision
+        # whose population claims the validated input — the piloted one
+        # when a live pilot's declaration matches, else the current.
+        # Stamped before materialize, so the first computation is already
+        # under the row's own law.
+        instance.law_revision = self._birth_revision(rdef, instance)
         # derived values materialize before the first insert (design §2):
         # a row is born already telling its declared truth. Initial
         # computation is not a flip — nothing existed to change from
@@ -654,6 +696,13 @@ class Invoker:
     ) -> InvokeResult:
         rdef = self._rdef(kind)
         defn = rdef.machine.actions.get(action_name)
+        if defn is None and action_name == "adopt":
+            # the engine-injected row-law transition (design 7.0 §3):
+            # every kind affords it; a machine that declares its own
+            # `adopt` shadows the engine's (the app owns its vocabulary)
+            return await self._adopt_in_session(
+                s, rdef, id, body, principal=principal, dry_run=dry_run,
+                locale=locale, correlation_id=correlation_id)
         if defn is None or (defn.bulk and not allow_bulk):
             raise NotFound(f"{rdef.kind} has no action {action_name!r}.")
         digest = body_digest(body)
@@ -908,6 +957,80 @@ class Invoker:
                 status=200, body=result.body, media_type=result.media_type,
                 at=ctx.now)
         return result
+
+    # ── adopt: the row moves to the newer law (design 7.0 §3) ───────────
+    async def _adopt_in_session(
+        self, s: Any, rdef: ResourceDef, id: str,
+        body: dict[str, Any] | None, *, principal: Principal,
+        dry_run: bool, locale: str, correlation_id: str | None,
+    ) -> InvokeResult:
+        """The engine-injected ``adopt``: restamp the row to the kind's
+        current revision, recompute its facts under it (5.0's
+        stale-by-definition machinery, per-row), and record the move as a
+        same-state transition — explicit, in the log, anchored to the law
+        the row moves TO. Idempotent by construction: a row already at
+        (or ahead of — a piloted row) the current revision returns its
+        document unchanged; a terminal row is refused — the finished keep
+        the law they finished under, which is what supersede-when-empty
+        counts on. Advertised only on rows the current law has passed by
+        (render's projection); enforcement here matches it."""
+        if body:
+            raise SchemaInvalid(
+                "Action 'adopt' takes an empty body.",
+                action_attempted="adopt",
+                errors={k: ["unexpected field"] for k in body})
+        instance = await self.storage.load(s, rdef.kind, id,
+                                           for_update=not dry_run)
+        if instance is None:
+            raise NotFound(f"No {rdef.kind} {id!r}.")
+        ctx = self._ctx(principal, s, locale=locale,
+                        correlation_id=correlation_id,
+                        mode="dry_run" if dry_run else "invoke")
+        current = rdef.current_law_revision
+        stamp = getattr(instance, "law_revision", None)
+        lagging = (current is not None and stamp is not None
+                   and stamp < current)
+        if instance.state in rdef.machine.terminal:
+            raise GuardRefused(
+                "A finished row keeps the law it finished under; adoption "
+                "is for rows still living.",
+                action_attempted="adopt", state=instance.state,
+                resource=await render(instance, rdef, ctx=ctx,
+                                      depth="summary", base=self.base))
+        if dry_run:
+            return InvokeResult(status=200,
+                                body=_to_bytes({"valid": lagging}),
+                                media_type="application/json",
+                                doc={"valid": lagging})
+        if not lagging:
+            # natural replay: the row is already under the current law (or
+            # under a live pilot's newer one) — the honest answer is the
+            # current document, no transition
+            doc = await render(instance, rdef, ctx=ctx, base=self.base)
+            return _result(doc)
+        needs_before = (bool(self.derived.owner_vias(rdef.kind))
+                        or self.derived.related_dirties(rdef.kind))
+        before = (instance.data.model_dump(mode="json")
+                  if needs_before else None)
+        instance.law_revision = current
+        flips = await self.derived.materialize(s, instance, rdef,
+                                               now=ctx.now)
+        instance.version += 1
+        instance.updated_at = ctx.now
+        summary = render_summary(rdef.summary_template, instance)
+        transition = await self._append(
+            s, kind=rdef.kind, instance=instance, action="adopt",
+            from_state=instance.state, principal=principal,
+            input_digest=body_digest(None), summary=summary, at=ctx.now,
+            correlation_id=ctx.correlation_id)
+        self.derived.record(s, rdef, instance.id, flips,
+                            cause=transition.id, at=ctx.now)
+        await self.storage.save(s, rdef.kind, instance,
+                                expected_version=instance.version - 1)
+        await self.derived.recompute_owners(s, instance, rdef, before,
+                                            now=ctx.now, cause=transition.id)
+        doc = await render(instance, rdef, ctx=ctx, base=self.base)
+        return _result(doc)
 
     # ── bulk ────────────────────────────────────────────────────────────
     async def bulk(self, kind: str, action_name: str,
