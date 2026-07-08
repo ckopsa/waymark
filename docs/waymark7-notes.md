@@ -35,7 +35,7 @@ per row.
 | meta.law / defined_by | `render._row_law`, `Invoker._law_for`, `ResourceDef.law_ids` | Both resolve the ROW's stamp through `law_ids` (revision number → definition row id, every stored revision) with the kind's current law as the shared fallback — the envelope and the audit anchor cannot disagree |
 | Conformance | `waymark7/testing/conformance.py` (`replay_history`) | `adopt` joined `ENGINE_ACTIONS` (same-state check); mixed-`law_revision` histories walk because every transition already carried `defined_by` and is checked against ITS revision's machine |
 | Phase 2 proofs | `tests/waymark7/test_populations.py`, `test_adoption.py`, `test_supersede_when_empty.py` | The §3 tolerance proof, creates routed by population, `after=True`, four-eyes on pilot, withdraw rollback, pilot reboot survival; Never/Immediate/adopt; the February story end to end |
-| Dogfood | `ledger7/` + `tests/ledger7/` | The four appendix stories as tests (see Phase 3 below) |
+| Dogfood | `ledger7/` + `tests/ledger7/`; `mealplan7/` + `tests/waymark7_dogfood/` | ledger7 = the four appendix stories (see Phase 3); mealplan7 = the v6 family-meal app forked forward (Priya's week), both enrolled in `--waymark7` conformance |
 
 ## The definition lifecycle (Phase 1, the contract)
 
@@ -187,12 +187,15 @@ appendix stories as tests (`tests/ledger7/`):
   (the boot backfill never did): a fact another kind derives over a
   restamped fact catches up at that row's next write. No dogfood shape
   hits it; recorded.
-- **`pytest --waymark7` (the conformance walk) has no root-conftest
-  wiring yet** — no `waymark7_engine` fixture or enrollments exist;
-  `tests/waymark7/` carries the suite instead. Wiring mealplan7 +
-  ledger7 into a shared `waymark7_engine` (the v6 pattern at
-  `conftest.py:989`) is the known remaining work, with the two
-  factory disciplines above.
+- **`pytest --waymark7` (the conformance walk) is wired** — the root
+  conftest's `waymark7_engine` fixture spans both v7 dogfoods (mealplan7
+  + ledger7), a 1:1 mirror of the v6 section, with the two factory
+  disciplines above (fresh fund per call; await the deferred refresh
+  job). The sweep is 5,580 parametrized items over ~19 kinds
+  (properties × kind × state × action); a full local run is 2,772
+  passed / 2,808 skipped / 0 failing, ~37 min single-machine (it is
+  DB-bound: every test rebuilds the whole schema in a fresh function-
+  scoped engine, so wall-clock is Postgres DDL, not CPU).
 
 ## Status
 
@@ -202,3 +205,4 @@ appendix stories as tests (`tests/ledger7/`):
 | 1 | Definition lifecycle (§1, §2, §5) | done — 342 tests green |
 | 2 | Law binds rows (§3, §4 row halves) | done — 356 tests green (`test_populations`, `test_adoption`, `test_supersede_when_empty`); waymark6 + ledger6 untouched (364 green) |
 | 3 | ledger7 dogfood (the four appendix stories) | done — 36 tests green (32 forked + 4 stories); ledger6 untouched |
+| 4 | mealplan7 dogfood + `--waymark7` conformance wiring | done — `waymark7_engine` fixture over mealplan7 + ledger7; conformance 2,772 passed / 2,808 skipped / 0 failing |

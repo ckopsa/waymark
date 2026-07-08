@@ -1255,3 +1255,295 @@ async def w6_make_cr_transaction(state: str, engine, services) -> CR6Transaction
     if CR6TransactionState(state) == CR6TransactionState.REMOVED:
         await _step(engine, "transaction", tid, "remove")
     return await _load(engine, "transaction", tid)
+
+
+# ── Meal-plan app on waymark7 (the 7.0 dogfood: same app + the calendar) ──
+
+import waymark7  # noqa: E402
+from waymark7.testing import (  # noqa: E402
+    conformance_resource as w7_conformance_resource,
+    example_input as w7_example_input,
+    state_factory as w7_state_factory,
+)
+from mealplan7.resources.event import Event as Event7  # noqa: E402
+from mealplan7.resources.grocery_list import (  # noqa: E402
+    GroceryList as GroceryList7, GroceryState as GroceryState7)
+from mealplan7.resources.meal import Meal as Meal7  # noqa: E402
+from mealplan7.resources.plan import (  # noqa: E402
+    MealPlan as MealPlan7, PlanState as PlanState7)
+from mealplan7.resources.prep_task import PrepTask as PrepTask7  # noqa: E402
+from mealplan7.resources.rotation import (  # noqa: E402
+    SundayRotation as SundayRotation7)
+
+# ── Cash reconciliation on waymark7 (the 7.0 dogfood: ledger7) ──────────
+# Account and Workbook are factory-built (`build_account()` /
+# `build_workbook()` at module level) so the deploy stories can revise
+# their laws; the module-level names ARE the shipped defaults.
+from ledger7.resources.account import Account as CR7Account  # noqa: E402
+from ledger7.resources.account import (  # noqa: E402
+    AccountState as CR7AccountState)
+from ledger7.resources.account_template import (  # noqa: E402
+    AccountTemplate as CR7AccountTemplate)
+from ledger7.resources.break_ import BreakState as CR7BreakState  # noqa: E402
+from ledger7.resources.break_ import ReconBreak as CR7ReconBreak  # noqa: E402
+from ledger7.resources.transaction import (  # noqa: E402
+    Transaction as CR7Transaction)
+from ledger7.resources.transaction import (  # noqa: E402
+    TransactionState as CR7TransactionState)
+from ledger7.resources.workbook import Workbook as CR7Workbook  # noqa: E402
+from ledger7.resources.workbook import (  # noqa: E402
+    WorkbookState as CR7WorkbookState)
+from ledger7.services import FakeBeacon as FakeBeacon7  # noqa: E402
+from ledger7.surfaces import (  # noqa: E402
+    CloseReview as CloseReview7, ReconcileAccount as ReconcileAccount7)
+
+
+@dataclass
+class SuiteServices7(SuiteServices):
+    """mealplan7's services plus the Beacon boundary ledger7 declares —
+    one shared engine/services pair covers both v7 dogfood apps, since
+    `pytest --waymark7` walks a single ``waymark7_engine`` fixture."""
+
+    beacon_backend: FakeBeacon7 = field(default_factory=FakeBeacon7)
+    beacon: Any = None
+
+    def __post_init__(self) -> None:
+        if self.beacon is None:
+            from waymark7.server.external import Service
+
+            self.beacon = Service("beacon", handler=self.beacon_backend.pull,
+                                 timeout=30.0, backoff_seconds=60.0,
+                                 down_on_error=True)
+
+
+@pytest.fixture
+async def waymark7_engine():
+    from waymark7.server.bus import InProcessBus
+
+    services = SuiteServices7()
+    engine = waymark7.Engine(
+        resources=[Meal7, SundayRotation7, MealPlan7, GroceryList7,
+                   PrepTask7, Event7,
+                   CR7AccountTemplate, CR7Workbook, CR7Account,
+                   CR7ReconBreak, CR7Transaction],
+        surfaces=[CloseReview7, ReconcileAccount7],
+        storage=TEST_DSN, services=services, bus=InProcessBus())
+    services.beacon_backend.engine = engine
+    await engine.storage.drop_all()
+    await engine.startup()
+    try:
+        yield engine
+    finally:
+        await engine.shutdown()
+
+
+w7_conformance_resource(Meal7)
+w7_conformance_resource(SundayRotation7)
+w7_conformance_resource(PrepTask7)
+# the calendar kind: every field is schema-synthesizable (the closed
+# ``kind`` vocab is a Literal with a default) — the derived walker suffices
+w7_conformance_resource(Event7)
+
+# 7.0 engine kinds: ordinary resources, ordinary conformance
+from waymark7.server.attachments import (  # noqa: E402
+    Attachment as Attachment7W, BYTES_ACTOR as BYTES_ACTOR7W,
+)
+from waymark7.server.members import Member as Member7W  # noqa: E402
+from waymark7.server.roles import Role as Role7W  # noqa: E402
+from waymark7.server.subscriptions import (  # noqa: E402
+    WebhookSubscription as Subscription7W,
+)
+
+w7_conformance_resource(Member7W)
+w7_conformance_resource(Role7W)
+w7_conformance_resource(Subscription7W)
+
+
+# an attachment's create must name a live target, so its states need a
+# factory rather than a schema-synthesized create (design E5)
+@w7_state_factory(Attachment7W)
+async def w7_make_attachment(state: str, engine, services) -> Attachment7W:
+    mid = await _mk(engine, "meal", {"name": "Attachment target",
+                                     "themes": ["mexican"]})
+    services.seeded["attachment_target"] = mid
+    aid = await _mk(engine, "attachment", {
+        "resource_kind": "meal", "resource_id": mid,
+        "name": "recipe.pdf", "mime": "application/pdf"})
+    if state in ("uploaded", "removed"):
+        await engine.invoker.invoke(
+            "attachment", aid, "mark_uploaded",
+            {"size": 3, "sha256": "a" * 64}, principal=BYTES_ACTOR7W)
+    if state == "removed":
+        await _step(engine, "attachment", aid, "remove")
+    return await _load(engine, "attachment", aid)
+
+
+@w7_example_input(Attachment7W, "duplicate")
+def w7_attachment_duplicate_example(services) -> dict:
+    # a synthesized target would dangle; duplicate onto the factory's meal
+    return {"resource_kind": "meal",
+            "resource_id": services.seeded["attachment_target"]}
+
+
+@w7_example_input(Role7W, "create")
+def w7_role_create_example(services) -> dict:
+    # role names are declared unique (design E2); the walker may create
+    # several per test, so the example must mint fresh spellings
+    return {"name": f"reader-{uuid.uuid4().hex[:8]}",
+            "description": "May read shared note titles"}
+
+
+@w7_example_input(Member7W, "create")
+def w7_member_create_example(services) -> dict:
+    return {"email": "mom@example.com", "display_name": "Grandma",
+            "roles": ["reader"]}
+
+
+@w7_example_input(Subscription7W, "create")
+def w7_subscription_create_example(services) -> dict:
+    return {"url": "https://budget.example/hooks", "kinds": ["plan"]}
+
+
+@w7_example_input(Meal7, "create")
+def w7_meal_create_example(services) -> dict:
+    # 7.0 speaks only the current shape on the wire; the single-theme era
+    # is a declared upcast (Meal7.shape/upcasts), not a payload dialect
+    return {"name": "Carnitas tacos", "themes": ["mexican"],
+            "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
+            "prep_minutes": 45, "thaw_hours": 12}
+
+
+@w7_example_input(PrepTask7, "create")
+def w7_prep_task_create_example(services) -> dict:
+    return prep_task_create_example(services)
+
+
+async def _listed_meal7(engine, services) -> str:
+    mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
+                                     "themes": ["mexican"]})
+    await _step(engine, "meal", mid, "accept")
+    services.seeded["meal_id"] = mid
+    return mid
+
+
+@w7_state_factory(MealPlan7)
+async def w7_make_plan(state: str, engine, services) -> MealPlan7:
+    rid = await _mk(engine, "rotation", {})
+    await _listed_meal7(engine, services)
+    pid = await _mk(engine, "plan", {"start_date": PLAN_START.isoformat(),
+                                     "weeks": 1, "rotation_id": rid})
+    services.seeded["plan_id"] = pid
+    target = PlanState7(state)
+    if target == PlanState7.ABANDONED:
+        await _step(engine, "plan", pid, "abandon")
+    elif target != PlanState7.DRAFT:
+        for i in range(7):
+            await _step(engine, "plan", pid, "mark_eating_out",
+                        {"date": (PLAN_START + timedelta(days=i)).isoformat()})
+        await _step(engine, "plan", pid, "finalize")
+        if target in (PlanState7.ACTIVE, PlanState7.DONE):
+            await _step(engine, "plan", pid, "begin")
+        if target == PlanState7.DONE:
+            await _step(engine, "plan", pid, "complete")
+    return await _load(engine, "plan", pid)
+
+
+# assign_meal needs no example: its Relation's tuple set feeds the
+# synthesizer (waymark7.testing.factories.synthesize_input)
+@w7_example_input(MealPlan7, "assign_off_theme")
+def w7_assign_off_theme_example(services) -> dict:
+    return {"date": PLAN_START.isoformat(), "meal_id": services.seeded["meal_id"]}
+
+
+@w7_state_factory(GroceryList7)
+async def w7_make_grocery_list(state: str, engine, services) -> GroceryList7:
+    plan = await w7_make_plan(PlanState7.PLANNED, engine, services)
+    gid = await _mk(engine, "grocery_list",
+                    {"plan_id": plan.id, "items": GROCERY_ITEMS})
+    target = GroceryState7(state)
+    if target != GroceryState7.DRAFT:
+        await _step(engine, "grocery_list", gid, "finalize")
+    if target == GroceryState7.DONE:
+        for item in GROCERY_ITEMS:
+            await _step(engine, "grocery_list", gid, "check_item",
+                        {"name": item["name"]})
+        await _step(engine, "grocery_list", gid, "complete")
+    return await _load(engine, "grocery_list", gid)
+
+
+@w7_example_input(GroceryList7, "remove_item")
+def w7_remove_item_example(services) -> dict:
+    return {"name": "paper towels"}
+
+
+# no cross-resource refs and every field is schema-synthesizable — the
+# derived walker needs no factory (mirrors Meal7/PrepTask7)
+w7_conformance_resource(CR7AccountTemplate)
+
+# The ledger helpers (_step_as, _cr_accounts_of, _cr_job_done,
+# _make_cr_workbook_id, _make_cr_account_id) and the CR_PREPARER /
+# CR_REVIEWER principals are version-agnostic — they only touch the
+# engine passed in — so the w7 factories reuse them directly.
+
+
+@w7_state_factory(CR7Workbook)
+async def w7_make_cr_workbook(state: str, engine, services) -> CR7Workbook:
+    # fresh fund + fresh workbook every call, never cached: a factory runs
+    # once per candidate principal per case, and a cached id already at
+    # the target state can't be re-driven (unique=(fund, period) would
+    # also 409) — see _make_cr_workbook_id's docstring
+    wid = await _make_cr_workbook_id(engine)
+    target = CR7WorkbookState(state)
+    if target == CR7WorkbookState.ABANDONED:
+        await _step(engine, "workbook", wid, "abandon")
+        return await _load(engine, "workbook", wid)
+    if target in (CR7WorkbookState.PREPARED, CR7WorkbookState.REVIEWED):
+        # freshen the sync first: beacon_fresh is a warning guard on
+        # prepare, and refresh stamps last_synced_at synchronously.
+        # Wait for the deferred job to finish before moving on — a
+        # conformance case calls this factory once per candidate
+        # principal, and a job still running in the background would
+        # otherwise race a *later* case's before/after transition count.
+        refreshed = await _step(engine, "workbook", wid, "refresh")
+        await _cr_job_done(engine, refreshed.doc["data"]["sync_job_id"])
+        for acc in await _cr_accounts_of(engine, wid):
+            if acc.state == "open":
+                await _step(engine, "account", acc.id, "reconcile")
+        await _step_as(engine, "workbook", wid, "prepare", CR_PREPARER)
+        if target == CR7WorkbookState.REVIEWED:
+            await _step_as(engine, "workbook", wid, "review", CR_REVIEWER)
+    return await _load(engine, "workbook", wid)
+
+
+@w7_state_factory(CR7Account)
+async def w7_make_cr_account(state: str, engine, services) -> CR7Account:
+    aid = await _make_cr_account_id(engine)
+    target = CR7AccountState(state)
+    if target == CR7AccountState.REMOVED:
+        await _step(engine, "account", aid, "remove")
+    elif target == CR7AccountState.BALANCED:
+        # a freshly seeded account is already reconciled (0 - 0 + 0 == 0)
+        await _step(engine, "account", aid, "reconcile")
+    return await _load(engine, "account", aid)
+
+
+@w7_state_factory(CR7ReconBreak)
+async def w7_make_cr_break(state: str, engine, services) -> CR7ReconBreak:
+    aid = await _make_cr_account_id(engine)
+    bid = await _mk(engine, "break",
+                    {"account_id": aid, "amount": 12.34,
+                     "note": "conformance"})
+    if CR7BreakState(state) == CR7BreakState.REMOVED:
+        await _step(engine, "break", bid, "remove")
+    return await _load(engine, "break", bid)
+
+
+@w7_state_factory(CR7Transaction)
+async def w7_make_cr_transaction(state: str, engine, services) -> CR7Transaction:
+    aid = await _make_cr_account_id(engine)
+    tid = await _mk(engine, "transaction",
+                    {"account_id": aid, "transaction_date": "2026-06-15",
+                     "amount": -42.0, "memo": "conformance"})
+    if CR7TransactionState(state) == CR7TransactionState.REMOVED:
+        await _step(engine, "transaction", tid, "remove")
+    return await _load(engine, "transaction", tid)
