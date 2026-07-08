@@ -179,11 +179,24 @@ async def test_affordance_completeness(wm7, wm3_case):
         assert entry.get("reason", "").strip(), \
             f"unavailable[{name}] has no localized reason"
 
-    # nothing falls through silently: hidden actions must 404 when invoked
+    # nothing falls through silently: hidden actions must 404 when invoked —
+    # unless the action is idempotent and the resource already sits in its
+    # target state, where the replay contract returns the current document
+    # unchanged (no execution, no version advance) before visibility is even
+    # evaluated. A Mirror's system-only sync marks (input-less, idempotent)
+    # hit this: staging `stale` leaves mark_stale as the last transition, so
+    # re-invoking it in `stale` naturally replays rather than 404s.
     for name in hidden:
         defn = rdef.machine.actions[name]
         body = await build_input(wm7, kind, defn, instance)
         res = await post(wm7, doc, defn, pname, body)
+        if res.status_code == 200:
+            assert defn.safety.idempotent and instance.state == defn.to \
+                and res.json()["meta"]["version"] == doc["meta"]["version"], (
+                    f"hidden action {name} executed (200) — a hidden action "
+                    "may return 200 only as an idempotent natural replay in "
+                    "its own target state")
+            continue
         assert res.status_code == 404, \
             f"hidden action {name} must return 404, got {res.status_code}"
 
@@ -1026,8 +1039,11 @@ async def replay_history(storage: Any, registry: Any, kind: str) -> int:
                 f"{where}: create must land in that revision's initial "
                 f"state {machine['initial']!r} or a declared create "
                 f"landing {sorted(rdef.cls.create_state_names)}")
-        elif name in ENGINE_ACTIONS:
-            # the engine's same-state write tails (authored sync marks)
+        elif name in ENGINE_ACTIONS and name not in machine["actions"]:
+            # the engine's same-state write tails (authored sync marks). A
+            # whole-resource Mirror shares these names (mark_stale/…) as REAL
+            # state-changing transitions — those are in machine["actions"] and
+            # validated as declared transitions below, not as bookkeeping.
             assert t.from_state == t.to_state and resolve_renamed(
                 t.to_state, state_renames, states) is not None, (
                 f"{where}: an engine bookkeeping write must hold its "

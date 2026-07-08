@@ -46,6 +46,39 @@ class DocState(StrEnum):
     APPROVED = "approved"
 
 
+class NoteState(StrEnum):
+    OPEN = "open"
+    FILED = "filed"
+
+
+def make_note(prominence: str = "primary"):
+    """A second app kind whose ``nav=`` is parametrized — byte-identical
+    for a given argument (a distinct class each call, same declaration), so
+    two boots stage a nav-prominence revision. The RHS names the enclosing
+    parameter, not the class-local ``nav``, so validation runs on it."""
+
+    class NoteData(BaseModel):
+        body: str = Field(min_length=1, max_length=200)
+
+    class Note(Resource):
+        kind = "note"
+        State = NoteState
+        Data = NoteData
+        initial = NoteState.OPEN
+        terminal = {NoteState.FILED}
+        summary = "{data.body}"
+        nav = prominence
+
+        @action(from_=NoteState.OPEN, to=NoteState.FILED,
+                safety=Safety(idempotent=True, reversible=False, confirm=True,
+                              consequence="The note is filed."),
+                display=dict(label="File"))
+        async def file(self, inp: None, ctx: Ctx) -> None:
+            pass
+
+    return Note
+
+
 # two spellings of the same predicate: textually different, behaviorally
 # identical — exactly the edit the fingerprint's source-text semantics
 # (core/fingerprint.py docstring) promise to treat as a new law
@@ -384,3 +417,55 @@ async def test_discovery_marks_engine_kinds():
     finally:
         await client.aclose()
         await engine.shutdown()
+
+
+async def test_discovery_marks_secondary_kinds():
+    """Discovery advertises the law's judgment of prominence: a domain kind
+    declared ``nav="secondary"`` is listed in ``secondary_kinds`` so the
+    client folds it behind the nav overflow — the sibling of engine_kinds
+    (the machinery folds by ownership; the secondary domain by declared
+    prominence). A primary kind is simply absent; the fold never hides —
+    the kind and its collection stay in discovery."""
+    engine = waymark7.Engine(
+        resources=[make_doc(EXPLAIN_V1, OVERDUE_V1), make_note("secondary")],
+        storage=TEST_DSN, principal=header_principal, services=None,
+        bus=InProcessBus())
+    await engine.storage.drop_all()
+    await engine.startup()
+    app = FastAPI()
+    app.include_router(engine.router, prefix="/api")
+    client = AsyncClient(transport=ASGITransport(app=app),
+                         base_url="http://t", headers=OWNER)
+    try:
+        doc = (await client.get("/api/.well-known/waymark")).json()
+        secondary = doc["secondary_kinds"]
+        assert secondary == ["note"], secondary
+        assert "doc" not in secondary, "a primary domain kind never lists here"
+        assert "note" in doc["kinds"], "secondary folds, it does not hide"
+        assert "note" in doc["collections"], "the collection stays reachable"
+        # prominence and ownership are disjoint declarations: an engine
+        # kind is folded by ownership, never appearing among the secondary
+        assert set(secondary).isdisjoint(doc["engine_kinds"])
+    finally:
+        await client.aclose()
+        await engine.shutdown()
+
+
+async def test_nav_secondary_is_an_advertisement_revision():
+    """Marking a kind ``nav="secondary"`` is a law change — the law judges
+    what leads — but a cosmetic one: revision 2 is minted, its one diff
+    path (``nav``, added, since primary omits the key) classified
+    ``advertisement``, so no derived fact is marked stale."""
+    e1 = await _boot(make_note("primary"), drop=True)
+    await e1.shutdown()
+
+    e2 = await _boot(make_note("secondary"))
+    try:
+        rev1, rev2 = await _definitions(e2, "note")
+        assert (rev1.data.revision, rev1.state) == (1, "superseded")
+        assert (rev2.data.revision, rev2.state) == (2, "current")
+        diff = rev2.data.diff
+        assert diff["added"] == [{"path": "nav", "class": "advertisement"}], diff
+        assert diff["removed"] == [] and diff["changed"] == []
+    finally:
+        await e2.shutdown()

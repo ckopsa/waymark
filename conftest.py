@@ -1261,11 +1261,11 @@ async def w6_make_cr_transaction(state: str, engine, services) -> CR6Transaction
 
 import waymark7  # noqa: E402
 from waymark7.testing import (  # noqa: E402
-    SkipState,
     conformance_resource as w7_conformance_resource,
     example_input as w7_example_input,
     state_factory as w7_state_factory,
 )
+from waymark7.testing.factories import make_state as w7_make_state  # noqa: E402
 from mealplan7.resources.event import Event as Event7  # noqa: E402
 from mealplan7.resources.grocery_list import (  # noqa: E402
     GroceryList as GroceryList7, GroceryState as GroceryState7)
@@ -1292,10 +1292,12 @@ from ledger7.resources.transaction import (  # noqa: E402
 from ledger7.resources.transaction import (  # noqa: E402
     TransactionState as CR7TransactionState)
 from ledger7.resources.fund import Fund as CR7Fund  # noqa: E402
+from ledger7.resources.beacon_coa import BeaconCoa as CR7BeaconCoa  # noqa: E402
 from ledger7.resources.workbook import Workbook as CR7Workbook  # noqa: E402
 from ledger7.resources.workbook import (  # noqa: E402
     WorkbookState as CR7WorkbookState)
 from ledger7.fund_source import FUNDS as FUNDS7  # noqa: E402
+from ledger7.beacon_coa_source import BEACON_COAS as BEACON_COAS7  # noqa: E402
 from ledger7.services import FakeBeacon as FakeBeacon7  # noqa: E402
 from ledger7.surfaces import (  # noqa: E402
     CloseReview as CloseReview7, ReconcileAccount as ReconcileAccount7)
@@ -1309,6 +1311,7 @@ class SuiteServices7(SuiteServices):
 
     beacon_backend: FakeBeacon7 = field(default_factory=FakeBeacon7)
     beacon: Any = None
+    beacon_coas: Any = None
 
     def __post_init__(self) -> None:
         if self.beacon is None:
@@ -1317,6 +1320,19 @@ class SuiteServices7(SuiteServices):
             self.beacon = Service("beacon", handler=self.beacon_backend.pull,
                                  timeout=30.0, backoff_seconds=60.0,
                                  down_on_error=True)
+        if self.beacon_coas is None:
+            from waymark7.server.external import Service
+
+            # dispatches to whatever CR7BeaconCoa.adapter currently is at
+            # call time (ledger7.services.Services._sync_coas's same
+            # lazy-seam), since this fixture swaps the module singleton
+            # per test rather than constructing a fresh adapter per case
+            async def _sync_coas(fund_beacon_id: int) -> dict[str, Any]:
+                return await CR7BeaconCoa.adapter.sync_fund(fund_beacon_id)
+
+            self.beacon_coas = Service(
+                "beacon_coas", handler=_sync_coas, timeout=30.0,
+                backoff_seconds=60.0, down_on_error=True)
 
 
 @pytest.fixture
@@ -1331,16 +1347,22 @@ async def waymark7_engine():
     FUNDS7.down = False
     FUNDS7.pulls = 0
     CR7Fund.adapter = FUNDS7
+    BEACON_COAS7.docs.clear()
+    BEACON_COAS7.by_fund.clear()
+    BEACON_COAS7.down = False
+    BEACON_COAS7.pulls = 0
+    CR7BeaconCoa.adapter = BEACON_COAS7
 
     services = SuiteServices7()
     engine = waymark7.Engine(
         resources=[Meal7, SundayRotation7, MealPlan7, GroceryList7,
                    PrepTask7, Event7,
                    CR7AccountTemplate, CR7Workbook, CR7Account,
-                   CR7ReconBreak, CR7Transaction, CR7Fund],
+                   CR7ReconBreak, CR7Transaction, CR7Fund, CR7BeaconCoa],
         surfaces=[CloseReview7, ReconcileAccount7],
         storage=TEST_DSN, services=services, bus=InProcessBus())
     services.beacon_backend.engine = engine
+    CR7BeaconCoa.adapter.engine = engine
     await engine.storage.drop_all()
     await engine.startup()
     try:
@@ -1488,50 +1510,50 @@ def w7_remove_item_example(services) -> dict:
     return {"name": "paper towels"}
 
 
-# The fund is a read-only Mirror (ledger3 friction #3 closed). It is
-# enrolled — the coverage gate (test_every_resource_is_enrolled) demands
-# every engine kind be walkable — but only its `fresh` state is
-# walker-producible: a Mirror is genuinely awkward for the "make state X,
-# GET, assert still X" model. Pull-through-on-read re-syncs a stale/
-# unreachable mirror back to fresh on the very GET the representation test
-# makes, and the sync states (stale/conflicted/unreachable) are reached
-# only by system-actor transitions a human walker cannot drive. So the
-# factory produces `fresh` (created + pulled, so its name renders) and
-# raises SkipState for the rest — the design's own "enroll minimally and
-# note it" escape hatch. The sync states are covered directly by the
-# framework's own mirror tests (tests/waymark7/test_external.py) and the
-# fund's app behavior by tests/ledger7/test_story8_funds.py.
+# The fund is a read-only Mirror (ledger3 friction #3 closed). Since the
+# 7.x Mirror-aware conformance extension (docs/waymark7-notes.md), a Mirror
+# walks its sync states through the harness's own system-actor factory: the
+# suite reads a staged state with pull-through suppressed (default-off seam),
+# and the factory stages `fresh/stale/unreachable` via SYSTEM_OBSERVER. So
+# the fund enrolls with the derived (Mirror-aware) walker — no hand-written
+# factory. `conflicted` is skipped by the factory for this read-only mirror
+# (push_on_write=False never diverges under our write). The full-walk proof
+# lives in tests/waymark7/test_mirror_conformance.py; the fund's app
+# behavior in tests/ledger7/test_story8_funds.py.
+w7_conformance_resource(CR7Fund)
+
+# beacon_coa is the same shape of read-only Mirror as fund (see beacon_coa.py)
+# and enrolls the same way — the derived Mirror-aware walker, no
+# hand-written factory.
+w7_conformance_resource(CR7BeaconCoa)
+
+
 async def _make_cr7_fund(engine) -> str:
-    """A fresh fund per call, pulled through so its name is filled (the
-    workbook/account label denormalization reads it at create; the
-    conformance summary must render a non-empty name)."""
-    code = f"fund-cr7-{uuid.uuid4().hex[:8]}"
-    FUNDS7.seed(code, name=code.replace("-", " ").title(), code=code)
-    fund_id = await _mk(engine, "fund", {"external_id": code})
-    from waymark7.server.external import refresh_external
-    async with engine.storage.session() as s:
-        inst = await engine.storage.load(s, "fund", fund_id)
-    await refresh_external(engine, engine.registry["fund"], inst)
-    return fund_id
+    """A fresh, pulled-through fund per call (its name filled), for the
+    workbook/account/template factories that denormalize the fund's name at
+    create. Delegates to the Mirror-aware state factory, which pulls the
+    adapter directly — so the name fills even under the suite's refresh
+    suppression (a GET-path pull would be suppressed; this is not)."""
+    fund = await w7_make_state("fund", "fresh", engine)
+    return fund.id
 
 
-@w7_state_factory(CR7Fund)
-async def w7_make_cr_fund(state, engine, services) -> CR7Fund:
-    if state != "fresh":
-        raise SkipState(
-            f"fund:{state!r} is not walker-producible — a Mirror re-syncs "
-            "to fresh on the representation GET (pull-through), and its "
-            "sync transitions are system-only (design: enroll minimally)")
-    return await _load(engine, "fund", await _make_cr7_fund(engine))
+async def _make_cr7_beacon_coa(engine) -> str:
+    """A fresh, pulled-through beacon_coa per call — the same Mirror-aware
+    delegation as ``_make_cr7_fund``, for the account_template/account
+    factories that denormalize the CoA's name at create."""
+    coa = await w7_make_state("beacon_coa", "fresh", engine)
+    return coa.id
 
 
 @w7_state_factory(CR7AccountTemplate)
 async def w7_make_cr_template(state, engine, services) -> CR7AccountTemplate:
     fund_id = await _make_cr7_fund(engine)
+    beacon_coa_id = await _make_cr7_beacon_coa(engine)
     tid = await _mk(engine, "account_template",
                     {"fund_id": fund_id, "name": "Ops checking",
                      "bank_name": "First Bank", "last4": "4321",
-                     "beacon_coa_id": f"COA-{uuid.uuid4().hex[:6]}"})
+                     "beacon_coa_id": beacon_coa_id})
     if state == "retired":
         await _step(engine, "account_template", tid, "retire")
     return await _load(engine, "account_template", tid)
@@ -1546,10 +1568,11 @@ async def _make_cr7_workbook_id(engine) -> str:
     — a factory runs once per candidate principal per case, and unique
     (fund_id, period) would 409 on a repeat)."""
     fund_id = await _make_cr7_fund(engine)
+    beacon_coa_id = await _make_cr7_beacon_coa(engine)
     await _mk(engine, "account_template",
               {"fund_id": fund_id, "name": "Ops checking",
                "bank_name": "First Bank", "last4": "4321",
-               "beacon_coa_id": "COA-1"})
+               "beacon_coa_id": beacon_coa_id})
     return await _mk(engine, "workbook",
                      {"fund_id": fund_id, "period": "2026-06"})
 

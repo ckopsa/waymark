@@ -164,6 +164,17 @@ class Resource:
     profiles: ClassVar[dict[str, Profile]] = {}
     links: ClassVar[tuple[LinkDef, ...]] = ()
     display: ClassVar[dict[str, Any]] = {}
+    # Where this kind sits in the workspace navigation. "primary" — a lead
+    # entry point, inline in the nav bar; "secondary" — a real domain kind
+    # that isn't a first stop, folded behind the nav's overflow menu. The
+    # sibling of the ``engine_kinds`` fold: the machinery hides by
+    # ownership, the secondary domain hides by the law's own judgment of
+    # prominence — so a helpful domain can grow past a handful of kinds
+    # without the nav becoming a wall. Discovery advertises the secondary
+    # set; the client renders the tiers it is told about (it never guesses
+    # relevance). Fingerprinted as advertisement — revising which kinds
+    # lead is a law change, but a cosmetic one that recomputes nothing.
+    nav: ClassVar[str] = "primary"
     allow_dead: ClassVar[set[Any]] = set()
     row_affordances: ClassVar[bool] = True
     spans: ClassVar[tuple[type, ...]] = ()   # workflow resources (§14)
@@ -282,6 +293,12 @@ class Resource:
             cls.filterable = spec
             observed = tuple(f for f, s in vocabs.items() if s.get("facet"))
             cls.faceted = tuple(dict.fromkeys((*cls.faceted, *observed)))
+
+        if cls.nav not in ("primary", "secondary"):
+            raise checks.DefinitionError(
+                f"{cls.__qualname__}: nav={cls.nav!r} — must be "
+                '"primary" (a lead nav entry) or "secondary" (folded behind '
+                "the nav overflow)")
 
         if cls.adoption not in (Immediate, Never):
             raise checks.DefinitionError(

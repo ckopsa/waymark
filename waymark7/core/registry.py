@@ -157,5 +157,15 @@ class Registry:
         said so; nothing re-derives the list from a hardcoded set."""
         return [k for k, rdef in self._by_kind.items() if rdef.engine_owned]
 
+    def secondary_kinds(self) -> list[str]:
+        """Kinds the law marks ``nav="secondary"`` — real domain resources
+        that aren't lead entry points, folded behind the nav overflow. The
+        sibling of ``engine_kinds``: the machinery hides by ownership, the
+        secondary domain by the declared judgment of prominence. Discovery
+        advertises the set so the client renders tiers it is told about
+        rather than guessing which kinds are relevant."""
+        return [k for k, rdef in self._by_kind.items()
+                if rdef.cls.nav == "secondary"]
+
     def schema(self, name: str) -> tuple[dict[str, Any], bytes] | None:
         return self._schemas.get(name)

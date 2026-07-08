@@ -68,6 +68,13 @@
                 font-size: 13px; color: var(--ink); white-space: nowrap; }
   .nav-menu a:hover { background: var(--chip); text-decoration: none; }
   .nav-menu .law-mark { color: var(--law); }
+  /* the machinery's divider: secondary domain kinds lead the overflow,
+     the engine kinds sit below this quiet rule — shown only when both
+     share the menu, so a pure-engine overflow reads as it always did */
+  .nav-menu-label { padding: 6px 14px 3px; margin-top: 4px;
+                    border-top: 1px solid var(--line);
+                    font: 600 9.5px var(--sans); letter-spacing: .06em;
+                    text-transform: uppercase; color: var(--muted); }
   /* the law stamp: which revision of the law produced this screen */
   #lawstamp a { font-family: var(--mono); font-size: 11px; color: var(--law);
                 background: var(--law-wash); border: 1px solid var(--law-wash);
@@ -447,6 +454,14 @@
                         font-size: 12.5px; margin-top: 2px; }
   dialog .buttons { display: flex; gap: 8px; justify-content: flex-end;
                     margin-top: 16px; }
+  /* the attachment upload dialog (design E5): the target stated not asked,
+     a file well, and the file's own facts echoed back before the send */
+  .upload-target { font-size: 13px; margin: 2px 0 12px; }
+  dialog input[type="file"] { padding: 10px; background: var(--paper);
+                    border: 1px dashed var(--line); }
+  .upload-preview { font-family: var(--mono); font-size: 12px;
+                    margin: 6px 0 2px; color: var(--muted); }
+  .upload-preview.chosen { color: var(--ink); }
   dialog .dryrun { font-size: 12px; margin-top: 10px; }
   dialog .dryrun.ok { color: var(--verdigris-deep); }
   dialog .dryrun.bad { color: var(--refusal); font-family: var(--serif);
@@ -463,6 +478,16 @@
   .when-note { font-family: var(--serif); font-size: 13px; color: var(--warn);
                margin: 4px 0 0; }
   .req { color: var(--refusal); }
+
+  /* the searchable combobox a truncated Ref <select> swaps into */
+  .combo { position: relative; }
+  .combo-panel { position: absolute; top: calc(100% + 2px); left: 0; right: 0;
+                 z-index: 20; background: var(--panel); border: 1px solid var(--line);
+                 border-radius: var(--radius); box-shadow: var(--shadow);
+                 max-height: 220px; overflow-y: auto; display: none; }
+  .combo-option { padding: 6px 9px; font-size: 13.5px; cursor: pointer; }
+  .combo-option:hover { background: var(--chip); }
+  .combo-empty { padding: 6px 9px; font-size: 11.5px; color: var(--muted); }
 
   /* batch verdicts: index and outcome are machine truth, reasons are prose */
   .batchbox { margin-top: 14px; border-top: 1px solid var(--line);
@@ -703,32 +728,48 @@ async function resolveLawRev(law, kind) {
 }
 
 /* ── the nav: built from discovery on EVERY load, whatever the route — a
-   deep link hard-refreshed must not arrive without its navigation. Domain
-   kinds sit inline; engine kinds (discovery's engine_kinds) tuck behind a
-   quiet ⋯ menu at the far right. A server without the field gets the
-   flat nav. Independent of the document render: they own disjoint DOM,
-   so neither async path can clobber the other in either order. ───────── */
+   deep link hard-refreshed must not arrive without its navigation. Primary
+   domain kinds sit inline; secondary domain kinds (discovery's
+   secondary_kinds) and engine kinds (engine_kinds) tuck behind a quiet ⋯
+   menu at the far right. The law judges prominence and ownership; this
+   client renders those tiers and invents no relevance of its own — a
+   server without either field gives every kind the inline seat it had.
+   Independent of the document render: they own disjoint DOM, so neither
+   async path can clobber the other in either order. ─────────────────── */
 async function renderNav() {
   let w;
   try { w = await wellKnown(); } catch { return; }
   const nav = $("#kinds"); nav.textContent = "";
   const engine = new Set(w.engine_kinds || []);
+  const secondary = new Set(w.secondary_kinds || []);
   const entries = Object.entries(w.collections || {});
   for (const [kind, href] of entries)
-    if (!engine.has(kind)) nav.append(el("a", {href: "#"+href}, title(kind)+"s"));
-  const tucked = entries.filter(([kind]) => engine.has(kind));
-  if (tucked.length) nav.append(engineMenu(tucked));
+    if (!engine.has(kind) && !secondary.has(kind))
+      nav.append(el("a", {href: "#"+href}, title(kind)+"s"));
+  // secondary domain kinds lead the overflow, engine kinds follow it —
+  // a kind marked both stays with the machinery (ownership is the stronger
+  // fold: it is not the app's domain at all)
+  const tuckedDomain = entries.filter(([kind]) =>
+    secondary.has(kind) && !engine.has(kind));
+  const tuckedEngine = entries.filter(([kind]) => engine.has(kind));
+  if (tuckedDomain.length || tuckedEngine.length)
+    nav.append(overflowMenu(tuckedDomain, tuckedEngine));
 }
 
-/* The ⋯ menu: keyboard-first (button = Enter/Space, Escape closes and
-   returns focus, links take the global focus-visible ring); the
-   definition kind wears its ⚖ — the law is findable, just not loud. */
-function engineMenu(entries) {
+/* The ⋯ overflow: secondary domain kinds, then the engine machinery below
+   a labeled rule. Keyboard-first (button = Enter/Space, Escape closes and
+   returns focus, links take the global focus-visible ring); the definition
+   kind wears its ⚖ — the law is findable, just not loud. A pure-engine
+   overflow (no secondary domain kinds) reads exactly as it did before: no
+   label, the machinery's own tooltip. */
+function overflowMenu(domainEntries, engineEntries) {
   const wrap = el("span", {class:"nav-more-wrap"});
   const menu = el("div", {class:"nav-menu", role:"menu"});
   const btn = el("button", {class:"nav-more", type:"button",
     "aria-haspopup":"true", "aria-expanded":"false",
-    title:"engine kinds — the machinery's own resources"}, "⋯");
+    title: domainEntries.length
+      ? "more — secondary domain kinds and the engine's own resources"
+      : "engine kinds — the machinery's own resources"}, "⋯");
   const close = () => { menu.style.display = "none";
                         btn.setAttribute("aria-expanded", "false"); };
   const open = () => { menu.style.display = "block";
@@ -742,10 +783,17 @@ function engineMenu(entries) {
   });
   document.addEventListener("pointerdown", ev => {
     if (!wrap.contains(ev.target)) close(); });
-  for (const [kind, href] of entries)
-    menu.append(el("a", {href: "#"+href, role:"menuitem", onclick: close},
-      ...(kind === "definition" ? [el("span", {class:"law-mark"}, "⚖ ")] : []),
-      title(kind)+"s"));
+  const item = ([kind, href], law) =>
+    el("a", {href: "#"+href, role:"menuitem", onclick: close},
+      ...(law && kind === "definition"
+        ? [el("span", {class:"law-mark"}, "⚖ ")] : []),
+      title(kind)+"s");
+  for (const e of domainEntries) menu.append(item(e, false));
+  if (engineEntries.length) {
+    if (domainEntries.length)
+      menu.append(el("div", {class:"nav-menu-label"}, "Engine"));
+    for (const e of engineEntries) menu.append(item(e, true));
+  }
   wrap.append(btn, menu);
   return wrap;
 }
@@ -998,13 +1046,23 @@ function renderCollection(view, doc, hints) {
   const bulk = Object.entries(doc.actions || {})
     .filter(([n, a]) => a.effect && a.effect.bulk);
   const bar = el("div", {class:"actions"});
-  if (create) bar.append(actionButton({name:"create", entry:create, doc,
-      label:"New", prefill: filterPrefill(doc.self, create),
-      onDone: b => go(b.self)}));
+  if (create) {
+    const prefill = filterPrefill(doc.self, create);
+    // attachments are a platform mechanism (design E5): filing one is a
+    // file upload, not a metadata form — so the create wears the upload
+    // affordance (which falls back to the plain form when the engine
+    // advertises no bytes route). Every other kind keeps the generic New.
+    bar.append(doc.kind === "attachment_collection"
+      ? uploadButton({entry: create, doc, prefill, onDone: b => go(b.self)})
+      : actionButton({name:"create", entry:create, doc,
+          label:"New", prefill, onDone: b => go(b.self)}));
+  }
   panel.append(bar);
 
   panel.append(itemTable(doc.data.items, hints,
-    new Set(doc.meta?.recomputing || [])));
+    new Set(doc.meta?.recomputing || []), null,
+    doc.kind === "attachment_collection"
+      ? {rowAction: it => downloadButton(it, true)} : undefined));
 
   const pager = el("div", {class:"pager"});
   if (doc.links.prev) pager.append(el("a", {href:"#"+doc.links.prev.href}, "← prev"));
@@ -1086,9 +1144,13 @@ function renderDeployHistory(view, doc) {
    envelopes: scalar data fields shared by the rows (in schema order), plus
    state and the honest per-row actions (§5). Compound fields (arrays,
    objects) stay behind the row link. Provenance renders per column. */
-function itemTable(items, hints, recomputing, declaredColumns) {
+function itemTable(items, hints, recomputing, declaredColumns, opts) {
   hints = hints || {};
   recomputing = recomputing || new Set();
+  // an optional per-row affordance the caller supplies (e.g. an attachment
+  // collection's Download) — a node or null per item, beside the honest
+  // per-row action buttons
+  const rowAction = opts?.rowAction;
   if (!items.length) return el("div", {class:"muted"}, "no rows");
   const isScalar = v => v === null || ["string","number","boolean"].includes(typeof v);
   const consumed = new Set(Object.values(hints)
@@ -1104,7 +1166,8 @@ function itemTable(items, hints, recomputing, declaredColumns) {
     .filter(k => items.every(i => isScalar(i.data[k]))
       && !hints[k]?.xd?.hidden && !consumed.has(k)
       && !proseColumn(hints[k]?.xd, rowsData, k));
-  const anyActions = items.some(i => i.actions && Object.keys(i.actions).length);
+  const anyActions = !!rowAction
+    || items.some(i => i.actions && Object.keys(i.actions).length);
 
   const head = el("tr", {},
     el("th", {}, ""),
@@ -1128,11 +1191,13 @@ function itemTable(items, hints, recomputing, declaredColumns) {
         item.display?.state?.label ?? title(item.state))));
     if (anyActions) {
       const cell = el("td", {class:"rowactions"});
+      const extra = rowAction ? rowAction(item) : null;
+      if (extra) cell.append(extra);
       if (item.actions) {           // honest per-row buttons (§5)
         for (const [name, entry] of Object.entries(item.actions))
           cell.append(actionButton({name, entry, doc:item, small:true,
             onDone: () => render()}));
-      } else if (item.actions === null) {
+      } else if (item.actions === null && !extra) {
         cell.append(el("span", {class:"muted", title:"row_affordances=False"}, "…"));
       }
       row.append(cell);
@@ -1445,6 +1510,18 @@ function renderResource(view, doc, hints) {
         on ? "✓ following this agent" : "👁 follow this agent"));
     }
   }
+  // an uploaded attachment (design E5): offer its bytes back. The buttons
+  // fetch with the acting principal's headers (a bare link can't), so they
+  // sit here rather than as a naked href; View only for types a browser
+  // renders inline. A reserved row has no bytes yet, so nothing shows.
+  if (doc.kind === "attachment" && doc.state === "uploaded") {
+    const id = doc.self.split("/").pop();
+    if (isViewable(doc.data?.mime))
+      bar.append(el("button", {title:"open in a new tab",
+        onclick: () => viewAttachment(id)}, "View"));
+    bar.append(el("button", {class:"primary", title:"save the file",
+      onclick: () => downloadAttachment(id, doc.data?.name)}, "↓ Download"));
+  }
   panel.append(bar);
   const notes = blockedNotes(blocked, doc);
   if (notes) panel.append(notes);
@@ -1606,19 +1683,36 @@ function embedSection(rel, link) {
       head.lastChild);
     bodyBox.textContent = "";
     const items = env.data?.items || [];
+    // the create affordance rides the embed itself — you file the next
+    // statement from the account, never only from the empty state. An
+    // attachment collection wears the upload flow; the filter this embed
+    // was fetched with prefills its target (this very account).
+    const create = env.actions?.create;
+    const createBtn = () => {
+      if (!create) return null;
+      const prefill = filterPrefill(link.href, create);
+      const btn = env.kind === "attachment_collection"
+        ? uploadButton({entry: create, doc: env, prefill, small: true,
+            onDone: b => go(b.self)})
+        : actionButton({name:"create", entry: create, doc: env, label:"New",
+            small: true, prefill, onDone: b => go(b.self)});
+      btn.classList.add("primary");
+      return btn;
+    };
     if (!items.length) {
       bodyBox.append(el("span", {class:"kc-none"}, "none yet"));
-      const create = env.actions?.create;
-      if (create) {
-        const btn = actionButton({name:"create", entry:create, doc:env,
-          label:"New", small:true, onDone: b => go(b.self)});
-        btn.classList.add("primary");
-        bodyBox.append(" ", btn);
-      }
+      const btn = createBtn();
+      if (btn) bodyBox.append(" ", btn);
       return;
     }
     bodyBox.append(itemTable(items, hints,
-      new Set(env.meta?.recomputing || [])));
+      new Set(env.meta?.recomputing || []), null,
+      env.kind === "attachment_collection"
+        ? {rowAction: it => downloadButton(it, true)} : undefined));
+    const btn = createBtn();
+    if (btn)
+      bodyBox.append(el("div", {class:"actions", style:"margin-top:10px"},
+        btn));
   })();
   return sec;
 }
@@ -1962,8 +2056,12 @@ function proseColumn(xd, rows, col) {
 }
 
 /* Fill a <select> from the collection behind a {widget:"resource", kind,
-   params?} field hint: option value = the id, label = the summary. */
-async function populateResourceOptions(input, kind, params) {
+   params?} field hint: option value = the id, label = the summary. Only
+   when the collection fits on one server page (default page[size]=25,
+   router.py split_query) — a <select> beyond that would silently drop
+   every row past page 1, so a truncated fetch swaps in a searchable
+   combobox instead (buildResourceCombobox below). */
+async function populateResourceOptions(select, kind, params, required) {
   const index = await wellKnown();
   let href = index.collections?.[kind];
   if (!href) return;
@@ -1972,9 +2070,97 @@ async function populateResourceOptions(input, kind, params) {
     href += (href.includes("?") ? "&" : "?") + new URLSearchParams(params);
   const {res, body} = await api(href);
   if (!res.ok) return;
-  for (const item of body.data.items || [])
-    input.append(el("option", {value: item.self.split("/").pop(),
-                               title: item.self}, item.summary));
+  const items = body.data.items || [];
+  if (!body.links?.next) {
+    for (const item of items)
+      select.append(el("option", {value: item.self.split("/").pop(),
+                                  title: item.self}, item.summary));
+    return;
+  }
+  // more than one page: by the time this resumes (a real fetch happened),
+  // every synchronous step of the dialog build — including any prefill
+  // assignment to `select.value` — has already run, so it's safe to read
+  // here and carry over to the combobox's hidden field
+  const pendingValue = select.value;
+  const combo = buildResourceCombobox(select.name, items, body.links.next.href,
+                                      required);
+  combo.hidden.value = pendingValue;
+  select.replaceWith(combo.el);
+  await combo.ready;
+}
+
+/* ── the combobox a truncated <select> swaps into: starts from the page
+   already fetched, keeps pulling pages in the background (capped, and
+   honest about it) so search reaches the whole collection — never just a
+   silently shorter one. Type to filter by summary; picking a row writes
+   the id into the hidden field the form actually submits. ───────────── */
+function buildResourceCombobox(name, firstPageItems, nextHref, required) {
+  const hidden = el("input", {type:"hidden", name});
+  const search = el("input", {type:"text", class:"combo-search",
+    autocomplete: "off",
+    placeholder: required ? "type to search…" : "type to search, or leave blank"});
+  const panel = el("div", {class:"combo-panel"});
+  const wrap = el("div", {class:"combo"}, hidden, search, panel);
+  const items = [...firstPageItems];
+  const CAP = 2000;   // a hard ceiling so one huge collection can't hang the form
+  let next = nextHref, truncated = false, loading = true;
+
+  const idOf = it => it.self.split("/").pop();
+  const labelFor = id => items.find(it => idOf(it) === id)?.summary;
+  const hint = text => el("div", {class:"combo-empty muted"}, text);
+
+  const render = () => {
+    const q = search.value.trim().toLowerCase();
+    const pool = q ? items.filter(it => (it.summary || "").toLowerCase().includes(q))
+                   : items;
+    const matches = pool.slice(0, 50);
+    panel.textContent = "";
+    for (const it of matches)
+      panel.append(el("div", {class:"combo-option",
+        // el()'s attrs only wire up "onclick" via addEventListener — any
+        // other onXxx key becomes an inert stringified-attribute no-op
+        onclick: () => {
+          hidden.value = idOf(it);
+          search.value = it.summary;
+          panel.style.display = "none";
+        }}, it.summary));
+    if (loading) panel.append(hint("loading…"));
+    else if (!matches.length) panel.append(hint("no matches"));
+    else if (matches.length < pool.length)
+      panel.append(hint(`showing ${matches.length} of ${pool.length} — `
+                        + "refine your search"));
+    if (truncated)
+      panel.append(hint(`only the first ${items.length} loaded — search `
+                        + "text to narrow further"));
+  };
+  search.addEventListener("input", () => {
+    // typing again abandons whatever was picked — a stale hidden id the
+    // visible text no longer names would submit silently wrong
+    if (hidden.value && labelFor(hidden.value) !== search.value) hidden.value = "";
+    panel.style.display = "block";
+    render();
+  });
+  search.addEventListener("focus", () => { panel.style.display = "block"; render(); });
+  document.addEventListener("click", e => {
+    if (!wrap.contains(e.target)) panel.style.display = "none";
+  });
+
+  const ready = (async () => {
+    while (next && items.length < CAP) {
+      const {res, body} = await api(next);
+      if (!res.ok) break;
+      items.push(...(body.data.items || []));
+      next = body.links?.next?.href;
+    }
+    truncated = !!next;
+    loading = false;
+    if (hidden.value && !search.value) {
+      const lbl = labelFor(hidden.value);
+      if (lbl) search.value = lbl;
+    }
+    if (panel.style.display === "block") render();
+  })();
+  return {el: wrap, hidden, ready};
 }
 
 function formValue(field, raw) {
@@ -2233,7 +2419,7 @@ async function actionDialog({name, entry, doc, onDone, prefill}) {
       input = el("select", {name:f.name, id:"f_"+f.name});
       if (!f.required) input.append(el("option", {value:""}, "—"));
       optionsReady = populateResourceOptions(input, f.display.kind,
-                                             f.display.params);
+                                             f.display.params, f.required);
     } else if (f.schema.enum) {
       input = el("select", {name:f.name, id:"f_"+f.name});
       if (!f.required) input.append(el("option", {value:""}, "—"));
@@ -2499,6 +2685,33 @@ async function actionDialog({name, entry, doc, onDone, prefill}) {
     }
   };
 
+  // an unacknowledged advisory guard (E1) comes back as 409 with an
+  // `acknowledge` block naming the header + guard names the caller must
+  // resend to proceed — render it like the pre-shown entry.warnings box
+  // above, and retry with that header on confirm, instead of dead-ending
+  // in problemBox with no way forward
+  const attemptSubmit = async (acknowledge) => {
+    const {res, body: b} = await invoke(entry, doc, collect(), {acknowledge});
+    if (res.status === 409 && b.acknowledge?.names?.length) {
+      errBox.textContent = "";
+      errBox.append(el("div", {class:"warnbox"},
+        el("div", {class:"consequence"}, `⚠ ${b.detail || b.title}`),
+        ...(b.warnings || []).flatMap(w => [
+          el("div", {class:"consequence"}, w.reason),
+          remedyChips(w.remedies, doc, () => dlg.close())]),
+        el("div", {class:"buttons", style:"justify-content:flex-start"},
+          el("button", {type:"button", class:"primary",
+              onclick: () => attemptSubmit(b.acknowledge)},
+            "Acknowledge and continue"))));
+      return;
+    }
+    if (!res.ok) { errBox.textContent = ""; errBox.append(problemBox(b));
+                   showFieldErrors(b.errors || {}); return; }
+    disarmDraft && disarmDraft();  // the invoke consumed the draft
+    dlg.close();
+    maybeUndoToast(name, doc, b);
+    onDone && onDone(b);
+  };
   const buttons = el("div", {class:"buttons"},
     el("button", {type:"button", onclick: () => dlg.close()}, "Cancel"),
     el("button", {type:"button",
@@ -2506,13 +2719,7 @@ async function actionDialog({name, entry, doc, onDone, prefill}) {
         onclick: async () => {
           if (needsConfirm && !(await confirmAct({name, entry, effect})))
             return;
-          const {res, body: b} = await invoke(entry, doc, collect(), {});
-          if (!res.ok) { errBox.textContent = ""; errBox.append(problemBox(b));
-                         showFieldErrors(b.errors || {}); return; }
-          disarmDraft && disarmDraft();  // the invoke consumed the draft
-          dlg.close();
-          maybeUndoToast(name, doc, b);
-          onDone && onDone(b);
+          await attemptSubmit(null);
         }},
       needsConfirm ? label(name, entry) + "…" : label(name, entry)));
   form.append(draftBar, dry, errBox, buttons);
@@ -2529,12 +2736,242 @@ async function actionDialog({name, entry, doc, onDone, prefill}) {
   dlg.showModal();
 }
 
-async function invoke(entry, doc, body, {dryRun}) {
+/* ── the attachment upload affordance (design E5): the two-phase
+   reserve→PUT-bytes flow, driven end to end from the wire. The create
+   action's own href reserves the row; discovery's attachment_bytes names
+   where the bytes go. name and mime are read off the chosen File (typing
+   them was the old form's cruelty); the target (resource_kind/resource_id)
+   rides in from the collection filter — filing "statements against THIS
+   account" already fixed it. A server that advertises no bytes route falls
+   back to the generic form, so the client still invents nothing. ──────── */
+function uploadButton({entry, doc, prefill, onDone, small}) {
+  const btn = el("button", {class:"primary", "data-action":"create",
+    style: small ? "font-size:12px;padding:3px 8px" : ""}, "Upload file");
+  btn.addEventListener("click", () =>
+    uploadDialog({entry, doc, prefill, onDone}));
+  return btn;
+}
+
+function humanSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+async function uploadDialog({entry, doc, prefill, onDone}) {
+  const w = await wellKnown().catch(() => ({}));
+  // no bytes route advertised (older engine): the generic form is the
+  // honest fallback — the client drives no route it wasn't handed
+  if (!w.attachment_bytes)
+    return actionDialog({name:"create", entry, doc, onDone, prefill});
+  prefill = prefill || {};
+  const props = entry.input?.properties || {};
+  const dlg = $("#dlg");
+  dlg.textContent = "";
+  dlg.onclose = null;
+  const body = el("div", {class:"body"});
+  body.append(el("h3", {}, "Upload a file"),
+    el("div", {class:"effect"}, "reserved → uploaded · the bytes are "
+      + "written once"));
+
+  // the target: when the collection filter already fixed it (filing
+  // against THIS account), it is stated, not asked; from the raw
+  // collection the two fields are the only thing left to pick
+  const hasTarget = "resource_kind" in prefill && "resource_id" in prefill;
+  if (hasTarget)
+    body.append(el("div", {class:"upload-target"}, "against: ",
+      resourceRef(prefill.resource_kind, prefill.resource_id)));
+
+  const form = el("form", {method:"dialog"});
+  const targetInputs = {};
+  if (!hasTarget)
+    for (const k of ["resource_kind", "resource_id"]) {
+      if (!(k in props)) continue;
+      const inp = el("input", {name:k, id:"f_"+k, type:"text",
+        value: prefill[k] || ""});
+      targetInputs[k] = inp;
+      form.append(el("div", {class:"field"},
+        el("label", {for:"f_"+k}, pretty(k)), inp));
+    }
+
+  const file = el("input", {type:"file", id:"f_file"});
+  const preview = el("div", {class:"upload-preview"}, "no file chosen");
+  const notesProp = props.notes
+    ? (props.notes.anyOf?.find(o => o.type !== "null") || props.notes) : null;
+  const notesField = notesProp
+    ? el("textarea", {name:"notes", id:"f_notes", rows: 3,
+        maxlength: notesProp.maxLength}) : null;
+  const upBtn = el("button", {type:"button", class:"primary",
+    disabled:"true"}, "Upload");
+
+  let chosen = null;
+  file.addEventListener("change", () => {
+    chosen = file.files && file.files[0];
+    if (chosen) {
+      preview.className = "upload-preview chosen";
+      preview.textContent = `${chosen.name} · `
+        + `${chosen.type || "application/octet-stream"} · `
+        + `${humanSize(chosen.size)}`;
+      upBtn.removeAttribute("disabled");
+    } else {
+      preview.className = "upload-preview";
+      preview.textContent = "no file chosen";
+      upBtn.setAttribute("disabled", "true");
+    }
+  });
+  form.append(el("div", {class:"field"},
+    el("label", {for:"f_file"}, "File"), file, preview));
+  if (notesField)
+    form.append(el("div", {class:"field"},
+      el("label", {for:"f_notes"}, "Notes (optional)"), notesField));
+  const errBox = el("div", {});
+
+  // the reserve is remembered across a failed bytes PUT, so a retry
+  // re-sends the bytes into the SAME reserved row instead of minting a
+  // second orphan (bytes write once into a reserved attachment)
+  let reservedId = null, reservedBody = null;
+  const doUpload = async () => {
+    if (!chosen) return;
+    errBox.textContent = "";
+    upBtn.setAttribute("disabled", "true");
+    if (!reservedId) {
+      const target = hasTarget
+        ? {resource_kind: prefill.resource_kind,
+           resource_id: prefill.resource_id}
+        : Object.fromEntries(Object.entries(targetInputs)
+            .map(([k, i]) => [k, i.value]));
+      // name and mime come off the File; the create's other bound
+      // constants (a scoped collection's key) ride along untouched
+      const create = {...target, name: chosen.name,
+        mime: chosen.type || "application/octet-stream"};
+      if (notesField && notesField.value.trim())
+        create.notes = notesField.value;
+      for (const [k, s] of Object.entries(props))
+        if (s.const !== undefined) create[k] = s.const;
+      const {res, body: b} = await invoke(entry, doc, create, {});
+      if (!res.ok) {
+        errBox.append(problemBox(b));
+        upBtn.removeAttribute("disabled");
+        return;
+      }
+      reservedBody = b;
+      reservedId = String(b.self).split("/").pop();
+    }
+    // phase two — the bytes: PUT to the advertised route; the server
+    // stamps size + sha256 and moves the row to uploaded
+    const url = w.attachment_bytes.replace("{id}",
+      encodeURIComponent(reservedId));
+    let putBody = null;
+    try {
+      const res = await fetch(url, {method:"PUT",
+        headers: {...principalHeaders(),
+          "Content-Type": chosen.type || "application/octet-stream"},
+        body: chosen});
+      putBody = res.status === 204 ? null
+        : await res.json().catch(() => null);
+      if (!res.ok) {
+        errBox.append(problemBox(putBody || {title:"Upload failed",
+          detail: `the bytes route returned ${res.status} — the file is `
+            + "reserved; try uploading again"}));
+        upBtn.removeAttribute("disabled");   // retry re-PUTs the same reserve
+        return;
+      }
+    } catch {
+      errBox.append(problemBox({title:"Upload failed",
+        detail: "could not reach the bytes route — the file is reserved; "
+          + "try again"}));
+      upBtn.removeAttribute("disabled");
+      return;
+    }
+    dlg.close();
+    const toast = $("#toast");
+    toast.textContent = `${chosen.name} uploaded ✓`;
+    toast.style.display = "block";
+    setTimeout(() => toast.style.display = "none", 6000);
+    onDone && onDone(putBody || reservedBody);
+  };
+  upBtn.addEventListener("click", doUpload);
+
+  // a cancel after a reserve-then-failed-PUT left a reserved row behind:
+  // refresh so the collection shows it honestly (a success navigates away)
+  const cancel = () => { dlg.close(); if (reservedId) render(); };
+  form.append(errBox, el("div", {class:"buttons"},
+    el("button", {type:"button", onclick: cancel}, "Cancel"),
+    upBtn));
+  body.append(form);
+  dlg.append(body);
+  dlg.showModal();
+}
+
+/* ── the other half of design E5: getting the bytes back. The bytes route
+   (discovery's attachment_bytes, GET) is behind the same act gate as any
+   read, and the dev client carries identity in X-Principal-* headers — a
+   bare <a href> would arrive unauthenticated. So both View and Download
+   fetch WITH the headers and hand off a blob: Download saves it under the
+   file's name; View opens types a browser renders inline in a new tab.
+   Only meaningful while a row is `uploaded` (a reserved row has no bytes —
+   the GET honestly 404s). ───────────────────────────────────────────── */
+function isViewable(mime) {
+  return /^(image\/|text\/)/.test(mime || "") || mime === "application/pdf";
+}
+
+async function attachmentBytesUrl(id) {
+  const w = await wellKnown().catch(() => ({}));
+  return w.attachment_bytes
+    ? w.attachment_bytes.replace("{id}", encodeURIComponent(id)) : null;
+}
+
+async function fetchAttachmentBlob(id) {
+  const url = await attachmentBytesUrl(id);
+  if (!url) return null;
+  try {
+    const res = await fetch(url, {headers: principalHeaders()});
+    if (!res.ok) { toast(`couldn't fetch the file — ${res.status}`); return null; }
+    return await res.blob();
+  } catch { toast("couldn't reach the file"); return null; }
+}
+
+async function downloadAttachment(id, name) {
+  const blob = await fetchAttachmentBlob(id);
+  if (!blob) return;
+  const obj = URL.createObjectURL(blob);
+  const a = el("a", {href: obj, download: name || "file"});
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(obj), 10000);
+}
+
+async function viewAttachment(id) {
+  const blob = await fetchAttachmentBlob(id);
+  if (!blob) return;
+  const obj = URL.createObjectURL(blob);
+  window.open(obj, "_blank");
+  // the new tab needs the object alive until it has loaded the bytes
+  setTimeout(() => URL.revokeObjectURL(obj), 60000);
+}
+
+/* The per-row download for an uploaded attachment (the statements table):
+   null for a reserved row, which has no bytes to fetch. */
+function downloadButton(item, small) {
+  if (!item || item.state !== "uploaded") return null;
+  const id = String(item.self).split("/").pop();
+  const btn = el("button", {
+    style: small ? "font-size:12px;padding:3px 8px" : "",
+    title:"download this file"}, "↓ Download");
+  btn.addEventListener("click", () => downloadAttachment(id, item.data?.name));
+  return btn;
+}
+
+async function invoke(entry, doc, body, {dryRun, acknowledge}) {
   const headers = {"Content-Type": "application/json"};
   if (entry.safety?.fence && doc.meta?.etag)
     headers["If-Match"] = doc.meta.etag;
   if (entry.safety?.idempotent === false)
     headers["Idempotency-Key"] = uuid();
+  // a retry after the 409 acknowledge prompt below (design E1): the
+  // problem body names its own header + names, so this never hardcodes
+  // "Waymark-Acknowledge" — a future guard on a different header still works
+  if (acknowledge?.header && acknowledge.names?.length)
+    headers[acknowledge.header] = acknowledge.names.join(",");
   const href = entry.href + (dryRun ? "?dry_run=1" : "");
   return api(href, {method: entry.method || "POST", headers,
                     body: JSON.stringify(body ?? {})});

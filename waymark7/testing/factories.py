@@ -271,6 +271,98 @@ async def _walk_invoke(engine: Any, kind: str, resource_id: str, defn: Any,
                                     acknowledged=names, **kwargs)
 
 
+def _is_mirror_kind(cls: type) -> bool:
+    """A whole-resource :class:`~...server.external.Mirror` (design §10):
+    its machine *is* the sync machine, entered only by system-actor
+    transitions, and its reads pull through the adapter. The derived walker
+    can neither drive those states (they are ``system_only``) nor observe
+    them (the read heals them), so a Mirror gets the Mirror-aware factory."""
+    from ..server.external import Mirror
+
+    return isinstance(cls, type) and issubclass(cls, Mirror)
+
+
+async def make_mirror_state(kind: str, state: str, engine: Any) -> Resource:
+    """Stage a Mirror in a requested sync state — the harness default for
+    Mirror kinds (design §10, 7.x conformance extension). An app need not
+    hand-write one per mirror, though a registered ``@state_factory`` still
+    wins (see :func:`make_state`).
+
+    A Mirror's sync states (``fresh/stale/conflicted/unreachable``) are
+    *un-drivable* by any walker principal — the transitions that enter them
+    are ``system_only`` — and *un-observable* by a plain read, since
+    pull-through-on-read heals a stale/unreachable mirror to fresh on the
+    very GET the representation test makes. So this factory:
+
+    1. mints the mirror (a mint carries only its external identity, design
+       §8 Discover);
+    2. pulls once through the adapter *directly* (not the read path, so it
+       is independent of the suppression seam the suite sets for its own
+       reads) and records it via ``observe_external`` — landing ``fresh``
+       with the authority's real fields, so the summary orients by a name;
+    3. drives to the requested state with ``SYSTEM_OBSERVER`` and the
+       declared sync transitions.
+
+    The suite then reads it back with pull-through suppressed (the
+    default-off ``_suppress_mirror_refresh`` seam), so observing the mirror
+    does not change it.
+    """
+    from ..server.external import SYSTEM_OBSERVER, SyncState
+
+    rdef = engine.registry[kind]
+    cls = rdef.cls
+    target = SyncState(state)  # a Mirror's machine states ARE the sync states
+
+    # a read-only mirror never conflicts: nothing local is ever pushed, so
+    # the external etag cannot diverge under our write — and ``reconcile``
+    # keeping "ours" would push against a boundary declared one-way. Don't
+    # fake a state the runtime can never produce.
+    if target == SyncState.CONFLICTED \
+            and not getattr(cls, "push_on_write", True):
+        raise SkipState(
+            "a read-only mirror (push_on_write=False) never conflicts — "
+            "nothing local is pushed, so the external etag cannot diverge "
+            "under our write")
+
+    create_body = await example_for(kind, "create", engine.services)
+    if create_body is None:
+        create_body = _schema_sample(rdef.extra["create_schema"])
+        # a readable external_id so an auto-vivifying adapter yields a
+        # readable name (a random schema string could be empty)
+        create_body["external_id"] = f"walker-mirror-{uuid.uuid4().hex[:12]}"
+    result = await engine.invoker.create(
+        kind, create_body, principal=WALKER,
+        idempotency_key=f"walker-{uuid.uuid4().hex}")
+    rid = result.doc["self"].rsplit("/", 1)[-1]
+    async with engine.storage.session() as s:
+        instance = await engine.storage.load(s, kind, rid)
+    external_id = instance.data.external_id
+
+    try:
+        document, etag = await cls.adapter.pull(external_id)
+    except Exception as exc:  # noqa: BLE001 — the adapter's failure is the reason
+        raise SkipState(
+            f"mirror {kind} adapter could not pull {external_id!r} to stage a "
+            f"fresh document ({exc}); register a @state_factory that seeds "
+            "its adapter, or pin the adapter up for conformance") from exc
+    await engine.invoker.invoke(
+        kind, rid, "observe_external",
+        {"document": document, "etag": etag}, principal=SYSTEM_OBSERVER)
+
+    if target == SyncState.STALE:
+        await engine.invoker.invoke(kind, rid, "mark_stale", None,
+                                    principal=SYSTEM_OBSERVER)
+    elif target == SyncState.UNREACHABLE:
+        await engine.invoker.invoke(kind, rid, "mark_unreachable", None,
+                                    principal=SYSTEM_OBSERVER)
+    elif target == SyncState.CONFLICTED:
+        await engine.invoker.invoke(
+            kind, rid, "mark_conflicted",
+            {"document": document, "etag": etag}, principal=SYSTEM_OBSERVER)
+    async with engine.storage.session() as s:
+        return await engine.storage.load(s, kind, rid)
+
+
 async def make_state(kind: str, state: str, engine: Any) -> Resource:
     if kind in _FACTORIES:
         cls, fn = _FACTORIES[kind]
@@ -278,6 +370,8 @@ async def make_state(kind: str, state: str, engine: Any) -> Resource:
         if inspect.isawaitable(result):
             result = await result
         return result
+    if _is_mirror_kind(engine.registry[kind].cls):
+        return await make_mirror_state(kind, state, engine)
     return await walk_to_state(kind, state, engine)
 
 

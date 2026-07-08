@@ -170,6 +170,166 @@ appendix stories as tests (`tests/ledger7/`):
 - Makefile: `ledger7` target (the `ledger5-pg` container on
   :15433, `ledger7_dev`, port 8012).
 
+## Mirror-aware conformance (7.x extension)
+
+An **extension, not waymark8**: no runtime law, wire format, or envelope
+changes — only the conformance walker's reach. The Mirror runtime
+(pull-through-on-read, system-only sync transitions) already shipped and
+is correct; the harness just could not verify a resource shape the
+runtime already sanctions. Lives in `waymark7/testing/` plus one inert,
+default-off seam line in `waymark7/server/external.py`.
+
+**The two walker assumptions a Mirror breaks — both at once.** The
+generic walker's loop is "reach state S, GET it, assert the envelope
+shows S." A pure `Mirror` (`waymark7/server/external.py`) breaks:
+
+1. **Reads are pure.** A Mirror does pull-through-on-read: a GET past the
+   TTL (or in a non-fresh state) fires `refresh_mirror`, calls the
+   adapter's `pull`, and applies an `observe_external` / `mark_unreachable`
+   **system transition**. So a walker that stages `unreachable` and GETs
+   to check it heals the mirror to `fresh` on that very read — observing
+   changed the observed.
+2. **State comes from principal-invoked transitions.** The sync states
+   (`fresh/stale/conflicted/unreachable`) are entered only through
+   `system_only`-guarded transitions (`observe_external`, `mark_stale`,
+   `mark_unreachable`, `mark_conflicted`), invokable only by
+   `SYSTEM_OBSERVER` and advertised to no walker principal — so the walker
+   can neither drive them nor reach them any declared way. (`reconcile` is
+   the exception: a *human* transition, conflicted → fresh.)
+
+`job`/`attachment` have some system transitions but a principal-driven
+primary lifecycle and pure reads, so the walker's existing hidden-action
+skip handles them. A pure Mirror is almost entirely system/external
+lifecycle, so that skip is not enough.
+
+**Read purity — option (b), the refresh-suppression seam (chosen).** A
+walker-scoped, **default-OFF** switch suppresses pull-through for the
+duration of a conformance read, so the walker observes the *stored* state
+deterministically in every sync state (not only `fresh`, which option (a)
+— a fresh-only factory — would have limited us to). The only runtime-file
+change is one inert early-return in `refresh_mirror`, gated on
+`getattr(engine, "_suppress_mirror_refresh", False)`, which the
+conformance engine fixture (`testing/pytest_plugin.py`, `wm7`) sets.
+Production behaviour is unchanged; `test_suppression_seam_is_default_off`
+asserts a plain engine still pulls through on read. No wall-clock TTL
+crossing is relied on — the suppressed read is deterministic by
+construction.
+
+**Staging — the system-actor factory.** `testing/factories.make_state`
+detects Mirror kinds (`issubclass(cls, Mirror)`) and, unless the app
+registers its own `@state_factory`, routes them to `make_mirror_state`,
+which the harness provides automatically: it mints the mirror (external
+identity only, as a `Discover` sweep does), pulls once through the adapter
+*directly* (not the read path, so it is independent of the suppression
+seam) and records it via `observe_external` — landing `fresh` with the
+authority's real fields so the summary orients by a name — then drives to
+the requested state with `SYSTEM_OBSERVER` and the declared sync
+transitions. A read-only mirror (`push_on_write=False`, like ledger7's
+`fund`) `SkipState`s `conflicted`: nothing local is ever pushed, so the
+external etag cannot diverge under our write — the runtime can never
+produce that state, and the factory does not fake it.
+
+**Two harness gaps the Mirror shape exposed** (both fixed in
+`testing/conformance.py`; both also needed for the fund's full
+enrollment):
+
+- `replay_history` treated `mark_stale`/`mark_conflicted`/`mark_unreachable`
+  as `ENGINE_ACTIONS` (same-state authored-sync bookkeeping) — but on a
+  whole-resource Mirror those names are **real state-changing
+  transitions** (`fresh → stale`). The bookkeeping branch now yields to
+  the declared-transition branch when the name is in the revision's
+  `machine["actions"]`.
+- `test_affordance_completeness` demanded every hidden action 404 on
+  invoke. An input-less idempotent system mark (`mark_stale`) re-invoked
+  in its own target state instead **naturally replays** (200, no version
+  advance) before visibility is evaluated — the replay contract, not a
+  silent fall-through. The check now accepts that one shape and asserts it
+  did not advance.
+
+The system-only transitions need no other exemption: they are hidden for
+every walker principal, so `test_transition_truth_available/unavailable`
+and `test_input_contract` find no principal advertising them and skip —
+the existing precedent, reused.
+
+**This closes the seam the ledger7 Fund mirror recorded** (the first
+real Mirror in a dogfood, enrolled minimally as `fresh`-only). A proof
+lives in `tests/waymark7/test_mirror_conformance.py`: a minimal read/write
+`NoteMirror` + scriptable adapter, walked through representation,
+affordance, orientation, collection, replay, the sync-transition matrix,
+and `reconcile` — plus the default-off assertion.
+
+## Nav prominence (7.x extension)
+
+Another **extension, not waymark8**: no runtime law or envelope change,
+only a new *advertisement* declaration. A sufficiently helpful domain
+grows past a handful of kinds, and a flat nav bar becomes a wall. The
+fix follows the `engine_kinds` precedent exactly — the law declares, the
+client renders the tiers it is told about, and **never guesses relevance
+of its own** (the one move the generic client is built to refuse).
+
+- **Declaration**: `Resource.nav = "primary" | "secondary"` (default
+  `"primary"`). `secondary` folds a real domain kind behind the nav
+  overflow — the sibling of the engine fold (machinery hides by
+  ownership, the secondary domain by declared prominence). Validated in
+  `__init_subclass__`.
+- **Fingerprinted as advertisement**, emitted only when `secondary` (the
+  `adoption`/`created_as` emission discipline — adding the mechanism
+  re-hashes no kind that never touched it). Revising prominence is a law
+  change, but a cosmetic one: `classify_path("nav") == "advertisement"`,
+  so it marks no fact stale and recomputes nothing.
+- **Discovery**: `.well-known/waymark` gains `secondary_kinds`
+  (`registry.secondary_kinds()`, parallel to `engine_kinds`).
+- **Client**: `renderNav()` seats primary domain kinds inline; secondary
+  domain kinds *and* engine kinds fold into one `⋯` overflow
+  (`overflowMenu`), secondary domain first, then the engine machinery
+  below a labeled rule. A kind marked both stays with the machinery
+  (ownership is the stronger fold). A pure-engine overflow reads exactly
+  as before. The home dashboard is deliberately unchanged — it charts
+  every domain kind with counts; prominence is a *navigation* concern.
+- Tests: `test_discovery_marks_secondary_kinds` (parallel to the
+  engine_kinds test) and `test_nav_secondary_is_an_advertisement_revision`
+  in `tests/waymark7/test_definition.py`, plus a parametrized `make_note`
+  fixture.
+
+## Attachment upload affordance (7.x extension)
+
+Same shape as nav prominence — **no runtime law or envelope change, one
+new discovery template plus client rendering.** The generic client had no
+file picker and never PUT the bytes, so "file a statement against this
+account" was a five-field metadata form (`resource_kind`, `resource_id`,
+`name`, `mime`, `notes`) that reserved a row against an empty blob.
+
+- **Discovery**: `.well-known/waymark` gains `attachment_bytes`
+  (`{base}/attachments/{id}/bytes`), emitted only when the engine
+  registered the attachment kind. It is the one URL the client can't
+  derive from a collection envelope; the create action's href it already
+  has.
+- **Client**: on `attachment_collection`, the create button becomes
+  `uploadButton`→`uploadDialog`. A file picker derives `name`+`mime` from
+  the chosen `File`; the target (`resource_kind`/`resource_id`) comes from
+  the collection filter (locked, shown as a `resourceRef`) or, from the
+  raw collection, two inputs. Submit = reserve via the create action
+  (reusing `invoke()`), then PUT the bytes to the advertised route. A
+  failed PUT keeps the reserved id so a retry re-sends into the same row
+  (bytes write once) rather than minting an orphan. **Falls back to the
+  generic `actionDialog` when `attachment_bytes` is absent** — the client
+  drives no route it wasn't handed.
+- Attachments are treated as a platform mechanism (like `definition`/
+  surfaces), so keying the affordance on the engine kind is consistent
+  with the client's existing first-class renderers — it still invents no
+  app affordance and no URL.
+- **Getting bytes back** (the GET half of the same route): View and
+  Download on the attachment detail page, and a per-row `↓ Download` in
+  the statements table (`itemTable` gained an optional `rowAction`). Both
+  fetch WITH the principal headers and hand off a blob — a bare `<a href>`
+  would hit the act-gated bytes route unauthenticated (the dev client
+  carries identity in `X-Principal-*`). View (new tab) shows only for
+  browser-renderable mimes (`image/*`, `text/*`, `application/pdf`); both
+  appear only while the row is `uploaded`.
+- Test: `test_discovery_advertises_the_bytes_route` in
+  `tests/waymark7/test_attachments.py` asserts the template matches the
+  live route.
+
 ## Gotchas carried forward (learned across v5–v7)
 
 - **Postgres port**: tests use the docker container on **5433**; a

@@ -358,6 +358,15 @@ async def refresh_mirror(engine: Any, rdef: Any, instance: Any) -> Any:
     cls = rdef.cls
     if cls.adapter is None:
         return instance
+    # conformance seam (7.x, design §10): a walker-scoped, default-OFF
+    # switch lets the suite read a *staged* sync state without the read
+    # healing it — a Mirror breaks the walker's "reads are pure" assumption,
+    # so a plain GET on an `unreachable` mirror would pull through to `fresh`
+    # and the representation assertion would fail. Only the conformance
+    # engine fixture sets this; a production engine never carries it, so
+    # pull-through-on-read is unchanged (a proof test asserts the default).
+    if getattr(engine, "_suppress_mirror_refresh", False):
+        return instance
     now = engine.invoker.clock()
     synced = instance.data.synced_at
     if synced is not None and (now - synced).total_seconds() < cls.ttl_seconds \
@@ -607,6 +616,7 @@ async def run_discovery(engine: Any, now: datetime) -> int:
             log.warning("discovery for %s failed; retrying next interval",
                         rdef.kind, exc_info=True)
             continue
+        new_ids = []
         for xid in ids:
             xid = str(xid)
             async with engine.storage.session() as s:
@@ -619,6 +629,32 @@ async def run_discovery(engine: Any, now: datetime) -> int:
                 rdef.kind, {"external_id": xid}, principal=SYSTEM_OBSERVER,
                 idempotency_key=f"discover:{rdef.kind}:{xid}")
             minted += 1
+            new_ids.append(xid)
+        # Eager batch pull-through (opt-in): an adapter that can answer many
+        # ids in one round trip fills the just-minted resources' fields now,
+        # instead of leaving each to its own individual first-read pull
+        # (refresh_mirror) — same outcome, one query instead of N.
+        pull_many = getattr(adapter, "pull_many", None)
+        if new_ids and pull_many is not None:
+            try:
+                pulled = await pull_many(new_ids)
+            except Exception:  # noqa: BLE001 — the per-read path still heals it
+                log.warning(
+                    "batch pull-through for %s failed; each resource's own "
+                    "first read will fill it in instead", rdef.kind,
+                    exc_info=True)
+                pulled = {}
+            for xid, (document, etag) in pulled.items():
+                async with engine.storage.session() as s:
+                    rows, _ = await engine.storage.query(
+                        s, rdef.kind, filters={"external_id": xid}, sort=None,
+                        page_size=1, page_number=1)
+                if not rows:
+                    continue
+                await engine.invoker.invoke(
+                    rdef.kind, rows[0].id, "observe_external",
+                    {"document": document, "etag": etag},
+                    principal=SYSTEM_OBSERVER)
         async with engine.storage.session() as s:
             await engine.storage.set_cursor(s, cursor_name, now_ms, now)
     return minted

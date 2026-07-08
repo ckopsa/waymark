@@ -221,8 +221,22 @@ def build_router(engine: Any) -> APIRouter:
             # member, …) vs. the app's domain — marked at registration,
             # advertised here so a client can fold the plumbing away
             "engine_kinds": sorted(registry.engine_kinds()),
+            # domain kinds the law marks nav="secondary": real resources
+            # that aren't lead entry points, so the client folds them
+            # behind the nav overflow beside the engine kinds — the law
+            # judges prominence; the client never guesses relevance
+            "secondary_kinds": sorted(registry.secondary_kinds()),
             "collections": {rdef.kind: f"{base}/{rdef.plural}"
                             for rdef in registry.defs()},
+            # the attachment bytes route (design E5): the two-phase upload's
+            # second leg, advertised so the generic client can drive the
+            # PUT itself — it reserves via the collection's create action,
+            # then sends the bytes here. Present only when the engine
+            # registered the attachment kind; older/attachment-less servers
+            # omit it and the client keeps the plain metadata form.
+            **({"attachment_bytes":
+                f"{base}/{registry['attachment'].plural}/{{id}}/bytes"}
+               if "attachment" in registry else {}),
             "schemas": f"{base}/schemas/{{name}}",
             "events": f"{base}/-/events",
             "ui": f"{base}/-/ui",

@@ -124,6 +124,25 @@ async def test_reserve_upload_download_roundtrip(env):
     assert again.status_code == 409, again.text
 
 
+async def test_discovery_advertises_the_bytes_route(env):
+    """Discovery names the bytes route (design E5) so the generic client
+    can drive the two-phase upload itself — reserve via the collection's
+    create action, then PUT the bytes to the advertised template. The
+    template must match the live route: a reserve's own {self}/bytes."""
+    engine, client, blobs = env
+    wk = (await client.get("/api/.well-known/waymark")).json()
+    tmpl = wk["attachment_bytes"]
+    assert tmpl == "/api/attachments/{id}/bytes", tmpl
+
+    att = await _reserved(client)
+    att_id = att["self"].rsplit("/", 1)[-1]
+    # the template, substituted, IS the route the roundtrip test PUTs to
+    assert tmpl.replace("{id}", att_id) == f"{att['self']}/bytes"
+    res = await client.put(tmpl.replace("{id}", att_id), content=PDF)
+    assert res.status_code == 200, res.text
+    assert res.json()["state"] == "uploaded"
+
+
 async def test_dangling_target_is_refused_at_create(env):
     engine, client, blobs = env
     res = await _post(client, "/api/attachments", {

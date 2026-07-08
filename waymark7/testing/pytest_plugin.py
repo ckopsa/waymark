@@ -101,6 +101,15 @@ async def wm7(waymark7_engine):
     engine = waymark7_engine
     profiles = reg.principals()
 
+    # Mirror-aware conformance (7.x): a Mirror breaks the walker's "reads are
+    # pure" assumption — a plain GET pulls through the adapter and heals a
+    # staged stale/unreachable/conflicted mirror back to fresh, so the read
+    # would change the state under test. This walker-scoped, default-off seam
+    # (waymark7.server.external.refresh_mirror) suppresses pull-through for
+    # the suite's reads only; the Mirror factory stages sync states directly
+    # through the system actor. Production engines never carry it.
+    engine._suppress_mirror_refresh = True
+
     def test_principal(request):
         name = request.headers.get("X-Waymark-Test-Principal", "anonymous")
         return profiles[name]

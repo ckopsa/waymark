@@ -437,6 +437,11 @@ def fingerprint_of(rdef: ResourceDef) -> dict[str, Any]:
         # kind that never touched it.
         **({"adoption": cls.adoption.__name__}
            if cls.adoption.__name__ != "Immediate" else {}),
+        # the declared nav prominence (Resource.nav): a kind folded behind
+        # the nav overflow instead of leading inline. Advertisement — the
+        # law's judgment of what leads, cosmetic and recomputing nothing.
+        # Emitted only when secondary — same emission discipline as above.
+        **({"nav": cls.nav} if cls.nav != "primary" else {}),
         "storage": _storage_fp(rdef),
     }
     return _norm(raw)
@@ -500,7 +505,7 @@ _ADVERTISEMENT = frozenset({"display", "field_display", "summary",
                             "label_template", "explain", "links",
                             "profiles", "query", "data_schema",
                             "input_schema", "schema", "edit", "place",
-                            "row_affordances", "plural"})
+                            "row_affordances", "plural", "nav"})
 
 
 # the garnish leaves of a derivation's fingerprint entry: carried for the
