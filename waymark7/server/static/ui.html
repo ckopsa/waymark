@@ -345,6 +345,23 @@
                color: var(--law); }
   .law-link:hover { color: var(--law); }
 
+  /* ── the per-resource history panel: this row's transition log,
+     replayed from its -/events stream. Rows read like the ledger's, but
+     also carry the row's law stamp and the recorded inputs (§5) the
+     ledger deliberately withholds. ──────────────────────────────────── */
+  .history { border-top: 1px solid var(--line); margin-top: 14px;
+             padding-top: 8px; }
+  .history > summary { cursor: pointer; font-size: 13px; }
+  .history .ev { padding: 7px 0; border-bottom: 1px solid var(--line);
+                 font-size: 13px; }
+  .history .ev:last-child { border-bottom: none; }
+  .law-chip { font-family: var(--mono); font-size: 10px; }
+  .ev-inputs { margin: 4px 0 2px; padding: 6px 9px; background: var(--chip);
+               border-radius: var(--radius); font-size: 12.5px; }
+  .ev-inputs.prose { font-family: var(--serif); font-size: 13.5px;
+                     line-height: 1.4; color: var(--ink); }
+  .ev-inputs .kv td { padding: 1px 8px 1px 0; }
+
   /* ── the deploy history: the definitions collection as a screen ───── */
   .rev-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
   .rev-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -1461,6 +1478,11 @@ function renderResource(view, doc, hints) {
   for (const [rel, l] of Object.entries(doc.links))
     if (l && l.embed) panel.append(embedSection(rel, l));
 
+  // the resource's own history: its transition log, replayed from the
+  // events link the envelope always carries (design §5), collapsed by
+  // default — recorded inputs land here for a full-visibility reader
+  panel.append(historySection(`${doc.self}/-/events`));
+
   // the compressed refusals: state gates and repeated identical reasons,
   // closed by default — derivable, not decision fuel
   const footer = notNowFooter(grouped, gated, doc);
@@ -1673,6 +1695,10 @@ function renderSurface(view, doc, hints) {
   // members arrive pre-embedded, in the declared order
   for (const [rel, m] of Object.entries(doc.embedded || {}))
     panel.append(memberSection(rel, m));
+
+  // the anchor's history: a surface's own self is /surfaces/… (no events
+  // route), so replay the ANCHOR's transition log — the surface renders it
+  if (anchor?.href) panel.append(historySection(`${anchor.href}/-/events`));
 
   const footer = notNowFooter(grouped, gated, doc);
   if (footer) panel.append(footer);
@@ -2783,6 +2809,121 @@ function lawLineRow(ev) {
     detail.textContent = bits.join(" · ");
   }).catch(() => {});
   return row;
+}
+
+/* ── the per-resource history panel (design §5) ─────────────────────────
+   Every envelope carries an `events` link — an SSE stream that, connected
+   with `Last-Event-ID: 0`, replays this resource's whole transition log.
+   The stream stays open for live events after the replay, and there is no
+   end-of-backlog sentinel, so a one-shot read can't know it is "done": we
+   read frames until the burst goes quiet (an idle gap), then abort. The
+   live edge is covered without a second subscription — the activity drawer
+   re-runs render() on any transition to the resource in view, which
+   rebuilds this panel. */
+function fetchReplay(href, {idle = 500} = {}) {
+  return new Promise(async (resolve) => {
+    const ctl = new AbortController();
+    const frames = [];
+    let timer = null;
+    const settle = () => { clearTimeout(timer); ctl.abort(); resolve(frames); };
+    const bump = () => { clearTimeout(timer); timer = setTimeout(settle, idle); };
+    bump();
+    try {
+      const res = await fetch(href, {signal: ctl.signal,
+        headers: {...principalHeaders(), "Last-Event-ID": "0"}});
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, {stream: true});
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const frame = buf.slice(0, idx); buf = buf.slice(idx + 2);
+          const data = frame.split("\n").find(l => l.startsWith("data:"));
+          if (data) { frames.push(JSON.parse(data.slice(5))); bump(); }
+        }
+      }
+    } catch (e) { /* aborted on idle, or the server hiccupped */ }
+    clearTimeout(timer); resolve(frames);   // idempotent: settle may have won
+  });
+}
+
+/* A history row: the ledger's shape (time · actor · action · from → to)
+   plus the two things the ledger withholds — the row's law stamp, compact,
+   and the recorded inputs (§5) when the wire carried them (a scoped
+   principal, or an action without record=Inputs(), simply has none). */
+function lawStampChip(ev) {
+  return ev.defined_by
+    ? el("span", {class:"anchor law-chip",
+        title: `defined by law revision ${ev.defined_by}`},
+        "⚖ " + String(ev.defined_by).slice(0, 8))
+    : null;
+}
+function inputsBlock(inputs) {
+  if (inputs == null || typeof inputs !== "object" || Array.isArray(inputs))
+    return null;
+  const keys = Object.keys(inputs);
+  if (!keys.length) return null;
+  // a single prose field (a reject's notes, say) reads as text under the row
+  if (keys.length === 1 && typeof inputs[keys[0]] === "string")
+    return el("div", {class:"ev-inputs prose"}, inputs[keys[0]]);
+  const t = el("table", {class:"kv"});
+  for (const k of keys)
+    t.append(el("tr", {}, el("td", {class:"k", title: k}, title(k)),
+      el("td", {}, fmtScalar(inputs[k]))));
+  return el("div", {class:"ev-inputs"}, t);
+}
+function historyRow(ev) {
+  const row = el("div", {class:"ev"},
+    el("div", {class:"ev-head"},
+      evTime(ev.at), " ", actorChip(ev.actor), lawStampChip(ev)),
+    el("div", {class:"ev-body"},
+      `${pretty(ev.action)} · `,
+      el("a", {href:"#"+ev.self, title: `${ev.from ?? "·"} → ${ev.to}`},
+        `${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to)}`)));
+  const inp = inputsBlock(ev.inputs);
+  if (inp) row.append(inp);
+  return row;
+}
+/* Expansion persists across renders (a module var, like the drawer's open
+   state) so a live re-render doesn't slam an opened panel shut. Loading is
+   lazy: the replay fires when the panel is open — on expand, or on a
+   re-render that lands it already open. */
+let historyOpen = false;
+function historySection(streamHref) {
+  const count = el("span", {class:"muted mono", style:"font-size:11px"});
+  const body = el("div", {class:"history-body"});
+  const sec = el("details", historyOpen ? {class:"history", open:""}
+                                        : {class:"history"},
+    el("summary", {class:"muted"}, "History ", count), body);
+  let loaded = false;
+  const load = () => {
+    if (loaded) return;
+    loaded = true;
+    body.append(el("span", {class:"muted"}, "…"));
+    fetchReplay(streamHref).then(frames => {
+      if (!document.contains(body)) return;   // superseded by a re-render
+      const trans = frames.filter(f => (f.class || "transition") === "transition");
+      trans.sort((a, b) => (b.version ?? 0) - (a.version ?? 0));  // newest first
+      body.textContent = "";
+      count.textContent = trans.length ? `(${trans.length})` : "";
+      if (!trans.length)
+        return body.append(el("span", {class:"kc-none"}, "no transitions yet"));
+      for (const ev of trans) body.append(historyRow(ev));
+    }).catch(() => {
+      if (!document.contains(body)) return;
+      body.textContent = "";
+      body.append(el("div", {class:"muted"}, "couldn't load history"));
+    });
+  };
+  sec.addEventListener("toggle", () => {
+    historyOpen = sec.open;
+    if (sec.open) load();
+  });
+  if (historyOpen) load();
+  return sec;
 }
 
 /* ── the activity drawer: the ledger's one global home. The firehose
