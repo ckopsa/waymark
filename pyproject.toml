@@ -33,6 +33,7 @@ waymark3 = "waymark3.cli.__main__:app"
 waymark4 = "waymark4.cli.__main__:app"
 waymark5 = "waymark5.cli.__main__:app"
 waymark6 = "waymark6.cli.__main__:app"
+waymark7 = "waymark7.cli.__main__:app"
 
 [project.entry-points.pytest11]
 waymark = "waymark.testing.pytest_plugin"
@@ -41,6 +42,7 @@ waymark3 = "waymark3.testing.pytest_plugin"
 waymark4 = "waymark4.testing.pytest_plugin"
 waymark5 = "waymark5.testing.pytest_plugin"
 waymark6 = "waymark6.testing.pytest_plugin"
+waymark7 = "waymark7.testing.pytest_plugin"
 
 [dependency-groups]
 dev = [
@@ -57,7 +59,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["waymark", "waymark2", "waymark3", "waymark4", "waymark5", "waymark6"]
+packages = ["waymark", "waymark2", "waymark3", "waymark4", "waymark5", "waymark6", "waymark7"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
