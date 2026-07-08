@@ -1936,8 +1936,33 @@ function actionButton({name, entry, doc, label: lbl, small, onDone, prefill}) {
   if (!small && entry.effort && entry.effort !== "assent")
     btn.append(el("span", {class:"effort-chip",
       title: `effort: ${entry.effort}`}, entry.effort));
-  btn.addEventListener("click", () =>
-    actionDialog({name, entry, doc, onDone, prefill}));
+  // an action with nothing to ask (every field is server-bound via const,
+  // e.g. a part-scoped row's key, or engine-owned via readOnly) and nothing
+  // the dialog exists to surface — no confirmation, no draft, no batch
+  // form, no warnings, no compound-act blast radius — has no reason to make
+  // the user open a dialog just to hit one more button. That gap is the
+  // difference between a one-tap checkoff and a two-tap one.
+  const fields = schemaFields(entry.input);
+  const hasVisibleFields = fields.some(f =>
+    f.schema.const === undefined && !f.raw.readOnly && !f.schema.readOnly);
+  const skippable = !hasVisibleFields && !entry.safety?.confirm &&
+    !entry.draft && !entry.batch && !entry.warnings?.length &&
+    !blastLines(entry.effect || {}).length;
+  if (skippable) {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      const body = {};
+      for (const f of fields) if (f.schema.const !== undefined) body[f.name] = f.schema.const;
+      const {res, body: b} = await invoke(entry, doc, body, {});
+      btn.disabled = false;
+      if (!res.ok) { actionDialog({name, entry, doc, onDone, prefill}); return; }
+      maybeUndoToast(name, doc, b);
+      onDone && onDone(b);
+    });
+  } else {
+    btn.addEventListener("click", () =>
+      actionDialog({name, entry, doc, onDone, prefill}));
+  }
   return btn;
 }
 

@@ -634,7 +634,26 @@ function actionButton({name, entry, doc, label: lbl, small, onDone}) {
      style: small ? "font-size:12px;padding:3px 8px" : "",
      title: entry.display?.description || ""},
     lbl || label(name, entry));
-  btn.addEventListener("click", () => actionDialog({name, entry, doc, onDone}));
+  // an action with nothing to ask (every field is server-bound via const,
+  // e.g. a part-scoped item's key) and no confirmation requirement has no
+  // reason to make the user open a dialog just to hit one more button —
+  // that's the difference between a one-tap checkoff and a two-tap one
+  const fields = schemaFields(entry.input);
+  const hasVisibleFields = fields.some(f => f.schema.const === undefined);
+  if (!hasVisibleFields && !entry.safety?.confirm && !entry.draft) {
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      const body = {};
+      for (const f of fields) body[f.name] = f.schema.const;
+      const {res, body: b} = await invoke(entry, doc, body, {});
+      btn.disabled = false;
+      if (!res.ok) { actionDialog({name, entry, doc, onDone}); return; }
+      maybeUndoToast(name, doc, b);
+      onDone && onDone(b);
+    });
+  } else {
+    btn.addEventListener("click", () => actionDialog({name, entry, doc, onDone}));
+  }
   return btn;
 }
 
