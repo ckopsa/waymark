@@ -488,6 +488,28 @@ def _adopt_entry(instance: Resource, self_href: str) -> dict[str, Any]:
     }
 
 
+def _empty_required_admission(defn: ActionDef, rdef: ResourceDef,
+                              admitted: dict[str, list[Any]]) -> str | None:
+    """The first required input field whose guard-declared accepts= set came
+    back empty — no row on this document currently qualifies, so the unbound
+    action has nothing valid to offer no matter what the client submits.
+    Fields with no accepts= guard never appear in ``admitted`` (design
+    §_admitted_values), so unguarded and optional fields are unaffected."""
+    if defn.input is None:
+        return None
+    required = rdef.action_schemas[defn.name][0].get("required", ())
+    for field in required:
+        if field in admitted and not admitted[field]:
+            return field
+    return None
+
+
+def _no_admissible_rows_entry(defn: ActionDef, field: str) -> dict[str, Any]:
+    label = (defn.display or {}).get("label", defn.name.replace("_", " "))
+    return {"reason": f"No {field.replace('_', ' ')} currently qualifies "
+                       f"for '{label}'."}
+
+
 def _out_of_state_entry(defn: ActionDef, current_state: str) -> dict[str, Any]:
     states = sorted(defn.from_)
     # prose is human-facing: humanized labels; tokens stay in the
@@ -639,15 +661,25 @@ async def render(
                 admitted = await _admitted_values(defn, instance, ctx,
                                                   resolved=resolved)
                 admitted_by_action[defn.name] = admitted
-                relations_by_action[defn.name] = await _relation_sets(
-                    defn, instance, ctx, resolved=resolved)
-                entry = _action_entry(
-                    defn, rdef, f"{self_href}/-/{defn.name}", admitted,
-                    instance, (drafts or {}).get((defn.name, "")), base,
-                    warnings)
-                if mode == "approval":
-                    entry["access"] = "approval"
-                actions[defn.name] = entry
+                # a guard's accepts= can pass the coarse probe (it only sees
+                # inp=None) yet admit no row at all — an unbound action with
+                # a required, guard-emptied field has nothing valid to
+                # submit, so it belongs in unavailable, not actions (design
+                # §1: don't offer what the server already knows it'll refuse)
+                empty_field = _empty_required_admission(defn, rdef, admitted)
+                if empty_field is not None:
+                    unavailable[defn.name] = _no_admissible_rows_entry(
+                        defn, empty_field)
+                else:
+                    relations_by_action[defn.name] = await _relation_sets(
+                        defn, instance, ctx, resolved=resolved)
+                    entry = _action_entry(
+                        defn, rdef, f"{self_href}/-/{defn.name}", admitted,
+                        instance, (drafts or {}).get((defn.name, "")), base,
+                        warnings)
+                    if mode == "approval":
+                        entry["access"] = "approval"
+                    actions[defn.name] = entry
             elif status == "unavailable":
                 unavailable[defn.name] = _unavailable_entry(defn, deny, denier, instance)
             # hidden: appears in neither map

@@ -98,6 +98,24 @@ item_on_list = Guard(
     explain="No item named '{name}' on this list.",
 )
 
+# a checked item drops out of check_item's admitted set — so the button
+# disappears from that row instead of staying clickable for a no-op
+item_not_checked = Guard(
+    name="item_not_checked",
+    judges=("name",),
+    accepts=lambda r: [i.name for i in r.data.items if not i.have],
+    explain="'{name}' is already checked off.",
+)
+
+# the mirror of item_not_checked: uncheck_item only admits rows that are
+# actually checked, so an accidental tap has a one-tap way back
+item_checked = Guard(
+    name="item_checked",
+    judges=("name",),
+    accepts=lambda r: [i.name for i in r.data.items if i.have],
+    explain="'{name}' isn't checked off yet.",
+)
+
 
 @guard("Still unchecked: {unchecked}.", vars=("unchecked",))
 async def all_items_checked(r, inp, ctx: Ctx) -> Allow | Deny:
@@ -174,13 +192,24 @@ class GroceryList(Resource):
         pass
 
     @action(from_=GroceryState.READY, to=GroceryState.READY,
-            input=NameInput, place=items, guards=[item_on_list],
+            input=NameInput, place=items,
+            guards=[item_on_list, item_not_checked],
             safety=Safety(idempotent=True, reversible=False, confirm=False),
             display=dict(label="Check off", style="primary", order=1))
     async def check_item(self, inp: NameInput, ctx: Ctx) -> None:
         for item in self.data.items:
             if item.name == inp.name:
                 item.have = True
+
+    @action(from_=GroceryState.READY, to=GroceryState.READY,
+            input=NameInput, place=items,
+            guards=[item_on_list, item_checked],
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
+            display=dict(label="Uncheck", order=2))
+    async def uncheck_item(self, inp: NameInput, ctx: Ctx) -> None:
+        for item in self.data.items:
+            if item.name == inp.name:
+                item.have = False
 
     @action(from_=GroceryState.READY, to=GroceryState.DONE,
             guards=[all_items_checked],
