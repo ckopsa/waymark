@@ -1261,6 +1261,7 @@ async def w6_make_cr_transaction(state: str, engine, services) -> CR6Transaction
 
 import waymark7  # noqa: E402
 from waymark7.testing import (  # noqa: E402
+    SkipState,
     conformance_resource as w7_conformance_resource,
     example_input as w7_example_input,
     state_factory as w7_state_factory,
@@ -1290,9 +1291,11 @@ from ledger7.resources.transaction import (  # noqa: E402
     Transaction as CR7Transaction)
 from ledger7.resources.transaction import (  # noqa: E402
     TransactionState as CR7TransactionState)
+from ledger7.resources.fund import Fund as CR7Fund  # noqa: E402
 from ledger7.resources.workbook import Workbook as CR7Workbook  # noqa: E402
 from ledger7.resources.workbook import (  # noqa: E402
     WorkbookState as CR7WorkbookState)
+from ledger7.fund_source import FUNDS as FUNDS7  # noqa: E402
 from ledger7.services import FakeBeacon as FakeBeacon7  # noqa: E402
 from ledger7.surfaces import (  # noqa: E402
     CloseReview as CloseReview7, ReconcileAccount as ReconcileAccount7)
@@ -1320,12 +1323,21 @@ class SuiteServices7(SuiteServices):
 async def waymark7_engine():
     from waymark7.server.bus import InProcessBus
 
+    # the fund Mirror's adapter is class-level (the framework's seam);
+    # reset the module-singleton fake per fixture, the framework's own
+    # mirror-test discipline
+    FUNDS7.docs.clear()
+    FUNDS7.discoverable.clear()
+    FUNDS7.down = False
+    FUNDS7.pulls = 0
+    CR7Fund.adapter = FUNDS7
+
     services = SuiteServices7()
     engine = waymark7.Engine(
         resources=[Meal7, SundayRotation7, MealPlan7, GroceryList7,
                    PrepTask7, Event7,
                    CR7AccountTemplate, CR7Workbook, CR7Account,
-                   CR7ReconBreak, CR7Transaction],
+                   CR7ReconBreak, CR7Transaction, CR7Fund],
         surfaces=[CloseReview7, ReconcileAccount7],
         storage=TEST_DSN, services=services, bus=InProcessBus())
     services.beacon_backend.engine = engine
@@ -1476,23 +1488,85 @@ def w7_remove_item_example(services) -> dict:
     return {"name": "paper towels"}
 
 
-# no cross-resource refs and every field is schema-synthesizable — the
-# derived walker needs no factory (mirrors Meal7/PrepTask7)
-w7_conformance_resource(CR7AccountTemplate)
+# The fund is a read-only Mirror (ledger3 friction #3 closed). It is
+# enrolled — the coverage gate (test_every_resource_is_enrolled) demands
+# every engine kind be walkable — but only its `fresh` state is
+# walker-producible: a Mirror is genuinely awkward for the "make state X,
+# GET, assert still X" model. Pull-through-on-read re-syncs a stale/
+# unreachable mirror back to fresh on the very GET the representation test
+# makes, and the sync states (stale/conflicted/unreachable) are reached
+# only by system-actor transitions a human walker cannot drive. So the
+# factory produces `fresh` (created + pulled, so its name renders) and
+# raises SkipState for the rest — the design's own "enroll minimally and
+# note it" escape hatch. The sync states are covered directly by the
+# framework's own mirror tests (tests/waymark7/test_external.py) and the
+# fund's app behavior by tests/ledger7/test_story8_funds.py.
+async def _make_cr7_fund(engine) -> str:
+    """A fresh fund per call, pulled through so its name is filled (the
+    workbook/account label denormalization reads it at create; the
+    conformance summary must render a non-empty name)."""
+    code = f"fund-cr7-{uuid.uuid4().hex[:8]}"
+    FUNDS7.seed(code, name=code.replace("-", " ").title(), code=code)
+    fund_id = await _mk(engine, "fund", {"external_id": code})
+    from waymark7.server.external import refresh_external
+    async with engine.storage.session() as s:
+        inst = await engine.storage.load(s, "fund", fund_id)
+    await refresh_external(engine, engine.registry["fund"], inst)
+    return fund_id
+
+
+@w7_state_factory(CR7Fund)
+async def w7_make_cr_fund(state, engine, services) -> CR7Fund:
+    if state != "fresh":
+        raise SkipState(
+            f"fund:{state!r} is not walker-producible — a Mirror re-syncs "
+            "to fresh on the representation GET (pull-through), and its "
+            "sync transitions are system-only (design: enroll minimally)")
+    return await _load(engine, "fund", await _make_cr7_fund(engine))
+
+
+@w7_state_factory(CR7AccountTemplate)
+async def w7_make_cr_template(state, engine, services) -> CR7AccountTemplate:
+    fund_id = await _make_cr7_fund(engine)
+    tid = await _mk(engine, "account_template",
+                    {"fund_id": fund_id, "name": "Ops checking",
+                     "bank_name": "First Bank", "last4": "4321",
+                     "beacon_coa_id": f"COA-{uuid.uuid4().hex[:6]}"})
+    if state == "retired":
+        await _step(engine, "account_template", tid, "retire")
+    return await _load(engine, "account_template", tid)
+
 
 # The ledger helpers (_step_as, _cr_accounts_of, _cr_job_done,
-# _make_cr_workbook_id, _make_cr_account_id) and the CR_PREPARER /
-# CR_REVIEWER principals are version-agnostic — they only touch the
-# engine passed in — so the w7 factories reuse them directly.
+# CR_PREPARER / CR_REVIEWER) are version-agnostic — they only touch the
+# engine passed in. The workbook/account id helpers, though, must mint a
+# fund first on v7 (fund_id is a real Ref now), so v7 gets its own.
+async def _make_cr7_workbook_id(engine) -> str:
+    """A fresh fund + registry template + workbook every call (never cached
+    — a factory runs once per candidate principal per case, and unique
+    (fund_id, period) would 409 on a repeat)."""
+    fund_id = await _make_cr7_fund(engine)
+    await _mk(engine, "account_template",
+              {"fund_id": fund_id, "name": "Ops checking",
+               "bank_name": "First Bank", "last4": "4321",
+               "beacon_coa_id": "COA-1"})
+    return await _mk(engine, "workbook",
+                     {"fund_id": fund_id, "period": "2026-06"})
+
+
+async def _make_cr7_account_id(engine) -> str:
+    wid = await _make_cr7_workbook_id(engine)
+    accounts = await _cr_accounts_of(engine, wid)
+    return accounts[0].id
 
 
 @w7_state_factory(CR7Workbook)
 async def w7_make_cr_workbook(state: str, engine, services) -> CR7Workbook:
     # fresh fund + fresh workbook every call, never cached: a factory runs
     # once per candidate principal per case, and a cached id already at
-    # the target state can't be re-driven (unique=(fund, period) would
-    # also 409) — see _make_cr_workbook_id's docstring
-    wid = await _make_cr_workbook_id(engine)
+    # the target state can't be re-driven (unique=(fund_id, period) would
+    # also 409) — see _make_cr7_workbook_id's docstring
+    wid = await _make_cr7_workbook_id(engine)
     target = CR7WorkbookState(state)
     if target == CR7WorkbookState.ABANDONED:
         await _step(engine, "workbook", wid, "abandon")
@@ -1517,7 +1591,7 @@ async def w7_make_cr_workbook(state: str, engine, services) -> CR7Workbook:
 
 @w7_state_factory(CR7Account)
 async def w7_make_cr_account(state: str, engine, services) -> CR7Account:
-    aid = await _make_cr_account_id(engine)
+    aid = await _make_cr7_account_id(engine)
     target = CR7AccountState(state)
     if target == CR7AccountState.REMOVED:
         await _step(engine, "account", aid, "remove")
@@ -1529,7 +1603,7 @@ async def w7_make_cr_account(state: str, engine, services) -> CR7Account:
 
 @w7_state_factory(CR7ReconBreak)
 async def w7_make_cr_break(state: str, engine, services) -> CR7ReconBreak:
-    aid = await _make_cr_account_id(engine)
+    aid = await _make_cr7_account_id(engine)
     bid = await _mk(engine, "break",
                     {"account_id": aid, "amount": 12.34,
                      "note": "conformance"})
@@ -1540,7 +1614,7 @@ async def w7_make_cr_break(state: str, engine, services) -> CR7ReconBreak:
 
 @w7_state_factory(CR7Transaction)
 async def w7_make_cr_transaction(state: str, engine, services) -> CR7Transaction:
-    aid = await _make_cr_account_id(engine)
+    aid = await _make_cr7_account_id(engine)
     tid = await _mk(engine, "transaction",
                     {"account_id": aid, "transaction_date": "2026-06-15",
                      "amount": -42.0, "memo": "conformance"})
