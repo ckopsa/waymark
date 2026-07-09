@@ -238,6 +238,9 @@ def build_router(engine: Any) -> APIRouter:
                 f"{base}/{registry['attachment'].plural}/{{id}}/bytes"}
                if "attachment" in registry else {}),
             "schemas": f"{base}/schemas/{{name}}",
+            # the askable surface (grants): the kinds → fields → actions an
+            # agent may request, so request_access is a menu, not a crawl
+            "grantable": f"{base}/-/grantable",
             "events": f"{base}/-/events",
             "ui": f"{base}/-/ui",
             "locales": ["en"],
@@ -265,6 +268,18 @@ def build_router(engine: Any) -> APIRouter:
         if found is None:
             raise NotFound(f"No schema {name!r}.")
         return Response(content=found[1], media_type="application/schema+json")
+
+    @router.get("/-/grantable")
+    @_wire
+    async def grantable() -> Response:
+        # the grants menu (design §9): part of the public catalog, like
+        # discovery and schemas — it names what CAN be asked for, not any
+        # resource's data, so a bare token reads it to shape its request
+        from .grants import grantable_catalog
+
+        doc = grantable_catalog(registry, base=base)
+        return Response(content=json.dumps(doc),
+                        media_type="application/json")
 
     @router.get("/-/ui")
     async def ui() -> Response:
@@ -433,15 +448,18 @@ def build_router(engine: Any) -> APIRouter:
         from .events import sse_response, sse_stream
         from .grants import visibility_of
 
-        from .pipeline import gate
-
         rdef = registry.by_plural(plural)
         if rdef is None:
             return problem_response(NotFound(f"No collection {plural!r}."))
-        try:
-            principal = await gate("stream", engine, request)
-        except Forbidden as exc:
-            return problem_response(exc)
+        # a scoped token is refused the workspace pulse (gate's refuse_scoped)
+        # — but its OWN negotiation surface is not the pulse: it may stream
+        # its grant and the approvals that grant created, to await a decision
+        # by push instead of polling. Everything else stays refused.
+        principal = await engine.resolve_principal(request)
+        grant = getattr(principal, "scope", None)
+        if grant is not None:
+            if not await _owns_target(grant, rdef, id):
+                return problem_response(Forbidden(SCOPE_REASON))
         sub = engine.dispatcher.subscribe(
             resource=(rdef.kind, id),
             classes=_stream_classes(request),

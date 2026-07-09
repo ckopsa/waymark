@@ -485,3 +485,50 @@ async def test_bare_approve_still_grants_the_whole_ask(env):
     doc = (await agent.get(memo_href)).json()
     assert doc["data"]["title"] == "Groceries note"
     assert (await _act(agent, doc, "touch")).status_code == 200
+
+
+async def test_grantable_catalog_is_the_ask_menu(env):
+    """Design C: a bare token reads /-/grantable — the public menu of what
+    it CAN request. Domain kinds carry their fields (with clear|hashed) and
+    actions (with args); the negotiation kinds themselves are omitted."""
+    engine, transport, human = env
+    _, token = await _mint(human)
+    agent = _agent(transport, token)
+
+    # discovery advertises the menu, and a bare token may read it
+    index = (await agent.get("/api/.well-known/waymark")).json()
+    assert index["grantable"] == "/api/-/grantable"
+    cat = (await agent.get("/api/-/grantable")).json()
+
+    memo = cat["kinds"]["memo"]
+    assert memo["collection"] == "/api/memos"
+    fields = {f["name"]: f for f in memo["fields"]}
+    assert "title" in fields and fields["title"]["modes"] == ["clear", "hashed"]
+    actions = {a["name"]: a for a in memo["actions"]}
+    assert "touch" in actions and actions["touch"]["modes"] == ["open", "approval"]
+    # an action's arguments ride the entry (so requested_args is a menu too)
+    edit = actions["edit"]
+    assert any(arg["name"] == "body" for arg in edit.get("args", []))
+
+    # the negotiation surface itself is not grantable
+    assert "grant" not in cat["kinds"]
+    assert "approval_request" not in cat["kinds"]
+
+
+async def test_scoped_token_streams_only_its_own_grant(env):
+    """Design E: a token may await its grant's decision by push — it streams
+    its OWN grant's events — but the workspace pulse and other resources
+    stay refused (the refusal returns immediately; the 200 stream itself is
+    covered over a real socket)."""
+    engine, transport, human = env
+    grant_href, token = await _mint(human)
+    memo_href = await _memo(human)
+    agent = _agent(transport, token)
+
+    # someone else's resource: refused (not the agent's negotiation surface)
+    assert (await agent.get(memo_href + "/-/events")).status_code == 403
+    # the workspace firehose: still refused for a scoped token
+    assert (await agent.get("/api/-/events")).status_code == 403
+    # a foreign grant id: refused (owns() is an exact match)
+    other = grant_href.rsplit("/", 1)[0] + "/" + uuid.uuid4().hex
+    assert (await agent.get(other + "/-/events")).status_code == 403

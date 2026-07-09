@@ -60,6 +60,9 @@ from ..core.types import Acknowledged, Allow, Ctx, Deny, Safety
 
 TOKEN_PREFIX = "wmk_"
 
+SUMMARY_MAX = 240   # the request_summary one-liner budget (< the 280 the
+                    # usability check calls prose)
+
 FieldMode = Literal["clear", "hashed", "hidden"]
 ActionMode = Literal["open", "approval", "none"]
 ArgMode = Literal["edit", "approval", "none"]
@@ -100,7 +103,11 @@ def _summarize_request(fields: FieldMap, actions: ActionMap,
     if not parts:
         return "Nothing requested yet."
     parts.append(f"for {hours}h")
-    return " · ".join(parts)
+    line = " · ".join(parts)
+    # a bounded one-liner (a sprawling ask is still legible truncated, and
+    # the full maps are right there on the grant) — stays a summary, never
+    # prose that breaks a table
+    return line if len(line) <= SUMMARY_MAX else line[:SUMMARY_MAX - 1] + "…"
 
 
 # ── the grant resource ──────────────────────────────────────────────────
@@ -150,6 +157,7 @@ class GrantData(BaseModel):
         over=("requested_fields", "requested_actions", "requested_hours"),
         fn=_summarize_request,
         default="Nothing requested yet.",
+        max_length=SUMMARY_MAX,
         json_schema_extra={"x-display": {"raw": True}})
     # what enforcement reads (copied from requested_* by `approve`); during
     # an amendment (granted → requested) the old grant stays in force
@@ -874,6 +882,72 @@ async def member_visibility(storage: Any, principal: Any,
             held.extend(rows)
     unique = {g.id: g for g in held}
     return MemberVisibility(pid, list(unique.values()), now)
+
+
+def _sub_schema(prop: dict[str, Any]) -> dict[str, Any]:
+    """The non-null branch of an optional field's ``anyOf`` (or the prop
+    itself) — where type/format live for a ``X | None`` field."""
+    if "anyOf" in prop:
+        return next((o for o in prop["anyOf"] if o.get("type") != "null"), prop)
+    return prop
+
+
+def _catalog_field(name: str, prop: dict[str, Any]) -> dict[str, Any]:
+    sub = _sub_schema(prop)
+    entry = {"name": name, "type": prop.get("type") or sub.get("type"),
+             "modes": ["clear", "hashed"]}
+    if prop.get("description"):
+        entry["description"] = prop["description"]
+    return entry
+
+
+def grantable_catalog(registry: Any, base: str = "/api") -> dict[str, Any]:
+    """The askable surface, straight from the registry: for each domain
+    kind, the fields an agent may request (``clear``/``hashed``) and the
+    actions it may request (``open``/``approval``), each with its own
+    description and — for actions — the arguments the agent may need to
+    supply or route to a human. This turns ``request_access`` from a
+    placeholder-filling exercise (crawl every schema, guess the shape) into
+    picking from a menu, and gives an approve UI the same vocabulary.
+
+    Engine and administration kinds (the negotiation surface itself, plus
+    members/roles/subscriptions/jobs) are not grantable and are omitted."""
+    skip = set(registry.engine_kinds()) | MemberVisibility.OPEN_KINDS
+    kinds: dict[str, Any] = {}
+    for rdef in registry.defs():
+        if rdef.kind in skip:
+            continue
+        props = (rdef.data_schema.get("properties") or {})
+        fields = [_catalog_field(n, p) for n, p in props.items()
+                  # readOnly = derived/authored/machine — not the agent's to
+                  # hold; hidden = plumbing the schema already suppresses
+                  if not p.get("readOnly")
+                  and not (p.get("x-display") or {}).get("hidden")]
+        actions = []
+        for aname, defn in rdef.machine.actions.items():
+            entry: dict[str, Any] = {"name": aname, "modes": ["open", "approval"]}
+            if defn.display.get("description"):
+                entry["description"] = defn.display["description"]
+            if defn.input is not None:
+                ischema = rdef.action_schemas.get(aname)
+                iprops = (ischema[0].get("properties") if ischema else None) or {}
+                required = set((ischema[0].get("required") or []) if ischema else [])
+                args = []
+                for n, p in iprops.items():
+                    a = {"name": n, "required": n in required}
+                    if p.get("description"):
+                        a["description"] = p["description"]
+                    args.append(a)
+                if args:
+                    entry["args"] = args
+            actions.append(entry)
+        kinds[rdef.kind] = {
+            "label": rdef.kind.replace("_", " ").title(),
+            "collection": f"{base}/{rdef.plural}",
+            "fields": fields,
+            "actions": actions,
+        }
+    return {"kinds": kinds}
 
 
 def visibility_of(principal: Any, now: datetime) -> Any:
