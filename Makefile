@@ -40,9 +40,7 @@ check:  ## import-time definition checks (CI fast path); pass ENGINE=module:attr
 	uv run waymark7 check $(ENGINE)
 
 dev: db dist  ## run the meal planner on waymark7 with auto-reload (mealplan7_dev)
-	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d waymark_test -Atc \
-		"SELECT 1 FROM pg_database WHERE datname='mealplan7_dev'" | grep -q 1 || \
-		docker exec $(PG_CONTAINER) createdb -U $(PG_USER) mealplan7_dev
+	@createdb -h localhost -p $(PG_PORT) -U $(PG_USER) mealplan7_dev 2>/dev/null || true
 	@echo "ui → http://localhost:$(PORT)/"
 	MEALPLAN_DSN=$(MEALPLAN_DSN) uv run uvicorn mealplan7.main:app --reload \
 		--port $(PORT) --timeout-graceful-shutdown 3
