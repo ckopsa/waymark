@@ -1,14 +1,245 @@
-"""Root conftest.
+"""Root conftest for the mealplan7 branch.
 
-The waymark7 framework test suite (``tests/waymark7/``) is self-contained:
-each module builds its own ``Engine`` over a throwaway set of resources via
-``waymark7.testing.per_worker_dsn``, so nothing is needed here.
-
-The ``--waymark7`` conformance suite walks whatever resources an application
-enrolls; it expects that application's root conftest to supply a
-``waymark7_engine`` async fixture (see ``waymark7.testing.pytest_plugin``).
-On this branch there is no application, so the enrollment registry is empty
-and ``pytest --waymark7`` collects nothing. Each dogfood app lives on its own
-branch and adds its ``waymark7_engine`` fixture here.
+The waymark7 framework suite (``tests/waymark7/``) is self-contained. This
+module supplies the ``--waymark7`` conformance walker with the mealplan7
+engine and mealplan7's resource enrollments / state factories (see
+``waymark7.testing.pytest_plugin``). mealplan7 is the app the conformance
+harness was originally written against, so it also exercises waymark7's
+built-in member/role/subscription/attachment resources (a meal is the
+attachment target).
 """
 from __future__ import annotations
+
+import os
+import uuid
+from dataclasses import dataclass, field
+from datetime import date, timedelta
+
+import pytest
+
+import waymark7
+from waymark7.core.types import Principal
+from waymark7.server.attachments import (
+    Attachment as Attachment7W, BYTES_ACTOR as BYTES_ACTOR7W)
+from waymark7.server.bus import InProcessBus
+from waymark7.server.members import Member as Member7W
+from waymark7.server.roles import Role as Role7W
+from waymark7.server.subscriptions import (
+    WebhookSubscription as Subscription7W)
+from waymark7.testing import (  # noqa: E402
+    conformance_resource as w7_conformance_resource,
+    example_input as w7_example_input,
+    per_worker_dsn,
+    state_factory as w7_state_factory,
+)
+
+from mealplan7.event_source import EVENTS as EVENTS7
+from mealplan7.resources.event import Event as Event7
+from mealplan7.resources.grocery_list import (
+    GroceryList as GroceryList7, GroceryState as GroceryState7)
+from mealplan7.resources.meal import Meal as Meal7
+from mealplan7.resources.plan import MealPlan as MealPlan7, PlanState as PlanState7
+from mealplan7.resources.prep_task import PrepTask as PrepTask7
+from mealplan7.resources.rotation import SundayRotation as SundayRotation7
+from mealplan7.services import Services as MealplanServices
+
+TEST_DSN = per_worker_dsn(os.environ.get(
+    "WAYMARK_TEST_DSN", "postgresql+asyncpg://localhost/waymark_test"))
+
+FACTORY_PRINCIPAL = Principal(id="owner", type="human", display="Owner")
+
+PLAN_START = date(2026, 6, 30)
+PLAN_SUNDAY = date(2026, 7, 5)
+
+GROCERY_ITEMS = [
+    {"name": "chicken thighs", "quantity": "2 lbs", "category": "meat"},
+    {"name": "paper towels", "category": "household"},
+]
+
+
+def prep_task_create_example(services) -> dict:
+    return {"plan_id": services.seeded.get("plan_id", "unlinked"),
+            "date": PLAN_SUNDAY.isoformat(), "meal_name": "Pulled pork",
+            "task_type": "thaw", "due_at": "2026-07-04T18:00:00+00:00",
+            "duration_minutes": 720}
+
+
+@dataclass
+class ConformanceServices(MealplanServices):
+    """mealplan7's services plus a stash the state factories use to hand real
+    ids to ``@example_input`` functions (which only see services)."""
+
+    seeded: dict = field(default_factory=dict)
+
+
+# ── generic engine helpers ──────────────────────────────────────────────────
+async def _load(engine, kind: str, id: str):
+    async with engine.storage.session() as s:
+        return await engine.storage.load(s, kind, id)
+
+
+async def _mk(engine, kind: str, body: dict) -> str:
+    created = await engine.invoker.create(kind, body,
+                                          principal=FACTORY_PRINCIPAL,
+                                          idempotency_key=uuid.uuid4().hex)
+    return created.doc["self"].rsplit("/", 1)[-1]
+
+
+async def _step(engine, kind: str, id: str, action: str, body=None):
+    return await engine.invoker.invoke(kind, id, action, body,
+                                       principal=FACTORY_PRINCIPAL,
+                                       idempotency_key=uuid.uuid4().hex)
+
+
+# ── the conformance engine (mealplan7 resources + its own services) ─────────
+@pytest.fixture
+async def waymark7_engine():
+    # the calendar's Event Mirror adapter is class-level (the framework's
+    # seam); reset the module-singleton fake per fixture
+    EVENTS7.docs.clear()
+    EVENTS7.discoverable.clear()
+    EVENTS7.down = False
+    EVENTS7.pulls = 0
+    Event7.adapter = EVENTS7
+
+    services = ConformanceServices()
+    engine = waymark7.Engine(
+        resources=[Meal7, SundayRotation7, MealPlan7, GroceryList7,
+                   PrepTask7, Event7],
+        storage=TEST_DSN, services=services, bus=InProcessBus())
+    await engine.storage.drop_all()
+    await engine.startup()
+    try:
+        yield engine
+    finally:
+        await engine.shutdown()
+
+
+# ── mealplan7 enrollments (verbatim from the shared v7 conformance harness) ──
+w7_conformance_resource(Meal7)
+w7_conformance_resource(SundayRotation7)
+w7_conformance_resource(PrepTask7)
+# the calendar kind: every field is schema-synthesizable (the closed ``kind``
+# vocab is a Literal with a default) — the derived walker suffices
+w7_conformance_resource(Event7)
+
+w7_conformance_resource(Member7W)
+w7_conformance_resource(Role7W)
+w7_conformance_resource(Subscription7W)
+
+
+# an attachment's create must name a live target, so its states need a
+# factory rather than a schema-synthesized create (design E5)
+@w7_state_factory(Attachment7W)
+async def w7_make_attachment(state: str, engine, services) -> Attachment7W:
+    mid = await _mk(engine, "meal", {"name": "Attachment target",
+                                     "themes": ["mexican"]})
+    services.seeded["attachment_target"] = mid
+    aid = await _mk(engine, "attachment", {
+        "resource_kind": "meal", "resource_id": mid,
+        "name": "recipe.pdf", "mime": "application/pdf"})
+    if state in ("uploaded", "removed"):
+        await engine.invoker.invoke(
+            "attachment", aid, "mark_uploaded",
+            {"size": 3, "sha256": "a" * 64}, principal=BYTES_ACTOR7W)
+    if state == "removed":
+        await _step(engine, "attachment", aid, "remove")
+    return await _load(engine, "attachment", aid)
+
+
+@w7_example_input(Attachment7W, "duplicate")
+def w7_attachment_duplicate_example(services) -> dict:
+    # a synthesized target would dangle; duplicate onto the factory's meal
+    return {"resource_kind": "meal",
+            "resource_id": services.seeded["attachment_target"]}
+
+
+@w7_example_input(Role7W, "create")
+def w7_role_create_example(services) -> dict:
+    # role names are declared unique (design E2); the walker may create
+    # several per test, so the example must mint fresh spellings
+    return {"name": f"reader-{uuid.uuid4().hex[:8]}",
+            "description": "May read shared note titles"}
+
+
+@w7_example_input(Member7W, "create")
+def w7_member_create_example(services) -> dict:
+    return {"email": "mom@example.com", "display_name": "Grandma",
+            "roles": ["reader"]}
+
+
+@w7_example_input(Subscription7W, "create")
+def w7_subscription_create_example(services) -> dict:
+    return {"url": "https://budget.example/hooks", "kinds": ["plan"]}
+
+
+@w7_example_input(Meal7, "create")
+def w7_meal_create_example(services) -> dict:
+    # 7.0 speaks only the current shape on the wire; the single-theme era is a
+    # declared upcast (Meal7.shape/upcasts), not a payload dialect
+    return {"name": "Carnitas tacos", "themes": ["mexican"],
+            "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
+            "prep_minutes": 45, "thaw_hours": 12}
+
+
+@w7_example_input(PrepTask7, "create")
+def w7_prep_task_create_example(services) -> dict:
+    return prep_task_create_example(services)
+
+
+async def _listed_meal7(engine, services) -> str:
+    mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
+                                     "themes": ["mexican"]})
+    await _step(engine, "meal", mid, "accept")
+    services.seeded["meal_id"] = mid
+    return mid
+
+
+@w7_state_factory(MealPlan7)
+async def w7_make_plan(state: str, engine, services) -> MealPlan7:
+    rid = await _mk(engine, "rotation", {})
+    await _listed_meal7(engine, services)
+    pid = await _mk(engine, "plan", {"start_date": PLAN_START.isoformat(),
+                                     "weeks": 1, "rotation_id": rid})
+    services.seeded["plan_id"] = pid
+    target = PlanState7(state)
+    if target == PlanState7.ABANDONED:
+        await _step(engine, "plan", pid, "abandon")
+    elif target != PlanState7.DRAFT:
+        for i in range(7):
+            await _step(engine, "plan", pid, "mark_eating_out",
+                        {"date": (PLAN_START + timedelta(days=i)).isoformat()})
+        await _step(engine, "plan", pid, "finalize")
+        if target in (PlanState7.ACTIVE, PlanState7.DONE):
+            await _step(engine, "plan", pid, "begin")
+        if target == PlanState7.DONE:
+            await _step(engine, "plan", pid, "complete")
+    return await _load(engine, "plan", pid)
+
+
+# assign_meal needs no example: its Relation's tuple set feeds the synthesizer
+@w7_example_input(MealPlan7, "assign_off_theme")
+def w7_assign_off_theme_example(services) -> dict:
+    return {"date": PLAN_START.isoformat(),
+            "meal_id": services.seeded["meal_id"]}
+
+
+@w7_state_factory(GroceryList7)
+async def w7_make_grocery_list(state: str, engine, services) -> GroceryList7:
+    plan = await w7_make_plan(PlanState7.PLANNED, engine, services)
+    gid = await _mk(engine, "grocery_list",
+                    {"plan_id": plan.id, "items": GROCERY_ITEMS})
+    target = GroceryState7(state)
+    if target != GroceryState7.DRAFT:
+        await _step(engine, "grocery_list", gid, "finalize")
+    if target == GroceryState7.DONE:
+        for item in GROCERY_ITEMS:
+            await _step(engine, "grocery_list", gid, "check_item",
+                        {"name": item["name"]})
+        await _step(engine, "grocery_list", gid, "complete")
+    return await _load(engine, "grocery_list", gid)
+
+
+@w7_example_input(GroceryList7, "remove_item")
+def w7_remove_item_example(services) -> dict:
+    return {"name": "paper towels"}

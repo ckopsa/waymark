@@ -4,7 +4,19 @@ PG_USER      ?= ckopsa
 PG_PORT      ?= 5433
 TEST_DSN     ?= postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/waymark_test
 
-.PHONY: db test conformance check dist
+# mealplan7 dev server + deploy
+PORT         ?= 8005
+ENGINE       ?= mealplan7.main:engine
+MEALPLAN_DSN ?= postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/mealplan7_dev
+# The home cluster's only node is ARM64; cross-building needs qemu binfmt.
+IMAGE     ?= docker.kopsa.info/mealplan
+IMAGE_TAG ?= $(shell git rev-parse --short HEAD)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
+PLATFORM  ?= linux/arm64
+INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
+NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
+NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
+
+.PHONY: db test conformance check dist dev image deploy
 
 dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
 	uv build
@@ -26,3 +38,20 @@ conformance: db  ## waymark7 conformance suite (walks the app enrolled on this b
 
 check:  ## import-time definition checks (CI fast path); pass ENGINE=module:attr
 	uv run waymark7 check $(ENGINE)
+
+dev: db dist  ## run the meal planner on waymark7 with auto-reload (mealplan7_dev)
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d waymark_test -Atc \
+		"SELECT 1 FROM pg_database WHERE datname='mealplan7_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) createdb -U $(PG_USER) mealplan7_dev
+	@echo "ui → http://localhost:$(PORT)/"
+	MEALPLAN_DSN=$(MEALPLAN_DSN) uv run uvicorn mealplan7.main:app --reload \
+		--port $(PORT) --timeout-graceful-shutdown 3
+
+image:  ## build and push the mealplan image for the home cluster
+	docker buildx build --platform $(PLATFORM) -t $(IMAGE):$(IMAGE_TAG) --push .
+	@echo "pushed $(IMAGE):$(IMAGE_TAG)"
+
+deploy: image  ## push image, then roll meals.kopsa.info onto it via nomad variable
+	@NOMAD_ADDR=$(NOMAD_ADDR) NOMAD_TOKEN=$(NOMAD_TOKEN) \
+		nomad var put -force nomad/jobs/mealplan/deploy image_tag=$(IMAGE_TAG) >/dev/null
+	@echo "deploying $(IMAGE):$(IMAGE_TAG) — nomad restarts the server task on the new image"
