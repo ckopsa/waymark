@@ -5,7 +5,10 @@ resource instance (``{id}``, ``{state}``, ``{data.total:.2f}``) plus a
 ``|filter`` suffix inside the field name (``{data.items|len}``).
 
 ``{state.label}`` renders the state token title-cased (display override is a
-render-time concern; the template layer stays pure).
+render-time concern; the template layer stays pure). A plain snake_case
+``Data`` enum field gets the same treatment via the ``|label`` filter —
+e.g. ``{data.transaction_type_id|label}`` renders ``capital_call`` as
+``Capital call`` rather than leaking the machine token into prose.
 """
 from __future__ import annotations
 
@@ -14,16 +17,20 @@ from typing import Any
 
 SUMMARY_BUDGET = 140
 
+def state_label(token: str) -> str:
+    return token.replace("_", " ").capitalize()
+
+
 _FILTERS = {
     "len": len,
     "upper": lambda v: str(v).upper(),
     "lower": lambda v: str(v).lower(),
     "join": lambda v: ", ".join(str(x) for x in v),
+    # a snake_case enum value rendered as prose (e.g. a StrEnum field on
+    # Data, not the resource's own state) — same humanization as
+    # {state.label}, available to any field via |label
+    "label": lambda v: state_label(str(v)),
 }
-
-
-def state_label(token: str) -> str:
-    return token.replace("_", " ").capitalize()
 
 
 class _StateProxy:

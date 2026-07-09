@@ -856,9 +856,16 @@ w5_conformance_resource(CRAccountTemplate)
 
 
 async def _step_as(engine, kind: str, id: str, action: str, principal,
-                   body=None):
+                   body=None, *, fenced: bool = False):
+    if_match = None
+    if fenced:
+        from waymark7.server.render import make_etag
+
+        async with engine.storage.session() as s:
+            inst = await engine.storage.load(s, kind, id)
+        if_match = make_etag(kind, id, inst.version)
     return await engine.invoker.invoke(kind, id, action, body,
-                                       principal=principal,
+                                       principal=principal, if_match=if_match,
                                        idempotency_key=uuid.uuid4().hex)
 
 
@@ -1302,17 +1309,23 @@ from ledger7.beacon_coa_source import BEACON_COAS as BEACON_COAS7  # noqa: E402
 from ledger7.services import FakeBeacon as FakeBeacon7  # noqa: E402
 from ledger7.surfaces import (  # noqa: E402
     CloseReview as CloseReview7, ReconcileAccount as ReconcileAccount7)
+from intake7.services import FakeBeacon as INTAKE7FakeBeacon  # noqa: E402
 
 
 @dataclass
 class SuiteServices7(SuiteServices):
-    """mealplan7's services plus the Beacon boundary ledger7 declares —
-    one shared engine/services pair covers both v7 dogfood apps, since
-    `pytest --waymark7` walks a single ``waymark7_engine`` fixture."""
+    """mealplan7's services plus the Beacon boundaries ledger7 and
+    intake7 each declare — one shared engine/services pair covers every
+    v7 dogfood app, since `pytest --waymark7` walks a single
+    ``waymark7_engine`` fixture. intake7's Beacon service is named
+    ``intake_beacon`` (not ``beacon``) precisely to avoid colliding with
+    ledger7's differently-shaped one here."""
 
     beacon_backend: FakeBeacon7 = field(default_factory=FakeBeacon7)
     beacon: Any = None
     beacon_coas: Any = None
+    intake_beacon_backend: Any = field(default_factory=INTAKE7FakeBeacon)
+    intake_beacon: Any = None
 
     def __post_init__(self) -> None:
         if self.beacon is None:
@@ -1321,6 +1334,12 @@ class SuiteServices7(SuiteServices):
             self.beacon = Service("beacon", handler=self.beacon_backend.pull,
                                  timeout=30.0, backoff_seconds=60.0,
                                  down_on_error=True)
+        if self.intake_beacon is None:
+            from waymark7.server.external import Service
+
+            self.intake_beacon = Service(
+                "intake_beacon", handler=self.intake_beacon_backend.pull,
+                timeout=30.0, backoff_seconds=60.0, down_on_error=False)
         if self.beacon_coas is None:
             from waymark7.server.external import Service
 
@@ -1358,13 +1377,31 @@ async def waymark7_engine():
     BEACON_COAS7.down = False
     BEACON_COAS7.pulls = 0
     CR7BeaconCoa.adapter = BEACON_COAS7
+    INTAKE7_FUNDS.docs.clear()
+    INTAKE7_FUNDS.discoverable.clear()
+    INTAKE7_FUNDS.down = False
+    INTAKE7_FUNDS.pulls = 0
+    INTAKE7Fund.adapter = INTAKE7_FUNDS
+    INTAKE7_FUND_CLASSES.docs.clear()
+    INTAKE7_FUND_CLASSES.discoverable.clear()
+    INTAKE7_FUND_CLASSES.down = False
+    INTAKE7_FUND_CLASSES.pulls = 0
+    INTAKE7FundClass.adapter = INTAKE7_FUND_CLASSES
 
     services = SuiteServices7()
     engine = waymark7.Engine(
         resources=[Meal7, SundayRotation7, MealPlan7, GroceryList7,
                    PrepTask7, Event7,
                    CR7AccountTemplate, CR7Workbook, CR7Account,
-                   CR7ReconBreak, CR7Transaction, CR7Fund, CR7BeaconCoa],
+                   CR7ReconBreak, CR7Transaction, CR7Fund, CR7BeaconCoa,
+                   INTAKE7Transaction, INTAKE7ChecklistItem,
+                   INTAKE7ChecklistItemType, INTAKE7Comment, INTAKE7Transfer,
+                   INTAKE7ImportBatch, INTAKE7RiskApplicability,
+                   INTAKE7TransactionRisk, INTAKE7ElevatedRisk,
+                   INTAKE7ElevatedRiskCategory, INTAKE7JurisdictionalRisk,
+                   INTAKE7JurisdictionSeed, INTAKE7JurisdictionCountryRank,
+                   INTAKE7JurisdictionRiskThreshold,
+                   INTAKE7Fund, INTAKE7FundClass],
         surfaces=[CloseReview7, ReconcileAccount7],
         storage=TEST_DSN, services=services, bus=InProcessBus())
     services.beacon_backend.engine = engine
@@ -1650,3 +1687,199 @@ async def w7_make_cr_transaction(state: str, engine, services) -> CR7Transaction
     if CR7TransactionState(state) == CR7TransactionState.REMOVED:
         await _step(engine, "transaction", tid, "remove")
     return await _load(engine, "transaction", tid)
+
+
+# ── intake on waymark7 (intake7): Phase 1 — the transaction lifecycle ─────────
+# Both kinds below get hand-written factories rather than the derived
+# walker: Transaction's review_completed/escalate_to_manager carry
+# four_eyes(of="submit_for_review") (one principal cannot both submit and
+# complete review — the single-principal walker can never satisfy this),
+# and ChecklistItem's review carries four_eyes(of="prepare") the same
+# way. The 8 reclassify_to_* actions are role-gated
+# (guard.role("investor_services_manager")), which the walker's
+# unprivileged principal can never satisfy either — every state below is
+# reached through the ordinary, non-reclassify edges instead.
+from intake7.resources.checklist_item import ChecklistItem as INTAKE7ChecklistItem  # noqa: E402
+from intake7.resources.checklist_item import ItemState as INTAKE7ItemState  # noqa: E402
+from intake7.resources.checklist_item_type import (  # noqa: E402
+    ChecklistItemType as INTAKE7ChecklistItemType)
+from intake7.resources.comment import Comment as INTAKE7Comment  # noqa: E402
+from intake7.resources.elevated_risk import ElevatedRisk as INTAKE7ElevatedRisk  # noqa: E402
+from intake7.resources.elevated_risk_category import (  # noqa: E402
+    ElevatedRiskCategory as INTAKE7ElevatedRiskCategory)
+from intake7.resources.fund import Fund as INTAKE7Fund  # noqa: E402
+from intake7.resources.fund_class import FundClass as INTAKE7FundClass  # noqa: E402
+from intake7.resources.import_batch import ImportBatch as INTAKE7ImportBatch  # noqa: E402
+from intake7.resources.jurisdiction_country_rank import (  # noqa: E402
+    JurisdictionCountryRank as INTAKE7JurisdictionCountryRank)
+from intake7.resources.jurisdiction_risk_threshold import (  # noqa: E402
+    JurisdictionRiskThreshold as INTAKE7JurisdictionRiskThreshold)
+from intake7.resources.jurisdiction_seed import (  # noqa: E402
+    JurisdictionSeed as INTAKE7JurisdictionSeed)
+from intake7.resources.jurisdictional_risk import (  # noqa: E402
+    JurisdictionalRisk as INTAKE7JurisdictionalRisk)
+from intake7.resources.risk_applicability import (  # noqa: E402
+    RiskApplicability as INTAKE7RiskApplicability)
+from intake7.resources.transaction import Transaction as INTAKE7Transaction  # noqa: E402
+from intake7.resources.transaction import TxStatus as INTAKE7TxStatus  # noqa: E402
+from intake7.resources.transaction_risk import (  # noqa: E402
+    TransactionRisk as INTAKE7TransactionRisk)
+from intake7.resources.transfer import Transfer as INTAKE7Transfer  # noqa: E402
+from intake7.fund_source import FUNDS as INTAKE7_FUNDS  # noqa: E402
+from intake7.fund_class_source import (  # noqa: E402
+    FUND_CLASSES as INTAKE7_FUND_CLASSES)
+
+INTAKE7_ASHA = Principal(id="asha", type="human", display="Asha")
+INTAKE7_TOM = Principal(id="tom", type="human", display="Tom")
+
+# every kind below is walked as part of the shared waymark7_engine fixture
+# (the conformance runner hardcodes that fixture name).
+w7_conformance_resource(INTAKE7ChecklistItemType)
+w7_conformance_resource(INTAKE7Comment)
+w7_conformance_resource(INTAKE7ImportBatch)
+w7_conformance_resource(INTAKE7RiskApplicability)
+w7_conformance_resource(INTAKE7TransactionRisk)
+w7_conformance_resource(INTAKE7ElevatedRisk)
+w7_conformance_resource(INTAKE7ElevatedRiskCategory)
+w7_conformance_resource(INTAKE7JurisdictionalRisk)
+w7_conformance_resource(INTAKE7JurisdictionSeed)
+w7_conformance_resource(INTAKE7JurisdictionCountryRank)
+w7_conformance_resource(INTAKE7JurisdictionRiskThreshold)
+w7_conformance_resource(INTAKE7Transfer)
+
+
+@w7_example_input(INTAKE7Transfer, "book")
+def w7_transfer_book_example(services) -> dict:
+    # a synthesized investor_type without a matching name fails
+    # identity_by_investor_type on both created legs (transaction.py's
+    # create_guards run for a Compound's creates too)
+    return {"investor_type": "individual", "individual_name": "Conformance Investor",
+           "dollar_amount": 1000.0}
+
+
+@w7_example_input(INTAKE7ImportBatch, "add_lines")
+def w7_import_batch_add_lines_example(services) -> dict:
+    # same create_guards a single create runs (import_batch.py's own
+    # docstring) — a synthesized line needs the same identity/amount
+    # discipline transfer.book's example does
+    return {"transaction_type_id": "capital_call", "investor_type": "individual",
+           "individual_name": "Conformance Investor", "dollar_amount": 1000.0}
+# Mirrors walk via the framework's Mirror-aware derived factory (the
+# fund/beacon_coa precedent) — no hand-written factory needed
+w7_conformance_resource(INTAKE7Fund)
+w7_conformance_resource(INTAKE7FundClass)
+
+
+async def _make_icat7_transaction_id(engine) -> str:
+    """capital_call: a type no other intake7 factory ever seeds a
+    checklist_item_type template for, so this transaction always owns
+    zero checklist items — all_items_reviewed is vacuously True, exactly
+    as an empty child set vacuously reconciles for CR7Workbook."""
+    return await _mk(engine, "disbursement", {
+        "transaction_type_id": "capital_call", "investor_type": "individual",
+        "individual_name": "Conformance Investor", "dollar_amount": 1000.0})
+
+
+@w7_state_factory(INTAKE7Transaction)
+async def w7_make_icat7_transaction(state: str, engine,
+                                    services) -> INTAKE7Transaction:
+    tid = await _make_icat7_transaction_id(engine)
+    target = INTAKE7TxStatus(state)
+    if target == INTAKE7TxStatus.NEW_TRANSACTION:
+        return await _load(engine, "disbursement", tid)
+    if target == INTAKE7TxStatus.CANCELLED:
+        await _step(engine, "disbursement", tid, "cancel")
+        return await _load(engine, "disbursement", tid)
+
+    await _step_as(engine, "disbursement", tid, "complete_data_entry",
+                    INTAKE7_ASHA)
+    if target == INTAKE7TxStatus.DATA_ENTRY_COMPLETE:
+        return await _load(engine, "disbursement", tid)
+
+    if target == INTAKE7TxStatus.PENDING_INVESTOR_FUNDING:
+        await _step_as(engine, "disbursement", tid,
+                        "mark_pending_investor_funding", INTAKE7_ASHA)
+        return await _load(engine, "disbursement", tid)
+
+    await _step_as(engine, "disbursement", tid, "submit_for_review",
+                    INTAKE7_ASHA)
+    if target == INTAKE7TxStatus.DATA_ENTRY_REVIEWED_PENDING:
+        return await _load(engine, "disbursement", tid)
+
+    if target == INTAKE7TxStatus.REVIEWED_PENDING_OPEN_ITEMS:
+        await _step_as(engine, "disbursement", tid, "flag_open_items",
+                        INTAKE7_ASHA)
+        return await _load(engine, "disbursement", tid)
+
+    if target == INTAKE7TxStatus.UPDATES_RECEIVED_READY_REVIEW:
+        await _step_as(engine, "disbursement", tid, "flag_open_items",
+                        INTAKE7_ASHA)
+        await _step_as(engine, "disbursement", tid, "resolve_open_items",
+                        INTAKE7_ASHA)
+        return await _load(engine, "disbursement", tid)
+
+    if target == INTAKE7TxStatus.REQUIRES_MANAGER_REVIEW:
+        await _step_as(engine, "disbursement", tid, "escalate_to_manager",
+                        INTAKE7_TOM)
+        return await _load(engine, "disbursement", tid)
+
+    # REVIEW_COMPLETED and beyond: zero checklist items (capital_call has
+    # no seeded template), so all_items_reviewed is vacuously True; Tom
+    # (not Asha, who submitted for review) completes it
+    await _step_as(engine, "disbursement", tid, "review_completed",
+                    INTAKE7_TOM)
+    if target == INTAKE7TxStatus.REVIEW_COMPLETED:
+        return await _load(engine, "disbursement", tid)
+
+    await _step_as(engine, "disbursement", tid,
+                    "mark_ready_for_processing", INTAKE7_TOM)
+    if target == INTAKE7TxStatus.READY_FOR_PROCESSING:
+        return await _load(engine, "disbursement", tid)
+
+    # PROCESSING: push_to_beacon's beacon_reachable guard reads the
+    # conformance suite's intake_beacon service, which defaults up. Wait for
+    # the deferred job to settle (_cr_job_done's docstring: an in-flight
+    # job's async start/finish transitions can otherwise land inside a
+    # later, unrelated case's before/after transition-count window).
+    pushed = await _step_as(engine, "disbursement", tid, "push_to_beacon",
+                            INTAKE7_TOM)
+    await _cr_job_done(engine, pushed.doc["data"]["beacon_import_job_id"])
+    return await _load(engine, "disbursement", tid)
+
+
+async def _make_icat7_checklist_item_id(engine) -> str:
+    """subscription_initial with one fresh, uniquely-named template row —
+    a real, active parent transaction (transaction_active gates every
+    checklist_item transition). Retires its own template row immediately
+    after seeding: this factory runs 3 times in one test_collection_contract
+    pass (once per ItemState), and a still-active template from an earlier
+    call would otherwise also seed onto every later call's transaction —
+    a unique name only prevents a 409, it doesn't isolate the seed match."""
+    template = await _mk(engine, "checklist_item_type", {
+        "transaction_type_id": "subscription_initial",
+        "item_name": f"Conformance item {uuid.uuid4().hex[:8]}",
+        "sort_order": 1})
+    tid = await _mk(engine, "disbursement", {
+        "transaction_type_id": "subscription_initial",
+        "investor_type": "individual",
+        "individual_name": "Conformance Investor", "dollar_amount": 500.0})
+    await _step(engine, "checklist_item_type", template, "retire")
+    async with engine.storage.session() as s:
+        rows, _ = await engine.storage.query(
+            s, "checklist_item", filters={"transaction_id": tid}, sort=None,
+            page_size=10, page_number=1)
+    return rows[0].id
+
+
+@w7_state_factory(INTAKE7ChecklistItem)
+async def w7_make_icat7_checklist_item(state: str, engine,
+                                       services) -> INTAKE7ChecklistItem:
+    iid = await _make_icat7_checklist_item_id(engine)
+    target = INTAKE7ItemState(state)
+    if target == INTAKE7ItemState.PENDING:
+        return await _load(engine, "checklist_item", iid)
+    await _step_as(engine, "checklist_item", iid, "prepare", INTAKE7_ASHA)
+    if target == INTAKE7ItemState.PREPARED:
+        return await _load(engine, "checklist_item", iid)
+    await _step_as(engine, "checklist_item", iid, "review", INTAKE7_TOM)
+    return await _load(engine, "checklist_item", iid)

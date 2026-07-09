@@ -42,6 +42,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import datetime
 from typing import Any
 
+from .summary import state_label
 from .types import Acknowledged, Allow, Ctx, DefinitionError, Deny
 
 CheckFn = Callable[[Any, Any, Ctx], Awaitable[Allow | Deny]]
@@ -631,7 +632,10 @@ class _GuardFactory:
             return Allow() if name in ctx.principal.roles else Deny()
 
         return Guard(
-            explain=explain or f"Requires role '{name}'.",
+            # state_label, not the raw name: a multi-word role like
+            # "investor_services_manager" would otherwise leak a snake_case
+            # machine token into prose (test_token_prose's exact check)
+            explain=explain or f"Requires role '{state_label(name)}'.",
             check=check, reads=("principal",),
             requires_token=requires_token or f"role:{name}",
             hide=hide, name=f"role:{name}",

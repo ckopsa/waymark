@@ -8,6 +8,7 @@ PORT7        ?= 8005  # mealplan7 dev server
 PORT_LEDGER5 ?= 8010  # ledger5 dev server
 PORT_LEDGER6 ?= 8011  # ledger6 dev server
 PORT_LEDGER7 ?= 8012  # ledger7 dev server
+PORT_ICAT7      ?= 8013  # intake7 dev server
 PG_CONTAINER ?= waymark-test-pg
 PG_USER      ?= ckopsa
 PG_PORT      ?= 5433
@@ -17,6 +18,8 @@ PG_PORT      ?= 5433
 # ledger5 gets its own container on a port nothing else claims.
 PG_CONTAINER_LEDGER5 ?= ledger5-pg
 PG_PORT_LEDGER5       ?= 15433
+PG_CONTAINER_ICAT7 ?= intake7-pg
+PG_PORT_ICAT7       ?= 15434
 DEV_DSN      ?= postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/waymark_dev
 TEST_DSN     ?= postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT)/waymark_test
 
@@ -173,6 +176,19 @@ ledger7: dist  ## run cash reconciliation on waymark7 (shares ledger5's Postgres
 	@echo "ui  → http://localhost:$(PORT_LEDGER7)/"
 	LEDGER_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT_LEDGER5)/ledger7_dev \
 		uv run uvicorn ledger7.main:app --reload --port $(PORT_LEDGER7) \
+		--timeout-graceful-shutdown 3
+
+intake7: dist  ## run intake (investor disbursement tracking) on waymark7 (its own Postgres on :15434)
+	@docker start $(PG_CONTAINER_ICAT7) >/dev/null 2>&1 || \
+		docker run -d --name $(PG_CONTAINER_ICAT7) \
+			-e POSTGRES_USER=$(PG_USER) \
+			-e POSTGRES_DB=intake7_dev \
+			-e POSTGRES_HOST_AUTH_METHOD=trust \
+			-p $(PG_PORT_ICAT7):5432 postgres:16 >/dev/null
+	@until docker exec $(PG_CONTAINER_ICAT7) pg_isready -U $(PG_USER) -q; do sleep 0.5; done
+	@echo "ui  → http://localhost:$(PORT_ICAT7)/"
+	INTAKE_DSN=postgresql+asyncpg://$(PG_USER)@localhost:$(PG_PORT_ICAT7)/intake7_dev \
+		uv run uvicorn intake7.main:app --reload --port $(PORT_ICAT7) \
 		--timeout-graceful-shutdown 3
 
 demo: db  ## agent demo (plans over effect.to, stops at safety.confirm)

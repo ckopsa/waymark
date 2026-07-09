@@ -3,7 +3,13 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .hypothesis/
+.ruff_cache/
 waymark.db
 uv.lock
 .idea/
 .env
+.DS_Store
+.claude/
+dist/
+# external repo clones vendored for reference, not part of this project
+full_stack/

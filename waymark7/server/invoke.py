@@ -1880,7 +1880,7 @@ class Invoker:
                             **dict(edge.seed.defaults)}
                     await ctx.create(edge.kind, body)
                 if len(rows) < 200:
-                    return
+                    break
                 page += 1
 
     async def _resolve_predecessors(self, instance: Resource,
