@@ -225,6 +225,18 @@
                               border-bottom: none; flex-wrap: wrap; }
   table.items tr:hover td { background: var(--paper); }
 
+  /* a long scalar value doesn't blow out its column: it truncates to one
+     ellipsized line and keeps a copy button one tap from the clipboard */
+  .trunc-cell { display: inline-flex; align-items: center; gap: 4px;
+                max-width: 100%; }
+  .trunc-cell .trunc { overflow: hidden; text-overflow: ellipsis;
+                       white-space: nowrap; max-width: 130px;
+                       vertical-align: bottom; }
+  .copybtn { flex: none; font-size: 12px; line-height: 1; padding: 2px 5px;
+             color: var(--muted); background: none; border: 1px solid var(--line);
+             border-radius: 4px; cursor: pointer; }
+  .copybtn:hover { color: var(--ink); border-color: var(--muted); }
+
   .filterbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end;
                margin-bottom: 12px; }
   .filterbar label, .filterbar .flabel { display: flex; flex-direction: column;
@@ -1185,8 +1197,8 @@ function itemTable(items, hints, recomputing, declaredColumns, opts) {
         item.summary)),
       ...columns.map(c => el("td", {}, recomputing.has(c)
         ? recomputingCell(item.data[c])
-        : hintedValue(hints[c]?.xd || {}, item.data[c], item.data,
-                      hints[c]?.src, hints[c]?.auth))),
+        : columnCell(hintedValue(hints[c]?.xd || {}, item.data[c], item.data,
+                      hints[c]?.src, hints[c]?.auth)))),
       el("td", {}, el("span", {class:"chip "+tone(item), title: item.state},
         item.display?.state?.label ?? title(item.state))));
     if (anyActions) {
@@ -1853,6 +1865,24 @@ function fmt(v) {
   return String(v);
 }
 
+/* A table cell that guards its column's width: hintedValue returns a bare
+   string only for a plain written scalar (references, prose, and the
+   provenance costumes all return DOM nodes), so a long one of those gets
+   truncated to a single ellipsized line with a copy button — the full
+   value stays in the title and one tap from the clipboard. Everything
+   else passes through untouched. */
+const CELL_TRUNC = 24;
+function columnCell(node) {
+  if (typeof node !== "string" || node.length <= CELL_TRUNC) return node;
+  return el("span", {class:"trunc-cell"},
+    el("span", {class:"trunc", title: node}, node),
+    el("button", {class:"copybtn", title:"copy full value",
+      onclick: async () => {
+        try { await navigator.clipboard.writeText(node); toast("copied"); }
+        catch { prompt("copy:", node); }
+      }}, "⧉"));
+}
+
 /* Provenance cells (design §1): the schema's x-source, made visible.
    The tooltip claims only what the wire actually says. */
 function derivedCell(v) {
@@ -1898,9 +1928,9 @@ function rowsTable(rows, doc, partGroup, itemHints) {
   const tbody = el("tbody", {});
   for (const r of rows) {
     const tr = el("tr", {}, ...shown.map(c =>
-      el("td", {}, hintedValue(itemHints[c] || {}, r[c], r,
+      el("td", {}, columnCell(hintedValue(itemHints[c] || {}, r[c], r,
                                itemHints[c]?.source,
-                               itemHints[c]?.authority))));
+                               itemHints[c]?.authority)))));
     if (partGroup) {
       const part = partGroup.items.find(p => p.key === r[partGroup.key]);
       const cell = el("td", {style:"white-space:nowrap"});
