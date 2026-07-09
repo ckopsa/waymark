@@ -6,12 +6,12 @@ Before v6 the recital was invisible to the plan — the relation is a
 date-overlap predicate, not an ownership edge, so the conflict was
 nobody's fact. Here the plan declares ``_calendar = Related("event", …)``
 over its stored week boundaries and carries ``calendar_conflicts`` /
-``has_conflicts`` as maintained fields: Sam's event write flips the
-plan's facts in the same request, finalize *warns* (a recital on taco
-night is worth an acknowledgment, not a wall), and cancelling the event
-clears the fact through the same inverted predicate. The calendar link
-is compiled from the edge — §3's honest date-range params, badged with
-the conflict count.
+``has_conflicts`` as maintained fields: the calendar feed's own pull-through
+read flips the plan's facts in the same request. Event is a read-only
+Mirror of the family's Google Calendar (event_source.py) — nobody inside
+this boundary authors title/date/kind, so the test mints through the
+fake source's ``seed``/``external_id`` mechanism, exactly like the
+ledger7 fund Mirror tests.
 """
 from __future__ import annotations
 
@@ -27,6 +27,7 @@ from waymark7.server.bus import InProcessBus
 from waymark7.server.engine import header_principal
 from waymark7.testing import per_worker_dsn
 
+from mealplan7.event_source import FakeEvents
 from mealplan7.resources.event import Event
 from mealplan7.resources.grocery_list import GroceryList
 from mealplan7.resources.meal import Meal
@@ -49,6 +50,8 @@ WEEK_END = "2026-07-06"
 
 @pytest.fixture
 async def env():
+    events = FakeEvents()
+    Event.adapter = events
     engine = waymark7.Engine(
         resources=[Meal, SundayRotation, MealPlan, GroceryList, PrepTask,
                    Event],
@@ -60,6 +63,7 @@ async def env():
     app.include_router(engine.router, prefix="/api")
     client = AsyncClient(transport=ASGITransport(app=app),
                          base_url="http://t", headers=PRIYA)
+    client.events = events
     try:
         yield engine, client
     finally:
@@ -82,10 +86,16 @@ async def _plan(client, start: str = WEEK_START, weeks: int = 1) -> dict:
 
 async def _event(client, when: str, kind: str = "blocking",
                  title: str = "School recital") -> dict:
-    res = await _post(client, "/api/events",
-                      {"title": title, "date": when, "kind": kind})
+    external_id = f"{title}-{when}-{uuid.uuid4().hex[:8]}"
+    client.events.seed(external_id, title=title, date=when, kind=kind)
+    res = await _post(client, "/api/events", {"external_id": external_id})
     assert res.status_code == 201, res.text
-    return res.json()
+    minted = res.json()
+    # the pull-through read fills the calendar's fields — Event's data
+    # (and so the plan's overlap predicate) is unset until this happens
+    got = await client.get(minted["self"])
+    assert got.status_code == 200, got.text
+    return got.json()
 
 
 async def _fresh(client, doc) -> dict:
@@ -101,7 +111,7 @@ async def _cover_week(client, plan: dict) -> None:
                     {"date": day["date"]})
 
 
-async def test_priya_plans_the_week(env):
+async def test_priya_plans_the_week(env, monkeypatch):
     engine, client = env
 
     # ── the plan is born telling the truth: no conflicts yet ────────────
@@ -133,7 +143,6 @@ async def test_priya_plans_the_week(env):
     (warning,) = problem["warnings"]
     assert warning["name"] == "calendar_clear"
     assert "1 calendar conflict(s) overlap this week" in warning["reason"]
-    assert "event.cancel" in warning["remedies"]
     assert problem["acknowledge"] == {"header": "Waymark-Acknowledge",
                                       "names": ["calendar_clear"]}
 
@@ -149,30 +158,40 @@ async def test_priya_plans_the_week(env):
     assert last.action == "finalize"
     assert last.acknowledged == ["calendar_clear"]
 
-    # ── the recital is cancelled; the fact flips back, same commit ──────
-    res = await _post(client, f"{recital['self']}/-/cancel")
+    # ── the recital is deleted off the calendar; the fact flips back ────
+    # (a read-only Mirror learns this on its own next pull-through, not
+    # through a local cancel action — force one by dropping the TTL and
+    # removing the fake source's doc, exactly as a real feed would after
+    # the family deletes the event)
+    monkeypatch.setattr(Event, "ttl_seconds", 0)
+    client.events.remove(recital["data"]["external_id"])
+    res = await client.get(recital["self"])
     assert res.status_code == 200, res.text
+    assert res.json()["state"] == "unreachable"
     data = (await _fresh(client, plan))["data"]
     assert data["has_conflicts"] is False
     assert data["calendar_conflicts"] == 0
 
 
-async def test_reschedule_moves_the_conflict_between_weeks(env):
-    """The two-set union: moving the event dirties BOTH windows."""
+async def test_moving_the_event_on_the_calendar_moves_the_conflict(
+        env, monkeypatch):
+    """The two-set union: moving the event dirties BOTH windows — a
+    read-only Mirror learns the new date on its own next pull-through, not
+    through a local reschedule action."""
     _, client = env
+    monkeypatch.setattr(Event, "ttl_seconds", 0)
     this_week = await _plan(client, WEEK_START)
     next_week = await _plan(client, "2026-07-07")
     ev = await _event(client, "2026-07-02")
     assert (await _fresh(client, this_week))["data"]["calendar_conflicts"] == 1
     assert (await _fresh(client, next_week))["data"]["calendar_conflicts"] == 0
 
-    # reschedule is an Edit: prefilled AND fenced — the form carries the
-    # stored date as its default and the write demands the etag it was
-    # rendered against
-    res = await _post(client, f"{ev['self']}/-/reschedule",
-                      {"date": "2026-07-09"},
-                      **{"If-Match": ev["meta"]["etag"]})
+    # the family moves the recital in the calendar itself
+    client.events.seed(ev["data"]["external_id"], title="School recital",
+                       date="2026-07-09", kind="blocking")
+    res = await client.get(ev["self"])
     assert res.status_code == 200, res.text
+    assert res.json()["data"]["date"] == "2026-07-09"
     assert (await _fresh(client, this_week))["data"]["calendar_conflicts"] == 0
     assert (await _fresh(client, next_week))["data"]["calendar_conflicts"] == 1
 

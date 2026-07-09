@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 import waymark7 as waymark
 from waymark7.server.engine import header_principal
 
+from .event_source import EVENTS, GoogleCalendarEvents
 from .resources.event import Event
 from .resources.grocery_list import GroceryList
 from .resources.meal import Meal
@@ -42,7 +43,17 @@ def _dsn() -> str:
     return "postgresql+asyncpg://localhost/mealplan7_dev"
 
 
+def _events_backend():
+    # real by default: MEALPLAN_GCAL_ICS_URL is the private Google Calendar
+    # feed URL (a bearer secret — env var only, never source). Falls back
+    # to the in-memory fake for offline dev when unset.
+    if "MEALPLAN_GCAL_ICS_URL" in os.environ:
+        return GoogleCalendarEvents(os.environ["MEALPLAN_GCAL_ICS_URL"])
+    return EVENTS  # the module-default FakeEvents singleton
+
+
 DSN = _dsn()
+Event.adapter = _events_backend()
 
 engine = waymark.Engine(
     resources=[Meal, SundayRotation, MealPlan, GroceryList, PrepTask, Event],

@@ -143,9 +143,9 @@ class PlanData(BaseModel):
     # calendar link, filters the plan list, and feeds the finalize warning;
     # nobody re-joins the calendar in a handler or a client
     calendar_conflicts: int = Count(
-        _calendar, where={"kind": ("blocking",), "state": ("scheduled",)})
+        _calendar, where={"kind": ("blocking",), "state": ("fresh", "stale")})
     has_conflicts: bool = Derived(
-        over=(_calendar.field("kind", where={"state": ("scheduled",)}),),
+        over=(_calendar.field("kind", where={"state": ("fresh", "stale")}),),
         fn=lambda kinds: any(k == "blocking" for k in kinds),
         explain="{n} calendar conflict(s) overlap this week.",
         vars=lambda kinds: {"n": sum(k == "blocking" for k in kinds)})
@@ -301,10 +301,10 @@ async def _check_calendar_clear(r, inp, ctx: Ctx) -> Allow | Deny:
 
 calendar_clear = Guard(
     name="calendar_clear", severity="warning",
-    explain="{n} calendar conflict(s) overlap this week — cancel or "
-            "reschedule around them, or acknowledge to finalize anyway.",
+    explain="{n} calendar conflict(s) overlap this week — move or cancel "
+            "them on the calendar itself, or acknowledge to finalize "
+            "anyway.",
     vars=("n",),
-    remedies=("event.cancel", "event.reschedule"),
     check=_check_calendar_clear,
 )
 

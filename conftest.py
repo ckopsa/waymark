@@ -1266,6 +1266,7 @@ from waymark7.testing import (  # noqa: E402
     state_factory as w7_state_factory,
 )
 from waymark7.testing.factories import make_state as w7_make_state  # noqa: E402
+from mealplan7.event_source import EVENTS as EVENTS7  # noqa: E402
 from mealplan7.resources.event import Event as Event7  # noqa: E402
 from mealplan7.resources.grocery_list import (  # noqa: E402
     GroceryList as GroceryList7, GroceryState as GroceryState7)
@@ -1347,6 +1348,11 @@ async def waymark7_engine():
     FUNDS7.down = False
     FUNDS7.pulls = 0
     CR7Fund.adapter = FUNDS7
+    EVENTS7.docs.clear()
+    EVENTS7.discoverable.clear()
+    EVENTS7.down = False
+    EVENTS7.pulls = 0
+    Event7.adapter = EVENTS7
     BEACON_COAS7.docs.clear()
     BEACON_COAS7.by_fund.clear()
     BEACON_COAS7.down = False
