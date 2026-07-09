@@ -167,3 +167,21 @@ async def test_mcp_tools_carry_effort_and_draftability(env):
     assert "[draftable:" in edit["description"]
     touch = tools["note.touch"]
     assert "[assent:" in touch["description"]
+
+
+async def test_state_graph_skips_non_envelope_docs():
+    """The catalog surfaces (index, /-/grantable) are plain JSON with no
+    "kind"/"state" — fetching one must not crash the client's state-graph
+    learner. Regression: `waymark7 client get …/-/grantable` raised
+    KeyError('kind') because learn() assumed a resource envelope."""
+    from waymark7.client.agent import StateGraph
+    from waymark7.client.py import Doc
+
+    g = StateGraph()
+    g.learn(Doc({"kinds": {"meal": {"fields": [], "actions": []}}}))  # no crash
+    assert g.seen == {}
+
+    # a real envelope still teaches the graph its edges
+    g.learn(Doc({"kind": "grant", "state": "draft",
+                 "actions": {"request_access": {"effect": {"to": "requested"}}}}))
+    assert g.seen["grant"]["draft"] == {"request_access": "requested"}

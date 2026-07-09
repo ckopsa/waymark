@@ -209,6 +209,12 @@ def _print_doc(doc: Doc, *, raw: bool = False) -> None:
     if raw:
         typer.echo(json.dumps(doc.body, indent=2, default=str))
         return
+    # not every GET is a resource envelope: the public catalog surfaces
+    # (e.g. /-/grantable) are plain JSON with no "kind" — pretty-print them
+    # rather than assuming the envelope shape and crashing
+    if "kind" not in doc.body:
+        typer.echo(json.dumps(doc.body, indent=2, default=str))
+        return
     meta = doc.body.get("meta") or {}
     version = f" · v{meta['version']}" if meta.get("version") is not None else ""
     typer.secho(f"{doc.kind} {doc.self_href} · state={doc.state}{version}",

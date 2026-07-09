@@ -74,6 +74,10 @@ class StateGraph:
     seen: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
 
     def learn(self, doc: Doc) -> None:
+        # only resource envelopes carry a state graph; the public catalog
+        # docs (index, /-/grantable) have no "kind"/"state" to learn from
+        if "kind" not in doc.body:
+            return
         by_state = self.seen.setdefault(doc.kind, {})
         edges = by_state.setdefault(doc.state, {})
         for name, entry in doc.actions.items():
