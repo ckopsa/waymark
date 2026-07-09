@@ -52,6 +52,7 @@ from pydantic import AwareDatetime, BaseModel, Field
 from pydantic.json_schema import SkipJsonSchema
 
 from ..core.actions import Edit, action
+from ..core.derived import Derived
 from ..core.guards import Guard
 from ..core.touches import Delegated
 from ..core.resource import Resource, filterable
@@ -71,6 +72,35 @@ OverMap = dict[str, list[str]]                      # kind → resource ids (sel
 
 def _mint_token() -> str:
     return TOKEN_PREFIX + uuid.uuid4().hex + uuid.uuid4().hex
+
+
+def _summarize_request(fields: FieldMap, actions: ActionMap,
+                       hours: int) -> str:
+    """The agent's ask in one sentence, for the approving human — the
+    nested maps read back as prose so an approver judges the blast radius
+    without parsing JSON. A non-default mode is named in parentheses; the
+    default (clear reads, open actions) stays quiet."""
+    parts: list[str] = []
+    reads = []
+    for kind, fs in sorted(fields.items()):
+        named = [f if m == "clear" else f"{f} ({m})"
+                 for f, m in sorted(fs.items()) if m != "hidden"]
+        if named:
+            reads.append(f"{kind}: " + ", ".join(named))
+    if reads:
+        parts.append("Read " + "; ".join(reads))
+    does = []
+    for kind, acts in sorted(actions.items()):
+        named = [a if m == "open" else f"{a} ({m})"
+                 for a, m in sorted(acts.items()) if m != "none"]
+        if named:
+            does.append(f"{kind}: " + ", ".join(named))
+    if does:
+        parts.append("Do " + "; ".join(does))
+    if not parts:
+        return "Nothing requested yet."
+    parts.append(f"for {hours}h")
+    return " · ".join(parts)
 
 
 # ── the grant resource ──────────────────────────────────────────────────
@@ -113,6 +143,14 @@ class GrantData(BaseModel):
     requested_over: OverMap = Field(default_factory=dict)
     requested_hours: int = Field(default=24, ge=1, le=720,
                                  description="How long the access should last")
+    # the ask as one legible line (design §1): one definition — the approve
+    # dialog reads it, feeds render it, and nobody re-derives "what did this
+    # agent ask for" by walking the nested maps
+    request_summary: str = Derived(
+        over=("requested_fields", "requested_actions", "requested_hours"),
+        fn=_summarize_request,
+        default="Nothing requested yet.",
+        json_schema_extra={"x-display": {"raw": True}})
     # what enforcement reads (copied from requested_* by `approve`); during
     # an amendment (granted → requested) the old grant stays in force
     granted_fields: FieldMap = Field(default_factory=dict)
@@ -125,6 +163,11 @@ class GrantData(BaseModel):
     approved_by: str | None = Field(
         default=None, max_length=128,
         json_schema_extra={"x-display": {"raw": True}})
+    # the approver's word on a send-back — the one signal the agent reads to
+    # know WHAT to change before asking again; cleared the moment it re-asks
+    review_note: str | None = Field(
+        default=None, max_length=240,
+        description="Why the last request was sent back (shown to the agent)")
     expires_at: AwareDatetime | None = None
 
 
@@ -146,6 +189,7 @@ class GrantCreate(GrantData):
     granted_actions: SkipJsonSchema[ActionMap] = Field(default_factory=dict)
     granted_args: SkipJsonSchema[ArgMap] = Field(default_factory=dict)
     granted_over: SkipJsonSchema[OverMap] = Field(default_factory=dict)
+    review_note: SkipJsonSchema[str | None] = None
     expires_at: SkipJsonSchema[AwareDatetime | None] = None
 
 
@@ -166,6 +210,13 @@ class RequestAccessInput(BaseModel):
         description="kind → resource ids: narrow this grant to specific "
                     "resources (unlisted kinds stay kind-level)")
     requested_hours: int = Field(default=24, ge=1, le=720)
+
+
+class DenyInput(BaseModel):
+    note: str = Field(
+        default="", max_length=240,
+        description="Tell the agent what to change so it can ask again "
+                    "(shown on its grant)")
 
 
 async def _not_the_holder(r: Any, inp: Any, ctx: Ctx) -> Allow | Deny:
@@ -288,6 +339,7 @@ class Grant(Resource):
         self.data.requested_args = inp.requested_args
         self.data.requested_over = inp.requested_over
         self.data.requested_hours = inp.requested_hours
+        self.data.review_note = None   # a fresh ask supersedes the last verdict
 
     @action(from_=GrantState.REQUESTED, to=GrantState.GRANTED,
             guards=[no_self_dealing],
@@ -305,13 +357,15 @@ class Grant(Resource):
             hours=self.data.requested_hours)
 
     @action(from_=GrantState.REQUESTED, to=GrantState.DRAFT,
+            input=DenyInput,
             guards=[no_self_dealing],
             safety=Safety(idempotent=True, reversible=True, confirm=False),
             display=dict(label="Send back", order=2,
                          description="Decline this request; the agent may "
                                      "request differently. Any previously "
                                      "granted access is withdrawn."))
-    async def deny(self, inp: None, ctx: Ctx) -> None:
+    async def deny(self, inp: DenyInput, ctx: Ctx) -> None:
+        self.data.review_note = inp.note or None
         self.data.granted_fields = {}
         self.data.granted_actions = {}
         self.data.granted_args = {}

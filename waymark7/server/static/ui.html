@@ -1498,6 +1498,8 @@ function renderResource(view, doc, hints) {
         `3. Request the minimum your task needs — fields (clear|hashed), actions (open|approval), and a duration:`,
         `    waymark7 client act ${grantHref} request_access --json '{"task": "<why>", "requested_fields": {"<kind>": {"<field>": "clear"}}, "requested_actions": {"<kind>": {"<action>": "open"}}, "requested_hours": 24}'`,
         `4. A person reviews. Poll your grant until its state is "granted", then do your task.`,
+        `   If it returns to "draft" you were sent back — read data.review_note on your grant for`,
+        `   what to change, then request again. Your grant also shows data.request_summary: your ask in one line.`,
         ``,
         `Actions shown as unavailable name request_access as the remedy — request more, don't retry.`,
         `Actions granted as "approval" return 202 with a pending approval a human decides; once approved, invoke its run action.`,

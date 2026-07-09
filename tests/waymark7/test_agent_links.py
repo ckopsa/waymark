@@ -377,3 +377,48 @@ async def test_grants_narrow_to_specific_resources(env):
     by_self = {i["self"]: i for i in listing["data"]["items"]}
     assert by_self[ours]["data"].get("title") == "Shared with Robo"
     assert by_self[theirs]["data"] == {}
+
+
+async def test_agent_reads_its_own_grant_and_the_send_back_note(env):
+    """The agent negotiates with sight: it reads its OWN grant in the clear
+    — task, request_summary, and a reviewer's send-back note — so a decline
+    is a legible instruction, not a silent bounce."""
+    engine, transport, human = env
+    grant_href, token = await _mint(human)
+    agent = _agent(transport, token)
+
+    own = (await agent.get(grant_href)).json()
+    # sight of one's own grant (the agent's negotiation surface)
+    assert own["data"]["holder_name"] == "Robo"
+    assert own["data"]["request_summary"] == "Nothing requested yet."
+
+    await _act(agent, own, "request_access", {
+        "task": "Tidy the family memo.",
+        "requested_fields": {"memo": {"title": "clear", "secret": "hashed"}},
+        "requested_actions": {"memo": {"touch": "open", "edit": "approval"}},
+        "requested_hours": 6,
+    })
+
+    # the ask reads back as one legible line for the approver and the agent
+    own = (await agent.get(grant_href)).json()
+    assert own["data"]["task"] == "Tidy the family memo."
+    assert own["data"]["request_summary"] == (
+        "Read memo: secret (hashed), title · Do memo: edit (approval), touch "
+        "· for 6h")
+
+    # a human sends it back WITH a reason — the note lands on the grant
+    await _act(human, (await human.get(grant_href)).json(), "deny",
+               {"note": "Drop the edit action; touch is enough."})
+    own = (await agent.get(grant_href)).json()
+    assert own["state"] == "draft"
+    assert own["data"]["review_note"] == "Drop the edit action; touch is enough."
+
+    # a fresh ask supersedes the last verdict — the note clears
+    await _act(agent, own, "request_access", {
+        "task": "Tidy the family memo.",
+        "requested_fields": {"memo": {"title": "clear"}},
+        "requested_actions": {"memo": {"touch": "open"}},
+        "requested_hours": 6,
+    })
+    own = (await agent.get(grant_href)).json()
+    assert own["data"].get("review_note") is None
