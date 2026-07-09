@@ -1,0 +1,41 @@
+# Test/conformance image: the waymark7 source tree + tests + the dev/test
+# dependency group, so `uv run pytest` (and `pytest --waymark7`) run.
+#
+# The production Dockerfile deliberately ships neither tests/ nor the dev
+# group (uv sync --frozen --no-install-project), so it cannot run pytest.
+# This image is the counterpart used by the waymark-conformance Nomad job.
+#
+# Build (the home cluster's only node is ARM64):
+#   docker buildx build --platform linux/arm64 \
+#     -f Dockerfile.test -t docker.kopsa.info/waymark-test:<tag> --push .
+#
+# NB: build context filtering comes from Dockerfile.test.dockerignore
+# (BuildKit prefers <dockerfile>.dockerignore over .dockerignore), because
+# the top-level .dockerignore excludes tests/ and app/ for the prod build.
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+
+WORKDIR /app
+ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
+
+# 1. Dependencies + dev group only (cached until pyproject/uv.lock change).
+#    uv sync installs the `dev` dependency-group by default → pytest,
+#    pytest-xdist, hypothesis, jsonschema all land here.
+COPY pyproject.toml uv.lock README.md ./
+RUN uv sync --frozen --no-install-project
+
+# 2. The whole source tree the root conftest.py imports: the waymark7
+#    engine, its mealplan7/ledger7 dogfood fixtures under tests/, plus
+#    the root conftest.py.
+COPY waymark7/ waymark7/
+COPY tests/ tests/
+COPY conftest.py ./
+
+# 3. Install the workspace package itself, so the pytest11 entry points
+#    (--waymark7 flag) register.
+RUN uv sync --frozen
+
+# Default: the full suite. The Nomad job overrides this with a script that
+# waits for Postgres and runs each suite serially; this CMD is just a
+# sensible `docker run` default for local smoke checks.
+ENV WAYMARK_TEST_DSN=postgresql+asyncpg://postgres@127.0.0.1:5432/waymark_test
+CMD ["uv", "run", "--no-sync", "pytest", "-n", "auto"]
