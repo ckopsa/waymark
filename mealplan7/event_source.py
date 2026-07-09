@@ -120,7 +120,7 @@ class GoogleCalendarEvents:
             resp = await client.get(self.ics_url)
             resp.raise_for_status()
         cal = _sane_calendar(Calendar.from_ical(resp.content))
-        start, end = await self._needed_window(datetime.utcnow())
+        start, end = await self._needed_window(datetime.now(timezone.utc))
         events = recurring_ical_events.of(cal).between(start, end)
         occurrences = []
         for vevent in events:
