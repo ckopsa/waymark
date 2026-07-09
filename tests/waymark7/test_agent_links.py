@@ -441,8 +441,19 @@ async def test_partial_approval_grants_less_than_asked(env):
         "requested_hours": 24,
     })
 
-    # the human grants touch but NOT edit, and shortens the window
+    # the approve form opens prefilled with the ask (design D): the server
+    # stamps the request onto the action input's defaults, so the approver
+    # edits down instead of retyping. The default rides the OUTER property
+    # even though each map field is optional (anyOf) — the UI reads it there.
     grant_doc = (await human.get(grant_href)).json()
+    approve_in = grant_doc["actions"]["approve"]["input"]["properties"]
+    assert approve_in["requested_fields"].get("default") == {
+        "memo": {"title": "clear", "summary": "clear"}}
+    assert approve_in["requested_actions"].get("default") == {
+        "memo": {"touch": "open", "edit": "open"}}
+    assert approve_in["requested_hours"].get("default") == 24
+
+    # the human grants touch but NOT edit, and shortens the window
     approved = await _act(human, grant_doc, "approve", {
         "requested_actions": {"memo": {"touch": "open"}},
         "requested_hours": 2,

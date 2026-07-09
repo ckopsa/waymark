@@ -2515,7 +2515,11 @@ async function actionDialog({name, entry, doc, onDone, prefill}) {
     const draftVal = draft?.values?.[f.name];
     const initial = draftVal !== undefined ? draftVal
       : prefill?.[f.name] !== undefined ? prefill[f.name]
-      : f.schema.default;
+      // an optional field (X | None) is an anyOf: schemaFields unwrapped it
+      // to the non-null branch, but the server's prefill default rides the
+      // OUTER property (f.raw) — so a prefilled `approve` form fills in
+      : f.schema.default !== undefined ? f.schema.default
+      : f.raw?.default;
     if (initial !== undefined && initial !== null) {
       const val = isStringList(f.schema) && Array.isArray(initial)
         ? initial.join("\n")
