@@ -221,3 +221,30 @@ async def test_calendar_link_is_compiled_from_the_edge(env):
     assert res.status_code == 200, res.text
     items = res.json()["data"]["items"]
     assert len(items) == 2
+
+
+async def test_sync_window_widens_to_cover_a_far_out_plan(env):
+    """A plan built further out than the calendar adapter's default
+    rolling window (event_source.WINDOW_FUTURE) still gets its whole
+    week's calendar synced — the real feed adapter's _needed_window
+    widens to span every existing plan, not just a fixed range around
+    "now" (design: a family planning a holiday week months ahead
+    shouldn't silently lose the calendar link)."""
+    from datetime import datetime, timezone
+
+    from mealplan7.event_source import (
+        WINDOW_FUTURE, WINDOW_PAST, GoogleCalendarEvents,
+    )
+
+    engine, client = env
+    far_out_start = "2027-03-01"  # a Monday, well past the 90-day default
+    await _plan(client, far_out_start)
+
+    adapter = GoogleCalendarEvents("unused")
+    adapter.engine = engine
+    now = datetime.now(timezone.utc)
+    start, end = await adapter._needed_window(now)
+    assert start == now - WINDOW_PAST, \
+        "no plan needs an earlier start, so the default floor stands"
+    assert end > now + WINDOW_FUTURE, \
+        "the far-out plan's end date must widen the sync window"

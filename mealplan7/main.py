@@ -62,6 +62,10 @@ engine = waymark.Engine(
     principal=header_principal,
     services=Services(),
 )
+# lets the calendar adapter widen its sync window to cover every existing
+# plan's own date range (see event_source.py's _needed_window) — the same
+# late-bound engine-handle seam ledger7's Mirror adapters use
+Event.adapter.engine = engine
 
 app = FastAPI(title="Family meal planner", lifespan=engine.lifespan)
 app.include_router(engine.router, prefix="/api")

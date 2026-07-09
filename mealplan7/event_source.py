@@ -20,16 +20,18 @@ occurrence.
 from __future__ import annotations
 
 import hashlib
-from datetime import date as date_t, datetime, timedelta
+from datetime import date as date_t, datetime, time, timedelta, timezone
 from typing import Any
 
 import httpx
 import recurring_ical_events
 from icalendar import Calendar
 
-# how far back/forward one fetch looks: enough to discover anything a
-# mealplan week board could still care about (a plan a week old, or one
-# being built a couple months out)
+# the default rolling window when no plan says otherwise: enough to
+# discover anything a mealplan week board could still care about (a plan
+# a week old, or one being built a couple months out). Widened per-fetch
+# (see _needed_window) to cover every existing plan's own date range, so
+# a plan further out than this default is never left unsynced.
 WINDOW_PAST = timedelta(days=7)
 WINDOW_FUTURE = timedelta(days=90)
 
@@ -85,15 +87,41 @@ class GoogleCalendarEvents:
 
     def __init__(self, ics_url: str) -> None:
         self.ics_url = ics_url
+        # set post-construction by main.py (the same late-bound seam
+        # ledger7's adapters use for their own engine handle) — lets
+        # discovery see every currently-existing plan's date range, not
+        # just a fixed window around "now"
+        self.engine: Any = None
+
+    async def _needed_window(self, now: datetime) -> tuple[datetime, datetime]:
+        """The default rolling window, widened to cover every existing
+        plan's own start/end — a plan built further out than
+        WINDOW_FUTURE (or looking back further than WINDOW_PAST) still
+        gets its whole week's calendar synced, not just whatever falls in
+        the default range."""
+        start, end = now - WINDOW_PAST, now + WINDOW_FUTURE
+        if self.engine is None:
+            return start, end
+        async with self.engine.storage.session() as s:
+            plans, _ = await self.engine.storage.query(
+                s, "plan", filters={}, sort=None, page_size=500,
+                page_number=1)
+        for plan in plans:
+            plan_start = datetime.combine(
+                plan.data.start_date, time.min, tzinfo=timezone.utc)
+            plan_end = datetime.combine(
+                plan.data.end_date, time.min, tzinfo=timezone.utc) + \
+                timedelta(days=1)
+            start, end = min(start, plan_start), max(end, plan_end)
+        return start, end
 
     async def _occurrences(self) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(self.ics_url)
             resp.raise_for_status()
         cal = _sane_calendar(Calendar.from_ical(resp.content))
-        now = datetime.utcnow()
-        events = recurring_ical_events.of(cal).between(
-            now - WINDOW_PAST, now + WINDOW_FUTURE)
+        start, end = await self._needed_window(datetime.utcnow())
+        events = recurring_ical_events.of(cal).between(start, end)
         occurrences = []
         for vevent in events:
             uid = str(vevent.get("UID"))
