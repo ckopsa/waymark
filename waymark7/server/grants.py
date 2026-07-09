@@ -219,6 +219,31 @@ class DenyInput(BaseModel):
                     "(shown on its grant)")
 
 
+class ApproveGrantInput(BaseModel):
+    """What actually gets granted. Field names mirror the ``requested_*``
+    data so ``Edit(prefill=…)`` fills the form with the ask — the approver's
+    default is "grant exactly what was asked". Every map is editable: delete
+    a field, downgrade an action to ``approval``, or shorten the hours to
+    grant *less* than asked without a send-back round trip. The original ask
+    stays on ``requested_*`` for the record.
+
+    A field left ``None`` (the bare ``approve`` with no body) means "grant
+    the request as-is" — so a programmatic approve still copies the whole
+    ask; only an explicit map (even an empty one) overrides it."""
+
+    requested_fields: FieldMap | None = Field(
+        default=None,
+        description="Fields to grant (from the ask) — remove any to grant less")
+    requested_actions: ActionMap | None = Field(
+        default=None,
+        description="Actions to grant — downgrade to approval or remove any")
+    requested_args: ArgMap | None = Field(default=None)
+    requested_over: OverMap | None = Field(default=None)
+    requested_hours: int | None = Field(
+        default=None, ge=1, le=720,
+        description="How long the access lasts (from the ask)")
+
+
 async def _not_the_holder(r: Any, inp: Any, ctx: Ctx) -> Allow | Deny:
     if getattr(ctx.principal, "scope", None) is not None:
         return Deny()  # a token holder never judges its own access
@@ -342,19 +367,40 @@ class Grant(Resource):
         self.data.review_note = None   # a fresh ask supersedes the last verdict
 
     @action(from_=GrantState.REQUESTED, to=GrantState.GRANTED,
+            input=ApproveGrantInput,
             guards=[no_self_dealing],
+            edit=Edit(prefill=("requested_fields", "requested_actions",
+                               "requested_args", "requested_over",
+                               "requested_hours"),
+                      fence=False,
+                      unfenced_reason="A requested grant is frozen — its only "
+                      "exits are approve/deny/revoke, and request_access "
+                      "cannot fire from `requested` — so the ask can't change "
+                      "under the approver; there is nothing to clobber."),
             safety=Safety(idempotent=True, reversible=True, confirm=True,
-                          consequence="The agent gets exactly the requested "
-                                      "access, for the requested duration."),
+                          consequence="The agent gets the access shown below "
+                                      "(the request, minus anything you "
+                                      "trimmed), for the duration shown."),
             display=dict(label="Approve access", style="primary", order=1))
-    async def approve(self, inp: None, ctx: Ctx) -> None:
+    async def approve(self, inp: ApproveGrantInput, ctx: Ctx) -> None:
+        # what enforcement reads is the approver's edited copy, falling back
+        # to the raw ask for any map left unspecified — requested_* stays as
+        # the record of what was asked
+        def granted(edited: Any, asked: Any) -> Any:
+            return dict(asked if edited is None else edited)
+
         self.data.approved_by = ctx.principal.id
-        self.data.granted_fields = dict(self.data.requested_fields)
-        self.data.granted_actions = dict(self.data.requested_actions)
-        self.data.granted_args = dict(self.data.requested_args)
-        self.data.granted_over = dict(self.data.requested_over)
-        self.data.expires_at = ctx.now + timedelta(
-            hours=self.data.requested_hours)
+        self.data.granted_fields = granted(inp.requested_fields,
+                                           self.data.requested_fields)
+        self.data.granted_actions = granted(inp.requested_actions,
+                                            self.data.requested_actions)
+        self.data.granted_args = granted(inp.requested_args,
+                                         self.data.requested_args)
+        self.data.granted_over = granted(inp.requested_over,
+                                         self.data.requested_over)
+        hours = (inp.requested_hours if inp.requested_hours is not None
+                 else self.data.requested_hours)
+        self.data.expires_at = ctx.now + timedelta(hours=hours)
 
     @action(from_=GrantState.REQUESTED, to=GrantState.DRAFT,
             input=DenyInput,

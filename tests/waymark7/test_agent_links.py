@@ -422,3 +422,66 @@ async def test_agent_reads_its_own_grant_and_the_send_back_note(env):
     })
     own = (await agent.get(grant_href)).json()
     assert own["data"].get("review_note") is None
+
+
+async def test_partial_approval_grants_less_than_asked(env):
+    """Design D: the approver trims the ask instead of sending it back. An
+    explicit map on approve overrides the request; the record of what was
+    asked stays on requested_*, what's enforced is the trimmed grant."""
+    engine, transport, human = env
+    grant_href, token = await _mint(human)
+    memo_href = await _memo(human)
+    agent = _agent(transport, token)
+
+    own = (await agent.get(grant_href)).json()
+    await _act(agent, own, "request_access", {
+        "task": "Tidy and rename the memo.",
+        "requested_fields": {"memo": {"title": "clear", "summary": "clear"}},
+        "requested_actions": {"memo": {"touch": "open", "edit": "open"}},
+        "requested_hours": 24,
+    })
+
+    # the human grants touch but NOT edit, and shortens the window
+    grant_doc = (await human.get(grant_href)).json()
+    approved = await _act(human, grant_doc, "approve", {
+        "requested_actions": {"memo": {"touch": "open"}},
+        "requested_hours": 2,
+    })
+    assert approved.status_code == 200 and approved.json()["state"] == "granted"
+
+    # the record of the ask is intact; enforcement is the trimmed grant
+    grant_doc = (await human.get(grant_href)).json()
+    assert grant_doc["data"]["requested_actions"] == {
+        "memo": {"touch": "open", "edit": "open"}}
+    assert grant_doc["data"]["granted_actions"] == {"memo": {"touch": "open"}}
+
+    # touch was granted; edit was trimmed away — default-deny end to end
+    doc = (await agent.get(memo_href)).json()
+    assert "touch" in doc["actions"] and "edit" not in doc["actions"]
+    assert (await _act(agent, doc, "touch")).status_code == 200
+    assert (await _act(agent, doc, "edit", {"body": "x"})).status_code == 403
+
+
+async def test_bare_approve_still_grants_the_whole_ask(env):
+    """The null-body approve (a programmatic approve, or the UI's unedited
+    form falling through) grants exactly the request — the prefill default
+    is 'grant what was asked'."""
+    engine, transport, human = env
+    grant_href, token = await _mint(human)
+    memo_href = await _memo(human)
+    agent = _agent(transport, token)
+
+    own = (await agent.get(grant_href)).json()
+    await _act(agent, own, "request_access", {
+        "task": "Tidy the memo.",
+        "requested_fields": {"memo": {"title": "clear"}},
+        "requested_actions": {"memo": {"touch": "open"}},
+        "requested_hours": 5,
+    })
+    await _act(human, (await human.get(grant_href)).json(), "approve")
+
+    grant_doc = (await human.get(grant_href)).json()
+    assert grant_doc["data"]["granted_actions"] == {"memo": {"touch": "open"}}
+    doc = (await agent.get(memo_href)).json()
+    assert doc["data"]["title"] == "Groceries note"
+    assert (await _act(agent, doc, "touch")).status_code == 200
