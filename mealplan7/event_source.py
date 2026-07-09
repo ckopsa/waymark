@@ -133,19 +133,39 @@ class GoogleCalendarEvents:
             })
         return occurrences
 
+    async def _docs(self) -> dict[str, tuple[dict[str, Any], str]]:
+        """Every occurrence in the current window, doc + etag, keyed by
+        external_id — one feed fetch serves discover, pull, AND pull_many,
+        so a freshly-discovered event's title/date arrive on the SAME
+        clock tick as the mint, not on whatever later request happens to
+        GET it first."""
+        result = {}
+        for o in await self._occurrences():
+            # the feed has no signal for "this evening is spoken for" —
+            # every pulled occurrence is minted note (see event.py)
+            doc = {"title": o["title"], "date": o["date"].isoformat(),
+                   "kind": "note"}
+            result[o["external_id"]] = (doc, _content_etag(doc))
+        return result
+
     async def discover(self) -> list[str]:
-        return [o["external_id"] for o in await self._occurrences()]
+        return list(await self._docs())
 
     async def pull(self, external_id: str) -> tuple[dict[str, Any], str]:
-        for o in await self._occurrences():
-            if o["external_id"] == external_id:
-                # the feed has no signal for "this evening is spoken for" —
-                # every pulled occurrence is minted note (see event.py)
-                doc = {"title": o["title"], "date": o["date"].isoformat(),
-                       "kind": "note"}
-                return doc, _content_etag(doc)
-        raise LookupError(f"no calendar occurrence for {external_id!r} "
-                          f"in the current window")
+        docs = await self._docs()
+        if external_id not in docs:
+            raise LookupError(f"no calendar occurrence for {external_id!r} "
+                              f"in the current window")
+        return docs[external_id]
+
+    async def pull_many(
+            self, external_ids: list[str],
+    ) -> dict[str, tuple[dict[str, Any], str]]:
+        """The batched twin discovery's eager fill-in calls (design §8,
+        the fund Mirror's same pattern): one feed fetch instead of one
+        per just-minted event."""
+        docs = await self._docs()
+        return {xid: docs[xid] for xid in external_ids if xid in docs}
 
     async def push(self, external_id: str, document: dict[str, Any],
                    *, etag: str | None) -> str:  # pragma: no cover
@@ -197,6 +217,23 @@ class FakeEvents:
         if self.down:
             raise ConnectionError("calendar feed unreachable")
         return list(self.discoverable)
+
+    async def pull_many(
+            self, external_ids: list[str],
+    ) -> dict[str, tuple[dict[str, Any], str]]:
+        """The fake's twin of the real adapter's batched fetch: one call
+        counted, not one per id — so a test can tell eager batch
+        pull-through apart from N lazy per-item reads."""
+        self.pulls += 1
+        if self.down:
+            raise ConnectionError("calendar feed unreachable")
+        result = {}
+        for xid in external_ids:
+            if xid in self.removed:
+                continue
+            doc = self._doc(xid)
+            result[xid] = (doc, _content_etag(doc))
+        return result
 
     async def push(self, external_id: str, document: dict[str, Any],
                    *, etag: str | None) -> str:  # pragma: no cover

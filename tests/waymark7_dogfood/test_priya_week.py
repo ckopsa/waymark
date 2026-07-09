@@ -248,3 +248,28 @@ async def test_sync_window_widens_to_cover_a_far_out_plan(env):
         "no plan needs an earlier start, so the default floor stands"
     assert end > now + WINDOW_FUTURE, \
         "the far-out plan's end date must widen the sync window"
+
+
+async def test_discovery_fills_details_eagerly_not_on_a_later_read(env):
+    """A freshly-discovered event's title/date arrive on the SAME clock
+    tick as the mint (the adapter's pull_many, design §8's eager batch
+    pull-through) — the collection listing right after the tick already
+    shows real data, no individual GET required to trigger the fill."""
+    from datetime import UTC, datetime
+
+    engine, client = env
+    client.events.seed("recital-42", title="School recital",
+                       date="2026-07-02", kind="blocking")
+    client.events.discoverable = ["recital-42"]
+    client.events.pulls = 0
+
+    await engine.tick(datetime.now(UTC))
+
+    listing = (await client.get("/api/events")).json()
+    item = next(i for i in listing["data"]["items"]
+               if i["data"]["external_id"] == "recital-42")
+    assert item["data"]["title"] == "School recital", \
+        "the listing shows real data straight off the clock tick"
+    assert item["data"]["date"] == "2026-07-02"
+    assert client.events.pulls == 1, \
+        "one batched pull_many call, not one per discovered event"
