@@ -74,6 +74,7 @@ from typing import Any, Callable, Iterable, Mapping
 from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
 
+from .expr import Expr, Scope as ExprScope, check_derived_expr
 from .related import RelatedField, forward_filters
 from .types import DefinitionError
 
@@ -133,8 +134,15 @@ class DerivedSpec:
     explain: str | None
     vars: Callable[..., Mapping[str, Any]] | None
     flips_at: Callable[[Any], Any] | None
+    expr: Expr | None = None
 
     def apply(self, args: list[Any]) -> Any:
+        if self.expr is not None:
+            # the expression calling convention (design 8.0 §1): inputs
+            # bind by declared name, positionally matching over= — the
+            # same resolved args every other arm consumes
+            env = {_describe_input(i): a for i, a in zip(self.over, args)}
+            return self.expr.eval(ExprScope(vars=env))
         if self.tolerance is not None:
             x = args[0]
             if x is None:
@@ -200,6 +208,7 @@ def Derived(
     over: Iterable[Any],
     fn: Callable[..., Any] | None = None,
     within: Tolerance | None = None,
+    expr: Expr | None = None,
     explain: str | None = None,
     vars: Callable[..., Mapping[str, Any]] | None = None,
     flips_at: Callable[[Any], Any] | None = None,
@@ -207,19 +216,24 @@ def Derived(
     **kwargs: Any,
 ) -> Any:
     """Declare a derived Data field. ``over=`` names the inputs (own
-    fields, ``Owns`` child fields, ``Clock``), ``fn=`` is a pure function
-    of their resolved values in ``over=`` order; ``within=`` is the
-    single-input tolerance shorthand. The default is the engine's to
-    overwrite — a derived field is never authored by a caller."""
+    fields, ``Owns`` child fields, ``Clock``), and exactly one of three
+    arms says how the value follows from them: ``fn=`` is a pure Python
+    function of their resolved values in ``over=`` order; ``within=`` is
+    the single-input tolerance shorthand; ``expr=`` is the same pure
+    function as data (design 8.0 §1) — fingerprinted as a tree, so a
+    semantic change is holdable, pilotable, and grandfathered exactly,
+    where an fn edit must promote totally. The default is the engine's
+    to overwrite — a derived field is never authored by a caller."""
     inputs = tuple(over)
     if not inputs:
         raise DefinitionError("Derived requires over=(...) naming at least "
                               "one input — a derivation of nothing derives "
                               "nothing")
-    if (fn is None) == (within is None):
+    if sum(arm is not None for arm in (fn, within, expr)) != 1:
         raise DefinitionError(
             "Derived: declare exactly one of fn= (a pure function of the "
-            "inputs) or within= (a Tolerance over one numeric input)")
+            "inputs), within= (a Tolerance over one numeric input), or "
+            "expr= (the function as data, design 8.0 §1)")
     for inp in inputs:
         if inp is Clock or isinstance(inp, (str, ChildField, RelatedField)):
             continue
@@ -249,10 +263,17 @@ def Derived(
     elif flips_at is not None:
         raise DefinitionError("flips_at= only applies to derivations over "
                               "Clock")
-    spec = DerivedSpec(over=inputs, fn=fn, tolerance=within, explain=explain,
-                       vars=vars, flips_at=flips_at)
     user_extra = dict(kwargs.pop("json_schema_extra", None) or {})
     over_desc = [_describe_input(i) for i in inputs]
+    if expr is not None:
+        if len(set(over_desc)) != len(over_desc):
+            raise DefinitionError(
+                f"Derived: over= inputs share a name ({over_desc}) — an "
+                "expression binds inputs by name, so each must be "
+                "unambiguous")
+        check_derived_expr(expr, over_desc, "Derived")
+    spec = DerivedSpec(over=inputs, fn=fn, tolerance=within, explain=explain,
+                       vars=vars, flips_at=flips_at, expr=expr)
 
     # json_schema_extra as a callable: the spec (it holds callables) never
     # tries to reach the wire, and every schema emission — Data, a Create
@@ -272,6 +293,12 @@ def Derived(
         derived_info: dict[str, Any] = {"over": over_desc}
         if explain:
             derived_info["explain"] = explain
+        if expr is not None:
+            # the law readable on the wire (design 8.0 §2): what the
+            # derivation IS, not only what it is derived from — stripped
+            # from the fingerprinted schema copies exactly as x-derived
+            # already is; derived.<fact>.expr stays the canonical entry
+            derived_info["expr"] = expr.to_wire()
         schema["x-derived"] = derived_info
 
     mark.__waymark_derived__ = spec  # type: ignore[attr-defined]
@@ -295,18 +322,28 @@ def Count(edge: Any, *, where: Mapping[str, Any] | None = None,
     """E4's count rollup as a library derivation (design §10): the number
     of rows on the edge (matching ``where``), maintained as a field. The
     edge is a relation — ``Owns`` or ``Related`` (design 6.0 §2) — and
-    the derivation rides whichever ``edge.field()`` produces."""
-    return Derived(over=(edge.field("id", where=where),),
-                   fn=lambda children: len(children), **kwargs)
+    the derivation rides whichever ``edge.field()`` produces. 8.0: the
+    body is an expression, so a library rollup is data-law end to end —
+    its edge filters always were; now nothing about it is a hash."""
+    from .expr import E
+
+    inp = edge.field("id", where=where)
+    return Derived(over=(inp,),
+                   expr=E.count(E.f(_describe_input(inp))), **kwargs)
 
 
 def Sum(edge: Any, of: str, *, where: Mapping[str, Any] | None = None,
         **kwargs: Any) -> Any:
     """E4's sum rollup as a library derivation (design §10): Σ of a field
     across the rows on the edge (matching ``where``) — ``Owns`` or
-    ``Related`` (design 6.0 §2), like :func:`Count`."""
-    return Derived(over=(edge.field(of, where=where),),
-                   fn=lambda values: sum(v or 0 for v in values), **kwargs)
+    ``Related`` (design 6.0 §2), like :func:`Count` (expression-bodied,
+    same reasons; a ``None`` value sums as 0, as the lambda's ``v or 0``
+    always read)."""
+    from .expr import E
+
+    inp = edge.field(of, where=where)
+    return Derived(over=(inp,),
+                   expr=E.sum(E.f(_describe_input(inp))), **kwargs)
 
 
 async def resolve_inputs(spec: DerivedSpec, r: Any, ctx: Any) -> list[Any]:

@@ -5,6 +5,7 @@ from .checks import UsabilityWarning
 from .compound import Advance, Compound, Create, Each, Op, ServiceEffect
 from .demand import demand_class
 from .derived import Clock, Count, Deferred, Derived, Sum, Tolerance
+from .expr import E, Expr
 from .guards import Guard, Relation, four_eyes, guard, require
 from .groups import OneOf
 from .history import Unless, actor_of
@@ -42,7 +43,8 @@ __all__ = [
     "Immediate", "Member", "Never", "On", "Owns", "Related", "RelatedField",
     "Rollup",
     "Seed", "Surface",
-    "Authored", "Clock", "Count", "Deferred", "Derived", "Sum", "Tolerance",
+    "Authored", "Clock", "Count", "Deferred", "Derived", "E", "Expr",
+    "Sum", "Tolerance",
     "Advances", "Creates", "Delegated",
     "Field", "Unless", "When",
     "action", "actor_of", "demand_class", "emits", "filterable",

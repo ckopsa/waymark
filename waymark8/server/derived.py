@@ -79,32 +79,47 @@ CLOCK_CURSOR = "clock"
 
 @dataclass
 class LawOverride:
-    """One derived fact's CURRENT-law parameters (design 7.0 §1): the
-    stored values the §1 overlay serves while a data-law proposal is held
-    at ``proposed``. Built from the current revision's stored fingerprint
-    — the definition store holds every revision's serialized form, and a
-    ``Tolerance`` literal / ``where=`` filter is recoverable from it
+    """One derived fact's stored-law parameters (design 7.0 §1, 8.0 §3):
+    the values the overlay serves while a data-law proposal is held at
+    ``proposed``, or that a grandfathered/piloted revision's rows compute
+    under. Built from that revision's stored fingerprint — the definition
+    store holds every revision's serialized form, and a ``Tolerance``
+    literal / ``where=`` filter / ``expr`` tree is recoverable from it
     exactly because it is data, which is the §4 data/code boundary made
-    operational: a ``fn`` is only a hash there, so code cannot overlay."""
+    operational: an ``fn`` is only a hash there, so code cannot overlay —
+    and (8.0) an expression can, which is why converting one is the whole
+    capability gain."""
 
     tolerance: str | None = None
-    # over-index → the where= filters the current law declares there
+    # the revision's expr tree, wire form (design 8.0 §3) — when present
+    # it IS the fact's semantic arm, evaluated verbatim
+    expr: Any = None
+    # over-index → the where= filters the revision's law declares there
     where: Mapping[int, Mapping[str, Any]] = field(default_factory=dict)
 
 
 def _overlaid(spec: DerivedSpec, ov: LawOverride) -> DerivedSpec:
-    """The resident spec with the current law's stored parameters in
-    place of the resident declaration's — the one substitution the §1
-    overlay performs."""
+    """The resident spec with the stored law's parameters in place of the
+    resident declaration's. The semantic arm follows the overlay: a
+    stored ``expr`` or ``tolerance`` replaces whatever arm the resident
+    declares (8.0 §3 — the grandfathered law evaluates ITS tree, not the
+    resident one); an overlay carrying neither substitutes parameters
+    only, which is as far as an fn law can honestly reach (7.0's
+    recorded deviation #6, now confined to fn= facts)."""
+    from ..core.expr import from_wire
+
     over = list(spec.over)
     for i, w in ov.where.items():
         inp = over[i]
         if isinstance(inp, (ChildField, RelatedField)):
             over[i] = dc_replace(inp, where=dict(w))
-    tolerance = spec.tolerance
+    if ov.expr is not None:
+        return dc_replace(spec, over=tuple(over), expr=from_wire(ov.expr),
+                          fn=None, tolerance=None)
     if ov.tolerance is not None:
-        tolerance = Tolerance(ov.tolerance)
-    return dc_replace(spec, over=tuple(over), tolerance=tolerance)
+        return dc_replace(spec, over=tuple(over),
+                          tolerance=Tolerance(ov.tolerance), expr=None)
+    return dc_replace(spec, over=tuple(over))
 
 
 def _jsonify(value: Any) -> Any:

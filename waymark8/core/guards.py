@@ -626,6 +626,82 @@ class _GuardFactory:
         return decorate
 
     @staticmethod
+    def expr(when: Any, *, explain: str,
+             vars: Mapping[str, Any] | None = None,
+             severity: str = "refuse", hide: bool = False,
+             remedies: Iterable[str] = (),
+             judges: Iterable[str] | None = None,
+             reads: Iterable[str] | None = None,
+             becomes_available_at: Callable[[Any], datetime] | None = None,
+             requires_token: str | None = None,
+             needs_input: bool | None = None,
+             name: str | None = None) -> Guard:
+        """A pure verdict as data (design 8.0 §4): ``when=`` is an
+        expression over ``E.data(...)``/``E.input(...)``/``E.now()`` —
+        truthy allows, falsy denies with ``explain=``. The tree is the
+        declaration: ``judges`` derives from the input fields the verdict
+        reads and ``reads`` from its clock use (never sniffed — the tree
+        IS the declaration; pass either to override). ``vars=`` garnish
+        is a mapping of template names to expressions, evaluated in the
+        same scope on refusal — the ``vars_fn`` lambda, said as data.
+
+        What this buys in 8.0 is the fingerprint reading the judgment
+        (the tree diffs semantically; formatting stops revising the law)
+        and a shrinking ``check=`` residue. NOT per-row pilotability:
+        judgment diffs classify ``code_or_shape`` exactly as in 7.0 —
+        the guard overlay is the design's named punt."""
+        from .expr import Expr as ExprNode, Scope as ExprScope, \
+            check_guard_expr
+
+        if not isinstance(when, ExprNode):
+            raise DefinitionError(
+                "guard.expr takes when=<expression> — an E.data()/"
+                "E.input()/E.now() tree (design 8.0 §4)")
+        gname = name or "expr_guard"
+        winfo = check_guard_expr(when, gname)
+        var_exprs: dict[str, Any] = dict(vars or {})
+        uses_now = winfo.uses_now
+        for vname, vexpr in var_exprs.items():
+            if not isinstance(vexpr, ExprNode):
+                raise DefinitionError(
+                    f"guard.expr {gname!r}: vars[{vname!r}] must be an "
+                    "expression — prose garnish that needs code is a "
+                    "vars_fn on an ordinary guard")
+            vinfo = check_guard_expr(vexpr, f"{gname}.vars[{vname}]")
+            uses_now = uses_now or vinfo.uses_now
+
+        async def check(r: Any, inp: Any, ctx: Ctx) -> Allow | Deny:
+            scope = ExprScope(data=(r.data if r is not None else None),
+                              input=inp, now=ctx.now)
+            if bool(when.eval(scope)):
+                return Allow()
+            rendered: dict[str, Any] = {}
+            for vname, vexpr in var_exprs.items():
+                try:
+                    rendered[vname] = vexpr.eval(scope)
+                except Exception:
+                    pass  # the garnish must never block the refusal
+            return Deny(vars=rendered or None)
+
+        g = Guard(
+            explain=explain,
+            judges=(tuple(judges) if judges is not None
+                    else tuple(sorted(winfo.inputs))),
+            reads=(tuple(reads) if reads is not None
+                   else (("now",) if uses_now else ())),
+            check=check, vars=tuple(var_exprs) or None,
+            hide=hide, remedies=remedies,
+            becomes_available_at=becomes_available_at,
+            requires_token=requires_token, name=gname,
+            needs_input=needs_input, severity=severity,
+        )
+        # the fingerprint reads these instead of hashing the closure
+        # (design 8.0 §4; see fingerprint._guard_fp)
+        g.expr_wire = when.to_wire()
+        g.vars_exprs = {k: v.to_wire() for k, v in var_exprs.items()}
+        return g
+
+    @staticmethod
     def role(name: str, *, explain: str | None = None,
              requires_token: str | None = None, hide: bool = False) -> Guard:
         async def check(r: Any, inp: Any, ctx: Ctx) -> Allow | Deny:

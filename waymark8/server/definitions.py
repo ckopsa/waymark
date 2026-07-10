@@ -620,7 +620,8 @@ def _overrides_for(target_kind: str, current_fp: dict[str, Any],
                 if w is not None:
                     where[i] = dict(w)
         out[(target_kind, fact)] = LawOverride(
-            tolerance=entry.get("tolerance"), where=where)
+            tolerance=entry.get("tolerance"), expr=entry.get("expr"),
+            where=where)
     return out
 
 

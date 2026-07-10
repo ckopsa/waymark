@@ -150,6 +150,16 @@ def _guard_fp(g: Guard) -> dict[str, Any]:
     fact = getattr(g, "fact", None)  # require(): the gated derived field
     if fact is not None:
         fp["fact"] = fact
+    expr_wire = getattr(g, "expr_wire", None)  # guard.expr (design 8.0 §4)
+    if expr_wire is not None:
+        # the judgment as a tree, not a closure hash: the diff pins the
+        # leaf that moved and formatting stops revising the law. The
+        # compiled check is this factory's constant text — hashing it
+        # would claim every expr guard shares one body; the tree is the
+        # body. Emitted only when declared (the emission discipline).
+        fp["check"] = None
+        fp["expr"] = expr_wire
+        fp["vars_exprs"] = getattr(g, "vars_exprs", None) or None
     return fp
 
 
@@ -257,6 +267,12 @@ def _derived_fp(cls: type) -> dict[str, Any]:
             "fn": callable_hash(spec.fn) if spec.fn is not None else None,
             "tolerance": (spec.tolerance.value
                           if spec.tolerance is not None else None),
+            # the tree itself, never a hash of it (design 8.0 §2): the
+            # diff pins the leaf that moved, and the §3 overlay reads the
+            # law back out. Emitted only when declared — the emission
+            # discipline, as everywhere.
+            **({"expr": spec.expr.to_wire()}
+               if spec.expr is not None else {}),
             "explain": spec.explain,
             "vars": callable_hash(spec.vars) if spec.vars is not None else None,
             "flips_at": (callable_hash(spec.flips_at)
@@ -567,8 +583,10 @@ def stale_facts(diff: dict[str, Any]) -> tuple[str, ...]:
 # The propose-mode hold serves the CURRENT law from stored parameters while
 # the resident Python objects are the NEW law. That is honest exactly when
 # every changed path is *data the engine already evaluates from stored
-# declarations*: a Derived's ``Tolerance`` literal and the ``where=``
-# filters on its child/related inputs. Everything else — fn/check source,
+# declarations*: a Derived's ``Tolerance`` literal, the ``where=``
+# filters on its child/related inputs, and (8.0 §3) its ``expr`` tree —
+# the whole point of the expression language: the fn that becomes an
+# expression becomes holdable. Everything else — fn/check source,
 # machine shape, added/removed actions/fields/kinds, schemas, guards, even
 # pure-advertisement text (which render reads from the resident objects,
 # so a hold would serve new prose under an old law id) — is
@@ -576,6 +594,7 @@ def stale_facts(diff: dict[str, Any]) -> tuple[str, ...]:
 # auto-promotes with a recorded marker rather than pretending to hold.
 _DATA_LAW_PATH = re.compile(
     r"^derived\.[^.]+\.(?:tolerance$"
+    r"|expr(?:\..+)?$"
     r"|over\.\d+\.(?:child|related)\.where(?:\..+)?$)")
 
 
