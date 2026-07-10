@@ -1,15 +1,34 @@
 (ns waymark10.fixtures
   "Phase-1 acceptance fixtures: meal and a trimmed plan, ported from
   mealplan9. These are the declarations the checks battery must pass
-  and the deliberately-broken variants must fail — by name."
-  (:require [waymark10.guards :as g]
+  and the deliberately-broken variants must fail — by name.
+
+  Spelled in the batch-G declaration style: field-scoped law
+  colocated on the schema entries it governs, the actions worth
+  naming def'd, one safety value named and cited. The law is
+  unchanged — normalization projects this spelling onto the same map
+  as the split spelling, and batch_g_invariance_test pins both kinds'
+  fingerprint hashes byte-identical to it."
+  (:require [waymark10.declare :refer [defaction defderived]]
+            [waymark10.guards :as g]
             [waymark10.resource :as r :refer [defresource defhandler]]
             [waymark10.types :as t]))
 
+;; a named safety value: reference is explicit declaration — the map
+;; is spelled once, in full, and cited by name, never inferred
+(def routine
+  {:idempotent true :reversible true :confirm false})
+
 ;; ── meal ────────────────────────────────────────────────────────────
 
-(defhandler update-recipe [row inp _ctx]
-  (assoc-in row [:data :recipe] (:recipe inp)))
+(defaction update-recipe
+  {:from #{:on_list} :to :on_list
+   :input [:map [:recipe {:x-display {:widget "prose"}} [:string {:max 8000}]]]
+   :edit {:prefill [:recipe]
+          :draft {:shared true :live true}}
+   :safety routine
+   :handler (fn [row inp _ctx]
+              (assoc-in row [:data :recipe] (:recipe inp)))})
 
 (defresource meal
   {:kind :meal
@@ -18,12 +37,11 @@
    :terminal #{:retired}
    :summary "{data.name} · {state}"
    :schema [:map
-            [:name [:string {:min 1 :max 120}]]
+            [:name {:sort :default} [:string {:min 1 :max 120}]]
             [:themes [:vector [:waymark/vocab {:open true}]]]
             [:recipe {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 8000}]]]]
    :filterable {:state #{:eq :in}}
-   :sortable {:fields [:name] :default "name"}
    :actions
    {:accept {:from #{:suggested} :to :on_list
              :safety {:idempotent true :reversible false :confirm false
@@ -31,12 +49,7 @@
     :decline {:from #{:suggested} :to :retired
               :safety {:idempotent true :reversible false :confirm true
                        :consequence "The suggestion is discarded; the AI will not re-suggest it."}}
-    :update_recipe {:from #{:on_list} :to :on_list
-                    :input [:map [:recipe {:x-display {:widget "prose"}} [:string {:max 8000}]]]
-                    :edit {:prefill [:recipe]
-                           :draft {:shared true :live true}}
-                    :safety {:idempotent true :reversible true :confirm false}
-                    :handler update-recipe}
+    :update_recipe update-recipe
     :retire {:from #{:on_list} :to :retired
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "A retired meal keeps its history; re-adding is a new suggestion."}}}})
@@ -82,6 +95,42 @@
                         %)
                      days))))
 
+;; the derived facts, def'd — each lands on its own schema entry below
+(defderived end-date
+  {:over [:start_date :weeks]
+   :expr '(+ (var :start_date) (days (- (* 7 (var :weeks)) 1)))})
+
+(defderived all-days-covered
+  {:over [:days]
+   :expr '(every [d (var :days)]
+            (or (is-set (get d :meal_id))
+                (= (get d :eating_out) true)))
+   :explain "Every day needs a meal or an eating-out mark."})
+
+(defderived has-conflicts
+  {:over [:calendar_conflicts]
+   :expr '(< 0 (var :calendar_conflicts))})
+
+(defaction assign-meal-action
+  {:from #{:draft} :to :draft
+   :place :days
+   :input [:map
+           [:date :waymark/date]
+           [:meal_id {:kind :meal} :waymark/ref]]
+   :guards [date-in-plan]
+   :safety {:idempotent true :reversible false :confirm false}
+   :handler assign-meal
+   :display {:label "Assign meal" :style :primary :order 1}})
+
+;; an action group: the plan's closing pair, merged into :actions
+(def closing-actions
+  {:complete {:from #{:active} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "A completed week is history."}}
+   :abandon {:from #{:draft :planned :active} :to :abandoned
+             :safety {:idempotent true :reversible false :confirm true
+                      :consequence "The plan and its prep tasks are discarded for good."}}})
+
 (defn- plan-map [calendar-gate]
   {:kind :plan
    :states [:draft :planned :active :done :abandoned]
@@ -89,67 +138,45 @@
    :terminal #{:done :abandoned}
    :summary "Week of {data.start_date} · {data.weeks} wk · {state}"
    :schema [:map
-            [:start_date :waymark/date]
+            [:start_date {:filter #{:eq :range} :sort :default-desc}
+             :waymark/date]
             [:weeks [:int {:min 1 :max 2}]]
-            [:end_date {:optional true} [:maybe :waymark/date]]
-            [:days [:vector
-                    [:map
-                     [:date :waymark/date]
-                     [:theme {:optional true} [:maybe [:string {:max 50}]]]
-                     [:meal_id {:optional true :kind :meal :label :meal_name}
-                      [:maybe :waymark/ref]]
-                     [:meal_name {:optional true} [:maybe [:string {:max 200}]]]
-                     [:eating_out {:optional true} [:maybe :boolean]]]]]
-            [:all_days_covered {:optional true} [:maybe :boolean]]
-            [:has_conflicts {:optional true} [:maybe :boolean]]
+            [:end_date {:optional true :derived end-date}
+             [:maybe :waymark/date]]
+            [:days {:part-scope {:key :date}}
+             [:vector
+              [:map
+               [:date :waymark/date]
+               [:theme {:optional true} [:maybe [:string {:max 50}]]]
+               [:meal_id {:optional true :kind :meal :label :meal_name}
+                [:maybe :waymark/ref]]
+               [:meal_name {:optional true} [:maybe [:string {:max 200}]]]
+               [:eating_out {:optional true} [:maybe :boolean]]]]]
+            [:all_days_covered {:optional true :derived all-days-covered}
+             [:maybe :boolean]]
+            [:has_conflicts {:optional true :derived has-conflicts :filter #{:eq}}
+             [:maybe :boolean]]
             [:calendar_conflicts {:optional true} [:maybe :int]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
-   :derived
-   {:end_date {:over [:start_date :weeks]
-               :expr '(+ (var :start_date) (days (- (* 7 (var :weeks)) 1)))}
-    :all_days_covered {:over [:days]
-                       :expr '(every [d (var :days)]
-                                (or (is-set (get d :meal_id))
-                                    (= (get d :eating_out) true)))
-                       :explain "Every day needs a meal or an eating-out mark."}
-    :has_conflicts {:over [:calendar_conflicts]
-                    :expr '(< 0 (var :calendar_conflicts))}}
    :one-of {:days/coverage {:in [:days]
                             :arms {:meal [:meal_id :meal_name]
                                    :eating_out [:eating_out]}
                             :clears true}}
-   :part-scopes {:days {:path :days :key :date}}
-   :filterable {:state #{:eq :in}
-                :start_date #{:eq :range}
-                :has_conflicts #{:eq}}
-   :sortable {:fields [:start_date] :default "-start_date"}
+   :filterable {:state #{:eq :in}}
    :actions
-   {:assign_meal {:from #{:draft} :to :draft
-                  :place :days
-                  :input [:map
-                          [:date :waymark/date]
-                          [:meal_id {:kind :meal} :waymark/ref]]
-                  :guards [date-in-plan]
-                  :safety {:idempotent true :reversible false :confirm false}
-                  :handler assign-meal
-                  :display {:label "Assign meal" :style :primary :order 1}}
-    :finalize {:from #{:draft} :to :planned
-               :guards [all-days-covered-gate calendar-gate]
-               :safety {:idempotent true :reversible true :confirm false}
-               :display {:label "Finalize plan" :style :primary}}
-    :reopen {:from #{:planned} :to :draft
-             :safety {:idempotent true :reversible true :confirm false}}
-    :begin {:from #{:planned} :to :active
-            :guards [plan-started]
-            :safety {:idempotent true :reversible false :confirm false
-                     :one-way "Starting the week reflects the calendar; reopening a started week is a new plan."}}
-    :complete {:from #{:active} :to :done
-               :safety {:idempotent true :reversible false :confirm false
-                        :one-way "A completed week is history."}}
-    :abandon {:from #{:draft :planned :active} :to :abandoned
-              :safety {:idempotent true :reversible false :confirm true
-                       :consequence "The plan and its prep tasks are discarded for good."}}}})
+   (merge {:assign_meal assign-meal-action
+           :finalize {:from #{:draft} :to :planned
+                      :guards [all-days-covered-gate calendar-gate]
+                      :safety routine
+                      :display {:label "Finalize plan" :style :primary}}
+           :reopen {:from #{:planned} :to :draft
+                    :safety routine}
+           :begin {:from #{:planned} :to :active
+                   :guards [plan-started]
+                   :safety {:idempotent true :reversible false :confirm false
+                            :one-way "Starting the week reflects the calendar; reopening a started week is a new plan."}}}
+          closing-actions)})
 
 (defn plan-resource
   "The plan declaration, optionally with a different calendar-gate law

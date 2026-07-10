@@ -6,7 +6,17 @@
   Normalized action keys: :from (set), :to, :input (malli form),
   :guards (vector), :safety (validated), :display, :handler,
   :emits, :edit, :place, :bulk, :batch, :waives (set), :touches,
-  :unless (transition kw; its guard is appended), :record."
+  :unless (transition kw; its guard is appended), :record.
+
+  Batch G: field-scoped law may be colocated on a schema entry's
+  property map — {:derived spec} {:filter ops} {:sort mark}
+  {:part-scope {:key …}} — and normalization projects it into the
+  canonical top-level keys (:derived, :filterable, :sortable,
+  :part-scopes), stripping the sugar from the schema form before it
+  compiles or fingerprints. Two spellings, one law: the colocated
+  and split spellings normalize to the same map, so a pure style
+  refactor mints zero revisions. Declaring a concern both ways for
+  one field is the :one-home definition error."
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
@@ -40,11 +50,13 @@
 
 ;; ── normalization ───────────────────────────────────────────────────
 
-(defn- normalize-action
+(defn normalize-action
   "Construction-shape validation, ported from waymark9 actions.py:
   safety declared never inferred; record needs input; bulk excludes
   drafts; batch needs input, excludes place/bulk and the fence; an
-  Edit implies the fence."
+  Edit implies the fence. Public seam: waymark10.declare/defaction
+  runs it eagerly at the def site so a malformed action fails at its
+  own line; the cross-referencing checks still wait for defresource."
   [kind aname a]
   (let [err (fn [msg] (throw (t/definition-error
                               (str (name kind) "/" (name aname) ": " msg))))]
@@ -91,19 +103,23 @@
              :waives (set (:waives a))
              :emits (vec (:emits a))))))
 
+(defn normalize-derived-spec
+  "Canonicalize one derived spec: expression trees normalized, count
+  :where values as sets — two spellings of one membership are one
+  law. Idempotent, and public: waymark10.declare/defderived lands a
+  def'd spec on the same value the inline spelling normalizes to."
+  [d]
+  (cond-> d
+    (:expr d) (update :expr expr/normalize)
+    (:vars d) (update :vars update-vals expr/normalize)
+    (get-in d [:count :where])
+    (update-in [:count :where] update-vals set)))
+
 (defn- normalize-derived [rmap]
   (update rmap :derived
           (fn [derived]
             (into {}
-                  (map (fn [[fact d]]
-                         [fact
-                          (cond-> d
-                            (:expr d) (update :expr expr/normalize)
-                            (:vars d) (update :vars update-vals expr/normalize)
-                            ;; count where values are sets — two
-                            ;; spellings of one membership are one law
-                            (get-in d [:count :where])
-                            (update-in [:count :where] update-vals set))]))
+                  (map (fn [[fact d]] [fact (normalize-derived-spec d)]))
                   derived))))
 
 (defn- bind-require-specs
@@ -152,6 +168,149 @@
           rmap
           (vocab-fields rmap)))
 
+;; ── schema-entry colocation (batch G) ───────────────────────────────
+;; Field-scoped law may live on the schema entry whose field it
+;; governs; normalization projects it into the canonical top-level
+;; keys. The sugar keys are declaration ergonomics, never schema
+;; properties: they are stripped before the schema compiles, so the
+;; published JSON Schema and the fingerprint see the split spelling.
+
+(def ^:private colocated-law-keys [:derived :filter :sort :part-scope])
+
+(def ^:private sort-marks #{true :default :default-desc})
+
+(defn- one-home-error [kind field concern]
+  (throw (t/definition-error
+          (str (name kind) " [one-home] field " (name field) " declares "
+               concern " both on its schema entry and at the top level — "
+               "a concern has exactly one home")
+          {:check :one-home})))
+
+(defn- project-into
+  "Project colocated [field value] pairs under a top-level map key,
+  refusing a field the top level already declares."
+  [rmap kind top-key concern entries xform]
+  (reduce (fn [m [f v]]
+            (when (contains? (get m top-key) f)
+              (one-home-error kind f concern))
+            (assoc-in m [top-key f] (xform f v)))
+          rmap
+          entries))
+
+(defn- part-scope-spec [kind f spec]
+  (when-not (and (map? spec) (:key spec))
+    (throw (t/definition-error
+            (str (name kind) ": schema entry " (name f)
+                 " :part-scope is a {:key …} map"))))
+  (when (and (:path spec) (not= (:path spec) f))
+    (throw (t/definition-error
+            (str (name kind) ": schema entry " (name f) " :part-scope names "
+                 ":path " (:path spec) " — a colocated part scope's path IS "
+                 "its entry"))))
+  (merge {:path f} spec))
+
+(defn- project-sort
+  "Colocated :sort marks join :sortable — true joins :fields;
+  :default / :default-desc also claim the list default (at most one,
+  counting a top-level :default; :default-desc marks \"-field\")."
+  [rmap kind entries]
+  (if (empty? entries)
+    rmap
+    (let [top (:sortable rmap)
+          top-fields (set (:fields top))]
+      (doseq [[f mark] entries]
+        (when-not (contains? sort-marks mark)
+          (throw (t/definition-error
+                  (str (name kind) ": schema entry " (name f) " :sort is true, "
+                       ":default, or :default-desc, got " (pr-str mark)))))
+        (when (contains? top-fields f)
+          (one-home-error kind f ":sort")))
+      (let [defaults (into (if-some [d (:default top)] [d] [])
+                           (keep (fn [[f mark]]
+                                   (case mark
+                                     :default (name f)
+                                     :default-desc (str "-" (name f))
+                                     nil)))
+                           entries)]
+        (when (< 1 (count defaults))
+          (throw (t/definition-error
+                  (str (name kind) ": at most one sort default — "
+                       (pr-str defaults) " all claim it"))))
+        (update rmap :sortable
+                (fn [s]
+                  (cond-> (update (or s {}) :fields
+                                  #(into (vec %) (map first) entries))
+                    (seq defaults) (assoc :default (first defaults)))))))))
+
+(def ^:private law-key-families
+  "Prefix families of the colocated law keys. malli ignores unknown
+  entry properties, so a typo'd law key would silently declare
+  nothing — the silent-drift hole this refusal closes: any entry prop
+  in a law key's lexical family that is not the exact key refuses."
+  {"filter" :filter "deriv" :derived "sort" :sort "part" :part-scope})
+
+(defn- refuse-near-misses [kind field props]
+  (doseq [k (keys props)
+          :when (and (simple-keyword? k)
+                     (not (contains? (set colocated-law-keys) k)))]
+    (let [n (name k)]
+      (doseq [[prefix correct] law-key-families]
+        (when (str/starts-with? n prefix)
+          (throw (t/definition-error
+                  (str (name kind) " [unknown-law-key] schema entry " field
+                       " declares " k " — not a law key; did you mean "
+                       correct "?")
+                  {:check :unknown-law-key})))))))
+
+(defn- project-colocated
+  "Field-scoped law on schema entry property maps → the canonical
+  top-level keys, the sugar stripped from the schema form. After this
+  step the colocated and split spellings are one map — two spellings,
+  one law."
+  [rmap]
+  (let [form (:schema rmap)
+        kind (:kind rmap)]
+    (if-not (and (vector? form) (= :map (first form)))
+      rmap
+      (let [[head entries] (if (map? (second form))
+                             [(subvec form 0 2) (drop 2 form)]
+                             [(subvec form 0 1) (rest form)])
+            parsed (mapv (fn [entry]
+                           (if-not (vector? entry)
+                             {:entry entry}
+                             (let [[k & more] entry
+                                   [props children] (if (map? (first more))
+                                                      [(first more) (rest more)]
+                                                      [nil more])
+                                   _ (when props (refuse-near-misses kind k props))
+                                   sugar (select-keys props colocated-law-keys)]
+                               (if (empty? sugar)
+                                 {:entry entry}
+                                 (let [props' (apply dissoc props colocated-law-keys)]
+                                   {:entry (into (cond-> [k]
+                                                   (seq props') (conj props'))
+                                                 children)
+                                    :field k
+                                    :sugar sugar})))))
+                         entries)
+            pick (fn [key]
+                   (into []
+                         (keep (fn [{:keys [field sugar]}]
+                                 (when (and field (contains? sugar key))
+                                   [field (get sugar key)])))
+                         parsed))]
+        (if (not-any? :sugar parsed)
+          rmap
+          (-> rmap
+              (assoc :schema (into head (map :entry) parsed))
+              (project-into kind :derived ":derived" (pick :derived)
+                            (fn [_ spec] spec))
+              (project-into kind :filterable ":filter" (pick :filter)
+                            (fn [_ ops] ops))
+              (project-into kind :part-scopes ":part-scope" (pick :part-scope)
+                            (partial part-scope-spec kind))
+              (project-sort kind (pick :sort))))))))
+
 (defn normalize-resource
   [rmap]
   (let [{:keys [kind states initial summary]} rmap]
@@ -172,6 +331,7 @@
     (when-not (contains? #{:primary :secondary} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary or :secondary")))
     (-> rmap
+        project-colocated
         (update :plural #(or % (str (name kind) "s")))
         (update :terminal set)
         (update :states vec)
