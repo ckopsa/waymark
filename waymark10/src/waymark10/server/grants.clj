@@ -1,8 +1,8 @@
 (ns waymark10.server.grants
   "Grants: least-privilege agent links (waymark9 server/grants.py,
-  scoped to phase 9a's deliverable). A grant is an ordinary resource
-  — {audience, scope, expires_at} through offered → accepted →
-  revoked/expired — and its enforcement is RENDERING AT THE SOURCE:
+  phase 9a's deliverable widened by batch B). A grant is an ordinary
+  resource — {audience, scope, expires_at} through offered → accepted
+  → revoked/expired — and its enforcement is RENDERING AT THE SOURCE:
   a request that presents X-Waymark-Grant sees only the granted
   surface. Non-granted kinds 404, non-granted actions are absent from
   envelopes (never narrated as unavailable) and 404 when invoked —
@@ -11,41 +11,135 @@
   The visibility is resolved ONCE per request at the router's
   identity boundary (judgment-style: what this request may see is
   fixed before any handler runs) and rides the request as a closure
-  map {:kind? :row? :action? :ids-of}. A presented-but-dead grant
-  (unknown id, wrong audience, unaccepted, revoked, expired) scopes
-  to NOTHING — dead means scoped-to-nothing, never a fall-through to
-  the full surface (waymark9's dead_grant law).
+  map {:kind? :row? :action? :field? :arg? :ids-of}. A
+  presented-but-dead grant (unknown id, wrong audience, unaccepted,
+  revoked, expired) scopes to NOTHING — dead means scoped-to-nothing,
+  never a fall-through to the full surface (waymark9's dead_grant
+  law).
+
+  ── batch B: field/argument modes, the negotiation machine, the
+     own-grant surface ────────────────────────────────────────────────
+
+  FIELD MODES. A scope entry may carry {:fields {:mode allow|deny
+  :names […]}} — an allow-list renders only the named fields, a
+  deny-list renders everything but. Entries sharing a kind union
+  their admissions (a field visible under any entry is visible); an
+  entry WITHOUT :fields leaves the kind's fields unrestricted, and
+  that openness absorbs any sibling's narrowing — the same absorption
+  rule ids follow. A redacted field is ABSENT: from data, from the
+  published schema view (/api/schemas/{kind}), from part items, from
+  links that draw on it (badge, edge params, href templates), and
+  from the summary (see render's honesty-trap note). Never narrated.
+
+  ARG MODES. {:args [{:action … :mode … :names […]}]} narrows the
+  arguments of a granted action, per entry. Advertised input schemas
+  lose denied properties (their folded enums with them); a denied arg
+  arriving in a body — dry-run included — answers the SAME 422 an
+  unknown field draws (check-args!), so a probing client cannot
+  distinguish 'denied to you' from 'never existed'. Recorded spelling
+  deviation: the wire shape is a vector of {action, mode, names}
+  entries, not waymark9's kind→action→arg→mode nesting — a schema the
+  fingerprint already knows how to hash.
+
+  THE NEGOTIATION MACHINE (waymark9's request_access, resized to the
+  v10 grant): an :approval_request resource — {grant_id, task, scope,
+  expires_at} through offered → approved/denied. The scoped principal
+  itself may create one (its create is the one affordance the
+  own-surface grants); the approver is four-eyes'd from the requester
+  by guard; approve's post-commit effect (approval-effects!, the
+  router's one grants seam — the attachments put-bytes! precedent)
+  EXTENDS the named grant through the concealed :extend transition,
+  system actor, logged, idempotency-keyed on the approval id so
+  redelivery is a replay. Deny records the note and the grant never
+  moves — the 404s persist.
+
+  THE OWN-GRANT SURFACE: a scoped principal sees the grants whose
+  audience it is and the approval requests it filed — :grant and
+  :approval_request join its kinds, rows gated per row (audience /
+  requested_by = self), collections narrowed by the same visibility
+  cond every id-scoped grant uses (ids-of queries own ids; no special
+  route). GET-only besides approval_request/create: no grant or
+  approval action is granted, so envelopes render with empty action
+  maps — concealment discipline unchanged. Deliberate: the own
+  surface survives the grant's death (dead scopes the DOMAIN to
+  nothing; the negotiation surface is how a dead grant's holder asks
+  again).
 
   Recorded deviations and named punts (each a sentence):
-  - waymark9's negotiation machine (draft→requested⇄granted,
-    request_access, approver-edited scope maps, review notes, the
-    attenuation ceiling) is unported: the v10 scope is set at offer
-    time and the audience accepts or a person revokes — phase 9a's
-    states are offered/accepted/revoked/expired.
-  - ApprovalRequest (approval-mode actions, the pending→approved→run
-    machine) is a named punt with waymark9's approval flow.
-  - Field modes (clear/hashed/hidden) and argument modes are unported:
-    a granted kind's data renders whole — the v10 grant grades kinds,
-    ids and actions only.
-  - The token IS the grant id carried in X-Waymark-Grant (waymark9
+  - approver-edited scope maps and review-note round-trips are
+    unported: v10's approve grants the ask as-is; the send-back is
+    deny with a note, and a new ask is a new approval_request.
+  - waymark9's attenuation ceiling (the approver's own live
+    visibility intersected onto the holder's) is unported — v10 has
+    no per-member visibility to intersect; grants.py's ceiling is the
+    live kind, not a max-grantable check, so nothing simpler stands
+    in for it.
+  - approval extends the REQUEST'S named grant rather than minting a
+    sibling: the holder already carries the link; a fresh audience is
+    a fresh grant create, which is ungated.
+  - the approve effect rides the wire boundary (the router calls
+    approval-effects! post-commit); an engine-internal invoke of
+    approve does not extend — the attachments discipline, recorded.
+  - field modes are the v10 pair allow/deny; waymark9's hashed mode
+    (render the sha, not the value) is unported.
+  - field granularity is the top-level data field: item fields inside
+    a part array are not separately gradable — redact the array.
+  - a granted action's guard NARRATION may name a redacted field's
+    value in its deny vars — unavailable reasons are not projected
+    (named punt; the summary and data are).
+  - create-argument modes are unported: :args grades declared
+    actions; the create body is judged by the create schema alone.
+  - grant projection of SSE, surfaces, openapi and collab stays the
+    phase-9b named punt — those routes still answer a scoped request
+    404 (their modules are other batches' files this run).
+  - collection query/create input schemas and facet counts
+    (server/collections.clj) are unprojected — a scoped collection
+    still advertises the kind's full filter grammar (named punt, not
+    this batch's file); items themselves project fully.
+  - the token IS the grant id carried in X-Waymark-Grant (waymark9
     minted an opaque wmk_ bearer token); the requesting principal
     must be the grant's audience, so the header is a scope selector,
     not a credential.
-  - The scoped agent's own-grant negotiation surface is unported: a
-    scoped request sees its own grant only if the grant grants it.
-  - Expiry is enforced live (an accepted grant past expires_at scopes
+  - expiry is enforced live (an accepted grant past expires_at scopes
     to nothing); the :expire transition is bookkeeping anyone may run
     once the clock passes — no sweeper drives it (named punt).
-  - Idempotency-replay responses are stored bytes rendered without a
+  - idempotency-replay responses are stored bytes rendered without a
     visibility (the phase-3 render-fn seam's recorded punt, extended):
-    a scoped replay serves the first execution's unprojected envelope."
+    a scoped replay serves the first execution's unprojected envelope.
+  - own-id collections cap at 200 held grants/requests per principal
+    (the member-visibility page waymark9 also capped)."
   (:require [waymark10.guards :as g]
-            [waymark10.resource :refer [defresource]]
+            [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
+
+;; ── the scope schema (shared: grant, approval_request, extend) ──────
+
+(def field-spec-schema
+  "One mode spec: allow renders only :names, deny renders all but."
+  [:map
+   [:mode [:enum "allow" "deny"]]
+   [:names [:vector [:string {:min 1 :max 64}]]]])
+
+(def scope-schema
+  [:vector
+   [:map
+    [:kind [:string {:min 1 :max 64}]]
+    [:ids {:optional true}
+     [:maybe [:vector [:string {:min 1 :max 64}]]]]
+    [:actions [:vector [:string {:min 1 :max 64}]]]
+    [:fields {:optional true} [:maybe field-spec-schema]]
+    [:args {:optional true}
+     [:maybe [:vector
+              [:map
+               [:action [:string {:min 1 :max 64}]]
+               [:mode [:enum "allow" "deny"]]
+               [:names [:vector [:string {:min 1 :max 64}]]]]]]]]])
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
@@ -74,7 +168,19 @@
            :explain "The grant has not reached its expiry."
            :becomes-available-at (fn [row] (get-in row [:data :expires_at]))}))
 
-;; ── the resource ────────────────────────────────────────────────────
+(g/defguard approval-route-only
+  {:reads [:principal]
+   :hide true
+   :explain "Scope extends only through an approved access request, never by hand."}
+  [_row _inp ctx]
+  (if (= :system (get-in ctx [:principal :type]))
+    (t/allow) (t/deny)))
+
+(defhandler extend-grant [row inp _ctx]
+  (cond-> (update-in row [:data :scope] (fn [s] (vec (concat s (:scope inp)))))
+    (:expires_at inp) (assoc-in [:data :expires_at] (:expires_at inp))))
+
+;; ── the grant resource ──────────────────────────────────────────────
 
 (defresource grant
   {:kind :grant
@@ -86,12 +192,7 @@
    :summary "Grant to {data.audience} · {state}"
    :schema [:map
             [:audience [:string {:min 1 :max 128}]]
-            [:scope [:vector
-                     [:map
-                      [:kind [:string {:min 1 :max 64}]]
-                      [:ids {:optional true}
-                       [:maybe [:vector [:string {:min 1 :max 64}]]]]
-                      [:actions [:vector [:string {:min 1 :max 64}]]]]]]
+            [:scope scope-schema]
             [:expires_at {:optional true} [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in}
                 :audience #{:eq}}
@@ -106,11 +207,154 @@
              :safety {:idempotent true :reversible false :confirm true
                       :consequence "The link goes dead immediately and for good; the audience keeps nothing."}
              :display {:label "Revoke" :style :danger :order 9}}
+    ;; the negotiation machine's landing (batch B): concealed from
+    ;; every envelope, invokable only by the approval effect's system
+    ;; actor — a human widening scope by hand is not a thing
+    :extend {:from #{:accepted} :to :accepted
+             :input [:map
+                     [:scope scope-schema]
+                     [:expires_at {:optional true} [:maybe :waymark/instant]]]
+             :record true
+             :edit {:prefill [:scope :expires_at] :fence false
+                    :unfenced-reason "Written once by the approval effect the moment its approve commits; there is no human form to clobber."}
+             :guards [approval-route-only]
+             ;; idempotent, deliberately: a non-idempotent action's 428
+             ;; fires before the hide guard can conceal (invoke's step
+             ;; order), and a keyless human probe must see 404, not a
+             ;; confirmation; a byte-identical redelivery natural-replays
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "Scope only widens through an approved request; the way back is revoke."}
+             :handler extend-grant
+             :display {:label "Extend" :order 7}}
     :expire {:from #{:offered :accepted} :to :expired
              :guards [past-expiry]
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "Expiry is the clock's bookkeeping; fresh access is a new grant, never an un-expire."}
              :display {:label "Expire" :order 8}}}})
+
+;; ── the approval_request resource (the negotiation machine) ─────────
+
+(g/defguard requester-holds-the-grant
+  {:reads [:principal :grant]
+   :explain "An access request extends a grant its requester holds; the named grant's audience must be you."}
+  [_row inp ctx]
+  (let [p (:principal ctx)]
+    (cond
+      (= :system (:type p)) (t/allow)
+      ;; render's probe ctx carries no :read — cross-kind admissions
+      ;; decline rather than guess (the phase-8 discipline)
+      (nil? (:read ctx)) (t/allow)
+      :else (let [row ((:read ctx) :grant (:grant_id inp))]
+              (if (and row (= (get-in row [:data :audience]) (:id p)))
+                (t/allow) (t/deny))))))
+
+(g/defguard someone-else-decides
+  {:reads [:principal]
+   :explain "The requester cannot judge its own ask; another principal decides."}
+  [row _inp ctx]
+  (if (= (:id (:principal ctx)) (get-in row [:data :requested_by]))
+    (t/deny) (t/allow)))
+
+(g/defguard grant-still-accepting
+  {:reads [:grant]
+   :explain "The named grant no longer accepts scope; offer a fresh grant instead."}
+  [row _inp ctx]
+  (if-some [read (:read ctx)]
+    (let [grant-row (read :grant (get-in row [:data :grant_id]))]
+      (if (and grant-row (= :accepted (:state grant-row)))
+        (t/allow) (t/deny)))
+    (t/allow)))
+
+(defhandler stamp-approver [row _inp ctx]
+  (assoc-in row [:data :approved_by] (:id (:principal ctx))))
+
+(defhandler record-verdict-note [row inp _ctx]
+  (assoc-in row [:data :note] (:note inp)))
+
+(defresource approval-request
+  {:kind :approval_request
+   :plural "approval_requests"
+   :states [:offered :approved :denied]
+   :initial :offered
+   :terminal #{:approved :denied}
+   :nav :secondary
+   :summary "Access request by {data.requested_by} · {state}"
+   :schema [:map
+            [:grant_id {:kind :grant} :waymark/ref]
+            [:task [:string {:min 1 :max 240}]]
+            [:scope scope-schema]
+            [:expires_at {:optional true} [:maybe :waymark/instant]]
+            ;; stamped by the engine (on-create / the approve handler);
+            ;; never supplied by hand — the create schema omits them
+            [:requested_by {:optional true :x-display {:raw true}}
+             [:maybe [:string {:max 128}]]]
+            [:approved_by {:optional true :x-display {:raw true}}
+             [:maybe [:string {:max 128}]]]
+            [:note {:optional true} [:maybe [:string {:max 240}]]]]
+   :create-schema [:map
+                   [:grant_id {:kind :grant} :waymark/ref]
+                   [:task [:string {:min 1 :max 240}]]
+                   [:scope scope-schema]
+                   [:expires_at {:optional true} [:maybe :waymark/instant]]]
+   :filterable {:state #{:eq :in}
+                :grant_id #{:eq}
+                :requested_by #{:eq}}
+   :create-guards [requester-holds-the-grant]
+   :on-create (fn [row ctx]
+                (assoc-in row [:data :requested_by]
+                          (get-in ctx [:principal :id])))
+   :actions
+   {:approve {:from #{:offered} :to :approved
+              :guards [someone-else-decides grant-still-accepting]
+              :safety {:idempotent true :reversible false :confirm true
+                       :consequence "The requester's grant gains exactly the scope shown, immediately."}
+              :handler stamp-approver
+              :display {:label "Approve" :style :primary :order 1}}
+    :deny {:from #{:offered} :to :denied
+           :input [:map [:note {:optional true} [:maybe [:string {:max 240}]]]]
+           :edit {:prefill [:note] :fence false
+                  :unfenced-reason "A denial's note is written once with the verdict; a frozen offered ask has nothing to clobber."}
+           :guards [someone-else-decides]
+           :safety {:idempotent true :reversible false :confirm false
+                    :one-way "A denied ask stays on record; asking differently is a new request."}
+           :handler record-verdict-note
+           :display {:label "Deny" :style :danger :order 9}}}})
+
+;; ── the approve effect (the router's one grants seam) ───────────────
+
+(def approvals-actor
+  "The system actor an approved request's grant extension acts as."
+  (t/principal {:id "waymark10-grants" :type :system
+                :display "Grant approvals"}))
+
+(defn approval-effects!
+  "Post-commit, wire-boundary (the router calls this after every
+  single invoke, the attachments put-bytes! precedent): a fresh,
+  non-replayed approve on an :approval_request extends its grant —
+  system actor, logged, keyed on the approval id so a redelivery
+  replays instead of double-appending. A refusal here (the grant
+  revoked between guard and effect) is warned on *err*, never thrown:
+  the approval committed; the grant honestly did not move."
+  [eng rdef action-name result]
+  (when (and (= :approval_request (:kind rdef))
+             (= :approve action-name)
+             (:transition result)
+             (nil? (:replayed? result)))
+    (let [row (:row result)
+          body (cond-> {:scope (get-in row [:data :scope])}
+                 (get-in row [:data :expires_at])
+                 (assoc :expires_at (str (get-in row [:data :expires_at]))))]
+      (try
+        (inv/invoke! eng :grant (get-in row [:data :grant_id]) :extend body
+                     {:principal approvals-actor
+                      :correlation-id (get-in result [:transition :correlation-id])
+                      :idempotency-key (str "approval-extend-" (:id row))})
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "waymark10 grants: approval" (:id row)
+                     "could not extend grant"
+                     (get-in row [:data :grant_id]) "-" (ex-message e)))))))
+  result)
 
 ;; ── scope evaluation ────────────────────────────────────────────────
 
@@ -123,55 +367,213 @@
        (let [exp (get-in row [:data :expires_at])]
          (or (nil? exp) (neg? (compare now exp))))))
 
+(defn- mode-spec [m]
+  (when m
+    {:mode (keyword (:mode m))
+     :names (into #{} (map str) (:names m))}))
+
+(defn- admits?
+  "Does any spec in the vector admit the name? nil specs = the kind is
+  unrestricted (some entry declared no narrowing)."
+  [specs n]
+  (or (nil? specs)
+      (boolean (some (fn [{:keys [mode names]}]
+                       (case mode
+                         :allow (contains? names n)
+                         :deny (not (contains? names n))
+                         false))
+                     specs))))
+
+(defn- args-of
+  "action → [spec …] for one kind's entries. Each entry granting an
+  action contributes its declared spec for it — or openness when its
+  :args does not name the action; one open contribution unrestricts
+  the action's args (absent from the map)."
+  [entries]
+  (let [contribs (for [e entries
+                       a (map str (:actions e))]
+                   [a (some #(when (= a (str (:action %))) (mode-spec %))
+                            (:args e))])]
+    (into {}
+          (keep (fn [[a pairs]]
+                  (let [specs (map second pairs)]
+                    (when (every? some? specs)
+                      [a (vec specs)]))))
+          (group-by first contribs))))
+
 (defn- surface-of
-  "The granted surface: kind → {:ids set|nil :actions #{string}}.
-  Entries sharing a kind union their actions; an entry without ids is
-  kind-level and absorbs any sibling's id narrowing."
+  "The granted surface: kind → {:ids set|nil :actions #{string}
+  :fields [spec…]|nil :args {action [spec…]}}. Entries sharing a kind
+  union their actions and admissions; an entry without ids (or
+  fields, or args for an action) is unrestricted there and absorbs
+  any sibling's narrowing."
   [row]
-  (reduce
-   (fn [m {:keys [kind ids actions]}]
-     (update m kind
-             (fn [e]
-               {:ids (when-not (or (and e (nil? (:ids e)) )
-                                   (nil? ids))
-                       (into (or (:ids e) #{}) (map str) ids))
-                :actions (into (get e :actions #{}) (map str) actions)})))
-   {}
-   (get-in row [:data :scope])))
+  (into {}
+        (map (fn [[kind entries]]
+               [kind
+                {:ids (when-not (some #(nil? (:ids %)) entries)
+                        (into #{} (comp (mapcat :ids) (map str)) entries))
+                 :actions (into #{} (comp (mapcat :actions) (map str)) entries)
+                 :fields (when-not (some #(nil? (:fields %)) entries)
+                           (mapv (comp mode-spec :fields) entries))
+                 :args (args-of entries)}]))
+        (group-by :kind (get-in row [:data :scope]))))
 
 (def dead
   "The scoped-to-nothing surface a dead or unknown grant confers."
   {})
 
-(defn- load-grant [eng grant-id]
-  (when-some [rdef (get (inv/resources eng) :grant)]
+(defn- required-arg-names
+  "The declared action's required input fields, as strings; nil when
+  the action or its input is undeclared."
+  [eng kind action]
+  (when-some [input (get-in (inv/resources eng)
+                            [(keyword kind) :actions (keyword action) :input])]
+    (into #{}
+          (keep (fn [[k e]] (when-not (:optional e) (name k))))
+          (schema/entry-map input))))
+
+(defn- prune-unusable
+  "Denying a REQUIRED argument denies the action (recorded closure of
+  the honesty gap): an action advertised with an unsatisfiable form
+  is a lie — and its missing-key 422 would NAME the hidden argument —
+  so the surface drops it whole; waymark9 routed such invocations to
+  approval mode, which is unported."
+  [eng surface]
+  (into {}
+        (map (fn [[kind e]]
+               [kind
+                (update e :actions
+                        (fn [actions]
+                          (into #{}
+                                (remove
+                                 (fn [a]
+                                   (when-some [specs (get-in e [:args a])]
+                                     (some #(not (admits? specs %))
+                                           (required-arg-names eng kind a)))))
+                                actions)))]))
+        surface))
+
+(defn- load-decoded [eng kind id]
+  (when-some [rdef (get (inv/resources eng) kind)]
     (some->> (store/with-tx (:storage eng)
-               (fn [tx] (store/load-row (:storage eng) tx :grant
-                                        (str grant-id) {})))
+               (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))
              (inv/decode-row rdef))))
+
+(def ^:private own-kinds
+  "The negotiation surface's kinds — visible to any principal whose
+  presented grant row exists and names it as audience, live or dead."
+  #{"grant" "approval_request"})
+
+(defn- own-ids
+  "The principal's own rows of one negotiation kind, as the id cond
+  the collection pushes down. Never empty — an impossible id keeps an
+  empty surface's total honestly zero (an empty IN would not parse)."
+  [eng kind where]
+  (let [ids (store/with-tx (:storage eng)
+              (fn [tx]
+                (mapv :id (store/query-rows (:storage eng) tx kind where
+                                            {:limit 200}))))]
+    (if (seq ids) (vec (sort ids)) ["-none-"])))
 
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
-  active grant confers its surface, anything else confers `dead`.
-  Returns closures the render/router consult — {:kind? :row? :action?
+  active grant confers its surface, anything else confers `dead` —
+  plus the own-grant surface (batch B) whenever the named row exists
+  with this principal as audience, any state. Returns closures the
+  render/router consult — {:kind? :row? :action? :field? :arg?
   :ids-of} — plus :grant-id for narration-free diagnostics."
   [eng grant-id principal]
-  (let [row (load-grant eng grant-id)
-        surface (if (and row
-                         (active? row ((:now-fn eng)))
-                         (= (get-in row [:data :audience]) (:id principal)))
-                  (surface-of row)
-                  dead)]
+  (let [pid (:id principal)
+        row (load-decoded eng :grant grant-id)
+        own? (boolean (and row (= (get-in row [:data :audience]) pid)))
+        surface (if (and own? (active? row ((:now-fn eng))))
+                  (prune-unusable eng (surface-of row))
+                  dead)
+        own-kind? (fn [k] (and own? (contains? own-kinds k)))
+        own-row? (fn [k id]
+                   (when (own-kind? k)
+                     (case k
+                       "grant"
+                       (= pid (some-> (load-decoded eng :grant id)
+                                      (get-in [:data :audience])))
+                       "approval_request"
+                       (= pid (some-> (load-decoded eng :approval_request id)
+                                      (get-in [:data :requested_by]))))))]
     {:grant-id (str grant-id)
      :surface surface
-     :kind? (fn [kind] (contains? surface (name kind)))
+     :own? own?
+     :kind? (fn [kind]
+              (let [k (name kind)]
+                (or (contains? surface k) (own-kind? k))))
      :row? (fn [kind id]
-             (boolean
-              (when-some [e (get surface (name kind))]
-                (or (nil? (:ids e)) (contains? (:ids e) (str id))))))
+             (let [k (name kind)]
+               (boolean
+                (if-some [e (get surface k)]
+                  (or (nil? (:ids e)) (contains? (:ids e) (str id)))
+                  (own-row? k id)))))
      :action? (fn [kind action]
-                (contains? (get-in surface [(name kind) :actions] #{})
-                           (name action)))
-     :ids-of (fn [kind] (some-> (get-in surface [(name kind) :ids])
-                                sort vec))}))
+                (let [k (name kind) a (name action)]
+                  (or (contains? (get-in surface [k :actions] #{}) a)
+                      ;; the one own-surface affordance: filing an ask
+                      (and (own-kind? k)
+                           (= k "approval_request")
+                           (= a "create")))))
+     :field? (fn [kind field]
+               (let [k (name kind)]
+                 (if-some [e (get surface k)]
+                   (admits? (:fields e) (name field))
+                   ;; the own surface renders whole — its rows are the
+                   ;; principal's own record
+                   (own-kind? k))))
+     :arg? (fn [kind action arg]
+             (let [k (name kind)]
+               (if-some [e (get surface k)]
+                 (admits? (get-in e [:args (name action)]) (name arg))
+                 (own-kind? k))))
+     :ids-of (fn [kind]
+               (let [k (name kind)]
+                 (if-some [e (get surface k)]
+                   (some-> (:ids e) sort vec)
+                   (when (own-kind? k)
+                     (own-ids eng (keyword k)
+                              (case k
+                                "grant" {:audience pid}
+                                "approval_request" {:requested_by pid}))))))}))
+
+;; ── enforcement helpers (the router's consults) ─────────────────────
+
+(defn check-args!
+  "Batch B's arg enforcement: a denied argument arriving in a body —
+  dry-run included — answers exactly the 422 an unknown field draws
+  (malli's closed-map words), so 'denied to you' and 'never existed'
+  are one answer. A nil visibility (unscoped request) checks nothing.
+  Recorded seam: this runs at the router boundary, AHEAD of invoke's
+  step order — a denied arg 422s where a truly unknown field would
+  first meet the fence or the state check; ordering can differ."
+  [vis rdef action body]
+  (when-some [arg? (:arg? vis)]
+    (when (map? body)
+      (when-some [denied (seq (remove (fn [[k _]] (arg? (:kind rdef) action k))
+                                      body))]
+        (throw (p/schema-invalid
+                action
+                (into {} (map (fn [[k _]] [k ["disallowed key"]])) denied)))))))
+
+(defn project-json-schema
+  "The published schema view under a grant (/api/schemas/{kind}):
+  redacted fields are not in the schema — absent from properties and
+  required alike. nil visibility returns the schema untouched."
+  [vis kind js]
+  (if-some [field? (:field? vis)]
+    (let [dropped (into #{} (remove #(field? kind %)) (keys (:properties js)))]
+      (if (empty? dropped)
+        js
+        (let [names (into #{} (map name) dropped)]
+          (-> js
+              (update :properties #(apply dissoc % dropped))
+              (update :required
+                      (fn [r]
+                        (some->> r (filterv #(not (contains? names (name %)))))))))))
+    js))

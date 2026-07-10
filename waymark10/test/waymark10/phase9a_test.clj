@@ -286,10 +286,11 @@
               the grant itself"
       (is (= 404 (:status (req :get "/api/meals" nil (scoped gid)))))
       (is (= 404 (:status (req :get "/api/schemas/meal" nil (scoped gid)))))
-      (is (= 404 (:status (req :get (str "/api/grants/" gid) nil (scoped gid))))))
-    (testing "discovery lists only the granted kinds"
+      ;; batch B: the own-grant surface — a holder may read its grant
+      (is (= 200 (:status (req :get (str "/api/grants/" gid) nil (scoped gid))))))
+    (testing "discovery lists the granted kinds plus the own-grant surface"
       (let [b (json (req :get "/api/.well-known/waymark" nil (scoped gid)))]
-        (is (= ["plan"] (:kinds b)))))
+        (is (= ["approval_request" "grant" "plan"] (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]
         (is (= 200 (:status (req :get "/api/plans" nil (scoped gid)))))

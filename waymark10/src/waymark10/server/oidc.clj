@@ -23,11 +23,15 @@
   without a restart. Every failure is one 401 problem carrying
   WWW-Authenticate.
 
-  Recorded scope (each a named punt): the authorization-code + PKCE
-  browser dance, session cookies, and RP-initiated logout are
-  unported — v10 phase 9a is the bearer-token resolver only; the
-  member binding rides the members gate (auto-provision by sub), not
-  waymark9's invited-email flow."
+  Recorded scope (each a named punt, batch B re-affirmed): the
+  authorization-code + PKCE browser dance, session cookies, and
+  RP-initiated logout stay unported — a cookie wrapper around bearer
+  verification would mint a second credential without the login flow
+  that justifies one, which does not fit cleanly here; v10 remains
+  the bearer-token resolver only. The member binding rides the
+  members gate — batch B's invite token (X-Waymark-Invite → the
+  concealed :bind) works under this resolver unchanged, replacing
+  waymark9's invited-email flow with an out-of-band token."
   (:require [buddy.core.keys :as keys]
             [buddy.sign.jwt :as jwt]
             [clojure.string :as str]

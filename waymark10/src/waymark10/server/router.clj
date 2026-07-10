@@ -225,7 +225,13 @@
       (when-some [vis (visibility-of req)]
         (when-not ((:kind? vis) (:kind rdef))
           (throw (p/not-found "kind" kind))))
-      (json-response 200 (p/wire-value (schema/json-schema (:schema rdef)))))))
+      ;; batch B (flagged router seam): the published schema view
+      ;; projects per grant field modes — a redacted field is not in
+      ;; the schema; grants.clj owns the logic, nil vis is untouched
+      (json-response 200 (p/wire-value
+                          (grants/project-json-schema
+                           (visibility-of req) (:kind rdef)
+                           (schema/json-schema (:schema rdef))))))))
 
 (defn- rows-of
   "The collection's rows= parameter: absent → full item summaries;
@@ -360,9 +366,17 @@
     (let [rdef (rdef-by-plural eng plural)
           _ (check-row! req rdef id)
           _ (check-action! req rdef (keyword action))
+          body (read-body req)
+          ;; batch B (flagged router seams, both owned by grants.clj):
+          ;; a grant-denied argument answers the unknown-field 422
+          ;; before invoke runs (dry-run included), and a committed
+          ;; approve on an approval_request extends its grant
+          ;; post-commit (system actor; a no-op for everything else)
+          _ (grants/check-args! (visibility-of req) rdef (keyword action) body)
           opts (invoke-opts req)
-          result (inv/invoke! eng (:kind rdef) id (keyword action)
-                              (read-body req) opts)]
+          result (grants/approval-effects!
+                  eng rdef (keyword action)
+                  (inv/invoke! eng (:kind rdef) id (keyword action) body opts))]
       (cond
         ;; stored replay: the first execution's bytes, verbatim
         (= :idempotency (:replayed? result))
@@ -400,9 +414,13 @@
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
           _ (check-action! req rdef (keyword action))
+          body (read-body req)
+          ;; batch B (flagged): grant-denied args 422 here too — the
+          ;; bulk body minus its ids is the per-item input
+          _ (grants/check-args! (visibility-of req) rdef (keyword action)
+                                (dissoc body :ids))
           opts (invoke-opts req)
-          result (inv/bulk! eng (:kind rdef) (keyword action)
-                            (read-body req) opts)]
+          result (inv/bulk! eng (:kind rdef) (keyword action) body opts)]
       (if-some [d (:deferred result)]
         ;; the phase-7 punt closes (phase 9b): an over-threshold call
         ;; mints a job and answers 202 — the envelope is the body, the
@@ -417,9 +435,14 @@
     (let [rdef (rdef-by-plural eng plural)
           _ (check-row! req rdef id)
           _ (check-action! req rdef (keyword action))
+          body (read-body req)
+          ;; batch B (flagged): each batch input answers the same 422
+          ;; a denied arg draws on a single invoke
+          _ (doseq [inp (:inputs body)]
+              (grants/check-args! (visibility-of req) rdef (keyword action) inp))
           opts (invoke-opts req)]
       (report-response
-       (inv/batch! eng (:kind rdef) id (keyword action) (read-body req) opts)))))
+       (inv/batch! eng (:kind rdef) id (keyword action) body opts)))))
 
 (defn- draft-view-response [view]
   (json-response 200 (p/wire-value view) media-type nil))
@@ -607,7 +630,10 @@
   (fn [req]
     (let [principal (or (oidc/resolve-principal (:oidc eng) (:headers req))
                         (dev-principal (:headers req)))
-          principal (members/gate! eng principal)
+          ;; batch B (flagged): a presented invite token rides into the
+          ;; gate — first authenticated sight binds an invited member
+          principal (members/gate! eng principal
+                                   (get-in req [:headers "x-waymark-invite"]))
           vis (when-some [gid (get-in req [:headers "x-waymark-grant"])]
                 (grants/visibility eng gid principal))]
       (handler (cond-> (assoc req :waymark10/principal principal)

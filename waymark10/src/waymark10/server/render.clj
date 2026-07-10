@@ -71,7 +71,32 @@
   actions stay complete (the refinement shape is what makes this
   honest). :rows :none in ctx-opts is the cheap stub: no probe runs,
   and actions AND unavailable are null — explicitly unknown, not
-  empty."
+  empty.
+
+  ── batch B: the field/argument projection ──────────────────────────
+
+  A visibility with :field?/:arg? closures (grant field/arg modes)
+  projects the envelope AFTER the action filter:
+  - a redacted field is ABSENT from data, from part item documents
+    (a redacted part path drops its whole parts group), and from
+    links — the link pass renders from the redacted view, so an edge
+    param, badge or href template drawing on a hidden field omits its
+    link exactly as a nil value would;
+  - a denied argument is absent from every advertised input schema,
+    its folded enum with it; required shrinks to match; effort is
+    computed over the PROJECTED schema, so the demand class tells the
+    scoped principal's truth; a placed action whose scope KEY is
+    denied drops its parts group (the per-item const would re-name
+    the argument);
+  - THE HONESTY TRAP, closed: a summary template that reads a
+    redacted field falls back to the honest generic line
+    ('Kind · State') — recorded choice over re-rendering with a
+    redaction mark, because a template with a hole leaks the shape of
+    what it hides and reads as a broken sentence besides. Guards
+    still probe over the FULL row (advertisement equals enforcement;
+    the projection is what leaves the building, not what the law
+    judges) — recorded seam: an unavailable narration's deny vars may
+    still name a redacted value (the grants ns records the punt)."
   (:require [clojure.string :as str]
             [waymark10.demand :as demand]
             [waymark10.guards :as g]
@@ -191,12 +216,32 @@
 
 ;; ── entries ─────────────────────────────────────────────────────────
 
-(defn- action-entry [defn' rdef self row ctx]
+(defn- project-input-js
+  "The batch-B argument projection of one advertised input schema:
+  denied properties drop (their folded enums with them), required
+  shrinks to match. arg-ok? nil = no projection."
+  [js arg-ok?]
+  (if (nil? arg-ok?)
+    js
+    (let [dropped (into #{} (remove arg-ok?) (keys (:properties js)))]
+      (if (empty? dropped)
+        js
+        (let [names (into #{} (map name) dropped)]
+          (-> js
+              (update :properties #(apply dissoc % dropped))
+              (update :required
+                      (fn [r]
+                        (some->> r (filterv #(not (contains? names (name %)))))))))))))
+
+(defn- action-entry [defn' rdef self row ctx arg?]
   (let [{:keys [to safety display]} defn'
         href (str self "/-/" (name (:name defn')))
         input-js (when (:input defn')
-                   (fold-acceptance (schema/json-schema (:input defn'))
-                                    defn' row ctx))
+                   (-> (fold-acceptance (schema/json-schema (:input defn'))
+                                        defn' row ctx)
+                       (project-input-js
+                        (when arg?
+                          #(arg? (:kind rdef) (:name defn') %)))))
         key-field (when-some [place (:place defn')]
                     (get-in rdef [:part-scopes place :key]))]
     (cond-> {:method "POST"
@@ -329,13 +374,18 @@
   (:actions {}) (:unavailable {})} …]}}. Every data item appears —
   the group mirrors the array, so a client renders rows for the whole
   scope; items the acceptance set excludes narrate per item, items a
-  relation empties stay silent (ns docstring)."
-  [rdef row ctx by-name actions enc-data]
+  relation empties stay silent (ns docstring). Batch B: a redacted
+  part path — or a denied scope key — drops the group whole (the item
+  documents, or the const-bound key, would re-name what the grant
+  hides)."
+  [rdef row ctx by-name actions enc-data field? arg?]
   (reduce-kv
    (fn [parts aname entry]
      (let [defn' (get by-name aname)
            scope (when defn' (get-in rdef [:part-scopes (:place defn')]))]
-       (if-not scope
+       (if-not (and scope
+                    (or (nil? field?) (field? (:kind rdef) (:path scope)))
+                    (or (nil? arg?) (arg? (:kind rdef) aname (:key scope))))
          parts
          (let [{:keys [path key]} scope
                items (vec (get-in row [:data path]))
@@ -448,6 +498,39 @@
                                         (get-in row [:data badge]))))])))
         (:links rdef)))
 
+;; ── the field projection (batch B) ──────────────────────────────────
+
+(defn- redacted-fields
+  "The declared data fields this visibility hides for the kind — nil
+  when the request is unscoped or hides nothing."
+  [rdef visibility]
+  (when-some [field? (:field? visibility)]
+    (not-empty
+     (into #{} (remove #(field? (:kind rdef) %))
+           (schema/entry-keys (:schema rdef))))))
+
+(def ^:private summary-data-token #"\{data\.([A-Za-z0-9_]+)")
+
+(defn- project-summary
+  "The honesty trap, closed (ns docstring): a summary template that
+  reads a redacted field renders as the honest generic line, never as
+  the template over hidden values."
+  [rdef row redacted]
+  (if (and (seq redacted)
+           (some #(contains? redacted (keyword (second %)))
+                 (re-seq summary-data-token (str (:summary rdef)))))
+    (str (summary/state-label (:kind rdef)) " · "
+         (summary/state-label (:state row)))
+    (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))))
+
+(defn- redact-row
+  "The public view of the row: redacted data fields removed — the one
+  value the summary/link passes read, so a hidden field omits its
+  link exactly as a nil value would."
+  [row redacted]
+  (cond-> row
+    (seq redacted) (update :data #(apply dissoc % redacted))))
+
 ;; ── the envelope ────────────────────────────────────────────────────
 
 (defn envelope
@@ -464,6 +547,12 @@
                     :now now :services services :mode :probe})
         self (str "/api/" (:plural rdef) "/" (:id row))
         state (:state row)
+        ;; the field/argument projection closures (batch B) — guards
+        ;; still probe over the FULL row below; only what leaves the
+        ;; building projects
+        field? (:field? visibility)
+        arg? (:arg? visibility)
+        redacted (redacted-fields rdef visibility)
         ;; the row's law resolves the probe's guards too (phase 5):
         ;; advertisement equals enforcement, per row
         resolved (map #(judgment/resolve-action rdef % (:law-revision row))
@@ -480,7 +569,7 @@
                    (assoc-in acc [:unavailable (:name defn')]
                              (no-admissible-entry defn' field))
                    (assoc-in acc [:actions (:name defn')]
-                             (action-entry defn' rdef self row ctx)))
+                             (action-entry defn' rdef self row ctx arg?)))
                  :unavailable (assoc-in acc [:unavailable (:name defn')]
                                         (unavailable-entry denier deny row))
                  :hidden acc))
@@ -514,20 +603,24 @@
                    (fn [[aname _]] ((:action? visibility) (:kind rdef) aname)))
         actions (cond->> actions granted? (into {} (filter granted?)))
         unavailable (cond->> unavailable granted? (into {} (filter granted?)))
-        enc-data (schema/encode (:schema rdef) (:data row))
+        ;; the redacted view (batch B): absent from data and from the
+        ;; link pass; guards above judged the full row
+        enc-data (cond-> (schema/encode (:schema rdef) (:data row))
+                   (seq redacted) (as-> d (apply dissoc d redacted)))
+        public-row (redact-row row redacted)
         ;; parts render over the SURVIVING actions — a concealed placed
         ;; action never re-renders per item
-        parts (parts-of rdef row ctx by-name actions enc-data)]
+        parts (parts-of rdef row ctx by-name actions enc-data field? arg?)]
     (p/wire-value
      (cond-> {:waymark "10"
               :kind (name (:kind rdef))
               :self self
               :state (name state)
-              :summary (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))
+              :summary (project-summary rdef row redacted)
               :data enc-data
               :actions actions
               :unavailable unavailable
-              :links (render-links rdef row resources)
+              :links (render-links rdef public-row resources)
               :meta (cond-> {:version (:version row)
                              :etag (inv/etag (:kind rdef) (:id row) (:version row))}
                       (:updated-at row) (assoc :updated-at (str (:updated-at row)))
@@ -538,21 +631,25 @@
   "The rows=none item (batch A): no probe runs — actions and
   unavailable are null, EXPLICITLY UNKNOWN (the spec's answer for a
   page that declined to pay per-row probes; a follow-up GET tells).
-  State, summary, links and meta stay — they cost nothing."
-  [rdef row {:keys [resources]}]
-  (p/wire-value
-   {:waymark "10"
-    :kind (name (:kind rdef))
-    :self (str "/api/" (:plural rdef) "/" (:id row))
-    :state (name (:state row))
-    :summary (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))
-    :actions nil
-    :unavailable nil
-    :links (render-links rdef row resources)
-    :meta (cond-> {:version (:version row)
-                   :etag (inv/etag (:kind rdef) (:id row) (:version row))}
-            (:updated-at row) (assoc :updated-at (str (:updated-at row)))
-            (:law-revision row) (assoc :law-revision (:law-revision row)))}))
+  State, summary, links and meta stay — they cost nothing (and they
+  project like the full envelope's: batch B's redaction holds at
+  every depth)."
+  [rdef row {:keys [resources visibility]}]
+  (let [redacted (redacted-fields rdef visibility)
+        public-row (redact-row row redacted)]
+    (p/wire-value
+     {:waymark "10"
+      :kind (name (:kind rdef))
+      :self (str "/api/" (:plural rdef) "/" (:id row))
+      :state (name (:state row))
+      :summary (project-summary rdef row redacted)
+      :actions nil
+      :unavailable nil
+      :links (render-links rdef public-row resources)
+      :meta (cond-> {:version (:version row)
+                     :etag (inv/etag (:kind rdef) (:id row) (:version row))}
+              (:updated-at row) (assoc :updated-at (str (:updated-at row)))
+              (:law-revision row) (assoc :law-revision (:law-revision row)))})))
 
 (defn envelope-summary
   "Depth summary: the full envelope minus data AND parts — state,

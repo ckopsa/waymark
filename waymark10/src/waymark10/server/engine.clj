@@ -71,7 +71,7 @@
   [resources]
   (registry/registry (into (vec resources)
                            [defs/definition members/member
-                            roles/role grants/grant
+                            roles/role grants/grant grants/approval-request
                             attachments/attachment
                             webhooks/subscription jobs/job])))
 
@@ -127,7 +127,8 @@
                                       :attachment-dir :attachment-max-bytes
                                       :webhook-attempts :webhook-backoff-ms
                                       :webhook-timeout-ms :webhooks-poll-ms
-                                      :jobs-poll-ms :jobs-batch-size])
+                                      :jobs-poll-ms :jobs-batch-size
+                                      :members])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)
