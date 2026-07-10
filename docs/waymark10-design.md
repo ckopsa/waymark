@@ -169,7 +169,40 @@ a membership predicate, so paths whose leaf value was `nil` or
 and poisoned the gate toward `code_or_shape`. Presence is
 `contains?`, never truthiness — the regression test pins it.
 
-# 5. Phase-0 status and acceptance
+# 5. The declaration layer (phase 1, landed)
+
+A resource is one map; `defresource` normalizes it, runs the check
+battery, and refuses at load what waymark9 refused at import. Guards
+are maps evaluated by one function — the same `[verdict denier]`
+resolution feeds the probe (render) and the invoke (enforcement),
+which is the 2.0 unification carried into the new medium. Nothing is
+sniffed: an `accepts` fn's call shape comes from `:reads`, the probe
+short-circuit from `:needs-input`, and `:needs-input` defaults to
+"grades input" — where grading is a `:check` **or a `:when` tree
+whose leaves read `(input …)`** (the expression guard is code's
+peer, so it inherits code's probe discipline).
+
+Recorded adaptations from the Python original:
+
+- **`bind_data` becomes data.** waymark9's `FactRequired.bind_data`
+  mutated the guard at check time. Guards are immutable maps here, so
+  `normalize-resource` *enriches* every require-leaf with its fact's
+  derived spec (`:require/spec`) — the functional spelling of the
+  same late binding.
+- **Declaration order is not law.** Clojure map literals over eight
+  entries lose authoring order, so action iteration is name-sorted
+  everywhere (fingerprint, machine queries). Display order was always
+  declared (`:display :order`); guard evaluation order lives in each
+  action's guard vector, which survives.
+- **Handler identity is a warning, then a gate.** A handler without
+  `defhandler`'s form metadata gets a usability warning in phase 1;
+  the strict mode that refuses it arrives with the registry, when
+  grandfathered laws make unstateable identity an actual lie.
+- **`async` evaporates.** Guard checks and accepts fns are plain
+  functions; concurrency is the server's problem (threads), not the
+  declaration's.
+
+# 6. Phase-0 status and acceptance
 
 Landed: `waymark10.expr` (vocabulary, validation, normalization,
 total interpreter, scope validators, `read-form`), `waymark10.wire`
