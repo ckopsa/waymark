@@ -335,3 +335,53 @@ and `mark_stale` as a human answers 404 (concealed).
 | Node | Demanded by | Date |
 | --- | --- | --- |
 | `:waymark/instant` (schema type, not an expr node) | prep_task.due_at | 2026-07-10 |
+
+# 8. Phase 9a — identity and access
+
+Members, roles, OIDC, grants and attachments land as engine-served
+resource kinds (every engine now enrolls definition + member + role +
+grant + attachment; well-known lists them), plus one new router
+boundary. `wrap-identity` (inside the problem boundary) resolves the
+request's identity ONCE, judgment-style: the principal — the OIDC
+bearer resolver when the engine configures `{:oidc {:issuer :audience
+:jwks-uri|:jwks :roles-claim :type-claim}}` (buddy-sign RS256 against
+a cached JWKS with kid-rotation refetch; expired/bad-signature/wrong-
+audience → one 401 problem carrying WWW-Authenticate; absent config =
+dev headers unchanged, and dev headers stay the no-Bearer fallback) —
+then the members gate (`members/gate!`: auto-provision on first sight
+as a logged system-actor create, waymark9's invite→bind flow scoped
+down to it; a suspended member's every request is one 403 problem
+BEFORE any handler — authentication-adjacent gating, documented as
+such, guards stay the only authorization concept; member-held roles
+union onto the credential), then the grant visibility (X-Waymark-
+Grant names a grant id whose audience must be the principal; the
+resolved `{:kind? :row? :action? :ids-of}` closures ride the request).
+Enforcement is rendering at the source, waymark9's discipline at
+phase-9a fidelity: render drops non-granted actions from actions AND
+unavailable (absence, never narration), the router 404s non-granted
+kinds/rows/actions (concealment), collections push granted ids down
+as a real cond so totals stay honest, and a dead grant (unknown,
+unaccepted, revoked, expired, wrong audience) scopes to NOTHING.
+Grants themselves are offered → accepted → revoked/expired with
+`accept` audience-gated, `revoke` no-self-dealing, `expire` clock-
+gated bookkeeping — expiry is enforced live either way. Attachments
+are pending → stored → deleted metadata plus PUT/GET
+`/api/attachments/{id}/bytes` against `:attachment-dir` (default
+target/attachments) with `:attachment-max-bytes` (default 10 MiB,
+413 problem); a successful PUT runs `mark_stored` as the bytes system
+actor (hidden — a human's direct invoke 404s), a same-size re-PUT
+natural-replays. The conformance library grows three additive
+obligations: grant concealment (a scoped envelope never NAMES an
+ungranted action), the suspended-refusal shape, and the attachment
+byte round-trip. mealplan10 needed no wiring. Named punts, each
+scoped deliberately: waymark9's grant negotiation machine
+(request_access, approver-edited maps, attenuation ceilings), the
+ApprovalRequest flow, field/argument modes (v10 grants grade kinds,
+ids and actions only), the agent's own-grant negotiation surface,
+grant-projected SSE (a scoped request 404s the event routes),
+idempotency replays predate the projection (the phase-3 render-fn
+punt, extended), invited-only membership, role uniqueness under race
+(a create guard, no unique index), OIDC's browser dance/sessions/
+logout, byte purge on delete (waymark9's BlobJanitor), duplication/
+sha256/S3/presigned URLs, and blob-write/metadata atomicity
+(waymark9's log-consumer choreography).

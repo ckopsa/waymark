@@ -172,8 +172,12 @@
 (defn envelope
   "The v10 wire document (snake string keys, JSON-ready values) for a
   DECODED row. ctx-opts: :principal (default anonymous), :now
-  (Instant, required for time-reading guards), :services."
-  [rdef row {:keys [principal now services]}]
+  (Instant, required for time-reading guards), :services, and
+  :visibility (phase 9a) — the per-request grant projection, resolved
+  once at the identity boundary: when present, only granted actions
+  survive, absent from actions AND unavailable alike (concealment,
+  never narration)."
+  [rdef row {:keys [principal now services visibility]}]
   (let [ctx (t/ctx {:principal (or principal t/anonymous)
                     :now now :services services :mode :probe})
         self (str "/api/" (:plural rdef) "/" (:id row))
@@ -217,7 +221,14 @@
                           :safety {:idempotent true :reversible false
                                    :confirm false}
                           :display {:label "Adopt the current law"}})
-                  actions)]
+                  actions)
+        ;; the visibility projection (phase 9a): a scoped request's
+        ;; non-granted actions do not exist — dropped from both maps,
+        ;; the engine-injected adopt included
+        granted? (when visibility
+                   (fn [[aname _]] ((:action? visibility) (:kind rdef) aname)))
+        actions (cond->> actions granted? (into {} (filter granted?)))
+        unavailable (cond->> unavailable granted? (into {} (filter granted?)))]
     (p/wire-value
      {:waymark "10"
       :kind (name (:kind rdef))

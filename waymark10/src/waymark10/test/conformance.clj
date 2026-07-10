@@ -393,3 +393,65 @@
                    refusals))
       (conj (str where ": a refusal entry carries no reason sentence: "
                  (pr-str refusals))))))
+
+;; ── the identity-and-access obligations (phase 9a) ──────────────────
+
+(defn grant-concealment-violations
+  "The grant-concealment obligation for one parsed envelope rendered
+  to a SCOPED principal: no action name outside the granted set
+  survives anywhere — not advertised, not narrated as unavailable
+  (absence IS the promise; narration would leak what concealment
+  hides)."
+  [env granted]
+  (let [where (where-of env)
+        allowed (into #{} (map (comp keyword name)) granted)]
+    (concat
+     (for [n (sort (keys (:actions env)))
+           :when (not (contains? allowed n))]
+       (str where ": a scoped envelope advertises ungranted " (name n)))
+     (for [n (sort (keys (:unavailable env)))
+           :when (not (contains? allowed n))]
+       (str where ": a scoped envelope NARRATES ungranted " (name n)
+            " — concealment demands absence")))))
+
+(defn suspension-violations
+  "The suspended-member refusal shape: a 403 problem (RFC 9457 like
+  every refusal) whose type names member-suspended — the same answer
+  on every route, because the gate runs before any handler."
+  [status ctype body & [{:keys [where]}]]
+  (let [where (or where "suspended member")]
+    (concat
+     (when (not= 403 status)
+       [(str where ": answered " status ", not 403")])
+     (problem-violations status ctype body {:where where})
+     (when-not (str/ends-with? (str (:type body)) "member-suspended")
+       [(str where ": problem type " (pr-str (:type body))
+             " does not name member-suspended")]))))
+
+(defn attachment-roundtrip-violations
+  "The byte round-trip obligation: the PUT answered 200 with the
+  stored envelope whose data.size tells the byte count, and the GET
+  served the same bytes back under the declared media type."
+  [{:keys [sent put-status put-env get-status get-ctype got media-type]}]
+  (let [n (count (seq sent))]
+    (cond-> []
+      (not= 200 put-status)
+      (conj (str "bytes PUT answered " put-status ", not 200"))
+
+      (not= "stored" (:state put-env))
+      (conj (str "the PUT's envelope is " (pr-str (:state put-env))
+                 ", not stored"))
+
+      (not= n (get-in put-env [:data :size]))
+      (conj (str "data.size " (pr-str (get-in put-env [:data :size]))
+                 " is not the " n " bytes sent"))
+
+      (not= 200 get-status)
+      (conj (str "bytes GET answered " get-status ", not 200"))
+
+      (and media-type (not= media-type get-ctype))
+      (conj (str "bytes GET Content-Type " (pr-str get-ctype)
+                 " is not the declared " (pr-str media-type)))
+
+      (not= (seq sent) (seq got))
+      (conj "the bytes that came back are not the bytes sent"))))

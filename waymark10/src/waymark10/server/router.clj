@@ -10,15 +10,33 @@
   {plural}/-/{action} is bulk, POST …/{action}/batch is batch, and
   …/{action}/draft carries the draft sub-resource (GET/PUT/DELETE).
   Query params URL-decode at parse, so the collection's own
-  page[…]-carrying self hrefs round-trip."
+  page[…]-carrying self hrefs round-trip.
+
+  Phase 9a adds the IDENTITY boundary (wrap-identity, inside the
+  problem boundary): the request's principal — the OIDC bearer
+  resolver when the engine configures :oidc, the dev headers
+  otherwise — and the grant visibility (X-Waymark-Grant) resolve ONCE
+  and ride the request; the members suspension gate refuses a
+  suspended member's every request 403 before any handler runs
+  (authentication-adjacent gating — guards stay the only
+  authorization concept, see waymark10.server.members). A scoped
+  request sees only its granted surface: non-granted kinds and rows
+  404, non-granted actions 404 (concealment). Recorded punt: the SSE
+  routes are not projected — a scoped request gets 404 on them.
+  Attachment bytes ride PUT/GET /api/attachments/{id}/bytes (static
+  route, shadowing the plural grammar by position)."
   (:require [clojure.string :as str]
             [reitit.ring :as ring]
             [waymark10.schema :as schema]
+            [waymark10.server.attachments :as attachments]
             [waymark10.server.collections :as collections]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
+            [waymark10.server.oidc :as oidc]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
@@ -50,7 +68,7 @@
   (when s
     (into [] (comp (map str/trim) (remove str/blank?)) (str/split s #","))))
 
-(defn- principal-of [headers]
+(defn- dev-principal [headers]
   (if-some [id (get headers "x-waymark-principal")]
     (t/principal {:id id
                   :roles (set (csv (get headers "x-waymark-roles")))
@@ -58,6 +76,41 @@
                                          str/trim str/lower-case keyword)]
                           (if (contains? t/actor-types at) at :human))})
     t/anonymous))
+
+(defn- principal-of
+  "The request's principal, resolved once by wrap-identity; the dev
+  headers remain the fallback for a bare handler in tests."
+  [req]
+  (or (:waymark10/principal req) (dev-principal (:headers req))))
+
+(defn- visibility-of [req] (:waymark10/visibility req))
+
+;; ── the visibility checks (phase 9a, concealment) ───────────────────
+
+(defn- check-kind!
+  "A scoped request addressing a non-granted kind: the collection does
+  not exist."
+  [req rdef]
+  (when-some [vis (visibility-of req)]
+    (when-not ((:kind? vis) (:kind rdef))
+      (throw (p/not-found "collection" (:plural rdef))))))
+
+(defn- check-row!
+  "A scoped request addressing a non-granted kind or un-granted id:
+  the row does not exist."
+  [req rdef id]
+  (when-some [vis (visibility-of req)]
+    (when-not ((:row? vis) (:kind rdef) id)
+      (throw (p/not-found (:kind rdef) id)))))
+
+(defn- check-action!
+  "A scoped request invoking a non-granted action: the action does not
+  exist (never a 403 — a refusal that names the gate would leak what
+  concealment hides)."
+  [req rdef action]
+  (when-some [vis (visibility-of req)]
+    (when-not ((:action? vis) (:kind rdef) action)
+      (throw (p/no-such-action (:kind rdef) action)))))
 
 (defn- url-decode ^String [^String s]
   (URLDecoder/decode s StandardCharsets/UTF_8))
@@ -72,7 +125,7 @@
 
 (defn- invoke-opts [req]
   (let [headers (:headers req)]
-    {:principal (principal-of headers)
+    {:principal (principal-of req)
      :if-match (get headers "if-match")
      :idempotency-key (get headers "idempotency-key")
      :acknowledged (into #{} (map keyword) (csv (get headers "waymark-acknowledge")))
@@ -87,10 +140,11 @@
     :headers (merge {"Content-Type" ctype} extra-headers)
     :body (wire/write-json body)}))
 
-(defn- envelope-response [eng rdef row principal status extra-headers]
-  (let [env (render/envelope rdef row {:principal principal
+(defn- envelope-response [eng rdef row req status extra-headers]
+  (let [env (render/envelope rdef row {:principal (principal-of req)
                                        :now ((:now-fn eng))
-                                       :services (:services eng)})]
+                                       :services (:services eng)
+                                       :visibility (visibility-of req)})]
     (json-response status env media-type
                    (merge {"ETag" (get-in env ["meta" "etag"])} extra-headers))))
 
@@ -110,42 +164,53 @@
 ;; ── handlers ────────────────────────────────────────────────────────
 
 (defn- well-known [eng]
-  (fn [_req]
-    (json-response
-     200
-     {:waymark "10"
-      :kinds (vec (sort (map name (keys (inv/resources eng)))))
-      :resources (into (sorted-map)
-                       (map (fn [[k r]] [(name k) {:href (str "/api/" (:plural r))}]))
-                       (inv/resources eng))})))
+  (fn [req]
+    (let [vis (visibility-of req)
+          resources (cond->> (inv/resources eng)
+                      vis (filter (fn [[k _]] ((:kind? vis) k))))]
+      (json-response
+       200
+       {:waymark "10"
+        :kinds (vec (sort (map (comp name key) resources)))
+        :resources (into (sorted-map)
+                         (map (fn [[k r]] [(name k) {:href (str "/api/" (:plural r))}]))
+                         resources)}))))
 
 (defn- kind-schema [eng]
-  (fn [{{:keys [kind]} :path-params}]
+  (fn [{{:keys [kind]} :path-params :as req}]
     (let [rdef (or (get (inv/resources eng) (keyword kind))
                    (throw (p/not-found "kind" kind)))]
+      (when-some [vis (visibility-of req)]
+        (when-not ((:kind? vis) (:kind rdef))
+          (throw (p/not-found "kind" kind))))
       (json-response 200 (p/wire-value (schema/json-schema (:schema rdef)))))))
 
 (defn- collection [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
+          _ (check-kind! req rdef)
           env (collections/envelope eng rdef (query-params req)
-                                    {:principal (principal-of (:headers req))
+                                    {:principal (principal-of req)
                                      :now ((:now-fn eng))
-                                     :services (:services eng)})]
+                                     :services (:services eng)
+                                     :visibility (visibility-of req)})]
       (json-response 200 env media-type nil))))
 
 (defn- create [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
+          _ (check-kind! req rdef)
+          _ (check-action! req rdef (first (:create-action-names rdef)))
           opts (invoke-opts req)
           {:keys [row]} (inv/create! eng (:kind rdef) (read-body req)
                                      (select-keys opts [:principal :acknowledged]))]
-      (envelope-response eng rdef row (:principal opts) 201
+      (envelope-response eng rdef row req 201
                          {"Location" (str "/api/" plural "/" (:id row))}))))
 
 (defn- get-one [eng]
   (fn [{{:keys [plural id]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
+          _ (check-row! req rdef id)
           row (load-decoded eng rdef id)
           ;; the mirror's pull-through seam (phase 8): a stale mirrored
           ;; row refreshes from its adapter on read, system actor.
@@ -156,11 +221,13 @@
           row (if (and (:mirror rdef) (not (:suppress-mirror-refresh eng)))
                 (mirror/refresh! eng rdef row)
                 row)]
-      (envelope-response eng rdef row (principal-of (:headers req)) 200 nil))))
+      (envelope-response eng rdef row req 200 nil))))
 
 (defn- invoke-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
+          _ (check-row! req rdef id)
+          _ (check-action! req rdef (keyword action))
           opts (invoke-opts req)
           result (inv/invoke! eng (:kind rdef) id (keyword action)
                               (read-body req) opts)]
@@ -181,7 +248,7 @@
                        media-type nil)
 
         :else
-        (envelope-response eng rdef (:row result) (:principal opts) 200 nil)))))
+        (envelope-response eng rdef (:row result) req 200 nil)))))
 
 ;; ── bulk, batch and drafts (phase 7) ────────────────────────────────
 
@@ -199,6 +266,8 @@
 (defn- bulk-action [eng]
   (fn [{{:keys [plural action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
+          _ (check-kind! req rdef)
+          _ (check-action! req rdef (keyword action))
           opts (invoke-opts req)]
       (report-response
        (inv/bulk! eng (:kind rdef) (keyword action) (read-body req) opts)))))
@@ -206,6 +275,8 @@
 (defn- batch-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
+          _ (check-row! req rdef id)
+          _ (check-action! req rdef (keyword action))
           opts (invoke-opts req)]
       (report-response
        (inv/batch! eng (:kind rdef) id (keyword action) (read-body req) opts)))))
@@ -216,22 +287,26 @@
 (defn- draft-get [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)]
+      (check-row! req rdef id)
+      (check-action! req rdef (keyword action))
       (draft-view-response
-       (drafts/fetch eng rdef id (keyword action)
-                     (principal-of (:headers req)))))))
+       (drafts/fetch eng rdef id (keyword action) (principal-of req))))))
 
 (defn- draft-put [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)]
+      (check-row! req rdef id)
+      (check-action! req rdef (keyword action))
       (draft-view-response
        (drafts/save! eng rdef id (keyword action) (read-body req)
-                     (principal-of (:headers req)))))))
+                     (principal-of req))))))
 
 (defn- draft-delete [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)]
-      (drafts/discard! eng rdef id (keyword action)
-                       (principal-of (:headers req)))
+      (check-row! req rdef id)
+      (check-action! req rdef (keyword action))
+      (drafts/discard! eng rdef id (keyword action) (principal-of req))
       {:status 204 :headers {}})))
 
 ;; ── events (SSE, phase 6) ───────────────────────────────────────────
@@ -258,18 +333,41 @@
   (fn [{{:keys [plural id]} :path-params :as req}]
     (let [d (events-dispatcher eng)
           rdef (rdef-by-plural eng plural)]
+      (check-row! req rdef id)
       (events/sse-handler eng d {:resource [(:kind rdef) id]
                                  :since (last-event-id req)}
                           req))))
 
 (defn- firehose-events [eng]
   (fn [req]
+    ;; the firehose spans kinds; projecting it per grant is a named
+    ;; punt — a scoped request gets the concealment answer
+    (when (visibility-of req)
+      (throw (p/problem :not-found 404 "Not found" {:detail "No such route."})))
     (let [d (events-dispatcher eng)
           kinds (some->> (get (query-params req) "kinds") csv
                          (map keyword) set not-empty)]
       (events/sse-handler eng d {:kinds kinds
                                  :since (last-event-id req)}
                           req))))
+
+;; ── attachment bytes (phase 9a) ─────────────────────────────────────
+
+(defn- attachment-rdef [eng id]
+  (or (get (inv/resources eng) :attachment)
+      (throw (p/not-found :attachment id))))
+
+(defn- bytes-put [eng]
+  (fn [{{:keys [id]} :path-params :as req}]
+    (let [rdef (attachment-rdef eng id)]
+      (check-row! req rdef id)
+      (let [result (attachments/put-bytes! eng id (:body req))]
+        (envelope-response eng rdef (:row result) req 200 nil)))))
+
+(defn- bytes-get [eng]
+  (fn [{{:keys [id]} :path-params :as req}]
+    (check-row! req (attachment-rdef eng id) id)
+    (attachments/get-bytes eng id)))
 
 ;; ── the handler ─────────────────────────────────────────────────────
 
@@ -303,15 +401,36 @@
   (p/->response (p/problem :not-found 404 "Not found"
                            {:detail "No such route."})))
 
+(defn- wrap-identity
+  "The identity boundary (phase 9a), judgment-style: the principal
+  (bearer token via the engine's :oidc config, else dev headers), the
+  members suspension gate, and the grant visibility all resolve ONCE
+  and ride the request — every handler reads the same resolved
+  identity, never the raw headers. Sits inside the problem boundary
+  so its refusals (401 bad token, 403 suspended) project like any
+  problem."
+  [handler eng]
+  (fn [req]
+    (let [principal (or (oidc/resolve-principal (:oidc eng) (:headers req))
+                        (dev-principal (:headers req)))
+          principal (members/gate! eng principal)
+          vis (when-some [gid (get-in req [:headers "x-waymark-grant"])]
+                (grants/visibility eng gid principal))]
+      (handler (cond-> (assoc req :waymark10/principal principal)
+                 vis (assoc :waymark10/visibility vis))))))
+
 (defn handler
   "The ring handler: linear router (static routes shadow the plural
-  grammar), problem boundary outermost."
+  grammar), identity boundary inside the problem boundary, problem
+  boundary outermost."
   [eng]
   (-> (ring/ring-handler
        (ring/router
         [["/api/.well-known/waymark" {:get (well-known eng)}]
          ["/api/schemas/:kind" {:get (kind-schema eng)}]
          ["/api/-/events" {:get (firehose-events eng)}]
+         ["/api/attachments/:id/bytes" {:put (bytes-put eng)
+                                        :get (bytes-get eng)}]
          ["/api/:plural" {:get (collection eng) :post (create eng)}]
          ["/api/:plural/-/:action" {:post (bulk-action eng)}]
          ["/api/:plural/:id" {:get (get-one eng)}]
@@ -323,4 +442,5 @@
                                               :delete (draft-delete eng)}]]
         {:conflicts nil})
        not-found-handler)
+      (wrap-identity eng)
       wrap-problems))

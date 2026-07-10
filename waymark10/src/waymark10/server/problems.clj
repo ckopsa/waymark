@@ -128,12 +128,15 @@
 
 (defn ->response
   "The tagged ex-info as an RFC 9457 ring response: status from the
-  data, application/problem+json, body = the ex-data minus the tag,
-  snake-cased, present keys only."
+  data, application/problem+json, body = the ex-data minus the tags,
+  snake-cased, present keys only. :waymark10/headers rides the
+  response headers, never the body (phase 9a: the 401's
+  WWW-Authenticate)."
   [e]
   (let [d (ex-data e)]
     {:status (:status d 500)
-     :headers {"Content-Type" "application/problem+json"}
-     :body (wire/write-json (-> (dissoc d :waymark10/problem)
+     :headers (merge {"Content-Type" "application/problem+json"}
+                     (:waymark10/headers d))
+     :body (wire/write-json (-> (dissoc d :waymark10/problem :waymark10/headers)
                                 prune
                                 wire-value))}))

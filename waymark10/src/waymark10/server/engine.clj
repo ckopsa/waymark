@@ -20,14 +20,26 @@
   that never starts (a test handler) pays nothing and its SSE routes
   answer 503. opts: :sweep-interval-ms (clock sweep, default 30s),
   :events-poll-ms (dispatcher backstop, default 2s),
-  :sse-heartbeat-ms (default 15s), :maintainer-fan-out (default 200)."
+  :sse-heartbeat-ms (default 15s), :maintainer-fan-out (default 200).
+
+  Phase 9a: every engine enrolls the identity-and-access kinds beside
+  the definition — member, role, grant, attachment — so well-known
+  lists them and the law lifecycle governs them like any kind. opts
+  gain :oidc (the relying-party config, validated at boot; absent =
+  dev-header auth unchanged), :attachment-dir (default
+  target/attachments) and :attachment-max-bytes (default 10 MiB)."
   (:require [org.httpkit.server :as http]
             [waymark10.registry :as registry]
+            [waymark10.server.attachments :as attachments]
             [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
+            [waymark10.server.grants :as grants]
             [waymark10.server.maintainer :as maintainer]
+            [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
+            [waymark10.server.oidc :as oidc]
             [waymark10.server.render :as render]
+            [waymark10.server.roles :as roles]
             [waymark10.server.router :as router]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -43,10 +55,15 @@
   finish! remains a recorded punt) — principal-sensitive guards may
   render differently in a replay than they did live."
   [{:keys [storage resources services now-fn deploy-mode] :as opts}]
-  (let [reg (registry/registry (conj (vec resources) defs/definition))
+  (let [reg (registry/registry (into (vec resources)
+                                     [defs/definition members/member
+                                      roles/role grants/grant
+                                      attachments/attachment]))
         eng (merge (select-keys opts [:sweep-interval-ms :events-poll-ms
                                       :sse-heartbeat-ms :maintainer-fan-out
-                                      :suppress-mirror-refresh])
+                                      :suppress-mirror-refresh
+                                      :attachment-dir :attachment-max-bytes])
+                   (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)
                     :services services

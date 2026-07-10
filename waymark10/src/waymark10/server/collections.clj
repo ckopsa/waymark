@@ -395,11 +395,19 @@
 (defn envelope
   "The collection envelope for one parsed GET: parse the params (422
   on unknowns), page the rows, count the filtered total, fold the
-  facets, and render items as envelope-minus-data summaries."
+  facets, and render items as envelope-minus-data summaries. A
+  :visibility in ctx-opts (phase 9a, the per-request grant projection)
+  narrows an id-scoped grant's page to its granted rows (a real cond,
+  so the total stays honest) and drops non-granted create/bulk
+  affordances; items project through render's own visibility filter."
   [eng rdef params ctx-opts]
   (let [plural (:plural rdef)
         kname (name (:kind rdef))
         {:keys [conds sort page filters applied]} (parse-query rdef params)
+        vis (:visibility ctx-opts)
+        conds (if-some [ids (when vis ((:ids-of vis) (:kind rdef)))]
+                (conj conds {:target :id :op :in :values (vec ids)})
+                conds)
         st (:storage eng)
         {:keys [rows total]}
         (store/with-tx st
@@ -430,6 +438,16 @@
         links (cond-> {}
                 (< number last-page) (assoc :next (page-link (inc number)))
                 (< 1 number) (assoc :prev (page-link (dec number))))
+        acts (collection-actions rdef)
+        ;; a scoped request's collection affordances: query stays (the
+        ;; kind itself is granted or this envelope never rendered),
+        ;; create and bulk entries survive only when granted
+        acts (if vis
+               (into {} (filter (fn [[aname _]]
+                                  (or (= :query aname)
+                                      ((:action? vis) (:kind rdef) aname))))
+                     acts)
+               acts)
         doc (p/wire-value
              {:waymark "10"
               :kind (str kname "_collection")
@@ -439,6 +457,6 @@
               :data {:items items
                      :total total
                      :page {:size size :number number}}
-              :actions (collection-actions rdef)
+              :actions acts
               :links links})]
     (splice-facets doc facets)))
