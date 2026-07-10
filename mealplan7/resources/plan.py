@@ -71,11 +71,21 @@ class PlanState(StrEnum):
 
 
 class SideDish(BaseModel):
-    """A side dish riding alongside the day's main meal. Purely decorative —
-    it never gates ``all_days_covered`` or finalize; ``meal_name`` is
-    hand-maintained by the ``add_side_dish`` handler (list-of-model label
-    maintenance only runs one level deep, at ``days`` itself)."""
-    meal_id: Ref["meal"] = RefField(default=None, label="meal_name")
+    """A side dish attached to a plan day. It lives as its own top-level
+    part on ``PlanData`` — not nested inside ``DayPlan`` — because label
+    maintenance, and every other part-aware mechanism, only reaches one
+    level of nesting (design §3: "the one level of nesting parts live at").
+    At this level ``meal_name`` is genuinely engine-maintained from the
+    labeled Ref, the same machinery that maintains ``DayPlan.meal_name``.
+    ``slot_id`` is a synthetic single-field identity: ``PartScope`` keys on
+    exactly one field, and neither ``date`` nor ``meal_id`` alone is unique
+    here (a day can carry 2 sides; the same meal can side multiple days)."""
+    # not named "date" — a plain field of that name would collide with the
+    # day actions' own "date" input and mislead the altitude check into
+    # thinking they should also be placed against this part
+    slot_id: str = Field(max_length=100)
+    for_date: date_t
+    meal_id: Ref["meal"] = RefField(label="meal_name")
     meal_name: str | None = Field(default=None, max_length=200)
 
 
@@ -88,7 +98,6 @@ class DayPlan(BaseModel):
                             placeholder=ROTATING)
     meal_id: Ref["meal"] | None = RefField(default=None, label="meal_name")
     meal_name: str | None = Field(default=None, max_length=200)
-    side_dishes: list[SideDish] = Field(default_factory=list)
     eating_out: bool = False
     eating_out_where: str | None = Field(
         default=None, max_length=120,
@@ -97,11 +106,9 @@ class DayPlan(BaseModel):
     # a day is covered by a meal OR by eating out, never both (design §5):
     # setting one arm clears the other in the engine — the hand-written
     # clearing that v2 repeated in three handlers is gone, and "is this day
-    # covered?" is coverage.filled(day), derived, not re-derived. side_dishes
-    # rides the "meal" arm (not the primary — fill detection still keys off
-    # meal_id) purely so eating-out clears it for free, same as meal_name.
+    # covered?" is coverage.filled(day), derived, not re-derived
     coverage: ClassVar[OneOf] = OneOf(
-        arms={"meal": ("meal_id", "meal_name", "side_dishes"),
+        arms={"meal": ("meal_id", "meal_name"),
               "eating_out": ("eating_out", "eating_out_where")},
         clears=True)
 
@@ -138,6 +145,9 @@ class PlanData(BaseModel):
         default=None, predecessor=Predecessor(order="start_date"),
         description="The plan this one follows (engine-resolved)")
     days: list[DayPlan] = Field(default_factory=list)
+    # a sibling top-level part, not nested under days (see SideDish's
+    # docstring): this is what makes meal_name real, engine-maintained data
+    side_dishes: list[SideDish] = Field(default_factory=list)
     # the coverage rollup as a declared fact (design §2): one definition —
     # the finalize gate judges it, the refusal reason is generated from it,
     # and data.all_days_covered renders it; the hand-written guard that
@@ -193,6 +203,7 @@ class PlanCreate(PlanData):
                                   "Leave blank for the active rotation.")
     previous_plan: SkipJsonSchema[str | None] = None
     days: SkipJsonSchema[list[DayPlan]] = Field(default_factory=list)
+    side_dishes: SkipJsonSchema[list[SideDish]] = Field(default_factory=list)
 
 
 class DayInput(BaseModel):
@@ -227,6 +238,14 @@ class SideDishInput(BaseModel):
     # an on-list meal that serves the night's theme
     meal_id: Ref["meal"] = RefField(
         min_length=1, pick=Query(state="on_list", themes="{item.theme}"))
+
+
+def _slot_id(date: date_t, meal_id: str) -> str:
+    return f"{date.isoformat()}:{meal_id}"
+
+
+class RemoveSideDishInput(BaseModel):
+    slot_id: str = Field(max_length=100)
 
 
 def _day(r, d: date_t) -> DayPlan | None:
@@ -400,6 +419,9 @@ class MealPlan(Resource):
     # the one place per-day placement is declared (design §3); every
     # day-shaped action places itself on it and the key is pre-bound per part
     days = PartScope("days", key="date")
+    # side dishes are their own top-level part, keyed on the synthetic
+    # slot_id (neither date nor meal_id alone is unique — see SideDish)
+    side_dishes = PartScope("side_dishes", key="slot_id")
 
     async def on_create(self, ctx: Ctx) -> None:
         """A blank rotation_id means the most recently activated active
@@ -473,7 +495,11 @@ class MealPlan(Resource):
         assert day is not None
         day.eating_out = True
         day.eating_out_where = inp.where
-        # coverage (OneOf) clears the meal arm — not this handler
+        # coverage (OneOf) clears the meal arm — not this handler. side
+        # dishes live outside DayPlan now, so OneOf can't reach them: clear
+        # this date's sides by hand, same intent as the meal-arm clearing
+        self.data.side_dishes = [sd for sd in self.data.side_dishes
+                                 if sd.for_date != inp.date]
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
             input=DayInput, place=days, guards=[date_in_plan],
@@ -484,9 +510,10 @@ class MealPlan(Resource):
         assert day is not None
         day.meal_id = None
         day.meal_name = None
-        day.side_dishes = []
         day.eating_out = False
         day.eating_out_where = None
+        self.data.side_dishes = [sd for sd in self.data.side_dishes
+                                 if sd.for_date != inp.date]
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
             input=SideDishInput, place=days,
@@ -494,24 +521,21 @@ class MealPlan(Resource):
             safety=Safety(idempotent=True, reversible=True, confirm=False),
             display=dict(label="Add side dish", order=6))
     async def add_side_dish(self, inp: SideDishInput, ctx: Ctx) -> None:
-        day = _day(self, inp.date)
-        assert day is not None  # date_in_plan ensured it
-        if any(sd.meal_id == inp.meal_id for sd in day.side_dishes):
+        slot_id = _slot_id(inp.date, inp.meal_id)
+        if any(sd.slot_id == slot_id for sd in self.data.side_dishes):
             return  # already a side of this day — idempotent no-op
-        meal = await ctx.read(Meal, inp.meal_id)
-        day.side_dishes.append(SideDish(
-            meal_id=inp.meal_id,
-            meal_name=meal.data.name if meal is not None else None))
+        self.data.side_dishes.append(
+            SideDish(slot_id=slot_id, for_date=inp.date, meal_id=inp.meal_id))
+        # meal_name is the engine's to maintain (labeled Ref, design §4) —
+        # side_dishes is a top-level part now, so this reaches it
 
     @action(from_=PlanState.DRAFT, to=PlanState.DRAFT,
-            input=SideDishInput, place=days, guards=[date_in_plan],
+            input=RemoveSideDishInput, place=side_dishes,
             safety=Safety(idempotent=True, reversible=True, confirm=False),
             display=dict(label="Remove side dish", order=7))
-    async def remove_side_dish(self, inp: SideDishInput, ctx: Ctx) -> None:
-        day = _day(self, inp.date)
-        assert day is not None
-        day.side_dishes = [sd for sd in day.side_dishes
-                           if sd.meal_id != inp.meal_id]
+    async def remove_side_dish(self, inp: RemoveSideDishInput, ctx: Ctx) -> None:
+        self.data.side_dishes = [sd for sd in self.data.side_dishes
+                                 if sd.slot_id != inp.slot_id]
 
     @action(from_=PlanState.DRAFT, to=PlanState.PLANNED,
             # the gate judges the stored fact; its reason is generated from
