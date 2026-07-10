@@ -252,19 +252,42 @@ def Derived(
     spec = DerivedSpec(over=inputs, fn=fn, tolerance=within, explain=explain,
                        vars=vars, flips_at=flips_at)
     user_extra = dict(kwargs.pop("json_schema_extra", None) or {})
+    over_desc = [_describe_input(i) for i in inputs]
 
     # json_schema_extra as a callable: the spec (it holds callables) never
     # tries to reach the wire, and every schema emission — Data, a Create
     # model that inherits the field, anywhere — carries the origin marks
-    # (design §1: readOnly + x-source) without a second site to forget
+    # (design §1: readOnly + x-source) without a second site to forget.
+    # x-derived names WHAT it's derived from (design §1 follow-up): a
+    # generic "computed by the definition" told a reader nothing a
+    # thousand other derived fields didn't already say — the over=
+    # inputs (and explain=, when declared) are exactly what distinguishes
+    # one derivation from another, and they already exist; this just lets
+    # them reach the wire instead of staying server-side-only plumbing.
     def mark(schema: dict[str, Any]) -> None:
         schema.update(user_extra)
         schema.pop("default", None)  # an engine-owned value offers none
         schema["readOnly"] = True
         schema["x-source"] = "derived"
+        derived_info: dict[str, Any] = {"over": over_desc}
+        if explain:
+            derived_info["explain"] = explain
+        schema["x-derived"] = derived_info
 
     mark.__waymark_derived__ = spec  # type: ignore[attr-defined]
     return Field(default, json_schema_extra=mark, **kwargs)
+
+
+def _describe_input(inp: Any) -> str:
+    """A human-readable name for one ``over=`` input — what the wire and
+    the generic UI show for "derived from ..."."""
+    if inp is Clock:
+        return "now"
+    if isinstance(inp, str):
+        return inp
+    if isinstance(inp, (ChildField, RelatedField)):
+        return f"{inp.kind}.{inp.field}"
+    return str(inp)  # pragma: no cover - over= is validated above
 
 
 def Count(edge: Any, *, where: Mapping[str, Any] | None = None,

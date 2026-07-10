@@ -1016,11 +1016,17 @@ function recomputeBanner(doc) {
   const facts = doc.meta?.recomputing;
   if (!facts || !facts.length) return null;
   const many = facts.length > 1;
+  const blocks = doc.meta?.recomputing_blocks || {};
+  // recomputing_blocks (design §4 follow-up): naming the affected facts
+  // said nothing about what they cost while stale — the actions gated on
+  // them, when the wire names any, is the concrete answer
+  const blocked = [...new Set(facts.flatMap(f => blocks[f] || []))];
   return el("div", {class:"recompute-banner"},
     el("span", {class:"spin-dot"}),
     `${facts.map(pretty).join(", ")} ${many ? "are" : "is"} recomputing `
     + `under a new definition — filters on ${many ? "them" : "it"} return `
-    + `when it's caught up`);
+    + `when it's caught up`
+    + (blocked.length ? `; currently blocks: ${blocked.join(", ")}` : ""));
 }
 
 /* Humans never read underscored tokens: the collection title renders
@@ -1073,8 +1079,9 @@ function renderCollection(view, doc, hints) {
 
   panel.append(itemTable(doc.data.items, hints,
     new Set(doc.meta?.recomputing || []), null,
-    doc.kind === "attachment_collection"
-      ? {rowAction: it => downloadButton(it, true)} : undefined));
+    {recomputingBlocks: doc.meta?.recomputing_blocks,
+     ...(doc.kind === "attachment_collection"
+       ? {rowAction: it => downloadButton(it, true)} : {})}));
 
   const pager = el("div", {class:"pager"});
   if (doc.links.prev) pager.append(el("a", {href:"#"+doc.links.prev.href}, "← prev"));
@@ -1196,9 +1203,9 @@ function itemTable(items, hints, recomputing, declaredColumns, opts) {
               "text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom"},
         item.summary)),
       ...columns.map(c => el("td", {}, recomputing.has(c)
-        ? recomputingCell(item.data[c])
+        ? recomputingCell(item.data[c], (opts?.recomputingBlocks || {})[c])
         : columnCell(hintedValue(hints[c]?.xd || {}, item.data[c], item.data,
-                      hints[c]?.src, hints[c]?.auth)))),
+                      hints[c]?.src, hints[c]?.auth, hints[c]?.der)))),
       el("td", {}, el("span", {class:"chip "+tone(item), title: item.state},
         item.display?.state?.label ?? title(item.state))));
     if (anyActions) {
@@ -1560,8 +1567,8 @@ function renderResource(view, doc, hints) {
         el("td", {}, Array.isArray(doc.data[f]) && (doc.parts?.[f] || h.items)
           ? rowsTable(doc.data[f], doc, doc.parts?.[f], h.items)
           : recomputing.has(f)
-            ? recomputingCell(doc.data[f])
-            : hintedValue(h.xd, doc.data[f], doc.data, h.src, h.auth))));
+            ? recomputingCell(doc.data[f], doc.meta?.recomputing_blocks?.[f])
+            : hintedValue(h.xd, doc.data[f], doc.data, h.src, h.auth, h.der))));
     }
     const d = el("details", g.collapsed ? {} : {open:""},
       el("summary", {class:"muted"}, g.label || g.id), table);
@@ -1725,8 +1732,9 @@ function embedSection(rel, link) {
     }
     bodyBox.append(itemTable(items, hints,
       new Set(env.meta?.recomputing || []), null,
-      env.kind === "attachment_collection"
-        ? {rowAction: it => downloadButton(it, true)} : undefined));
+      {recomputingBlocks: env.meta?.recomputing_blocks,
+       ...(env.kind === "attachment_collection"
+         ? {rowAction: it => downloadButton(it, true)} : {})}));
     const btn = createBtn();
     if (btn)
       bodyBox.append(el("div", {class:"actions", style:"margin-top:10px"},
@@ -1798,8 +1806,8 @@ function renderSurface(view, doc, hints) {
       el("td", {}, Array.isArray(v) && (doc.parts?.[f] || h.items)
         ? rowsTable(v, doc, doc.parts?.[f], h.items)
         : recomputing.has(f)
-          ? recomputingCell(v)
-          : hintedValue(h.xd, v, doc.data, h.src, h.auth))));
+          ? recomputingCell(v, doc.meta?.recomputing_blocks?.[f])
+          : hintedValue(h.xd, v, doc.data, h.src, h.auth, h.der))));
   }
   panel.append(el("details", {open:""},
     el("summary", {class:"muted"}, "Data"), table));
@@ -1891,10 +1899,15 @@ function columnCell(node) {
 
 /* Provenance cells (design §1): the schema's x-source, made visible.
    The tooltip claims only what the wire actually says. */
-function derivedCell(v) {
-  return el("span", {class:"v-derived",
-      title:"ƒ derived — computed by the definition; one definition, "
-          + "every consumer"},
+function derivedCell(v, der) {
+  // x-derived (design §4 follow-up): "computed by the definition" is true
+  // of every derived field and says nothing distinguishing this one —
+  // over= names the actual inputs, when the wire carries them
+  const over = der?.over?.length ? der.over.join(", ") : null;
+  const title = (over ? `ƒ derived from ${over}` : "ƒ derived")
+    + " — computed by the definition; one definition, every consumer"
+    + (der?.explain ? ` (${der.explain})` : "");
+  return el("span", {class:"v-derived", title},
     el("span", {class:"fmark"}, "ƒ"), " ", fmt(v));
 }
 function authoredCell(v, authority) {
@@ -1904,10 +1917,14 @@ function authoredCell(v, authority) {
             + "read-only here"}, fmt(v)),
     el("span", {class:"src-chip"}, authority || "external"));
 }
-function recomputingCell(v) {
-  return el("span", {class:"v-recomputing",
-      title:"recomputing under a new definition — this stored value may "
-          + "predate the current law"},
+function recomputingCell(v, blocks) {
+  // recomputing_blocks (design §4 follow-up): "may predate the current
+  // law" doesn't say what that costs — the actions it's currently
+  // blocking, when the wire names any, is the concrete cost
+  const title = "recomputing under a new definition — this stored value "
+    + "may predate the current law"
+    + (blocks?.length ? `; currently blocks: ${blocks.join(", ")}` : "");
+  return el("span", {class:"v-recomputing", title},
     el("span", {class:"spin-dot"}), fmt(v));
 }
 
@@ -1936,7 +1953,8 @@ function rowsTable(rows, doc, partGroup, itemHints) {
     const tr = el("tr", {}, ...shown.map(c =>
       el("td", {}, columnCell(hintedValue(itemHints[c] || {}, r[c], r,
                                itemHints[c]?.source,
-                               itemHints[c]?.authority)))));
+                               itemHints[c]?.authority,
+                               itemHints[c]?.derived)))));
     if (partGroup) {
       const part = partGroup.items.find(p => p.key === r[partGroup.key]);
       const cell = el("td", {style:"white-space:nowrap"});
@@ -2029,10 +2047,12 @@ function wellKnown() {       // (nav + document, both racing at boot)
 }
 
 /* ── data-field display hints from the published data schema (§8) ──────
-   {field: {xd, src, auth, items}}: xd = the field's x-display (widget/
-   hidden/label/label_field), src = its x-source (derived|authored|absent
-   = written), auth = its x-authority (WHO owns an authored value), items
-   = per-column x-display (+source/authority) for list-of-object
+   {field: {xd, src, auth, der, items}}: xd = the field's x-display
+   (widget/hidden/label/label_field), src = its x-source (derived|
+   authored|absent = written), auth = its x-authority (WHO owns an
+   authored value), der = its x-derived ({over, explain} — what a derived
+   field is actually derived from, design §4 follow-up), items = per-
+   column x-display (+source/authority/derived) for list-of-object
    fields. */
 const dataHintsCache = {};
 async function dataHints(kind) {
@@ -2057,14 +2077,20 @@ async function dataHints(kind) {
     const sub = p.anyOf ? p.anyOf.find(o => o.type !== "null") || {} : p;
     return p["x-authority"] || sub["x-authority"] || null;
   };
+  const derOf = p => {
+    if (!p || typeof p !== "object") return null;
+    const sub = p.anyOf ? p.anyOf.find(o => o.type !== "null") || {} : p;
+    return p["x-derived"] || sub["x-derived"] || null;
+  };
   const out = {};
   for (const [f, p] of Object.entries(dataHintsCache[kind].properties || {})) {
     const sub = p.anyOf ? p.anyOf.find(o => o.type !== "null") || {} : p;
     const itemProps = (sub.items || p.items || {}).properties;
-    out[f] = {xd: xdOf(p), src: srcOf(p), auth: authOf(p),
+    out[f] = {xd: xdOf(p), src: srcOf(p), auth: authOf(p), der: derOf(p),
       items: itemProps ? Object.fromEntries(
         Object.entries(itemProps).map(([k, v]) =>
-          [k, {...xdOf(v), source: srcOf(v), authority: authOf(v)}])) : null};
+          [k, {...xdOf(v), source: srcOf(v), authority: authOf(v),
+              derived: derOf(v)}])) : null};
   }
   return out;
 }
@@ -2097,13 +2123,13 @@ function resourceRef(kind, id, text) {
 /* Value cell for one data field/column, honoring its x-display hint and
    its declared provenance (x-source; x-authority names WHO owns an
    authored value). Written fields render plain. */
-function hintedValue(xd, value, row, src, authority) {
+function hintedValue(xd, value, row, src, authority, derived) {
   if (xd.widget === "resource" && value)
     return resourceRef(xd.kind, value, xd.label_field ? row?.[xd.label_field] : null);
   if (xd.widget === "prose" && value)
     return el("div", {style:"white-space:pre-wrap;max-width:640px;" +
       "max-height:320px;overflow-y:auto"}, String(value));
-  if (src === "derived") return derivedCell(value);
+  if (src === "derived") return derivedCell(value, derived);
   if (src === "authored") return authoredCell(value, authority);
   return fmt(value);
 }

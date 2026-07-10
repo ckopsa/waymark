@@ -342,6 +342,23 @@ def _backfill_fp(cls: type) -> dict[str, Any] | None:
     return {"deferred": {"batch": declared.batch, "pause": declared.pause}}
 
 
+def _strip_derived_marks(node: Any) -> Any:
+    """``x-derived`` (design §4 follow-up: a derived field's ``over=``/
+    ``explain=`` on the wire, for the generic UI) duplicates verbatim what
+    ``_derived_fp`` already fingerprints under ``derived.<fact>.*`` — the
+    dedicated, canonical entry. Left in, the exact same change would
+    surface twice more (once per schema it's rendered into) under
+    ``data_schema``/``create.schema`` — a second place for the same fact
+    to (redundantly, if harmlessly) disagree with the first. Stripped only
+    from the fingerprinted copy; the served schema keeps it."""
+    if isinstance(node, dict):
+        return {k: _strip_derived_marks(v) for k, v in node.items()
+                if k != "x-derived"}
+    if isinstance(node, list):
+        return [_strip_derived_marks(v) for v in node]
+    return node
+
+
 def _storage_fp(rdef: ResourceDef) -> dict[str, Any] | None:
     """The storage facet — the per-table half of ``schema_snapshot``,
     reused verbatim (design §1: ``snapshot.json`` becomes one facet of
@@ -383,10 +400,10 @@ def fingerprint_of(rdef: ResourceDef) -> dict[str, Any]:
                         for name, defn in machine.actions.items()},
         },
         "create": {
-            "schema": rdef.extra.get("create_schema"),
+            "schema": _strip_derived_marks(rdef.extra.get("create_schema")),
             "guards": [_guard_fp(g) for g in cls.create_guards],
         },
-        "data_schema": rdef.data_schema,
+        "data_schema": _strip_derived_marks(rdef.data_schema),
         "derived": _derived_fp(cls),
         "backfill": _backfill_fp(cls),
         "authored": _authored_fp(cls),

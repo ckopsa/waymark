@@ -21,6 +21,24 @@ def _relations(defn: ActionDef) -> list[tuple[str, str, str]]:
     return out
 
 
+def _recomputing_blocks(machine: StateMachine) -> dict[str, tuple[str, ...]]:
+    """Static fact → action-names index (design §4 follow-up): a
+    ``require(fact)`` guard (``core/guards.py``'s ``FactRequired``) is the
+    only guard shape that names a gating fact directly (``.fact``), and
+    which actions gate on which fact never changes after registration — so
+    this is computed once here, not per-request. ``rdef.recomputing`` (the
+    dynamic, currently-stale subset) is what render.py filters this
+    against; a generic "may predate the current law" told a reader
+    nothing about what stopped working — this is what did."""
+    out: dict[str, list[str]] = {}
+    for name, defn in machine.actions.items():
+        facts = {fact for guard in defn.guards for leaf in guard.iter_leaves()
+                 if (fact := getattr(leaf, "fact", None))}
+        for fact in facts:
+            out.setdefault(fact, []).append(name)
+    return {fact: tuple(sorted(names)) for fact, names in out.items()}
+
+
 @dataclass
 class ResourceDef:
     cls: type[Resource]
@@ -80,6 +98,12 @@ class ResourceDef:
     # from the collection query schema and refused by the router — the
     # value renders as data, but is never served as *filterable truth*.
     recomputing: tuple[str, ...] = ()
+    # static fact → action-names this fact's require() gates (design §4
+    # follow-up): computed once at register() from the machine's guards,
+    # independent of whether the fact is currently recomputing — render.py
+    # filters this against ``recomputing`` per request to say what a
+    # stale fact costs, not just that it's stale
+    recomputing_blocks: dict[str, tuple[str, ...]] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -121,6 +145,7 @@ class Registry:
             action_schemas=action_schemas,
             query_schema=query_dict, query_schema_bytes=query_bytes,
             engine_owned=engine_owned,
+            recomputing_blocks=_recomputing_blocks(cls.__waymark_machine__),
         )
         rdef.extra["create_model"] = create_model
         rdef.extra["create_schema"] = create_schema

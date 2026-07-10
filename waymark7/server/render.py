@@ -463,22 +463,41 @@ def _row_law(instance: Resource, rdef: ResourceDef) -> str | None:
     return rdef.current_law
 
 
-def _adopt_entry(instance: Resource, self_href: str) -> dict[str, Any]:
+def _adopt_entry(instance: Resource, self_href: str,
+                 rdef: ResourceDef) -> dict[str, Any]:
     """The engine-injected ``adopt`` affordance (design 7.0 §3): offered
     exactly when the current law has passed this row by — a same-state
     transition that restamps and recomputes. No ActionDef exists (the
     engine injects it on every kind, like ``create``); the entry is built
-    to the same wire shape."""
+    to the same wire shape.
+
+    The consequence names what recomputing actually costs, when it's
+    knowable (design §4 follow-up): "your facts recompute" told a reader
+    nothing they could act on — which facts, and whether recomputing one
+    currently unblocks a gated action, are exactly the two things
+    ``rdef.recomputing``/``recomputing_blocks`` already know statically
+    and dynamically. Falls back to the general sentence only when no
+    kind-wide Deferred backfill is in flight (no more specific claim to
+    make honestly)."""
     from ..core.types import Effect, Safety
+
+    consequence = ("This row moves to the current revision of its kind's "
+                  "law and its facts recompute under it.")
+    if rdef.recomputing:
+        facts = ", ".join(rdef.recomputing)
+        consequence = (f"This row moves to the current revision of its "
+                       f"kind's law and recomputes: {facts}.")
+        blocked = sorted({name for fact in rdef.recomputing
+                          for name in rdef.recomputing_blocks.get(fact, ())})
+        if blocked:
+            consequence += f" Currently blocks: {', '.join(blocked)}."
 
     return {
         "method": "POST",
         "href": f"{self_href}/-/adopt",
         "effect": Effect(to=instance.state).to_wire(),
         "safety": Safety(idempotent=True, reversible=False, confirm=True,
-                         consequence="This row moves to the current "
-                                     "revision of its kind's law and its "
-                                     "facts recompute under it.").to_wire(),
+                         consequence=consequence).to_wire(),
         "effort": "assent",
         "display": {"label": "Adopt the current law",
                     "description": "The law moved on while this row lived "
@@ -698,7 +717,7 @@ async def render(
             and _stamp < rdef.current_law_revision
             and instance.state not in rdef.machine.terminal
             and "adopt" not in rdef.machine.actions):
-        actions.setdefault("adopt", _adopt_entry(instance, self_href))
+        actions.setdefault("adopt", _adopt_entry(instance, self_href, rdef))
 
     # the agent's own negotiation surface renders in the clear — it is the
     # agent's to read; everything else projects through the visibility
@@ -781,6 +800,14 @@ async def render(
             # honestly marked, never as filterable truth
             **({"recomputing": list(rdef.recomputing)}
                if rdef.recomputing else {}),
+            # what recomputing actually costs (design §4 follow-up): the
+            # static fact→action index, filtered to the facts currently
+            # stale — additive sibling to "recomputing", same shape rule
+            **({"recomputing_blocks": blocks} if (blocks := {
+                    fact: list(rdef.recomputing_blocks[fact])
+                    for fact in rdef.recomputing
+                    if rdef.recomputing_blocks.get(fact)
+                }) else {}),
         },
     }
     if embeds and vis.full:
@@ -1009,5 +1036,10 @@ async def render_collection(
                  **({"law_revision": rdef.current_law_revision}
                     if rdef.current_law_revision else {}),
                  **({"recomputing": list(rdef.recomputing)}
-                    if rdef.recomputing else {})},
+                    if rdef.recomputing else {}),
+                 **({"recomputing_blocks": blocks} if (blocks := {
+                        fact: list(rdef.recomputing_blocks[fact])
+                        for fact in rdef.recomputing
+                        if rdef.recomputing_blocks.get(fact)
+                    }) else {})},
     }
