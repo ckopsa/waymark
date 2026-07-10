@@ -48,6 +48,7 @@
             [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
+            [waymark10.server.intents :as intents]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members :as members]
@@ -133,7 +134,10 @@
                                       :webhook-timeout-ms :webhooks-poll-ms
                                       :jobs-poll-ms :jobs-batch-size
                                       :members :collab-heartbeat-ms
-                                      :presence-heartbeat-ms])
+                                      :presence-heartbeat-ms
+                                      :collab-ticket-ttl-ms
+                                      :intents-heartbeat-ms
+                                      :intent-ttl-ms :intent-ask-ttl-ms])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)
@@ -147,6 +151,9 @@
                     :surfaces (surface/assemble reg (:surfaces opts))
                     ;; live collab's per-draft rooms (phase 9b)
                     :collab-rooms (atom {})
+                    ;; the socket's one-time identity vouchers —
+                    ;; ephemeral, never law (collab/mint-ticket!)
+                    :collab-tickets (atom {})
                     :runtime (atom nil)})
         eng (assoc eng :render-fn
                    (fn [rdef row]
@@ -181,6 +188,11 @@
                   ;; starts answers 503 on its routes, like SSE
                   :presence (presence/start!
                              eng {:hb-ms (:presence-heartbeat-ms eng 15000)})
+                  ;; intent frames (the considering/asking surface):
+                  ;; the presence discipline again — ephemeral, never
+                  ;; law; the dispatcher hands it the committed acts
+                  ;; that resolve a card
+                  :intents (intents/start! eng {:dispatcher dispatcher})
                   ;; mirror kinds get their declared discovery cadence
                   ;; (phase 8); an engine without mirrors pays nothing
                   :discovery (when (seq (mirror/mirror-kinds eng))
@@ -212,11 +224,13 @@
    (when server (http/server-stop! server))
    (when-some [rt (:runtime eng)]
      (when-some [{:keys [dispatcher coherence discovery jobs
-                         orphan-sweeper purge-sweeper presence]} @rt]
+                         orphan-sweeper purge-sweeper presence
+                         intents]} @rt]
        (some-> orphan-sweeper coherence/stop-role!)
        (some-> purge-sweeper coherence/stop-role!)
        (some-> jobs jobs/stop-worker!)
        (some-> coherence coherence/stop!)
+       (some-> intents intents/stop!)
        (some-> presence presence/stop!)
        (some-> dispatcher events/stop!)
        (some-> discovery mirror/stop-discovery!))

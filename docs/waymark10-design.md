@@ -2481,3 +2481,145 @@ never-started engine's 503 — 3 tests, 33 assertions. The full suites
 after this landing: `make test10` 316 tests / 2297 assertions,
 `make test-mealplan10` 23 / 217; the story drive
 (scripts/ui-drive.mjs) 43 checks, no console errors.
+
+# 21. Hand in hand — intent frames, the asking surface, the socket's name
+
+The hand-in-hand charter (`waymark10-hand-in-hand.md`) audited the
+story against the tree and named three genuinely new mechanisms, all
+small, all owed to the presence precedent: **intent frames** (beat 3
+— thinking out loud), **the asking surface** (beat 5 — the wall as a
+question addressed to the human), and **identity over the collab
+socket** (beat 4 — authors lost to anonymous joins). This section is
+their landing. The shared discipline, stated once: EPHEMERAL, NEVER
+LAW, CONCEALMENT-PROJECTED — no table, no transitions, no
+fingerprint, nothing the walker or the migrate planner will ever
+meet. Home: `server/intents.clj` (the first two mechanisms are one
+channel), ticket fns in `server/collab.clj`, seams in router and
+engine. Tests: `test/waymark10/intents_test.clj` (its own database)
+and `collab_ticket_test.clj` (batch D's).
+
+## Intent frames (beat 3)
+
+`waymark10.server.intents` is presence's structural twin: an
+in-process registry fanned across processes on its own pg_notify
+channel (`waymark10_intents`, origin-nonce'd), re-asserted every
+`:intents-heartbeat-ms` (default 15s), remote origins evicted after
+three silent intervals, every viewer's frames derived from ONE
+merged-view diff. One card per **(principal, action, self)** — the
+id is that triple spelled out (`sous:finalize@/api/plans/p1`), so a
+re-considered dry-run refreshes the card instead of dealing a second
+one.
+
+The doors, the presence pattern again:
+- **implicit** — a row-level `?dry_run=1` through the router IS a
+  considering: the invoke-action seam reports
+  `{status: "considering"}` after a valid dry-run (TTL
+  `:intent-ttl-ms`, default 30s — gone in a moment if abandoned);
+- **explicit** — `POST /api/-/intents {self, action, question?}` for
+  a client surfacing what the router cannot see;
+  `POST /api/-/intents/abandon {self, action}` clears the caller's
+  own card (the id derives from the request's own principal — nobody
+  abandons anyone else's thought).
+
+Resolution is the story's point: a per-registry consumer on the
+engine's events dispatcher (the collab regate thread's precedent)
+purges every local card whose (self, action) a COMMITTED transition
+names — whoever acted, the consideration is moot — and peers hear
+the drop. Drops carry their outcome on the wire: `resolved` and
+`abandoned` are authoritative (the id purges everywhere), `expired`
+is origin-scoped (a fresher copy on another origin — an answer — may
+legitimately outlive it).
+
+The stream: `GET /api/-/intents` (SSE) — a snapshot frame on
+connect, then `open`/`update`/`close` frames (`close` names its
+outcome). No id lines, no replay; an intent is liveness. Concealment
+reuses `presence/self-visible?` verbatim: a scoped viewer sees an
+intent iff it could GET the self it names, and a filtered frame is
+byte-level absent — pinned by the same never-names-the-concealed-row
+test presence carries.
+
+## The asking surface (beat 5)
+
+The doc's own hint held: an agent's pending gate IS an intent that
+lingers until answered — the same channel, a longer leash. When a
+real (non-dry-run) invoke refuses `warning-required`, the router's
+seam reports the refusal as `{status: "asking"}` before rethrowing:
+the guard's own sentence as `question`, the warnings and the E1
+acknowledge names riding along, TTL `:intent-ask-ttl-ms` (default 10
+minutes). On Priya's screen the wall arrives as the card the story
+describes — the guard's sentence, the agent's pending intent, her
+decision.
+
+Her yes is `POST /api/-/intents/answer {id, names?}` (names default
+to the ask's own): the card restamps `answered` with `{by, names,
+at}` and the update fans to every watcher — including the asking
+agent. **The answer only delivers; it never overrides.** The agent's
+retry still passes the guard through the existing
+acknowledge-by-name header — one acknowledgement path, exactly as
+E1 built it — and the retry's committed transition resolves the card
+through the same consumer every act feeds. Answering a concealed ask
+is the same 404 as answering none; answering a considering is a 409
+(nothing was asked).
+
+The confirm gate is the recorded asymmetry: it lives in clients (the
+server never refuses on it), so its ask arrives through the explicit
+door — a client's `confirm!` hook posts the consequence sentence as
+the question and the human's answer rides back the same way.
+
+## Identity over the collab socket (beat 4)
+
+The regression: a browser WebSocket cannot send
+`x-waymark-principal` or a bearer header, so collab joins resolved
+to `t/anonymous` and per-field `:authors` lost their names — four
+hands, no signatures. The fix follows the identity boundary rather
+than widening it: `POST /api/-/collab-ticket` (an ordinary
+authenticated request — wrap-identity, suspension gate and all)
+mints a short-lived (`:collab-ticket-ttl-ms`, default 60s), ONE-TIME
+ticket; the join URL presents it as `?ticket=`. Query param over a
+first-frame handshake, recorded why: the join must know its
+principal BEFORE the upgrade — the state frame and the presence
+join carry the author, and a bad ticket refuses 401 as plain HTTP,
+never a half-open socket. Redemption consumes the nonce
+(`swap-vals!` — two racing joins admit one); tickets live in an
+atom on the engine, ephemeral, never law.
+
+Recorded boundaries: a ticket redeems only on the process that
+minted it (fan-out earns its keep for frames, not credentials — a
+sticky LB or a re-mint is the multi-process answer); the suspension
+gate runs at the mint, so a member suspended inside the ticket's 60
+seconds joins once more. A join with neither ticket nor header stays
+anonymous — exactly the door that existed before, pinned by test.
+
+## Recorded boundaries, each a sentence
+
+- Only row-level dry-runs report intents — bulk/batch dry-runs and
+  direct `inv/invoke!` calls are invisible (the router's seams are
+  the doors; presence's mid-request invisibility, again).
+- Intent reporting is best-effort: a failed report warns on *err*
+  and the invoke answers untouched — company must never cost the
+  work.
+- Resolution matches (self, action), not the actor: an act by anyone
+  moots everyone's consideration of it.
+- Freshest-entry merging trusts one wall clock across origins (the
+  presence surface's own assumption).
+- Intents fan-out is a Postgres surface; other backends stay
+  process-local, warned once at start.
+- The UI speaks none of this yet — intent cards and the answer
+  button on the approver's screen are the story's polish pass, named
+  future work beside batch D's cursor chrome.
+
+## Runs
+
+Its own database, the presence discipline:
+
+    createdb waymark10_intents_test   # once, on the :5433 container
+    cd waymark10 && clojure -M:test --focus waymark10.intents-test \
+      --focus waymark10.collab-ticket-test
+
+Cross-process considerings, TTL expiry, cross-process abandon, the
+lingering ask and its answer, crashed-peer eviction, the dry-run and
+warning-wall doors, E1 release resolving the card, the scoped
+stream's byte-level absences, the 503; the minted ticket naming the
+roster/presence/authors, spent and expired tickets' 401, and the
+unchanged header/anonymous joins — 4 tests, 77 assertions. The full
+suite after this landing: 317 tests / 2358 assertions, 0 failures.

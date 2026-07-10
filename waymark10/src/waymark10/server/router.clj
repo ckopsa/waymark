@@ -60,6 +60,7 @@
             [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
+            [waymark10.server.intents :as intents]
             [waymark10.server.invoke :as inv]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.members :as members]
@@ -362,6 +363,24 @@
       (json-response 200 env media-type
                      {"ETag" (get-in env ["meta" "etag"])}))))
 
+(defn- intents-running
+  "The engine's intents registry when one is running — the automatic
+  doors (dry-run, warning wall) report through it and never fail a
+  request over its absence."
+  [eng]
+  (some-> (:runtime eng) deref :intents))
+
+(defn- report-intent!
+  "Best-effort: an intent frame is ephemeral company, never the
+  request's fate — a failed report warns on *err* and the invoke
+  answers untouched."
+  [reg principal intent]
+  (try
+    (intents/report! reg principal intent)
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 intent report failed -" (ex-message e))))))
+
 (defn- invoke-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
@@ -375,9 +394,44 @@
           ;; post-commit (system actor; a no-op for everything else)
           _ (grants/check-args! (visibility-of req) rdef (keyword action) body)
           opts (invoke-opts req)
-          result (grants/approval-effects!
-                  eng rdef (keyword action)
-                  (inv/invoke! eng (:kind rdef) id (keyword action) body opts))]
+          ;; the intent seams (ephemeral, never law): a dry-run IS a
+          ;; considering and a warning wall IS an ask — announced only
+          ;; for named principals on a started engine, after the
+          ;; concealment checks above (a concealed row 404s first, so
+          ;; no intent ever names it)
+          self (str "/api/" plural "/" id)
+          reg (intents-running eng)
+          announce? (boolean (and reg (not= (:id (:principal opts))
+                                            (:id t/anonymous))))
+          result (try
+                   (grants/approval-effects!
+                    eng rdef (keyword action)
+                    (inv/invoke! eng (:kind rdef) id (keyword action) body opts))
+                   (catch Exception e
+                     (let [d (ex-data e)]
+                       ;; beat 5: the wall the agent hit becomes the
+                       ;; question on the approver's screen — the
+                       ;; guard's own sentence, lingering until
+                       ;; answered, abandoned, or resolved by the
+                       ;; acknowledged retry
+                       (when (and announce?
+                                  (= :warning-required (:waymark10/problem d)))
+                         (report-intent! reg (:principal opts)
+                                         {:self self :action action
+                                          :status "asking"
+                                          :question (:reason (first (:warnings d)))
+                                          :warnings (mapv #(select-keys % [:name :reason])
+                                                          (:warnings d))
+                                          :acknowledge (:acknowledge d)}))
+                       (throw e))))
+          ;; beat 3: the dry-run's shadow — "considering — <action> on
+          ;; <resource>", gone in a moment if abandoned
+          _ (when (and announce? (:dry-run opts) (:valid? result))
+              (report-intent! reg (:principal opts)
+                              {:self self :action action
+                               :status "considering"
+                               :warnings (some->> (:warnings result)
+                                                  (mapv #(select-keys % [:name :reason])))}))]
       (cond
         ;; stored replay: the first execution's bytes, verbatim
         (= :idempotency (:replayed? result))
@@ -480,7 +534,32 @@
     (let [rdef (rdef-by-plural eng plural)]
       (check-row! req rdef id)
       (check-action! req rdef (keyword action))
-      (collab/join eng rdef (keyword action) id (principal-of req) req))))
+      ;; identity over the socket: a browser WS cannot send the
+      ;; headers wrap-identity reads, so a ?ticket= (minted by the
+      ;; authenticated POST /api/-/collab-ticket) names the joiner. A
+      ;; presented ticket that does not redeem refuses BEFORE the
+      ;; upgrade — plain HTTP, never a half-open socket; no ticket
+      ;; keeps the header/anonymous path exactly as before.
+      (let [principal (if-some [tk (get (query-params req) "ticket")]
+                        (or (collab/redeem-ticket! eng tk)
+                            (throw (p/problem
+                                    :collab-ticket-invalid 401 "Ticket invalid"
+                                    {:detail (str "The ticket is unknown, expired or"
+                                                  " already spent; mint a fresh one"
+                                                  " (POST /api/-/collab-ticket).")})))
+                        (principal-of req))]
+        (collab/join eng rdef (keyword action) id principal req)))))
+
+(defn- collab-ticket-mint
+  "POST /api/-/collab-ticket: the authenticated session mints the
+  one-time voucher its WebSocket join will present — the socket's
+  identity rides the SAME resolved principal every other request
+  carries."
+  [eng]
+  (fn [req]
+    (json-response 200
+                   (p/wire-value (collab/mint-ticket! eng (principal-of req)))
+                   media-type nil)))
 
 ;; ── surfaces (phase 9b) ─────────────────────────────────────────────
 
@@ -595,6 +674,68 @@
       (presence/report! reg (principal-of req) (:self (read-body req)))
       {:status 204 :headers {}})))
 
+;; ── intents (ephemeral, never law) ──────────────────────────────────
+
+(defn- intents-registry
+  "The engine's running intents registry — 503 on an engine that
+  never started (the dispatcher's discipline)."
+  [eng]
+  (or (some-> (:runtime eng) deref :intents)
+      (throw (p/problem :intents-unavailable 503 "Intents unavailable"
+                        {:detail (str "This engine is not started; the "
+                                      "intents registry is not running.")}))))
+
+(defn- intents-stream
+  "GET /api/-/intents: the considering/asking stream. Like presence
+  (and unlike the firehose), a scoped request is not 404'd — it gets
+  the stream PROJECTED: only intents on selves its visibility could
+  GET, the frames it may not see byte-level absent."
+  [eng]
+  (fn [req]
+    (let [reg (intents-registry eng)]
+      (intents/sse-handler eng reg
+                           (presence/self-visible? eng (visibility-of req))
+                           req))))
+
+(defn- intents-report
+  "POST /api/-/intents {self, action, question?}: the explicit door —
+  a client surfacing a considering the router cannot see (or its own
+  confirm gate as an ask, question = the consequence sentence). A
+  principal's own reporting is always accepted, scoped or not."
+  [eng]
+  (fn [req]
+    (let [reg (intents-registry eng)
+          body (read-body req)]
+      (intents/report! reg (principal-of req)
+                       (select-keys body [:self :action :question]))
+      {:status 204 :headers {}})))
+
+(defn- intents-abandon
+  "POST /api/-/intents/abandon {self, action}: the caller clears its
+  own card — the considering that came to nothing, the ask it no
+  longer stands behind."
+  [eng]
+  (fn [req]
+    (let [reg (intents-registry eng)
+          body (read-body req)]
+      (intents/abandon! reg (principal-of req)
+                        (select-keys body [:self :action]))
+      {:status 204 :headers {}})))
+
+(defn- intents-answer
+  "POST /api/-/intents/answer {id, names?}: the human's yes on a
+  pending ask — delivered back down the stream; the asker's retry
+  still passes the guard through the E1 header. Concealment holds:
+  an intent the answerer may not see is the same 404 as none."
+  [eng]
+  (fn [req]
+    (let [reg (intents-registry eng)
+          body (read-body req)]
+      (intents/answer! reg (principal-of req)
+                       (select-keys body [:id :names])
+                       (presence/self-visible? eng (visibility-of req)))
+      {:status 204 :headers {}})))
+
 ;; ── the generic UI (phase 10) ───────────────────────────────────────
 
 (defn- ui-page
@@ -700,6 +841,11 @@
          ["/api/-/events" {:get (firehose-events eng)}]
          ["/api/-/presence" {:get (presence-stream eng)
                              :post (presence-report eng)}]
+         ["/api/-/intents" {:get (intents-stream eng)
+                            :post (intents-report eng)}]
+         ["/api/-/intents/abandon" {:post (intents-abandon eng)}]
+         ["/api/-/intents/answer" {:post (intents-answer eng)}]
+         ["/api/-/collab-ticket" {:post (collab-ticket-mint eng)}]
          ["/api/-/ui" {:get (ui-page eng "waymark10/ui.html")}]
          ["/api/-/ui-lite" {:get (ui-page eng "waymark10/ui_lite.html")}]
          ["/api/attachments/:id/bytes" {:put (bytes-put eng)

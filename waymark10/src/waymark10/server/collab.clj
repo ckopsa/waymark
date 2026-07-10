@@ -81,6 +81,26 @@
   draft is gone, compose anew. An engine that never started (no
   dispatcher) keeps the write-path detection only, recorded.
 
+  Identity over the socket (the hand-in-hand fix): a browser's
+  WebSocket cannot send the bearer (or dev) headers wrap-identity
+  reads, so joins used to fall to anonymous and per-field :authors
+  lost their names. The door now takes a TICKET — a short-lived
+  (:collab-ticket-ttl-ms, default 60s), ONE-TIME identity voucher
+  minted by an authenticated POST /api/-/collab-ticket and presented
+  as ?ticket= on the join URL. Query param over first-frame
+  handshake, recorded why: the join must know its principal BEFORE
+  the upgrade (the state frame and the presence join carry the
+  author, and refusals answer as plain HTTP), and the router already
+  parses query params where it resolves identity. Tickets are
+  ephemeral, never law: an in-process atom on the engine, consumed at
+  redemption, pruned at mint — a restart forgets them and a fresh
+  mint is one POST away. Recorded boundaries: a ticket redeems only
+  on the process that minted it (fan-out earns its keep for frames,
+  not credentials), and the members suspension gate runs at the MINT
+  (a member suspended inside the ticket's 60 seconds joins once
+  more). A join with neither ticket nor headers stays anonymous —
+  exactly as before.
+
   Remaining punts, each named: UI cursor/presence chrome (ui.html is
   another batch's), cursor positions on the wire, and a plain draft
   PUT beside a live room bumps revs but broadcasts nothing — live
@@ -92,6 +112,7 @@
             [waymark10.server.events :as events]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
+            [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (com.zaxxer.hikari HikariDataSource)
            (java.sql Connection DriverManager)
@@ -533,6 +554,54 @@
                  (dissoc rooms key)
                  rooms)))
       (reap-relay! eng))))
+
+;; ── identity tickets (the socket's own door key) ────────────────────
+
+(def ticket-ttl-ms
+  "How long a minted ticket waits to be presented — one page
+  navigation, not a session (the engine's :collab-ticket-ttl-ms
+  overrides)."
+  60000)
+
+(defn mint-ticket!
+  "A short-lived, ONE-TIME identity voucher for the collab socket:
+  the authenticated HTTP session asks, the join URL presents it as
+  ?ticket=. Minting prunes whatever already expired; an anonymous
+  mint refuses — a ticket that names nobody is the fallback join we
+  already have. → {:ticket nonce :expires-at iso}."
+  [eng principal]
+  (when (= (:id principal) (:id t/anonymous))
+    (throw (p/problem :collab-ticket-anonymous 422 "A ticket names its principal"
+                      {:detail "An anonymous ticket would join nobody; authenticate first."})))
+  (let [tickets (or (:collab-tickets eng)
+                    (throw (p/problem :collab-tickets-unavailable 503
+                                      "Collab tickets unavailable"
+                                      {:detail "This engine carries no ticket store."})))
+        now (System/currentTimeMillis)
+        ttl (long (:collab-ticket-ttl-ms eng ticket-ttl-ms))
+        nonce (str (random-uuid))]
+    (swap! tickets
+           (fn [ts]
+             (assoc (into {}
+                          (filter (fn [[_ {:keys [expires-at]}]]
+                                    (< now (long expires-at))))
+                          ts)
+                    nonce {:principal principal :expires-at (+ now ttl)})))
+    {:ticket nonce
+     :expires-at (str (java.time.Instant/ofEpochMilli (+ now ttl)))}))
+
+(defn redeem-ticket!
+  "The join's half: the principal a live ticket names, exactly once —
+  the redemption consumes it (swap-vals!, so two racing joins admit
+  one). nil for unknown, expired or already-spent tickets; the caller
+  owns the refusal."
+  [eng nonce]
+  (when-some [tickets (:collab-tickets eng)]
+    (when (string? nonce)
+      (let [[before _] (swap-vals! tickets dissoc nonce)
+            tk (get before nonce)]
+        (when (and tk (< (System/currentTimeMillis) (long (:expires-at tk))))
+          (:principal tk))))))
 
 ;; ── the door ────────────────────────────────────────────────────────
 
