@@ -17,26 +17,40 @@
   the row's state before every batch and stops when it is no longer
   running.
 
+  Batch F restores waymark9's job lifecycle pieces:
+  - :queued is back: a job is born :queued and the worker's claim
+    STARTS it (queued → running, the hidden :start action) — a queued
+    job is honest about nobody working it yet.
+  - Job artifacts: the worker persists the final per-item report on
+    the job row's data (:report — action, kind, totals, the refusal
+    list with a refused/failed class per entry) before completing, so
+    the completed envelope carries the whole outcome, not just the
+    running progress.
+  - The orphan sweep: sweep-orphans! re-queues :running jobs whose
+    lease is absent or expired (no live claimant — the worker died
+    between renewals); start-orphan-sweeper! elects ONE sweeper across
+    processes via coherence/start-role! (the advisory-lock election),
+    the same discipline as the webhook deliverer. The lease steal
+    still resumes too — the sweep just makes the orphan VISIBLE as
+    queued instead of leaving it wearing a dead worker's :running.
+
   Recorded deviations from waymark9's jobs.py, each a sentence:
-  - queued is dropped: a v10 job is born :running (the worker's claim
-    is the lease, not a state) and done is spelled :completed.
   - Items run under a principal RECONSTRUCTED from the job's
     requested_by (id, type, display) — held roles are not carried, so
     a role-reading guard judges the reconstruction, not the original
     credential (waymark9 had the same property).
-  - Job artifacts (the per-dataset sub-status of service jobs, design
-    E6) and the orphan sweep are unported — the lease steal already
-    resumes a dead worker's job instead of cancelling it.
   - A deferred call skips whole-call idempotency (the job row is its
     record); each item still natural-replays like any invoke."
   (:require [waymark10.guards :as g]
             [waymark10.resource :refer [defresource]]
             [waymark10.schema :as schema]
+            [waymark10.server.coherence :as coherence]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.util.concurrent CountDownLatch TimeUnit)))
+  (:import (java.time Instant)
+           (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
 
@@ -69,8 +83,8 @@
 (defresource job
   {:kind :job
    :plural "jobs"
-   :states [:running :completed :cancelled]
-   :initial :running
+   :states [:queued :running :completed :cancelled]
+   :initial :queued
    :terminal #{:completed :cancelled}
    :nav :secondary
    :summary "Deferred {data.action} on {data.kind} · {state}"
@@ -84,15 +98,28 @@
             [:progress [:map
                         [:done :int]
                         [:total :int]
-                        [:refusals [:vector :any]]]]]
+                        [:refusals [:vector :any]]]]
+            ;; the job artifact (batch F): the final per-item report,
+            ;; persisted by the worker just before :complete fires
+            [:report {:optional true} :any]]
    :filterable {:state #{:eq :in}
                 :kind #{:eq}}
    :create-guards [worker-only]
    :actions
-   {:cancel {:from #{:running} :to :cancelled
+   {:start {:from #{:queued} :to :running
+            :guards [worker-only-hidden]
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "The claim made visible: a worker holds this job's lease."}
+            :display {:label "Start" :order 9}}
+    :cancel {:from #{:queued :running} :to :cancelled
              :safety {:idempotent true :reversible false :confirm true
                       :consequence "Items not yet processed stay untouched; items already processed stay done."}
              :display {:label "Cancel job" :style :danger :order 9}}
+    :requeue {:from #{:running} :to :queued
+              :guards [worker-only-hidden]
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "The orphan sweep's record: the claimant died, and the next claim starts the job again."}
+              :display {:label "Re-queue" :order 9}}
     :complete {:from #{:running} :to :completed
                :guards [worker-only-hidden]
                :safety {:idempotent true :reversible false :confirm false
@@ -131,16 +158,34 @@
                   :type (keyword (or (:type rb) "human"))
                   :display (:display rb)})))
 
-(defn- persist-progress!
-  "The maintenance write: progress updates in place — no version bump,
-  no transition (the items log on their own rows)."
-  [eng job progress]
-  (let [rdef (get (inv/resources eng) :job)
-        data (assoc (:data job) :progress progress)]
+(defn- persist-data!
+  "The maintenance write: the job document updates in place — no
+  version bump, no transition (the items log on their own rows)."
+  [eng job data]
+  (let [rdef (get (inv/resources eng) :job)]
     (store/with-tx (:storage eng)
       (fn [tx]
         (store/update-data! (:storage eng) tx :job (:id job)
                             (schema/encode (:schema rdef) data) nil)))))
+
+(defn- persist-progress! [eng job progress]
+  (persist-data! eng job (assoc (:data job) :progress progress)))
+
+(defn- report-of
+  "The job artifact from the final progress: totals plus the refusal
+  list, refused/failed told apart by the per-entry :class the worker
+  stamped."
+  [job]
+  (let [{:keys [action kind progress]} (:data job)
+        {:keys [total refusals]} progress
+        classes (frequencies (map :class refusals))]
+    {:action action
+     :kind kind
+     :total total
+     :succeeded (- total (count refusals))
+     :refused (get classes "refused" 0)
+     :failed (get classes "failed" 0)
+     :refusals refusals}))
 
 (defn claim!
   "Claim-or-steal the job's lease for lease-seconds; re-claiming our
@@ -154,20 +199,27 @@
     #(store/release-job-lease! (:storage eng) % job-id holder)))
 
 (defn run-batch!
-  "One batch of a claimed running job: reload the row (a cancel landed
-  between batches stops here), run up to batch-size items through
-  bulk-item!, persist progress, renew the lease. → the job's state
-  after the batch (:running means more items remain), :gone when the
-  row vanished, :lost when the lease was stolen mid-run."
+  "One batch of a claimed job: reload the row (a cancel landed between
+  batches stops here), start a queued job (queued → running — the
+  claim made visible), run up to batch-size items through bulk-item!,
+  persist progress, renew the lease. → the job's state after the
+  batch (:running means more items remain), :gone when the row
+  vanished, :lost when the lease was stolen mid-run. On the last
+  batch the artifact (:report) persists before :complete fires."
   [eng job-id {:keys [batch-size holder lease-seconds]
                :or {batch-size 10 lease-seconds 60}}]
   (let [job (load-job eng job-id)]
     (cond
       (nil? job) :gone
-      (not= :running (:state job)) (:state job)
+      (contains? #{:completed :cancelled} (:state job)) (:state job)
       (and holder (not (claim! eng job-id holder lease-seconds))) :lost
       :else
-      (let [{:keys [action kind ids input progress]} (:data job)
+      (let [job (if (= :queued (:state job))
+                  (:row (inv/invoke! eng :job job-id :start nil
+                                     {:principal worker-actor
+                                      :correlation-id job-id}))
+                  job)
+            {:keys [action kind ids input progress]} (:data job)
             {:keys [done total]} progress
             target-kind (keyword kind)
             action-name (keyword action)
@@ -175,7 +227,11 @@
             principal (requesting-principal job)
             batch (subvec (vec ids) done (min total (+ done batch-size)))]
         (if (empty? batch)
-          (do (inv/invoke! eng :job job-id :complete nil
+          (do ;; the artifact: the final per-item report on the row's
+              ;; data, in the same document the completed envelope reads
+              (persist-data! eng job (assoc (:data job)
+                                            :report (p/wire-value (report-of job))))
+              (inv/invoke! eng :job job-id :complete nil
                            {:principal worker-actor
                             :correlation-id job-id})
               :completed)
@@ -190,12 +246,14 @@
                      (catch Exception e
                        (if (inv/refusal? e)
                          (conj refusals {:self (str "/api/" plural "/" id)
-                                         :reason (inv/problem-reason e)})
+                                         :reason (inv/problem-reason e)
+                                         :class "refused"})
                          (do (warn! "job " job-id " item " id " failed: "
                                     (ex-message e))
                              (conj refusals
                                    {:self (str "/api/" plural "/" id)
-                                    :reason "Internal error while processing this item."}))))))
+                                    :reason "Internal error while processing this item."
+                                    :class "failed"}))))))
                  []
                  batch)]
             (persist-progress! eng job
@@ -214,14 +272,19 @@
       (if (= :running s) (recur) s))))
 
 (defn run-once!
-  "One worker pass: claim-or-steal every running job and drive each to
-  its end. → the number of jobs this pass advanced."
+  "One worker pass: claim-or-steal every queued and running job and
+  drive each to its end (a queued claim starts it; a running claim is
+  the steal-on-expiry resume). → the number of jobs this pass
+  advanced."
   [eng {:keys [holder lease-seconds] :or {lease-seconds 60} :as opts}]
   (let [holder (or holder (str "worker-" (random-uuid)))
         opts (assoc opts :holder holder :lease-seconds lease-seconds)
         running (store/with-tx (:storage eng)
-                  (fn [tx] (store/query-rows (:storage eng) tx :job
-                                             {:state :running} {:limit 50})))]
+                  (fn [tx]
+                    (into (store/query-rows (:storage eng) tx :job
+                                            {:state :queued} {:limit 50})
+                          (store/query-rows (:storage eng) tx :job
+                                            {:state :running} {:limit 50}))))]
     (reduce
      (fn [n job]
        (if (claim! eng (:id job) holder lease-seconds)
@@ -260,3 +323,66 @@
 (defn stop-worker! [{:keys [^CountDownLatch stop]}]
   (some-> stop .countDown)
   nil)
+
+;; ── the orphan sweep (batch F) ──────────────────────────────────────
+
+(defn sweep-orphans!
+  "Re-queue every :running job with no live claimant — its lease row
+  absent or expired (the worker died between renewals). The re-queue
+  is an ordinary logged transition (system actor), so the outage is
+  in the audit trail; the stale lease row is dropped so the next
+  claim is an insert, not a steal. → the number of jobs re-queued."
+  [eng]
+  (let [st (:storage eng)
+        now ^Instant ((:now-fn eng))
+        running (store/with-tx st
+                  (fn [tx] (store/query-rows st tx :job
+                                             {:state :running} {:limit 200})))]
+    (reduce
+     (fn [n job]
+       (let [lease (store/with-tx st #(store/job-lease st % (:id job)))]
+         (if (and lease (.isAfter ^Instant (:expires-at lease) now))
+           n
+           (do (when lease
+                 (store/with-tx st
+                   #(store/release-job-lease! st % (:id job) (:holder lease))))
+               (try
+                 (inv/invoke! eng :job (:id job) :requeue nil
+                              {:principal worker-actor
+                               :correlation-id (:id job)})
+                 (inc n)
+                 (catch Exception e
+                   (warn! "orphan re-queue of job " (:id job) " failed: "
+                          (ex-message e))
+                   n))))))
+     0
+     running)))
+
+(defn start-orphan-sweeper!
+  "The orphan sweep as an ELECTED singleton (coherence/start-role!'s
+  advisory-lock election, role :jobs-orphan-sweeper): one process per
+  database sweeps every :interval-ms (default 30s); a crashed holder's
+  lock session dies and a peer takes over within one retry interval.
+  Returns the role handle; stop with coherence/stop-role!."
+  [eng {:keys [interval-ms retry-ms] :or {interval-ms 30000}}]
+  (coherence/start-role!
+   (:storage eng) :jobs-orphan-sweeper
+   {:retry-ms (or retry-ms 5000)
+    :start-fn
+    (fn []
+      (let [stop (CountDownLatch. 1)
+            t (Thread. ^Runnable
+                       (fn []
+                         (loop []
+                           (when-not (.await stop (long interval-ms)
+                                             TimeUnit/MILLISECONDS)
+                             (try (sweep-orphans! eng)
+                                  (catch Exception e
+                                    (warn! "orphan sweep failed: "
+                                           (ex-message e))))
+                             (recur))))
+                       "waymark10-jobs-orphans")]
+        (doto ^Thread t (.setDaemon true) (.start))
+        {:thread t :stop stop}))
+    :stop-fn (fn [{:keys [^CountDownLatch stop]}]
+               (some-> stop .countDown))}))

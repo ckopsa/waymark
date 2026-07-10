@@ -10,33 +10,49 @@
 
   A successful byte PUT transitions the metadata row pending → stored
   (mark_stored, the bytes system actor, hidden from every envelope) —
-  a re-PUT of the identical size on a stored row natural-replays; a
-  different size answers the honest 409. Ref fields can point at
-  attachments like any kind (the default {data.name} label applies).
+  a re-PUT of byte-identical content on a stored row natural-replays
+  (the sha256 detects the duplicate); different content answers the
+  honest 409. Ref fields can point at attachments like any kind (the
+  default {data.name} label applies).
+
+  Batch F closes two of the phase-9a punts:
+  - sha256 stamping: the byte PUT records the content's sha256 hex in
+    data (envelope-visible like any field), and duplicate content is
+    DETECTED by it — a re-PUT of byte-identical content on a stored
+    row natural-replays (200, first execution's outcome), while
+    different content refuses 409 even at the same size.
+  - The purge sweep (waymark9's BlobJanitor, resized): purge-deleted!
+    removes the stored bytes of :deleted attachments from the
+    directory (metadata rows stay, the audited record);
+    start-purge-sweeper! elects ONE sweeper per database via
+    coherence/start-role! — the advisory-lock election, the webhook
+    deliverer's discipline.
 
   Recorded deviations and named punts (each a sentence):
   - No presigned URLs, no S3, no BlobStore protocol: the local
-    directory is the phase-9a store, production stores are a named
-    punt.
-  - Deletion is metadata-only: the :delete transition stops the bytes
-    being SERVED, but no purge runs (waymark9's BlobJanitor log
-    consumer is a named punt) — the file stays on disk.
+    directory is the store, production stores are a named punt.
   - Blob write and metadata transition are not atomic: the bytes land
     on disk before mark_stored commits, so a crash in between leaves
     pending-with-bytes, healed by the next PUT (waymark9's
     log-consumer choreography is unported).
-  - Duplication (waymark9's duplicate/BlobCopier), sha256 stamping,
-    and the resource_kind/resource_id target binding are unported —
-    v10 phase 9a attachments attach BY being referenced, not by
-    naming a target."
+  - Duplication (waymark9's duplicate/BlobCopier) and the
+    resource_kind/resource_id target binding are unported — v10
+    attachments attach BY being referenced, not by naming a target.
+  - A row stored BEFORE batch F carries no sha256; a re-PUT on it
+    refuses 409 (the pre-sha digest can never natural-replay) — the
+    honest answer for bytes whose provenance was never recorded."
   (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
+            [waymark10.server.coherence :as coherence]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.io ByteArrayOutputStream File InputStream)))
+  (:import (java.io ByteArrayOutputStream File InputStream)
+           (java.security MessageDigest)
+           (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
 
@@ -59,7 +75,8 @@
     (t/allow) (t/deny)))
 
 (defhandler record-size [row inp _ctx]
-  (assoc-in row [:data :size] (:size inp)))
+  (cond-> (assoc-in row [:data :size] (:size inp))
+    (:sha256 inp) (assoc-in [:data :sha256] (:sha256 inp))))
 
 (defresource attachment
   {:kind :attachment
@@ -76,12 +93,19 @@
             ;; stamped by the bytes route's system transition; never
             ;; supplied by hand
             [:size {:optional true :x-display {:raw true}}
-             [:maybe [:int {:min 0}]]]]
+             [:maybe [:int {:min 0}]]]
+            ;; the content's sha256 hex, stamped with the size (batch
+            ;; F) — the duplicate-content anchor, envelope-visible
+            [:sha256 {:optional true :x-display {:raw true}}
+             [:maybe [:string {:min 64 :max 64}]]]]
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:name] :default "name"}
    :actions
    {:mark_stored {:from #{:pending} :to :stored
-                  :input [:map [:size [:int {:min 0}]]]
+                  :input [:map
+                          [:size [:int {:min 0}]]
+                          [:sha256 {:optional true}
+                           [:maybe [:string {:min 64 :max 64}]]]]
                   :record true
                   :edit {:prefill [:size] :fence false
                          :unfenced-reason "Written once by the bytes route at upload; there is no human form to clobber."}
@@ -146,21 +170,31 @@
     (when-not raw (throw (p/not-found :attachment id)))
     [rdef (inv/decode-row rdef raw)]))
 
+(defn sha256-of
+  "The content's sha256 hex — the duplicate-content anchor."
+  ^String [^bytes data]
+  (let [d (.digest (MessageDigest/getInstance "SHA-256") data)]
+    (str/join (map #(format "%02x" %) d))))
+
 (defn put-bytes!
   "PUT …/bytes: cap-checked bytes land in the attachment dir, then
-  the metadata row transitions pending → stored (system actor).
-  Returns the invoke result whose :row the router renders. A stored
-  row re-PUT with the same size natural-replays through mark_stored;
-  any other state refuses before the file is touched (no clobber)."
+  the metadata row transitions pending → stored (system actor), the
+  content's size AND sha256 recorded in data. Returns the invoke
+  result whose :row the router renders. Duplicate content detects by
+  the sha: a stored row re-PUT with byte-identical content
+  natural-replays through mark_stored (same input digest → the 2.0
+  replay, 200); different content — same size or not — refuses 409
+  before the file is touched (no clobber)."
   [eng id body]
   (let [[rdef row] (load-attachment eng id)
         cap (:attachment-max-bytes eng default-max-bytes)
-        data (read-capped body cap)]
+        data (read-capped body cap)
+        sha (sha256-of data)]
     (when (zero? (alength data))
       (throw (p/schema-invalid :mark_stored {:bytes ["at least one byte"]})))
     (when-not (or (= :pending (:state row))
                   (and (= :stored (:state row))
-                       (= (alength data) (get-in row [:data :size]))))
+                       (= sha (get-in row [:data :sha256]))))
       (throw (p/wrong-state :mark_stored (:state row)
                             (get-in rdef [:actions :mark_stored :from])
                             {:kind :attachment :id (str id)})))
@@ -168,7 +202,7 @@
       (io/make-parents f)
       (io/copy data f))
     (inv/invoke! eng :attachment (str id) :mark_stored
-                 {:size (alength data)}
+                 {:size (alength data) :sha256 sha}
                  {:principal bytes-actor})))
 
 (defn get-bytes
@@ -186,3 +220,57 @@
      :headers {"Content-Type" (get-in row [:data :media_type])
                "Content-Length" (str (.length f))}
      :body f}))
+
+;; ── the purge sweep (batch F — waymark9's BlobJanitor, resized) ─────
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 attachments: " parts))))
+
+(defn purge-deleted!
+  "Remove the stored bytes of every :deleted attachment from the
+  directory — the metadata rows stay, the audited record; deleting a
+  file that is already gone is a no-op, so the sweep is idempotent
+  and cheap to re-run. → the number of files removed."
+  [eng]
+  (let [st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx] (store/query-rows st tx :attachment
+                                          {:state :deleted} {:limit 500})))]
+    (reduce
+     (fn [n row]
+       (let [f (file-of eng (:id row))]
+         (if (and (.isFile f) (.delete f))
+           (inc n)
+           n)))
+     0
+     rows)))
+
+(defn start-purge-sweeper!
+  "The purge sweep as an ELECTED singleton (coherence/start-role!'s
+  advisory-lock election, role :attachments-purge): one process per
+  database sweeps every :interval-ms (default 60s); a crashed holder's
+  lock session dies and a peer takes over within one retry interval.
+  Returns the role handle; stop with coherence/stop-role!."
+  [eng {:keys [interval-ms retry-ms] :or {interval-ms 60000}}]
+  (coherence/start-role!
+   (:storage eng) :attachments-purge
+   {:retry-ms (or retry-ms 5000)
+    :start-fn
+    (fn []
+      (let [stop (CountDownLatch. 1)
+            t (Thread. ^Runnable
+                       (fn []
+                         (loop []
+                           (when-not (.await stop (long interval-ms)
+                                             TimeUnit/MILLISECONDS)
+                             (try (purge-deleted! eng)
+                                  (catch Exception e
+                                    (warn! "purge sweep failed: "
+                                           (ex-message e))))
+                             (recur))))
+                       "waymark10-attachments-purge")]
+        (doto ^Thread t (.setDaemon true) (.start))
+        {:thread t :stop stop}))
+    :stop-fn (fn [{:keys [^CountDownLatch stop]}]
+               (some-> stop .countDown))}))

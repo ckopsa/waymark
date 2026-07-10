@@ -181,7 +181,13 @@
                   :coherence (coherence/start! eng dispatcher {})
                   :jobs (jobs/start-worker!
                          eng {:poll-ms (:jobs-poll-ms eng 1000)
-                              :batch-size (:jobs-batch-size eng 10)})})))
+                              :batch-size (:jobs-batch-size eng 10)})
+                  ;; batch F's elected singletons: orphaned running
+                  ;; jobs re-queue; deleted attachments' bytes purge
+                  :orphan-sweeper (jobs/start-orphan-sweeper!
+                                   eng {:interval-ms (:orphan-sweep-ms eng 30000)})
+                  :purge-sweeper (attachments/start-purge-sweeper!
+                                  eng {:interval-ms (:purge-sweep-ms eng 60000)})})))
   (http/run-server (handler eng) {:port port :legacy-return-value? false}))
 
 (defn stop!
@@ -193,7 +199,10 @@
   ([eng server]
    (when server (http/server-stop! server))
    (when-some [rt (:runtime eng)]
-     (when-some [{:keys [dispatcher coherence discovery jobs]} @rt]
+     (when-some [{:keys [dispatcher coherence discovery jobs
+                         orphan-sweeper purge-sweeper]} @rt]
+       (some-> orphan-sweeper coherence/stop-role!)
+       (some-> purge-sweeper coherence/stop-role!)
        (some-> jobs jobs/stop-worker!)
        (some-> coherence coherence/stop!)
        (some-> dispatcher events/stop!)

@@ -101,9 +101,9 @@
 (deftest deferred-bulk-completes
   (let [ids (errands! [true true false true])
         job (defer! ids)]
-    (testing "the 202 envelope is the running job, work untouched"
+    (testing "the 202 envelope is the queued job, work untouched"
       (is (= "job" (:kind job)))
-      (is (= "running" (:state job)))
+      (is (= "queued" (:state job)))
       (is (= {:done 0 :total 4 :refusals []} (get-in job [:data :progress])))
       (is (= ids (get-in job [:data :ids])))
       (is (= "priya" (get-in job [:data :requested_by :id])))

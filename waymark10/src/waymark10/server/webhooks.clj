@@ -26,6 +26,15 @@
   Nothing is silently dropped; the trade is that one broken endpoint
   stops its own stream (never anyone else's).
 
+  Batch F makes that trade PER SUBSCRIPTION (:delivery_policy,
+  declaration-driven): \"fail\" (the default, exactly the discipline
+  above) or \"skip\" (waymark9's liveness posture — a delivery that
+  exhausts its retries logs to *err*, the cursor advances past the
+  refusing event, and the subscription stays active). And waymark9's
+  revoked terminal state is ported after all: :revoke is owner-gated
+  (the subscription's creator, never another principal) and terminal —
+  paused and failed still both resume; revoked does not.
+
   Recorded deviations and scope, each a sentence:
   - One deliverer thread drains every subscription's cursor in turn —
     the v10 spelling of a worker per active subscription; delivery is
@@ -38,8 +47,6 @@
   - :subscription transitions are never delivered (waymark9 excluded
     them too) — a webhook narrating its own bookkeeping is feedback,
     not signal.
-  - waymark9's revoked terminal state is unported: paused is the off
-    switch, failed is the honest outage record, and both resume.
   - The active-subscription set re-reads from storage on every drain —
     no cache to invalidate; the drain is already IO-bound on delivery."
   (:require [clojure.string :as str]
@@ -84,12 +91,21 @@
 (defhandler record-failure [row inp _ctx]
   (assoc-in row [:data :failure_reason] (:reason inp)))
 
+(def ^:private owner-only
+  (g/guard {:name :owner-revokes
+            :explain "Only the subscription's owner may revoke it — pause it instead."
+            :reads [:principal]
+            :check (fn [row _ ctx]
+                     (if (and (some? (:owner row))
+                              (= (:owner row) (get-in ctx [:principal :id])))
+                       (t/allow) (t/deny)))}))
+
 (defresource subscription
   {:kind :subscription
    :plural "subscriptions"
-   :states [:active :paused :failed]
+   :states [:active :paused :failed :revoked]
    :initial :active
-   :terminal #{}                       ; failed and paused both resume
+   :terminal #{:revoked}               ; failed and paused both resume
    :nav :secondary
    :summary "{data.url} · {state}"
    :schema [:map
@@ -100,6 +116,11 @@
             ;; the HMAC key for X-Waymark-Signature; absent = unsigned
             [:secret {:optional true :x-display {:raw true}}
              [:maybe [:string {:min 8 :max 120}]]]
+            ;; what an exhausted delivery does (batch F): "fail" (the
+            ;; default — mark the subscription failed, park the cursor)
+            ;; or "skip" (log to *err*, advance the cursor, stay active)
+            [:delivery_policy {:optional true}
+             [:maybe [:enum "fail" "skip"]]]
             [:failure_reason {:optional true} [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
    :actions
@@ -109,6 +130,11 @@
     :resume {:from #{:paused :failed} :to :active
              :safety {:idempotent true :reversible true :confirm false}
              :display {:label "Resume" :order 1}}
+    :revoke {:from #{:active :paused :failed} :to :revoked
+             :guards [owner-only]
+             :safety {:idempotent true :reversible false :confirm true
+                      :consequence "The endpoint never hears another event; a new subscription starts from its own creation, not from here."}
+             :display {:label "Revoke" :style :danger :order 8}}
     :mark_failed {:from #{:active} :to :failed
                   :input [:map [:reason {:optional true}
                                 [:maybe [:string {:max 200}]]]]
@@ -210,30 +236,46 @@
 
 (defn- drain-subscription!
   "Deliver everything past one active subscription's cursor, advancing
-  it per delivered event; a delivery that exhausts its retries marks
+  it per delivered event. A delivery that exhausts its retries follows
+  the subscription's :delivery_policy: \"fail\" (the default) marks
   the subscription failed and PARKS the cursor at the refusing event,
-  so a resume continues from exactly there."
+  so a resume continues from exactly there; \"skip\" logs the loss to
+  *err*, advances the cursor past the refusing event, and the
+  subscription stays active — liveness over completeness, chosen per
+  subscription."
   [eng client sub opts]
   (let [st (:storage eng)
         consumer (consumer-of sub)
+        skip? (= "skip" (get-in sub [:data :delivery_policy]))
         cursor (or (store/with-tx st #(store/cursor-get st % consumer))
                    (seed-cursor! eng sub))]
     (loop [cursor cursor]
       (let [rows (store/with-tx st
                    (fn [tx] (store/transitions st tx {:since cursor}
                                                {:limit 200})))
+            advance! (fn [t]
+                       (store/with-tx st
+                         #(store/cursor-set! st % consumer (:id t)))
+                       (:id t))
             outcome
             (reduce
              (fn [cursor t]
                (if (or (= :subscription (:kind t)) (not (wants? sub t)))
-                 (do (store/with-tx st
-                       #(store/cursor-set! st % consumer (:id t)))
-                     (:id t))
+                 (advance! t)
                  (let [body (wire-body eng t)]
-                   (if (deliver-with-retries! client sub (:id t) body opts)
-                     (do (store/with-tx st
-                           #(store/cursor-set! st % consumer (:id t)))
-                         (:id t))
+                   (cond
+                     (deliver-with-retries! client sub (:id t) body opts)
+                     (advance! t)
+
+                     skip?
+                     (do (warn! "delivery to " (get-in sub [:data :url])
+                                " failed after " (:attempts opts)
+                                " attempts at event " (:id t)
+                                "; skipping it (delivery policy: skip) — "
+                                "the subscription stays active")
+                         (advance! t))
+
+                     :else
                      (do (warn! "delivery to " (get-in sub [:data :url])
                                 " failed after " (:attempts opts)
                                 " attempts at event " (:id t)

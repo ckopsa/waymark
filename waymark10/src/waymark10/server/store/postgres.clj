@@ -60,7 +60,8 @@
   "CREATE TABLE + indexes for one declared kind, from its storage
   projection (store/kind-projection — filterable ∪ sortable promote
   to generated columns; vocab arrays have no single-value promotion
-  and no GIN index yet, a named punt — containment filters scan)."
+  but DO carry a GIN index since batch F, so membership filters walk
+  an index instead of scanning)."
   [rmap]
   (table-ddl (store/kind-projection rmap)))
 
@@ -247,9 +248,12 @@
   filters."
   [{:keys [target field cast op value values]}]
   (if (= :in-any op)
+    ;; the ?| operator (JDBC-escaped ??|), not jsonb_exists_any: the
+    ;; planner matches INDEXES through operators only, so the function
+    ;; spelling could never walk the vocab GIN index (batch F)
     (let [f (store/definition-checked-name field)]
-      [(str "jsonb_exists_any(data->'" f "', ARRAY["
-            (str/join ", " (repeat (count values) "?")) "])")
+      [(str "data->'" f "' ??| ARRAY["
+            (str/join ", " (repeat (count values) "?")) "]")
        (vec values)])
     (let [cast (or cast "text")
           _ (when-not (contains? safe-casts cast)
@@ -560,6 +564,14 @@
      tx ["DELETE FROM waymark10_job_leases WHERE job_id = ? AND holder = ?"
          job-id holder])
     nil)
+
+  (job-lease [_ tx job-id]
+    (when-some [r (jdbc/execute-one!
+                   tx ["SELECT holder, expires_at FROM waymark10_job_leases WHERE job_id = ?"
+                       job-id]
+                   jdbc-opts)]
+      {:holder (:holder r)
+       :expires-at (->inst (:expires_at r))}))
 
   (restamp-law! [_ tx kind where to-revision]
     (let [table (get @tables kind)

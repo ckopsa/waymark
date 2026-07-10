@@ -175,7 +175,7 @@
             b (json resp)]
         (is (= 202 (:status resp)))
         (is (= "job" (:kind b)))
-        (is (= "running" (:state b)))
+        (is (= "queued" (:state b)))
         (is (= (:self b) (get-in resp [:headers "Location"])))
         (is (= {:done 0 :total 3 :refusals []} (get-in b [:data :progress])))
         (is (= "sweep" (get-in b [:data :action])))

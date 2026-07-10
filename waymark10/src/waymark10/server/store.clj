@@ -112,7 +112,11 @@
     over one whose expiry has passed — a live other holder refuses.
     → true when held for ttl-seconds from now.")
   (release-job-lease! [st tx job-id holder]
-    "Drop the lease if we still hold it; absent or stolen is a no-op."))
+    "Drop the lease if we still hold it; absent or stolen is a no-op.")
+  (job-lease [st tx job-id]
+    "The job's lease row, {:holder … :expires-at inst} or nil — the
+    orphan sweep's read (batch F): a :running job whose lease is
+    absent or expired has no live claimant."))
 
 (defn with-tx
   "Sugar: (with-tx st [tx] …)."
@@ -198,12 +202,44 @@
        :ddl (str "f_" fname " " sql-type " GENERATED ALWAYS AS ("
                  (generated-expression sql-type fname) ") STORED")})))
 
+(defn vocab-array-schema?
+  "Is this field's schema form a vector of :waymark/vocab tokens (the
+  membership-filtered shape with no single-value promotion)? :maybe
+  wrapping and property maps unwrap."
+  [field-schema]
+  (let [s (if (and (vector? field-schema) (= :maybe (first field-schema)))
+            (last field-schema)
+            field-schema)]
+    (boolean
+     (and (vector? s) (= :vector (first s))
+          (let [item (last s)]
+            (= :waymark/vocab (if (vector? item) (first item) item)))))))
+
+(defn- gin-indexes
+  "A GIN index per vector-typed :waymark/vocab filterable field (batch
+  F, closing phase 7's named punt): membership filters (:in-any, the
+  jsonb ?| containment) walk the index instead of scanning. Vocab
+  arrays still have no single-value promotion — the GIN entry is
+  their whole storage story."
+  [rmap table]
+  (into {}
+        (keep (fn [field]
+                (when (and (not= :state field)
+                           (vocab-array-schema?
+                            (schema/field-schema (:schema rmap) field)))
+                  (let [fname (definition-checked-name field)
+                        ix (str "ix_" table "_" fname "_gin")]
+                    [ix (str "CREATE INDEX IF NOT EXISTS " ix " ON " table
+                             " USING gin ((data->'" fname "'))")]))))
+        (sort (keys (:filterable rmap)))))
+
 (defn kind-projection
   "The one projection of a kind's table: the engine's fixed columns,
   a generated column per promoted field (filterable ∪ sortable, phase
   7's rule — sort orders by the generated column, so sortable fields
   promote too; :state has its own column; vocab arrays have no
-  single-value promotion), and the standard indexes.
+  single-value promotion), and the standard indexes — plus a GIN
+  index per vocab-array filterable field (batch F).
   → {:table … :columns [{:name :type :generated? :ddl} …]
      :indexes {name create-sql}}"
   [rmap]
@@ -216,13 +252,15 @@
     {:table table
      :columns (into engine-columns promoted)
      :indexes
-     {(str "ix_" table "_state")
-      (str "CREATE INDEX IF NOT EXISTS ix_" table "_state ON " table " (state)")
-      (str "ix_" table "_law")
-      (str "CREATE INDEX IF NOT EXISTS ix_" table "_law ON " table " (law_revision)")
-      (str "ix_" table "_flip")
-      (str "CREATE INDEX IF NOT EXISTS ix_" table "_flip ON " table
-           " (next_flip_at) WHERE next_flip_at IS NOT NULL")}}))
+     (merge
+      {(str "ix_" table "_state")
+       (str "CREATE INDEX IF NOT EXISTS ix_" table "_state ON " table " (state)")
+       (str "ix_" table "_law")
+       (str "CREATE INDEX IF NOT EXISTS ix_" table "_law ON " table " (law_revision)")
+       (str "ix_" table "_flip")
+       (str "CREATE INDEX IF NOT EXISTS ix_" table "_flip ON " table
+            " (next_flip_at) WHERE next_flip_at IS NOT NULL")}
+      (gin-indexes rmap table))}))
 
 (defn projection-snapshot
   "A projection reduced to the comparable shape the live snapshot

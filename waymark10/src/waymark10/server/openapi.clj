@@ -9,12 +9,15 @@
   drift from what the router serves.
 
   Scope, recorded: enough for /docs-style tooling, not a full OAS
-  validation suite — response BODY schemas are stubs (the envelope's
-  shape lives in the conformance library, not here), the SSE/
-  attachment-bytes/surfaces/collab/well-known routes are undocumented,
-  securitySchemes are absent (identity is dev headers or the engine's
-  OIDC config), and a grant-scoped request 404s the route (the
-  document names every kind; concealment wins)."
+  validation suite — response bodies reference the SHARED shapes
+  (components.schemas: envelope, collection, problem, bulk_report —
+  structural, not per-kind; the per-kind data model rides
+  /api/schemas/{kind} and the envelope's own affordances), the
+  surfaces routes document per declared surface (batch F), the SSE/
+  attachment-bytes/collab/well-known routes stay undocumented,
+  securitySchemes name both doors (the OIDC bearer and the dev
+  header), and a grant-scoped request 404s the route (the document
+  names every kind; concealment wins)."
   (:require [clojure.string :as str]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
@@ -23,13 +26,100 @@
 
 (set! *warn-on-reflection* true)
 
+;; ── the shared shapes, referenced once (components.schemas) ─────────
+
+(defn- schema-ref [k]
+  {"$ref" (str "#/components/schemas/" k)})
+
+(def ^:private envelope-schema
+  {:type "object"
+   :description "The resource envelope: identity, state, summary, data, and the affordances (actions/unavailable) the server projected for THIS caller."
+   :properties {:waymark {:type "string"}
+                :kind {:type "string"}
+                :self {:type "string"}
+                :state {:type "string"}
+                :summary {:type "string"}
+                :data {:type "object"}
+                :parts {:type "object"}
+                :actions {:type "object"}
+                :unavailable {:type "object"}
+                :links {:type "object"}
+                :meta {:type "object"}}
+   :required ["kind" "self" "state" "summary"]})
+
+(def ^:private collection-schema
+  {:type "object"
+   :description "The collection envelope: items as envelope-minus-data summaries, the real filtered total, pagination, and the create/query/bulk affordances."
+   :properties {:waymark {:type "string"}
+                :kind {:type "string"}
+                :self {:type "string"}
+                :state {:type "string"}
+                :summary {:type "string"}
+                :data {:type "object"
+                       :properties {:items {:type "array"
+                                            :items (schema-ref "envelope")}
+                                    :total {:type "integer"}
+                                    :page {:type "object"
+                                           :properties {:size {:type "integer"}
+                                                        :number {:type "integer"}}}}}
+                :actions {:type "object"}
+                :links {:type "object"}}
+   :required ["kind" "self" "data"]})
+
+(def ^:private problem-schema
+  {:type "object"
+   :description "RFC 9457 problem details; refusals carry remedies and becomes_available beside the standard members."
+   :properties {:type {:type "string"}
+                :title {:type "string"}
+                :status {:type "integer"}
+                :detail {:type "string"}
+                :errors {:type "object"}
+                :remedies {:type "array" :items {:type "string"}}
+                :becomes_available {:type "object"}}
+   :required ["title" "status"]})
+
+(def ^:private bulk-report-schema
+  {:type "object"
+   :description "The bulk/batch report: per-call counts and the refusal list, one entry per item that did not land."
+   :properties {:kind {:type "string" :const "bulk_report"}
+                :action {:type "string"}
+                :data {:type "object"
+                       :properties {:succeeded {:type "integer"}
+                                    :refused {:type "integer"}
+                                    :failed {:type "integer"}
+                                    :refusals {:type "array"
+                                               :items {:type "object"
+                                                       :properties {:self {:type "string"}
+                                                                    :reason {:type "string"}}}}}}
+                :links {:type "object"}}
+   :required ["kind" "action" "data"]})
+
 ;; ── the problem responses, referenced once ──────────────────────────
 
 (def ^:private problem-content
-  {"application/problem+json" {:schema {:type "object"}}})
+  {"application/problem+json" {:schema (schema-ref "problem")}})
+
+(def ^:private envelope-content
+  {"application/waymark+json" {:schema (schema-ref "envelope")}})
+
+(def ^:private collection-content
+  {"application/waymark+json" {:schema (schema-ref "collection")}})
+
+(def ^:private bulk-report-content
+  {"application/waymark+json" {:schema (schema-ref "bulk_report")}})
 
 (def components
-  {:responses
+  {:schemas
+   {"envelope" envelope-schema
+    "collection" collection-schema
+    "problem" problem-schema
+    "bulk_report" bulk-report-schema}
+   :securitySchemes
+   {"bearer" {:type "http" :scheme "bearer" :bearerFormat "JWT"
+              :description "The OIDC relying party (engines configured with :oidc): an ID/access token whose claims resolve the principal."}
+    "devHeader" {:type "apiKey" :in "header" :name "X-Waymark-Principal"
+                 :description "The dev identity headers (engines without :oidc): X-Waymark-Principal names the principal; X-Waymark-Roles and X-Waymark-Actor-Type ride beside it."}}
+   :responses
    {"not_found" {:description "No such resource, collection or action (concealment answers this too)"
                  :content problem-content}
     "refused" {:description "Guard refused, wrong state, or unacknowledged warnings — detail carries the advertised reason; remedies and becomes_available ride along"
@@ -45,7 +135,8 @@
   {"$ref" (str "#/components/responses/" k)})
 
 (def ^:private act-responses
-  {"200" {:description "The post-transition envelope (or {valid: true} on dry_run)"}
+  {"200" {:description "The post-transition envelope (or {valid: true} on dry_run)"
+          :content envelope-content}
    "404" (resp-ref "not_found")
    "409" (resp-ref "refused")
    "412" (resp-ref "version_conflict")
@@ -109,19 +200,22 @@
                                     {:name pname :in "query" :required false
                                      :schema pschema})
                                   (sort-by key (:properties qs)))
-                :responses {"200" {:description (str kname " collection envelope")}
+                :responses {"200" {:description (str kname " collection envelope")
+                                   :content collection-content}
                             "422" (resp-ref "schema_invalid")}}
           :post {:tags [kname]
                  :summary (str "Create a " kname " (initial-state transition)")
                  :requestBody (body-of (schema/json-schema create-model))
-                 :responses {"201" {:description "The new resource envelope; Location carries its self"}
+                 :responses {"201" {:description "The new resource envelope; Location carries its self"
+                                    :content envelope-content}
                              "409" (resp-ref "refused")
                              "422" (resp-ref "schema_invalid")}}}
          (str col "/{id}")
          {:get {:tags [kname]
                 :summary (str "Fetch a " kname " envelope")
                 :parameters [id-param]
-                :responses {"200" {:description "The resource envelope"}
+                :responses {"200" {:description "The resource envelope"
+                                   :content envelope-content}
                             "404" (resp-ref "not_found")}}}}]
     (reduce
      (fn [paths defn']
@@ -134,7 +228,10 @@
                                  (assoc :summary (str (:summary op) " (bulk)"))
                                  (assoc :requestBody (bulk-body defn'))
                                  (update :responses assoc
-                                         "202" {:description "Deferred: the job envelope; Location carries the job"}))})
+                                         "200" {:description "The bulk report"
+                                                :content bulk-report-content}
+                                         "202" {:description "Deferred: the job envelope; Location carries the job"
+                                                :content envelope-content}))})
                (assoc paths (str col "/{id}/-/" aname)
                       {:post (update op :parameters #(into [id-param] %))}))
              paths
@@ -147,6 +244,9 @@
                                                   :properties {:inputs {:type "array"
                                                                         :items (schema/json-schema (:input defn'))}}
                                                   :required ["inputs"]}))
+                                 (update :responses assoc
+                                         "200" {:description "The batch report"
+                                                :content bulk-report-content})
                                  (assoc :parameters [id-param]))})
                paths)]
          (if (get-in defn' [:edit :draft])
@@ -170,16 +270,40 @@
      base
      (machine/actions-seq rdef))))
 
+(defn- surface-paths
+  "One documented path per declared surface (batch F): the composed
+  decision screen at /api/surfaces/{name}/{anchor-id}."
+  [surfaces]
+  (into {}
+        (map (fn [[sname sdef]]
+               [(str "/api/surfaces/" (name sname) "/{id}")
+                {:get {:tags ["surfaces"]
+                       :summary (str "The " (name sname) " surface")
+                       :description (str "The composed decision screen anchored on one "
+                                         (name (get sdef :anchor "resource"))
+                                         " — panels of related envelopes, assembled per request.")
+                       :parameters [{:name "id" :in "path" :required true
+                                     :schema {:type "string"}
+                                     :description "The anchor resource's id"}]
+                       :responses {"200" {:description "The surface envelope: the anchor plus its panels"}
+                                   "404" (resp-ref "not_found")}}}]))
+        surfaces))
+
 (defn document
   "The derived OpenAPI 3.1 document for everything this engine
-  serves."
+  serves — every kind's paths, the declared surfaces, the shared
+  response shapes (components.schemas), and both identity doors
+  (securitySchemes: the OIDC bearer and the dev header)."
   [eng]
   {:openapi "3.1.0"
    :info {:title "waymark10"
           :version "10"
           :description (str "Derived from the resource declarations — "
                             "every action with its real input schema.")}
+   :security [{"bearer" []} {"devHeader" []}]
    :paths (into (sorted-map)
-                (mapcat (fn [[_ rdef]] (kind-paths rdef)))
-                (sort-by key (inv/resources eng)))
+                (concat
+                 (mapcat (fn [[_ rdef]] (kind-paths rdef))
+                         (sort-by key (inv/resources eng)))
+                 (surface-paths (:surfaces eng))))
    :components components})
