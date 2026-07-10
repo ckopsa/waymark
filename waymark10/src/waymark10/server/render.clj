@@ -16,6 +16,7 @@
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.judgment :as judgment]
             [waymark10.server.problems :as p]
             [waymark10.summary :as summary]
             [waymark10.types :as t])
@@ -141,7 +142,26 @@
                (assoc-in acc [:unavailable (:name defn')]
                          (out-of-state-entry defn' state)))))
          {:actions {} :unavailable {}}
-         (remove :bulk (machine/actions-seq rdef)))]
+         ;; the row's law resolves the probe's guards too (phase 5):
+         ;; advertisement equals enforcement, per row
+         (map #(judgment/resolve-action rdef % (:law-revision row))
+              (remove :bulk (machine/actions-seq rdef))))
+        ;; the engine-injected adopt (phase 5): a row living under an
+        ;; older law than the kind's current one affords stepping
+        ;; forward — unless the machine declares its own :adopt
+        actions (if (and (:current-law rdef)
+                         (:law-revision row)
+                         (< (:law-revision row) (:current-law rdef))
+                         (not (contains? (:terminal rdef) state))
+                         (not (contains? (:actions rdef) :adopt)))
+                  (assoc actions :adopt
+                         {:method "POST"
+                          :href (str self "/-/adopt")
+                          :effect {:to (name state)}
+                          :safety {:idempotent true :reversible false
+                                   :confirm false}
+                          :display {:label "Adopt the current law"}})
+                  actions)]
     (p/wire-value
      {:waymark "10"
       :kind (name (:kind rdef))

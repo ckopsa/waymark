@@ -310,7 +310,7 @@
   severity create guards are acknowledged on retry. Returns the
   create! result {:row … :transition …}."
   [eng kind {:keys [seed overrides] :or {seed 0}}]
-  (let [rdef (or (get-in eng [:resources kind])
+  (let [rdef (or (get (inv/resources eng) kind)
                  (throw (ex-info (str "no enrolled kind " kind) {:kind kind})))
         model (or (:create-schema rdef) (:schema rdef))
         body (or (example-for eng kind :create)
@@ -362,7 +362,7 @@
   :reason …}} — and the reason always NAMES the blocking action and
   the registration that would fix it (waymark9's honest SkipState)."
   [eng kind target {:keys [seed] :or {seed 0}}]
-  (let [rdef (get-in eng [:resources kind])
+  (let [rdef (get (inv/resources eng) kind)
         skip (fn [reason] {:skip {:state target :reason reason}})]
     (cond
       (nil? rdef) (skip (str "no enrolled kind " kind))

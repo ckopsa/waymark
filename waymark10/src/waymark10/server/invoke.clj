@@ -7,8 +7,8 @@
    1. resolve the action                            (404)
    2. idempotency-key requirement + stored replay   (428 / replay)
    3. load the row FOR UPDATE — one lock per invocation
-   4. the row's law resolves the guards (judgment; resident stub
-      until phase 5)
+   4. the row's law resolves the guards (waymark10.server.judgment:
+      a non-resident stamp is judged by its revision's stored trees)
    5. out of state → natural replay, else concealment (404), else
       wrong-state with becomes-available              (409)
    6. the fence: If-Match vs the current etag         (412)
@@ -32,12 +32,23 @@
   schema-typed body is refused at the digest. Decoding to schema
   types happens inside, at step 7.
 
+  Phase 5 additions, each at its numbered seam: step 4 reads the
+  judgment overlay; create! stamps :law-revision from the kind's law
+  slots (an after=true pilot claims new creates); the engine-injected
+  :adopt action restamps a row to its governing law; and after-write!
+  — the lifecycle seam — runs the definitions machinery's effects
+  after a committed, non-replayed write (waymark9's DefinitionLifecycle
+  after_commit, made synchronous: it runs post-commit in the same
+  call, so a crash between commit and effect is the boot-revise crash
+  window, re-detected at the next boot).
+
   Returns {:row … :transition … :replayed? … :valid? …}; rendering to
   the envelope is phase 3's job."
   (:require [clojure.string :as str]
             [waymark10.derived :as derived]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
+            [waymark10.server.judgment :as judgment]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.summary :as summary]
@@ -52,8 +63,17 @@
 (defn- body-digest [body]
   (wire/digest (or body {})))
 
+(defn resources
+  "The kind → rdef map this engine serves: the phase-5 registry atom's
+  current snapshot when the definitions boot installed one, else the
+  static phase-2 map — old engines keep working with law slots absent."
+  [engine]
+  (if-some [reg (:registry engine)]
+    (:kinds @reg)
+    (:resources engine)))
+
 (defn- rdef-of [engine kind]
-  (or (get-in engine [:resources kind])
+  (or (get (resources engine) kind)
       (throw (p/not-found kind "?"))))
 
 (defn- make-ctx [engine tx mode principal]
@@ -188,19 +208,125 @@
        "application/waymark+json"))
     {:row (decode-row rdef saved) :transition record}))
 
+;; ── the lifecycle seam (phase 5) ────────────────────────────────────
+
+(defn- after-write!
+  "A committed, non-replayed write may carry law-lifecycle effects: a
+  definition transition flips slots and restamps populations; an adopt
+  triggers the supersede-when-empty sweep. The hook is the engine's
+  :lifecycle fn (waymark10.server.definitions/lifecycle), installed by
+  the boot; engines without it pay nothing. Runs AFTER the write's
+  transaction — the simplest correct seam: effects use ordinary
+  create!/invoke! calls and bulk restamps in their own transactions,
+  and a crash in between is the boot-revise crash window (the next
+  boot re-detects). Recorded deviation: waymark9 superseded the prior
+  revision inside the promote's own transaction; v10 runs the whole
+  effect post-commit, so two current definition rows can coexist for
+  the effect's duration."
+  [engine kind action-name res]
+  (when-some [lc (:lifecycle engine)]
+    (when (and (:transition res) (nil? (:replayed? res)))
+      (lc engine kind action-name res)))
+  res)
+
+;; ── the engine-injected adopt (phase 5) ─────────────────────────────
+
+(defn- where-claims?
+  "Does a pilot population's where= equality map claim this decoded
+  row? String-fallback comparison, the acceptance-membership
+  discipline."
+  [where row]
+  (every? (fn [[f expected]]
+            (let [v (get-in row [:data f])]
+              (or (= v expected) (= (str v) (str expected)))))
+          where))
+
+(defn- adopt-target
+  "The revision a row adopts INTO: the piloted revision when its
+  where-population claims the row, else the kind's current law."
+  [rdef row]
+  (let [p (:piloted-law rdef)]
+    (if (and p (some-> (get-in p [:population :where])
+                       (where-claims? row)))
+      (:revision p)
+      (:current-law rdef))))
+
+(defn- adopt!
+  "The engine-injected :adopt: a same-state restamp to the row's
+  governing law — version+1, logged, no handler, no guards. A machine
+  that declares its own :adopt shadows this. Enforcement accepts any
+  state, terminal included, though render only advertises it on
+  non-terminal rows — recorded deviation: adopting a closed row is
+  the maintenance act that lets a grandfathered law finally die (the
+  sweep counts every stamped row)."
+  [engine rdef kind id {:keys [principal dry-run correlation-id]}]
+  (store/with-tx (:storage engine)
+    (fn [tx]
+      (let [raw (or (store/load-row (:storage engine) tx kind id
+                                    {:for-update (not dry-run)})
+                    (throw (p/not-found kind id)))
+            row (decode-row rdef raw)
+            target (adopt-target rdef row)]
+        (cond
+          dry-run {:valid? true}
+          (= target (:law-revision row)) {:row row :replayed? :natural}
+          :else
+          (let [advanced (-> row
+                             (assoc :law-revision target)
+                             (update :version inc))
+                record (store/append-transition!
+                        (:storage engine) tx
+                        {:kind kind
+                         :resource-id id
+                         :action :adopt
+                         :from-state (:state row)
+                         :to-state (:state row)
+                         :actor {:type (name (:type principal))
+                                 :id (:id principal)
+                                 :display (:display principal)}
+                         :law-revision target
+                         :input-digest (body-digest nil)
+                         :correlation-id correlation-id
+                         :summary (summary-of rdef row)})
+                saved (store/save-row! (:storage engine) tx kind
+                                       (encode-row rdef advanced)
+                                       (:version row))]
+            {:row (decode-row rdef saved) :transition record}))))))
+
+(declare invoke-declared!)
+
 (defn invoke!
   "One write. opts: :principal (required), :if-match, :idempotency-key,
   :dry-run, :acknowledged (set of guard names), :correlation-id."
   [engine kind id action-name body
    {:keys [principal if-match idempotency-key dry-run acknowledged
            correlation-id]
+    :or {acknowledged #{}}
+    :as opts}]
+  (let [rdef (rdef-of engine kind)]
+    (if (and (= :adopt action-name)
+             (nil? (get-in rdef [:actions :adopt]))
+             (:current-law rdef))
+      (do (when (seq body)
+            (throw (p/schema-invalid
+                    :adopt (into {} (map (fn [[k _]] [k ["unexpected field"]]))
+                                 body))))
+          (after-write! engine kind :adopt
+                        (adopt! engine rdef kind id opts)))
+      (invoke-declared! engine rdef kind id action-name body opts))))
+
+(defn- invoke-declared!
+  [engine rdef kind id action-name body
+   {:keys [principal if-match idempotency-key dry-run acknowledged
+           correlation-id]
     :or {acknowledged #{}}}]
-  (let [rdef (rdef-of engine kind)
-        defn (or (some-> (get-in rdef [:actions action-name])
+  (let [defn (or (some-> (get-in rdef [:actions action-name])
                          (assoc :name action-name))
                  (throw (p/no-such-action kind action-name)))
         digest (body-digest body)]
-    (store/with-tx (:storage engine)
+    (after-write!
+     engine kind action-name
+     (store/with-tx (:storage engine)
       (fn [tx]
         ;; 2. idempotency: requirement, then stored replay
         (when (and (not dry-run)
@@ -221,8 +347,10 @@
                                         {:for-update (not dry-run)})
                         (throw (p/not-found kind id)))
                 row (decode-row rdef raw)
-                ;; 4. the row's law judges the row — resident stub until
-                ;; the definitions machinery (phase 5) serves stored trees
+                ;; 4. the row's law judges the row: a non-resident
+                ;; stamp resolves this action's guards from that
+                ;; revision's stored trees (the judgment overlay)
+                defn (judgment/resolve-action rdef defn (:law-revision row))
                 ctx (make-ctx engine tx (if dry-run :dry-run :invoke) principal)]
             (if-not (contains? (:from defn) (:state row))
               ;; 5. out of state: replay, conceal, or narrate
@@ -267,12 +395,27 @@
                                           :overridden overridden
                                           :idempotency-key idempotency-key
                                           :principal principal
-                                          :correlation-id correlation-id})))))))))))))
+                                          :correlation-id correlation-id}))))))))))))))
+
+(defn- create-law-revision
+  "Creates stamp the kind's current law (phase 5); an after=true pilot
+  claims new creates for the piloted revision. Engines built without
+  the definitions boot carry no law slots and keep the phase-2 stub
+  (the engine's :current-law map, default 1)."
+  [engine rdef kind]
+  (if (contains? rdef :current-law)
+    (if (get-in rdef [:piloted-law :population :after])
+      (get-in rdef [:piloted-law :revision])
+      (:current-law rdef))
+    (get-in engine [:current-law kind] 1)))
 
 (defn create!
   "The initial-state transition. Validates against :create-schema (or
   :schema), runs create guards with row nil, runs :on-create, then
-  materializes, inserts, and logs under the kind's create action name."
+  materializes, inserts, and logs under the kind's create action name.
+  The transition's to-state is the row's state AFTER :on-create — a
+  declared create landing (a held definition is born :proposed) logs
+  honestly."
   [engine kind body {:keys [principal acknowledged correlation-id id]
                      :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
@@ -312,7 +455,7 @@
                      :data inp
                      :shape (:shape rdef 1)
                      :owner (:id principal)
-                     :law-revision (get-in engine [:current-law kind] 1)}
+                     :law-revision (create-law-revision engine rdef kind)}
                 row (if-some [oc (:on-create rdef)] (oc row ctx) row)
                 row (derived/materialize rdef row now)
                 row (assoc row :summary (summary-of rdef row))
@@ -324,7 +467,7 @@
                          :resource-id (:id row)
                          :action (first (:create-action-names rdef))
                          :from-state nil
-                         :to-state (:initial rdef)
+                         :to-state (:state row)
                          :actor {:type (name (:type principal))
                                  :id (:id principal)
                                  :display (:display principal)}

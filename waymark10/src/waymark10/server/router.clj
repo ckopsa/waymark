@@ -80,7 +80,7 @@
 ;; ── lookups ─────────────────────────────────────────────────────────
 
 (defn- rdef-by-plural [eng plural]
-  (or (some (fn [[_ r]] (when (= plural (:plural r)) r)) (:resources eng))
+  (or (some (fn [[_ r]] (when (= plural (:plural r)) r)) (inv/resources eng))
       (throw (p/not-found "collection" plural))))
 
 (defn- decode-row [rdef row]
@@ -99,14 +99,14 @@
     (json-response
      200
      {:waymark "10"
-      :kinds (vec (sort (map name (keys (:resources eng)))))
+      :kinds (vec (sort (map name (keys (inv/resources eng)))))
       :resources (into (sorted-map)
                        (map (fn [[k r]] [(name k) {:href (str "/api/" (:plural r))}]))
-                       (:resources eng))})))
+                       (inv/resources eng))})))
 
 (defn- kind-schema [eng]
   (fn [{{:keys [kind]} :path-params}]
-    (let [rdef (or (get (:resources eng) (keyword kind))
+    (let [rdef (or (get (inv/resources eng) (keyword kind))
                    (throw (p/not-found "kind" kind)))]
       (json-response 200 (p/wire-value (schema/json-schema (:schema rdef)))))))
 

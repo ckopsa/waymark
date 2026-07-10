@@ -35,7 +35,19 @@
     "Log rows: where {:kind … :resource-id … :since id}, newest-last.")
   (idempotency-lookup [st tx key kind]
     "→ {:status :response :media-type :request-digest} or nil.")
-  (idempotency-store! [st tx key kind action digest status response media-type]))
+  (idempotency-store! [st tx key kind action digest status response media-type])
+  (law-count [st tx kind revision]
+    "How many rows of the kind are stamped with this law revision —
+    the supersede-when-empty question (phase 5). Counts every stamped
+    row, terminal included: a law lives while anything cites it.")
+  (restamp-law! [st tx kind where to-revision]
+    "Bulk-move a population's law stamp: rows matching the equality
+    map ({field value}; :state and :law-revision address their
+    columns, anything else the JSON document) get law_revision =
+    to-revision. Version untouched and no transition appended —
+    recorded deviation from waymark9, whose restamp logged per row:
+    lifecycle restamps are maintenance, not writes. Returns the row
+    count moved."))
 
 (defn with-tx
   "Sugar: (with-tx st [tx] …)."

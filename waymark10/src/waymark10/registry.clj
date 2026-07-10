@@ -17,18 +17,24 @@
 (def law-slots
   "Phase-5 assembly slots the definitions machinery fills at boot
   (waymark9 ResourceDef, design §3 / 7.0 §1–3): :current-law — the
-  definition revision id governing this kind, nil before the first
+  definition revision NUMBER governing this kind, nil before the first
   revise (the pre-law horizon); :proposed-law — the held proposal a
   propose-mode boot registered while the overlay serves the current
   law; :piloted-law — the piloted revision whose declared population's
   rows live under it; :law-ids — revision number → definition revision
   row id, how a row's integer stamp resolves to the law its envelope
-  names. At most one proposal and one pilot per kind — a stage, not a
-  lattice."
+  names; :judgment-laws — revision number → stored fingerprint, one
+  entry per non-resident revision that still needs serving (the
+  grandfathered laws, and the current law while a hold or pilot keeps
+  newer code resident) — waymark9's judgment_served/judgment_laws
+  twins collapsed into one map, affordable because \"evaluate revision
+  N\" is just wire->form + evaluate (waymark10.server.judgment). At
+  most one proposal and one pilot per kind — a stage, not a lattice."
   {:current-law nil
    :proposed-law nil
    :piloted-law nil
-   :law-ids {}})
+   :law-ids {}
+   :judgment-laws {}})
 
 (defn- registry-err [msg]
   (throw (t/definition-error msg {:check :registry})))

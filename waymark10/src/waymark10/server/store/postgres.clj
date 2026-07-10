@@ -295,7 +295,39 @@
     (jdbc/execute-one!
      tx ["INSERT INTO waymark10_idempotency (key, kind, action, request_digest, status, response, media_type) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (key, kind) DO NOTHING"
          key (name kind) (name action) digest status response media-type])
-    nil))
+    nil)
+
+  (law-count [_ tx kind revision]
+    (let [table (get @tables kind)]
+      (:n (jdbc/execute-one!
+           tx [(str "SELECT count(*) AS n FROM " table
+                    " WHERE law_revision = ?")
+               revision]
+           jdbc-opts))))
+
+  (restamp-law! [_ tx kind where to-revision]
+    (let [table (get @tables kind)
+          clauses (map (fn [[f _]]
+                         (case f
+                           :state "state = ?"
+                           :law-revision "law_revision = ?"
+                           (str "data->>'" (store/definition-checked-name f)
+                                "' = ?")))
+                       where)
+          params (map (fn [[f v]]
+                        (case f
+                          :state (name v)
+                          :law-revision v
+                          (str v)))
+                      where)
+          res (jdbc/execute-one!
+               tx (into [(str "UPDATE " table
+                              " SET law_revision = ?, updated_at = now()"
+                              (when (seq clauses)
+                                (str " WHERE " (str/join " AND " clauses))))
+                         to-revision]
+                        params))]
+      (:next.jdbc/update-count res))))
 
 (defn storage
   "A pooled Postgres storage. jdbc-url e.g.

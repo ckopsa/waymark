@@ -55,7 +55,7 @@
     (try
       (store/with-tx st
         (fn [tx]
-          (doseq [table ["plans" "meals" "tasks"
+          (doseq [table ["plans" "meals" "tasks" "definitions"
                          "waymark10_transitions" "waymark10_idempotency"]]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
       (binding [*h* (engine/handler
@@ -92,7 +92,9 @@
         b (json resp)]
     (is (= 200 (:status resp)))
     (is (= "10" (:waymark b)))
-    (is (= ["meal" "plan" "task"] (:kinds b)))
+    ;; phase 5: the definition kind is registered beside the
+    ;; application kinds — the deploy history is wire-readable
+    (is (= ["definition" "meal" "plan" "task"] (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))))
 

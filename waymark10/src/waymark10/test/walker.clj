@@ -9,7 +9,8 @@
 
   Deterministic given :seed: one java.util.Random threads every
   choice, and generation seeds derive from it."
-  (:require [waymark10.server.store :as store]
+  (:require [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.test.factories :as fac]))
 
 (set! *warn-on-reflection* true)
@@ -72,7 +73,7 @@
   early at a terminal (or unsynthesizable) frontier. Returns
   {:steps [{:action … :from … :to … :replayed? …} …] :row final}."
   [eng kind {:keys [seed steps] :or {seed 0 steps 10}}]
-  (let [rdef (or (get-in eng [:resources kind])
+  (let [rdef (or (get (inv/resources eng) kind)
                  (throw (ex-info (str "no enrolled kind " kind) {:kind kind})))
         rnd (java.util.Random. (long seed))
         created (fac/create-example eng kind {:seed seed})]

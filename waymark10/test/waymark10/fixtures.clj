@@ -49,18 +49,30 @@
             :accepts (fn [row] (mapv :date (get-in row [:data :days])))
             :explain "{date} is not a day of this plan."}))
 
-(def calendar-clear
+(defn calendar-clear-guard
+  "The calendar gate with its law as a parameter — phase 5's admission
+  test flips exactly this expression leaf."
+  [when-form]
   (g/expr {:name :calendar-clear
            :severity :warning
-           :when '(not (data :has_conflicts))
+           :when when-form
            :explain "{n} calendar conflict(s) overlap this week."
            :vars {:n '(data :calendar_conflicts)}}))
+
+(def calendar-clear
+  (calendar-clear-guard '(not (data :has_conflicts))))
 
 (def plan-started
   (g/expr {:name :plan-started
            :when '(<= (data :start_date) (date-of (now)))
            :explain "The plan starts {start}."
            :vars {:start '(data :start_date)}}))
+
+;; hoisted so its :check fn has ONE identity per process: two boots of
+;; the same declaration must fingerprint identically, and a code
+;; guard's stopgap hash is its printed fn object
+(def all-days-covered-gate
+  (g/require :all_days_covered {:remedies [:plan/assign_meal]}))
 
 (defhandler assign-meal [row inp _ctx]
   (update-in row [:data :days]
@@ -70,7 +82,7 @@
                         %)
                      days))))
 
-(defresource plan
+(defn- plan-map [calendar-gate]
   {:kind :plan
    :states [:draft :planned :active :done :abandoned]
    :initial :draft
@@ -123,9 +135,7 @@
                   :handler assign-meal
                   :display {:label "Assign meal" :style :primary :order 1}}
     :finalize {:from #{:draft} :to :planned
-               :guards [(g/require :all_days_covered
-                                   {:remedies [:plan/assign_meal]})
-                        calendar-clear]
+               :guards [all-days-covered-gate calendar-gate]
                :safety {:idempotent true :reversible true :confirm false}
                :display {:label "Finalize plan" :style :primary}}
     :reopen {:from #{:planned} :to :draft
@@ -140,3 +150,15 @@
     :abandon {:from #{:draft :planned :active} :to :abandoned
               :safety {:idempotent true :reversible false :confirm true
                        :consequence "The plan and its prep tasks are discarded for good."}}}})
+
+(defn plan-resource
+  "The plan declaration, optionally with a different calendar-gate law
+  ({:calendar-when form}) — the single-leaf judgment flip the phase-5
+  admission test deploys."
+  [& [{:keys [calendar-when]}]]
+  (r/resource
+   (plan-map (if calendar-when
+               (calendar-clear-guard calendar-when)
+               calendar-clear))))
+
+(def plan (plan-resource))
