@@ -128,7 +128,7 @@
                                       :webhook-attempts :webhook-backoff-ms
                                       :webhook-timeout-ms :webhooks-poll-ms
                                       :jobs-poll-ms :jobs-batch-size
-                                      :members])
+                                      :members :collab-heartbeat-ms])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)
