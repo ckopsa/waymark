@@ -597,16 +597,38 @@ _DATA_LAW_PATH = re.compile(
     r"|expr(?:\..+)?$"
     r"|over\.\d+\.(?:child|related)\.where(?:\..+)?$)")
 
+# The judgment half (design 9.0 §2): a diff confined to the recoverable
+# leaves of a top-level expression guard is overlayable — render, probe,
+# and invoke resolve the row's guards from the stored tree (the judgment
+# overlay). The boundary is drawn by recoverability, not category:
+# a check hash cannot be read back (and converting check= to expr=
+# necessarily changes the check leaf too, so a convert-and-change deploy
+# promotes totally once); adding/removing a guard shifts positional
+# paths (name/judges/... leaves) and refuses; machine shape, safety,
+# composite internals, and create guards keep their fate.
+_JUDGMENT_LAW_PATH = re.compile(
+    r"^machine\.actions\.[^.]+\.guards\.\d+\."
+    r"(?:expr(?:\..+)?$"
+    r"|vars_exprs(?:\..+)?$"
+    r"|explain$"
+    r"|remedies(?:\.\d+)?$"
+    r"|hide$"
+    r"|severity$"
+    r"|requires_token$)")
+
 
 def classify_diff(diff: dict[str, Any]) -> str:
-    """``data_law`` or ``code_or_shape`` (design 7.0 §1): may a propose-mode
-    boot hold this diff at ``proposed`` behind the §1 overlay, or must it
-    promote totally? Every added/removed/changed path must be overlayable
-    data for the hold to be honest; an empty diff cannot reach here (the
-    hash moved)."""
+    """``data_law`` or ``code_or_shape`` (design 7.0 §1, widened by 8.0 §3
+    and 9.0 §2): may a propose-mode boot hold this diff at ``proposed``
+    behind the overlays, or must it promote totally? Every
+    added/removed/changed path must be overlayable data — a derived
+    fact's stored parameters or tree, or a recoverable judgment leaf —
+    for the hold to be honest; an empty diff cannot reach here (the hash
+    moved)."""
     paths = [entry["path"] for key in ("added", "removed", "changed")
              for entry in diff.get(key, ())]
-    if paths and all(_DATA_LAW_PATH.match(p) for p in paths):
+    if paths and all(_DATA_LAW_PATH.match(p) or _JUDGMENT_LAW_PATH.match(p)
+                     for p in paths):
         return "data_law"
     return "code_or_shape"
 

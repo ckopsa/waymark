@@ -136,8 +136,14 @@ class CollabRooms:
                         grant, self.engine.invoker.clock(), rdef.kind,
                         defn.name) == "none")
                 if not lapsed:
+                    from .judgment import resolve_action
+
                     ctx = self.engine.invoker._ctx(principal, s, mode="probe")
-                    status, _, _, _ = await probe_transition(defn, instance, ctx)
+                    status, _, _, _ = await probe_transition(
+                        resolve_action(rdef, defn,
+                                       getattr(instance, "law_revision",
+                                               None)),
+                        instance, ctx)
                     lapsed = status != "available"
                 if lapsed:
                     room.members.pop(ws, None)
@@ -259,7 +265,12 @@ async def serve(engine: Any, ws: Any, rdef: Any, defn: Any,
         if instance.state not in defn.from_:
             await ws.close(code=4403)
             return
-        status, _, _, _ = await probe_transition(defn, instance, ctx)
+        from .judgment import resolve_action
+
+        status, _, _, _ = await probe_transition(
+            resolve_action(rdef, defn,
+                           getattr(instance, "law_revision", None)),
+            instance, ctx)
         if status != "available":
             await ws.close(code=4403)
             return

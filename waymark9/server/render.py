@@ -658,9 +658,17 @@ async def render(
     admitted_by_action: dict[str, dict[str, list[Any]]] = {}
     relations_by_action: dict[str, list[tuple[tuple[str, ...], list[tuple]]]] = {}
 
+    from .judgment import resolve_action
+
     for defn in rdef.machine.actions.values():
         if defn.bulk:
             continue  # collection-level affordance
+        # the row's law judges the row (design 9.0 §1): the guards this
+        # probe evaluates — and the reasons the entries render — are the
+        # row's revision's, so advertisement and enforcement agree under
+        # one law per row
+        defn = resolve_action(rdef, defn,
+                              getattr(instance, "law_revision", None))
         # visibility gates the projection (design §1): an ungranted action
         # is not probed, not offered, and honestly unavailable with the
         # remedy naming the fix — decided here, not redacted after

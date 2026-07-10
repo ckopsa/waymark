@@ -68,6 +68,7 @@ from ..core.guards import Guard, four_eyes
 from ..core.resource import Resource, filterable, sortable
 from ..core.types import Acknowledged, Allow, Ctx, Deny, Principal, Safety
 from .idempotency import body_digest
+from .judgment import build_overlay, judgment_raw
 
 # the deploy actor (design §2): the process identity that revises the law
 # at boot — a system principal like the engine's other write tails
@@ -573,6 +574,12 @@ class KindRevise:
     proposed_revision: int | None = None
     # (kind, fact) → LawOverride: the CURRENT law's stored parameters
     overrides: dict[tuple[str, str], Any] = dc_field(default_factory=dict)
+    # the judgment twins (design 9.0 §1), raw fingerprint guard entries —
+    # rebuilt against the resident machine at the apply site: the CURRENT
+    # law's judgments while a hold/pilot keeps newer code resident, and
+    # revision → judgments for grandfathered / parameter-served laws
+    judgment_served: dict[str, Any] = dc_field(default_factory=dict)
+    judgment_laws: dict[int, dict[str, Any]] = dc_field(default_factory=dict)
     # the live pilot (design §3), re-detected across boots
     piloted_id: str | None = None
     piloted_revision: int | None = None
@@ -769,6 +776,11 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
                           _overrides_all(target_kind,
                                          r.data.fingerprint).items()}
         for r in rows if r.state == "grandfathered"}
+    # …and from stored judgments (design 9.0 §1): the same revisions, the
+    # same source, the guard half
+    judgment_laws = {
+        r.data.revision: judgment_raw(r.data.fingerprint)
+        for r in rows if r.state == "grandfathered"}
     # the durable marker survives a crash between revise and backfill:
     # matching hashes on the re-boot write nothing, but the debt reports
     carried = _still_declared(
@@ -784,7 +796,8 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
                             "the resident code matches the current law; "
                             "this proposal's code is no longer deployed")
         outcome = KindRevise(current.id, current.data.revision, carried,
-                             law_ids=law_ids, law_overlays=law_overlays)
+                             law_ids=law_ids, law_overlays=law_overlays,
+                             judgment_laws=judgment_laws)
         if piloted_rows:
             # a live pilot whose code is no longer resident (the current
             # law's code was redeployed): the pilot is a data-law diff by
@@ -797,6 +810,8 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
                 f: ov for (_, f), ov in
                 _overrides_all(target_kind,
                                pilot.data.fingerprint).items()}
+            judgment_laws[pilot.data.revision] = judgment_raw(
+                pilot.data.fingerprint)
             outcome.piloted_id = pilot.id
             outcome.piloted_revision = pilot.data.revision
             outcome.population = pilot.data.population
@@ -847,10 +862,14 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
             # row whenever one exists — the §1 overlay's fact set
             overrides=_overrides_for(target_kind, current.data.fingerprint,
                                      stale),
+            # the current law's judgments serve too (design 9.0 §1): the
+            # resident guards are the pilot's law
+            judgment_served=judgment_raw(current.data.fingerprint),
             piloted_id=pilot_match.id,
             piloted_revision=pilot_match.data.revision,
             population=pilot_match.data.population,
-            law_ids=law_ids, law_overlays=law_overlays)
+            law_ids=law_ids, law_overlays=law_overlays,
+            judgment_laws=judgment_laws)
     if piloted_rows:
         # a genuinely new deploy while a pilot is live would strand the
         # pilot's rows under a law the process can neither run nor
@@ -903,7 +922,12 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
                           proposed_id=proposed_id,
                           proposed_revision=proposed_revision,
                           overrides=overrides,
-                          law_ids=law_ids, law_overlays=law_overlays)
+                          # the held proposal's resident guards are the NEW
+                          # law; the current one's judge from the store
+                          judgment_served=judgment_raw(
+                              current.data.fingerprint),
+                          law_ids=law_ids, law_overlays=law_overlays,
+                          judgment_laws=judgment_laws)
 
     # auto mode — or a propose-mode diff the gate refused to hold, or the
     # first law: revise to current, exactly as v6. Lingering proposals
@@ -962,6 +986,8 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
                     f: ov for (_, f), ov in
                     _overrides_all(target_kind,
                                    current.data.fingerprint).items()}
+                judgment_laws[current.data.revision] = judgment_raw(
+                    current.data.fingerprint)
     law_ids[revision] = new_id
     if has_table and not rows:
         # the first law of a kind whose table already has rows (an
@@ -970,7 +996,8 @@ async def _revise_kind(invoker: Any, correlation: str, target_kind: str,
         async with invoker.storage.session() as s:
             await invoker.storage.stamp_null_law(s, target_kind, revision)
     return KindRevise(new_id, revision, pending,
-                      law_ids=law_ids, law_overlays=law_overlays)
+                      law_ids=law_ids, law_overlays=law_overlays,
+                      judgment_laws=judgment_laws)
 
 
 async def settle_backfill(invoker: Any, row_id: str) -> None:
@@ -1059,6 +1086,13 @@ async def revise_definitions(engine: Any
         for rev, per_fact in outcome.law_overlays.items():
             engine.invoker.derived.law_overlay[(rdef.kind, rev)] = per_fact
             engine._grandfathered_kinds.add(rdef.kind)
+        # the judgment twins (design 9.0 §1), rebuilt against the resident
+        # machine and stored on the rdef — resolve_action's two reads
+        rdef.judgment_served = (build_overlay(rdef, outcome.judgment_served)
+                                if outcome.judgment_served else {})
+        rdef.judgment_laws = {rev: built for rev, raw
+                              in outcome.judgment_laws.items()
+                              if (built := build_overlay(rdef, raw))}
         if outcome.piloted_id is not None:
             log.info(
                 "revision %s of %s is piloted (population %s); the current "
@@ -1294,9 +1328,12 @@ class DefinitionLifecycle:
             rdef.piloted_law_revision = None
             rdef.piloted_population = None
             maintainer.law_overlay.pop((target, row.data.revision), None)
-        # the overlay drops: the resident law becomes the served law
+            getattr(rdef, "judgment_laws", {}).pop(row.data.revision, None)
+        # the overlay drops: the resident law becomes the served law —
+        # the judgment overlay with it (design 9.0 §1)
         for key in [k for k in maintainer.overlay if k[0] == target]:
             del maintainer.overlay[key]
+        rdef.judgment_served = {}
         # the prior revision may have grandfathered in-transaction
         # (supersede_prior, adoption=Never with survivors): its rows keep
         # computing under it, from its stored parameters
@@ -1310,6 +1347,9 @@ class DefinitionLifecycle:
             maintainer.law_overlay[(target, old.data.revision)] = {
                 f: ov for (_, f), ov in
                 _overrides_all(target, old.data.fingerprint).items()}
+            built = build_overlay(rdef, judgment_raw(old.data.fingerprint))
+            if built:
+                rdef.judgment_laws[old.data.revision] = built
             engine._grandfathered_kinds.add(target)
         # the standard stale-by-definition backfill (design §4), then the
         # settle that clears the durable marker. Runs inside the promote
@@ -1369,6 +1409,7 @@ class DefinitionLifecycle:
         rdef.piloted_population = None
         engine.invoker.derived.law_overlay.pop(
             (target, row.data.revision), None)
+        getattr(rdef, "judgment_laws", {}).pop(row.data.revision, None)
         if rdef.current_law_revision is not None:
             await self._restamp(target, rdef,
                                 {"law_revision": row.data.revision},
@@ -1444,6 +1485,7 @@ class DefinitionLifecycle:
                     correlation_id=uuid.uuid4().hex, require_key=False)
             engine.invoker.derived.law_overlay.pop(
                 (kind, row.data.revision), None)
+            getattr(rdef, "judgment_laws", {}).pop(row.data.revision, None)
             log.info("revision %d of %s superseded: its last stamped row "
                      "adopted or closed (laws die when they are empty)",
                      row.data.revision, kind)

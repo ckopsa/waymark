@@ -724,6 +724,13 @@ class Invoker:
         if instance is None:
             raise NotFound(f"No {rdef.kind} {id!r}.")
 
+        # the row's law judges the row (design 9.0 §1): enforcement
+        # resolves the same guards render advertised for this revision
+        from .judgment import resolve_action
+
+        defn = resolve_action(rdef, defn,
+                              getattr(instance, "law_revision", None))
+
         ctx = self._ctx(principal, s, locale=locale,
                         correlation_id=correlation_id,
                         mode="dry_run" if dry_run else "invoke")
