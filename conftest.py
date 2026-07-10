@@ -1,12 +1,12 @@
-"""Root conftest for the mealplan7 branch.
+"""Root conftest for the mealplan8 branch.
 
-The waymark7 framework suite (``tests/waymark7/``) is self-contained. This
-module supplies the ``--waymark7`` conformance walker with the mealplan7
-engine and mealplan7's resource enrollments / state factories (see
-``waymark7.testing.pytest_plugin``). mealplan7 is the app the conformance
-harness was originally written against, so it also exercises waymark7's
-built-in member/role/subscription/attachment resources (a meal is the
-attachment target).
+The waymark7/waymark8 framework suites (``tests/waymark7/``,
+``tests/waymark8/``) are self-contained. This module supplies the
+``--waymark7`` conformance walker with the mealplan7 engine and
+enrollments, and the ``--waymark8`` walker with mealplan8's (the v8
+fork whose law is expressions — see ``docs/waymark8-design.md``); each
+app also exercises its framework's built-in member/role/subscription/
+attachment resources (a meal is the attachment target).
 """
 from __future__ import annotations
 
@@ -242,4 +242,180 @@ async def w7_make_grocery_list(state: str, engine, services) -> GroceryList7:
 
 @w7_example_input(GroceryList7, "remove_item")
 def w7_remove_item_example(services) -> dict:
+    return {"name": "paper towels"}
+
+
+# ═══ the waymark8 half: mealplan8 (the expression-law fork) ═════════════════
+import waymark8  # noqa: E402
+from waymark8.server.attachments import (  # noqa: E402
+    Attachment as Attachment8W, BYTES_ACTOR as BYTES_ACTOR8W)
+from waymark8.server.bus import InProcessBus as InProcessBus8  # noqa: E402
+from waymark8.server.members import Member as Member8W  # noqa: E402
+from waymark8.server.roles import Role as Role8W  # noqa: E402
+from waymark8.server.subscriptions import (  # noqa: E402
+    WebhookSubscription as Subscription8W)
+from waymark8.testing import (  # noqa: E402
+    conformance_resource as w8_conformance_resource,
+    example_input as w8_example_input,
+    state_factory as w8_state_factory,
+)
+
+from mealplan8.event_source import EVENTS as EVENTS8  # noqa: E402
+from mealplan8.resources.event import Event as Event8  # noqa: E402
+from mealplan8.resources.grocery_list import (  # noqa: E402
+    GroceryList as GroceryList8, GroceryState as GroceryState8)
+from mealplan8.resources.meal import Meal as Meal8  # noqa: E402
+from mealplan8.resources.plan import (  # noqa: E402
+    MealPlan as MealPlan8, PlanState as PlanState8)
+from mealplan8.resources.prep_task import PrepTask as PrepTask8  # noqa: E402
+from mealplan8.resources.rotation import (  # noqa: E402
+    SundayRotation as SundayRotation8)
+from mealplan8.services import Services as MealplanServices8  # noqa: E402
+
+
+@dataclass
+class ConformanceServices8(MealplanServices8):
+    """mealplan8's services plus the factory-to-example stash (see the
+    waymark7 twin above)."""
+
+    seeded: dict = field(default_factory=dict)
+
+
+@pytest.fixture
+async def waymark8_engine():
+    EVENTS8.docs.clear()
+    EVENTS8.discoverable.clear()
+    EVENTS8.down = False
+    EVENTS8.pulls = 0
+    Event8.adapter = EVENTS8
+
+    services = ConformanceServices8()
+    engine = waymark8.Engine(
+        resources=[Meal8, SundayRotation8, MealPlan8, GroceryList8,
+                   PrepTask8, Event8],
+        storage=TEST_DSN, services=services, bus=InProcessBus8())
+    await engine.storage.drop_all()
+    await engine.startup()
+    try:
+        yield engine
+    finally:
+        await engine.shutdown()
+
+
+w8_conformance_resource(Meal8)
+w8_conformance_resource(SundayRotation8)
+w8_conformance_resource(PrepTask8)
+w8_conformance_resource(Event8)
+
+w8_conformance_resource(Member8W)
+w8_conformance_resource(Role8W)
+w8_conformance_resource(Subscription8W)
+
+
+@w8_state_factory(Attachment8W)
+async def w8_make_attachment(state: str, engine, services) -> Attachment8W:
+    mid = await _mk(engine, "meal", {"name": "Attachment target",
+                                     "themes": ["mexican"]})
+    services.seeded["attachment_target"] = mid
+    aid = await _mk(engine, "attachment", {
+        "resource_kind": "meal", "resource_id": mid,
+        "name": "recipe.pdf", "mime": "application/pdf"})
+    if state in ("uploaded", "removed"):
+        await engine.invoker.invoke(
+            "attachment", aid, "mark_uploaded",
+            {"size": 3, "sha256": "a" * 64}, principal=BYTES_ACTOR8W)
+    if state == "removed":
+        await _step(engine, "attachment", aid, "remove")
+    return await _load(engine, "attachment", aid)
+
+
+@w8_example_input(Attachment8W, "duplicate")
+def w8_attachment_duplicate_example(services) -> dict:
+    return {"resource_kind": "meal",
+            "resource_id": services.seeded["attachment_target"]}
+
+
+@w8_example_input(Role8W, "create")
+def w8_role_create_example(services) -> dict:
+    return {"name": f"reader-{uuid.uuid4().hex[:8]}",
+            "description": "May read shared note titles"}
+
+
+@w8_example_input(Member8W, "create")
+def w8_member_create_example(services) -> dict:
+    return {"email": "mom@example.com", "display_name": "Grandma",
+            "roles": ["reader"]}
+
+
+@w8_example_input(Subscription8W, "create")
+def w8_subscription_create_example(services) -> dict:
+    return {"url": "https://budget.example/hooks", "kinds": ["plan"]}
+
+
+@w8_example_input(Meal8, "create")
+def w8_meal_create_example(services) -> dict:
+    return {"name": "Carnitas tacos", "themes": ["mexican"],
+            "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
+            "prep_minutes": 45, "thaw_hours": 12}
+
+
+@w8_example_input(PrepTask8, "create")
+def w8_prep_task_create_example(services) -> dict:
+    return prep_task_create_example(services)
+
+
+async def _listed_meal8(engine, services) -> str:
+    mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
+                                     "themes": ["mexican"]})
+    await _step(engine, "meal", mid, "accept")
+    services.seeded["meal_id"] = mid
+    return mid
+
+
+@w8_state_factory(MealPlan8)
+async def w8_make_plan(state: str, engine, services) -> MealPlan8:
+    rid = await _mk(engine, "rotation", {})
+    await _listed_meal8(engine, services)
+    pid = await _mk(engine, "plan", {"start_date": PLAN_START.isoformat(),
+                                     "weeks": 1, "rotation_id": rid})
+    services.seeded["plan_id"] = pid
+    target = PlanState8(state)
+    if target == PlanState8.ABANDONED:
+        await _step(engine, "plan", pid, "abandon")
+    elif target != PlanState8.DRAFT:
+        for i in range(7):
+            await _step(engine, "plan", pid, "mark_eating_out",
+                        {"date": (PLAN_START + timedelta(days=i)).isoformat()})
+        await _step(engine, "plan", pid, "finalize")
+        if target in (PlanState8.ACTIVE, PlanState8.DONE):
+            await _step(engine, "plan", pid, "begin")
+        if target == PlanState8.DONE:
+            await _step(engine, "plan", pid, "complete")
+    return await _load(engine, "plan", pid)
+
+
+@w8_example_input(MealPlan8, "assign_off_theme")
+def w8_assign_off_theme_example(services) -> dict:
+    return {"date": PLAN_START.isoformat(),
+            "meal_id": services.seeded["meal_id"]}
+
+
+@w8_state_factory(GroceryList8)
+async def w8_make_grocery_list(state: str, engine, services) -> GroceryList8:
+    plan = await w8_make_plan(PlanState8.PLANNED, engine, services)
+    gid = await _mk(engine, "grocery_list",
+                    {"plan_id": plan.id, "items": GROCERY_ITEMS})
+    target = GroceryState8(state)
+    if target != GroceryState8.DRAFT:
+        await _step(engine, "grocery_list", gid, "finalize")
+    if target == GroceryState8.DONE:
+        for item in GROCERY_ITEMS:
+            await _step(engine, "grocery_list", gid, "check_item",
+                        {"name": item["name"]})
+        await _step(engine, "grocery_list", gid, "complete")
+    return await _load(engine, "grocery_list", gid)
+
+
+@w8_example_input(GroceryList8, "remove_item")
+def w8_remove_item_example(services) -> dict:
     return {"name": "paper towels"}
