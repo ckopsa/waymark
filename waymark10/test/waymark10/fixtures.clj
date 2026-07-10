@@ -8,6 +8,9 @@
 
 ;; ── meal ────────────────────────────────────────────────────────────
 
+(defhandler update-recipe [row inp _ctx]
+  (assoc-in row [:data :recipe] (:recipe inp)))
+
 (defresource meal
   {:kind :meal
    :states [:suggested :on_list :retired]
@@ -32,7 +35,8 @@
                     :input [:map [:recipe {:x-display {:widget "prose"}} [:string {:max 8000}]]]
                     :edit {:prefill [:recipe]
                            :draft {:shared true :live true}}
-                    :safety {:idempotent true :reversible true :confirm false}}
+                    :safety {:idempotent true :reversible true :confirm false}
+                    :handler update-recipe}
     :retire {:from #{:on_list} :to :retired
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "A retired meal keeps its history; re-adding is a new suggestion."}}}})

@@ -35,6 +35,10 @@
                                  (catch Exception _ x))
                             x))
      :encode/wire (fn [x] (if (instance? LocalDate x) (str x) x))
+     ;; generation (data-only, no test.check dep here): recent past
+     ;; dates, so clock-gated guards hold by default under the walker
+     :gen/schema [:int {:min 10957 :max 20088}]   ; 2000-01-01 … 2024-12-31
+     :gen/fmap (fn [d] (LocalDate/ofEpochDay (long d)))
      :json-schema {:type "string" :format "date"}}}))
 
 (def ^:private waymark-ref
@@ -43,6 +47,8 @@
     :pred string?
     :type-properties
     {:error/message "must be a resource id"
+     :gen/schema [:int {:min 0 :max 999}]
+     :gen/fmap (fn [n] (str "ref-" n))
      :json-schema {:type "string" :format "waymark-ref"}}}))
 
 (def ^:private waymark-vocab

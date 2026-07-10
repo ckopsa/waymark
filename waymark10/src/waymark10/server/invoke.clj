@@ -27,6 +27,11 @@
   14. transition append (defined_by = the row's law) + save
   15. idempotency store — replay is byte-identical
 
+  Bodies are WIRE-SHAPED JSON values (parsed JSON: strings for dates,
+  exact decimals) — the input digest hashes the wire bytes, so a
+  schema-typed body is refused at the digest. Decoding to schema
+  types happens inside, at step 7.
+
   Returns {:row … :transition … :replayed? … :valid? …}; rendering to
   the envelope is phase 3's job."
   (:require [clojure.string :as str]

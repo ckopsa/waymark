@@ -208,14 +208,18 @@
                      " SET state = ?, version = ?, data = ?, shape = ?,"
                      " owner = ?, law_revision = ?, next_flip_at = ?,"
                      " updated_at = now()"
-                     " WHERE id = ? AND version = ?")
+                     " WHERE id = ? AND version = ?"
+                     " RETURNING updated_at")
                 (name (:state row)) (:version row) (jsonb (:data row))
                 (:shape row 1) (:owner row) (:law-revision row)
                 (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)
-                (:id row) expected-version])]
-      (when (zero? (:next.jdbc/update-count res))
+                (:id row) expected-version]
+               jdbc-opts)]
+      (when (nil? res)
         (throw (store/version-conflict kind (:id row) expected-version)))
-      row))
+      ;; the write's own stamp, so post-invoke envelopes never carry
+      ;; the pre-write time
+      (assoc row :updated-at (->inst (:updated_at res)))))
 
   (query-rows [_ tx kind where opts]
     (let [table (get @tables kind)
