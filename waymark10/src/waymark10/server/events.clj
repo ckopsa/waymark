@@ -74,7 +74,10 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.wire :as wire])
-  (:import (java.util.concurrent LinkedBlockingQueue TimeUnit)
+  (:import (java.lang.reflect Field)
+           (java.nio.channels SelectionKey)
+           (java.util.concurrent LinkedBlockingQueue TimeUnit)
+           (org.httpkit.server AsyncChannel)
            (org.postgresql PGConnection)
            (org.postgresql.util PGobject)))
 
@@ -406,15 +409,56 @@
    "Cache-Control" "no-cache"
    "X-Accel-Buffering" "no"})
 
+(def ^:private channel-key-field
+  (delay (doto (.getDeclaredField AsyncChannel "key")
+           (.setAccessible true))))
+
+(defn channel-alive?
+  "Is this http-kit channel's socket still open? Verified quirk of
+  http-kit 2.8.0 plain-HTTP streaming (the #375 per-request
+  AsyncChannel): closeKey notifies the KEY ATTACHMENT's stale
+  channel, so a streaming response's on-close never fires and send!
+  keeps answering true into a closed socket — the docstring's
+  'heartbeat doubles as the disconnect probe' held only for
+  websockets. The underlying SelectionKey knows the truth (a FIN
+  read or a failed selector write invalidates it), so the writer
+  threads probe it each heartbeat tick. Reflection, guarded: an
+  unreadable field degrades to 'alive' — the old behavior, a leak
+  but never a wrong disconnect."
+  [ch]
+  (try
+    (let [^SelectionKey k (.get ^Field @channel-key-field ch)]
+      (.isValid k))
+    (catch Throwable _ true)))
+
 (defn sse-handler
   "The streaming response for one subscription: replay from :since,
   then live frames; heartbeat comments every hb-ms. The SSE surface
   speaks both event classes — `event: transition` (with ids) and
-  `event: derivation` (without; batch C)."
-  [eng d {:keys [kinds resource since]} req]
+  `event: derivation` (without; batch C).
+
+  The subscription hook (the presence seam): :on-subscribe fires once
+  beside the subscribe, :on-unsubscribe exactly once with the
+  unsubscribe (writer-detected disconnects and :on-close race; the
+  cleanup gate keeps the hook single-shot) — the router uses the pair
+  to register a per-resource stream AS presence. Hook failures warn
+  and never touch the stream."
+  [eng d {:keys [kinds resource since on-subscribe on-unsubscribe]} req]
   (let [hb-ms (:sse-heartbeat-ms eng 15000)
         sub (subscribe d {:kinds kinds :resource resource :since since
-                          :classes #{:transition :derivation}})]
+                          :classes #{:transition :derivation}})
+        _ (when on-subscribe
+            (try (on-subscribe)
+                 (catch Exception e
+                   (warn! "subscribe hook: " (ex-message e)))))
+        done (atom false)
+        cleanup! (fn []
+                   (when (compare-and-set! done false true)
+                     (unsubscribe d sub)
+                     (when on-unsubscribe
+                       (try (on-unsubscribe)
+                            (catch Exception e
+                              (warn! "unsubscribe hook: " (ex-message e)))))))]
     (http/as-channel
      req
      {:on-open
@@ -430,13 +474,15 @@
                        (let [evt (take-event sub hb-ms)]
                          (cond
                            (= ::closed evt) nil
-                           (nil? evt) (when (http/send! ch ": hb\n\n" false)
+                           (nil? evt) (when (and (http/send! ch ": hb\n\n" false)
+                                                 (channel-alive? ch))
                                         (recur))
-                           :else (when (http/send! ch (frame eng evt) false)
+                           :else (when (and (http/send! ch (frame eng evt) false)
+                                            (channel-alive? ch))
                                    (recur)))))
-                     (finally (unsubscribe d sub))))
+                     (finally (cleanup!))))
                  (str "waymark10-sse-" (:id sub)))]
           (doto ^Thread t (.setDaemon true) (.start))))
       :on-close
       (fn [_ch _status]
-        (unsubscribe d sub))})))
+        (cleanup!))})))

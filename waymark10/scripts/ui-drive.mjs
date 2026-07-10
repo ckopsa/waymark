@@ -451,6 +451,37 @@ await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")]
 await waitFor(`!document.querySelector("dialog[open]")`, "draft discarded");
 ok("discard closes the composition", true);
 
+/* ── presence: dots + follow-me steering (9's surface, restored) ────── */
+console.log("· presence");
+await evaljs(`unfollow(); true`);            // self-normalizing: no stale follow
+await evaljs(`location.hash = ${JSON.stringify(feedMeal.self)}; true`);
+await waitFor(`document.querySelector("[data-presence]")`, "presence slot on the envelope");
+/* colton holds only the firehose: his gaze arrives as an explicit
+   heartbeat, and the open screen grows his viewing dot */
+await fetch(BASE + "/api/-/presence", {method: "POST", headers: H,
+  body: JSON.stringify({self: feedMeal.self})});
+await waitFor(`(document.querySelector("[data-presence]")?.textContent || "")
+               .includes("colton is here")`, "viewing dot", 10000);
+ok("an explicit heartbeat becomes a viewing dot on the open screen", true);
+
+/* the member envelope offers Follow (members auto-provision on first
+   sight, id = principal id) */
+await evaljs(`location.hash = "/api/members/colton"; true`);
+await waitFor(`[...document.querySelectorAll("button")].some(b => b.textContent.includes("Follow"))`,
+              "follow button on the member envelope");
+await evaljs(`[...document.querySelectorAll("button")].find(b => b.textContent.includes("Follow")).click(); true`);
+await waitFor(`document.getElementById("followchip").textContent.includes("colton")`, "follow chip");
+ok("the member envelope's Follow button starts the follow", true);
+
+/* a simulated move: colton's gaze lands elsewhere and THIS screen
+   navigates there — where he looks, not where he writes */
+await fetch(BASE + "/api/-/presence", {method: "POST", headers: H,
+  body: JSON.stringify({self: planHash})});
+await waitFor(`decodeURIComponent(location.hash.slice(1)).split("?")[0] === ${JSON.stringify(planHash)}`,
+              "follow-me navigation", 10000);
+ok("a presence move steers the following screen (look, not write)", true);
+await evaljs(`unfollow(); true`);
+
 /* ── the preserved lite page still serves ───────────────────────────── */
 ok("ui-lite (the preserved phase-10 page) serves beside the port",
    await evaljs(`fetch("/api/-/ui-lite").then(r => r.status === 200)`));

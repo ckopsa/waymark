@@ -66,6 +66,7 @@
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.openapi :as openapi]
+            [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
@@ -533,9 +534,20 @@
     (let [d (events-dispatcher eng)
           rdef (rdef-by-plural eng plural)]
       (check-row! req rdef id)
-      (events/sse-handler eng d {:resource [(:kind rdef) id]
-                                 :since (last-event-id req)}
-                          req))))
+      ;; the implicit presence door: a per-resource subscription IS
+      ;; presence — the engine already knows the principal and the
+      ;; resource, so the stream registers on subscribe and drops on
+      ;; disconnect (source \"stream\"). Anonymous streams mark nobody.
+      (let [principal (principal-of req)
+            reg (some-> (:runtime eng) deref :presence)
+            self (str "/api/" plural "/" id)
+            hooks (when (and reg (not= (:id principal) (:id t/anonymous)))
+                    {:on-subscribe #(presence/stream-open! reg principal self)
+                     :on-unsubscribe #(presence/stream-closed! reg principal self)})]
+        (events/sse-handler eng d (merge {:resource [(:kind rdef) id]
+                                          :since (last-event-id req)}
+                                         hooks)
+                            req)))))
 
 (defn- firehose-events [eng]
   (fn [req]
@@ -549,6 +561,39 @@
       (events/sse-handler eng d {:kinds kinds
                                  :since (last-event-id req)}
                           req))))
+
+;; ── presence (ephemeral, never law) ─────────────────────────────────
+
+(defn- presence-registry
+  "The engine's running presence registry — 503 on an engine that
+  never started (the dispatcher's discipline)."
+  [eng]
+  (or (some-> (:runtime eng) deref :presence)
+      (throw (p/problem :presence-unavailable 503 "Presence unavailable"
+                        {:detail (str "This engine is not started; the "
+                                      "presence registry is not running.")}))))
+
+(defn- presence-stream
+  "GET /api/-/presence: the where-they-look stream. Unlike the
+  firehose, a scoped request is not 404'd — it gets the stream
+  PROJECTED: only presences on selves its visibility could GET, the
+  frames it may not see byte-level absent."
+  [eng]
+  (fn [req]
+    (let [reg (presence-registry eng)]
+      (presence/sse-handler eng reg
+                            (presence/self-visible? eng (visibility-of req))
+                            req))))
+
+(defn- presence-report
+  "POST /api/-/presence {self}: the explicit heartbeat for clients
+  that only hold the firehose (the ported UI's case). A scoped
+  principal's own reporting is always accepted."
+  [eng]
+  (fn [req]
+    (let [reg (presence-registry eng)]
+      (presence/report! reg (principal-of req) (:self (read-body req)))
+      {:status 204 :headers {}})))
 
 ;; ── the generic UI (phase 10) ───────────────────────────────────────
 
@@ -653,6 +698,8 @@
          ["/api/openapi.json" {:get (openapi-doc eng)}]
          ["/api/schemas/:kind" {:get (kind-schema eng)}]
          ["/api/-/events" {:get (firehose-events eng)}]
+         ["/api/-/presence" {:get (presence-stream eng)
+                             :post (presence-report eng)}]
          ["/api/-/ui" {:get (ui-page eng "waymark10/ui.html")}]
          ["/api/-/ui-lite" {:get (ui-page eng "waymark10/ui_lite.html")}]
          ["/api/attachments/:id/bytes" {:put (bytes-put eng)

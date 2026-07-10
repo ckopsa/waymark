@@ -84,6 +84,12 @@
   #followchip button { border: none; background: none;
                        color: var(--verdigris-deep); padding: 0 0 0 6px;
                        font-weight: 700; cursor: pointer; }
+  /* presence: who else is looking at THIS screen — ephemeral dots off
+     the /-/presence stream, never law */
+  [data-presence] { margin-top: 6px; }
+  [data-presence] .viewing { display: inline-block; font-size: 12px;
+               background: var(--verdigris-wash); color: var(--verdigris-deep);
+               border-radius: 999px; padding: 2px 10px; margin: 0 6px 0 0; }
 
   select, input, textarea, button {
     font: 13.5px/1.4 var(--sans); color: inherit; border: 1px solid var(--line);
@@ -502,8 +508,12 @@
    embeds arrive server-spliced as links.<rel>.embedded.
 
    Named gaps, so nobody hunts for silent stubs:
-   - presence/follow-navigation chrome: wire 10 serves no /-/presence
-     route — following below steers on the firehose's transitions only.
+   - presence/follow-navigation chrome: CLOSED — wire 10 grew
+     GET/POST /api/-/presence back (ephemeral, never law). Following
+     below steers on presence moves (where they LOOK) as well as
+     transitions (where they WRITE); resource screens show viewing
+     dots; this page reports its own gaze by explicit heartbeat (it
+     holds only the firehose, never per-resource streams).
    - provenance cells (x-source/x-authority/x-derived): the v10
      published schema does not emit them; the costumes stay retired.
    - the batch textarea (9's design §7): v10 serves the batch route but
@@ -1350,6 +1360,9 @@ async function renderResource(view, doc, hints) {
       (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
       (meta.updated_at ? ` · ${String(meta.updated_at).slice(0, 19).replace("T", " ")}` : "")),
     el("span", {class:"version", title: doc.self}, doc.self)));
+  /* the viewing dots: who else is looking at this screen right now
+     (the presence stream repaints this slot as frames arrive) */
+  panel.append(el("div", {"data-presence": ""}));
 
   /* the read surface up front: declared links (badges riding) and the
      surfaces this row anchors — scent before the scroll */
@@ -1415,6 +1428,18 @@ async function renderResource(view, doc, hints) {
         grantChip(); render();
       }}, on ? "✓ scoped to this grant" : "🔭 act under this grant"));
   }
+  /* the follow affordance: a member envelope names a principal —
+     follow them and this screen goes where they LOOK (the presence
+     stream) as well as where they write (the firehose) */
+  if (kind === "member") {
+    const mid = doc.data?.subject || doc.self.split("/").pop();
+    const mname = doc.data?.display || mid;
+    bar.append(el("button", {
+      title: `follow ${mname} — this screen navigates where they look`,
+      onclick: () => { follow({id: mid, display: mname});
+                       toast(`following ${mname}`); }},
+      "👁 Follow"));
+  }
   /* an uploaded attachment: offer its bytes back (the bytes route is
      the engine's static /api/attachments/{id}/bytes) */
   if (kind === "attachment" && doc.state === "uploaded") {
@@ -1448,6 +1473,7 @@ async function renderResource(view, doc, hints) {
   if (footer) dataPanel.append(footer);
   view.append(dataPanel);
   watchScope({self: doc.self});
+  paintPresence();
 }
 
 /* ── the surface screen: the composed decision view (wire 10 shape:
@@ -2416,10 +2442,10 @@ function fetchReplay(href, {idle = 500} = {}) {
 }
 
 /* ── follow a principal (supervision): their transitions steer this
-   screen. The firehose names the actor on every event; following is a
-   client-side filter plus navigation. (9's presence stream — where
-   your screen went where they merely LOOKED — has no wire-10 route;
-   only committed transitions steer here. Recorded gap.) ────────────── */
+   screen — and so does their GAZE. The firehose names the actor on
+   every event (where they write); the presence stream below names
+   where they look. Following is a client-side filter plus navigation
+   on both. (9's follow-me, restored: the recorded gap closes.) ─────── */
 let followId = localStorage.getItem("wm10.follow.id") || null;
 let followName = localStorage.getItem("wm10.follow.name") || null;
 function follow(actor) {
@@ -2654,6 +2680,66 @@ sse("/api/-/events", ({event, id, data: ev}) => {
     refetchTimer = setTimeout(render, 350);
   }
 });
+
+/* ── presence: the where-they-look surface (GET/POST /api/-/presence,
+   ephemeral — never law). The stream carries a snapshot on connect,
+   then join/move/leave frames; while following, a move for the
+   followed principal steers this screen (debounced — transitions
+   still steer as before); resource screens get viewing dots. This
+   page holds only the firehose, so it reports its own gaze by
+   explicit heartbeat: on navigation, and every 10s (the server
+   evicts after 3 missed 15s heartbeats). ───────────────────────────── */
+const PRESENCE = new Map();   // pid → {principal, self, source, at}
+function hereHref() {
+  return decodeURIComponent(location.hash.slice(1)).split("?")[0];
+}
+function paintPresence() {
+  const box = $("[data-presence]");
+  if (!box) return;
+  const here = hereHref();
+  const me = principalId();
+  box.replaceChildren(...[...PRESENCE.values()]
+    .filter(p => p.self === here && p.principal.id !== me)
+    .map(p => el("span", {class: "viewing",
+        title: `${p.principal.display || p.principal.id} is viewing this `
+             + `screen right now (${p.source || "presence"})`},
+      el("span", {class: "actor-mark " + (p.principal.type || "human")},
+        ACTOR_MARKS[p.principal.type] || "●"),
+      ` ${p.principal.display || p.principal.id} is here`)));
+}
+let followMoveTimer = null;
+sse("/api/-/presence", ({event, data: f}) => {
+  if (event !== "presence") return;
+  if (f.event === "snapshot") {
+    PRESENCE.clear();
+    for (const p of f.presences || []) PRESENCE.set(p.principal.id, p);
+  } else if (f.event === "leave") PRESENCE.delete(f.principal.id);
+  else PRESENCE.set(f.principal.id, f);   // join | move
+  paintPresence();
+  /* follow-me: go where they LOOK — debounced, and never yank a human
+     out of an open dialog (the transition-steering discipline) */
+  if ((f.event === "move" || f.event === "join") &&
+      followId && f.principal.id === followId && f.self) {
+    clearTimeout(followMoveTimer);
+    followMoveTimer = setTimeout(() => {
+      if (f.self !== hereHref() && !$("dialog[open]"))
+        location.hash = "#" + f.self;
+    }, 250);
+  }
+});
+async function presenceBeat() {
+  const here = hereHref();
+  if (!principalId() || !here.startsWith("/api/")) return;
+  try {
+    await fetch("/api/-/presence", {method: "POST",
+      headers: Object.assign({"Content-Type": "application/json"},
+                             principalHeaders()),
+      body: JSON.stringify({self: here})});
+  } catch (_e) { /* engine not started, or restarting */ }
+}
+setInterval(presenceBeat, 10000);
+window.addEventListener("hashchange", presenceBeat);
+presenceBeat();
 
 $("#apphost").textContent = location.host;  // the honest app identity
 render();

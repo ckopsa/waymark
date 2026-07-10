@@ -21,6 +21,9 @@
   answer 503. opts: :sweep-interval-ms (clock sweep, default 30s),
   :events-poll-ms (dispatcher backstop, default 2s),
   :sse-heartbeat-ms (default 15s), :maintainer-fan-out (default 200).
+  The presence registry (the follow-me surface, ephemeral state —
+  waymark10.server.presence) starts and stops beside the dispatcher;
+  :presence-heartbeat-ms (default 15s) paces its heartbeats and TTL.
 
   Phase 9a: every engine enrolls the identity-and-access kinds beside
   the definition — member, role, grant, attachment — so well-known
@@ -50,6 +53,7 @@
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
+            [waymark10.server.presence :as presence]
             [waymark10.server.render :as render]
             [waymark10.server.roles :as roles]
             [waymark10.server.router :as router]
@@ -128,7 +132,8 @@
                                       :webhook-attempts :webhook-backoff-ms
                                       :webhook-timeout-ms :webhooks-poll-ms
                                       :jobs-poll-ms :jobs-batch-size
-                                      :members :collab-heartbeat-ms])
+                                      :members :collab-heartbeat-ms
+                                      :presence-heartbeat-ms])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)
@@ -170,6 +175,12 @@
     (let [dispatcher (events/dispatcher
                       eng {:poll-ms (:events-poll-ms eng 2000)})]
       (reset! rt {:dispatcher dispatcher
+                  ;; presence (the follow-me surface): ephemeral state,
+                  ;; never law — an in-process registry fanned over
+                  ;; pg_notify, TTL-evicted; an engine that never
+                  ;; starts answers 503 on its routes, like SSE
+                  :presence (presence/start!
+                             eng {:hb-ms (:presence-heartbeat-ms eng 15000)})
                   ;; mirror kinds get their declared discovery cadence
                   ;; (phase 8); an engine without mirrors pays nothing
                   :discovery (when (seq (mirror/mirror-kinds eng))
@@ -201,11 +212,12 @@
    (when server (http/server-stop! server))
    (when-some [rt (:runtime eng)]
      (when-some [{:keys [dispatcher coherence discovery jobs
-                         orphan-sweeper purge-sweeper]} @rt]
+                         orphan-sweeper purge-sweeper presence]} @rt]
        (some-> orphan-sweeper coherence/stop-role!)
        (some-> purge-sweeper coherence/stop-role!)
        (some-> jobs jobs/stop-worker!)
        (some-> coherence coherence/stop!)
+       (some-> presence presence/stop!)
        (some-> dispatcher events/stop!)
        (some-> discovery mirror/stop-discovery!))
      (reset! rt nil))))

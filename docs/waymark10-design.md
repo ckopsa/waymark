@@ -2281,6 +2281,9 @@ list:
   routes answer a scoped principal with concealment-404 today, never
   a projection; idempotency replays serve the first execution's
   unprojected bytes (the phase-3 render-fn punt, twice re-extended).
+  One exception since: the presence stream (§20) IS projected — a
+  scoped viewer gets the stream filtered per its row visibility,
+  concealed presences byte-level absent.
 - Visibility modes: waymark9's `hashed` field mode; create-argument
   modes; per-item grading inside part arrays (redact the array);
   collection `query`/`create` input schemas and facet counts
@@ -2363,3 +2366,118 @@ The law is a form, the wire is its projection, and every client in
 phase 10 proved it can follow the projection without ever being told
 what the application is; everything since has widened what the
 projection carries without moving that claim.
+
+# 20. Presence — follow-me restored (the where-they-look surface)
+
+waymark9's `/-/presence` comes home: your screen goes where the
+followed principal LOOKS, not just where they write. The firehose
+already steered follows on committed transitions (phase 10's UI
+port, its one loudly-named gap); this section closes the gap with a
+presence surface that is EPHEMERAL STATE, never law — no table, no
+transitions, no fingerprint, nothing the conformance walker or the
+migrate planner will ever meet. `waymark10.server.presence` owns it
+whole; the seams elsewhere are deliberately small: a subscription
+hook in events.clj, two routes in router.clj, start/stop beside the
+dispatcher in engine.clj.
+
+## The registry
+
+One in-process registry per engine, fanned across processes on its
+own pg_notify channel (`waymark10_presence`), origin-nonce'd so a
+publisher skips its own echo — the collab relay's precedent, resized:
+every local report notifies `{origin, pid, entry}` (drops notify
+`{origin, pid}`), each process re-asserts its local entries every
+`:presence-heartbeat-ms` (default 15s), and a remote entry silent for
+three intervals is evicted — a crashed peer's ghosts leave on the
+clock, not never. Frames a viewer sees derive from ONE merged-view
+diff (freshest entry per principal across origins), so local reports,
+remote frames and TTL evictions all speak through the same mouth:
+join when a principal appears, move when its self changes, leave when
+it goes. A restart forgets everyone; the next heartbeat re-teaches.
+
+## Two reporting doors, both marked by source
+
+- **Implicit** — a per-resource SSE subscription IS presence: the
+  engine already knows the principal and the resource, so the
+  router's stream hook registers on subscribe and drops on disconnect
+  (`source: "stream"`). Streams refcount per self; the last close
+  drops the principal (unless a fresh heartbeat still holds it).
+- **Explicit** — `POST /api/-/presence {self}` is a heartbeat for
+  clients that only hold the firehose, the ported UI's case
+  (`source: "heartbeat"`). Three missed heartbeats evict. Selves cap
+  at 512 chars (each entry rides one pg_notify payload); an anonymous
+  heartbeat answers 422 — it would mark nobody.
+
+## The stream, and its concealment
+
+`GET /api/-/presence` (SSE): a snapshot frame on connect, then
+join/move/leave frames `{principal {id, display, type}, self,
+source, at}` — no id lines and no replay; presence is liveness, the
+snapshot on connect is the truth, and Last-Event-ID means nothing
+here. Unlike the firehose (still concealment-404 to a scoped
+request), the presence stream is PROJECTED: a scoped principal sees
+only presences on selves it could GET — the request's own visibility
+closures judge each frame's self, and a filtered frame is byte-level
+absent, never narrated (pinned by test: the concealed row's id and
+its viewer's name never cross the wire, snapshot or live). An
+unscoped viewer sees all. A scoped principal's own reporting is
+always accepted: where it looks is its own to say; who gets to watch
+is the grant's.
+
+## The UI
+
+The ported page (resources/waymark10/ui.html) reports its own gaze by
+explicit heartbeat — on navigation and every 10s (it holds only the
+firehose, never per-resource streams). While following, a presence
+move for the followed principal navigates the screen, debounced,
+never yanking a human out of an open dialog — the same discipline
+transition-steering already kept, and transitions still steer as
+before (look AND write, two feeds, one follow). Resource screens grow
+viewing dots ("● colton is here") repainted as frames arrive; member
+envelopes grow a Follow button (the row names a principal — subject
+when bound, else the member id). scripts/ui-drive.mjs pins three
+checks: heartbeat → dot; the member Follow affordance; follow +
+simulated move → navigation.
+
+## Recorded boundaries, each a sentence
+
+- A principal mid-request (an invoke, a GET) is invisible — only held
+  streams and explicit heartbeats register, so firehose-only agents
+  appear exactly when they choose to say where they look.
+- A followed principal's move onto a concealed self reads as
+  stillness to a scoped viewer — byte-level absence beats an
+  honest-looking narrated departure.
+- Presence fan-out is a Postgres surface; other backends stay
+  process-local, warned once at start.
+- A slow presence subscriber's full queue (256) drops frames; the
+  snapshot on reconnect is the whole recovery.
+- A self that names no row (a collection screen, the workspace) is
+  concealed from scoped viewers: what cannot be GETed row-wise cannot
+  be watched.
+
+## The http-kit finding (verified, fixed in events.clj)
+
+The SSE docstring's claim that "send! returns false on a closed
+channel" was FALSE for plain-HTTP streaming on http-kit 2.8.0: the
+#375 per-request AsyncChannel is not the channel `closeKey` notifies,
+so a streaming response's `on-close` never fires and `send!` answers
+true into a closed socket forever — every SSE writer thread leaked on
+silent disconnects (websockets were fine; collab never saw it).
+`events/channel-alive?` now probes the underlying SelectionKey
+(reflection, guarded — an unreadable field degrades to the old leak,
+never a wrong disconnect) on every heartbeat tick, which is also what
+makes "drop presence on disconnect" true.
+
+## Runs
+
+Its own database, the batch-D discipline:
+
+    createdb waymark10_presence_test   # once, on the :5433 container
+    cd waymark10 && clojure -M:test --focus waymark10.presence-test
+
+Cross-process joins/moves/leaves, TTL eviction, crashed-peer
+eviction, both sources, the scoped stream's byte-level absences, the
+never-started engine's 503 — 3 tests, 33 assertions. The full suites
+after this landing: `make test10` 316 tests / 2297 assertions,
+`make test-mealplan10` 23 / 217; the story drive
+(scripts/ui-drive.mjs) 43 checks, no console errors.
