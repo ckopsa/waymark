@@ -8,10 +8,10 @@
   \"[check-name] …\" strings the resource gate surfaces on *err*.
 
   Phase-2 punts: check-when (conditional demand) and check-authored
-  wait for their features; the assembly-time registry battery —
-  check-owns, check-related, check-derived-edges, cross-kind
-  check-derived-cycles, check-refs, check-touches, check-compounds —
-  arrives with the registry."
+  wait for their features. The assembly-time battery — check-refs,
+  check-owns, check-related, cross-kind derived inputs — lives in
+  waymark10.checks-assembly and runs at registry construction;
+  check-touches and check-compounds remain unported."
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [waymark10.expr :as expr]
