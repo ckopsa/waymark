@@ -57,6 +57,7 @@
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.surface :as surface]
+            [waymark10.server.coherence :as coherence]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -168,17 +169,16 @@
     (let [dispatcher (events/dispatcher
                       eng {:poll-ms (:events-poll-ms eng 2000)})]
       (reset! rt {:dispatcher dispatcher
-                  :sweeper (maintainer/start-sweeper!
-                            eng {:interval-ms (:sweep-interval-ms eng 30000)})
                   ;; mirror kinds get their declared discovery cadence
                   ;; (phase 8); an engine without mirrors pays nothing
                   :discovery (when (seq (mirror/mirror-kinds eng))
                                (mirror/start-discovery! eng))
-                  ;; phase 9b: the webhook deliverer rides the
-                  ;; dispatcher; the jobs worker polls for claims
-                  :webhooks (webhooks/start-deliverer!
-                             eng dispatcher
-                             {:poll-ms (:webhooks-poll-ms eng 2000)})
+                  ;; multi-process coherence owns the singleton roles:
+                  ;; the law-refresh consumer rides the dispatcher, and
+                  ;; the webhook deliverer + clock sweeper run under
+                  ;; advisory-lock election — one holder per database,
+                  ;; takeover on stop or crash
+                  :coherence (coherence/start! eng dispatcher {})
                   :jobs (jobs/start-worker!
                          eng {:poll-ms (:jobs-poll-ms eng 1000)
                               :batch-size (:jobs-batch-size eng 10)})})))
@@ -193,11 +193,10 @@
   ([eng server]
    (when server (http/server-stop! server))
    (when-some [rt (:runtime eng)]
-     (when-some [{:keys [dispatcher sweeper discovery webhooks jobs]} @rt]
-       (some-> webhooks webhooks/stop-deliverer!)
+     (when-some [{:keys [dispatcher coherence discovery jobs]} @rt]
        (some-> jobs jobs/stop-worker!)
+       (some-> coherence coherence/stop!)
        (some-> dispatcher events/stop!)
-       (some-> sweeper maintainer/stop-sweeper!)
        (some-> discovery mirror/stop-discovery!))
      (reset! rt nil))))
 
