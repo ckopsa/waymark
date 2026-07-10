@@ -377,7 +377,7 @@
    :initial :offered
    :terminal #{:approved :denied}
    :nav :secondary
-   :summary "Access request by {data.requested_by} · {state}"
+   :summary "Access request by {data.requested_by} · {state} · until {data.expires_at}"
    ;; grant_id is OPTIONAL: an anchorless ask is the bootstrap path —
    ;; its approval mints the grant and stamps the id here
    :schema [:map
@@ -406,8 +406,19 @@
                    asks-are-paced
                    asks-are-few]
    :on-create (fn [row ctx]
-                (assoc-in row [:data :requested_by]
-                          (get-in ctx [:principal :id])))
+                (-> row
+                    (assoc-in [:data :requested_by]
+                              (get-in ctx [:principal :id]))
+                    ;; short-lived is the DEFAULT, not an opt-in: an ask
+                    ;; naming no expiry gets the engine's TTL (24h) —
+                    ;; stamped at create, so the approver approves the
+                    ;; leash that will actually exist. An agent may ask
+                    ;; for longer; the approver sees the number either way.
+                    (update-in [:data :expires_at]
+                               #(or % (.plusSeconds
+                                       ^java.time.Instant (:now ctx)
+                                       (long (:grant-default-ttl-seconds
+                                              (:services ctx) 86400)))))))
    :actions
    {:approve {:from #{:offered} :to :approved
               :guards [someone-else-decides grant-still-accepting]
