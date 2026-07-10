@@ -47,8 +47,16 @@ conformance8: db  ## waymark8 conformance suite (mealplan8, the expression-law f
 conformance9: db  ## waymark9 conformance suite (mealplan9)
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark9 -n auto
 
-test10:  ## waymark10 (Clojure) framework tests — pure, no database yet
-	cd waymark10 && clojure -M:test
+test10: db10  ## waymark10 (Clojure) framework tests
+	cd waymark10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
+
+db10: db  ## waymark10 databases on the shared :5433 container
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
+		"SELECT 1 FROM pg_database WHERE datname='waymark10_test'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE waymark10_test"
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
+		"SELECT 1 FROM pg_database WHERE datname='mealplan10_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE mealplan10_dev"
 
 check:  ## import-time definition checks (CI fast path); pass ENGINE=module:attr
 	uv run waymark7 check $(ENGINE)
