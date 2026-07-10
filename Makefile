@@ -47,6 +47,9 @@ conformance8: db  ## waymark8 conformance suite (mealplan8, the expression-law f
 conformance9: db  ## waymark9 conformance suite (mealplan9)
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark9 -n auto
 
+test10:  ## waymark10 (Clojure) framework tests — pure, no database yet
+	cd waymark10 && clojure -M:test
+
 check:  ## import-time definition checks (CI fast path); pass ENGINE=module:attr
 	uv run waymark7 check $(ENGINE)
 
