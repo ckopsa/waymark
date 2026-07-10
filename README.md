@@ -60,6 +60,35 @@ app migrated per the design's sketch lives in **`mealplan3/`**
 (`make mealplan3`, `pytest --waymark3`). Build-time deviations and caveats:
 [`docs/waymark3-notes.md`](docs/waymark3-notes.md).
 
+## The later lineage: 7 → 10
+
+The line continued fork-by-fork, each version a design doc plus a full
+framework plus the meal-plan app migrated onto it: **`waymark7/`**
+(`docs/waymark7-design.md`, `make conformance`), **`waymark8/`** — the law
+becomes data: guards and derivations as expression trees, fingerprinted and
+diffable (`docs/waymark8-design.md`, `make conformance8`), and
+**`waymark9/`** — the law binds the row's judgment: every row is judged by
+the law revision stamped on it (`docs/waymark9-design.md`,
+`make conformance9`).
+
+**`waymark10/`** is the current head: a ground-up **Clojure** rewrite
+(wire format `"10"`, a clean break) where the law is a form — the tree the
+reviewer diffs, the fingerprint stores, the wire carries, and the
+interpreter evaluates are one value. Engine, conformance library, the
+affordance-following client (`waymark10.client`, spec Part IV enforced),
+the CLI (`clojure -M:cli`), and the envelope-driven generic UI
+(`GET /api/-/ui`) live in `waymark10/`; the dogfood app is
+**`mealplan10/`**. Design record with the 9→10 wire divergence table:
+[`docs/waymark10-design.md`](docs/waymark10-design.md).
+
+```bash
+make test10            # waymark10 framework tests (Clojure, Postgres :5433)
+make test-mealplan10   # mealplan10 conformance + the family-week story
+make dev10             # serve mealplan10 on :8010 (UI at /api/-/ui)
+```
+
+Everything below this line describes the original v0.1 `waymark/` package.
+
 ## Status
 
 Complete implementation of spec v0.1 **except i18n** (all human strings are

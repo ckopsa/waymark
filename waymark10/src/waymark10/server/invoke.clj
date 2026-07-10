@@ -980,16 +980,32 @@
   materializes, inserts, and logs under the kind's create action name.
   The transition's to-state is the row's state AFTER :on-create — a
   declared create landing (a held definition is born :proposed) logs
-  honestly."
-  [engine kind body {:keys [principal acknowledged correlation-id id]
+  honestly.
+
+  Phase 10 (the client found the gap): a PRESENT Idempotency-Key is
+  honored exactly as invoke's — stored replay is byte-identical,
+  reuse with a different body refuses 409. Recorded deviation from
+  waymark9: the 428 requirement on keyless creates stays waived —
+  v10 never demanded it and every enrolled app creates bare; the
+  affordance-following client always sends one."
+  [engine kind body {:keys [principal acknowledged correlation-id id
+                            idempotency-key]
                      :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         model (or (:create-schema rdef) (:schema rdef))
+        create-action (first (:create-action-names rdef))
         digest (body-digest body)]
     (after-write!
-     engine kind (first (:create-action-names rdef))
+     engine kind create-action
      (store/with-tx (:storage engine)
       (fn [tx]
+        (if-some [hit (when idempotency-key
+                        (store/idempotency-lookup (:storage engine) tx
+                                                  idempotency-key kind))]
+          (if (and (= (:action hit) create-action)
+                   (= (:request-digest hit) digest))
+            {:replayed? :idempotency :response hit}
+            (throw (p/idempotency-key-reuse create-action)))
         (let [inp (schema/decode model (or body {}))
               _ (when-some [errors (schema/closed-errors model inp)]
                   (throw (p/schema-invalid :create errors)))
@@ -1036,7 +1052,7 @@
                         (:storage engine) tx
                         {:kind kind
                          :resource-id (:id row)
-                         :action (first (:create-action-names rdef))
+                         :action create-action
                          :from-state nil
                          :to-state (:state row)
                          :actor {:type (name (:type principal))
@@ -1047,7 +1063,19 @@
                          :acknowledged (not-empty (vec overridden))
                          :correlation-id correlation-id
                          :summary (:summary row)})]
-            {:row row :transition record})))))))
+            (when idempotency-key
+              (store/idempotency-store!
+               (:storage engine) tx idempotency-key kind create-action digest
+               201 (if-some [render-fn (:render-fn engine)]
+                     ;; row is already decoded; the same envelope the
+                     ;; live 201 answers with
+                     (render-fn rdef (dissoc row :summary))
+                     (wire/write-json {:id (:id row)
+                                       :state (name (:state row))
+                                       :version (:version row)
+                                       :summary (:summary row)}))
+               "application/waymark+json"))
+            {:row row :transition record}))))))))
 
 (defn engine
   "Phase-2 wiring: storage + resources, kinds ensured. Grows into

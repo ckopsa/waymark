@@ -572,3 +572,281 @@ Live collab (an action with :draft {:shared true :live true}):
 OpenAPI:
 
     curl -s localhost:8010/api/openapi.json | jq '.paths | keys'
+
+# 10. Phase 10 — the clients close the loop
+
+The engine has spoken wire "10" since phase 3; phase 10 gives the
+wire its three consumers — the affordance-following client library,
+the CLI over it, and the envelope-driven generic UI — and with them
+the lineage's final claim is testable end to end: a client that
+knows NOTHING about meal planning drives the whole family week,
+because everything it needs was declared once and projected.
+
+## The client contract, as enforced (`waymark10.client`)
+
+The library is the reference implementation of spec Part IV: each
+agent-client rule lives in exactly one named place, and its
+docstrings teach the contract. The rules as they landed, with every
+adaptation recorded:
+
+1. **Act only on declared actions.** `act!` looks the action up in
+   the document's `actions`; absent means a LOCAL refusal carrying
+   the server's own `unavailable.reason` when it narrates one. The
+   namespace contains no URL constructor for writes — the test pins
+   that an unknown action produces zero HTTP requests. Reads are
+   `self`, well-known hrefs, and `links` (`follow`); an undeclared
+   rel refuses locally too.
+2. **`safety.confirm=true` is a hard stop.** waymark9's
+   `PendingConfirmation` object becomes the `:confirm!` callback —
+   the seam where a human says yes. No callback, or a falsey return,
+   refuses locally with the consequence text (the declaration's
+   `:consequence`, riding the wire as `display.description`).
+3. **Idempotency-Keys are persisted before the first attempt.** The
+   session's `:key-store` (an atom the caller may persist — the CLI
+   does) maps the LOGICAL attempt (href + input hash) to a generated
+   key; an ambiguous transport failure retries once with the same
+   key, and a deliberate identical re-call replays byte-identically
+   instead of duplicating. Recorded nuance: same href + same input
+   IS the same attempt, by design — a distinct attempt needs
+   distinct input (waymark9's client chose the same).
+4. **Fenced actions auto-send If-Match** from the document's
+   `meta.etag`. A stale document's write is a 412 problem, honestly
+   surfaced; re-reading heals the fence.
+5. **`dry-run`** pre-validates schema AND guards server-side
+   (`?dry_run=1`) before anyone is asked to confirm anything.
+6. **Warning 409s surface as data**: `{:warnings … :acknowledge!}`.
+   Calling `(acknowledge!)` retries with `Waymark-Acknowledge`
+   naming exactly the warnings the caller saw — same idempotency
+   key, because it is the same attempt.
+7. **Plan over `effect.to`, verify every landing.** The session
+   learns `state → action → to` edges from every document seen;
+   `plan` BFSes the learned graph (an unroutable goal refuses with
+   the widen-the-graph hint), `follow-plan!` executes and re-reads
+   between steps, and every `act!` compares the landed `state`
+   against the declared prediction — a mismatch rides the result as
+   `:waymark10.client/diverged` (`diverged` reads it), surfaced,
+   never improvised around.
+
+The library-wide adaptation, recorded once: **refusals are data,
+never exceptions** — `{:problem …}` (the RFC 9457 body, whole),
+`{:refused …}` (local), `{:transport …}` (the wire itself), plus
+the warnings shape above; predicates `problem?`/`refused?`/
+`transport?`/`warnings?`/`doc?` grade results. waymark9's exception
+hierarchy is a Python idiom; in Clojure the refusal IS the return
+value, and nothing is ever swallowed into nil.
+
+`tools` is the MCP projection: the document's CURRENT actions as
+`[{:name "kind.action" :description … :input_schema …}]`, purely
+mechanical — folded acceptance sets arrive as enums for free,
+confirm gates annotate the description, terminal effects warn.
+`watch!` tails the SSE firehose as parsed frames (real HTTP only —
+the `:handler` ring transport, the test seam, has no stream).
+
+**The engine gap the client found** (and phase 10 closed): `create!`
+silently dropped a present `Idempotency-Key` — waymark9 stored and
+replayed create keys (invoke.py's create path), v10's router never
+passed the header down. Creates now honor a present key exactly as
+invoke does (byte-identical replay through the render-fn seam,
+409 on body-different reuse); the recorded deviation is that
+waymark9's **428 requirement on keyless creates stays waived** —
+v10 never demanded it, every enrolled app creates bare, and the
+affordance-following client always sends one anyway. A replayed
+create serves the stored bytes without the Location header (the
+body's `self` carries the same href).
+
+## The CLI (`waymark10.cli`, `clojure -M:cli`)
+
+Thin over the library — one shell call per affordance, every rule
+enforced by the client rather than remembered by the operator:
+
+    clojure -M:cli <base-url> index
+    clojure -M:cli <base-url> get <href>
+    clojure -M:cli <base-url> act <href> <action> [--input '{json}'] [--yes]
+    clojure -M:cli <base-url> watch [--kinds a,b]
+
+Auth (`--as id [--roles a,b]` dev headers, `--bearer` OIDC,
+`--grant` the scope selector) persists per base-url in the session
+file (`~/.waymark10/session.edn`, `--session` overrides) beside the
+idempotency key store — so a re-run of the same act with the same
+input REPLAYS across processes. Confirm gates prompt on the
+terminal; `--yes` is the recorded human approval (and acknowledges
+warnings). Exit codes: **0** ok · **1** the server refused
+(problem) · **2** refused locally (confirm/acknowledge declined,
+unknown action, usage) · **3** transport. waymark9's separate
+divergence code (4) folds into 0-with-a-loud-line: the write
+LANDED, the surprise is narrated on stdout.
+
+The dev10 transcript (2026-07-10, `make dev10` with a blocking
+"Piano recital" seeded on the FakeEvents feed for 2026-07-16;
+`--as priya` given once, persisted; every id from a prior answer):
+
+    $ cli index                                          # exit 0
+    waymark 10
+      meal            /api/meals
+      plan            /api/plans …
+      surface week-board /api/surfaces/week-board/{anchor-id}
+
+    $ cli act /api/rotations create --input '{}'         # exit 0
+    rotation /api/rotations/032e… · state=inactive · v1
+    actions:  activate  → active
+    unavailable:  add_theme: Available in state(s) Active; …
+    $ cli act /api/rotations/032e… activate              # exit 0
+
+    # six meals created + accepted (create → suggested, accept →
+    # on_list), then:
+    $ cli act /api/plans create --input '{"weeks": 1}'   # exit 0
+    plan /api/plans/00ef… · state=draft · v1
+    data: …"days":[{"date":"2026-07-14","theme":"mexican"}, …
+          "calendar_conflicts":1,"has_conflicts":true …
+    unavailable:
+      finalize: Every day needs a meal or an eating-out mark …
+      add_side_dish: No date currently qualifies for 'Add side dish'.
+
+    $ cli act /api/plans/00ef… assign_meal \
+        --input '{"date":"2026-07-15","meal_id":"<tacos>"}'   # exit 1
+    refused by the server: 409 Refused
+    That meal doesn't serve 2026-07-15's theme night. Pick the
+    Sunday theme first if the day still rotates, or assign
+    off-theme with confirmation.
+
+    # six assign_meal + one mark_eating_out (v2…v8), then:
+    $ cli act /api/plans/00ef… finalize                  # exit 2
+    the server warns:
+      calendar-clear: 1 calendar conflict(s) overlap this week —
+      move or cancel them on the calendar itself, or acknowledge …
+    Acknowledge and retry? [y/N] not acknowledged; nothing done
+
+    $ cli act /api/plans/00ef… finalize --yes            # exit 0
+    plan /api/plans/00ef… · state=planned · v9
+
+    $ cli act /api/plans/00ef… begin                     # exit 2
+    refused locally: The plan starts 2026-07-14.
+    # (unavailable.reason rode the local refusal — no request left)
+
+    $ cli act /api/plans create --input '{"weeks": 1}'   # exit 0
+    plan /api/plans/00ef… · state=draft · v1
+    # the SAME plan, v1 bytes: the persisted key replayed the first
+    # execution instead of minting a second week
+
+    $ cli watch --kinds meal
+    14:17:07  colton retire  meal on_list → retired  /api/meals/14ad…
+
+## The generic UI, decided and executed
+
+**The decision:** adapt waymark9's `ui.html` approach — the envelope
+IS the screen — to wire "10", rewritten from scratch rather than
+ported (waymark9's page consumes parts/relay/presence/approvals,
+none of which v10 serves), at roughly a third the size. One
+self-contained page (vanilla JS, zero external hosts — pinned by
+test) served at `GET /api/-/ui` from the engine's own classpath
+(`waymark10/resources/waymark10/ui.html`), zero app knowledge: the
+one baked-in list is the ENGINE kinds (definition, member, role,
+grant, attachment, subscription, job — wire-10 knowledge, grouped
+in the nav, never hidden).
+
+What it renders, each from the wire alone: nav and home from
+well-known (declared surfaces listed); collection screens from the
+query grammar (state/sort selects and facet chips from the
+advertised query input schema — `x-facets` counts become lit
+chips — items as state + summary rows, next/prev from links, bulk
+actions as a checkbox column whose reports render verbatim);
+resource screens as the envelope (data as a kv table, vector-of-map
+fields as nested tables, `x-display` prose as preformatted blocks;
+actions as buttons styled by `display.style`, ordered by
+`display.order`; **unavailable as disabled-with-tooltip buttons
+PLUS the narrated not-now list** with `becomes_available` and
+remedies); action dialogs generated from the input schemas (folded
+acceptance enums as selects — the assign_meal date field offers
+exactly the plan's seven days — `waymark-ref` fields as pickers
+populated from the target kind's collection labeled by summary,
+booleans/dates/numbers/arrays as their honest widgets); the confirm
+gate as a consequence box with an explicit "Confirm & …" button;
+`dry_run=1` as a Check button; warning 409s as an in-dialog
+acknowledge box that retries with the header; 412s as
+re-read-and-retry; 422s as per-field errors; fenced actions
+auto-If-Match; non-idempotent actions mint one key per dialog-open
+(retries within the dialog reuse it); `:edit` drafts load on open
+(GET `draft.href`: values + prefill), **save on blur** (PUT), offer
+discard (DELETE), and are consumed by the act; surface screens
+render the anchor, the attention flags, showcased actions and
+member tables; and the SSE firehose drives a one-line ticker plus a
+debounced refetch of whatever envelope or collection is open.
+
+Scope boundaries, each recorded: no live-collab websocket join (the
+draft's shared row still syncs on blur/reopen), no batch surface,
+no attachment byte upload, no OpenAPI/docs screen, no vocab
+combobox (arrays of strings are comma-separated text), arrays of
+objects input as a JSON textarea, `date-time` inputs as plain RFC
+3339 text, dry-run on demand rather than on blur, no grant-scoped
+chrome (a scoped request's data is projected by the API either
+way), no i18n, and no undo toast (v10 envelopes advertise the
+inverse action; the button is there, the toast isn't).
+
+**Verified against live dev10** (2026-07-10) two ways: the
+automated floor (`waymark10.ui-test`: serves, self-contained,
+consumes the wire) and a scripted headless-chromium drive over CDP
+(node + `--headless=new`) that clicked the real page through the
+family-week story — 33 checks, zero console errors: home/nav from
+well-known; meals collection with grammar-built filter bar; state
+filter round-tripping through the collection self href; meal
+created through the generated form (required marks, prose
+textarea); accept invoked; the confirm-gated retire showing its
+declared consequence and landing only through "Confirm &";
+unavailable narration on the planned plan (begin's clock sentence
+as tooltip AND not-now line with `becomes_available.at`); the
+week-board chip earned by anchor probe; reopen; assign_meal with
+the folded 7-day enum and summary-labeled meal picker; the
+wrong-theme guard refusing IN the form with its own sentence, then
+the corrected assign landing; dry-run's green verdict; finalize's
+warning box acknowledging and landing planned; the surface's
+attention flag up with the Piano recital riding the calendar
+member; update_recipe's draft saved on blur, prefilled on reopen,
+consumed by the act; and a foreign retire refetching the open
+envelope through SSE with the ticker narrating it.
+
+# The 9→10 wire, closed: divergences the lineage should remember
+
+Wire "10" is a clean break, not a superset. Everything a waymark9
+client must relearn, in one table:
+
+| Surface | waymark9 | waymark10 |
+| --- | --- | --- |
+| Format marker | `"waymark": "9"` | `"waymark": "10"` |
+| Dev principal | `X-Principal-Id` / `-Type` / `-Display` | `x-waymark-principal` / `x-waymark-roles` / `x-waymark-actor-type` |
+| Grant credential | minted opaque `wmk_…` bearer token | `X-Waymark-Grant: <grant-id>` — a scope SELECTOR, not a credential; the principal must be the grant's audience |
+| Guard names on the wire (warnings, acknowledge, `guard`) | snake (Python identifiers: `calendar_clear`) | kebab (Clojure keywords: `calendar-clear`) — problem KEYS are snake in both; only guard-name VALUES differ |
+| Count facts in stored/wire law trees | `["count", …]` expression node | no count node (unearned): a declarative `{:count {:owns … :where …}}` spec compiled by the maintainer — v9 and v10 definition fingerprints are not comparable |
+| Collection shape | `data.items` negotiable: `depth=`, `rows=none`, declared columns | fixed envelope-minus-data summaries; no depth param, no rows=none (named punt) |
+| Envelope `links` / `parts` | rendered (embeds, parts groups, placed actions) | `links` always `{}`, no parts surface (the standing phase-3 punt) |
+| Draft GET with nothing stored | 200 empty open draft | 404 (a draft that was never saved does not exist) |
+| Create idempotency | key REQUIRED (428) + replay | key honored when present + replay; keyless creates accepted (recorded deviation, phase 10) |
+| Webhook failure | skip-and-advance per event | the subscription FAILS with the cursor parked; resume replays |
+| Deferred bulk | job + queued state + artifacts | 202 + job envelope; no queue state, lease-steal is the resume |
+| Batch refusal | judged every input, full verdict report | first refusal aborts with its index (recorded deviation, phase 7) |
+| CLI exit codes | 1 problem/transport · 2 not afforded · 3 confirm · 4 divergence | 0 ok · 1 problem · 2 refused locally · 3 transport; divergence is a loud line on a landed write |
+
+## The final state of the ledger
+
+`make test10`: **192 tests, 1302 assertions** (phase 9b's 179/1165
+plus the phase-10 client, CLI and UI suites). `make
+test-mealplan10`: **11 tests, 145 assertions** — the conformance
+walk and the family-week story, untouched by phase 10 (the one
+engine change, create-key honoring, is additive).
+
+The parity ledger (§9) stands as written: every waymark9 server
+module has a waymark10 home or a named punt, and phase 10 adds the
+client column — waymark9's `client/py.py` + `client/agent.py` →
+`waymark10.client` (refusals as data; PendingConfirmation → the
+`:confirm!` seam; Divergence → a result key), `cli/client.py` →
+`waymark10.cli` (session file; exit-code table above),
+`server/static/ui.html` → `resources/waymark10/ui.html` (scope
+boundaries above; approvals/presence/relay/parts screens punted
+with their servers). Standing cross-cutting punts, restated one
+last time so nobody re-discovers them: RRULE/recurrence, spans, the
+predecessor resolver, `rows=none`/`depth=` collection modes, GIN
+indexes for vocab arrays, grant-projected SSE/surface/openapi
+routes, the grant negotiation machine and ApprovalRequest flow, the
+cross-process bus, and the migration planner. The law is a form,
+the wire is its projection, and every client in this phase proved
+it can follow the projection without ever being told what the
+application is.

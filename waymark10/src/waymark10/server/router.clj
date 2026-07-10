@@ -33,7 +33,8 @@
   its Location; …/{action}/draft/collab upgrades to the live-collab
   websocket. Recorded: like SSE, the openapi/surface/collab routes
   answer a grant-scoped request 404 — projecting them is a punt."
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [reitit.ring :as ring]
             [waymark10.schema :as schema]
             [waymark10.server.attachments :as attachments]
@@ -218,10 +219,20 @@
           _ (check-kind! req rdef)
           _ (check-action! req rdef (first (:create-action-names rdef)))
           opts (invoke-opts req)
-          {:keys [row]} (inv/create! eng (:kind rdef) (read-body req)
-                                     (select-keys opts [:principal :acknowledged]))]
-      (envelope-response eng rdef row req 201
-                         {"Location" (str "/api/" plural "/" (:id row))}))))
+          result (inv/create! eng (:kind rdef) (read-body req)
+                              (select-keys opts [:principal :acknowledged
+                                                 :idempotency-key]))]
+      (if (= :idempotency (:replayed? result))
+        ;; the first execution's bytes, verbatim (phase 10: creates
+        ;; honor a present key; the Location header is not stored —
+        ;; the body's self carries the same href)
+        (let [hit (:response result)]
+          {:status (:status hit)
+           :headers {"Content-Type" (:media-type hit)}
+           :body (:response hit)})
+        (let [row (:row result)]
+          (envelope-response eng rdef row req 201
+                             {"Location" (str "/api/" plural "/" (:id row))}))))))
 
 (defn- get-one [eng]
   (fn [{{:keys [plural id]} :path-params :as req}]
@@ -411,6 +422,24 @@
                                  :since (last-event-id req)}
                           req))))
 
+;; ── the generic UI (phase 10) ───────────────────────────────────────
+
+(defn- ui-page
+  "GET /api/-/ui: the envelope-driven generic UI — one self-contained
+  page (vanilla JS, no external hosts) that renders whatever the
+  wire declares: kinds from well-known, collections from the query
+  grammar, envelopes as forms. A static asset, served to anyone —
+  a scoped request's DATA stays projected by the API it drives."
+  [_eng]
+  (let [page (some-> (io/resource "waymark10/ui.html") slurp)]
+    (fn [_req]
+      (if page
+        {:status 200
+         :headers {"Content-Type" "text/html; charset=utf-8"}
+         :body page}
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "The UI asset is not on the classpath."}))))))
+
 ;; ── attachment bytes (phase 9a) ─────────────────────────────────────
 
 (defn- attachment-rdef [eng id]
@@ -490,6 +519,7 @@
          ["/api/openapi.json" {:get (openapi-doc eng)}]
          ["/api/schemas/:kind" {:get (kind-schema eng)}]
          ["/api/-/events" {:get (firehose-events eng)}]
+         ["/api/-/ui" {:get (ui-page eng)}]
          ["/api/attachments/:id/bytes" {:put (bytes-put eng)
                                         :get (bytes-get eng)}]
          ["/api/surfaces/:name/:id" {:get (surface-view eng)}]

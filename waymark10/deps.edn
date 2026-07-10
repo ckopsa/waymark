@@ -16,4 +16,7 @@
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
                        lambdaisland/kaocha    {:mvn/version "1.91.1392"}}
          :main-opts   ["-m" "kaocha.runner"]}
-  :dev  {:extra-paths ["dev"]}}}
+  :dev  {:extra-paths ["dev"]}
+  ;; the affordance-following CLI (phase 10):
+  ;;   clojure -M:cli http://localhost:8010 index
+  :cli  {:main-opts ["-m" "waymark10.cli"]}}}

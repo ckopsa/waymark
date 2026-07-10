@@ -73,4 +73,11 @@ curl -sf "${P[@]}" -H "If-Match: $ETAG" \
 say "the collection"
 curl -sf "${P[@]}" "$BASE/api/plans" | body
 
+say "the generic UI serves (phase 10) — open $BASE/api/-/ui in a browser"
+curl -sf -o /dev/null -w '  %{http_code} %{content_type}\n' "$BASE/api/-/ui"
+
+say "the CLI walks the same wire (phase 10)"
+echo "  clojure -M:cli $BASE index"
+echo "  clojure -M:cli $BASE act /api/plans/$PID finalize --yes"
+
 printf '\nsmoke10: all calls answered.\n'
