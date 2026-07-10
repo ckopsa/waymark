@@ -24,22 +24,34 @@
   404, non-granted actions 404 (concealment). Recorded punt: the SSE
   routes are not projected — a scoped request gets 404 on them.
   Attachment bytes ride PUT/GET /api/attachments/{id}/bytes (static
-  route, shadowing the plural grammar by position)."
+  route, shadowing the plural grammar by position).
+
+  Phase 9b: /api/openapi.json (the derived overlay) and
+  /api/surfaces/{name}/{anchor-id} (the composed decision screen)
+  join the static routes; a deferred bulk call (over its :defer-over
+  threshold) mints a job and answers 202 with the job envelope and
+  its Location; …/{action}/draft/collab upgrades to the live-collab
+  websocket. Recorded: like SSE, the openapi/surface/collab routes
+  answer a grant-scoped request 404 — projecting them is a punt."
   (:require [clojure.string :as str]
             [reitit.ring :as ring]
             [waymark10.schema :as schema]
             [waymark10.server.attachments :as attachments]
+            [waymark10.server.collab :as collab]
             [waymark10.server.collections :as collections]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.jobs :as jobs]
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
+            [waymark10.server.openapi :as openapi]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
+            [waymark10.server.surface :as surface]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder)
@@ -170,11 +182,15 @@
                       vis (filter (fn [[k _]] ((:kind? vis) k))))]
       (json-response
        200
-       {:waymark "10"
-        :kinds (vec (sort (map (comp name key) resources)))
-        :resources (into (sorted-map)
-                         (map (fn [[k r]] [(name k) {:href (str "/api/" (:plural r))}]))
-                         resources)}))))
+       (cond-> {:waymark "10"
+                :kinds (vec (sort (map (comp name key) resources)))
+                :resources (into (sorted-map)
+                                 (map (fn [[k r]] [(name k) {:href (str "/api/" (:plural r))}]))
+                                 resources)}
+         ;; the declared surfaces (phase 9b) — hidden from a scoped
+         ;; request, whose surface routes 404 anyway
+         (and (seq (:surfaces eng)) (nil? vis))
+         (assoc :surfaces (surface/well-known-entry (:surfaces eng))))))))
 
 (defn- kind-schema [eng]
   (fn [{{:keys [kind]} :path-params :as req}]
@@ -268,9 +284,17 @@
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
           _ (check-action! req rdef (keyword action))
-          opts (invoke-opts req)]
-      (report-response
-       (inv/bulk! eng (:kind rdef) (keyword action) (read-body req) opts)))))
+          opts (invoke-opts req)
+          result (inv/bulk! eng (:kind rdef) (keyword action)
+                            (read-body req) opts)]
+      (if-some [d (:deferred result)]
+        ;; the phase-7 punt closes (phase 9b): an over-threshold call
+        ;; mints a job and answers 202 — the envelope is the body, the
+        ;; Location is where to watch it
+        (let [{job :row} (jobs/enqueue! eng d (:principal opts))]
+          (envelope-response eng (get (inv/resources eng) :job) job req 202
+                             {"Location" (str "/api/jobs/" (:id job))}))
+        (report-response result)))))
 
 (defn- batch-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
@@ -308,6 +332,42 @@
       (check-action! req rdef (keyword action))
       (drafts/discard! eng rdef id (keyword action) (principal-of req))
       {:status 204 :headers {}})))
+
+;; ── live collab (websockets, phase 9b) ──────────────────────────────
+
+(defn- draft-collab [eng]
+  (fn [{{:keys [plural id action]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)]
+      (check-row! req rdef id)
+      (check-action! req rdef (keyword action))
+      (collab/join eng rdef (keyword action) id (principal-of req) req))))
+
+;; ── surfaces (phase 9b) ─────────────────────────────────────────────
+
+(defn- surface-view [eng]
+  (fn [{{:keys [name id]} :path-params :as req}]
+    ;; a scoped request 404s the surface routes — projecting a
+    ;; composition per grant is a named punt (the SSE precedent)
+    (when (visibility-of req)
+      (throw (p/problem :not-found 404 "Not found" {:detail "No such route."})))
+    (let [sdef (or (get (:surfaces eng) name)
+                   (throw (p/not-found "surface" name)))]
+      (json-response 200
+                     (surface/envelope eng sdef id
+                                       {:principal (principal-of req)
+                                        :now ((:now-fn eng))
+                                        :services (:services eng)})
+                     media-type nil))))
+
+;; ── the OpenAPI overlay (phase 9b) ──────────────────────────────────
+
+(defn- openapi-doc [eng]
+  (fn [req]
+    ;; the document names every kind; a scoped request gets the
+    ;; concealment answer
+    (when (visibility-of req)
+      (throw (p/problem :not-found 404 "Not found" {:detail "No such route."})))
+    (json-response 200 (openapi/document eng))))
 
 ;; ── events (SSE, phase 6) ───────────────────────────────────────────
 
@@ -427,10 +487,12 @@
   (-> (ring/ring-handler
        (ring/router
         [["/api/.well-known/waymark" {:get (well-known eng)}]
+         ["/api/openapi.json" {:get (openapi-doc eng)}]
          ["/api/schemas/:kind" {:get (kind-schema eng)}]
          ["/api/-/events" {:get (firehose-events eng)}]
          ["/api/attachments/:id/bytes" {:put (bytes-put eng)
                                         :get (bytes-get eng)}]
+         ["/api/surfaces/:name/:id" {:get (surface-view eng)}]
          ["/api/:plural" {:get (collection eng) :post (create eng)}]
          ["/api/:plural/-/:action" {:post (bulk-action eng)}]
          ["/api/:plural/:id" {:get (get-one eng)}]
@@ -439,7 +501,8 @@
          ["/api/:plural/:id/-/:action/batch" {:post (batch-action eng)}]
          ["/api/:plural/:id/-/:action/draft" {:get (draft-get eng)
                                               :put (draft-put eng)
-                                              :delete (draft-delete eng)}]]
+                                              :delete (draft-delete eng)}]
+         ["/api/:plural/:id/-/:action/draft/collab" {:get (draft-collab eng)}]]
         {:conflicts nil})
        not-found-handler)
       (wrap-identity eng)

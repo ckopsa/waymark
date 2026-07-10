@@ -27,13 +27,24 @@
   lists them and the law lifecycle governs them like any kind. opts
   gain :oidc (the relying-party config, validated at boot; absent =
   dev-header auth unchanged), :attachment-dir (default
-  target/attachments) and :attachment-max-bytes (default 10 MiB)."
+  target/attachments) and :attachment-max-bytes (default 10 MiB).
+
+  Phase 9b: the engine also enrolls :subscription (webhooks) and :job
+  (deferred bulk), assembles declared :surfaces against the registry,
+  and carries the collab rooms atom. start!/stop! gain two more
+  running surfaces — the webhook deliverer (riding the dispatcher as
+  its wake signal) and the jobs worker. opts: :surfaces (surface
+  declarations), :webhook-attempts (default 3), :webhook-backoff-ms
+  (default 250), :webhook-timeout-ms (default 10s), :webhooks-poll-ms
+  (deliverer backstop, default 2s), :jobs-poll-ms (worker cadence,
+  default 1s), :jobs-batch-size (progress granularity, default 10)."
   (:require [org.httpkit.server :as http]
             [waymark10.registry :as registry]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
+            [waymark10.server.jobs :as jobs]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
@@ -43,6 +54,8 @@
             [waymark10.server.router :as router]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.surface :as surface]
+            [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
 
@@ -58,11 +71,15 @@
   (let [reg (registry/registry (into (vec resources)
                                      [defs/definition members/member
                                       roles/role grants/grant
-                                      attachments/attachment]))
+                                      attachments/attachment
+                                      webhooks/subscription jobs/job]))
         eng (merge (select-keys opts [:sweep-interval-ms :events-poll-ms
                                       :sse-heartbeat-ms :maintainer-fan-out
                                       :suppress-mirror-refresh
-                                      :attachment-dir :attachment-max-bytes])
+                                      :attachment-dir :attachment-max-bytes
+                                      :webhook-attempts :webhook-backoff-ms
+                                      :webhook-timeout-ms :webhooks-poll-ms
+                                      :jobs-poll-ms :jobs-batch-size])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)
@@ -71,6 +88,11 @@
                     :deploy-mode (or deploy-mode :promote)
                     :lifecycle defs/lifecycle
                     :maintain maintainer/after-write
+                    ;; the declared surfaces, validated where every
+                    ;; kind is known (phase 9b)
+                    :surfaces (surface/assemble reg (:surfaces opts))
+                    ;; live collab's per-draft rooms (phase 9b)
+                    :collab-rooms (atom {})
                     :runtime (atom nil)})
         eng (assoc eng :render-fn
                    (fn [rdef row]
@@ -95,25 +117,37 @@
   BOTH engine and server to stop!."
   [eng port]
   (when-some [rt (:runtime eng)]
-    (reset! rt {:dispatcher (events/dispatcher
-                             eng {:poll-ms (:events-poll-ms eng 2000)})
-                :sweeper (maintainer/start-sweeper!
-                          eng {:interval-ms (:sweep-interval-ms eng 30000)})
-                ;; mirror kinds get their declared discovery cadence
-                ;; (phase 8); an engine without mirrors pays nothing
-                :discovery (when (seq (mirror/mirror-kinds eng))
-                             (mirror/start-discovery! eng))}))
+    (let [dispatcher (events/dispatcher
+                      eng {:poll-ms (:events-poll-ms eng 2000)})]
+      (reset! rt {:dispatcher dispatcher
+                  :sweeper (maintainer/start-sweeper!
+                            eng {:interval-ms (:sweep-interval-ms eng 30000)})
+                  ;; mirror kinds get their declared discovery cadence
+                  ;; (phase 8); an engine without mirrors pays nothing
+                  :discovery (when (seq (mirror/mirror-kinds eng))
+                               (mirror/start-discovery! eng))
+                  ;; phase 9b: the webhook deliverer rides the
+                  ;; dispatcher; the jobs worker polls for claims
+                  :webhooks (webhooks/start-deliverer!
+                             eng dispatcher
+                             {:poll-ms (:webhooks-poll-ms eng 2000)})
+                  :jobs (jobs/start-worker!
+                         eng {:poll-ms (:jobs-poll-ms eng 1000)
+                              :batch-size (:jobs-batch-size eng 10)})})))
   (http/run-server (handler eng) {:port port :legacy-return-value? false}))
 
 (defn stop!
   "Stop the server; the two-arity form also stops the engine's
-  runtime (dispatcher + sweeper)."
+  runtime (dispatcher, sweeper, discovery, webhook deliverer, jobs
+  worker)."
   ([server]
    (when server (http/server-stop! server)))
   ([eng server]
    (when server (http/server-stop! server))
    (when-some [rt (:runtime eng)]
-     (when-some [{:keys [dispatcher sweeper discovery]} @rt]
+     (when-some [{:keys [dispatcher sweeper discovery webhooks jobs]} @rt]
+       (some-> webhooks webhooks/stop-deliverer!)
+       (some-> jobs jobs/stop-worker!)
        (some-> dispatcher events/stop!)
        (some-> sweeper maintainer/stop-sweeper!)
        (some-> discovery mirror/stop-discovery!))

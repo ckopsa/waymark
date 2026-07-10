@@ -385,3 +385,190 @@ punt, extended), invited-only membership, role uniqueness under race
 logout, byte purge on delete (waymark9's BlobJanitor), duplication/
 sha256/S3/presigned URLs, and blob-write/metadata atomicity
 (waymark9's log-consumer choreography).
+
+# 9. Phase 9b — the outbox is a product, the screen is a declaration
+
+Webhooks, deferred jobs, surfaces, live collab and the OpenAPI
+overlay land, and with them the parity ledger below: every waymark9
+server module now has either a waymark10 home or a named punt.
+
+**Webhooks** (`server/webhooks.clj`). The `:subscription` kind
+(url, kind filter, optional secret; active/paused/failed) enrolls on
+every engine beside member/role/grant/attachment. One deliverer
+thread rides the events dispatcher as its wake signal and drains
+each active subscription's cursor (`waymark10_cursors`, additive
+DDL: consumer PK, position, updated_at) — at-least-once off the
+log, per-event checkpoint, restart replays instead of dropping. The
+body is the SSE frame's data verbatim (snake keys); the event id
+rides `X-Waymark-Event-Id`; a declared secret signs the body:
+`X-Waymark-Signature: hex hmac-sha256(secret, body)`. Failure
+discipline deliberately differs from waymark9's skip-and-advance:
+after the declared attempts (default 3, exponential backoff) the
+SUBSCRIPTION transitions to failed (`mark_failed`, system actor,
+logged, reason recorded) with the cursor parked at the refusing
+event — resume replays from exactly there; nothing silently drops,
+and one broken endpoint stops only its own stream. A new
+subscription hears the world from its own creation transition.
+Recorded: subscription bookkeeping is never delivered; waymark9's
+revoked terminal state is unported (pause is the off switch).
+
+**Deferred jobs** (`server/jobs.clj`). The phase-7 `:defer-over`
+punt closes: an over-threshold bulk call now answers **202** with
+the `:job` envelope as body and its self in Location. The job is an
+ordinary engine-served resource — `{action, kind, ids, input,
+requested_by, progress {done, total, refusals}}`, born `:running`,
+terminal completed/cancelled — minted by the system actor (wire
+creation refuses), the requester recorded in data. The worker claims
+through `waymark10_job_leases` (additive DDL: job_id PK, holder,
+expires_at) with claim-or-steal-on-expiry — a died worker's job is
+picked up by the next pass; the steal IS the resume, which retires
+waymark9's orphan-cancel sweep. Items execute through
+`inv/bulk-item!` — the SAME per-item algorithm a synchronous bulk
+runs, own transaction, after-write! hooks included — under a
+principal reconstructed from `requested_by` (roles not carried,
+recorded). Progress persists batchwise as a maintenance write (no
+version bump, no transition — the items already log on their own
+rows); cancel is a confirm-gated wire action that takes effect
+between batches. Recorded: waymark9's queued state and job
+artifacts are unported; deferred calls skip whole-call idempotency
+(the job row is the record).
+
+**Surfaces** (`server/surface.clj`). The composed decision screen:
+`{:name :anchor :members :showcase :attention}` — members name
+DECLARED edges of the anchor (`:related` joins or `:owns`; the
+surface composes what the law relates and smuggles no new joins),
+validated at engine assembly against the full registry. Served
+read-only at `GET /api/surfaces/{name}/{anchor-id}`: the anchor's
+FULL envelope, each member's rows as envelope-minus-data summaries
+(related joins inverted exactly as the maintainer inverts them),
+and the attention map evaluated (declared field = nominated value →
+boolean per flag). Engine opt `:surfaces […]`; well-known lists
+them. mealplan10 declares WeekBoard (`plan.clj`): the plan anchor
+with the family calendar co-present, finalize showcased,
+`has_conflicts` nominated — covered in the family-week story.
+Recorded (what waymark9's surface.py has that this does not):
+surfaces are not fingerprinted (no `surface:{name}` definition rows,
+no revise transitions), not grantable (a scoped request 404s, the
+SSE precedent), no member table hints or title template, attention
+is schema-field equality rather than the query grammar, and the
+anchor's envelope does not link back to its surfaces.
+
+**Live collab** (`server/collab.clj`). waymark-relay over http-kit
+websockets at `GET /api/{plural}/{id}/-/{action}/draft/collab`, for
+`:edit` actions whose draft policy is `{:shared true :live true}`.
+Frames: client `{"type": "set", field, value}` → the same partial
+validation a draft PUT runs, persisted through the shared draft row
+in the set's own transaction, then `{"type": "update", field,
+value, rev, author}` broadcast to the others; `{"type": "sync"}`
+answers the full draft. Per-field last-writer-wins, server-ordered
+(a room lock serializes), rev = a per-draft atom that resets with
+the room (room-lifetime, deliberately — LWW ordering matters only
+among live participants). Rooms clean up on last disconnect; the
+act consumes the draft in its own commit as before. Scoped honestly:
+no OT/CRDT, no relay/2 staleness rejection (`base_rev`/reject), no
+saved-acks, no presence frames, no affordance regate, no
+cross-worker bus, no closed frame on consumption — each recorded.
+
+**OpenAPI** (`server/openapi.clj`). `GET /api/openapi.json` — a
+derived 3.1 overlay: per kind the collection (query parameters from
+the filter grammar), create, get, and every action's act path
+(+bulk/batch/draft) with the REAL input schemas from the
+declarations, descriptions from display + the machine + safety, and
+the problem responses referenced once in `components.responses`.
+Enough for /docs-style tooling; recorded: response body schemas are
+stubs, SSE/attachments/surfaces/collab/well-known are undocumented,
+no securitySchemes, scoped requests 404.
+
+## The parity ledger — waymark9's server inventory → waymark10
+
+| waymark9 module | waymark10 home | Scope notes / named punts |
+| --- | --- | --- |
+| invoke.py | `server/invoke.clj` | full transition algorithm; bulk/batch/bulk-item |
+| definitions.py | `server/definitions.clj` | promote/pilot/withdraw; population grammar check punted |
+| router.py | `server/router.clj` | linear reitit router, problem + identity boundaries |
+| render.py | `server/render.clj` | envelope links still the phase-3 punt; depth=expanded profiles punted |
+| storage/ | `server/store.clj` + `store/postgres.clj` | one backend (Postgres); memory twin punted |
+| grants.py | `server/grants.clj` | kinds/ids/actions only — field/argument visibility MODES punted; negotiation machine punted |
+| derived.py (maintainer) | `server/maintainer.clj` | counts, clocks, backfill; derivation-class events punted |
+| external.py (Mirror) | `server/mirror.clj` | pull-through + discovery only — external PUSH / write-back beyond pull is a punt |
+| engine.py | `server/engine.clj` | boot, runtime lifecycle (dispatcher/sweeper/discovery/webhooks/jobs) |
+| collab.py | `server/collab.clj` | LWW relay; relay/2 staleness rejection, presence, regate, bus **punted** |
+| events.py | `server/events.clj` | transitions only; derivation event class punted |
+| attachments.py | `server/attachments.clj` | bytes on disk; purge/S3/sha256 punted |
+| oidc.py | `server/oidc.clj` | bearer RS256 verification; browser dance/sessions punted |
+| drafts.py | `server/drafts.clj` | per-field revs/authors unported (collab holds revs room-local) |
+| subscriptions.py | `server/webhooks.clj` | fail-the-subscription instead of skip-and-advance; revoked state punted |
+| migrate.py | **punt** | no schema diff/migration planner; ensure-kind! is additive-only |
+| bus.py | **punt** | single-process engines; rooms and dispatcher are process-local |
+| members.py | `server/members.clj` | auto-provision on first sight; invite→bind flow punted |
+| judgment.py | `server/judgment.clj` | stored-tree overlay; derived-law overlay punted |
+| jobs.py | `server/jobs.clj` | queued state, artifacts, orphan sweep punted (lease steal resumes) |
+| problems.py | `server/problems.clj` | RFC 9457 projection |
+| openapi.py | `server/openapi.clj` | overlay only; no docs UI, response schemas stubbed |
+| owns.py | `invoke.clj` cascade + `maintainer.clj` rollups | rollup_is subsumed by count facts |
+| consumers.py | **punt** | consumers-as-API (registered log consumers) unbuilt; webhooks cover the external case |
+| pipeline.py | **punt** | no pipeline/choreography surface |
+| roles.py | `server/roles.clj` | registry + uniqueness-under-race punt |
+| surface.py | `server/surface.clj` | fingerprint/grant/links/table-hints punted (see above) |
+| idempotency.py | `invoke.clj` + `waymark10_idempotency` | byte-identical replay; replays predate grant projection (recorded) |
+
+Standing cross-cutting punts, restated so nobody re-discovers them:
+RRULE/recurrence, spans, the predecessor resolver (period chaining),
+rows=none/depth= collection modes, GIN indexes for vocab arrays, and
+the grant-projected SSE/surface/openapi routes.
+
+## The wire walk (curl + websocat)
+
+Webhooks — subscribe, transition, verify:
+
+    # subscribe (secret optional; omit it for unsigned deliveries)
+    curl -s -X POST localhost:8010/api/subscriptions \
+      -H 'x-waymark-principal: priya' \
+      -d '{"url": "http://localhost:9999/hook",
+           "kinds": ["plan"], "secret": "whsec-demo"}'
+
+    # any plan transition now POSTs to the hook: body = the SSE data
+    # shape; verify with
+    #   hmac_sha256_hex("whsec-demo", body) == X-Waymark-Signature
+    # and resume-after-outage is automatic (the cursor is parked)
+
+    # a broken endpoint fails the subscription after 3 attempts:
+    curl -s localhost:8010/api/subscriptions | jq '.data.items[].state'
+    # … fix the endpoint, then
+    curl -s -X POST localhost:8010/api/subscriptions/{id}/-/resume \
+      -H 'x-waymark-principal: priya'
+
+Deferred bulk — 202, watch, cancel:
+
+    curl -si -X POST localhost:8010/api/meals/-/accept_many \
+      -H 'x-waymark-principal: priya' \
+      -d '{"ids": [ …51 ids… ]}' | grep -e HTTP -e Location
+    # HTTP/1.1 202  /  Location: /api/jobs/{job-id}
+    curl -s localhost:8010/api/jobs/{job-id} | jq .data.progress
+    curl -s -X POST localhost:8010/api/jobs/{job-id}/-/cancel \
+      -H 'x-waymark-principal: priya'   # stops between batches
+
+Surfaces:
+
+    curl -s localhost:8010/api/surfaces/week-board/{plan-id} \
+      -H 'x-waymark-principal: priya' \
+      | jq '{attention, showcase, calendar: [.members.calendar.items[].summary]}'
+
+Live collab (an action with :draft {:shared true :live true}):
+
+    websocat -H 'x-waymark-principal: priya' \
+      ws://localhost:8010/api/pads/{id}/-/revise/draft/collab
+    > {"type": "set", "field": "title", "value": "Family week"}
+    # every OTHER participant sees:
+    # {"type":"update","field":"title","value":"Family week",
+    #  "rev":1,"author":{"id":"priya",…}}
+    > {"type": "sync"}
+    # {"type":"sync","values":{"title":"Family week"},"rev":1}
+    # then the act consumes the draft:
+    curl -s -X POST localhost:8010/api/pads/{id}/-/revise \
+      -H 'x-waymark-principal: priya' -H 'if-match: W/"pad-{id}-v1"' \
+      -d '{"title": "Family week"}'
+
+OpenAPI:
+
+    curl -s localhost:8010/api/openapi.json | jq '.paths | keys'

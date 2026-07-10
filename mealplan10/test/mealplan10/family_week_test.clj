@@ -13,9 +13,10 @@
   has_conflicts flips on the plan → finalize warns → acknowledge →
   planned → begin refuses before Tuesday, then starts the week →
   prep tasks spawn, one goes on the calendar, complete refuses while
-  they're open → the grocery list fills, checks off, completes →
-  the week completes. A second plan abandons and its task cascades
-  to cancelled."
+  they're open → the week-board surface composes the plan with both
+  calendar events and the attention flag (phase 9b) → the grocery
+  list fills, checks off, completes → the week completes. A second
+  plan abandons and its task cascades to cancelled."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [mealplan10.event-source :as es]
@@ -54,6 +55,7 @@
                                       " CASCADE")]))))
         (let [eng (engine/engine {:storage st
                                   :resources (main/resources feed)
+                                  :surfaces main/surfaces
                                   :now-fn (fn [] @clock)})]
           (binding [*eng* eng
                     *h* (engine/handler eng)
@@ -269,6 +271,31 @@
               (is (= "scheduled"
                      (:state (act! (:self thaw) :schedule
                                    {:event_id (last (str/split event-self #"/"))}))))))
+
+          ;; ── the week board: the decision screen, composed ─────────
+          (testing "the week board shows the conflicted week whole"
+            (is (= "/api/surfaces/week-board/{anchor-id}"
+                   (get-in (json (req :get "/api/.well-known/waymark"))
+                           [:surfaces :week-board :href]))
+                "well-known lists the declared surface")
+            (let [resp (req :get (str "/api/surfaces/week-board/"
+                                      (id-of plan)))
+                  board (json resp)]
+              (is (= 200 (:status resp)))
+              (is (= "surface" (:kind board)))
+              (is (= ["finalize"] (:showcase board)))
+              (is (true? (get-in board [:attention :has_conflicts]))
+                  "the conflicted week is flagged for the dashboard")
+              (is (= "active" (get-in board [:anchor :state]))
+                  "the anchor arrives as its full envelope")
+              (is (= 1 (get-in board [:anchor :data :calendar_conflicts])))
+              (let [items (get-in board [:members :calendar :items])]
+                (is (= #{"Piano recital · 2026-07-16"
+                         "Thaw the brisket · 2026-07-17"}
+                       (into #{} (map :summary) items))
+                    "both calendar members ride the declared edge")
+                (is (not-any? #(contains? % :data) items)
+                    "member items are envelope-minus-data"))))
 
           ;; ── the grocery list ──────────────────────────────────────────
           (let [grocery (created! "grocery_lists" {:plan_id (id-of plan)})

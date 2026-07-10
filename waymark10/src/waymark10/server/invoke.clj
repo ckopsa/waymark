@@ -56,10 +56,14 @@
   - bulk! (one input, N resources): non-atomic runs one transaction
     PER item so a refusal never poisons neighbors; :atomic runs ONE
     transaction and any refusal rolls everything back, answering a
-    409 that carries the report; :defer-over refuses over-threshold
-    calls with a 422 naming the phase-9 deferred-jobs punt (no job
-    resource is built). Whole-call idempotency: the stored report
-    replays byte-identical under the bulk:<action> marker.
+    409 that carries the report; :defer-over hands over-threshold
+    calls to the job resource (phase 9b closed the phase-7 punt) —
+    bulk! returns {:deferred {…}} and the router mints the job and
+    answers 202, so this namespace stays free of a jobs require.
+    Whole-call idempotency: the stored report replays byte-identical
+    under the bulk:<action> marker; a DEFERRED call does not
+    participate (recorded: the job row is its record — replaying a
+    deferred call mints a second job).
   - batch! (N inputs, one resource): always atomic, one transaction,
     one row lock held throughout, inputs applied in order — each
     input is its own transition through the full per-item algorithm
@@ -703,13 +707,17 @@
   [v]
   (if (map? v) v {}))
 
-(defn- problem-reason [e]
+(defn problem-reason
+  "The refusal's sentence — public since phase 9b: the job worker
+  reports per-item refusals with the same words a bulk report would."
+  [e]
   (let [d (ex-data e)]
     (or (:detail d) (ex-message e))))
 
-(defn- refusal?
+(defn refusal?
   "A per-item outcome that is a refusal (a tagged problem or a storage
-  version conflict), as opposed to a failure."
+  version conflict), as opposed to a failure. Public since phase 9b
+  (the job worker classifies item outcomes the same way bulk! does)."
   [e]
   (boolean (or (p/problem? e)
                (:waymark10/version-conflict (ex-data e)))))
@@ -768,93 +776,117 @@
     (when-not (and (vector? ids) (seq ids) (every? string? ids))
       (throw (p/schema-invalid action-name
                                {:ids ["required, non-empty array of ids"]})))
-    (when-some [threshold (:defer-over spec)]
-      (when (< threshold (count ids))
-        ;; the named punt: deferred bulk runs on the job resource,
-        ;; which is phase 9's — refuse politely, do not half-build it
-        (throw (p/problem :bulk-deferred 422 "Bulk call too large"
-                          {:detail (str (count ids) " ids exceed the declared "
-                                        ":defer-over " threshold " for "
-                                        (name action-name) "; deferred bulk "
-                                        "jobs land with phase 9's job "
-                                        "resource — send at most " threshold
-                                        " ids per call for now.")
-                           :action-attempted action-name}))))
-    (when (< max-items (count ids))
-      (throw (p/schema-invalid action-name
-                               {:ids [(str "at most " max-items " ids per call")]})))
-    (let [item-body (not-empty (dissoc body :ids))
-          item-digest (body-digest item-body)
-          digest (body-digest body)
-          marker (keyword (str "bulk:" (name action-name)))
-          href #(str "/api/" (:plural rdef) "/" %)]
-      (or (fan-out-replay engine kind action-name marker digest
-                          idempotency-key (get-in defn [:safety :idempotent]))
-          (let [cid (or correlation-id (str (random-uuid)))
-                item-opts {:principal principal
-                           :acknowledged acknowledged
-                           :correlation-id cid
-                           :require-key? false}
-                run-item (fn [tx id]
-                           (invoke-in-tx! engine tx rdef kind id defn
-                                          item-digest item-body item-opts))
-                data
-                (if (:atomic spec)
-                  ;; all-or-nothing: one transaction, any refusal rolls
-                  ;; the whole call back — the 409 carries the report
-                  (let [at (volatile! nil)
-                        results
-                        (try
-                          (store/with-tx (:storage engine)
-                            (fn [tx]
-                              (mapv (fn [id] (vreset! at id) (run-item tx id))
-                                    ids)))
-                          (catch Exception e
-                            (if (refusal? e)
-                              (throw (p/problem
-                                      :bulk-refused 409 "Atomic bulk refused"
-                                      {:detail (str "Atomic bulk "
-                                                    (name action-name)
-                                                    " aborted: "
-                                                    (problem-reason e)
-                                                    "; nothing committed.")
-                                       :action-attempted action-name
-                                       :report {:succeeded 0 :refused 1 :failed 0
-                                                :refusals [{:self (href @at)
-                                                            :reason (problem-reason e)}]}}))
-                              (throw e))))]
-                    (doseq [res results]
-                      (after-write! engine kind action-name res))
-                    {:succeeded (count ids) :refused 0 :failed 0 :refusals []})
-                  ;; partial success: one transaction PER item — a
-                  ;; refusal never poisons its neighbors
-                  (reduce
-                   (fn [rep id]
-                     (try
-                       (let [res (store/with-tx (:storage engine)
-                                   #(run-item % id))]
-                         (after-write! engine kind action-name res)
-                         (update rep :succeeded inc))
-                       (catch Exception e
-                         (if (refusal? e)
-                           (-> rep
-                               (update :refused inc)
-                               (update :refusals conj
-                                       {:self (href id)
-                                        :reason (problem-reason e)}))
-                           (do (binding [*out* *err*]
-                                 (println "waymark10 bulk item error:"
-                                          (name kind) id "-" (ex-message e)))
+    (if (when-some [threshold (:defer-over spec)]
+          (< threshold (count ids)))
+      ;; phase 9b closes the phase-7 punt: an over-threshold call
+      ;; defers to the job resource — bulk! answers the marker, the
+      ;; router mints the job and 202s (which keeps this namespace
+      ;; free of a jobs require)
+      {:deferred {:kind kind
+                  :action action-name
+                  :ids ids
+                  :input (not-empty (dissoc body :ids))}}
+      (do
+        (when (< max-items (count ids))
+          (throw (p/schema-invalid action-name
+                                   {:ids [(str "at most " max-items " ids per call")]})))
+        (let [item-body (not-empty (dissoc body :ids))
+              item-digest (body-digest item-body)
+              digest (body-digest body)
+              marker (keyword (str "bulk:" (name action-name)))
+              href #(str "/api/" (:plural rdef) "/" %)]
+          (or (fan-out-replay engine kind action-name marker digest
+                              idempotency-key (get-in defn [:safety :idempotent]))
+              (let [cid (or correlation-id (str (random-uuid)))
+                    item-opts {:principal principal
+                               :acknowledged acknowledged
+                               :correlation-id cid
+                               :require-key? false}
+                    run-item (fn [tx id]
+                               (invoke-in-tx! engine tx rdef kind id defn
+                                              item-digest item-body item-opts))
+                    data
+                    (if (:atomic spec)
+                      ;; all-or-nothing: one transaction, any refusal
+                      ;; rolls the whole call back — the 409 carries
+                      ;; the report
+                      (let [at (volatile! nil)
+                            results
+                            (try
+                              (store/with-tx (:storage engine)
+                                (fn [tx]
+                                  (mapv (fn [id] (vreset! at id) (run-item tx id))
+                                        ids)))
+                              (catch Exception e
+                                (if (refusal? e)
+                                  (throw (p/problem
+                                          :bulk-refused 409 "Atomic bulk refused"
+                                          {:detail (str "Atomic bulk "
+                                                        (name action-name)
+                                                        " aborted: "
+                                                        (problem-reason e)
+                                                        "; nothing committed.")
+                                           :action-attempted action-name
+                                           :report {:succeeded 0 :refused 1 :failed 0
+                                                    :refusals [{:self (href @at)
+                                                                :reason (problem-reason e)}]}}))
+                                  (throw e))))]
+                        (doseq [res results]
+                          (after-write! engine kind action-name res))
+                        {:succeeded (count ids) :refused 0 :failed 0 :refusals []})
+                      ;; partial success: one transaction PER item — a
+                      ;; refusal never poisons its neighbors
+                      (reduce
+                       (fn [rep id]
+                         (try
+                           (let [res (store/with-tx (:storage engine)
+                                       #(run-item % id))]
+                             (after-write! engine kind action-name res)
+                             (update rep :succeeded inc))
+                           (catch Exception e
+                             (if (refusal? e)
                                (-> rep
-                                   (update :failed inc)
+                                   (update :refused inc)
                                    (update :refusals conj
                                            {:self (href id)
-                                            :reason "Internal error while processing this item."})))))))
-                   {:succeeded 0 :refused 0 :failed 0 :refusals []}
-                   ids))
-                doc (report-doc action-name data nil)]
-            (fan-out-store! engine kind marker digest idempotency-key doc)
-            {:report doc})))))
+                                            :reason (problem-reason e)}))
+                               (do (binding [*out* *err*]
+                                     (println "waymark10 bulk item error:"
+                                              (name kind) id "-" (ex-message e)))
+                                   (-> rep
+                                       (update :failed inc)
+                                       (update :refusals conj
+                                               {:self (href id)
+                                                :reason "Internal error while processing this item."})))))))
+                       {:succeeded 0 :refused 0 :failed 0 :refusals []}
+                       ids))
+                    doc (report-doc action-name data nil)]
+                (fan-out-store! engine kind marker digest idempotency-key doc)
+                {:report doc})))))))
+
+(defn bulk-item!
+  "One id through the SAME per-item algorithm bulk!'s partial-success
+  path runs — its own transaction, after-write! included, step 2's
+  428 waived (the caller owns the call-level record). Exposed for the
+  deferred-jobs worker (phase 9b): a job item and a bulk item are one
+  code path. Refusals throw exactly as a single invoke's would."
+  [engine kind action-name id body
+   {:keys [principal acknowledged correlation-id]
+    :or {acknowledged #{}}}]
+  (let [rdef (rdef-of engine kind)
+        defn (or (some-> (get-in rdef [:actions action-name])
+                         (assoc :name action-name))
+                 (throw (p/no-such-action kind action-name)))
+        digest (body-digest body)]
+    (after-write!
+     engine kind action-name
+     (store/with-tx (:storage engine)
+       (fn [tx]
+         (invoke-in-tx! engine tx rdef kind id defn digest body
+                        {:principal principal
+                         :acknowledged acknowledged
+                         :correlation-id correlation-id
+                         :require-key? false}))))))
 
 (defn batch!
   "N inputs, one resource: POST /api/{plural}/{id}/-/{action}/batch

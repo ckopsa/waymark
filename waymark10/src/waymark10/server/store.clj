@@ -87,7 +87,22 @@
     "Upsert the (kind, id, action, audience) draft row: values replace
     wholesale, base_version restamps, updated_at now.")
   (delete-draft! [st tx kind id action audience]
-    "Discard/consume: delete the draft row; absent is a no-op."))
+    "Discard/consume: delete the draft row; absent is a no-op.")
+
+  ;; ── phase 9b: consumer cursors and job leases ──────────────────────
+
+  (cursor-get [st tx consumer]
+    "The named consumer's log position (a transition id), or nil when
+    the consumer has never checkpointed.")
+  (cursor-set! [st tx consumer position]
+    "Upsert the consumer's cursor — the at-least-once checkpoint the
+    webhook deliverer resumes from across restarts.")
+  (claim-job-lease! [st tx job-id holder ttl-seconds]
+    "Claim-or-steal the job's lease: insert, extend our own, or take
+    over one whose expiry has passed — a live other holder refuses.
+    → true when held for ttl-seconds from now.")
+  (release-job-lease! [st tx job-id holder]
+    "Drop the lease if we still hold it; absent or stolen is a no-op."))
 
 (defn with-tx
   "Sugar: (with-tx st [tx] …)."

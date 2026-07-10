@@ -4,7 +4,9 @@
   success report counts honestly and carries the guard's own sentence,
   a refused row stays untouched, the atomic twin rolls everything
   back, batch lands one transition per input in order, and the named
-  punts (defer-over → phase-9 jobs) refuse politely."
+  an over-threshold call defers to the job resource with a 202 (the
+  phase-9b closure of the phase-7 punt; the worker's own story lives
+  in waymark10.jobs-test)."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -83,9 +85,9 @@
       (try
         (store/with-tx st
           (fn [tx]
-            (doseq [table ["chores" "ledgers" "definitions"
+            (doseq [table ["chores" "ledgers" "definitions" "jobs"
                            "waymark10_transitions" "waymark10_idempotency"
-                           "waymark10_drafts"]]
+                           "waymark10_drafts" "waymark10_job_leases"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (binding [*st* st
                   *h* (engine/handler
@@ -168,14 +170,19 @@
 
 (deftest bulk-refusals
   (let [ids (chores! [true true true])]
-    (testing "defer-over refuses politely, naming the phase-9 punt"
+    (testing "defer-over answers 202 with the job envelope in Location"
       (let [resp (req :post "/api/chores/-/sweep" {:ids ids})
             b (json resp)]
-        (is (= 422 (:status resp)))
-        (is (= "https://waymark.dev/problems/bulk-deferred" (:type b)))
-        (is (str/includes? (:detail b) "phase 9"))
-        (doseq [id ids]
-          (is (= "open" (:state (get-row (str "/api/chores/" id))))))))
+        (is (= 202 (:status resp)))
+        (is (= "job" (:kind b)))
+        (is (= "running" (:state b)))
+        (is (= (:self b) (get-in resp [:headers "Location"])))
+        (is (= {:done 0 :total 3 :refusals []} (get-in b [:data :progress])))
+        (is (= "sweep" (get-in b [:data :action])))
+        (is (= "chore" (get-in b [:data :kind])))
+        (testing "…and nothing moved yet — the worker owns the fan-out"
+          (doseq [id ids]
+            (is (= "open" (:state (get-row (str "/api/chores/" id)))))))))
     (testing "the max-items cap"
       (let [six (into ids (chores! [true true true]))
             b (json (req :post "/api/chores/-/complete" {:ids six}))]

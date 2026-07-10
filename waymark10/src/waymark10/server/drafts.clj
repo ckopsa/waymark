@@ -24,9 +24,11 @@
     the checks battery already nudges prose edits toward declaring
     one.
   - values persist wire-shaped (like the transition log's inputs);
-    per-field revs/authors (waymark9) are unported.
-  - waymark-relay live collab (websockets) is phase 9's — named punt;
-    the :live flag on the policy is declared but unserved."
+    per-field revs/authors (waymark9) are unported — live collab
+    (waymark10.server.collab, phase 9b) holds its revs room-local.
+  - a {:shared true :live true} policy serves the waymark-relay
+    websocket at …/draft/collab (phase 9b); every accepted set lands
+    through the same draft row this namespace owns."
   (:require [waymark10.schema :as schema]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]))

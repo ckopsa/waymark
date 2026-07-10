@@ -147,7 +147,17 @@
         "  \"values\" jsonb NOT NULL DEFAULT '{}'::jsonb,\n"
         "  base_version bigint,\n"
         "  updated_at timestamptz NOT NULL DEFAULT now(),\n"
-        "  PRIMARY KEY (kind, resource_id, action, audience))")])
+        "  PRIMARY KEY (kind, resource_id, action, audience))")
+   ;; phase 9b: consumer cursors (the webhook deliverer's at-least-once
+   ;; checkpoint) and job leases (claim-or-steal on expiry)
+   (str "CREATE TABLE IF NOT EXISTS waymark10_cursors (\n"
+        "  consumer text PRIMARY KEY,\n"
+        "  position bigint NOT NULL DEFAULT 0,\n"
+        "  updated_at timestamptz NOT NULL DEFAULT now())")
+   (str "CREATE TABLE IF NOT EXISTS waymark10_job_leases (\n"
+        "  job_id text PRIMARY KEY,\n"
+        "  holder text NOT NULL,\n"
+        "  expires_at timestamptz NOT NULL)")])
 
 ;; ── row mapping ─────────────────────────────────────────────────────
 
@@ -477,6 +487,42 @@
      tx [(str "DELETE FROM waymark10_drafts WHERE kind = ? AND"
               " resource_id = ? AND action = ? AND audience = ?")
          (name kind) id (name action) audience])
+    nil)
+
+  ;; ── phase 9b: consumer cursors and job leases ──────────────────────
+
+  (cursor-get [_ tx consumer]
+    (:position (jdbc/execute-one!
+                tx ["SELECT position FROM waymark10_cursors WHERE consumer = ?"
+                    consumer]
+                jdbc-opts)))
+
+  (cursor-set! [_ tx consumer position]
+    (jdbc/execute-one!
+     tx [(str "INSERT INTO waymark10_cursors (consumer, position)"
+              " VALUES (?, ?)"
+              " ON CONFLICT (consumer) DO UPDATE"
+              " SET position = EXCLUDED.position, updated_at = now()")
+         consumer (long position)])
+    nil)
+
+  (claim-job-lease! [_ tx job-id holder ttl-seconds]
+    (let [res (jdbc/execute-one!
+               tx [(str "INSERT INTO waymark10_job_leases"
+                        " (job_id, holder, expires_at)"
+                        " VALUES (?, ?, now() + make_interval(secs => ?))"
+                        " ON CONFLICT (job_id) DO UPDATE"
+                        " SET holder = EXCLUDED.holder,"
+                        " expires_at = EXCLUDED.expires_at"
+                        " WHERE waymark10_job_leases.expires_at <= now()"
+                        " OR waymark10_job_leases.holder = EXCLUDED.holder")
+                   job-id holder (double ttl-seconds)])]
+      (= 1 (:next.jdbc/update-count res))))
+
+  (release-job-lease! [_ tx job-id holder]
+    (jdbc/execute-one!
+     tx ["DELETE FROM waymark10_job_leases WHERE job_id = ? AND holder = ?"
+         job-id holder])
     nil)
 
   (restamp-law! [_ tx kind where to-revision]

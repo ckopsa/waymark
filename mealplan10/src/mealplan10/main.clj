@@ -17,7 +17,7 @@
             [mealplan10.resources.event :as event]
             [mealplan10.resources.grocery-list :refer [grocery-list]]
             [mealplan10.resources.meal :refer [meal]]
-            [mealplan10.resources.plan :refer [plan]]
+            [mealplan10.resources.plan :refer [plan week-board]]
             [mealplan10.resources.prep-task :refer [prep-task]]
             [mealplan10.resources.rotation :refer [rotation]]
             [waymark10.server.engine :as engine]
@@ -39,6 +39,10 @@
   [adapter]
   [meal rotation plan grocery-list prep-task (event/event-resource adapter)])
 
+(def surfaces
+  "The declared decision screens (phase 9b): the week board."
+  [week-board])
+
 (defn- dsn []
   (or (System/getenv "MEALPLAN10_DSN")
       "jdbc:postgresql://localhost:5433/mealplan10_dev?user=ckopsa"))
@@ -56,6 +60,7 @@
   (let [storage (pg/storage (dsn))
         eng (engine/engine {:storage storage
                             :resources (resources (events-adapter))
+                            :surfaces surfaces
                             :deploy-mode (deploy-mode)})
         port (or (some-> (System/getenv "MEALPLAN10_PORT") parse-long) 8010)
         server (engine/start! eng port)]

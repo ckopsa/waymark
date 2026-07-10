@@ -33,8 +33,10 @@
   - A slow consumer's full queue (1024) drops with a warning —
     truth is replayable from the log by Last-Event-ID; only liveness
     is lost.
-  - Derivation-class events (waymark9's second channel) are punted to
-    the webhook phase; this stream carries transitions only.
+  - Derivation-class events (waymark9's second channel) remain a
+    named punt — this stream (and the phase-9b webhooks riding it)
+    carries transitions only; a consumer re-derives a missed flip
+    from the envelope.
   - Event frames carry the stored summary bytes, written under the
     law law_revision names — log prose is never re-rendered.
 

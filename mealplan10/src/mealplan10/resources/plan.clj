@@ -42,8 +42,9 @@
   - the :calendar link is declared (edge-cited, badge and all) but v10
     render serves no :links yet — the declaration is carried, the
     envelope's links stay the phase-3 punt.
-  - the WeekBoard surface and spans have no v10 spelling — named punts
-    with the feature.
+  - the WeekBoard surface (waymark9 design 6.0 §4) is declared below
+    and served at /api/surfaces/week-board/{plan-id} (phase 9b);
+    spans still have no v10 spelling — a named punt.
   - v10 summary templates carry no |len filter; the summary names the
     week and its state.
   - cross-resource acceptance sets (theme_in_rotation, meal_fits_day)
@@ -500,3 +501,18 @@
               :safety {:idempotent true :reversible false :confirm true
                        :consequence "The plan is discarded for good; its open prep tasks are cancelled; its days and any grocery list stay readable as records."}
               :display {:label "Abandon plan" :style :danger :order 9}}}})
+
+;; ── the week's decision surface (phase 9b, waymark9 mealplan9's
+;;    WeekBoard) ──────────────────────────────────────────────────────
+
+(def week-board
+  "The composition the finalize decision consults, declared once: the
+  plan anchor with the family calendar co-present through the declared
+  :calendar edge, finalize showcased, has_conflicts nominated for the
+  dashboard's attention. Served read-only at
+  /api/surfaces/week-board/{plan-id}."
+  {:name :week-board
+   :anchor :plan
+   :members [{:name :calendar :kind :event :related :calendar}]
+   :showcase [:finalize]
+   :attention {:has_conflicts true}})

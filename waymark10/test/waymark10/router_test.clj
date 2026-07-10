@@ -94,9 +94,10 @@
     (is (= "10" (:waymark b)))
     ;; phase 5: the definition kind is registered beside the
     ;; application kinds — the deploy history is wire-readable.
-    ;; phase 9a: the identity-and-access kinds enroll on every engine
-    (is (= ["attachment" "definition" "grant" "meal" "member" "plan"
-            "role" "task"]
+    ;; phase 9a: the identity-and-access kinds enroll on every engine.
+    ;; phase 9b: so do the subscription (webhooks) and job kinds
+    (is (= ["attachment" "definition" "grant" "job" "meal" "member"
+            "plan" "role" "subscription" "task"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))))
