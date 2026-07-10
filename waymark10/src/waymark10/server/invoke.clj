@@ -112,6 +112,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.judgment :as judgment]
+            [waymark10.server.predecessor :as predecessor]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.summary :as summary]
@@ -1039,6 +1040,17 @@
                      :shape (:shape rdef 1)
                      :owner (:id principal)
                      :law-revision (create-law-revision engine rdef kind)}
+                ;; predecessor refs resolve first (design E7, batch E —
+                ;; the one batch-E invoke seam, documented): a
+                ;; :waymark/ref entry declaring {:predecessor {…}}
+                ;; fills from the newest existing sibling when the
+                ;; body left it blank, BEFORE :on-create so the hook
+                ;; may read the resolved sibling (waymark9 invoke.py's
+                ;; step order). All machinery lives in
+                ;; waymark10.server.predecessor; this line only runs
+                ;; it at the create algorithm's honest slot.
+                row (predecessor/resolve! (:storage engine) tx
+                                          (resources engine) rdef row)
                 row (if-some [oc (:on-create rdef)] (oc row ctx) row)
                 ;; ref labels + one-of at birth too: before nil, every
                 ;; set ref is newly set

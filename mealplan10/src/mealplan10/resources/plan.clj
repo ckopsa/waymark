@@ -36,9 +36,10 @@
   with acknowledgment, not never.
 
   Recorded punts and deviations, each a sentence:
-  - previous_plan is declared but engine-unresolved — the predecessor
-    resolver (waymark9 design E7) has no v10 spelling yet, so period
-    chaining waits with it.
+  - previous_plan resolves at create (batch E, design E7): the
+    {:predecessor {:order :start_date}} entry property links each new
+    plan to the newest plan starting at or before it — last week is
+    data, not date arithmetic; the first plan's stays nil.
   - the :calendar link is declared (edge-cited, badge and all) but v10
     render serves no :links yet — the declaration is carried, the
     envelope's links stay the phase-3 punt.
@@ -272,8 +273,9 @@
   means the most recently activated active rotation; each rotating
   Sunday is pre-themed from it, walking the list from position. With
   no rotation at all, Sundays stay rotating and the old flow
-  (set_sunday_theme first) still applies. previous_plan stays nil —
-  the predecessor resolver is a named punt."
+  (set_sunday_theme first) still applies. previous_plan arrives
+  already resolved — the engine's predecessor step runs before this
+  hook (batch E, design E7)."
   [row ctx]
   (let [today (.toLocalDate (.atOffset ^Instant (:now ctx) ZoneOffset/UTC))
         start (or (get-in row [:data :start_date]) (next-tuesday today))
@@ -325,9 +327,11 @@
             [:end_date {:optional true} [:maybe :waymark/date]]
             [:rotation_id {:optional true :kind :rotation}
              [:maybe :waymark/ref]]
-            ;; period chaining (design E7): declared, engine-unresolved
-            ;; — the predecessor resolver is a named v10 punt
-            [:previous_plan {:optional true :kind :plan}
+            ;; period chaining (design E7, batch E): the engine
+            ;; resolves the newest plan starting at or before this one
+            ;; at create — last week is data, not date arithmetic
+            [:previous_plan {:optional true :kind :plan
+                             :predecessor {:order :start_date}}
              [:maybe :waymark/ref]]
             [:days [:vector
                     [:map
