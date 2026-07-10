@@ -11,10 +11,21 @@
   kind's storage, then boot-revise! — definition rows exist before
   anything anchors to them. opts gain :deploy-mode (:promote, the
   default single-breath revise, or :propose — a data-law diff holds
-  at proposed while the overlay serves the current law)."
+  at proposed while the overlay serves the current law).
+
+  Phase 6: the engine carries the :maintain hook (the derivation
+  maintainer rides invoke's after-write! seam on every engine), and
+  start!/stop! own the running surfaces — the events dispatcher and
+  the clock sweeper live in the engine's :runtime atom, so an engine
+  that never starts (a test handler) pays nothing and its SSE routes
+  answer 503. opts: :sweep-interval-ms (clock sweep, default 30s),
+  :events-poll-ms (dispatcher backstop, default 2s),
+  :sse-heartbeat-ms (default 15s), :maintainer-fan-out (default 200)."
   (:require [org.httpkit.server :as http]
             [waymark10.registry :as registry]
             [waymark10.server.definitions :as defs]
+            [waymark10.server.events :as events]
+            [waymark10.server.maintainer :as maintainer]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.store :as store]
@@ -30,14 +41,18 @@
   ANONYMOUS principal (threading the acting principal through
   finish! remains a recorded punt) — principal-sensitive guards may
   render differently in a replay than they did live."
-  [{:keys [storage resources services now-fn deploy-mode]}]
+  [{:keys [storage resources services now-fn deploy-mode] :as opts}]
   (let [reg (registry/registry (conj (vec resources) defs/definition))
-        eng {:storage storage
-             :registry (atom reg)
-             :services services
-             :now-fn (or now-fn (fn [] (java.time.Instant/now)))
-             :deploy-mode (or deploy-mode :promote)
-             :lifecycle defs/lifecycle}
+        eng (merge (select-keys opts [:sweep-interval-ms :events-poll-ms
+                                      :sse-heartbeat-ms :maintainer-fan-out])
+                   {:storage storage
+                    :registry (atom reg)
+                    :services services
+                    :now-fn (or now-fn (fn [] (java.time.Instant/now)))
+                    :deploy-mode (or deploy-mode :promote)
+                    :lifecycle defs/lifecycle
+                    :maintain maintainer/after-write
+                    :runtime (atom nil)})
         eng (assoc eng :render-fn
                    (fn [rdef row]
                      (wire/write-json
@@ -55,12 +70,30 @@
   (router/handler eng))
 
 (defn start!
-  "Serve the engine on port via http-kit; returns the server."
+  "Serve the engine on port via http-kit and start its running
+  surfaces — the events dispatcher (SSE's feed) and the clock
+  sweeper — in the engine's :runtime atom. Returns the server; pass
+  BOTH engine and server to stop!."
   [eng port]
+  (when-some [rt (:runtime eng)]
+    (reset! rt {:dispatcher (events/dispatcher
+                             eng {:poll-ms (:events-poll-ms eng 2000)})
+                :sweeper (maintainer/start-sweeper!
+                          eng {:interval-ms (:sweep-interval-ms eng 30000)})}))
   (http/run-server (handler eng) {:port port :legacy-return-value? false}))
 
-(defn stop! [server]
-  (when server (http/server-stop! server)))
+(defn stop!
+  "Stop the server; the two-arity form also stops the engine's
+  runtime (dispatcher + sweeper)."
+  ([server]
+   (when server (http/server-stop! server)))
+  ([eng server]
+   (when server (http/server-stop! server))
+   (when-some [rt (:runtime eng)]
+     (when-some [{:keys [dispatcher sweeper]} @rt]
+       (some-> dispatcher events/stop!)
+       (some-> sweeper maintainer/stop-sweeper!))
+     (reset! rt nil))))
 
 ;; ── the dev server (scripts/smoke10.sh) ─────────────────────────────
 
@@ -87,7 +120,7 @@
     eng))
 
 (defn stop-dev! []
-  (when-some [{:keys [server storage]} @dev]
-    (stop! server)
+  (when-some [{:keys [server storage engine]} @dev]
+    (stop! engine server)
     (pg/close! storage)
     (reset! dev nil)))

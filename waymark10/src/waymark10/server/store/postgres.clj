@@ -165,6 +165,40 @@
 (def ^:private jdbc-opts
   {:builder-fn rs/as-unqualified-maps})
 
+;; ── the maintainer's condition grammar (phase 6) ────────────────────
+
+(def ^:private safe-casts #{"date" "boolean" "bigint" "numeric" "text"})
+
+(def ^:private cond-ops {:= "=" :< "<" :<= "<=" :>= ">=" :> ">"})
+
+(defn- cond-sql
+  "One maintainer cond → [sql-fragment params]. Identifiers come from
+  checked declarations; casts from a closed set — anything else is
+  refused loudly, never spliced."
+  [{:keys [target field cast op value values]}]
+  (let [cast (or cast "text")
+        _ (when-not (contains? safe-casts cast)
+            (throw (ex-info (str "cond cast " (pr-str cast)
+                                 " is not a known SQL type") {:cast cast})))
+        lval (case target
+               :state "state"
+               :id "id"
+               (let [f (store/definition-checked-name field)]
+                 (case cast
+                   "date" (str "waymark10_date(data->>'" f "')")
+                   "text" (str "data->>'" f "'")
+                   (str "(data->>'" f "')::" cast))))
+        rval (if (or (contains? #{:state :id} target) (= "text" cast))
+               "?"
+               (if (= "date" cast) "waymark10_date(?)" (str "(?)::" cast)))]
+    (if (= :in op)
+      [(str lval " IN (" (str/join ", " (repeat (count values) rval)) ")")
+       (vec values)]
+      [(str lval " " (or (get cond-ops op)
+                         (throw (ex-info (str "unknown cond op " op) {:op op})))
+            " " rval)
+       [value]])))
+
 ;; ── the storage ─────────────────────────────────────────────────────
 
 (defrecord PostgresStorage [^HikariDataSource ds tables]
@@ -305,6 +339,49 @@
                revision]
            jdbc-opts))))
 
+  ;; ── phase 6: the maintainer's reads and the maintenance write ──────
+
+  (count-matching [_ tx kind conds]
+    (let [table (get @tables kind)
+          parts (map cond-sql conds)
+          sql (str "SELECT count(*) AS n FROM " table
+                   (when (seq parts)
+                     (str " WHERE " (str/join " AND " (map first parts)))))]
+      (:n (jdbc/execute-one! tx (into [sql] (mapcat second parts)) jdbc-opts))))
+
+  (ids-matching [_ tx kind conds limit]
+    (let [table (get @tables kind)
+          parts (map cond-sql conds)
+          sql (str "SELECT id FROM " table
+                   (when (seq parts)
+                     (str " WHERE " (str/join " AND " (map first parts))))
+                   " ORDER BY id LIMIT " (long limit))]
+      (mapv :id (jdbc/execute! tx (into [sql] (mapcat second parts)) jdbc-opts))))
+
+  (update-data! [_ tx kind id data next-flip-at]
+    (let [table (get @tables kind)]
+      (jdbc/execute-one!
+       tx
+       [(str "UPDATE " table
+             " SET data = ?, next_flip_at = ?, updated_at = now()"
+             " WHERE id = ?")
+        (jsonb data)
+        (some-> ^java.time.Instant next-flip-at Timestamp/from)
+        id])
+      nil))
+
+  (due-flips [_ tx kind now limit]
+    (let [table (get @tables kind)]
+      (mapv row->map
+            (jdbc/execute!
+             tx
+             [(str "SELECT * FROM " table
+                   " WHERE next_flip_at IS NOT NULL AND next_flip_at <= ?"
+                   " ORDER BY next_flip_at LIMIT " (long limit)
+                   " FOR UPDATE")
+              (Timestamp/from ^java.time.Instant now)]
+             jdbc-opts))))
+
   (restamp-law! [_ tx kind where to-revision]
     (let [table (get @tables kind)
           clauses (map (fn [[f _]]
@@ -328,6 +405,18 @@
                          to-revision]
                         params))]
       (:next.jdbc/update-count res))))
+
+(defn listen-connection
+  "A dedicated raw JDBC connection LISTENing the outbox channel —
+  deliberately NOT from the Hikari pool: getNotifications parks the
+  connection for the dispatcher's lifetime. The caller owns closing
+  it (waymark10.server.events/stop!)."
+  ^java.sql.Connection [^PostgresStorage st]
+  (let [url (.getJdbcUrl ^HikariDataSource (:ds st))
+        conn (java.sql.DriverManager/getConnection url)]
+    (with-open [stmt (.createStatement conn)]
+      (.execute stmt (str "LISTEN " notify-channel)))
+    conn))
 
 (defn storage
   "A pooled Postgres storage. jdbc-url e.g.

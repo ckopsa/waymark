@@ -136,13 +136,22 @@
      (let [[v d] (g/evaluate guard row inp ctx)]
        (if-not (t/deny? v)
          acc
-         (if (= :warning (:severity d))
+         (cond
+           (= :warning (:severity d))
            (if (contains? acknowledged (:name d))
              (update acc :overridden conj (:name d))
              (update acc :warned conj
                      {:name (:name d)
                       :reason (g/render-reason d v row)
                       :remedies (:remedies d)}))
+
+           ;; concealment holds in-state too: what render hides by a
+           ;; hide-flagged guard, the wire must 404, not narrate —
+           ;; a 409 here would leak the very reason hide= conceals
+           (:hide d)
+           (throw (p/not-found (:kind rdef) (:id row)))
+
+           :else
            (throw (p/guard-refused
                    (:name defn) (:state row)
                    (g/render-reason d v row)
@@ -222,12 +231,24 @@
   boot re-detects). Recorded deviation: waymark9 superseded the prior
   revision inside the promote's own transaction; v10 runs the whole
   effect post-commit, so two current definition rows can coexist for
-  the effect's duration."
+  the effect's duration.
+
+  Phase 6's one invoke.clj seam, recorded: the :maintain hook
+  (waymark10.server.maintainer/after-write) rides the same
+  post-commit call — cross-row count recompute and the clock index —
+  and create! now routes through after-write! so births feed both
+  hooks. :maintain may refresh the result's :row (the response tells
+  the maintained truth); the stored idempotency envelope, rendered
+  inside the write's transaction, predates it by design."
   [engine kind action-name res]
-  (when-some [lc (:lifecycle engine)]
-    (when (and (:transition res) (nil? (:replayed? res)))
-      (lc engine kind action-name res)))
-  res)
+  (if (and (:transition res) (nil? (:replayed? res)))
+    (do
+      (when-some [lc (:lifecycle engine)]
+        (lc engine kind action-name res))
+      (if-some [m (:maintain engine)]
+        (or (m engine kind action-name res) res)
+        res))
+    res))
 
 ;; ── the engine-injected adopt (phase 5) ─────────────────────────────
 
@@ -421,7 +442,9 @@
   (let [rdef (rdef-of engine kind)
         model (or (:create-schema rdef) (:schema rdef))
         digest (body-digest body)]
-    (store/with-tx (:storage engine)
+    (after-write!
+     engine kind (first (:create-action-names rdef))
+     (store/with-tx (:storage engine)
       (fn [tx]
         (let [inp (schema/decode model (or body {}))
               _ (when-some [errors (schema/closed-errors model inp)]
@@ -476,7 +499,7 @@
                          :acknowledged (not-empty (vec overridden))
                          :correlation-id correlation-id
                          :summary (:summary row)})]
-            {:row row :transition record}))))))
+            {:row row :transition record})))))))
 
 (defn engine
   "Phase-2 wiring: storage + resources, kinds ensured. Grows into

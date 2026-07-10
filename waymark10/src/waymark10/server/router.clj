@@ -7,6 +7,7 @@
   (:require [clojure.string :as str]
             [reitit.ring :as ring]
             [waymark10.schema :as schema]
+            [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
@@ -167,6 +168,43 @@
         :else
         (envelope-response eng rdef (:row result) (:principal opts) 200 nil)))))
 
+;; ── events (SSE, phase 6) ───────────────────────────────────────────
+
+(defn- events-dispatcher
+  "The engine's running dispatcher — 503 on an engine that never
+  started (documented pick over lazy-start: the operator owns the
+  lifecycle; a test handler pays nothing)."
+  [eng]
+  (or (some-> (:runtime eng) deref :dispatcher)
+      (throw (p/problem :events-unavailable 503 "Event stream unavailable"
+                        {:detail (str "This engine is not started; the events "
+                                      "dispatcher is not running.")}))))
+
+(defn- last-event-id
+  "SSE resume point: the Last-Event-ID header, or ?last_event_id=."
+  [req]
+  (some-> (or (get-in req [:headers "last-event-id"])
+              (get (query-params req) "last_event_id"))
+          str/trim
+          parse-long))
+
+(defn- resource-events [eng]
+  (fn [{{:keys [plural id]} :path-params :as req}]
+    (let [d (events-dispatcher eng)
+          rdef (rdef-by-plural eng plural)]
+      (events/sse-handler eng d {:resource [(:kind rdef) id]
+                                 :since (last-event-id req)}
+                          req))))
+
+(defn- firehose-events [eng]
+  (fn [req]
+    (let [d (events-dispatcher eng)
+          kinds (some->> (get (query-params req) "kinds") csv
+                         (map keyword) set not-empty)]
+      (events/sse-handler eng d {:kinds kinds
+                                 :since (last-event-id req)}
+                          req))))
+
 ;; ── the handler ─────────────────────────────────────────────────────
 
 (defn- wrap-problems
@@ -207,8 +245,10 @@
        (ring/router
         [["/api/.well-known/waymark" {:get (well-known eng)}]
          ["/api/schemas/:kind" {:get (kind-schema eng)}]
+         ["/api/-/events" {:get (firehose-events eng)}]
          ["/api/:plural" {:get (collection eng) :post (create eng)}]
          ["/api/:plural/:id" {:get (get-one eng)}]
+         ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
          ["/api/:plural/:id/-/:action" {:post (invoke-action eng)}]]
         {:conflicts nil})
        not-found-handler)

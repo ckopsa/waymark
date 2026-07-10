@@ -133,7 +133,7 @@
              (get-in b [:unavailable :finalize :remedies]))))
 
     (testing "out-of-state actions narrate their states"
-      (is (= "Available in state(s) planned; the resource is draft."
+      (is (= "Available in state(s) Planned; the resource is Draft."
              (get-in b [:unavailable :reopen :reason])))
       (is (= ["planned"]
              (get-in b [:unavailable :reopen :becomes_available :in_states]))))

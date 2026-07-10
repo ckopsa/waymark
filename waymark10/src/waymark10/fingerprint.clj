@@ -71,9 +71,22 @@
      "severity"       (name (:severity g :refuse))
      "requires_token" (:requires-token g)}))
 
+(defn- count-fp
+  "The aggregate facet, canonical: the edge by name, where sets as
+  sorted vectors — a set has no order, a fingerprint must."
+  [c]
+  (cond-> {}
+    (:related c) (assoc "related" (name (:related c)))
+    (:owns c)    (assoc "owns" (name (:owns c)))
+    (:where c)   (assoc "where" (into (sorted-map)
+                                      (map (fn [[f vs]]
+                                             [(name f) (vec (sort-by str vs))]))
+                                      (:where c)))))
+
 (defn- derived-fp [d]
   (cond-> {"over" (mapv name (:over d))}
     (contains? d :expr)      (assoc "expr" (form-tree (:expr d)))
+    (contains? d :count)     (assoc "count" (count-fp (:count d)))
     (contains? d :fn)        (assoc "fn" (callable-hash (:fn d)))
     (contains? d :tolerance) (assoc "tolerance" (str (:tolerance d)))
     (:explain d)             (assoc "explain" (:explain d))
@@ -198,8 +211,12 @@
 ;; expression guard. Everything else is code_or_shape — the resident
 ;; objects ARE that law, and a hold would be a lie.
 
+;; count.where is the tolerance precedent (phase 6): the filter values
+;; are stored parameters an overlay can serve; the edge itself
+;; (count.related / count.owns) is :code-or-shape — the maintainer's
+;; reverse map is built from resident declarations.
 (def ^:private data-law-path
-  #"^derived\.[^.]+\.(?:tolerance$|expr(?:\..+)?$|over\.\d+\.(?:child|related)\.where(?:\..+)?$)")
+  #"^derived\.[^.]+\.(?:tolerance$|expr(?:\..+)?$|count\.where(?:\..+)?$|over\.\d+\.(?:child|related)\.where(?:\..+)?$)")
 
 (def ^:private judgment-law-path
   #"^machine\.actions\.[^.]+\.guards\.\d+\.(?:expr(?:\..+)?$|vars_exprs(?:\..+)?$|explain$|remedies(?:\.\d+)?$|hide$|severity$|requires_token$)")

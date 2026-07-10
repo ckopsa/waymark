@@ -13,11 +13,11 @@
   strings the registry gate surfaces on *err*.
 
   Assembly punts, each a named comment at its site: owns seeds and
-  predecessor refs (declarations unported), the cross-kind edge-input
-  spelling for derived facts (check-derived-cycles keeps that door
-  explicitly shut), and check-touches / check-compounds — :touches
-  and compound-input declarations have no v10 spelling yet; each
-  check arrives with its feature."
+  predecessor refs (declarations unported), the cross-kind fact DAG
+  walk (check-derived-cycles admits :count edges — phase 6 — but does
+  not yet chase cycles through them), and check-touches /
+  check-compounds — :touches and compound-input declarations have no
+  v10 spelling yet; each check arrives with its feature."
   (:require [clojure.string :as str]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
@@ -328,27 +328,58 @@
 
 ;; ── check-derived-cycles ────────────────────────────────────────────
 
-(defn- check-derived-cycles
-  "Cross-kind derived cycles (waymark9 check_derived_cycles) need edge
-  inputs to exist at all; v10 derived facts read own fields and :now
-  only, and same-kind cycles are already refused per-declaration
-  (checks/check-derived). HERE the door is kept explicitly shut rather
-  than silently open: an :over entry that is neither :now nor an own
-  data field is refused by name.
+(defn- check-count-edge
+  "One count spec's assembly half (phase 6): its declared edge exists
+  on this kind, and every :where field is promoted on the target (or
+  :state, which is always its own indexed column) — a predicate the
+  maintainer's COUNT cannot run on an indexed column is a predicate it
+  cannot honor."
+  [reg kind r fact c]
+  (let [target-kind
+        (if-some [ek (:related c)]
+          (or (:kind (get (:related r) ek))
+              (err kind :derived-cycles
+                   (str "derived field " fact ": count reads related edge "
+                        ek ", which this kind never declares")))
+          (let [ck (:owns c)]
+            (when-not (some #(= ck (:kind %)) (:owns r))
+              (err kind :derived-cycles
+                   (str "derived field " fact ": count reads owned kind "
+                        ck ", which this kind never owns")))
+            ck))
+        target (get-in reg [:kinds target-kind])]
+    (doseq [f (sort (keys (:where c)))]
+      (when-not (or (= :state f) (contains? (promoted-fields target) f))
+        (err kind :derived-cycles
+             (str "derived field " fact ": count where field " f " is not "
+                  "promoted (filterable or sortable) on " target-kind
+                  " — the maintainer's COUNT runs on indexed columns"))))))
 
-  ;; punt: cross-kind derived inputs (waymark9 ChildField /
-  ;; RelatedField and the DAG walk over kind.field nodes) arrive with
-  ;; the maintainer — the edge-input spelling is not yet designed."
+(defn- check-derived-cycles
+  "Cross-kind derived cycles (waymark9 check_derived_cycles): v10's
+  cross-kind door is the phase-6 count spec — {:count {:related/:owns
+  …}} reads through a declared, admission-checked edge, validated here
+  where the other end exists. Everything else stays shut: an :over
+  entry that is neither :now nor an own data field is refused by name
+  (a count fact IS an own data field, so composition costs nothing).
+
+  ;; punt: the cross-kind fact DAG walk (waymark9's kind.field node
+  ;; graph) — count-where over another kind's derived fact can close a
+  ;; cross-kind cycle this check does not see; the maintainer's
+  ;; recompute terminates on a per-write visited set instead, and the
+  ;; assembly-time DAG check arrives when a declaration demands it."
   [reg]
   (doseq [[kind r] (sort-by key (:kinds reg))
           :let [dkeys (set (schema/entry-keys (:schema r)))]
-          [fact d] (sort-by key (:derived r))
-          o (:over d)]
-    (when-not (or (= :now o) (contains? dkeys o))
-      (err kind :derived-cycles
-           (str "derived field " fact ": cross-kind derived inputs arrive "
-                "with the maintainer; over= names " o " — neither :now nor "
-                "a data field of " kind)))))
+          [fact d] (sort-by key (:derived r))]
+    (doseq [o (:over d)]
+      (when-not (or (= :now o) (contains? dkeys o))
+        (err kind :derived-cycles
+             (str "derived field " fact ": cross-kind derived inputs read "
+                  "through count edges only; over= names " o " — neither "
+                  ":now nor a data field of " kind))))
+    (when-some [c (:count d)]
+      (check-count-edge reg kind r fact c))))
 
 ;; ── the battery ─────────────────────────────────────────────────────
 

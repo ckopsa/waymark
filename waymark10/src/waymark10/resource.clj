@@ -99,7 +99,11 @@
                          [fact
                           (cond-> d
                             (:expr d) (update :expr expr/normalize)
-                            (:vars d) (update :vars update-vals expr/normalize))]))
+                            (:vars d) (update :vars update-vals expr/normalize)
+                            ;; count where values are sets — two
+                            ;; spellings of one membership are one law
+                            (get-in d [:count :where])
+                            (update-in [:count :where] update-vals set))]))
                   derived))))
 
 (defn- bind-require-specs

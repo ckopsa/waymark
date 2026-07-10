@@ -111,8 +111,11 @@
 
 (defn- out-of-state-entry [defn' state]
   (let [states (sort (:from defn'))]
-    {:reason (str "Available in state(s) " (str/join ", " (map name states))
-                  "; the resource is " (name state) ".")
+    ;; humanized state labels: reasons are prose, not tokens; the
+    ;; machine-readable states ride becomes_available
+    {:reason (str "Available in state(s) "
+                  (str/join ", " (map summary/state-label states))
+                  "; the resource is " (summary/state-label state) ".")
      :becomes-available {:in-states (mapv name states)}}))
 
 ;; ── the envelope ────────────────────────────────────────────────────

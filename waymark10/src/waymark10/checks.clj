@@ -485,10 +485,50 @@
                       (filter facts (:over (get derived f))))))]
       (some #(visit % [] #{}) (sort (keys derived))))))
 
+(defn- schema-head
+  "The head type of a field's schema form, :maybe already unwrapped by
+  field-schema: [:int {:min 0}] → :int."
+  [s]
+  (if (vector? s) (first s) s))
+
+(defn- check-count-spec
+  "One aggregate spec: {:count {:related <edge> | :owns <child-kind>,
+  :where {field #{values}}}} — exactly one edge, a shaped where, an
+  :int fact, no :over (a count's inputs ARE its edge). The edge's
+  existence is an assembly question (checks-assembly)."
+  [r fact d]
+  (let [c (:count d)]
+    (when (seq (:over d))
+      (err r :derived (str "derived field " fact ": a count's inputs are its "
+                           "declared edge; :over does not apply")))
+    (when-not (and (map? c)
+                   (= 1 (count (select-keys c [:related :owns])))
+                   (every? #{:related :owns :where} (keys c))
+                   (every? keyword? (vals (select-keys c [:related :owns]))))
+      (err r :derived (str "derived field " fact ": :count is {:related <edge> "
+                           "| :owns <child-kind>, :where {field #{values}}} — "
+                           "exactly one edge")))
+    (when (contains? c :where)
+      (let [w (:where c)]
+        (when-not (and (map? w) (seq w)
+                       (every? keyword? (keys w))
+                       (every? #(and (coll? %) (not (map? %)) (seq %)) (vals w)))
+          (err r :derived (str "derived field " fact ": :count :where is a "
+                               "{field #{values}} map of non-empty value sets")))))
+    (when-not (= :int (schema-head (schema/field-schema (:schema r) fact)))
+      (err r :derived (str "derived field " fact ": a count fact is an int — "
+                           "declare " fact " as :int in the schema")))))
+
 (defn- check-derived [r]
   (let [derived (:derived r)
         dkeys (data-keys r)]
     (doseq [[fact d] (sort-by key derived)]
+      (when (= (contains? d :expr) (contains? d :count))
+        (err r :derived (str "derived field " fact ": declare exactly one of "
+                             ":expr (an expression fact) or :count (an "
+                             "aggregate over a declared edge)")))
+      (when (contains? d :count)
+        (check-count-spec r fact d))
       (doseq [o (:over d)]
         (when-not (or (= :now o) (contains? dkeys o))
           (err r :derived (str "derived field " fact ": :over names " o

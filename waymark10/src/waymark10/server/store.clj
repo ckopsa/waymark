@@ -47,7 +47,26 @@
     to-revision. Version untouched and no transition appended —
     recorded deviation from waymark9, whose restamp logged per row:
     lifecycle restamps are maintenance, not writes. Returns the row
-    count moved."))
+    count moved.")
+
+  ;; ── phase 6: the maintainer's reads and the maintenance write ──────
+
+  (count-matching [st tx kind conds]
+    "COUNT of the kind's rows matching every cond — the maintainer's
+    aggregate read. A cond is {:target :state|:id|:data, :field name,
+    :cast sql-type, :op :=|:<|:<=|:>=|:>|:in, :value v | :values [vs]};
+    :data values cross as strings and cast server-side.")
+  (ids-matching [st tx kind conds limit]
+    "Row ids matching every cond (same grammar as count-matching),
+    id-ordered, LIMIT'd — the inverted dependent query and the
+    backfill pager.")
+  (update-data! [st tx kind id data next-flip-at]
+    "The maintenance write: the document and the clock index only —
+    version untouched, updated_at stamped, NO transition logged.
+    Derivation maintenance is not a write (phase 6).")
+  (due-flips [st tx kind now limit]
+    "Rows whose next_flip_at <= now, oldest flip first, FOR UPDATE —
+    the clock sweep's page."))
 
 (defn with-tx
   "Sugar: (with-tx st [tx] …)."

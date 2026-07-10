@@ -255,12 +255,10 @@
 
 ;; ── 2. affordance-completeness ──────────────────────────────────────
 ;;
-;; GAP (assert-as-is): a hide-concealed action whose :from INCLUDES
-;; the row's state is omitted from the envelope but, invoked
-;; directly, refuses 409 through the guard loop — invoke! only maps
-;; a hide deny to 404 in its out-of-state branch, so the wire
-;; narrates (and leaks the reason of) a door the envelope conceals.
-;; Spec: 404, never 409. Out-of-state hidden actions 404 correctly.
+;; Concealment on the wire, in-state and out: a hide-flagged deny is
+;; 404, never a 409 that would leak the concealed reason. (The
+;; in-state leak was this obligation's first catch; invoke's guard
+;; loop now conceals.)
 
 (deftest affordance-completeness
   (let [hidden-checked (atom 0)
@@ -277,15 +275,12 @@
                   ;; concealment on the wire: each hidden action,
                   ;; invoked directly, must not exist
                   (for [aname (conf/hidden-actions (rdef kind) env)
-                        :let [a (action-def kind aname)
-                              in-state? (contains? (:from a) state)
-                              _ (swap! hidden-checked inc)
+                        :let [_ (swap! hidden-checked inc)
                               resp (invoke-http kind (:id row) aname nil
-                                                {:headers headers})
-                              expected (if in-state? 409 404)] ; 409 = the GAP above
-                        :when (not= expected (:status resp))]
+                                                {:headers headers})]
+                        :when (not= 404 (:status resp))]
                     (str where ": hidden " (name aname) " answered "
-                         (:status resp) ", expected " expected)))]
+                         (:status resp) ", expected 404")))]
            v))]
     (is (empty? violations) (str/join "\n" violations))
     (is (pos? @hidden-checked)

@@ -6,6 +6,7 @@
   data. This namespace also owns the kebab→snake key converter the
   whole wire boundary shares (wire-value)."
   (:require [clojure.string :as str]
+            [waymark10.summary :as summary]
             [waymark10.wire :as wire]))
 
 (def base-uri "https://waymark.dev/problems/")
@@ -33,8 +34,8 @@
 (defn wrong-state [action state from resource]
   (problem :wrong-state 409 "Wrong state"
            {:detail (str "Available in state(s) "
-                         (str/join ", " (map name (sort from)))
-                         "; the resource is " (name state) ".")
+                         (str/join ", " (map summary/state-label (sort from)))
+                         "; the resource is " (summary/state-label state) ".")
             :action-attempted action
             :state state
             :becomes-available {:in-states (vec (sort from))}
