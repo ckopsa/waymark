@@ -553,13 +553,16 @@
 ;; ── the generic UI (phase 10) ───────────────────────────────────────
 
 (defn- ui-page
-  "GET /api/-/ui: the envelope-driven generic UI — one self-contained
-  page (vanilla JS, no external hosts) that renders whatever the
-  wire declares: kinds from well-known, collections from the query
-  grammar, envelopes as forms. A static asset, served to anyone —
-  a scoped request's DATA stays projected by the API it drives."
-  [_eng]
-  (let [page (some-> (io/resource "waymark10/ui.html") slurp)]
+  "GET /api/-/ui (and /api/-/ui-lite): the envelope-driven generic UI
+  — one self-contained page (vanilla JS, no external hosts) that
+  renders whatever the wire declares: kinds from well-known,
+  collections from the query grammar, envelopes as forms. A static
+  asset, served to anyone — a scoped request's DATA stays projected
+  by the API it drives. ui.html is the full client (the waymark9
+  generic UI, ported to wire 10); ui_lite.html preserves the original
+  phase-10 page."
+  [_eng asset]
+  (let [page (some-> (io/resource asset) slurp)]
     (fn [_req]
       (if page
         {:status 200
@@ -650,7 +653,8 @@
          ["/api/openapi.json" {:get (openapi-doc eng)}]
          ["/api/schemas/:kind" {:get (kind-schema eng)}]
          ["/api/-/events" {:get (firehose-events eng)}]
-         ["/api/-/ui" {:get (ui-page eng)}]
+         ["/api/-/ui" {:get (ui-page eng "waymark10/ui.html")}]
+         ["/api/-/ui-lite" {:get (ui-page eng "waymark10/ui_lite.html")}]
          ["/api/attachments/:id/bytes" {:put (bytes-put eng)
                                         :get (bytes-get eng)}]
          ["/api/surfaces/:name/:id" {:get (surface-view eng)}]

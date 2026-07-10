@@ -1,25 +1,54 @@
-/* ui-drive.mjs — the phase-10 UI verification, reproducible:
-   drive the generic UI (GET /api/-/ui) in headless chromium over
-   CDP. Zero deps beyond node >= 22. Two drives share one harness:
+/* ui-drive.mjs — the generic-UI verification, reproducible: drive
+   GET /api/-/ui (the waymark9 client ported to wire 10; the original
+   phase-10 page is preserved at /api/-/ui-lite) in headless chromium
+   over CDP. Zero deps beyond node >= 22. Two drives share one
+   harness:
 
-   DEFAULT (the family-week story, against mealplan10 dev):
-   1. make dev10 (a fresh mealplan10_dev; seed a blocking event if you
-      want the finalize warning: see docs/waymark10-design.md §10)
+   DEFAULT (the family-week story, against a mealplan10 dev engine):
+   1. a FRESH dev database + seeded world per run — the story retires
+      meals it later relies on, so re-runs need fresh bytes. The seed
+      is the family-week test's, § by §: boot with the Piano recital
+      on the FakeEvents feed and discovery run, then over the API as
+      priya — rotation create+activate; eight meals (Carnitas tacos
+      mexican / Elote corn mexican / Smash burgers american / Chicken
+      stir fry asian / Traeger brisket bbq / Pancake supper breakfast
+      for dinner / Sheet-pan pizza pizza / Spaghetti and meatballs
+      italian), all accepted; a plan {start_date 2026-07-14, weeks 1};
+      assign tacos→14 burgers→15 stir-fry→16 brisket→18 pancakes→19
+      spaghetti→20; mark_eating_out 17 "Blaze Pizza". Boot shape:
+
+        cd mealplan10 && MEALPLAN10_PORT=8011 \
+          MEALPLAN10_DSN=jdbc:postgresql://localhost:5433/<fresh-db>?user=ckopsa \
+          WAYMARK10_AUTO_MIGRATE=1 clojure -M -e "
+          (require 'mealplan10.main 'mealplan10.event-source
+                   'waymark10.server.mirror)
+          (let [eng (mealplan10.main/start!)]
+            (mealplan10.event-source/seed! mealplan10.main/events
+              \"uid-recital@2026-07-16\"
+              {:title \"Piano recital\" :date \"2026-07-16\"
+               :kind \"blocking\"})
+            (waymark10.server.mirror/discover! eng :event))
+          @(promise)"
+
    2. chromium --headless=new --remote-debugging-port=9223 \
         --no-sandbox --user-data-dir=/tmp/wm10-chrome about:blank &
-   3. node waymark10/scripts/ui-drive.mjs
+   3. BASE=http://localhost:8011 node waymark10/scripts/ui-drive.mjs
 
    BATCH-A (parts/links/validation/vocab/effort, against the
    FRAMEWORK fixtures — never mealplan10):
    1. WAYMARK10_TEST_DSN=... clojure -Sdeps \
         '{:aliases {:fx {:extra-paths ["test"]}}}' -M:fx -e \
-        "((requiring-resolve 'waymark10.batch-a-dev/start!) 8123) @(promise)"
-      (boot fresh per drive run — the drive seeds through the API)
+        "(do ((requiring-resolve 'waymark10.batch-a-dev/start!) 8123) nil) @(promise)"
+      (boot fresh per drive run — the drive seeds through the API;
+       the (do … nil) keeps the REPL from printing the engine map,
+       whose recursive registry overflows the printer)
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs batch-a
 
-   The story drive is self-normalizing: a re-run against mutated
-   state brings the plan back to `planned` before its checks. */
+   The story's plan checks stay self-normalizing (a partial re-run
+   brings the plan back to planned before them), and the ported-page
+   additions below seed uniquely-named rows per run — but the meal
+   sections assume the fresh world of step 1. */
 const MODE = process.argv[2] === "batch-a" ? "batch-a" : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
@@ -274,7 +303,8 @@ await evaljs(`[...document.querySelectorAll("button")].find(b => b.textContent.t
 await waitFor(`document.querySelector("dialog[open] textarea[name=recipe]")`, "recipe form (prose widget)");
 ok("x-display prose renders a textarea", true);
 await evaljs(`{ const ta = document.querySelector("dialog[open] textarea[name=recipe]");
-  ta.value = "# Draft recipe\\nhalf-written by the UI drive";
+  ta.value = "# Draft recipe\\nhalf-written by the UI drive " + Date.now();
+  ta.dispatchEvent(new Event("input", {bubbles: true}));
   ta.dispatchEvent(new Event("focusout", {bubbles: true})); true }`);
 await waitFor(`document.querySelector("dialog[open] [data-draftnote]")?.textContent.includes("draft saved")`,
               "draft saved note");
@@ -302,6 +332,128 @@ await waitFor(`document.querySelector(".statechip")?.textContent === "retired"`,
 ok("the firehose refetched the open envelope after a foreign write", true);
 ok("the ticker narrates the transition",
    await evaljs(`document.getElementById("ticker").innerText.includes("retire")`));
+
+/* ════ ported-page additions: the waymark9 chrome on the 10 wire ═════ */
+const H = {"x-waymark-principal": "colton", "Content-Type": "application/json"};
+
+/* ── the activity ledger: the drawer renders the firehose ───────────── */
+console.log("· activity ledger");
+await evaljs(`document.getElementById("ledgertoggle").click(); true`);
+await waitFor(`document.getElementById("ledger").classList.contains("open")`, "ledger open");
+const feedMeal = await (await fetch(BASE + "/api/meals",
+  {method: "POST", headers: H,
+   body: JSON.stringify({name: "Feed check meal", themes: ["bbq"]})})).json();
+await fetch(BASE + feedMeal.self + "/-/accept", {method: "POST", headers: H});
+await waitFor(`[...document.querySelectorAll("#feed .ev")]
+               .some(e => e.innerText.includes("accept") && e.innerText.includes("meal"))`,
+              "accept transition in the feed", 8000);
+ok("the activity feed renders firehose transitions (action · kind · from → to)",
+   await evaljs(`[...document.querySelectorAll("#feed .ev")]
+                 .some(e => e.innerText.includes("colton") &&
+                            e.innerText.includes("suggested → on list"))`));
+await evaljs(`document.getElementById("ledgerclose").click(); true`);
+
+/* ── the undo affordance: an inverse action in the post-action doc ──── */
+console.log("· undo affordance");
+await evaljs(`location.hash = ${JSON.stringify(planHash)}; true`);
+await waitFor(`[...document.querySelectorAll("button")].some(b => b.textContent.trim() === "Reopen")`,
+              "plan page (planned)");
+await evaljs(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Reopen").click(); true`);
+await waitFor(`document.querySelector("dialog[open]")`, "reopen dialog");
+await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
+await waitFor(`document.querySelector("#toast button[data-undo]")`, "undo button in the toast");
+ok("a reverse action in the post-action envelope becomes the undo affordance",
+   await evaljs(`document.querySelector("#toast button[data-undo]").textContent
+                 .includes("undo") &&
+                 document.querySelector("#toast").textContent.includes("reopen ✓")`));
+await waitFor(`document.querySelector(".statechip")?.textContent === "draft"`, "plan draft again");
+/* restore: the later runs expect a planned plan is not required — leave draft;
+   the story is self-normalizing at its head */
+
+/* ── bulk: the collection form of the act, honestly partial ─────────── */
+console.log("· bulk partial report");
+const runTag = String(Date.now());
+await (await fetch(BASE + "/api/meals",
+  {method: "POST", headers: H,
+   body: JSON.stringify({name: `Bulk ok ${runTag}`, themes: ["bbq"]})})).json();
+const bulkNo = await (await fetch(BASE + "/api/meals",
+  {method: "POST", headers: H,
+   body: JSON.stringify({name: `Bulk no ${runTag}`, themes: ["bbq"]})})).json();
+await fetch(BASE + bulkNo.self + "/-/accept", {method: "POST", headers: H});
+await fetch(BASE + bulkNo.self + "/-/retire", {method: "POST", headers: H});
+await evaljs(`location.hash = "/api/meals?page[size]=100"; true`);
+await waitFor(`document.body.innerText.includes(${JSON.stringify(runTag)})`,
+              "bulk fixture rows on the collection");
+await evaljs(`{ for (const tr of document.querySelectorAll("tbody tr")) {
+    if (tr.innerText.includes(${JSON.stringify(runTag)})) {
+      const box = tr.querySelector("[data-bulk-check]");
+      if (box) { box.checked = true;
+                 box.dispatchEvent(new Event("change", {bubbles: true})); }
+    }
+  } true }`);
+await evaljs(`[...document.querySelectorAll("button")]
+  .find(b => b.textContent.includes("Add selected to meal list")).click(); true`);
+await waitFor(`document.querySelector("dialog[open] .consequence")`, "bulk confirm dialog");
+ok("the bulk dialog states the selection and demands the confirm",
+   await evaljs(`document.querySelector("dialog[open] .metaline").textContent
+                   .includes("2 selected row(s)") &&
+                 [...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1)
+                   .textContent.startsWith("Confirm &")`));
+await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
+await waitFor(`document.querySelector("dialog[open][data-report]")`, "bulk report dialog");
+ok("the bulk report is honestly partial (1 succeeded, 1 refused, with the reason)",
+   await evaljs(`document.querySelector("dialog[open] .verdict-totals").textContent
+                   .includes("succeeded 1 · refused 1") &&
+                 document.querySelector("dialog[open] .verdict-refused") !== null &&
+                 document.querySelector("dialog[open] td.reason").textContent.length > 0`));
+await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
+
+/* ── the draft chrome: relay/2 stale rejection, recovered ───────────── */
+console.log("· draft stale-rejection recovery (relay/2)");
+const staleMeal = await (await fetch(BASE + "/api/meals",
+  {method: "POST", headers: H,
+   body: JSON.stringify({name: "Stale draft meal", themes: ["bbq"]})})).json();
+await fetch(BASE + staleMeal.self + "/-/accept", {method: "POST", headers: H});
+await evaljs(`location.hash = ${JSON.stringify(staleMeal.self)}; true`);
+await waitFor(`[...document.querySelectorAll("button")]
+               .some(b => b.textContent.toLowerCase().includes("recipe"))`, "stale meal page");
+await evaljs(`[...document.querySelectorAll("button")]
+  .find(b => b.textContent.toLowerCase().includes("recipe")).click(); true`);
+await waitFor(`document.querySelector("dialog[open] textarea[name=recipe]")`, "recipe form");
+/* the relay must be LIVE before we type — the state frame's presence
+   roster is its observable arrival (without the socket, saves fall
+   back to the plain PUT, which has no revision discipline to reject) */
+await waitFor(`(document.querySelector("dialog[open] [data-draftnote]")?.textContent || "")
+               .includes("editing with")`, "relay/2 socket joined", 8000);
+await evaljs(`{ const ta = document.querySelector("dialog[open] textarea[name=recipe]");
+  ta.value = "v1 typed in this ui";
+  ta.dispatchEvent(new Event("input", {bubbles: true}));
+  ta.dispatchEvent(new Event("focusout", {bubbles: true})); true }`);
+await waitFor(`document.querySelector("dialog[open] [data-draftnote]")?.textContent.includes("draft saved")`,
+              "first save acked over the socket");
+/* a second writer moves the field's revision underneath us (a plain
+   draft PUT bumps revs and broadcasts nothing — relay/2's recorded
+   convergence point is our next frame) */
+await fetch(BASE + staleMeal.self + "/-/update_recipe/draft",
+  {method: "PUT", headers: H,
+   body: JSON.stringify({recipe: "the external truth"})});
+await evaljs(`{ const ta = document.querySelector("dialog[open] textarea[name=recipe]");
+  ta.value = "v2 typed against a stale rev";
+  ta.dispatchEvent(new Event("input", {bubbles: true}));
+  ta.dispatchEvent(new Event("focusout", {bubbles: true})); true }`);
+await waitFor(`document.querySelector("dialog[open] [data-draftnote]")?.textContent.includes("edit overtaken")`,
+              "stale frame recovered", 8000);
+ok("a stale edit is rejected with the field's truth and the form recovers",
+   await evaljs(`document.querySelector("dialog[open] textarea[name=recipe]").value
+                 === "the external truth"`));
+await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")]
+  .find(b => b.textContent === "Discard draft").click(); true`);
+await waitFor(`!document.querySelector("dialog[open]")`, "draft discarded");
+ok("discard closes the composition", true);
+
+/* ── the preserved lite page still serves ───────────────────────────── */
+ok("ui-lite (the preserved phase-10 page) serves beside the port",
+   await evaljs(`fetch("/api/-/ui-lite").then(r => r.status === 200)`));
 }
 
 /* ════ batch A: parts, links, validation, vocab, effort ═══════════════

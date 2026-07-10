@@ -1,319 +1,907 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>waymark 10</title>
+<title>Waymark</title>
+<!-- no favicon route on the engine: declare none, so the browser's
+     automatic /favicon.ico probe doesn't 404 in every console -->
+<link rel="icon" href="data:,">
 <style>
-/* ── the envelope is the screen ──────────────────────────────────────
-   One self-contained page, zero external hosts, zero app knowledge:
-   everything rendered here was read off the wire — kinds from
-   well-known, tables from the query grammar, forms from the action
-   input schemas, gates from safety, reasons from unavailable.       */
-:root {
-  --bg: #f7f6f3; --panel: #ffffff; --ink: #1a1a18; --muted: #6b6a64;
-  --line: #e2e0d8; --accent: #2c5f8a; --accent-ink: #ffffff;
-  --danger: #a33a2e; --warn-bg: #fdf3d7; --warn-line: #e5c96b;
-  --ok: #3a7d44; --chip: #eceae2; --code: #f0efe9;
-}
-@media (prefers-color-scheme: dark) {
+  /* ── provenance is the aesthetic (the waymark9 UI, ported to wire 10) ─
+     Every color and face encodes where a piece of truth comes from:
+     serif = server prose (the document speaking), mono = machine truth
+     (facts, states, ids, law tokens), sans = this client's own chrome.
+     Verdigris is the one action color; violet is reserved exclusively
+     for definition/deploy vocabulary — the law is visibly not an app
+     concern, and nothing else may borrow its color.
+     Self-contained: local font stacks only, no external hosts. */
   :root {
-    --bg: #191a1c; --panel: #222325; --ink: #e8e6e1; --muted: #97958e;
-    --line: #35363a; --accent: #6ea3cc; --accent-ink: #14181c;
-    --danger: #d3766a; --warn-bg: #3a3320; --warn-line: #8a7a3a;
-    --ok: #7dbb87; --chip: #2e2f33; --code: #26272b;
+    --paper: #FAFAF8; --panel: #FFFFFF; --ink: #20261F; --muted: #6B7268;
+    --line: #E4E5E0; --chipbg: #EFF1EC;
+    --verdigris: #2E6E4E; --verdigris-deep: #245A3F; --verdigris-wash: #E7F0EA;
+    --refusal: #93342B; --refusal-wash: #F7ECEA;
+    --warn: #8A5A00; --warn-wash: #F6EFDF;
+    --law: #5B4B9E; --law-wash: #EDEAF6;
+    --radius: 4px;
+    --shadow: 0 1px 2px rgba(32,38,31,.06);
+    --serif: Georgia, "Times New Roman", "Source Serif 4", serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, "IBM Plex Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-}
-* { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--ink);
-  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-code, .mono { font-family: ui-monospace, "Cascadia Mono", Menlo, monospace;
-  font-size: 0.92em; }
-header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-  padding: 10px 18px; border-bottom: 1px solid var(--line);
-  background: var(--panel); position: sticky; top: 0; z-index: 5; }
-.brand { font-weight: 700; letter-spacing: 0.04em; }
-.brand small { color: var(--muted); font-weight: 400; }
-nav { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
-nav a { padding: 3px 9px; border-radius: 20px; font-size: 13.5px; }
-nav a.on { background: var(--accent); color: var(--accent-ink); }
-nav .sep { color: var(--line); align-self: center; }
-#who { width: 110px; padding: 4px 8px; border: 1px solid var(--line);
-  border-radius: 6px; background: var(--bg); color: var(--ink); }
-#live { width: 9px; height: 9px; border-radius: 50%; background: var(--muted);
-  flex: none; }
-#live.on { background: var(--ok); }
-main { max-width: 1060px; margin: 0 auto; padding: 18px; }
-h1 { font-size: 21px; margin: 4px 0 2px; }
-h2 { font-size: 15px; margin: 22px 0 8px; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
-.crumb, .meta { color: var(--muted); font-size: 13px; }
-.statechip { display: inline-block; padding: 1px 10px; border-radius: 20px;
-  background: var(--chip); font-size: 13px; font-weight: 600; }
-.card { background: var(--panel); border: 1px solid var(--line);
-  border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
-.tablewrap { overflow-x: auto; }
-table { border-collapse: collapse; width: 100%; }
-th { text-align: left; font-size: 12.5px; color: var(--muted);
-  text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 10px 4px; }
-td { padding: 7px 10px; border-top: 1px solid var(--line);
-  vertical-align: top; }
-tr.rowlink { cursor: pointer; }
-tr.rowlink:hover td { background: var(--chip); }
-.chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
-.chip { padding: 2px 10px; border-radius: 20px; background: var(--chip);
-  border: 1px solid var(--line); font-size: 13px; cursor: pointer; }
-.chip.on { background: var(--accent); color: var(--accent-ink);
-  border-color: var(--accent); }
-.chip.static { cursor: default; }
-button { font: inherit; padding: 6px 14px; border-radius: 8px;
-  border: 1px solid var(--line); background: var(--panel);
-  color: var(--ink); cursor: pointer; }
-button:hover { border-color: var(--accent); }
-button.primary { background: var(--accent); color: var(--accent-ink);
-  border-color: var(--accent); }
-button.danger { border-color: var(--danger); color: var(--danger); }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
-.actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
-.notnow { margin: 6px 0; }
-.notnow li { margin: 3px 0; color: var(--muted); font-size: 13.5px; }
-.notnow b { color: var(--ink); font-weight: 600; }
-pre { background: var(--code); border: 1px solid var(--line);
-  border-radius: 8px; padding: 10px; overflow-x: auto; white-space: pre-wrap;
-  margin: 4px 0; font-size: 13px; }
-.kv td:first-child { color: var(--muted); width: 190px; font-size: 13.5px; }
-.null { color: var(--muted); }
-/* dialogs */
-dialog { border: 1px solid var(--line); border-radius: 12px; padding: 0;
-  background: var(--panel); color: var(--ink); max-width: 560px;
-  width: calc(100vw - 40px); }
-dialog::backdrop { background: rgba(0,0,0,0.45); }
-.dlghead { padding: 14px 18px 8px; }
-.dlghead h3 { margin: 0; font-size: 17px; }
-.dlgbody { padding: 4px 18px 14px; max-height: 65vh; overflow-y: auto; }
-.dlgfoot { padding: 12px 18px; border-top: 1px solid var(--line);
-  display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
-.dlgfoot .hint { margin-right: auto; color: var(--muted); font-size: 12.5px; }
-.field { margin: 10px 0; }
-.field label { display: block; font-size: 13px; color: var(--muted);
-  margin-bottom: 3px; }
-.field label b { color: var(--ink); }
-.field input[type=text], .field input[type=date], .field input[type=number],
-.field select, .field textarea { width: 100%; padding: 7px 9px;
-  border: 1px solid var(--line); border-radius: 7px; background: var(--bg);
-  color: var(--ink); font: inherit; }
-.field textarea { min-height: 110px; font-family: ui-monospace, monospace;
-  font-size: 13px; }
-.field .err { color: var(--danger); font-size: 12.5px; margin-top: 2px; }
-.field .err.srv::before { content: "server: "; color: var(--muted); }
-.field .const { padding: 7px 9px; border: 1px dashed var(--line);
-  border-radius: 7px; background: var(--chip); color: var(--muted); }
-.linkrel .badge { display: inline-block; min-width: 18px; text-align: center;
-  padding: 0 6px; border-radius: 10px; background: var(--accent);
-  color: var(--accent-ink); font-size: 12px; margin-left: 4px; }
-.partactions { white-space: nowrap; }
-.partactions button { padding: 3px 10px; font-size: 13px; margin: 1px 2px; }
-.consequence { background: var(--warn-bg); border: 1px solid var(--warn-line);
-  border-radius: 8px; padding: 9px 12px; margin: 10px 0; font-size: 13.5px; }
-.problem { border: 1px solid var(--danger); border-radius: 8px;
-  padding: 9px 12px; margin: 10px 0; font-size: 13.5px;
-  color: var(--danger); }
-.validok { color: var(--ok); font-size: 13.5px; margin: 8px 0; }
-.warnbox { background: var(--warn-bg); border: 1px solid var(--warn-line);
-  border-radius: 8px; padding: 9px 12px; margin: 10px 0; }
-.warnbox ul { margin: 6px 0 0; padding-left: 18px; }
-/* attention flags on surfaces */
-.flag { padding: 2px 10px; border-radius: 6px; font-size: 13px;
-  font-weight: 600; }
-.flag.up { background: var(--warn-bg); border: 1px solid var(--warn-line); }
-.flag.down { background: var(--chip); color: var(--muted); }
-/* ticker */
-#ticker { position: fixed; bottom: 0; left: 0; right: 0;
-  background: var(--panel); border-top: 1px solid var(--line);
-  font-size: 12.5px; color: var(--muted); padding: 4px 18px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#ticker b { color: var(--ink); font-weight: 600; }
-main { padding-bottom: 48px; }
-#toasts { position: fixed; right: 16px; bottom: 40px; display: flex;
-  flex-direction: column; gap: 8px; z-index: 20; }
-.toast { background: var(--panel); border: 1px solid var(--line);
-  border-left: 4px solid var(--accent); border-radius: 8px;
-  padding: 8px 14px; box-shadow: 0 4px 14px rgba(0,0,0,0.18);
-  font-size: 13.5px; max-width: 340px; }
-.toast.bad { border-left-color: var(--danger); }
-.draftnote { color: var(--muted); font-size: 12px; }
-.pager { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
-@media (max-width: 640px) {
-  .kv td:first-child { width: 110px; }
-  main { padding: 10px; }
-}
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink);
+         font: 14px/1.5 var(--sans); padding-bottom: 40px; }
+  a { color: var(--verdigris); text-decoration: none; }
+  a:hover { text-decoration: underline; color: var(--verdigris-deep); }
+  code, .mono { font-family: var(--mono); font-size: 12px; }
+  code { background: var(--chipbg); padding: 1px 5px; border-radius: 3px; }
+  .prose { font-family: var(--serif); }
+  :focus-visible { outline: 2px solid var(--verdigris); outline-offset: 1px;
+                   border-radius: 2px; }
+
+  header { display: flex; align-items: center; gap: 14px; padding: 10px 20px;
+           background: var(--panel); border-bottom: 1px solid var(--line);
+           position: sticky; top: 0; z-index: 5; flex-wrap: wrap; row-gap: 4px; }
+  header h1 { font-size: 15px; font-weight: 800; letter-spacing: .04em;
+              margin: 0; }
+  header h1 a { color: var(--ink); }
+  header nav { display: inline-flex; align-items: center; flex-wrap: wrap; }
+  header nav a { margin-right: 12px; font-size: 13px; }
+  header .spacer { flex: 1; }
+  #who { width: 120px; padding: 4px 8px; border: 1px solid var(--line);
+         border-radius: var(--radius); background: var(--paper);
+         color: var(--ink); font: 13px var(--sans); }
+  /* engine kinds tuck behind a quiet ⋯ at the far right of the nav */
+  .nav-more-wrap { position: relative; }
+  .nav-more { border: none; background: none; color: var(--muted);
+              font-size: 15px; line-height: 1; padding: 2px 7px;
+              border-radius: 3px; }
+  .nav-more:hover { color: var(--ink); background: var(--chipbg); border: none; }
+  .nav-menu { position: absolute; top: calc(100% + 4px); left: 0;
+              z-index: 30; background: var(--panel);
+              border: 1px solid var(--line); border-radius: var(--radius);
+              box-shadow: var(--shadow); padding: 6px 0; min-width: 170px;
+              display: none; }
+  .nav-menu a { display: block; padding: 5px 14px; margin: 0;
+                font-size: 13px; color: var(--ink); white-space: nowrap; }
+  .nav-menu a:hover { background: var(--chipbg); text-decoration: none; }
+  .nav-menu .law-mark { color: var(--law); }
+  /* the law stamp: which revision of the law produced this screen */
+  #lawstamp a { font-family: var(--mono); font-size: 11px; color: var(--law);
+                background: var(--law-wash); border: 1px solid var(--law-wash);
+                border-radius: 3px; padding: 2px 8px; white-space: nowrap; }
+  #lawstamp a:hover { border-color: var(--law); text-decoration: none; }
+  /* the grant scope chip: this session reads through the named grant */
+  #grantchip { display: none; font-family: var(--mono); font-size: 11px;
+               background: var(--warn-wash); color: var(--warn);
+               border-radius: 999px; padding: 3px 10px; white-space: nowrap; }
+  #grantchip button { border: none; background: none; color: var(--warn);
+                      padding: 0 0 0 6px; font-weight: 700; cursor: pointer; }
+  #followchip { background: var(--verdigris-wash); color: var(--verdigris-deep);
+                border-radius: 999px; padding: 3px 12px; font-size: 12px;
+                font-weight: 600; display: none; white-space: nowrap; }
+  #followchip button { border: none; background: none;
+                       color: var(--verdigris-deep); padding: 0 0 0 6px;
+                       font-weight: 700; cursor: pointer; }
+
+  select, input, textarea, button {
+    font: 13.5px/1.4 var(--sans); color: inherit; border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 6px 9px; background: var(--panel); }
+  textarea.mono { font-family: var(--mono); font-size: 12px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--verdigris); color: #fff;
+                   border-color: var(--verdigris); }
+  button.primary:hover, button.primary:active {
+    background: var(--verdigris-deep); border-color: var(--verdigris-deep); }
+  button.danger  { background: var(--panel); color: var(--refusal);
+                   border-color: var(--refusal); }
+  button.danger:hover { background: var(--refusal); color: #fff; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  /* effort as a subtle chip riding the button, not a text suffix */
+  .effort-chip { font: 600 9.5px var(--sans); border-radius: 3px;
+                 padding: 1px 5px; margin-left: 6px; vertical-align: 1px;
+                 background: var(--chipbg); color: var(--muted); }
+  button.primary .effort-chip, button.danger:hover .effort-chip {
+    background: rgba(255,255,255,.25); color: #fff; }
+
+  main { max-width: 1200px; margin: 18px auto; padding: 0 20px; }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px;
+           overflow-x: auto; box-shadow: var(--shadow); }
+  .crumbs { color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+  .crumbs .id { font-family: var(--mono); font-size: 11.5px; }
+  h2 { margin: 4px 0 2px; font-size: 19px; font-weight: 800;
+       letter-spacing: -.01em; }
+  h3.sect { margin: 18px 0 6px; font-size: 12px; font-weight: 700;
+            color: var(--muted); text-transform: uppercase;
+            letter-spacing: .06em; }
+  /* the summary is the server's own sentence — it IS the orientation */
+  .summary { font-family: var(--serif); font-size: 17.5px; line-height: 1.4;
+             color: var(--ink); margin: 6px 0 14px; }
+  .muted { color: var(--muted); }
+  .metaline { color: var(--muted); font-size: 12px; }
+  .metaline .mono { font-size: 11px; }
+
+  /* machine truth wears the mono: states, ids, versions, counts */
+  .chip { display: inline-block; font-family: var(--mono); font-size: 11px;
+          background: var(--chipbg); color: var(--ink);
+          border-radius: 3px; padding: 2px 8px; border: 1px solid transparent; }
+  .chip.warning { background: var(--warn-wash); color: var(--warn); }
+  .chip.ok      { background: var(--verdigris-wash); color: var(--verdigris-deep); }
+  .chip.danger  { background: var(--refusal-wash); color: var(--refusal); }
+  .statechip { display: inline-block; font-family: var(--mono); font-size: 11px;
+               background: var(--chipbg); color: var(--ink);
+               border-radius: 3px; padding: 2px 8px; }
+  .version { font-family: var(--mono); font-size: 11px; color: var(--muted);
+             margin-left: 8px; }
+  /* clickable facet chips (the collection's x-facets, lit when active) */
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0;
+           align-items: center; }
+  .chips .chip { cursor: pointer; }
+  .chips .chip.static { cursor: default; }
+  .chips .chip.on { background: var(--verdigris); color: #fff;
+                    border-color: var(--verdigris); }
+
+  table.kv { border-collapse: collapse; width: 100%; }
+  table.kv td { padding: 6px 10px 6px 0; vertical-align: top;
+                border-bottom: 1px solid var(--line); }
+  table.kv td.k { color: var(--muted); width: 32%; font-size: 12px;
+                  font-family: var(--mono); }
+  .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px;
+             align-items: center; }
+
+  /* the can't-yet section: the reason is server prose, so it's serif;
+     a clock-gated hope gets a live countdown */
+  .cantyet .item { padding: 7px 0; font-size: 13px;
+                   border-bottom: 1px solid var(--line); }
+  .cantyet .item:last-child { border-bottom: none; }
+  .cantyet .item b { font-weight: 700; }
+  .cantyet .why { font-family: var(--serif); font-size: 14px;
+                  color: var(--ink); margin: 2px 0; }
+  .countdown { font-family: var(--mono); font-size: 12px;
+               color: var(--verdigris-deep); }
+  .unavail { margin-top: 10px; }
+  .notnow li { margin: 3px 0; color: var(--muted); font-size: 13.5px; }
+  .notnow b { color: var(--ink); font-weight: 600; }
+
+  /* remedies: the wire names the way out as "kind.action" chips */
+  .remedies { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 2px; }
+  a.chip.remedy, button.chip.remedy {
+    background: var(--verdigris-wash); color: var(--verdigris-deep);
+    border: 1px solid var(--verdigris-wash); }
+  a.chip.remedy:hover, button.chip.remedy:hover {
+    border-color: var(--verdigris); text-decoration: none; }
+  button.suggested { border-color: var(--verdigris);
+                     box-shadow: 0 0 0 2px var(--verdigris-wash); }
+  .suggest-chip { font: 600 9.5px var(--sans); border-radius: 3px;
+                  padding: 1px 5px; margin-left: 6px; vertical-align: 1px;
+                  background: var(--verdigris-wash);
+                  color: var(--verdigris-deep); }
+  button.primary .suggest-chip { background: rgba(255,255,255,.25);
+                                 color: #fff; }
+  @keyframes remedy-pulse {
+    50% { box-shadow: 0 0 0 6px var(--verdigris-wash); } }
+  button.pulse { outline: 2px solid var(--verdigris); outline-offset: 1px;
+                 animation: remedy-pulse .7s ease-in-out 2; }
+  /* a link badge: a count the wire sent riding the link */
+  .badge { font-family: var(--mono); font-size: 10px; color: var(--muted);
+           background: var(--chipbg); border-radius: 999px; padding: 1px 6px;
+           margin-left: 6px; vertical-align: 1px; font-weight: 400; }
+  a.link-chip { font-family: var(--mono); font-size: 11px;
+                color: var(--ink); background: var(--chipbg);
+                border: 1px solid var(--line); border-radius: 3px;
+                padding: 2px 8px; white-space: nowrap; }
+  a.link-chip:hover { border-color: var(--muted); text-decoration: none; }
+  a.surface-link { font-family: var(--mono); font-size: 11px;
+                   color: var(--law); background: var(--law-wash);
+                   border: 1px solid var(--law-wash); border-radius: 3px;
+                   padding: 2px 8px; white-space: nowrap; }
+  a.surface-link:hover { border-color: var(--law); text-decoration: none; }
+  .surface-mark { color: var(--law); font-family: var(--mono); font-size: 12px; }
+  /* attention flags on surfaces */
+  .flag { display: inline-block; padding: 2px 10px; border-radius: 3px;
+          font: 600 12px var(--sans); }
+  .flag.up { background: var(--warn-wash); color: var(--warn);
+             border: 1px solid var(--warn); }
+  .flag.down { background: var(--chipbg); color: var(--muted); }
+
+  /* embedded collections: server-spliced rows on the detail page */
+  .embed { border-top: 1px solid var(--line); margin-top: 14px;
+           padding-top: 10px; }
+  .embed-head { display: flex; align-items: baseline; gap: 8px;
+                flex-wrap: wrap; margin-bottom: 6px; }
+  .embed-head b { font-size: 13px; }
+  .embed-head .open { font-size: 12px; margin-left: auto; white-space: nowrap; }
+
+  table.items { border-collapse: collapse; width: 100%; }
+  table.items th { text-align: left; font-size: 11px; color: var(--muted);
+                   font-weight: 600; padding: 6px 10px 6px 0;
+                   border-bottom: 2px solid var(--line); white-space: nowrap; }
+  table.items td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line);
+                   vertical-align: middle; }
+  table.items td.rowactions { text-align: right; white-space: nowrap; }
+  table.items tr:hover td { background: var(--paper); }
+  .partactions { white-space: nowrap; }
+  .partactions button { padding: 3px 10px; font-size: 12px; margin: 1px 2px; }
+
+  .filterbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end;
+               margin-bottom: 12px; }
+  .filterbar label { display: flex; flex-direction: column;
+                     font-size: 11px; color: var(--muted); gap: 3px; }
+  .facet-count { font-family: var(--mono); font-size: 10.5px;
+                 color: var(--muted); }
+
+  /* ── the home dashboard ─────────────────────────────────────────── */
+  .dash-grid { display: grid; gap: 12px; margin-bottom: 16px;
+               grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .kind-card { background: var(--panel); border: 1px solid var(--line);
+               border-radius: var(--radius); padding: 14px 16px;
+               min-height: 108px; display: flex; flex-direction: column;
+               gap: 8px; }
+  .kind-card .kc-head { display: flex; align-items: baseline; gap: 8px;
+                        justify-content: space-between; flex-wrap: wrap; }
+  .kind-card h3 { margin: 0; font-size: 14px; font-weight: 800;
+                  letter-spacing: -.01em; }
+  .kind-card h3 a { color: var(--ink); }
+  .kc-total { font-family: var(--mono); font-size: 27px; line-height: 1.1; }
+  .kc-none { font-family: var(--serif); color: var(--muted); font-size: 14.5px; }
+  .kc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .kc-chips a.chip:hover { background: var(--verdigris-wash);
+                           color: var(--verdigris-deep); text-decoration: none; }
+  .kc-foot { margin-top: auto; }
+  .attention { background: var(--panel); border: 1px solid var(--line);
+               border-left: 3px solid var(--warn);
+               border-radius: var(--radius); padding: 8px 14px;
+               margin-bottom: 14px; }
+  .attention .item { font-family: var(--serif); font-size: 14.5px;
+                     padding: 3px 0; }
+  #apphost { font-family: var(--mono); font-size: 11px; }
+  @media (max-width: 600px) { #apphost { display: none; } }
+
+  /* ── the ledger: the activity drawer ─────────────────────────────── */
+  #ledger { position: fixed; top: 0; right: 0; bottom: 0; width: 380px;
+            max-width: 92vw; z-index: 15; background: var(--paper);
+            border-left: 1px solid var(--line); box-shadow: var(--shadow);
+            display: flex; flex-direction: column; padding: 12px 16px;
+            transform: translateX(100%); visibility: hidden;
+            transition: transform .18s ease-out, visibility 0s linear .18s; }
+  #ledger.open { transform: none; visibility: visible;
+                 transition: transform .18s ease-out; }
+  #ledger:focus { outline: none; }
+  .ledger-head { display: flex; align-items: baseline; gap: 8px;
+                 border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+  .ledger-scope { font-family: var(--mono); font-size: 10.5px;
+                  color: var(--muted); }
+  .ledger-close { border: none; background: none; color: var(--muted);
+                  font-size: 14px; line-height: 1; padding: 3px 7px;
+                  margin-left: auto; border-radius: 3px; }
+  .ledger-close:hover { color: var(--ink); background: var(--chipbg);
+                        border: none; }
+  @media (max-width: 700px) {
+    #ledger { top: auto; left: 0; width: auto; max-width: none;
+              height: 60vh; border-left: none;
+              border-top: 1px solid var(--line);
+              transform: translateY(100%); }
+  }
+  #ledgerpip { display: none; font-family: var(--mono); font-size: 10px;
+               font-weight: 500; background: var(--verdigris); color: #fff;
+               border-radius: 999px; padding: 1px 6px; margin-left: 6px;
+               vertical-align: 1px; }
+  #ledgerpip.law { background: var(--law); }
+  .feed { flex: 1; min-height: 0; margin-top: 6px; overflow-y: auto;
+          overscroll-behavior: contain; }
+  .feed .ev { padding: 7px 0; border-bottom: 1px solid var(--line);
+              font-size: 13px; }
+  .ev-time { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+  .actor-chip { font-weight: 600; cursor: pointer; font-size: 12.5px; }
+  .actor-chip:hover { text-decoration: underline; }
+  .actor-mark { font-size: 10px; }
+  .actor-mark.human { color: var(--ink); }
+  .actor-mark.agent { color: var(--verdigris); }
+  .actor-mark.system { color: var(--muted); }
+  .anchor { color: var(--law); font-size: 10px; cursor: help; margin-left: 5px; }
+  .ev-body { margin-top: 1px; }
+  .feed .ev.deriv { color: var(--muted); font-family: var(--mono);
+                    font-size: 11.5px; }
+  .feed .ev.deriv a { color: var(--muted); }
+  .feed .ev.followed { background: var(--verdigris-wash);
+                       border-left: 3px solid var(--verdigris);
+                       padding-left: 6px; }
+  .feed .ev.law-line { border-top: 2px solid var(--law);
+                       border-bottom: 1px solid var(--line);
+                       padding: 8px 0; animation: law-in .24s ease-out; }
+  @keyframes law-in { from { opacity: 0; transform: translateY(-3px); } }
+  .law-stamp { color: var(--law); font-weight: 700; font-size: 12.5px;
+               white-space: nowrap; }
+  .law-detail, .law-link { font-family: var(--mono); font-size: 11px;
+               color: var(--law); }
+  .law-link:hover { color: var(--law); }
+  .law-chip { font-family: var(--mono); font-size: 10px; }
+
+  /* ── the per-resource history panel ──────────────────────────────── */
+  .history { border-top: 1px solid var(--line); margin-top: 14px;
+             padding-top: 8px; }
+  .history > summary { cursor: pointer; font-size: 13px; }
+  .history .ev { padding: 7px 0; border-bottom: 1px solid var(--line);
+                 font-size: 13px; }
+  .history .ev:last-child { border-bottom: none; }
+
+  /* ── the deploy history: the definitions collection as a screen ─── */
+  .rev-row { padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .rev-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .rev-token { font-family: var(--mono); font-size: 12.5px; font-weight: 500;
+               color: var(--law); white-space: nowrap; }
+  .rev-summary { font-family: var(--serif); font-size: 14px; margin: 4px 0; }
+  .diff-chip { font: 600 10px var(--sans); border-radius: 3px;
+               padding: 1px 6px; background: var(--law-wash);
+               color: var(--law); cursor: help; }
+  .hash { font-size: 10.5px; color: var(--muted); cursor: help; }
+
+  /* a guard-refused action keeps its seat in the bar, dimmed */
+  button.blocked { opacity: .55; cursor: not-allowed; }
+  .blockedwhy { margin: 2px 0 4px; }
+  .blockedwhy .item { font-size: 13px; padding: 3px 0; }
+  .blockedwhy .item b { font-weight: 700; }
+  .blockedwhy .why { font-family: var(--serif); font-size: 14px;
+                     color: var(--ink); }
+
+  #toast { position: fixed; bottom: 40px; left: 50%; transform: translateX(-50%);
+           background: var(--ink); color: #fff; padding: 10px 18px;
+           border-radius: var(--radius); display: none; z-index: 20;
+           box-shadow: var(--shadow); max-width: 94vw;
+           animation: toast-in .18s ease-out; }
+  @keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
+  #toast button { background: none; border: none; color: #9fd0b5;
+                  margin-left: 10px; font-weight: 600; }
+  #ticker { position: fixed; bottom: 0; left: 0; right: 0; z-index: 14;
+            background: var(--panel); border-top: 1px solid var(--line);
+            font-size: 12px; color: var(--muted); padding: 4px 18px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #ticker b { color: var(--ink); font-weight: 600; }
+  #ticker .mono { font-size: 11px; }
+
+  /* refusals and problems speak in the server's voice: serif */
+  .problem { background: var(--refusal-wash); border: 1px solid var(--line);
+             border-left: 3px solid var(--refusal); color: var(--ink);
+             border-radius: var(--radius); padding: 10px 14px;
+             margin: 10px 0; font-family: var(--serif); font-size: 14px; }
+  .problem b { color: var(--refusal); }
+  .problem ul { margin: 6px 0 0; padding-left: 18px; font-size: 13.5px; }
+  .validok { color: var(--verdigris-deep); font-size: 13.5px; margin: 8px 0; }
+  .warnbox { border: 1px solid var(--line); border-left: 3px solid var(--warn);
+             background: var(--warn-wash);
+             border-radius: var(--radius); padding: 8px 12px; margin: 10px 0; }
+  .warnbox ul { margin: 6px 0 0; padding-left: 18px;
+                font-family: var(--serif); font-size: 13.5px; }
+  .consequence { font-family: var(--serif); font-size: 14.5px;
+                 line-height: 1.45; margin: 8px 0; padding: 8px 12px;
+                 border: 1px solid var(--line); border-left: 3px solid var(--warn);
+                 border-radius: var(--radius); }
+  .blast { border: 1px solid var(--line); border-radius: var(--radius);
+           padding: 8px 12px; margin: 0 0 12px; }
+  .blast b { font-size: 12px; }
+
+  dialog { border: 1px solid var(--line); border-radius: var(--radius);
+           padding: 0; width: min(480px, 94vw); max-height: 92dvh;
+           overflow-y: auto; box-shadow: var(--shadow);
+           background: var(--panel); color: var(--ink); }
+  dialog::backdrop { background: rgba(32,38,31,.28); }
+  .dlghead { padding: 16px 18px 4px; }
+  .dlghead h3 { margin: 0 0 4px; font-weight: 800; font-size: 16px; }
+  .dlghead .metaline { margin: 0; }
+  .dlgbody { padding: 4px 18px 8px; }
+  .dlgfoot { padding: 12px 18px 16px; display: flex; gap: 8px;
+             justify-content: flex-end; align-items: center; }
+  .dlgfoot .hint { margin-right: auto; color: var(--muted); font-size: 12px; }
+  .field { margin: 10px 0; }
+  .field label { display: block; margin: 0 0 3px; font-size: 12px;
+                 color: var(--muted); }
+  .field label b { color: var(--ink); font-weight: 600; }
+  .field input[type=text], .field input[type=date], .field input[type=number],
+  .field select, .field textarea { width: 100%; }
+  .field textarea { min-height: 110px; font-family: var(--mono);
+                    font-size: 12.5px; }
+  .field .err { color: var(--refusal); font-family: var(--serif);
+                font-size: 12.5px; margin-top: 2px; }
+  .field .err.srv::before { content: "server: "; color: var(--muted);
+                            font-family: var(--sans); font-size: 11px; }
+  .field .const { padding: 7px 9px; border: 1px dashed var(--line);
+                  border-radius: var(--radius); background: var(--chipbg);
+                  color: var(--muted); font-family: var(--mono);
+                  font-size: 12px; }
+  .req { color: var(--refusal); }
+  .draftnote { color: var(--muted); font-size: 12px; margin: 6px 0; }
+  .draftnote .bad { color: var(--warn); font-family: var(--serif); }
+
+  /* batch verdicts / bulk reports: outcomes are machine truth */
+  .verdict-totals { font-family: var(--mono); font-size: 11.5px;
+                    margin: 8px 0 4px; color: var(--muted); }
+  table.verdicts { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  table.verdicts th { text-align: left; font-size: 10.5px; color: var(--muted);
+                      padding: 4px 8px 4px 0;
+                      border-bottom: 1px solid var(--line); }
+  table.verdicts td { padding: 4px 8px 4px 0;
+                      border-bottom: 1px solid var(--line); vertical-align: top; }
+  table.verdicts td.reason { font-family: var(--serif); font-size: 13px; }
+  .verdict-ok { color: var(--verdigris-deep); font-weight: 600; }
+  .verdict-refused { color: var(--refusal); font-weight: 600; }
+  .verdict-failed { color: var(--refusal); font-weight: 700; }
+
+  .pager { display: flex; gap: 10px; margin-top: 10px; align-items: center; }
+  .pager .muted { font-family: var(--mono); font-size: 11px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  @media (max-width: 900px) { main { margin: 12px auto; padding: 0 10px; } }
+  @media (max-width: 600px) {
+    header { padding: 8px 10px; gap: 10px; }
+    .panel { padding: 12px; }
+    h2 { font-size: 17px; }
+    .summary { font-size: 16px; }
+    table.kv td.k { width: 40%; }
+    select, input, textarea, button { font-size: 16px; padding: 8px 12px; }
+    dialog { width: 94vw; }
+    .actions button { flex: 1 1 auto; }
+  }
+  @media (pointer: coarse) { button { padding: 9px 14px; } }
 </style>
 </head>
 <body>
 <header>
-  <span class="brand">waymark <small>10</small></span>
-  <nav id="nav"></nav>
-  <input id="who" placeholder="principal" title="dev principal (x-waymark-principal)">
-  <span id="live" title="event stream"></span>
+  <h1><a href="#">Waymark</a></h1>
+  <span id="apphost" class="muted"></span>
+  <nav id="kinds"></nav>
+  <span id="lawstamp"></span>
+  <span id="grantchip"></span>
+  <span id="followchip"></span>
+  <div class="spacer"></div>
+  <input id="who" placeholder="principal"
+         title="dev principal (x-waymark-principal)">
+  <button id="ledgertoggle" style="font-size:12px;padding:4px 10px"
+          aria-expanded="false" aria-controls="ledger"
+          title="the live ledger — every transition as it lands">
+    ◷ Activity<span id="ledgerpip"></span></button>
 </header>
-<main id="main"></main>
-<div id="toasts"></div>
+<main>
+  <section id="view"></section>
+</main>
+<aside id="ledger" role="complementary" aria-label="Activity" tabindex="-1">
+  <div class="ledger-head">
+    <b>Activity</b>
+    <span class="ledger-scope"
+          title="the whole workspace's stream, every kind">everything</span>
+    <button class="ledger-close" id="ledgerclose" type="button"
+            aria-label="close activity">✕</button>
+  </div>
+  <div class="feed" id="feed"></div>
+</aside>
+<div id="toast"></div>
 <div id="ticker"></div>
+
 <script>
 "use strict";
-/* ════ tiny DOM + fetch layer ═══════════════════════════════════════ */
-function el(tag, attrs, ...children) {
-  const node = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs || {})) {
-    if (k === "class") node.className = v;
-    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
-    else if (v !== null && v !== undefined) node.setAttribute(k, v);
+/* The generic human client (spec Part IV), waymark9's ui.html ported to
+   wire 10: route = self · screen = envelope · buttons = actions ·
+   disabled-with-tooltip = unavailable · forms = input schema · filter
+   bar = the collection query schema · live updates + activity feed =
+   the events stream. It consumes only the envelope — it invents no
+   affordances.
+
+   Wire-10 deltas this port absorbs (docs/waymark10-design.md, closing
+   table): "waymark": "10"; dev identity = x-waymark-principal /
+   x-waymark-roles / x-waymark-actor-type; grants scope by
+   X-Waymark-Grant (a selector, not a credential); guard names on the
+   wire are kebab; drafts 404 until saved and answer {values,
+   base_version, prefill, revs, authors}; live collab speaks
+   waymark-relay/2 (set/edit/ack/stale/update/presence/regate/sync);
+   the SSE surface frames `event: transition` (with ids) and
+   `event: derivation`; collection items are envelope-minus-data;
+   embeds arrive server-spliced as links.<rel>.embedded.
+
+   Named gaps, so nobody hunts for silent stubs:
+   - presence/follow-navigation chrome: wire 10 serves no /-/presence
+     route — following below steers on the firehose's transitions only.
+   - provenance cells (x-source/x-authority/x-derived): the v10
+     published schema does not emit them; the costumes stay retired.
+   - the batch textarea (9's design §7): v10 serves the batch route but
+     advertises no entry.batch — the page invents no affordance.
+   - x-display.relation bounds and if/then conditional arms: not
+     emitted by the v10 schema publisher.
+   - recomputing honesty banners: v10 meta carries no `recomputing`.
+   - the agent-token brief: v10 grants mint no opaque bearer token; the
+     grant screen instead scopes THIS session via X-Waymark-Grant. */
+
+const $ = (s, el=document) => el.querySelector(s);
+const uuid = () => {
+  if (crypto.randomUUID) return crypto.randomUUID();
+  const b = new Uint8Array(16);
+  (crypto.getRandomValues ? crypto.getRandomValues(b)
+    : b.forEach((_, i) => b[i] = Math.floor(Math.random() * 256)));
+  b[6] = (b[6] & 0x0f) | 0x40; b[8] = (b[8] & 0x3f) | 0x80;
+  const h = [...b].map(x => x.toString(16).padStart(2, "0"));
+  return `${h.slice(0,4).join("")}-${h.slice(4,6).join("")}-${h.slice(6,8).join("")}`
+       + `-${h.slice(8,10).join("")}-${h.slice(10,16).join("")}`;
+};
+const pretty = s => String(s).replace(/_/g, " ");
+const title = s => { const t = pretty(s); return t.charAt(0).toUpperCase() + t.slice(1); };
+const el = (tag, attrs={}, ...kids) => {
+  const n = document.createElement(tag);
+  for (const [k,v] of Object.entries(attrs)) {
+    if (k === "onclick") n.addEventListener("click", v);
+    else if (v !== undefined && v !== null) n.setAttribute(k, v);
   }
-  for (const c of children.flat(Infinity)) {
-    if (c === null || c === undefined) continue;
-    node.append(c.nodeType ? c : document.createTextNode(String(c)));
-  }
-  return node;
-}
-const $main = document.getElementById("main");
-const $who = document.getElementById("who");
+  for (const kid of kids.flat(Infinity)) if (kid != null)
+    n.append(kid.nodeType ? kid : document.createTextNode(kid));
+  return n;
+};
+
+/* ── identity: the dev principal + the session's grant scope ───────── */
+const $who = $("#who");
 $who.value = localStorage.getItem("wm10.principal") || "";
 $who.addEventListener("change", () => {
   localStorage.setItem("wm10.principal", $who.value.trim());
   render();
 });
-function headers(extra) {
-  const h = Object.assign({"Content-Type": "application/json"}, extra || {});
-  const who = $who.value.trim();
+function principalId() { return $who.value.trim(); }
+function principalHeaders() {
+  const h = {};
+  const who = principalId();
   if (who) h["x-waymark-principal"] = who;
+  /* the v10 grant scope: a grant id is a scope SELECTOR the audience
+     principal presents — not a credential (waymark9 minted opaque
+     bearer tokens instead; wire 10 does not) */
+  const grant = localStorage.getItem("wm10.grant");
+  if (grant) h["X-Waymark-Grant"] = grant;
   return h;
 }
-async function api(href, opts) {
-  opts = opts || {};
+function grantChip() {
+  const chip = $("#grantchip");
+  const grant = localStorage.getItem("wm10.grant");
+  chip.textContent = "";
+  chip.style.display = grant ? "inline-block" : "none";
+  if (grant) chip.append(`grant ${grant.slice(0, 8)}`,
+    el("button", {title: "leave the grant scope", onclick: () => {
+      localStorage.removeItem("wm10.grant"); grantChip(); render();
+    }}, "✕"));
+}
+grantChip();
+
+async function api(href, opts={}) {
   const res = await fetch(href, {method: opts.method || "GET",
-                                 headers: headers(opts.headers),
-                                 body: opts.body});
+    headers: {...principalHeaders(),
+              ...(opts.body !== undefined ? {"Content-Type": "application/json"} : {}),
+              ...(opts.headers || {})},
+    body: opts.body});
   const text = await res.text();
   let body = null;
   try { body = text ? JSON.parse(text) : null; } catch (_e) { body = {unparsed: text}; }
-  return {status: res.status, ok: res.status < 400, body,
+  return {res, status: res.status, ok: res.status < 400, body,
           etag: res.headers.get("ETag")};
 }
-function toast(msg, bad) {
-  const t = el("div", {class: "toast" + (bad ? " bad" : "")}, msg);
-  document.getElementById("toasts").append(t);
-  setTimeout(() => t.remove(), 5000);
-}
-function title(s) {
-  return String(s).replaceAll("_", " ").replace(/^./, c => c.toUpperCase());
-}
-function go(href) { location.hash = href; }
 
-/* ════ discovery (well-known drives everything) ═════════════════════ */
-let INDEX = null;
-async function wellKnown() {
-  if (!INDEX) {
-    const res = await api("/api/.well-known/waymark");
-    if (res.ok) INDEX = res.body;
-  }
-  return INDEX;
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.style.display = "block";
+  setTimeout(() => t.style.display = "none", 4000);
 }
-/* the kinds every engine enrolls beside the app's — grouped, not hidden */
-const ENGINE_KINDS = new Set(["definition","member","role","grant",
-                              "attachment","subscription","job"]);
-const SCHEMAS = {};   /* kind → published data schema (x-display hints) */
+
+/* live countdown timers die with the screen that owns them */
+const liveTimers = [];
+function clearLiveTimers() {
+  while (liveTimers.length) clearInterval(liveTimers.pop());
+}
+
+/* ── discovery: well-known drives everything ───────────────────────── */
+let wellKnownCache = null;   // caches the PROMISE: concurrent callers share
+function wellKnown() {
+  if (!wellKnownCache)
+    wellKnownCache = api("/api/.well-known/waymark").then(
+      r => { if (!r.ok) throw new Error("no discovery"); return r.body; },
+      err => { wellKnownCache = null; throw err; });
+  return wellKnownCache;
+}
+/* v10's well-known lists kinds flat (no engine/secondary tiers on the
+   wire — a recorded difference from 9's discovery); the engine's own
+   kinds fold behind the ⋯ by this client-side set. */
+const ENGINE_KINDS = new Set(["definition", "member", "role", "grant",
+                              "attachment", "subscription", "job"]);
+function collectionHref(idx, kind) {
+  return (((idx || {}).resources || {})[kind] || {}).href || null;
+}
+
+/* published data schemas: x-display hints per kind */
+const dataHintsCache = {};
 async function kindSchema(kind) {
-  if (!(kind in SCHEMAS)) {
-    const res = await api("/api/schemas/" + kind);
-    SCHEMAS[kind] = res.ok ? res.body : null;
+  if (!(kind in dataHintsCache)) {
+    try {
+      const {ok, body} = await api(`/api/schemas/${kind}`);
+      dataHintsCache[kind] = ok ? body : {};
+    } catch { dataHintsCache[kind] = {}; }
   }
-  return SCHEMAS[kind];
+  return dataHintsCache[kind];
 }
-async function renderNav(current) {
-  const idx = await wellKnown();
-  const nav = document.getElementById("nav");
-  nav.replaceChildren();
-  if (!idx) return;
-  const entries = Object.entries(idx.resources || {});
-  const app = entries.filter(([k]) => !ENGINE_KINDS.has(k));
-  const eng = entries.filter(([k]) => ENGINE_KINDS.has(k));
-  const link = ([kind, {href}]) =>
-    el("a", {href: "#" + href, class: current === href ? "on" : ""},
-       title(kind) + "s");
-  nav.append(el("a", {href: "#", class: current ? "" : "on"}, "Home"));
-  nav.append(...app.map(link));
-  if (eng.length) nav.append(el("span", {class: "sep"}, "·"), ...eng.map(link));
+function xdisplay(schema, field) {
+  const prop = ((schema || {}).properties || {})[field] || {};
+  return prop["x-display"] || schemaProp(prop)["x-display"] || {};
+}
+function xref(prop) {
+  if (!prop || typeof prop !== "object") return null;
+  const sub = schemaProp(prop);
+  return prop["x-ref"] || sub["x-ref"] ||
+    (prop.format === "waymark-ref" || sub.format === "waymark-ref" ? {} : null);
 }
 
-/* ════ routing: the URL hash IS the href ════════════════════════════ */
-async function render() {
-  const href = decodeURIComponent(location.hash.replace(/^#/, ""));
-  await renderNav(href.split("?")[0].split("/").slice(0, 3).join("/"));
-  $main.replaceChildren(el("p", {class: "meta"}, "…"));
-  try {
-    if (!href) return renderHome();
-    if (/^\/api\/surfaces\//.test(href)) return renderSurface(href);
-    if (/^\/api\/[^/]+\/[^/?]+/.test(href)) return renderResource(href);
-    if (/^\/api\/[^/]+/.test(href)) return renderCollection(href);
-    $main.replaceChildren(el("p", {}, "Nothing at ", el("code", {}, href)));
-  } catch (e) {
-    $main.replaceChildren(el("div", {class: "problem"}, String(e)));
-  }
-}
+/* ── routing: the URL hash IS the resource href ────────────────────── */
+function go(href) { location.hash = href; }
 window.addEventListener("hashchange", render);
 
-/* ════ home: the workspace, from discovery alone ════════════════════ */
-async function renderHome() {
-  const idx = await wellKnown();
-  if (!idx) {
-    $main.replaceChildren(el("div", {class: "problem"},
+let renderSeq = 0;
+async function render() {
+  const seq = ++renderSeq;               // fetch first, swap after — a
+  const href = decodeURIComponent(location.hash.slice(1)) || null;
+  const view = $("#view");               // superseded render never blanks
+  renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
+  if (!href) { lawStamp(null); return renderHome(view, seq); }
+  if (/^\/api\/surfaces\//.test(href)) {
+    const {ok, body} = await api(href);
+    if (seq !== renderSeq) return;
+    clearLiveTimers(); view.textContent = ""; lawStamp(null);
+    if (!ok) return view.append(problemBox(body));
+    return renderSurface(view, body);
+  }
+  const {ok, body} = await api(href);
+  let hints = {};
+  if (ok && body && body.kind)
+    hints = await kindSchema(String(body.kind).replace(/_collection$/, ""));
+  if (seq !== renderSeq) return;
+  clearLiveTimers();
+  view.textContent = "";
+  lawStamp(ok ? body : null);
+  if (!ok) return view.append(problemBox(body));
+  if (body.kind === "definition_collection") renderDeployHistory(view, body);
+  else if (body.kind && body.kind.endsWith("_collection"))
+    renderCollection(view, body, hints);
+  else renderResource(view, body, hints);
+}
+
+/* ── the law stamp: the envelope's own meta.law_revision, read straight
+   off the wire — the deploy history is one click away ──────────────── */
+function lawStamp(doc) {
+  const box = $("#lawstamp");
+  box.textContent = "";
+  const rev = doc?.meta?.law_revision;
+  if (rev == null || !doc.kind) return;
+  const kind = String(doc.kind).replace(/_collection$/, "");
+  wellKnown().then(w => {
+    const col = collectionHref(w, "definition");
+    if (!col || !document.contains(box)) return;
+    box.append(el("a",
+      {href: `#${col}?target_kind=${encodeURIComponent(kind)}`,
+       title: `the law in force for ${pretty(kind)} — revision ${rev}. `
+            + `Click for the deploy history.`},
+      `⚖ rev ${rev}`));
+  }).catch(() => {});
+}
+
+/* ── the nav: built from discovery on EVERY load — a deep link
+   hard-refreshed must not arrive without its navigation. Domain kinds
+   sit inline; the engine's own kinds tuck behind a quiet ⋯ menu. ───── */
+async function renderNav(current) {
+  let w;
+  try { w = await wellKnown(); } catch { return; }
+  const nav = $("#kinds"); nav.textContent = "";
+  const entries = Object.entries(w.resources || {});
+  for (const [kind, {href}] of entries)
+    if (!ENGINE_KINDS.has(kind))
+      nav.append(el("a", {href: "#" + href,
+        style: current === href ? "font-weight:700" : ""}, title(kind) + "s"));
+  const tucked = entries.filter(([kind]) => ENGINE_KINDS.has(kind));
+  if (tucked.length) nav.append(overflowMenu(tucked));
+}
+
+function overflowMenu(engineEntries) {
+  const wrap = el("span", {class:"nav-more-wrap"});
+  const menu = el("div", {class:"nav-menu", role:"menu"});
+  const btn = el("button", {class:"nav-more", type:"button",
+    "aria-haspopup":"true", "aria-expanded":"false",
+    title: "engine kinds — the machinery's own resources"}, "⋯");
+  const close = () => { menu.style.display = "none";
+                        btn.setAttribute("aria-expanded", "false"); };
+  const open = () => { menu.style.display = "block";
+                       btn.setAttribute("aria-expanded", "true");
+                       (menu.querySelector("a") || btn).focus(); };
+  btn.addEventListener("click", () =>
+    menu.style.display === "block" ? close() : open());
+  wrap.addEventListener("keydown", ev => {
+    if (ev.key === "Escape" && menu.style.display === "block") {
+      ev.stopPropagation(); close(); btn.focus(); }
+  });
+  document.addEventListener("pointerdown", ev => {
+    if (!wrap.contains(ev.target)) close(); });
+  for (const [kind, {href}] of engineEntries)
+    menu.append(el("a", {href: "#" + href, role:"menuitem", onclick: close},
+      ...(kind === "definition" ? [el("span", {class:"law-mark"}, "⚖ ")] : []),
+      title(kind) + "s"));
+  wrap.append(btn, menu);
+  return wrap;
+}
+
+/* Build a filtered link by merging params into the advertised href —
+   the server owns its URL shapes; this client only ever adds a query. */
+function mergeParams(href, params) {
+  const [base, q] = href.split("?");
+  const qs = new URLSearchParams(q || "");
+  for (const [k, v] of Object.entries(params)) qs.set(k, v);
+  const s = qs.toString();
+  return s ? `${base}?${s}` : base;
+}
+
+/* ── home: the dashboard — one rows=none envelope per domain kind (a
+   single COUNT, no per-row probes) whose x-facets carry the per-state
+   counts; the engine kinds and declared surfaces below. ────────────── */
+async function renderHome(view, seq) {
+  let w;
+  try { w = await wellKnown(); } catch {
+    view.textContent = "";
+    return view.append(el("div", {class:"problem"},
       "Cannot reach /api/.well-known/waymark"));
-    return;
   }
-  const cards = [];
-  for (const [kind, {href}] of Object.entries(idx.resources || {})) {
-    if (ENGINE_KINDS.has(kind)) continue;
-    cards.push(el("div", {class: "card rowlink", onclick: () => go(href)},
-      el("b", {}, title(kind) + "s"), " ",
-      el("span", {class: "meta mono"}, href)));
+  if (seq !== renderSeq) return;
+  clearLiveTimers();
+  view.textContent = "";
+  const entries = Object.entries(w.resources || {});
+  const domain = entries.filter(([kind]) => !ENGINE_KINDS.has(kind));
+
+  const strip = el("div");             // fills only if something is nonzero
+  const grid = el("div", {class:"dash-grid"});
+  view.append(strip, grid);
+  const attention = [];
+
+  const settling = domain.map(([kind, {href}]) => {
+    const card = el("div", {class:"kind-card"});
+    grid.append(card);
+    return fillDashCard(card, kind, href);
+  });
+  /* the engine vitals: running/queued jobs surface as attention (a
+     kind the engine did not enroll simply contributes nothing) */
+  const jobHref = collectionHref(w, "job");
+  if (jobHref)
+    settling.push(api(mergeParams(jobHref, {rows: "none"})).then(({ok, body}) => {
+      if (!ok) return;
+      const facets = body.actions?.query?.input?.properties
+        ?.state?.["x-facets"] || {};
+      const live = ["running", "queued"].filter(s => facets[s] > 0);
+      const n = live.reduce((sum, s) => sum + facets[s], 0);
+      if (n) attention.push(el("div", {class:"item"},
+        el("a", {href: "#" + mergeParams(jobHref, {state: live.join(",")})},
+          el("span", {class:"mono"}, String(n)),
+          n === 1 ? " job is running or queued." : " jobs are running or queued.")));
+    }).catch(() => {}));
+
+  await Promise.allSettled(settling);
+  if (seq !== renderSeq) return;
+  if (attention.length) strip.append(el("div", {class:"attention"}, attention));
+  else strip.remove();
+
+  const engine = entries.filter(([kind]) => ENGINE_KINDS.has(kind));
+  if (engine.length) {
+    view.append(el("h3", {class:"sect"}, "Engine kinds"),
+      el("div", {class:"chips"}, engine.map(([kind, {href}]) =>
+        el("a", {href: "#" + href, class: "link-chip"}, title(kind) + "s"))));
   }
-  const engine = Object.entries(idx.resources || {})
-    .filter(([k]) => ENGINE_KINDS.has(k))
-    .map(([kind, {href}]) => el("a", {href: "#" + href, class: "chip"},
-                                title(kind) + "s"));
-  const surfaces = Object.entries(idx.surfaces || {}).map(([name, {href}]) =>
-    el("li", {}, el("code", {}, name), " ", el("span", {class: "meta mono"}, href),
-       el("span", {class: "meta"}, " — open from an anchor row")));
-  $main.replaceChildren(
-    el("h1", {}, "Workspace"),
-    el("p", {class: "meta"}, "waymark " + idx.waymark +
-       " · everything below was read from the wire"),
-    ...cards,
-    engine.length ? el("h2", {}, "Engine kinds") : null,
-    engine.length ? el("div", {class: "chips"}, engine) : null,
-    surfaces.length ? el("h2", {}, "Declared surfaces") : null,
-    surfaces.length ? el("ul", {class: "notnow"}, surfaces) : null);
+  const surfaces = Object.entries(w.surfaces || {});
+  if (surfaces.length) {
+    view.append(el("h3", {class:"sect"}, "Declared surfaces"),
+      el("div", {class:"chips"}, surfaces.map(([name, {href}]) =>
+        el("span", {class:"surface-link", title: href + " — open from an anchor row"},
+          "⧉ " + name))));
+  }
 }
 
-/* ════ collections: the query grammar as a screen ═══════════════════ */
-function parseQuery(href) {
+/* One domain kind's card: humanized name, the count in mono, state-facet
+   chips as filtered links, the advertised create affordance. */
+async function fillDashCard(card, kind, href) {
+  let env;
+  try {
+    const {ok, body} = await api(mergeParams(href, {rows: "none"}));
+    if (!ok) { card.remove(); return null; }   // degrade silently
+    env = body;
+  } catch { card.remove(); return null; }
+  card.textContent = "";
+  card.append(el("div", {class:"kc-head"},
+    el("h3", {}, el("a", {href: "#" + href}, title(kind) + "s"))));
+  const total = env.data?.total ?? 0;
+  if (!total)
+    card.append(el("div", {class:"kc-none"}, "none yet"));
+  else {
+    card.append(el("div", {class:"kc-total", title: `${total} total`},
+      String(total)));
+    const facets = env.actions?.query?.input?.properties
+      ?.state?.["x-facets"] || {};
+    const chips = Object.entries(facets).filter(([, n]) => n > 0);
+    if (chips.length)
+      card.append(el("div", {class:"kc-chips"}, chips.map(([s, n]) =>
+        el("a", {class: "chip", href: "#" + mergeParams(href, {state: s}),
+                 title: `${pretty(s)} ${pretty(kind)}s`}, `${pretty(s)} ${n}`))));
+  }
+  const create = env.actions?.create;
+  if (create) {
+    const btn = actionButton({name: "create", entry: create, doc: env,
+      label: "New", small: true, onDone: b => { if (b?.self) go(b.self); }});
+    btn.classList.add("primary");
+    card.append(el("div", {class:"kc-foot"}, btn));
+  }
+  return env;
+}
+
+/* ── collection screen ─────────────────────────────────────────────── */
+function parseHrefQuery(href) {
   const [path, q] = href.split("?");
-  const params = new URLSearchParams(q || "");
-  return {path, params};
+  return {path, params: new URLSearchParams(q || "")};
 }
-async function renderCollection(href) {
-  const res = await api(href);
-  if (!res.ok) return renderProblem(res);
-  const doc = res.body;
-  const {path, params} = parseQuery(href);
-  const query = ((doc.actions || {}).query || {}).input || {};
-  const props = query.properties || {};
 
-  /* facet chips: x-facets counts per faceted field, current filters lit */
-  const chipRows = [];
-  for (const [field, prop] of Object.entries(props)) {
+/* Active scalar filters whose names exactly match create-input
+   properties become prefills — the user was already looking at that
+   slice, so the form starts there (still editable). */
+function filterPrefill(selfHref, entry) {
+  const props = entry.input?.properties || {};
+  const out = {};
+  for (const [k, v] of new URLSearchParams(selfHref.split("?")[1] || "")) {
+    if (["page", "sort", "rows"].includes(k) || k.startsWith("page[")) continue;
+    if (/_(gte|lte)$/.test(k)) continue;
+    if (!v || v.includes(",")) continue;
+    if (k in props) out[k] = v;
+  }
+  return out;
+}
+
+function filterBar(query, selfHref) {
+  const {path, params} = parseHrefQuery(selfHref);
+  const bar = el("div", {class:"filterbar"});
+  const props = query.input?.properties || {};
+  const apply = (name, value) => {
+    const p = new URLSearchParams(params);
+    if (value) p.set(name, value); else p.delete(name);
+    p.delete("page[number]");
+    go(path + (p.toString() ? "?" + p : ""));
+  };
+  for (const [name, prop] of Object.entries(props)) {
+    if (name.startsWith("page[")) continue;
+    let input;
+    if (prop.enum) {
+      input = el("select", {name});
+      input.append(el("option", {value: ""},
+        name === "sort" ? "sort: default" : "—"));
+      for (const v of prop.enum) {
+        const count = prop["x-facets"]?.[v];
+        input.append(el("option", {value: v},
+          (name === "sort" ? "sort: " : "") + pretty(v)
+          + (count !== undefined ? ` (${count})` : "")));
+      }
+      input.value = params.get(name) || "";
+      input.addEventListener("change", () => apply(name, input.value));
+    } else {
+      input = el("input", {name, value: params.get(name) || "",
+        type: prop.type === "integer" || prop.type === "number" ? "number" : "text",
+        step: "any", placeholder: prop.format || prop.type || ""});
+      input.addEventListener("change", () => apply(name, input.value));
+    }
+    bar.append(el("label", {title: name},
+      xdisplay(query.input, name).label || title(name), input));
+  }
+  return bar;
+}
+
+/* facet chips: x-facets counts per faceted field, current filters lit —
+   a chip click toggles membership in the comma list (x-in). */
+function facetChips(query, selfHref) {
+  const {path, params} = parseHrefQuery(selfHref);
+  const rows = [];
+  for (const [field, prop] of Object.entries(query.input?.properties || {})) {
     if (!prop["x-facets"]) continue;
     const active = (params.get(field) || "").split(",").filter(Boolean);
     const chips = Object.entries(prop["x-facets"]).map(([value, count]) => {
@@ -325,324 +913,657 @@ async function renderCollection(href) {
           if (next.length) p.set(field, next.join(",")); else p.delete(field);
           p.delete("page[number]");
           go(path + (p.toString() ? "?" + p : ""));
-        }}, value + " · " + count);
+        }}, `${value} · ${count}`);
     });
-    chipRows.push(el("div", {class: "chips"},
-      el("span", {class: "chip static"}, el("b", {}, field)), chips));
+    if (chips.length)
+      rows.push(el("div", {class:"chips"},
+        el("span", {class:"chip static"}, el("b", {}, field)), chips));
   }
-  /* state filter + sort, straight from the advertised query schema */
-  const bar = el("div", {class: "chips"});
-  if (props.state && props.state.enum) {
-    const sel = el("select", {onchange: e => {
-      const p = new URLSearchParams(params);
-      if (e.target.value) p.set("state", e.target.value); else p.delete("state");
-      p.delete("page[number]");
-      go(path + (p.toString() ? "?" + p : ""));
-    }}, el("option", {value: ""}, "any state"),
-      props.state.enum.map(s => el("option",
-        {value: s, selected: params.get("state") === s ? "" : null}, s)));
-    bar.append(sel);
-  }
-  if (props.sort && props.sort.enum) {
-    const sel = el("select", {onchange: e => {
-      const p = new URLSearchParams(params);
-      if (e.target.value) p.set("sort", e.target.value); else p.delete("sort");
-      go(path + (p.toString() ? "?" + p : ""));
-    }}, el("option", {value: ""}, "sort: default"),
-      props.sort.enum.map(s => el("option",
-        {value: s, selected: params.get("sort") === s ? "" : null}, "sort: " + s)));
-    bar.append(sel);
-  }
+  return rows;
+}
 
-  /* bulk affordances → a checkbox column + one button per bulk action */
+function pagerOf(doc) {
+  const page = doc.data?.page || {};
+  const pager = el("div", {class:"pager"});
+  if (doc.links?.prev) pager.append(el("a", {href:"#"+doc.links.prev.href}, "← prev"));
+  pager.append(el("span", {class:"muted"},
+    `page ${page.number || 1} · ${doc.data?.total ?? 0} total`));
+  if (doc.links?.next) pager.append(el("a", {href:"#"+doc.links.next.href}, "next →"));
+  return pager;
+}
+
+/* Collection items as a table. v10 items are envelope-minus-data
+   summaries (declared columns are a recorded absence on this wire), so
+   the columns are the honest ones: state, the server's own sentence,
+   updated — plus each row's HONEST action buttons. */
+function itemTable(items, opts) {
+  opts = opts || {};
+  if (!items.length) return el("p", {class:"muted"}, "No rows.");
+  const anyActions = !!opts.rowAction ||
+    items.some(i => i.actions && Object.keys(i.actions).length);
+  const head = el("tr", {},
+    opts.selectable ? el("th", {}, "") : null,
+    el("th", {}, "State"), el("th", {}, "Summary"), el("th", {}, "Updated"),
+    anyActions ? el("th", {}, "") : null);
+  const tbody = el("tbody", {});
+  for (const item of items) {
+    const row = el("tr", {},
+      opts.selectable ? el("td", {},
+        el("input", {type: "checkbox", "data-bulk-check": "",
+          onclick: e => e.stopPropagation()})) : null,
+      el("td", {}, el("span", {class:"statechip"}, item.state)),
+      el("td", {}, el("a", {href:"#"+item.self, title: item.self,
+        style:"display:inline-block;max-width:420px;overflow:hidden;" +
+              "text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom"},
+        item.summary)),
+      el("td", {class:"metaline mono"},
+        ((item.meta || {}).updated_at || "").slice(0, 16).replace("T", " ")));
+    if (opts.selectable) {
+      const box = row.querySelector("[data-bulk-check]");
+      const id = item.self.split("/").pop();
+      box.addEventListener("change", () =>
+        box.checked ? opts.selected.add(id) : opts.selected.delete(id));
+    }
+    if (anyActions) {
+      const cell = el("td", {class:"rowactions partactions"});
+      const extra = opts.rowAction ? opts.rowAction(item) : null;
+      if (extra) cell.append(extra);
+      for (const [name, entry] of Object.entries(item.actions || {}))
+        cell.append(actionButton({name, entry, doc: item, small: true,
+                                  onDone: () => render()}));
+      row.append(cell);
+    }
+    tbody.append(row);
+  }
+  const table = el("table", {class:"items"}, el("thead", {}, head), tbody);
+  return el("div", {style:"overflow-x:auto"}, table);
+}
+
+function renderCollection(view, doc, hints) {
+  const kind = doc.kind.replace("_collection", "");
+  const panel = el("div", {class:"panel"});
+  const colName = title(kind) + "s";
+  panel.append(el("div", {class:"crumbs"},
+    el("a", {href:"#"}, "Workspace"), " / ", colName));
+  panel.append(el("h2", {}, colName));
+  /* the server's own sentence, verbatim — it carries the honest filter
+     echo ("filtered: state=retired") and count */
+  if (doc.summary) panel.append(el("div", {class:"metaline"}, doc.summary));
+
+  const query = doc.actions?.query;
+  if (query) { panel.append(filterBar(query, doc.self));
+               panel.append(...facetChips(query, doc.self)); }
+
+  /* bulk affordances: a checkbox column plus one button per bulk action */
   const bulkActions = Object.entries(doc.actions || {})
-    .filter(([, e]) => (e.effect || {}).bulk);
+    .filter(([, e]) => e.effect && e.effect.bulk);
   const selected = new Set();
-
-  const items = (doc.data || {}).items || [];
-  const rows = items.map(item => {
-    const tr = el("tr", {class: "rowlink", onclick: () => go(item.self)},
-      bulkActions.length
-        ? el("td", {onclick: e => e.stopPropagation()},
-            el("input", {type: "checkbox", onchange: e => {
-              const id = item.self.split("/").pop();
-              e.target.checked ? selected.add(id) : selected.delete(id);
-            }}))
-        : null,
-      el("td", {}, el("span", {class: "statechip"}, item.state)),
-      el("td", {}, item.summary),
-      el("td", {class: "meta"},
-         ((item.meta || {}).updated_at || "").slice(0, 16).replace("T", " ")));
-    return tr;
-  });
-
-  const actionsBar = el("div", {class: "actions"});
-  if ((doc.actions || {}).create) {
-    actionsBar.append(el("button", {class: "primary",
-      onclick: () => actionDialog({name: "create", entry: doc.actions.create,
-                                   doc, onDone: out => {
-                                     if (out && out.self) go(out.self);
-                                     else render();
-                                   }})},
-      "New " + doc.kind.replace("_collection", "")));
+  const bar = el("div", {class:"actions"});
+  const create = doc.actions?.create;
+  if (create) {
+    const prefill = filterPrefill(doc.self, create);
+    if (kind === "attachment")
+      bar.append(uploadButton({entry: create, doc, prefill,
+        onDone: b => { if (b?.self) go(b.self); else render(); }}));
+    else
+      bar.append(actionButton({name: "create", entry: create, doc,
+        label: "New " + kind, prefill,
+        onDone: b => { if (b?.self) go(b.self); else render(); }}));
   }
-  for (const [name, entry] of bulkActions) {
-    actionsBar.append(el("button", {onclick: () => {
-      if (!selected.size) { toast("Select rows first", true); return; }
+  for (const [name, entry] of bulkActions)
+    bar.append(el("button", {"data-bulk": name, onclick: () => {
+      if (!selected.size) { toast("Select rows first"); return; }
       actionDialog({name, entry, doc, bulkIds: [...selected],
                     onDone: () => render()});
-    }}, title(name) + " (selected)"));
+    }}, (entry.display?.label || title(name)) + " (selected)"));
+  panel.append(bar);
+
+  const items = doc.data?.items || [];
+  panel.append(itemTable(items, {
+    selectable: bulkActions.length > 0, selected,
+    ...(kind === "attachment" ? {rowAction: it => downloadButton(it, true)} : {})}));
+  panel.append(pagerOf(doc));
+  view.append(panel);
+  watchScope({kind});
+}
+
+/* ── the deploy history: the definitions collection, rendered as what
+   it is — the record of what the law has been, when. Violet is spent
+   here and nowhere else. (v10 collection items are envelope-minus-data,
+   so each row speaks through its stored summary; the full fingerprint
+   diff lives one click in, on the definition row itself.) ──────────── */
+function renderDeployHistory(view, doc) {
+  const panel = el("div", {class:"panel"});
+  panel.append(el("div", {class:"crumbs"},
+    el("a", {href:"#"}, "Workspace"), " / ", "Deploy history"));
+  panel.append(el("h2", {}, "Deploy history"));
+  if (doc.summary) panel.append(el("div", {class:"metaline"}, doc.summary));
+  const query = doc.actions?.query;
+  if (query) panel.append(filterBar(query, doc.self));
+  const items = doc.data?.items || [];
+  for (const item of items) {
+    /* the stored summary is "Law of {kind} · revision {n} · {state}" —
+       the row names itself; the id stays in the href */
+    panel.append(el("div", {class:"rev-row"},
+      el("div", {class:"rev-head"},
+        el("a", {href:"#"+item.self, class:"rev-token", title: item.self}, "⚖"),
+        el("span", {class:"rev-summary"},
+          el("a", {href:"#"+item.self}, item.summary)),
+        el("span", {class:"chip " + (item.state === "current" ? "ok" : ""),
+                    title: item.state}, item.state))));
   }
-
-  const page = (doc.data || {}).page || {};
-  const pager = el("div", {class: "pager"},
-    (doc.links || {}).prev
-      ? el("button", {onclick: () => go(doc.links.prev.href)}, "‹ prev") : null,
-    el("span", {class: "meta"},
-       "page " + (page.number || 1) + " · " + (doc.data.total || 0) + " total"),
-    (doc.links || {}).next
-      ? el("button", {onclick: () => go(doc.links.next.href)}, "next ›") : null);
-
-  $main.replaceChildren(
-    el("h1", {}, title(doc.kind.replace("_collection", "")) + "s"),
-    el("p", {class: "meta"}, doc.summary),
-    actionsBar, bar, ...chipRows,
-    el("div", {class: "card tablewrap"},
-      items.length
-        ? el("table", {},
-            el("thead", {}, el("tr", {},
-              bulkActions.length ? el("th") : null,
-              el("th", {}, "state"), el("th", {}, "summary"),
-              el("th", {}, "updated"))),
-            el("tbody", {}, rows))
-        : el("p", {class: "meta"}, "No rows.")),
-    pager);
-  watchScope({kind: doc.kind.replace("_collection", "")});
+  if (!items.length) panel.append(el("div", {class:"muted"}, "no revisions"));
+  panel.append(pagerOf(doc));
+  view.append(panel);
+  watchScope({kind: "definition"});
 }
 
-/* ════ values: honest rendering of the data document ════════════════ */
-function xdisplay(schema, field) {
-  const prop = ((schema || {}).properties || {})[field] || {};
-  return prop["x-display"] || {};
-}
-function valueCell(v, xd) {
-  if (v === null || v === undefined) return el("span", {class: "null"}, "—");
-  if (typeof v === "boolean") return el("span", {}, v ? "✓ yes" : "✗ no");
-  if (Array.isArray(v)) {
-    if (!v.length) return el("span", {class: "null"}, "—");
-    if (typeof v[0] === "object" && v[0] !== null) return nestedTable(v);
-    return el("span", {class: "chips"},
-      v.map(x => el("span", {class: "chip static"}, String(x))));
-  }
-  if (typeof v === "object") return kvTable(v);
-  if ((xd || {}).widget === "prose" || (typeof v === "string" && v.includes("\n")))
-    return el("pre", {}, v);
-  return el("span", {}, String(v));
-}
-function nestedTable(rows) {
-  const cols = [...new Set(rows.flatMap(r => Object.keys(r)))];
-  return el("div", {class: "tablewrap"}, el("table", {},
-    el("thead", {}, el("tr", {}, cols.map(c => el("th", {}, c)))),
-    el("tbody", {}, rows.map(r => el("tr", {},
-      cols.map(c => el("td", {}, valueCell(r[c]))))))));
-}
-function kvTable(obj, schema) {
-  return el("table", {class: "kv"}, el("tbody", {},
-    Object.entries(obj).map(([k, v]) =>
-      el("tr", {}, el("td", {}, k),
-         el("td", {}, valueCell(v, xdisplay(schema, k)))))));
-}
-
-/* ════ the resource screen: envelope in, screen out ═════════════════ */
-/* effort-aware emphasis: an assent action is one click — prominent
-   unless the declaration styles it; composition earns the compose
-   mark (the form is where the work is). display.style always wins. */
-function actionButton(name, entry, doc, onDone) {
-  const style = (entry.display || {}).style;
-  const cls = style === "primary" ? "primary"
-            : style === "danger" ? "danger"
-            : entry.effort === "assent" ? "primary" : "";
-  return el("button",
-    {class: cls, "data-effort": entry.effort || "",
-     title: (entry.display || {}).description || "",
-     onclick: () => actionDialog({name, entry, doc, onDone})},
-    (entry.display || {}).label || title(name),
-    (entry.safety || {}).confirm ? " …"
-      : entry.effort === "composition" ? " ✎" : "");
-}
-/* the declared links: a navigation strip, badges as scent */
+/* ── the read surface, up front: link chips with badges as scent ───── */
 function linksStrip(doc) {
-  const entries = Object.entries(doc.links || {})
-    .filter(([, link]) => link && link.href);
-  if (!entries.length) return null;
-  return el("div", {class: "chips", "data-links": ""},
-    entries.map(([rel, link]) =>
-      el("a", {href: "#" + link.href, class: "chip linkrel",
-               title: link.summary || link.kind || ""},
-        title(rel),
-        link.badge !== undefined && link.badge !== null
-          ? el("b", {class: "badge"}, String(link.badge)) : null)));
+  const rels = Object.entries(doc.links || {})
+    .filter(([, l]) => l && l.href);
+  if (!rels.length) return null;
+  const row = el("div", {class:"chips", "data-links": ""});
+  for (const [rel, l] of rels)
+    row.append(el("a", {class:"chip link-chip", href:"#"+l.href,
+                        title: l.summary || rel},
+      title(rel), l.badge !== undefined && l.badge !== null
+        ? el("b", {class:"badge", title:"count, per the server"},
+            String(l.badge)) : null));
+  return row;
 }
-/* embed=true links arrive with inlined envelope-minus-data items */
-function embeddedSections(doc) {
-  return Object.entries(doc.links || {})
-    .filter(([, link]) => (link.embedded || []).length)
-    .map(([rel, link]) =>
-      el("div", {},
-        el("h2", {}, title(rel) + " (embedded)"),
-        el("div", {class: "card tablewrap"},
-          el("table", {}, el("tbody", {}, link.embedded.map(item =>
-            el("tr", {class: "rowlink", onclick: () => go(item.self)},
-              el("td", {}, el("span", {class: "statechip"}, item.state)),
-              el("td", {}, item.summary))))))));
-}
-/* the parts namespace: placed actions re-rendered per data item — the
-   item rows render HERE (with their buttons), not in the data table */
-function partsSections(doc) {
-  return Object.entries(doc.parts || {}).map(([scope, group]) => {
-    const items = group.items || [];
-    const cols = [...new Set(items.flatMap(it => Object.keys(it.item || {})))];
-    return el("div", {},
-      el("h2", {}, title(scope)),
-      el("div", {class: "card tablewrap", "data-part": scope},
-        el("table", {},
-          el("thead", {}, el("tr", {},
-            cols.map(c => el("th", {}, c)), el("th", {}, ""))),
-          el("tbody", {}, items.map(it =>
-            el("tr", {"data-part-key": String(it.key)},
-              cols.map(c => el("td", {}, valueCell((it.item || {})[c]))),
-              el("td", {class: "partactions"},
-                Object.entries(it.actions || {}).map(([name, entry]) =>
-                  actionButton(name, entry, doc, () => render())),
-                Object.entries(it.unavailable || {}).map(([name, entry]) =>
-                  el("button", {disabled: "", title: entry.reason || ""},
-                     title(name))))))))));
-  });
-}
-async function renderResource(href) {
-  const res = await api(href);
-  if (!res.ok) return renderProblem(res);
-  const doc = res.body;
-  const schema = await kindSchema(doc.kind);
-  const meta = doc.meta || {};
 
-  /* actions, ordered by display.order then name */
-  const entries = Object.entries(doc.actions || {})
-    .sort(([a, ea], [b, eb]) =>
-      ((ea.display || {}).order ?? 99) - ((eb.display || {}).order ?? 99) ||
-      a.localeCompare(b));
-  const buttons = entries.map(([name, entry]) =>
-    actionButton(name, entry, doc, out => {
-      if (out && out.self && out.self !== doc.self) go(out.self);
-      else render();
-    }));
-  /* unavailable: disabled buttons with the server's reason as tooltip,
-     plus the narrated list — absence would be dishonest */
-  const gated = Object.entries(doc.unavailable || {});
-  const gatedButtons = gated.map(([name, entry]) =>
-    el("button", {disabled: "", title: entry.reason || ""}, title(name)));
-  const notNow = gated.length
-    ? el("ul", {class: "notnow"}, gated.map(([name, entry]) =>
-        el("li", {}, el("b", {}, title(name)), " — ", entry.reason || "",
-           entry.becomes_available
-             ? el("span", {class: "meta"},
-                 " (" + becomesText(entry.becomes_available) + ")")
-             : null,
-           (entry.remedies || []).length
-             ? el("span", {class: "meta"},
-                 " · remedy: " + entry.remedies.join(", "))
-             : null)))
-    : null;
-
-  const surfaceChips = await surfaceLinks(doc);
-
-  /* fields a parts group re-renders (with buttons) leave the kv table */
-  const partPaths = new Set(Object.keys(doc.parts || {}));
-  const plainData = Object.fromEntries(
-    Object.entries(doc.data || {}).filter(([k]) => !partPaths.has(k)));
-
-  $main.replaceChildren(
-    el("p", {class: "crumb"},
-      el("a", {href: "#" + collectionOf(doc.self)}, "‹ " + title(doc.kind) + "s")),
-    el("h1", {}, doc.summary || doc.kind),
-    el("p", {}, el("span", {class: "statechip"}, doc.state), " ",
-      el("span", {class: "meta"},
-        "v" + meta.version +
-        (meta.law_revision ? " · law r" + meta.law_revision : "") +
-        (meta.updated_at ? " · " + meta.updated_at.slice(0, 19).replace("T", " ") : "") +
-        " · "), el("span", {class: "meta mono"}, doc.self)),
-    linksStrip(doc),
-    surfaceChips,
-    el("div", {class: "actions"}, buttons, gatedButtons),
-    notNow,
-    ...partsSections(doc),
-    el("h2", {}, "Data"),
-    el("div", {class: "card"}, kvTable(plainData, schema)),
-    ...embeddedSections(doc));
-  watchScope({self: doc.self});
-}
-function collectionOf(self) { return self.split("/").slice(0, 3).join("/"); }
-function becomesText(ba) {
-  if (ba.at) return "available at " + ba.at;
-  if (ba.in_states) return "available in state(s) " + ba.in_states.join(", ");
-  return JSON.stringify(ba);
-}
 /* declared surfaces: probe this row as an anchor; a 200 earns a chip */
-async function surfaceLinks(doc) {
-  const idx = await wellKnown();
-  const surfaces = Object.entries((idx || {}).surfaces || {});
+async function surfaceChips(doc) {
+  let w;
+  try { w = await wellKnown(); } catch { return null; }
+  const surfaces = Object.entries(w.surfaces || {});
   if (!surfaces.length) return null;
   const id = doc.self.split("/").pop();
   const chips = [];
   for (const [name, {href}] of surfaces) {
     const target = href.replace("{anchor-id}", id);
-    const res = await api(target);
-    if (res.ok) chips.push(el("a", {href: "#" + target, class: "chip"},
-                              "surface: " + name));
+    const {ok} = await api(target);
+    if (ok) chips.push(el("a", {href: "#" + target, class: "chip surface-link"},
+      "⧉ " + name + " ↗"));
   }
-  return chips.length ? el("div", {class: "chips"}, chips) : null;
+  return chips.length ? el("div", {class:"chips"}, chips) : null;
 }
 
-/* ════ the surface screen: the composed decision view ═══════════════ */
-async function renderSurface(href) {
-  const res = await api(href);
-  if (!res.ok) return renderProblem(res);
-  const doc = res.body;
+/* ── refusals, ranked by what the reader can do with them ──────────────
+   A countdown or a singular guard reason is decision fuel — it stays at
+   the action bar (a dimmed button plus its honest reason). State gates
+   and repeated identical reasons compress into a closed footer. */
+function splitRefusals(doc) {
+  const timed = [], gated = [], byReason = new Map();
+  for (const [name, entry] of Object.entries(doc.unavailable || {})) {
+    const hope = entry.becomes_available;
+    if (hope?.at) timed.push([name, entry]);
+    else if (hope?.in_states) gated.push([name, entry]);
+    else {
+      const k = entry.reason || "";
+      if (!byReason.has(k)) byReason.set(k, []);
+      byReason.get(k).push([name, entry]);
+    }
+  }
+  const blocked = [...timed], grouped = [];
+  for (const g of byReason.values())
+    if (g.length === 1) blocked.push(g[0]); else grouped.push(g);
+  return {blocked, grouped, gated};
+}
+
+/* A live countdown from becomes_available.at — the literal moment
+   stays printed (machine truth), the tick is the courtesy. */
+function countdownEl(at) {
+  const span = el("span", {class:"countdown", style:"margin-left:6px",
+                           title: new Date(at).toLocaleString()});
+  const tick = () => {
+    const ms = new Date(at) - Date.now();
+    if (ms <= 0 || Number.isNaN(ms)) { span.textContent = ""; return true; }
+    span.textContent = `· opens in ${dur(ms)}`;
+    return false;
+  };
+  if (!tick()) {
+    const t = setInterval(() => { if (tick()) clearInterval(t); }, 1000);
+    liveTimers.push(t);
+  }
+  return span;
+}
+function dur(ms) {
+  const s = Math.floor(ms / 1000), m = Math.floor(s / 60),
+        h = Math.floor(m / 60), d = Math.floor(h / 24);
+  if (d) return `${d}d ${h % 24}h`;
+  if (h) return `${h}h ${m % 60}m`;
+  if (m) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+function becomesText(ba) {
+  if (!ba) return "";
+  if (ba.at) return "available at " + ba.at;
+  if (ba.in_states) return "available in state(s) " + ba.in_states.join(", ");
+  if (ba.requires) return "requires " + ba.requires;
+  return "";
+}
+
+function blockedNotes(blocked, doc) {
+  if (!blocked.length) return null;
+  const box = el("ul", {class:"blockedwhy notnow"});
+  for (const [name, entry] of blocked) {
+    const li = el("li", {class:"item"},
+      el("b", {}, label(name, entry)), " — ",
+      el("span", {class:"why"}, entry.reason || ""),
+      entry.becomes_available
+        ? el("span", {class:"metaline"}, ` (${becomesText(entry.becomes_available)})`)
+        : null);
+    if (entry.becomes_available?.at)
+      li.append(countdownEl(entry.becomes_available.at));
+    const chips = remedyChips(entry.remedies, doc);
+    if (chips) li.append(chips);
+    box.append(li);
+  }
+  return box;
+}
+
+function notNowFooter(grouped, gated, doc) {
+  const n = grouped.reduce((s, g) => s + g.length, 0) + gated.length;
+  if (!n) return null;
+  const box = el("div", {class:"cantyet"});
+  for (const g of grouped)          // one reason, many actions: say it once
+    box.append(el("div", {class:"item"},
+      el("b", {}, g.map(([nm, e]) => label(nm, e)).join(", ")),
+      el("div", {class:"why"}, g[0][1].reason || ""),
+      remedyChips(g[0][1].remedies, doc)));
+  const byStates = new Map();       // state gates: one line per destination
+  for (const [nm, e] of gated) {
+    const k = e.becomes_available.in_states.join(", ");
+    if (!byStates.has(k)) byStates.set(k, []);
+    byStates.get(k).push(label(nm, e));
+  }
+  for (const [states, names] of byStates)
+    box.append(el("div", {class:"item"},
+      el("b", {}, names.join(", ")),
+      el("span", {class:"muted"}, ` — available in state(s) ${states}`)));
+  return el("details", {class:"unavail"},
+    el("summary", {class:"muted"}, `not now (${n})`), box);
+}
+
+/* ── remedies: the wire names the way out as "kind.action" tokens ── */
+function remedyChips(remedies, doc, onAct) {
+  if (!remedies || !remedies.length) return null;
+  const docKind = (doc.kind || "").replace(/_collection$/, "");
+  const box = el("span", {class:"remedies"});
+  for (const token of remedies) {
+    const dot = String(token).indexOf(".");
+    const kind = dot > 0 ? token.slice(0, dot) : "";
+    const action = dot > 0 ? String(token).slice(dot + 1) : String(token);
+    if (kind === docKind && doc.actions?.[action]) {
+      box.append(el("button", {type:"button", class:"chip remedy",
+        title: `${token} — this action is on this page`,
+        onclick: () => { onAct && onAct(); pulseAction(action); }},
+        "→ " + label(action, doc.actions[action])));
+    } else if (action === "create") {
+      const chip = el("span", {class:"chip",
+        title: `${token} — a remedy elsewhere`}, String(token));
+      box.append(chip);
+      wellKnown().then(w => {
+        const col = collectionHref(w, kind);
+        if (col) chip.replaceWith(el("a", {class:"chip remedy",
+          href: "#"+col, onclick: () => { onAct && onAct(); },
+          title: `${token} — opens the ${pretty(kind)}s page`},
+          `+ new ${pretty(kind)}`));
+      }).catch(() => {});
+    } else {
+      box.append(el("span", {class:"chip",
+        title: `${token} — a remedy this page can't reach directly`},
+        String(token)));
+    }
+  }
+  return box;
+}
+function pulseAction(name) {
+  const btn = $(`#view button[data-action="${CSS.escape(name)}"]`);
+  if (!btn) return;
+  btn.scrollIntoView({behavior:"smooth", block:"center"});
+  btn.focus({preventScroll: true});
+  btn.classList.add("pulse");
+  setTimeout(() => btn.classList.remove("pulse"), 1500);
+}
+
+/* ── values: honest rendering of the data document ─────────────────── */
+function valueCell(v, xd) {
+  if (v === null || v === undefined) return el("span", {class:"muted"}, "—");
+  if (typeof v === "boolean") return v ? "✓" : el("span", {class:"muted"}, "—");
+  if (Array.isArray(v)) {
+    if (!v.length) return el("span", {class:"muted"}, "—");
+    if (v.every(x => x && typeof x === "object" && !Array.isArray(x)))
+      return nestedTable(v);
+    return el("span", {}, v.map(x =>
+      el("span", {class:"chip", style:"margin-right:4px"}, String(x))));
+  }
+  if (typeof v === "object") return kvTable(v);
+  if ((xd || {}).widget === "prose" || (typeof v === "string" && v.includes("\n")))
+    return el("div", {class:"prose", style:"white-space:pre-wrap;max-width:640px;" +
+      "max-height:320px;overflow-y:auto"}, String(v));
+  return el("span", {}, String(v));
+}
+function nestedTable(rows) {
+  const cols = [...new Set(rows.flatMap(r => Object.keys(r)))]
+    .filter(c => rows.some(r => r[c] !== null && r[c] !== undefined));
+  return el("div", {style:"overflow-x:auto"}, el("table", {class:"items"},
+    el("thead", {}, el("tr", {}, cols.map(c => el("th", {title: c}, title(c))))),
+    el("tbody", {}, rows.map(r => el("tr", {},
+      cols.map(c => el("td", {}, valueCell(r[c]))))))));
+}
+function kvTable(obj, schema) {
+  const t = el("table", {class:"kv"});
+  for (const [k, v] of Object.entries(obj)) {
+    const xd = xdisplay(schema, k);
+    const ref = xref(((schema || {}).properties || {})[k]);
+    t.append(el("tr", {},
+      el("td", {class:"k", title: xd.label || title(k)}, k),
+      el("td", {}, ref && v ? resourceRef(ref.kind, v) : valueCell(v, xd))));
+  }
+  return t;
+}
+
+/* A cross-resource reference: a link to the referenced resource,
+   labeled lazily by its own summary. Raw ids are machine plumbing —
+   humans get the thing, not the token. (wire 10 has no lookup route
+   class; the summary ride is a plain depth=summary read.) */
+function resourceRef(kind, id, text) {
+  const a = el("a", {href: "#", class:"mono", title: String(id)},
+    text || `${pretty(kind || "")} · ${String(id).slice(0, 8)}`);
+  wellKnown().then(w => {
+    const col = kind && collectionHref(w, kind);
+    if (!col) return;
+    a.href = "#" + col + "/" + id;
+    if (!text) api(`${col}/${id}?depth=summary`).then(({ok, body}) => {
+      if (ok && body.summary) { a.textContent = body.summary; a.className = ""; }
+    }).catch(() => {});
+  }).catch(() => {});
+  return a;
+}
+
+/* ── the parts namespace: placed actions re-rendered per data item —
+   the item rows render HERE (with their honest buttons and their
+   per-item refusal narrations), not in the data table ──────────────── */
+function partsSections(doc) {
+  return Object.entries(doc.parts || {}).map(([scope, group]) => {
+    const items = group.items || [];
+    const cols = [...new Set(items.flatMap(it => Object.keys(it.item || {})))]
+      .filter(c => items.some(it => (it.item || {})[c] !== null &&
+                                    (it.item || {})[c] !== undefined));
+    return el("div", {},
+      el("h3", {class:"sect"}, title(scope)),
+      el("div", {class:"panel", "data-part": scope, style:"padding:10px 14px"},
+        el("div", {style:"overflow-x:auto"}, el("table", {class:"items"},
+          el("thead", {}, el("tr", {},
+            cols.map(c => el("th", {title: c}, title(c))), el("th", {}, ""))),
+          el("tbody", {}, items.map(it =>
+            el("tr", {"data-part-key": String(it.key)},
+              cols.map(c => el("td", {}, valueCell((it.item || {})[c]))),
+              el("td", {class:"partactions"},
+                Object.entries(it.actions || {}).map(([name, entry]) =>
+                  actionButton({name, entry, doc, small: true,
+                                onDone: () => render()})),
+                Object.entries(it.unavailable || {}).map(([name, entry]) =>
+                  el("button", {disabled: "", class:"blocked",
+                                title: entry.reason || ""},
+                     title(name)))))))))));
+  });
+}
+
+/* embed=true links arrive with server-spliced envelope-minus-data items
+   under links.<rel>.embedded — the rows are already in the envelope */
+function embeddedSections(doc) {
+  return Object.entries(doc.links || {})
+    .filter(([, link]) => (link.embedded || []).length)
+    .map(([rel, link]) => el("div", {class:"embed"},
+      el("div", {class:"embed-head"},
+        el("b", {}, link.summary || title(rel)),
+        link.badge !== undefined && link.badge !== null
+          ? el("span", {class:"badge", title:"count, per the server"},
+              String(link.badge)) : null,
+        el("a", {class:"open", href:"#"+link.href}, "open ↗")),
+      itemTable(link.embedded, {})));
+}
+
+/* ── resource screen ───────────────────────────────────────────────── */
+function label(name, entry) { return entry.display?.label || title(name); }
+
+async function renderResource(view, doc, hints) {
+  hints = hints || {};
+  const panel = el("div", {class:"panel"});
+  const kind = doc.kind;
+  const colHref = doc.self.split("/").slice(0, 3).join("/");
+  panel.append(el("div", {class:"crumbs"},
+    el("a", {href:"#"}, "Workspace"), " / ",
+    el("a", {href:"#"+colHref}, title(kind) + "s"), " / ",
+    el("span", {class:"id", title: doc.self},
+      doc.self.split("/").pop().slice(0, 8))));
+  panel.append(el("h2", {class:"prose"}, doc.summary || title(kind)));
+  const meta = doc.meta || {};
+  panel.append(el("div", {},
+    el("span", {class:"statechip", title: kind}, doc.state),
+    el("span", {class:"version"},
+      `v${meta.version}` +
+      (meta.law_revision != null ? ` · law r${meta.law_revision}` : "") +
+      (meta.updated_at ? ` · ${String(meta.updated_at).slice(0, 19).replace("T", " ")}` : "")),
+    el("span", {class:"version", title: doc.self}, doc.self)));
+
+  /* the read surface up front: declared links (badges riding) and the
+     surfaces this row anchors — scent before the scroll */
+  const chips = linksStrip(doc);
+  if (chips) panel.append(chips);
+  const surfBox = el("div", {});
+  panel.append(surfBox);
+  surfaceChips(doc).then(c => { if (c) surfBox.append(c); }).catch(() => {});
+
+  /* buttons = actions, ordered by display.order. Parts are a
+     REFINEMENT, not a replacement (the v10 envelope doctrine): a
+     placed action renders here with its full schema AND re-renders
+     per item below with the scope key const-bound. */
+  /* suggested actions (co-presence): remedies on this doc's refusals
+     may name a same-kind action that IS here — the way out gains a
+     ring; nothing is demoted */
+  const suggested = new Set();
+  for (const entry of Object.values(doc.unavailable || {}))
+    for (const t of entry.remedies || []) {
+      const dot = String(t).indexOf(".");
+      if (dot > 0 && t.slice(0, dot) === kind && (doc.actions || {})[t.slice(dot + 1)])
+        suggested.add(t.slice(dot + 1));
+    }
+  const bar = el("div", {class:"actions"});
+  const entries = Object.entries(doc.actions || {})
+    .sort(([a, ea], [b, eb]) =>
+      ((ea.display || {}).order ?? 99) - ((eb.display || {}).order ?? 99) ||
+      a.localeCompare(b));
+  for (const [name, entry] of entries) {
+    const btn = actionButton({name, entry, doc, onDone: out => {
+      if (out && out.self && out.self !== doc.self) go(out.self);
+      else render();
+    }});
+    if (suggested.has(name)) {
+      btn.classList.add("suggested");
+      btn.append(el("span", {class:"suggest-chip",
+        title: "a refusal on this page names this action as the remedy"},
+        "suggested"));
+    }
+    bar.append(btn);
+  }
+  /* refused actions keep their seats in the bar, dimmed; their honest
+     reasons render just below, at the point of intent */
+  const {blocked, grouped, gated} = splitRefusals(doc);
+  for (const [name, entry] of blocked)
+    bar.append(el("button", {class:"blocked", disabled:"",
+      title: entry.reason || ""}, label(name, entry)));
+  for (const [name, entry] of gated)
+    bar.append(el("button", {class:"blocked", disabled:"",
+      title: entry.reason || ""}, label(name, entry)));
+  /* the grant scope (wire 10): a grant row is a scope SELECTOR its
+     audience presents via X-Waymark-Grant — this session can put it on */
+  if (kind === "grant") {
+    const gid = doc.self.split("/").pop();
+    const on = localStorage.getItem("wm10.grant") === gid;
+    bar.append(el("button", {
+      title: on ? "stop reading through this grant"
+                : "send X-Waymark-Grant with this grant's id on every request "
+                  + "— the principal must be the grant's audience",
+      onclick: () => {
+        if (on) localStorage.removeItem("wm10.grant");
+        else localStorage.setItem("wm10.grant", gid);
+        grantChip(); render();
+      }}, on ? "✓ scoped to this grant" : "🔭 act under this grant"));
+  }
+  /* an uploaded attachment: offer its bytes back (the bytes route is
+     the engine's static /api/attachments/{id}/bytes) */
+  if (kind === "attachment" && doc.state === "uploaded") {
+    const id = doc.self.split("/").pop();
+    if (isViewable(doc.data?.media_type))
+      bar.append(el("button", {title:"open in a new tab",
+        onclick: () => viewAttachment(id)}, "View"));
+    bar.append(el("button", {class:"primary", title:"save the file",
+      onclick: () => downloadAttachment(id, doc.data?.name)}, "↓ Download"));
+  }
+  panel.append(bar);
+  const notes = blockedNotes(blocked, doc);
+  if (notes) panel.append(notes);
+
+  /* the data document: fields a parts group re-renders (with buttons)
+     leave the kv table */
+  const partPaths = new Set(Object.keys(doc.parts || {}));
+  const plainData = Object.fromEntries(
+    Object.entries(doc.data || {}).filter(([k]) => !partPaths.has(k)));
+  view.append(panel);
+  view.append(...partsSections(doc));
+  const dataPanel = el("div", {class:"panel"},
+    el("details", {open:""},
+      el("summary", {class:"muted"}, "Data"),
+      kvTable(plainData, hints)));
+  for (const sec of embeddedSections(doc)) dataPanel.append(sec);
+  /* the resource's own history: its transition log, replayed from the
+     events stream (Last-Event-ID 0), collapsed by default */
+  dataPanel.append(historySection(`${doc.self}/-/events`));
+  const footer = notNowFooter(grouped, gated, doc);
+  if (footer) dataPanel.append(footer);
+  view.append(dataPanel);
+  watchScope({self: doc.self});
+}
+
+/* ── the surface screen: the composed decision view (wire 10 shape:
+   {name, anchor: the full envelope, members, showcase, attention}) ── */
+function renderSurface(view, doc) {
   const anchor = doc.anchor || {};
-  const flags = Object.entries(doc.attention || {}).map(([f, up]) =>
-    el("span", {class: "flag " + (up ? "up" : "down")},
-       f + (up ? " ⚑" : " ·")));
-  const members = Object.entries(doc.members || {}).map(([mname, m]) =>
-    el("div", {}, el("h2", {}, title(mname)),
-      el("div", {class: "card tablewrap"},
-        (m.items || []).length
-          ? el("table", {}, el("tbody", {}, m.items.map(item =>
-              el("tr", {class: "rowlink", onclick: () => go(item.self)},
-                el("td", {}, el("span", {class: "statechip"}, item.state)),
-                el("td", {}, item.summary)))))
-          : el("p", {class: "meta"}, "Nothing here."))));
-  const showcase = (doc.showcase || [])
-    .filter(a => (anchor.actions || {})[a])
-    .map(a => el("button", {class: "primary",
-      onclick: () => actionDialog({name: a, entry: anchor.actions[a],
-                                   doc: anchor, onDone: () => render()})},
-      ((anchor.actions[a].display || {}).label || title(a))));
-  $main.replaceChildren(
-    el("p", {class: "crumb"},
-      el("a", {href: "#" + anchor.self}, "‹ " + (anchor.summary || "anchor"))),
-    el("h1", {}, title(doc.name || "surface")),
-    el("div", {class: "chips"}, flags),
-    el("div", {class: "actions"}, showcase),
-    el("h2", {}, "Anchor"),
-    el("div", {class: "card rowlink", onclick: () => go(anchor.self)},
-      el("span", {class: "statechip"}, anchor.state), " ", anchor.summary),
-    ...members);
-  watchScope({self: anchor.self});
+  const panel = el("div", {class:"panel"});
+  panel.append(el("div", {class:"crumbs"},
+    el("a", {href:"#"}, "Workspace"),
+    anchor.self ? [" / ", el("a", {href:"#"+anchor.self, title: anchor.self},
+                             title(anchor.kind || "anchor"))] : null,
+    " / ", el("span", {class:"surface-mark", title: doc.self},
+      "⧉ " + pretty(doc.name || "surface"))));
+  panel.append(el("h2", {}, title(doc.name || "surface")));
+  if (anchor.summary)
+    panel.append(el("div", {class:"summary"}, anchor.summary));
+  const flags = Object.entries(doc.attention || {});
+  if (flags.length)
+    panel.append(el("div", {class:"chips"}, flags.map(([f, up]) =>
+      el("span", {class: "flag " + (up ? "up" : "down"),
+                  title: up ? "attention: the declared value holds"
+                            : "quiet"}, f + (up ? " ⚑" : " ·")))));
+  /* showcased actions first and prominent; the anchor's other actions
+     follow — order is the declaration's, not this client's */
+  const showcase = new Set(doc.showcase || []);
+  const bar = el("div", {class:"actions"});
+  for (const name of doc.showcase || []) {
+    const entry = (anchor.actions || {})[name];
+    if (!entry) continue;
+    const btn = actionButton({name, entry, doc: anchor, onDone: () => render()});
+    btn.classList.add("primary", "suggested");
+    btn.append(el("span", {class:"suggest-chip",
+      title: "showcased by this surface's definition"}, "showcased"));
+    bar.append(btn);
+  }
+  for (const [name, entry] of Object.entries(anchor.actions || {}))
+    if (!showcase.has(name))
+      bar.append(actionButton({name, entry, doc: anchor, onDone: () => render()}));
+  const {blocked, grouped, gated} = splitRefusals(anchor);
+  for (const [name, entry] of blocked)
+    bar.append(el("button", {class:"blocked", disabled:"",
+      title: entry.reason || ""}, label(name, entry)));
+  panel.append(bar);
+  const notes = blockedNotes(blocked, anchor);
+  if (notes) panel.append(notes);
+  if (anchor.self)
+    panel.append(el("div", {class:"embed"},
+      el("div", {class:"embed-head"}, el("b", {}, "Anchor"),
+        el("a", {class:"open", href:"#"+anchor.self}, "open ↗")),
+      el("div", {},
+        el("span", {class:"statechip"}, anchor.state), " ",
+        el("a", {href:"#"+anchor.self, class:"prose"}, anchor.summary))));
+  view.append(panel);
+  /* members arrive pre-embedded, in the declared order */
+  for (const [mname, m] of Object.entries(doc.members || {})) {
+    const items = m.items || [];
+    view.append(el("div", {},
+      el("h3", {class:"sect"}, title(mname)),
+      el("div", {class:"panel", style:"padding:10px 14px"},
+        items.length ? itemTable(items, {})
+                     : el("p", {class:"muted"}, "Nothing here."))));
+  }
+  const dataPanel = el("div", {class:"panel"});
+  kindSchema(anchor.kind || "").then(schema => {
+    const partPaths = new Set(Object.keys(anchor.parts || {}));
+    const plain = Object.fromEntries(
+      Object.entries(anchor.data || {}).filter(([k]) => !partPaths.has(k)));
+    dataPanel.append(el("details", {open:""},
+      el("summary", {class:"muted"}, "Data"), kvTable(plain, schema)));
+    if (anchor.self)
+      dataPanel.append(historySection(`${anchor.self}/-/events`));
+    const footer = notNowFooter(grouped, gated, anchor);
+    if (footer) dataPanel.append(footer);
+  });
+  view.append(dataPanel);
+  if (anchor.self) watchScope({self: anchor.self});
 }
 
-/* ════ forms from JSON schemas (x-display honored, enums folded) ════ */
-function fieldWidget(name, prop, value) {
-  const xd = prop["x-display"] || {};
+/* ── actions: buttons, forms from input schema, confirm, dry-run ───── */
+/* effort-aware emphasis: an assent action is one click — prominent
+   unless the declaration styles it; display.style always wins. */
+function actionButton({name, entry, doc, label: lbl, small, onDone, prefill}) {
+  const style = entry.display?.style;
+  const cls = style === "primary" ? "primary"
+            : style === "danger" ? "danger"
+            : entry.effort === "assent" ? "primary" : "";
+  const btn = el("button",
+    {class: cls, "data-action": name, "data-effort": entry.effort || "",
+     style: small ? "font-size:12px;padding:3px 8px" : "",
+     title: entry.display?.description || ""},
+    lbl || label(name, entry),
+    entry.safety?.confirm ? " …" : "");
+  if (!small && entry.effort && entry.effort !== "assent")
+    btn.append(el("span", {class:"effort-chip",
+      title: `effort: ${entry.effort}`}, entry.effort));
+  btn.addEventListener("click", () =>
+    actionDialog({name, entry, doc, prefill, onDone}));
+  return btn;
+}
+
+/* ── forms from JSON schemas (x-display honored, enums folded) ─────── */
+/* unwrap an optional property: `X | null` arrives as oneOf/anyOf (or a
+   type array) — the non-null branch is the one a form judges by */
+function schemaProp(prop) {
+  if (!prop || typeof prop !== "object") return {};
+  const alts = prop.oneOf || prop.anyOf;
+  const sub = alts ? alts.find(o => o && o.type !== "null") || {} : prop;
+  if (Array.isArray(sub.type)) {
+    const t = sub.type.find(t => t !== "null");
+    return Object.assign({}, sub, {type: t});
+  }
+  return sub;
+}
+function fieldWidget(name, rawProp, value) {
+  const prop = schemaProp(rawProp);
+  const xd = rawProp["x-display"] || prop["x-display"] || {};
   if (prop.enum) {
     return el("select", {name},
       el("option", {value: ""}, "…"),
@@ -650,12 +1571,14 @@ function fieldWidget(name, prop, value) {
         {value: String(v), selected: String(value ?? "") === String(v) ? "" : null},
         String(v))));
   }
-  if (xd.widget === "prose" || xd.widget === "textarea")
-    return el("textarea", {name}, value ?? "");
+  if (xd.widget === "prose" || xd.widget === "textarea") {
+    const ta = el("textarea", {name, "data-prose": ""}, value ?? "");
+    return ta;
+  }
   if (prop.type === "boolean")
     return el("select", {name}, el("option", {value: ""}, "…"),
-      el("option", {value: "true", selected: value === true ? "" : null}, "yes"),
-      el("option", {value: "false", selected: value === false ? "" : null}, "no"));
+      el("option", {value: "true", selected: value === true ? "" : null}, "true"),
+      el("option", {value: "false", selected: value === false ? "" : null}, "false"));
   if (prop.type === "integer" || prop.type === "number")
     return el("input", {type: "number", name, value: value ?? "",
                         step: prop.type === "integer" ? "1" : "any"});
@@ -663,33 +1586,38 @@ function fieldWidget(name, prop, value) {
     return el("input", {type: "date", name, value: value ?? ""});
   if (prop.type === "array") {
     const items = prop.items || {};
-    if (items.type === "string" && !items.properties)
+    if ((items.type === "string" || items.type === undefined) && !items.properties)
       return el("input", {type: "text", name, "data-array": "csv",
         placeholder: "comma-separated",
         value: Array.isArray(value) ? value.join(", ") : (value ?? "")});
-    return el("textarea", {name, "data-array": "json",
-      placeholder: "JSON array"},
+    return el("textarea", {name, "data-array": "json", placeholder: "JSON array"},
       value !== undefined && value !== null ? JSON.stringify(value, null, 1) : "");
   }
+  if (prop.type === "object")
+    return el("textarea", {name, "data-array": "json", placeholder: "JSON object"},
+      value !== undefined && value !== null ? JSON.stringify(value, null, 1) : "");
   return el("input", {type: "text", name, value: value ?? "",
     placeholder: prop.format || ""});
 }
 /* a waymark-ref field offers the target kind's rows, labeled by summary */
-async function refOptions(select, prop, current) {
-  const kind = (prop["x-ref"] || {}).kind;
-  const idx = await wellKnown();
-  const href = (((idx || {}).resources || {})[kind] || {}).href;
+async function refOptions(select, rawProp, current) {
+  const prop = schemaProp(rawProp);
+  const kind = ((rawProp["x-ref"] || prop["x-ref"]) || {}).kind;
+  let w;
+  try { w = await wellKnown(); } catch { return; }
+  const href = kind && collectionHref(w, kind);
   if (!href) return;
-  const res = await api(href + "?page[size]=100");
-  if (!res.ok) return;
-  for (const item of (res.body.data || {}).items || []) {
+  const {ok, body} = await api(mergeParams(href, {"page[size]": "100"}));
+  if (!ok) return;
+  for (const item of (body.data || {}).items || []) {
     const id = item.self.split("/").pop();
     select.append(el("option", {value: id, selected: id === current ? "" : null},
                      item.summary || id));
   }
 }
-/* ── keystroke validation: the JSON schema judges as you type ────── */
-function clientMessages(raw, prop, required) {
+/* keystroke validation: the JSON schema judges as you type */
+function clientMessages(raw, rawProp, required) {
+  const prop = schemaProp(rawProp);
   const msgs = [];
   if (raw === "" || raw === null || raw === undefined) {
     if (required) msgs.push("required");
@@ -721,22 +1649,23 @@ function clientMessages(raw, prop, required) {
   }
   return msgs;
 }
-/* vocab fields: a combobox — facet counts from the target collection's
-   advertised query schema (x-facets) when the field is faceted there;
-   otherwise the input stays free text (open vocab is open). */
-function vocabProp(prop) {
+/* vocab fields: a datalist combobox — facet counts from the target
+   collection's advertised query schema (x-facets) when faceted there */
+function vocabProp(rawProp) {
+  const prop = schemaProp(rawProp);
   return prop.format === "waymark-vocab" ||
          ((prop.items || {}).format === "waymark-vocab") ||
-         !!prop["x-vocab"];
+         !!rawProp["x-vocab"] || !!prop["x-vocab"];
 }
 let vocabListSeq = 0;
 async function vocabOptions(listNode, kind, field) {
-  const idx = await wellKnown();
-  const href = (((idx || {}).resources || {})[kind] || {}).href;
+  let w;
+  try { w = await wellKnown(); } catch { return; }
+  const href = collectionHref(w, kind);
   if (!href) return;
-  const res = await api(href);
-  if (!res.ok) return;
-  const prop = (((((res.body || {}).actions || {}).query || {}).input || {})
+  const {ok, body} = await api(href);
+  if (!ok) return;
+  const prop = (((((body || {}).actions || {}).query || {}).input || {})
                 .properties || {})[field] || {};
   for (const [value, count] of Object.entries(prop["x-facets"] || {}))
     listNode.append(el("option", {value, label: value + " · " + count}));
@@ -744,30 +1673,32 @@ async function vocabOptions(listNode, kind, field) {
 function buildForm(schema, prefill, kind) {
   const form = el("div", {});
   const required = new Set((schema.required || []).map(String));
-  for (const [name, prop] of Object.entries(schema.properties || {})) {
+  for (const [name, rawProp] of Object.entries(schema.properties || {})) {
     if (name === "ids") continue;           /* bulk ids ride the selection */
-    /* a const field is pre-bound: shown, fixed, still submitted */
-    if (prop.const !== undefined) {
+    const prop = schemaProp(rawProp);
+    /* a const field is pre-bound (a part-scope key): shown, fixed,
+       still submitted */
+    if (prop.const !== undefined || rawProp.const !== undefined) {
+      const c = prop.const !== undefined ? prop.const : rawProp.const;
       form.append(el("div", {class: "field"},
         el("label", {}, el("b", {}, name), " (bound)"),
-        el("div", {class: "const mono", "data-const": name},
-           String(prop.const)),
-        el("input", {type: "hidden", name, value: String(prop.const)})));
+        el("div", {class: "const", "data-const": name}, String(c)),
+        el("input", {type: "hidden", name, value: String(c)})));
       continue;
     }
     let widget;
-    if (prop.format === "waymark-ref" || prop["x-ref"]) {
+    if (xref(rawProp)) {
       widget = el("select", {name}, el("option", {value: ""}, "…"));
-      refOptions(widget, prop, (prefill || {})[name]);
+      refOptions(widget, rawProp, (prefill || {})[name]);
     } else {
-      widget = fieldWidget(name, prop, (prefill || {})[name]);
+      widget = fieldWidget(name, rawProp, (prefill || {})[name]);
     }
-    if (vocabProp(prop) && widget.tagName === "INPUT") {
+    if (vocabProp(rawProp) && widget.tagName === "INPUT") {
       const listId = "vocab-" + (++vocabListSeq);
       const list = el("datalist", {id: listId});
       widget.setAttribute("list", listId);
       widget.setAttribute("data-vocab", name);
-      const ph = ((prop["x-vocab"] || {}).placeholder);
+      const ph = ((rawProp["x-vocab"] || prop["x-vocab"] || {}).placeholder);
       if (ph) widget.setAttribute("placeholder", ph);
       form.append(list);
       if (kind) vocabOptions(list, kind, name);
@@ -776,15 +1707,19 @@ function buildForm(schema, prefill, kind) {
     if (widget.tagName === "INPUT" || widget.tagName === "TEXTAREA") {
       widget.addEventListener("input", () => {
         errSlot.textContent =
-          clientMessages(widget.value, prop, required.has(name)).join("; ");
+          clientMessages(widget.value, rawProp, required.has(name)).join("; ");
       });
     }
-    form.append(el("div", {class: "field"},
-      el("label", {}, el("b", {}, name), required.has(name) ? " *" : "",
-         vocabProp(prop) ? el("span", {class: "meta"}, " (vocab)") : ""),
+    const xd = rawProp["x-display"] || prop["x-display"] || {};
+    form.append(el("div", {class: "field", "data-field": name},
+      el("label", {title: name}, el("b", {}, xd.label || name),
+         required.has(name) ? el("span", {class:"req"}, " *") : "",
+         vocabProp(rawProp) ? el("span", {class:"muted"}, " (vocab)") : ""),
       widget,
       errSlot,
       el("div", {class: "err srv", "data-srverr": name})));
+    if (xd.help) form.append(el("div", {class:"muted",
+      style:"font-size:11px;margin:-6px 0 8px"}, xd.help));
   }
   return form;
 }
@@ -793,7 +1728,7 @@ function collectValues(form, schema) {
   const props = (schema || {}).properties || {};
   for (const node of form.querySelectorAll("[name]")) {
     const name = node.getAttribute("name");
-    const prop = props[name] || {};
+    const prop = schemaProp(props[name] || {});
     let raw = node.value;
     if (raw === "" || raw === null) continue;
     if (node.dataset.array === "csv") {
@@ -813,87 +1748,275 @@ function collectValues(form, schema) {
   }
   return values;
 }
+function prefillFromDoc(doc, input) {
+  const out = {};
+  for (const name of Object.keys((input || {}).properties || {}))
+    if ((doc.data || {})[name] !== undefined) out[name] = doc.data[name];
+  return out;
+}
 
-/* ════ the action dialog: gate, form, fence, key, warnings ══════════ */
-/* dry_run=1 is honored on SINGLE-RESOURCE action invokes only — the
-   create and bulk paths execute regardless of the parameter (engine
-   fact, recorded), so the UI never offers to "check" those. This also
-   retires the phase-10 page's live-firing Check button on create
-   dialogs. */
+/* ── relay/2 prose ops: a prefix/suffix diff makes the op, the server
+   transforms and relays; incoming ops apply positionally ───────────── */
+function diffOps(a, b) {
+  a = String(a ?? ""); b = String(b ?? "");
+  let p = 0;
+  while (p < a.length && p < b.length && a[p] === b[p]) p++;
+  let s = 0;
+  while (s < a.length - p && s < b.length - p &&
+         a[a.length - 1 - s] === b[b.length - 1 - s]) s++;
+  const ops = [];
+  if (p) ops.push({retain: p});
+  if (a.length - p - s > 0) ops.push({delete: a.length - p - s});
+  if (b.slice(p, b.length - s).length) ops.push({insert: b.slice(p, b.length - s)});
+  if (s) ops.push({retain: s});
+  return ops;
+}
+function applyOps(s, ops) {
+  s = String(s ?? "");
+  let i = 0, out = "";
+  for (const op of ops || []) {
+    if (op.insert !== undefined) out += op.insert;
+    else if (op.retain !== undefined) { out += s.slice(i, i + op.retain); i += op.retain; }
+    else if (op.delete !== undefined) i += op.delete;
+  }
+  return out + s.slice(i);
+}
+
+/* ── the action dialog: gate, form, fence, key, warnings, drafts ───── */
+/* dry_run=1 is honored on SINGLE-RESOURCE action invokes only (engine
+   fact, recorded) — the create and bulk paths execute regardless. */
 function dryRunnable(href) {
   return /^\/api\/[^/]+\/(?!-\/)[^/]+\/-\/[^/?]+$/.test(href || "");
 }
-async function actionDialog({name, entry, doc, bulkIds, onDone}) {
+const dlgStamp = t => new Date(t || Date.now())
+  .toTimeString().slice(0, 8);
+
+async function actionDialog({name, entry, doc, bulkIds, prefill, onDone}) {
   const safety = entry.safety || {};
   const input = entry.input || null;
   /* rule 3 (Part IV): a non-idempotent action gets its key at dialog
      open — one logical attempt, one key, however many retries */
-  const idemKey = safety.idempotent ? null : crypto.randomUUID();
+  const idemKey = safety.idempotent ? null : uuid();
   let acknowledged = [];
 
-  /* drafts: half-written effort is server state; prefill from it */
-  let draftValues = {};
+  /* drafts: half-written effort is server state. Wire 10: GET 404s
+     until something was saved and answers {values, base_version,
+     prefill, revs, authors}; the row's own current values are the
+     fallback prefill for an :edit that was never drafted. */
+  let draftView = null;
   if (entry.draft && entry.draft.href) {
     const d = await api(entry.draft.href);
-    if (d.ok) draftValues = Object.assign({}, d.body.prefill, d.body.values);
-    else draftValues = prefillFromDoc(doc, input);
+    if (d.ok) draftView = d.body;
   }
+  const initialValues = Object.assign({},
+    entry.draft ? prefillFromDoc(doc, input) : {},
+    prefill || {},
+    (draftView || {}).prefill || {},
+    (draftView || {}).values || {});
   const kind = (doc.kind || "").replace("_collection", "");
-  const form = input ? buildForm(input, draftValues, kind) : el("div", {});
+  const form = input ? buildForm(input, initialValues, kind) : el("div", {});
 
   const errBox = el("div", {});
+  const savedNote = el("span", {},
+    draftView ? "draft loaded from the server" : "");
+  const peers = el("span", {class:"muted"});
+  const draftBar = entry.draft
+    ? el("p", {class: "draftnote", "data-draftnote": ""},
+        savedNote, peers) : null;
+  /* staleness by base_version: the draft was written against an older
+     row — say so before anyone submits it */
+  if (draftView && draftView.base_version != null && doc.meta &&
+      doc.meta.version != null && draftView.base_version < doc.meta.version)
+    draftBar.prepend(el("span", {class:"bad"},
+      `⚠ draft from an older version of this ${pretty(kind)} — review before submitting · `));
+
+  const h3 = el("h3", {}, entry.display?.label || title(name));
+  if (entry.effort && entry.effort !== "assent")
+    h3.append(el("span", {class:"effort-chip",
+      title: `effort: ${entry.effort}`}, entry.effort));
   const dlg = el("dialog", {},
     el("div", {class: "dlghead"},
-      el("h3", {}, (entry.display || {}).label || title(name)),
-      el("p", {class: "meta"},
-        "→ " + ((entry.effect || {}).to || "?") +
+      h3,
+      el("p", {class: "metaline"},
+        el("span", {class:"mono"}, doc.state ? pretty(doc.state) : "—"),
+        " → ", el("span", {class:"mono"}, pretty((entry.effect || {}).to || "?")),
         ((entry.effect || {}).terminal ? " (terminal)" : "") +
-        (bulkIds ? " · " + bulkIds.length + " selected row(s)" : "") +
+        (bulkIds ? ` · ${bulkIds.length} selected row(s)` : "") +
         (safety.fence ? " · fenced (If-Match)" : "") +
         (safety.idempotent ? "" : " · idempotency-key attached"))),
     el("div", {class: "dlgbody"},
       safety.confirm
         ? el("div", {class: "consequence"},
             el("b", {}, "Confirm: "),
-            (entry.display || {}).description ||
-              "This action requires confirmation.")
+            entry.display?.description || "This action requires confirmation.")
         : null,
-      form, errBox,
-      entry.draft ? el("p", {class: "draftnote", "data-draftnote": ""},
-                       entry.draft.shared ? "shared draft — saved on blur"
-                                          : "draft — saved on blur") : null),
+      form, errBox, draftBar),
     el("div", {class: "dlgfoot"},
-      el("span", {class: "hint"}),
+      el("span", {class: "hint"},
+        entry.draft ? (entry.draft.shared ? "shared draft — saved on blur"
+                                          : "draft — saved on blur") : ""),
       entry.draft ? el("button", {onclick: async () => {
+        disarmDraft();
         await api(entry.draft.href, {method: "DELETE"});
         toast("Draft discarded");
-        dlg.close(); dlg.remove();
+        closeDlg(); render();
       }}, "Discard draft") : null,
       input && dryRunnable(entry.href)
         ? el("button", {onclick: () => check()}, "Check") : null,
-      el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Cancel"),
+      el("button", {onclick: () => closeDlg()}, "Cancel"),
       el("button", {class: safety.confirm ? "danger" : "primary",
                     onclick: () => submit()},
-        safety.confirm ? "Confirm & " + ((entry.display||{}).label || title(name))
-                       : ((entry.display||{}).label || title(name)))));
+        safety.confirm
+          ? "Confirm & " + (entry.display?.label || title(name))
+          : (entry.display?.label || title(name)))));
 
-  /* drafts save on blur — the same write path as every other client */
-  if (entry.draft && entry.draft.href) {
-    form.addEventListener("focusout", async () => {
-      const values = collectValues(form, input);
-      if (!Object.keys(values).length) return;
-      const res = await api(entry.draft.href,
-        {method: "PUT", body: JSON.stringify(values)});
-      const note = dlg.querySelector("[data-draftnote]");
-      if (note) note.textContent = res.ok
-        ? "draft saved " + new Date().toTimeString().slice(0, 8)
-        : "draft not saved: " + (((res.body||{}).detail) || res.status);
+  /* ── the draft chrome: PUT on blur; a shared draft upgrades to the
+     waymark-relay/2 websocket at {draft}/collab — per-field revisions,
+     explicit staleness rejection, presence, regate. Losing the socket
+     just falls back to the plain PUT. ──────────────────────────────── */
+  let ws = null, wsTimer = null, disarmed = false;
+  const revs = {...((draftView || {}).revs || {})};
+  const lastKnown = {...initialValues};
+  const dirty = new Set();
+  const proseFields = new Set(
+    [...form.querySelectorAll("textarea[data-prose]")].map(n => n.name));
+  function disarmDraft() { disarmed = true; clearTimeout(wsTimer); }
+  function closeDlg() {
+    clearTimeout(wsTimer);
+    if (ws) { try { ws.close(); } catch (_e) {} ws = null; }
+    dlg.close(); dlg.remove();
+  }
+  const applyRemoteField = (k, v, rev) => {
+    if (rev !== undefined) {
+      if (rev <= (revs[k] || 0) && lastKnown[k] === v) return;
+      revs[k] = rev;
+    }
+    lastKnown[k] = v;
+    const node = form.querySelector(`[name="${CSS.escape(k)}"]`);
+    if (!node) return;
+    /* hold off only while the user has unsent keystrokes in this exact
+       field — a stale send comes back as a rejection carrying the truth */
+    if (node === document.activeElement && dirty.has(k)) return;
+    const val = v == null ? ""
+      : typeof v === "object" ? JSON.stringify(v) : String(v);
+    if (node === document.activeElement) {
+      const s = node.selectionStart, e = node.selectionEnd;
+      node.value = val;
+      try { node.setSelectionRange(s, e); } catch (_e) {}
+    } else node.value = val;
+  };
+  const showPeers = participants => {
+    const me = principalId() || "anonymous";
+    const others = (participants || []).filter(p => p.id !== me);
+    peers.textContent = others.length
+      ? ` · editing with ${others.map(p => p.display || p.id).join(", ")}` : "";
+  };
+  if (entry.draft && entry.draft.shared) {
+    try {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      ws = new WebSocket(`${proto}//${location.host}${entry.draft.href}/collab`);
+      ws.onmessage = ev => {
+        let m; try { m = JSON.parse(ev.data); } catch (_e) { return; }
+        if (m.type === "state" || m.type === "sync") {
+          for (const [k, v] of Object.entries(m.values || {}))
+            applyRemoteField(k, v, (m.revs || {})[k]);
+          for (const [k, r] of Object.entries(m.revs || {}))
+            if (r > (revs[k] || 0)) revs[k] = r;
+          showPeers(m.participants);
+          if (m.stale) savedNote.textContent =
+            "shared draft from an older version — review before submitting";
+        } else if (m.type === "update") {
+          applyRemoteField(m.field, m.value, m.rev);
+          savedNote.textContent =
+            `${(m.author || {}).display || (m.author || {}).id || "someone"} `
+            + `edited ${dlgStamp()}`;
+        } else if (m.type === "edit") {
+          const next = applyOps(lastKnown[m.field], m.ops);
+          applyRemoteField(m.field, next, m.rev);
+          savedNote.textContent =
+            `${(m.author || {}).display || (m.author || {}).id || "someone"} `
+            + `edited ${dlgStamp()}`;
+        } else if (m.type === "ack") {
+          revs[m.field] = m.rev;
+          savedNote.textContent = `draft saved ${dlgStamp()}`;
+        } else if (m.type === "stale") {
+          /* our edit was based on a stale revision: the server sent the
+             field's truth — show it and continue from there */
+          dirty.delete(m.field);
+          applyRemoteField(m.field, m.value, m.rev);
+          savedNote.textContent = "edit overtaken — showing the latest";
+        } else if (m.type === "presence") {
+          showPeers(m.participants);
+        } else if (m.type === "regate") {
+          if (m.gone) { savedNote.textContent =
+            "the draft was consumed elsewhere — compose anew"; }
+          else {
+            for (const [k, r] of Object.entries(m.revs || {})) revs[k] = r;
+            savedNote.textContent =
+              "the row moved underneath this draft — re-check before submitting";
+          }
+        } else if (m.type === "resync") {
+          try { ws.send(JSON.stringify({type: "sync"})); } catch (_e) {}
+        } else if (m.type === "error") {
+          showFieldErrors({errors: m.errors || {}});
+        }
+      };
+      ws.onclose = () => { ws = null; peers.textContent = ""; };
+      ws.onerror = () => { try { ws && ws.close(); } catch (_e) {} };
+    } catch (_e) { ws = null; }
+  }
+  const saveDraft = async () => {
+    if (disarmed || !entry.draft) return;
+    const all = input ? collectValues(form, input) : {};
+    if (ws && ws.readyState === 1) {
+      /* send only what changed, one relay/2 frame per field, each
+         pinned to the revision it was based on — the server rejects
+         stale edits with the truth instead of silently clobbering */
+      for (const fname of Object.keys((input || {}).properties || {})) {
+        const v = all[fname] === undefined ? null : all[fname];
+        const known = lastKnown[fname] === undefined ? null : lastKnown[fname];
+        if (JSON.stringify(v) === JSON.stringify(known)) continue;
+        /* prose fields ride operation frames once a revision exists;
+           the first write is a set (a rebase point, per relay/2) */
+        if (proseFields.has(fname) && (revs[fname] || 0) > 0 &&
+            typeof v === "string" && typeof known === "string") {
+          ws.send(JSON.stringify({type: "edit", field: fname,
+            rev: revs[fname] || 0, ops: diffOps(known, v)}));
+        } else {
+          ws.send(JSON.stringify({type: "set", field: fname, value: v,
+                                  rev: revs[fname] || 0}));
+        }
+        lastKnown[fname] = v;
+      }
+      dirty.clear();
+      return;
+    }
+    const res = await api(entry.draft.href,
+      {method: "PUT", body: JSON.stringify(all)});
+    dirty.clear();
+    if (res.ok) {
+      for (const [k, r] of Object.entries((res.body || {}).revs || {})) revs[k] = r;
+      for (const [k, v] of Object.entries((res.body || {}).values || {}))
+        lastKnown[k] = v;
+      savedNote.textContent = `draft saved ${dlgStamp()}`;
+    } else savedNote.textContent =
+      "draft not saved: " + (((res.body || {}).detail) || res.status);
+  };
+  if (entry.draft) {
+    form.addEventListener("input", ev => {
+      if (ev.target && ev.target.name) dirty.add(ev.target.name);
+      clearTimeout(wsTimer);
+      wsTimer = setTimeout(saveDraft, ws ? 400 : 800);
+    });
+    form.addEventListener("focusout", () => {
+      clearTimeout(wsTimer);
+      saveDraft();
     });
   }
 
   /* blur-time dry-run: the SERVER judges the half-built input and its
-     field errors land inline (schema 422s per field; anything else
-     waits for Check/submit — a guard 409 mid-typing would only nag) */
+     schema 422s land inline per field (anything else waits for
+     Check/submit — a guard 409 mid-typing would only nag) */
   let dryTimer = null;
   if (input && dryRunnable(entry.href)) {
     form.addEventListener("focusout", () => {
@@ -939,9 +2062,7 @@ async function actionDialog({name, entry, doc, bulkIds, onDone}) {
     clearServerErrors();
     showFieldErrors(problem);
     if (!Object.keys((problem || {}).errors || {}).length)
-      errBox.append(el("div", {class: "problem"},
-        ((problem || {}).title || "Refused") +
-        ((problem || {}).detail ? ": " + problem.detail : "")));
+      errBox.append(problemBox(problem || {}));
   }
   async function check() {           /* dry-run pre-validation (rule 5) */
     const sep = entry.href.includes("?") ? "&" : "?";
@@ -954,37 +2075,44 @@ async function actionDialog({name, entry, doc, bulkIds, onDone}) {
         "✓ schema and guards accept this input" +
         (warns.length ? " (with warnings)" : "")));
       for (const w of warns)
-        errBox.append(el("div", {class: "warnbox"}, w.reason || w.name));
+        errBox.append(el("div", {class: "warnbox"},
+          el("span", {class:"prose"}, w.reason || w.name),
+          remedyChips(w.remedies, doc, () => closeDlg())));
     } else showErrors(res.body);
   }
   async function submit() {
+    disarmDraft();                   /* the invoke consumes the draft */
     const res = await api(entry.href,
       {method: "POST", body: body(), headers: actHeaders()});
     if (res.ok) {
-      dlg.close(); dlg.remove();
+      closeDlg();
       if ((res.body || {}).kind === "bulk_report") reportDialog(res.body);
-      else toast(((res.body || {}).summary || "Done"));
-      onDone(res.body);
+      else maybeUndoToast(name, doc, res.body || {});
+      onDone && onDone(res.body);
       return;
     }
+    disarmed = false;
     const problem = res.body || {};
-    /* the acknowledge protocol: warnings are a dialog, not a dead end */
+    /* the acknowledge protocol (guard names ride kebab on wire 10):
+       warnings are a dialog, not a dead end — the problem body names
+       its own header and names, so nothing is hardcoded */
     if (res.status === 409 && problem.acknowledge && problem.acknowledge.names) {
       errBox.replaceChildren(el("div", {class: "warnbox"},
         el("b", {}, "The server warns:"),
         el("ul", {}, (problem.warnings || []).map(w =>
-          el("li", {}, (w.name ? w.name + ": " : "") + (w.reason || "")))),
+          el("li", {}, (w.name ? w.name + ": " : "") + (w.reason || ""),
+             remedyChips(w.remedies, doc, () => closeDlg())))),
         el("div", {class: "actions"},
           el("button", {class: "primary", onclick: () => {
             acknowledged = problem.acknowledge.names;
-            submit();               /* same key: the retry is the same attempt */
+            submit();            /* same key: the retry is the same attempt */
           }}, "Acknowledge and retry"))));
       return;
     }
     if (res.status === 412) {
       errBox.replaceChildren(el("div", {class: "problem"},
-        (problem.detail || "The resource changed since you read it."),
-        " ", el("button", {onclick: async () => {
+        (problem.detail || "The resource changed since you read it."), " ",
+        el("button", {onclick: async () => {
           const fresh = await api(doc.self);
           if (fresh.ok) { doc = fresh.body; errBox.replaceChildren(
             el("div", {class: "validok"}, "re-read — try again")); }
@@ -995,80 +2123,539 @@ async function actionDialog({name, entry, doc, bulkIds, onDone}) {
   }
 
   document.body.append(dlg);
+  dlg.addEventListener("close", () => dlg.remove());
   dlg.showModal();
 }
-function prefillFromDoc(doc, input) {
-  const out = {};
-  for (const name of Object.keys((input || {}).properties || {}))
-    if ((doc.data || {})[name] !== undefined) out[name] = doc.data[name];
-  return out;
-}
+
+/* ── the bulk report: N inputs → N verdicts, honestly partial ──────── */
 function reportDialog(report) {
-  const d = (report.data || {});
-  const dlg = el("dialog", {},
-    el("div", {class: "dlghead"}, el("h3", {}, "Bulk report · " + report.action)),
+  const d = report.data || {};
+  const dlg = el("dialog", {"data-report": ""},
+    el("div", {class: "dlghead"},
+      el("h3", {}, "Bulk report · " + pretty(report.action || ""))),
     el("div", {class: "dlgbody"},
-      el("p", {}, d.succeeded + " succeeded · " + d.refused + " refused · " +
-                  d.failed + " failed"),
+      el("div", {class: "verdict-totals"},
+        `succeeded ${d.succeeded ?? 0} · refused ${d.refused ?? 0} · `
+        + `failed ${d.failed ?? 0}`),
       (d.refusals || []).length
-        ? el("ul", {class: "notnow"}, d.refusals.map(r =>
-            el("li", {}, el("a", {href: "#" + r.self,
-              onclick: () => dlg.remove()}, r.self.split("/").pop()),
-              " — " + r.reason)))
-        : null),
+        ? el("table", {class: "verdicts"},
+            el("thead", {}, el("tr", {},
+              el("th", {}, "row"), el("th", {}, "outcome"),
+              el("th", {}, "reason"))),
+            el("tbody", {}, d.refusals.map(r =>
+              el("tr", {},
+                el("td", {class:"mono"},
+                  el("a", {href: "#" + r.self,
+                           onclick: () => { dlg.close(); dlg.remove(); }},
+                    String(r.self || "").split("/").pop().slice(0, 8))),
+                el("td", {}, el("span", {class:"verdict-refused"}, "refused")),
+                el("td", {class:"reason"}, r.reason || "")))))
+        : el("p", {class: "validok"}, "every row succeeded")),
     el("div", {class: "dlgfoot"},
       el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
   document.body.append(dlg);
   dlg.showModal();
 }
-function renderProblem(res) {
-  const p = res.body || {};
-  $main.replaceChildren(
-    el("h1", {}, res.status + " " + (p.title || "")),
-    el("div", {class: "problem"}, p.detail || "The server refused this read."),
-    el("p", {}, el("a", {href: "#"}, "‹ home")));
+
+/* ── undo: an inverse action present in the post-action document ───── */
+async function invokeBare(entry, doc) {
+  const h = {};
+  if (entry.safety?.fence && doc.meta?.etag) h["If-Match"] = doc.meta.etag;
+  if (entry.safety && entry.safety.idempotent === false)
+    h["Idempotency-Key"] = uuid();
+  return api(entry.href, {method: entry.method || "POST",
+                          body: JSON.stringify({}), headers: h});
+}
+function maybeUndoToast(name, before, after) {
+  const t = $("#toast");
+  t.textContent = "";
+  t.append(`${pretty(name)} ✓`);
+  const backTo = before.state;
+  const inverse = Object.entries(after.actions || {})
+    .find(([, a]) => a.effect?.to === backTo);
+  if (inverse && backTo && after.state !== backTo) {
+    const [invName, invEntry] = inverse;
+    t.append(el("button", {"data-undo": invName, onclick: async () => {
+      await invokeBare(invEntry, after);
+      t.style.display = "none";
+      render();
+    }}, `undo (${label(invName, invEntry)})`));
+  }
+  t.style.display = "block";
+  setTimeout(() => t.style.display = "none", 6000);
 }
 
-/* ════ live updates: the SSE firehose ═══════════════════════════════ */
-let SCOPE = {};                 /* what the current screen is watching */
+function problemBox(p) {
+  p = p || {};
+  const box = el("div", {class:"problem"},
+    el("b", {}, p.title || "Error"), " — ",
+    el("span", {class:"detail"}, p.detail || ""));
+  if (p.errors) box.append(el("ul", {},
+    Object.entries(p.errors).map(([f, msgs]) =>
+      el("li", {}, `${f}: ${Array.isArray(msgs) ? msgs.join("; ") : msgs}`))));
+  if (p.resource && p.resource.self)
+    box.append(el("div", {style:"margin-top:4px"},
+      el("a", {href:"#"+p.resource.self}, "view current state")));
+  return box;
+}
+
+/* ── attachments: the bytes ride the engine's static route
+   /api/attachments/{id}/bytes (wire 10 advertises no template — a
+   recorded adaptation from 9's discovery-advertised route) ─────────── */
+function bytesHref(id) { return `/api/attachments/${encodeURIComponent(id)}/bytes`; }
+function isViewable(mime) {
+  return /^(image\/|text\/)/.test(mime || "") || mime === "application/pdf";
+}
+async function fetchAttachmentBlob(id) {
+  try {
+    const res = await fetch(bytesHref(id), {headers: principalHeaders()});
+    if (!res.ok) { toast(`couldn't fetch the file — ${res.status}`); return null; }
+    return await res.blob();
+  } catch { toast("couldn't reach the file"); return null; }
+}
+async function downloadAttachment(id, name) {
+  const blob = await fetchAttachmentBlob(id);
+  if (!blob) return;
+  const obj = URL.createObjectURL(blob);
+  const a = el("a", {href: obj, download: name || "file"});
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(obj), 10000);
+}
+async function viewAttachment(id) {
+  const blob = await fetchAttachmentBlob(id);
+  if (!blob) return;
+  const obj = URL.createObjectURL(blob);
+  window.open(obj, "_blank");
+  setTimeout(() => URL.revokeObjectURL(obj), 60000);
+}
+function downloadButton(item, small) {
+  if (!item || item.state !== "uploaded") return null;
+  const id = String(item.self).split("/").pop();
+  const btn = el("button", {
+    style: small ? "font-size:12px;padding:3px 8px" : "",
+    title:"download this file"}, "↓ Download");
+  btn.addEventListener("click", () => downloadAttachment(id, null));
+  return btn;
+}
+function humanSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+function uploadButton({entry, doc, prefill, onDone, small}) {
+  const btn = el("button", {class:"primary", "data-action":"create",
+    style: small ? "font-size:12px;padding:3px 8px" : ""}, "Upload file");
+  btn.addEventListener("click", () =>
+    uploadDialog({entry, doc, prefill, onDone}));
+  return btn;
+}
+/* the two-phase reserve→PUT-bytes flow: the create action's own href
+   reserves the row; the bytes go to the static route. name and the
+   media type come off the chosen File. */
+async function uploadDialog({entry, doc, prefill, onDone}) {
+  prefill = prefill || {};
+  const props = entry.input?.properties || {};
+  const mediaField = "media_type" in props ? "media_type"
+                   : "mime" in props ? "mime" : null;
+  const file = el("input", {type:"file", id:"f_file"});
+  const preview = el("div", {class:"muted mono", style:"margin:6px 0"},
+    "no file chosen");
+  const errBox = el("div", {});
+  const upBtn = el("button", {class:"primary", disabled:"true"}, "Upload");
+  let chosen = null, reservedId = null, reservedBody = null;
+  file.addEventListener("change", () => {
+    chosen = file.files && file.files[0];
+    if (chosen) {
+      preview.textContent = `${chosen.name} · `
+        + `${chosen.type || "application/octet-stream"} · `
+        + `${humanSize(chosen.size)}`;
+      upBtn.removeAttribute("disabled");
+    } else {
+      preview.textContent = "no file chosen";
+      upBtn.setAttribute("disabled", "true");
+    }
+  });
+  const extraForm = el("div", {});
+  for (const [k, rawProp] of Object.entries(props)) {
+    if (k === "name" || k === mediaField || k === "size" || k === "sha256") continue;
+    const prop = schemaProp(rawProp);
+    if (prop.const !== undefined) continue;
+    extraForm.append(el("div", {class:"field"},
+      el("label", {}, el("b", {}, k)),
+      fieldWidget(k, rawProp, prefill[k])));
+  }
+  const dlg = el("dialog", {},
+    el("div", {class:"dlghead"}, el("h3", {}, "Upload a file"),
+      el("p", {class:"metaline"}, "reserved → uploaded · the bytes are written once")),
+    el("div", {class:"dlgbody"},
+      el("div", {class:"field"}, el("label", {}, el("b", {}, "File")),
+        file, preview),
+      extraForm, errBox),
+    el("div", {class:"dlgfoot"},
+      el("button", {onclick: () => { dlg.close(); dlg.remove();
+                                     if (reservedId) render(); }}, "Cancel"),
+      upBtn));
+  upBtn.addEventListener("click", async () => {
+    if (!chosen) return;
+    errBox.textContent = "";
+    upBtn.setAttribute("disabled", "true");
+    if (!reservedId) {
+      const create = {name: chosen.name};
+      if (mediaField) create[mediaField] = chosen.type || "application/octet-stream";
+      for (const [k, rawProp] of Object.entries(props)) {
+        const prop = schemaProp(rawProp);
+        if (prop.const !== undefined) create[k] = prop.const;
+      }
+      for (const node of extraForm.querySelectorAll("[name]"))
+        if (node.value) create[node.getAttribute("name")] = node.value;
+      const res = await api(entry.href, {method: entry.method || "POST",
+        body: JSON.stringify(Object.assign({}, prefill, create))});
+      if (!res.ok) {
+        errBox.append(problemBox(res.body));
+        upBtn.removeAttribute("disabled");
+        return;
+      }
+      reservedBody = res.body;
+      reservedId = String(res.body.self).split("/").pop();
+    }
+    try {
+      const res = await fetch(bytesHref(reservedId), {method:"PUT",
+        headers: {...principalHeaders(),
+          "Content-Type": chosen.type || "application/octet-stream"},
+        body: chosen});
+      if (!res.ok) {
+        const b = await res.json().catch(() => null);
+        errBox.append(problemBox(b || {title:"Upload failed",
+          detail:`the bytes route returned ${res.status} — the file is `
+            + "reserved; try uploading again"}));
+        upBtn.removeAttribute("disabled");  /* retry re-PUTs the same reserve */
+        return;
+      }
+    } catch {
+      errBox.append(problemBox({title:"Upload failed",
+        detail:"could not reach the bytes route — the file is reserved; try again"}));
+      upBtn.removeAttribute("disabled");
+      return;
+    }
+    dlg.close(); dlg.remove();
+    toast(`${chosen.name} uploaded ✓`);
+    onDone && onDone(reservedBody);
+  });
+  document.body.append(dlg);
+  dlg.showModal();
+}
+
+/* ── events: fetch-based SSE (principal headers ride along), parsing
+   the wire's named frames — `event: transition` with ids,
+   `event: derivation` without ─────────────────────────────────────── */
+function parseFrame(frame) {
+  let event = "message", id = null, data = null;
+  for (const line of frame.split("\n")) {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    else if (line.startsWith("id:")) id = line.slice(3).trim();
+    else if (line.startsWith("data:")) data = line.slice(5).trim();
+  }
+  if (!data) return null;
+  try { return {event, id, data: JSON.parse(data)}; } catch { return null; }
+}
+async function sse(href, onFrame) {
+  while (true) {
+    try {
+      const res = await fetch(href, {headers: principalHeaders()});
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, {stream: true});
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const f = parseFrame(buf.slice(0, idx));
+          buf = buf.slice(idx + 2);
+          if (f) onFrame(f);
+        }
+      }
+    } catch (_e) { /* server restarting */ }
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+/* a one-shot replay: read frames until the burst goes quiet, then stop */
+function fetchReplay(href, {idle = 500} = {}) {
+  return new Promise(async resolve => {
+    const ctl = new AbortController();
+    const frames = [];
+    let timer = null, settled = false;
+    const settle = () => {
+      if (settled) return; settled = true;
+      clearTimeout(timer); ctl.abort(); resolve(frames);
+    };
+    const bump = () => { clearTimeout(timer); timer = setTimeout(settle, idle); };
+    bump();
+    try {
+      const sep = href.includes("?") ? "&" : "?";
+      const res = await fetch(href + sep + "last_event_id=0",
+        {signal: ctl.signal, headers: principalHeaders()});
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const {done, value} = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, {stream: true});
+        let idx;
+        while ((idx = buf.indexOf("\n\n")) >= 0) {
+          const f = parseFrame(buf.slice(0, idx));
+          buf = buf.slice(idx + 2);
+          if (f) { frames.push(f); bump(); }
+        }
+      }
+    } catch (_e) { /* aborted on idle, or the server hiccupped */ }
+    settle();
+  });
+}
+
+/* ── follow a principal (supervision): their transitions steer this
+   screen. The firehose names the actor on every event; following is a
+   client-side filter plus navigation. (9's presence stream — where
+   your screen went where they merely LOOKED — has no wire-10 route;
+   only committed transitions steer here. Recorded gap.) ────────────── */
+let followId = localStorage.getItem("wm10.follow.id") || null;
+let followName = localStorage.getItem("wm10.follow.name") || null;
+function follow(actor) {
+  followId = actor.id;
+  followName = actor.display || actor.id;
+  localStorage.setItem("wm10.follow.id", followId);
+  localStorage.setItem("wm10.follow.name", followName);
+  followChip();
+}
+function unfollow() {
+  followId = followName = null;
+  localStorage.removeItem("wm10.follow.id");
+  localStorage.removeItem("wm10.follow.name");
+  followChip();
+}
+function followChip() {
+  const chip = $("#followchip");
+  chip.style.display = followId ? "inline-block" : "none";
+  chip.textContent = "";
+  if (followId)
+    chip.append(`following ${followName}`,
+      el("button", {title: "stop following", onclick: unfollow}, "✕"));
+}
+const bootParams = new URLSearchParams(location.search);
+if (bootParams.get("follow")) {
+  follow({id: bootParams.get("follow"),
+          display: bootParams.get("follow_name") || bootParams.get("follow")});
+  history.replaceState(null, "", location.pathname + location.hash);
+}
+followChip();
+
+/* ── the ledger rows: time in mono, the actor marked by type, machine
+   facts quiet, and the law loud — exactly once, when it changes ────── */
+const ACTOR_MARKS = {human: "●", agent: "◆", system: "○"};
+function evTime(at) {
+  return el("span", {class:"ev-time"},
+    at ? new Date(at).toLocaleTimeString([], {hour12: false}) : "");
+}
+function actorChip(actor) {
+  actor = actor || {};
+  return el("span", {class:"actor-chip",
+      title: `follow ${actor.display || actor.id || "?"}'s actions`,
+      onclick: () => { follow(actor); toast(`following ${actor.display || actor.id}`); }},
+    el("span", {class:"actor-mark " + (actor.type || "human")},
+      ACTOR_MARKS[actor.type] || "●"),
+    " ", actor.display || actor.id || "?");
+}
+function lawStampChip(ev) {
+  return ev.law_revision != null
+    ? el("span", {class:"anchor law-chip",
+        title: `written under law revision ${ev.law_revision}`},
+        "⚖ r" + ev.law_revision)
+    : null;
+}
+function ledgerRow(ev, isFollowed) {
+  return el("div", {class: "ev" + (isFollowed ? " followed" : "")},
+    el("div", {class:"ev-head"},
+      evTime(ev.at), " ", actorChip(ev.actor), lawStampChip(ev)),
+    el("div", {class:"ev-body"},
+      `${pretty(ev.action || "")} · `,
+      el("a", {href:"#"+ev.self, title: `${ev.from ?? "·"} → ${ev.to}`},
+        `${pretty(ev.kind || "")}: ${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to || "")}`)));
+}
+function derivRow(ev) {
+  /* a derivation-class event: maintenance changed a fact no transition
+     announces — quiet, mono. self is null when the whole kind restamped. */
+  const what = Array.isArray(ev.changed) ? ev.changed.join(", ")
+    : typeof ev.changed === "object" && ev.changed ? Object.keys(ev.changed).join(", ")
+    : String(ev.changed ?? "");
+  return el("div", {class:"ev deriv"},
+    evTime(ev.at), " ",
+    ev.self ? el("a", {href:"#"+ev.self}, `ƒ ${ev.class || "derivation"} · ${what}`)
+            : el("span", {}, `ƒ ${ev.class || "derivation"} · ${pretty(ev.kind || "")} · ${what}`));
+}
+/* The law line — the signature: a full-width violet rule when the
+   definition kind itself transitions. Degrades to the stored summary;
+   enriched from the definition row itself. */
+function lawLineRow(ev) {
+  const detail = el("span", {class:"law-detail"},
+    ev.summary || (ev.self || "").split("/").pop().slice(0, 8));
+  const row = el("div", {class:"ev law-line"},
+    el("div", {},
+      el("span", {class:"law-stamp"},
+        "⚖ ", ev.action === "create" ? "law recorded" : "law revised"),
+      " · ", el("a", {href:"#"+ev.self, class:"law-link"}, detail)),
+    evTime(ev.at));
+  api(ev.self).then(({ok, body}) => {
+    if (!ok || !body.data) return;
+    const d = body.data;
+    const bits = [`${pretty(d.target_kind || "")} · rev ${d.revision}`];
+    if (d.diff_class && d.diff_class !== "initial") bits.push(d.diff_class);
+    if (d.change_summary) bits.push(d.change_summary);
+    detail.textContent = bits.join(" · ");
+  }).catch(() => {});
+  return row;
+}
+
+/* ── the per-resource history panel: this row's transition log,
+   replayed from its events stream (wire 10 frames carry no recorded
+   inputs and no version — the replay's own order is the order) ────── */
+let historyOpen = false;
+function historySection(streamHref) {
+  const count = el("span", {class:"muted mono", style:"font-size:11px"});
+  const body = el("div", {class:"history-body"});
+  const sec = el("details", historyOpen ? {class:"history", open:""}
+                                        : {class:"history"},
+    el("summary", {class:"muted"}, "History ", count), body);
+  let loaded = false;
+  const load = () => {
+    if (loaded) return;
+    loaded = true;
+    body.append(el("span", {class:"muted"}, "…"));
+    fetchReplay(streamHref).then(frames => {
+      if (!document.contains(body)) return;   // superseded by a re-render
+      const trans = frames.filter(f => f.event === "transition").map(f => f.data);
+      trans.reverse();                        // replay is id order: newest first
+      body.textContent = "";
+      count.textContent = trans.length ? `(${trans.length})` : "";
+      if (!trans.length)
+        return body.append(el("span", {class:"muted"}, "no transitions yet"));
+      for (const ev of trans)
+        body.append(el("div", {class:"ev"},
+          el("div", {class:"ev-head"},
+            evTime(ev.at), " ", actorChip(ev.actor), lawStampChip(ev)),
+          el("div", {class:"ev-body"},
+            `${pretty(ev.action || "")} · `,
+            `${ev.from ? pretty(ev.from) : "·"} → ${pretty(ev.to || "")}`)));
+    }).catch(() => {
+      if (!document.contains(body)) return;
+      body.textContent = "";
+      body.append(el("div", {class:"muted"}, "couldn't load history"));
+    });
+  };
+  sec.addEventListener("toggle", () => {
+    historyOpen = sec.open;
+    if (sec.open) load();
+  });
+  if (historyOpen) load();
+  return sec;
+}
+
+/* ── the activity drawer: the ledger's one global home. Closed ≠ torn
+   down — arrivals count into the pip (violet the moment the law
+   moves); opening clears it. ───────────────────────────────────────── */
+const ledgerEl = $("#ledger");
+const ledgerToggle = $("#ledgertoggle");
+const ledgerPip = $("#ledgerpip");
+let ledgerUnread = 0, ledgerUnreadLaw = false;
+function paintPip() {
+  if (!ledgerUnread) { ledgerPip.style.display = "none"; return; }
+  ledgerPip.textContent = ledgerUnread > 99 ? "99+" : String(ledgerUnread);
+  ledgerPip.className = ledgerUnreadLaw ? "law" : "";
+  ledgerPip.style.display = "inline-block";
+}
+const ledgerIsOpen = () => ledgerEl.classList.contains("open");
+function setLedger(open, opts) {
+  const moveFocus = !opts || opts.focus !== false;
+  ledgerEl.classList.toggle("open", open);
+  ledgerToggle.setAttribute("aria-expanded", String(open));
+  localStorage.setItem("wm10.ledger.open", open ? "1" : "0");
+  if (open) {
+    ledgerUnread = 0; ledgerUnreadLaw = false; paintPip();
+    if (moveFocus) ledgerEl.focus();
+  } else if (moveFocus) ledgerToggle.focus();
+}
+ledgerToggle.addEventListener("click", () => setLedger(!ledgerIsOpen()));
+$("#ledgerclose").addEventListener("click", () => setLedger(false));
+ledgerEl.addEventListener("keydown", ev => {
+  if (ev.key === "Escape") { ev.stopPropagation(); setLedger(false); }
+});
+if (localStorage.getItem("wm10.ledger.open") === "1")
+  setLedger(true, {focus: false});
+
+/* what the current screen is watching: a transition (or derivation)
+   touching it refetches, debounced — a burst becomes one read */
+let SCOPE = {};
 let refetchTimer = null;
 function watchScope(scope) { SCOPE = scope || {}; }
-function startEvents() {
-  const source = new EventSource("/api/-/events");
-  const live = document.getElementById("live");
-  source.onopen = () => live.classList.add("on");
-  source.onerror = () => live.classList.remove("on");
-  source.addEventListener("transition", ev => {
-    let t = null;
-    try { t = JSON.parse(ev.data); } catch (_e) { return; }
-    document.getElementById("ticker").replaceChildren(
-      el("span", {}, (t.at || "").slice(11, 19) + " · ",
-        el("b", {}, ((t.actor || {}).id || "?")), " ", t.action, " · ",
-        t.kind, " ", (t.from || "·") + " → " + (t.to || "·"), " · ",
-        el("a", {href: "#" + t.self, class: "mono"}, t.self)));
-    const hit = (SCOPE.self && t.self === SCOPE.self) ||
-                (SCOPE.kind && t.kind === SCOPE.kind);
-    if (hit) {                       /* debounce a burst into one refetch */
-      clearTimeout(refetchTimer);
-      refetchTimer = setTimeout(render, 350);
-    }
-  });
-  /* derivation class: maintenance changed a fact no transition
-     announces (cross-row recompute, clock flip, bulk restamp — self
-     is null when the whole kind restamped); refetch what's open */
-  source.addEventListener("derivation", ev => {
-    let t = null;
-    try { t = JSON.parse(ev.data); } catch (_e) { return; }
-    const hit = (SCOPE.self && t.self === SCOPE.self) ||
-                (SCOPE.kind && t.kind === SCOPE.kind);
-    if (hit) {
-      clearTimeout(refetchTimer);
-      refetchTimer = setTimeout(render, 350);
-    }
-  });
+function scopeHit(t) {
+  return (SCOPE.self && (t.self === SCOPE.self ||
+                         (t.self || "").startsWith(SCOPE.self + "/"))) ||
+         (SCOPE.kind && t.kind === SCOPE.kind);
+}
+function tickerLine(t) {
+  $("#ticker").replaceChildren(
+    el("span", {}, (t.at || "").slice(11, 19) + " · ",
+      el("b", {}, ((t.actor || {}).id || "?")), " ", t.action || "", " · ",
+      t.kind || "", " ", (t.from || "·") + " → " + (t.to || "·"), " · ",
+      el("a", {href: "#" + t.self, class: "mono"}, t.self || "")));
 }
 
-startEvents();
+const seen = new Set();  // dedupe — at-least-once delivery
+sse("/api/-/events", ({event, id, data: ev}) => {
+  const feed = $("#feed");
+  if (event === "derivation") {
+    const key = `d:${ev.kind}#${ev.self}#${ev.at}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    feed.prepend(derivRow(ev));
+    if (scopeHit(ev)) {
+      clearTimeout(refetchTimer);
+      refetchTimer = setTimeout(render, 350);
+    }
+    return;
+  }
+  if (event !== "transition") return;
+  const key = id ? `t:${id}` : `t:${ev.self}#${ev.at}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  tickerLine(ev);
+  const isFollowed = !!(followId && ev.actor && ev.actor.id === followId);
+  let lawLine = false;
+  if (ev.kind === "definition") {
+    lawLine = true;                    // the law moved: the one loud line
+    feed.prepend(lawLineRow(ev));
+  } else feed.prepend(ledgerRow(ev, isFollowed));
+  if (!ledgerIsOpen()) {
+    ledgerUnread += 1;
+    if (lawLine) ledgerUnreadLaw = true;
+    paintPip();
+  }
+  const here = decodeURIComponent(location.hash.slice(1)).split("?")[0];
+  /* following: go where they went — unless a dialog is open (never yank
+     a human out of a form they're typing in) */
+  if (isFollowed && ev.self && ev.self !== here && !$("dialog[open]")) {
+    location.hash = "#" + ev.self;
+    return;
+  }
+  if (scopeHit(ev) ||
+      (here && ev.self && here === ev.self.replace(/\/[^/]+$/, ""))) {
+    clearTimeout(refetchTimer);
+    refetchTimer = setTimeout(render, 350);
+  }
+});
+
+$("#apphost").textContent = location.host;  // the honest app identity
 render();
 </script>
 </body>

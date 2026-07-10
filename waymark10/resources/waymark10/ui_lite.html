@@ -1,0 +1,1075 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>waymark 10 · lite</title>
+<style>
+/* ── the envelope is the screen ──────────────────────────────────────
+   One self-contained page, zero external hosts, zero app knowledge:
+   everything rendered here was read off the wire — kinds from
+   well-known, tables from the query grammar, forms from the action
+   input schemas, gates from safety, reasons from unavailable.       */
+:root {
+  --bg: #f7f6f3; --panel: #ffffff; --ink: #1a1a18; --muted: #6b6a64;
+  --line: #e2e0d8; --accent: #2c5f8a; --accent-ink: #ffffff;
+  --danger: #a33a2e; --warn-bg: #fdf3d7; --warn-line: #e5c96b;
+  --ok: #3a7d44; --chip: #eceae2; --code: #f0efe9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #191a1c; --panel: #222325; --ink: #e8e6e1; --muted: #97958e;
+    --line: #35363a; --accent: #6ea3cc; --accent-ink: #14181c;
+    --danger: #d3766a; --warn-bg: #3a3320; --warn-line: #8a7a3a;
+    --ok: #7dbb87; --chip: #2e2f33; --code: #26272b;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+code, .mono { font-family: ui-monospace, "Cascadia Mono", Menlo, monospace;
+  font-size: 0.92em; }
+header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 18px; border-bottom: 1px solid var(--line);
+  background: var(--panel); position: sticky; top: 0; z-index: 5; }
+.brand { font-weight: 700; letter-spacing: 0.04em; }
+.brand small { color: var(--muted); font-weight: 400; }
+nav { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
+nav a { padding: 3px 9px; border-radius: 20px; font-size: 13.5px; }
+nav a.on { background: var(--accent); color: var(--accent-ink); }
+nav .sep { color: var(--line); align-self: center; }
+#who { width: 110px; padding: 4px 8px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--bg); color: var(--ink); }
+#live { width: 9px; height: 9px; border-radius: 50%; background: var(--muted);
+  flex: none; }
+#live.on { background: var(--ok); }
+main { max-width: 1060px; margin: 0 auto; padding: 18px; }
+h1 { font-size: 21px; margin: 4px 0 2px; }
+h2 { font-size: 15px; margin: 22px 0 8px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+.crumb, .meta { color: var(--muted); font-size: 13px; }
+.statechip { display: inline-block; padding: 1px 10px; border-radius: 20px;
+  background: var(--chip); font-size: 13px; font-weight: 600; }
+.card { background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: 14px 16px; margin: 12px 0; }
+.tablewrap { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; }
+th { text-align: left; font-size: 12.5px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 10px 4px; }
+td { padding: 7px 10px; border-top: 1px solid var(--line);
+  vertical-align: top; }
+tr.rowlink { cursor: pointer; }
+tr.rowlink:hover td { background: var(--chip); }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+.chip { padding: 2px 10px; border-radius: 20px; background: var(--chip);
+  border: 1px solid var(--line); font-size: 13px; cursor: pointer; }
+.chip.on { background: var(--accent); color: var(--accent-ink);
+  border-color: var(--accent); }
+.chip.static { cursor: default; }
+button { font: inherit; padding: 6px 14px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--panel);
+  color: var(--ink); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button.primary { background: var(--accent); color: var(--accent-ink);
+  border-color: var(--accent); }
+button.danger { border-color: var(--danger); color: var(--danger); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.notnow { margin: 6px 0; }
+.notnow li { margin: 3px 0; color: var(--muted); font-size: 13.5px; }
+.notnow b { color: var(--ink); font-weight: 600; }
+pre { background: var(--code); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px; overflow-x: auto; white-space: pre-wrap;
+  margin: 4px 0; font-size: 13px; }
+.kv td:first-child { color: var(--muted); width: 190px; font-size: 13.5px; }
+.null { color: var(--muted); }
+/* dialogs */
+dialog { border: 1px solid var(--line); border-radius: 12px; padding: 0;
+  background: var(--panel); color: var(--ink); max-width: 560px;
+  width: calc(100vw - 40px); }
+dialog::backdrop { background: rgba(0,0,0,0.45); }
+.dlghead { padding: 14px 18px 8px; }
+.dlghead h3 { margin: 0; font-size: 17px; }
+.dlgbody { padding: 4px 18px 14px; max-height: 65vh; overflow-y: auto; }
+.dlgfoot { padding: 12px 18px; border-top: 1px solid var(--line);
+  display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+.dlgfoot .hint { margin-right: auto; color: var(--muted); font-size: 12.5px; }
+.field { margin: 10px 0; }
+.field label { display: block; font-size: 13px; color: var(--muted);
+  margin-bottom: 3px; }
+.field label b { color: var(--ink); }
+.field input[type=text], .field input[type=date], .field input[type=number],
+.field select, .field textarea { width: 100%; padding: 7px 9px;
+  border: 1px solid var(--line); border-radius: 7px; background: var(--bg);
+  color: var(--ink); font: inherit; }
+.field textarea { min-height: 110px; font-family: ui-monospace, monospace;
+  font-size: 13px; }
+.field .err { color: var(--danger); font-size: 12.5px; margin-top: 2px; }
+.field .err.srv::before { content: "server: "; color: var(--muted); }
+.field .const { padding: 7px 9px; border: 1px dashed var(--line);
+  border-radius: 7px; background: var(--chip); color: var(--muted); }
+.linkrel .badge { display: inline-block; min-width: 18px; text-align: center;
+  padding: 0 6px; border-radius: 10px; background: var(--accent);
+  color: var(--accent-ink); font-size: 12px; margin-left: 4px; }
+.partactions { white-space: nowrap; }
+.partactions button { padding: 3px 10px; font-size: 13px; margin: 1px 2px; }
+.consequence { background: var(--warn-bg); border: 1px solid var(--warn-line);
+  border-radius: 8px; padding: 9px 12px; margin: 10px 0; font-size: 13.5px; }
+.problem { border: 1px solid var(--danger); border-radius: 8px;
+  padding: 9px 12px; margin: 10px 0; font-size: 13.5px;
+  color: var(--danger); }
+.validok { color: var(--ok); font-size: 13.5px; margin: 8px 0; }
+.warnbox { background: var(--warn-bg); border: 1px solid var(--warn-line);
+  border-radius: 8px; padding: 9px 12px; margin: 10px 0; }
+.warnbox ul { margin: 6px 0 0; padding-left: 18px; }
+/* attention flags on surfaces */
+.flag { padding: 2px 10px; border-radius: 6px; font-size: 13px;
+  font-weight: 600; }
+.flag.up { background: var(--warn-bg); border: 1px solid var(--warn-line); }
+.flag.down { background: var(--chip); color: var(--muted); }
+/* ticker */
+#ticker { position: fixed; bottom: 0; left: 0; right: 0;
+  background: var(--panel); border-top: 1px solid var(--line);
+  font-size: 12.5px; color: var(--muted); padding: 4px 18px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#ticker b { color: var(--ink); font-weight: 600; }
+main { padding-bottom: 48px; }
+#toasts { position: fixed; right: 16px; bottom: 40px; display: flex;
+  flex-direction: column; gap: 8px; z-index: 20; }
+.toast { background: var(--panel); border: 1px solid var(--line);
+  border-left: 4px solid var(--accent); border-radius: 8px;
+  padding: 8px 14px; box-shadow: 0 4px 14px rgba(0,0,0,0.18);
+  font-size: 13.5px; max-width: 340px; }
+.toast.bad { border-left-color: var(--danger); }
+.draftnote { color: var(--muted); font-size: 12px; }
+.pager { display: flex; gap: 8px; align-items: center; margin: 10px 0; }
+@media (max-width: 640px) {
+  .kv td:first-child { width: 110px; }
+  main { padding: 10px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">waymark <small>10</small></span>
+  <nav id="nav"></nav>
+  <input id="who" placeholder="principal" title="dev principal (x-waymark-principal)">
+  <span id="live" title="event stream"></span>
+</header>
+<main id="main"></main>
+<div id="toasts"></div>
+<div id="ticker"></div>
+<script>
+"use strict";
+/* ════ tiny DOM + fetch layer ═══════════════════════════════════════ */
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") node.className = v;
+    else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined) node.setAttribute(k, v);
+  }
+  for (const c of children.flat(Infinity)) {
+    if (c === null || c === undefined) continue;
+    node.append(c.nodeType ? c : document.createTextNode(String(c)));
+  }
+  return node;
+}
+const $main = document.getElementById("main");
+const $who = document.getElementById("who");
+$who.value = localStorage.getItem("wm10.principal") || "";
+$who.addEventListener("change", () => {
+  localStorage.setItem("wm10.principal", $who.value.trim());
+  render();
+});
+function headers(extra) {
+  const h = Object.assign({"Content-Type": "application/json"}, extra || {});
+  const who = $who.value.trim();
+  if (who) h["x-waymark-principal"] = who;
+  return h;
+}
+async function api(href, opts) {
+  opts = opts || {};
+  const res = await fetch(href, {method: opts.method || "GET",
+                                 headers: headers(opts.headers),
+                                 body: opts.body});
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch (_e) { body = {unparsed: text}; }
+  return {status: res.status, ok: res.status < 400, body,
+          etag: res.headers.get("ETag")};
+}
+function toast(msg, bad) {
+  const t = el("div", {class: "toast" + (bad ? " bad" : "")}, msg);
+  document.getElementById("toasts").append(t);
+  setTimeout(() => t.remove(), 5000);
+}
+function title(s) {
+  return String(s).replaceAll("_", " ").replace(/^./, c => c.toUpperCase());
+}
+function go(href) { location.hash = href; }
+
+/* ════ discovery (well-known drives everything) ═════════════════════ */
+let INDEX = null;
+async function wellKnown() {
+  if (!INDEX) {
+    const res = await api("/api/.well-known/waymark");
+    if (res.ok) INDEX = res.body;
+  }
+  return INDEX;
+}
+/* the kinds every engine enrolls beside the app's — grouped, not hidden */
+const ENGINE_KINDS = new Set(["definition","member","role","grant",
+                              "attachment","subscription","job"]);
+const SCHEMAS = {};   /* kind → published data schema (x-display hints) */
+async function kindSchema(kind) {
+  if (!(kind in SCHEMAS)) {
+    const res = await api("/api/schemas/" + kind);
+    SCHEMAS[kind] = res.ok ? res.body : null;
+  }
+  return SCHEMAS[kind];
+}
+async function renderNav(current) {
+  const idx = await wellKnown();
+  const nav = document.getElementById("nav");
+  nav.replaceChildren();
+  if (!idx) return;
+  const entries = Object.entries(idx.resources || {});
+  const app = entries.filter(([k]) => !ENGINE_KINDS.has(k));
+  const eng = entries.filter(([k]) => ENGINE_KINDS.has(k));
+  const link = ([kind, {href}]) =>
+    el("a", {href: "#" + href, class: current === href ? "on" : ""},
+       title(kind) + "s");
+  nav.append(el("a", {href: "#", class: current ? "" : "on"}, "Home"));
+  nav.append(...app.map(link));
+  if (eng.length) nav.append(el("span", {class: "sep"}, "·"), ...eng.map(link));
+}
+
+/* ════ routing: the URL hash IS the href ════════════════════════════ */
+async function render() {
+  const href = decodeURIComponent(location.hash.replace(/^#/, ""));
+  await renderNav(href.split("?")[0].split("/").slice(0, 3).join("/"));
+  $main.replaceChildren(el("p", {class: "meta"}, "…"));
+  try {
+    if (!href) return renderHome();
+    if (/^\/api\/surfaces\//.test(href)) return renderSurface(href);
+    if (/^\/api\/[^/]+\/[^/?]+/.test(href)) return renderResource(href);
+    if (/^\/api\/[^/]+/.test(href)) return renderCollection(href);
+    $main.replaceChildren(el("p", {}, "Nothing at ", el("code", {}, href)));
+  } catch (e) {
+    $main.replaceChildren(el("div", {class: "problem"}, String(e)));
+  }
+}
+window.addEventListener("hashchange", render);
+
+/* ════ home: the workspace, from discovery alone ════════════════════ */
+async function renderHome() {
+  const idx = await wellKnown();
+  if (!idx) {
+    $main.replaceChildren(el("div", {class: "problem"},
+      "Cannot reach /api/.well-known/waymark"));
+    return;
+  }
+  const cards = [];
+  for (const [kind, {href}] of Object.entries(idx.resources || {})) {
+    if (ENGINE_KINDS.has(kind)) continue;
+    cards.push(el("div", {class: "card rowlink", onclick: () => go(href)},
+      el("b", {}, title(kind) + "s"), " ",
+      el("span", {class: "meta mono"}, href)));
+  }
+  const engine = Object.entries(idx.resources || {})
+    .filter(([k]) => ENGINE_KINDS.has(k))
+    .map(([kind, {href}]) => el("a", {href: "#" + href, class: "chip"},
+                                title(kind) + "s"));
+  const surfaces = Object.entries(idx.surfaces || {}).map(([name, {href}]) =>
+    el("li", {}, el("code", {}, name), " ", el("span", {class: "meta mono"}, href),
+       el("span", {class: "meta"}, " — open from an anchor row")));
+  $main.replaceChildren(
+    el("h1", {}, "Workspace"),
+    el("p", {class: "meta"}, "waymark " + idx.waymark +
+       " · everything below was read from the wire"),
+    ...cards,
+    engine.length ? el("h2", {}, "Engine kinds") : null,
+    engine.length ? el("div", {class: "chips"}, engine) : null,
+    surfaces.length ? el("h2", {}, "Declared surfaces") : null,
+    surfaces.length ? el("ul", {class: "notnow"}, surfaces) : null);
+}
+
+/* ════ collections: the query grammar as a screen ═══════════════════ */
+function parseQuery(href) {
+  const [path, q] = href.split("?");
+  const params = new URLSearchParams(q || "");
+  return {path, params};
+}
+async function renderCollection(href) {
+  const res = await api(href);
+  if (!res.ok) return renderProblem(res);
+  const doc = res.body;
+  const {path, params} = parseQuery(href);
+  const query = ((doc.actions || {}).query || {}).input || {};
+  const props = query.properties || {};
+
+  /* facet chips: x-facets counts per faceted field, current filters lit */
+  const chipRows = [];
+  for (const [field, prop] of Object.entries(props)) {
+    if (!prop["x-facets"]) continue;
+    const active = (params.get(field) || "").split(",").filter(Boolean);
+    const chips = Object.entries(prop["x-facets"]).map(([value, count]) => {
+      const on = active.includes(value);
+      return el("span", {class: "chip" + (on ? " on" : ""),
+        onclick: () => {
+          const next = on ? active.filter(v => v !== value) : [...active, value];
+          const p = new URLSearchParams(params);
+          if (next.length) p.set(field, next.join(",")); else p.delete(field);
+          p.delete("page[number]");
+          go(path + (p.toString() ? "?" + p : ""));
+        }}, value + " · " + count);
+    });
+    chipRows.push(el("div", {class: "chips"},
+      el("span", {class: "chip static"}, el("b", {}, field)), chips));
+  }
+  /* state filter + sort, straight from the advertised query schema */
+  const bar = el("div", {class: "chips"});
+  if (props.state && props.state.enum) {
+    const sel = el("select", {onchange: e => {
+      const p = new URLSearchParams(params);
+      if (e.target.value) p.set("state", e.target.value); else p.delete("state");
+      p.delete("page[number]");
+      go(path + (p.toString() ? "?" + p : ""));
+    }}, el("option", {value: ""}, "any state"),
+      props.state.enum.map(s => el("option",
+        {value: s, selected: params.get("state") === s ? "" : null}, s)));
+    bar.append(sel);
+  }
+  if (props.sort && props.sort.enum) {
+    const sel = el("select", {onchange: e => {
+      const p = new URLSearchParams(params);
+      if (e.target.value) p.set("sort", e.target.value); else p.delete("sort");
+      go(path + (p.toString() ? "?" + p : ""));
+    }}, el("option", {value: ""}, "sort: default"),
+      props.sort.enum.map(s => el("option",
+        {value: s, selected: params.get("sort") === s ? "" : null}, "sort: " + s)));
+    bar.append(sel);
+  }
+
+  /* bulk affordances → a checkbox column + one button per bulk action */
+  const bulkActions = Object.entries(doc.actions || {})
+    .filter(([, e]) => (e.effect || {}).bulk);
+  const selected = new Set();
+
+  const items = (doc.data || {}).items || [];
+  const rows = items.map(item => {
+    const tr = el("tr", {class: "rowlink", onclick: () => go(item.self)},
+      bulkActions.length
+        ? el("td", {onclick: e => e.stopPropagation()},
+            el("input", {type: "checkbox", onchange: e => {
+              const id = item.self.split("/").pop();
+              e.target.checked ? selected.add(id) : selected.delete(id);
+            }}))
+        : null,
+      el("td", {}, el("span", {class: "statechip"}, item.state)),
+      el("td", {}, item.summary),
+      el("td", {class: "meta"},
+         ((item.meta || {}).updated_at || "").slice(0, 16).replace("T", " ")));
+    return tr;
+  });
+
+  const actionsBar = el("div", {class: "actions"});
+  if ((doc.actions || {}).create) {
+    actionsBar.append(el("button", {class: "primary",
+      onclick: () => actionDialog({name: "create", entry: doc.actions.create,
+                                   doc, onDone: out => {
+                                     if (out && out.self) go(out.self);
+                                     else render();
+                                   }})},
+      "New " + doc.kind.replace("_collection", "")));
+  }
+  for (const [name, entry] of bulkActions) {
+    actionsBar.append(el("button", {onclick: () => {
+      if (!selected.size) { toast("Select rows first", true); return; }
+      actionDialog({name, entry, doc, bulkIds: [...selected],
+                    onDone: () => render()});
+    }}, title(name) + " (selected)"));
+  }
+
+  const page = (doc.data || {}).page || {};
+  const pager = el("div", {class: "pager"},
+    (doc.links || {}).prev
+      ? el("button", {onclick: () => go(doc.links.prev.href)}, "‹ prev") : null,
+    el("span", {class: "meta"},
+       "page " + (page.number || 1) + " · " + (doc.data.total || 0) + " total"),
+    (doc.links || {}).next
+      ? el("button", {onclick: () => go(doc.links.next.href)}, "next ›") : null);
+
+  $main.replaceChildren(
+    el("h1", {}, title(doc.kind.replace("_collection", "")) + "s"),
+    el("p", {class: "meta"}, doc.summary),
+    actionsBar, bar, ...chipRows,
+    el("div", {class: "card tablewrap"},
+      items.length
+        ? el("table", {},
+            el("thead", {}, el("tr", {},
+              bulkActions.length ? el("th") : null,
+              el("th", {}, "state"), el("th", {}, "summary"),
+              el("th", {}, "updated"))),
+            el("tbody", {}, rows))
+        : el("p", {class: "meta"}, "No rows.")),
+    pager);
+  watchScope({kind: doc.kind.replace("_collection", "")});
+}
+
+/* ════ values: honest rendering of the data document ════════════════ */
+function xdisplay(schema, field) {
+  const prop = ((schema || {}).properties || {})[field] || {};
+  return prop["x-display"] || {};
+}
+function valueCell(v, xd) {
+  if (v === null || v === undefined) return el("span", {class: "null"}, "—");
+  if (typeof v === "boolean") return el("span", {}, v ? "✓ yes" : "✗ no");
+  if (Array.isArray(v)) {
+    if (!v.length) return el("span", {class: "null"}, "—");
+    if (typeof v[0] === "object" && v[0] !== null) return nestedTable(v);
+    return el("span", {class: "chips"},
+      v.map(x => el("span", {class: "chip static"}, String(x))));
+  }
+  if (typeof v === "object") return kvTable(v);
+  if ((xd || {}).widget === "prose" || (typeof v === "string" && v.includes("\n")))
+    return el("pre", {}, v);
+  return el("span", {}, String(v));
+}
+function nestedTable(rows) {
+  const cols = [...new Set(rows.flatMap(r => Object.keys(r)))];
+  return el("div", {class: "tablewrap"}, el("table", {},
+    el("thead", {}, el("tr", {}, cols.map(c => el("th", {}, c)))),
+    el("tbody", {}, rows.map(r => el("tr", {},
+      cols.map(c => el("td", {}, valueCell(r[c]))))))));
+}
+function kvTable(obj, schema) {
+  return el("table", {class: "kv"}, el("tbody", {},
+    Object.entries(obj).map(([k, v]) =>
+      el("tr", {}, el("td", {}, k),
+         el("td", {}, valueCell(v, xdisplay(schema, k)))))));
+}
+
+/* ════ the resource screen: envelope in, screen out ═════════════════ */
+/* effort-aware emphasis: an assent action is one click — prominent
+   unless the declaration styles it; composition earns the compose
+   mark (the form is where the work is). display.style always wins. */
+function actionButton(name, entry, doc, onDone) {
+  const style = (entry.display || {}).style;
+  const cls = style === "primary" ? "primary"
+            : style === "danger" ? "danger"
+            : entry.effort === "assent" ? "primary" : "";
+  return el("button",
+    {class: cls, "data-effort": entry.effort || "",
+     title: (entry.display || {}).description || "",
+     onclick: () => actionDialog({name, entry, doc, onDone})},
+    (entry.display || {}).label || title(name),
+    (entry.safety || {}).confirm ? " …"
+      : entry.effort === "composition" ? " ✎" : "");
+}
+/* the declared links: a navigation strip, badges as scent */
+function linksStrip(doc) {
+  const entries = Object.entries(doc.links || {})
+    .filter(([, link]) => link && link.href);
+  if (!entries.length) return null;
+  return el("div", {class: "chips", "data-links": ""},
+    entries.map(([rel, link]) =>
+      el("a", {href: "#" + link.href, class: "chip linkrel",
+               title: link.summary || link.kind || ""},
+        title(rel),
+        link.badge !== undefined && link.badge !== null
+          ? el("b", {class: "badge"}, String(link.badge)) : null)));
+}
+/* embed=true links arrive with inlined envelope-minus-data items */
+function embeddedSections(doc) {
+  return Object.entries(doc.links || {})
+    .filter(([, link]) => (link.embedded || []).length)
+    .map(([rel, link]) =>
+      el("div", {},
+        el("h2", {}, title(rel) + " (embedded)"),
+        el("div", {class: "card tablewrap"},
+          el("table", {}, el("tbody", {}, link.embedded.map(item =>
+            el("tr", {class: "rowlink", onclick: () => go(item.self)},
+              el("td", {}, el("span", {class: "statechip"}, item.state)),
+              el("td", {}, item.summary))))))));
+}
+/* the parts namespace: placed actions re-rendered per data item — the
+   item rows render HERE (with their buttons), not in the data table */
+function partsSections(doc) {
+  return Object.entries(doc.parts || {}).map(([scope, group]) => {
+    const items = group.items || [];
+    const cols = [...new Set(items.flatMap(it => Object.keys(it.item || {})))];
+    return el("div", {},
+      el("h2", {}, title(scope)),
+      el("div", {class: "card tablewrap", "data-part": scope},
+        el("table", {},
+          el("thead", {}, el("tr", {},
+            cols.map(c => el("th", {}, c)), el("th", {}, ""))),
+          el("tbody", {}, items.map(it =>
+            el("tr", {"data-part-key": String(it.key)},
+              cols.map(c => el("td", {}, valueCell((it.item || {})[c]))),
+              el("td", {class: "partactions"},
+                Object.entries(it.actions || {}).map(([name, entry]) =>
+                  actionButton(name, entry, doc, () => render())),
+                Object.entries(it.unavailable || {}).map(([name, entry]) =>
+                  el("button", {disabled: "", title: entry.reason || ""},
+                     title(name))))))))));
+  });
+}
+async function renderResource(href) {
+  const res = await api(href);
+  if (!res.ok) return renderProblem(res);
+  const doc = res.body;
+  const schema = await kindSchema(doc.kind);
+  const meta = doc.meta || {};
+
+  /* actions, ordered by display.order then name */
+  const entries = Object.entries(doc.actions || {})
+    .sort(([a, ea], [b, eb]) =>
+      ((ea.display || {}).order ?? 99) - ((eb.display || {}).order ?? 99) ||
+      a.localeCompare(b));
+  const buttons = entries.map(([name, entry]) =>
+    actionButton(name, entry, doc, out => {
+      if (out && out.self && out.self !== doc.self) go(out.self);
+      else render();
+    }));
+  /* unavailable: disabled buttons with the server's reason as tooltip,
+     plus the narrated list — absence would be dishonest */
+  const gated = Object.entries(doc.unavailable || {});
+  const gatedButtons = gated.map(([name, entry]) =>
+    el("button", {disabled: "", title: entry.reason || ""}, title(name)));
+  const notNow = gated.length
+    ? el("ul", {class: "notnow"}, gated.map(([name, entry]) =>
+        el("li", {}, el("b", {}, title(name)), " — ", entry.reason || "",
+           entry.becomes_available
+             ? el("span", {class: "meta"},
+                 " (" + becomesText(entry.becomes_available) + ")")
+             : null,
+           (entry.remedies || []).length
+             ? el("span", {class: "meta"},
+                 " · remedy: " + entry.remedies.join(", "))
+             : null)))
+    : null;
+
+  const surfaceChips = await surfaceLinks(doc);
+
+  /* fields a parts group re-renders (with buttons) leave the kv table */
+  const partPaths = new Set(Object.keys(doc.parts || {}));
+  const plainData = Object.fromEntries(
+    Object.entries(doc.data || {}).filter(([k]) => !partPaths.has(k)));
+
+  $main.replaceChildren(
+    el("p", {class: "crumb"},
+      el("a", {href: "#" + collectionOf(doc.self)}, "‹ " + title(doc.kind) + "s")),
+    el("h1", {}, doc.summary || doc.kind),
+    el("p", {}, el("span", {class: "statechip"}, doc.state), " ",
+      el("span", {class: "meta"},
+        "v" + meta.version +
+        (meta.law_revision ? " · law r" + meta.law_revision : "") +
+        (meta.updated_at ? " · " + meta.updated_at.slice(0, 19).replace("T", " ") : "") +
+        " · "), el("span", {class: "meta mono"}, doc.self)),
+    linksStrip(doc),
+    surfaceChips,
+    el("div", {class: "actions"}, buttons, gatedButtons),
+    notNow,
+    ...partsSections(doc),
+    el("h2", {}, "Data"),
+    el("div", {class: "card"}, kvTable(plainData, schema)),
+    ...embeddedSections(doc));
+  watchScope({self: doc.self});
+}
+function collectionOf(self) { return self.split("/").slice(0, 3).join("/"); }
+function becomesText(ba) {
+  if (ba.at) return "available at " + ba.at;
+  if (ba.in_states) return "available in state(s) " + ba.in_states.join(", ");
+  return JSON.stringify(ba);
+}
+/* declared surfaces: probe this row as an anchor; a 200 earns a chip */
+async function surfaceLinks(doc) {
+  const idx = await wellKnown();
+  const surfaces = Object.entries((idx || {}).surfaces || {});
+  if (!surfaces.length) return null;
+  const id = doc.self.split("/").pop();
+  const chips = [];
+  for (const [name, {href}] of surfaces) {
+    const target = href.replace("{anchor-id}", id);
+    const res = await api(target);
+    if (res.ok) chips.push(el("a", {href: "#" + target, class: "chip"},
+                              "surface: " + name));
+  }
+  return chips.length ? el("div", {class: "chips"}, chips) : null;
+}
+
+/* ════ the surface screen: the composed decision view ═══════════════ */
+async function renderSurface(href) {
+  const res = await api(href);
+  if (!res.ok) return renderProblem(res);
+  const doc = res.body;
+  const anchor = doc.anchor || {};
+  const flags = Object.entries(doc.attention || {}).map(([f, up]) =>
+    el("span", {class: "flag " + (up ? "up" : "down")},
+       f + (up ? " ⚑" : " ·")));
+  const members = Object.entries(doc.members || {}).map(([mname, m]) =>
+    el("div", {}, el("h2", {}, title(mname)),
+      el("div", {class: "card tablewrap"},
+        (m.items || []).length
+          ? el("table", {}, el("tbody", {}, m.items.map(item =>
+              el("tr", {class: "rowlink", onclick: () => go(item.self)},
+                el("td", {}, el("span", {class: "statechip"}, item.state)),
+                el("td", {}, item.summary)))))
+          : el("p", {class: "meta"}, "Nothing here."))));
+  const showcase = (doc.showcase || [])
+    .filter(a => (anchor.actions || {})[a])
+    .map(a => el("button", {class: "primary",
+      onclick: () => actionDialog({name: a, entry: anchor.actions[a],
+                                   doc: anchor, onDone: () => render()})},
+      ((anchor.actions[a].display || {}).label || title(a))));
+  $main.replaceChildren(
+    el("p", {class: "crumb"},
+      el("a", {href: "#" + anchor.self}, "‹ " + (anchor.summary || "anchor"))),
+    el("h1", {}, title(doc.name || "surface")),
+    el("div", {class: "chips"}, flags),
+    el("div", {class: "actions"}, showcase),
+    el("h2", {}, "Anchor"),
+    el("div", {class: "card rowlink", onclick: () => go(anchor.self)},
+      el("span", {class: "statechip"}, anchor.state), " ", anchor.summary),
+    ...members);
+  watchScope({self: anchor.self});
+}
+
+/* ════ forms from JSON schemas (x-display honored, enums folded) ════ */
+function fieldWidget(name, prop, value) {
+  const xd = prop["x-display"] || {};
+  if (prop.enum) {
+    return el("select", {name},
+      el("option", {value: ""}, "…"),
+      prop.enum.map(v => el("option",
+        {value: String(v), selected: String(value ?? "") === String(v) ? "" : null},
+        String(v))));
+  }
+  if (xd.widget === "prose" || xd.widget === "textarea")
+    return el("textarea", {name}, value ?? "");
+  if (prop.type === "boolean")
+    return el("select", {name}, el("option", {value: ""}, "…"),
+      el("option", {value: "true", selected: value === true ? "" : null}, "yes"),
+      el("option", {value: "false", selected: value === false ? "" : null}, "no"));
+  if (prop.type === "integer" || prop.type === "number")
+    return el("input", {type: "number", name, value: value ?? "",
+                        step: prop.type === "integer" ? "1" : "any"});
+  if (prop.format === "date")
+    return el("input", {type: "date", name, value: value ?? ""});
+  if (prop.type === "array") {
+    const items = prop.items || {};
+    if (items.type === "string" && !items.properties)
+      return el("input", {type: "text", name, "data-array": "csv",
+        placeholder: "comma-separated",
+        value: Array.isArray(value) ? value.join(", ") : (value ?? "")});
+    return el("textarea", {name, "data-array": "json",
+      placeholder: "JSON array"},
+      value !== undefined && value !== null ? JSON.stringify(value, null, 1) : "");
+  }
+  return el("input", {type: "text", name, value: value ?? "",
+    placeholder: prop.format || ""});
+}
+/* a waymark-ref field offers the target kind's rows, labeled by summary */
+async function refOptions(select, prop, current) {
+  const kind = (prop["x-ref"] || {}).kind;
+  const idx = await wellKnown();
+  const href = (((idx || {}).resources || {})[kind] || {}).href;
+  if (!href) return;
+  const res = await api(href + "?page[size]=100");
+  if (!res.ok) return;
+  for (const item of (res.body.data || {}).items || []) {
+    const id = item.self.split("/").pop();
+    select.append(el("option", {value: id, selected: id === current ? "" : null},
+                     item.summary || id));
+  }
+}
+/* ── keystroke validation: the JSON schema judges as you type ────── */
+function clientMessages(raw, prop, required) {
+  const msgs = [];
+  if (raw === "" || raw === null || raw === undefined) {
+    if (required) msgs.push("required");
+    return msgs;
+  }
+  if (prop.type === "integer" || prop.type === "number") {
+    const n = Number(raw);
+    if (Number.isNaN(n)) msgs.push("must be a number");
+    else {
+      if (prop.type === "integer" && !Number.isInteger(n))
+        msgs.push("must be an integer");
+      if (prop.minimum !== undefined && n < prop.minimum)
+        msgs.push("must be ≥ " + prop.minimum);
+      if (prop.maximum !== undefined && n > prop.maximum)
+        msgs.push("must be ≤ " + prop.maximum);
+    }
+    return msgs;
+  }
+  if (typeof raw === "string") {
+    if (prop.minLength !== undefined && raw.length < prop.minLength)
+      msgs.push("at least " + prop.minLength + " character(s)");
+    if (prop.maxLength !== undefined && raw.length > prop.maxLength)
+      msgs.push("at most " + prop.maxLength + " characters (" +
+                raw.length + " typed)");
+    if (prop.pattern && !(new RegExp(prop.pattern)).test(raw))
+      msgs.push("must match " + prop.pattern);
+    if (prop.enum && !prop.enum.map(String).includes(raw))
+      msgs.push("must be one of the offered values");
+  }
+  return msgs;
+}
+/* vocab fields: a combobox — facet counts from the target collection's
+   advertised query schema (x-facets) when the field is faceted there;
+   otherwise the input stays free text (open vocab is open). */
+function vocabProp(prop) {
+  return prop.format === "waymark-vocab" ||
+         ((prop.items || {}).format === "waymark-vocab") ||
+         !!prop["x-vocab"];
+}
+let vocabListSeq = 0;
+async function vocabOptions(listNode, kind, field) {
+  const idx = await wellKnown();
+  const href = (((idx || {}).resources || {})[kind] || {}).href;
+  if (!href) return;
+  const res = await api(href);
+  if (!res.ok) return;
+  const prop = (((((res.body || {}).actions || {}).query || {}).input || {})
+                .properties || {})[field] || {};
+  for (const [value, count] of Object.entries(prop["x-facets"] || {}))
+    listNode.append(el("option", {value, label: value + " · " + count}));
+}
+function buildForm(schema, prefill, kind) {
+  const form = el("div", {});
+  const required = new Set((schema.required || []).map(String));
+  for (const [name, prop] of Object.entries(schema.properties || {})) {
+    if (name === "ids") continue;           /* bulk ids ride the selection */
+    /* a const field is pre-bound: shown, fixed, still submitted */
+    if (prop.const !== undefined) {
+      form.append(el("div", {class: "field"},
+        el("label", {}, el("b", {}, name), " (bound)"),
+        el("div", {class: "const mono", "data-const": name},
+           String(prop.const)),
+        el("input", {type: "hidden", name, value: String(prop.const)})));
+      continue;
+    }
+    let widget;
+    if (prop.format === "waymark-ref" || prop["x-ref"]) {
+      widget = el("select", {name}, el("option", {value: ""}, "…"));
+      refOptions(widget, prop, (prefill || {})[name]);
+    } else {
+      widget = fieldWidget(name, prop, (prefill || {})[name]);
+    }
+    if (vocabProp(prop) && widget.tagName === "INPUT") {
+      const listId = "vocab-" + (++vocabListSeq);
+      const list = el("datalist", {id: listId});
+      widget.setAttribute("list", listId);
+      widget.setAttribute("data-vocab", name);
+      const ph = ((prop["x-vocab"] || {}).placeholder);
+      if (ph) widget.setAttribute("placeholder", ph);
+      form.append(list);
+      if (kind) vocabOptions(list, kind, name);
+    }
+    const errSlot = el("div", {class: "err", "data-err": name});
+    if (widget.tagName === "INPUT" || widget.tagName === "TEXTAREA") {
+      widget.addEventListener("input", () => {
+        errSlot.textContent =
+          clientMessages(widget.value, prop, required.has(name)).join("; ");
+      });
+    }
+    form.append(el("div", {class: "field"},
+      el("label", {}, el("b", {}, name), required.has(name) ? " *" : "",
+         vocabProp(prop) ? el("span", {class: "meta"}, " (vocab)") : ""),
+      widget,
+      errSlot,
+      el("div", {class: "err srv", "data-srverr": name})));
+  }
+  return form;
+}
+function collectValues(form, schema) {
+  const values = {};
+  const props = (schema || {}).properties || {};
+  for (const node of form.querySelectorAll("[name]")) {
+    const name = node.getAttribute("name");
+    const prop = props[name] || {};
+    let raw = node.value;
+    if (raw === "" || raw === null) continue;
+    if (node.dataset.array === "csv") {
+      const arr = raw.split(",").map(s => s.trim()).filter(Boolean);
+      if (arr.length) values[name] = arr;
+      continue;
+    }
+    if (node.dataset.array === "json") {
+      try { values[name] = JSON.parse(raw); }
+      catch (_e) { values[name] = raw; }    /* the server's 422 narrates */
+      continue;
+    }
+    if (prop.type === "integer") values[name] = parseInt(raw, 10);
+    else if (prop.type === "number") values[name] = parseFloat(raw);
+    else if (prop.type === "boolean") values[name] = raw === "true";
+    else values[name] = raw;
+  }
+  return values;
+}
+
+/* ════ the action dialog: gate, form, fence, key, warnings ══════════ */
+/* dry_run=1 is honored on SINGLE-RESOURCE action invokes only — the
+   create and bulk paths execute regardless of the parameter (engine
+   fact, recorded), so the UI never offers to "check" those. This also
+   retires the phase-10 page's live-firing Check button on create
+   dialogs. */
+function dryRunnable(href) {
+  return /^\/api\/[^/]+\/(?!-\/)[^/]+\/-\/[^/?]+$/.test(href || "");
+}
+async function actionDialog({name, entry, doc, bulkIds, onDone}) {
+  const safety = entry.safety || {};
+  const input = entry.input || null;
+  /* rule 3 (Part IV): a non-idempotent action gets its key at dialog
+     open — one logical attempt, one key, however many retries */
+  const idemKey = safety.idempotent ? null : crypto.randomUUID();
+  let acknowledged = [];
+
+  /* drafts: half-written effort is server state; prefill from it */
+  let draftValues = {};
+  if (entry.draft && entry.draft.href) {
+    const d = await api(entry.draft.href);
+    if (d.ok) draftValues = Object.assign({}, d.body.prefill, d.body.values);
+    else draftValues = prefillFromDoc(doc, input);
+  }
+  const kind = (doc.kind || "").replace("_collection", "");
+  const form = input ? buildForm(input, draftValues, kind) : el("div", {});
+
+  const errBox = el("div", {});
+  const dlg = el("dialog", {},
+    el("div", {class: "dlghead"},
+      el("h3", {}, (entry.display || {}).label || title(name)),
+      el("p", {class: "meta"},
+        "→ " + ((entry.effect || {}).to || "?") +
+        ((entry.effect || {}).terminal ? " (terminal)" : "") +
+        (bulkIds ? " · " + bulkIds.length + " selected row(s)" : "") +
+        (safety.fence ? " · fenced (If-Match)" : "") +
+        (safety.idempotent ? "" : " · idempotency-key attached"))),
+    el("div", {class: "dlgbody"},
+      safety.confirm
+        ? el("div", {class: "consequence"},
+            el("b", {}, "Confirm: "),
+            (entry.display || {}).description ||
+              "This action requires confirmation.")
+        : null,
+      form, errBox,
+      entry.draft ? el("p", {class: "draftnote", "data-draftnote": ""},
+                       entry.draft.shared ? "shared draft — saved on blur"
+                                          : "draft — saved on blur") : null),
+    el("div", {class: "dlgfoot"},
+      el("span", {class: "hint"}),
+      entry.draft ? el("button", {onclick: async () => {
+        await api(entry.draft.href, {method: "DELETE"});
+        toast("Draft discarded");
+        dlg.close(); dlg.remove();
+      }}, "Discard draft") : null,
+      input && dryRunnable(entry.href)
+        ? el("button", {onclick: () => check()}, "Check") : null,
+      el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Cancel"),
+      el("button", {class: safety.confirm ? "danger" : "primary",
+                    onclick: () => submit()},
+        safety.confirm ? "Confirm & " + ((entry.display||{}).label || title(name))
+                       : ((entry.display||{}).label || title(name)))));
+
+  /* drafts save on blur — the same write path as every other client */
+  if (entry.draft && entry.draft.href) {
+    form.addEventListener("focusout", async () => {
+      const values = collectValues(form, input);
+      if (!Object.keys(values).length) return;
+      const res = await api(entry.draft.href,
+        {method: "PUT", body: JSON.stringify(values)});
+      const note = dlg.querySelector("[data-draftnote]");
+      if (note) note.textContent = res.ok
+        ? "draft saved " + new Date().toTimeString().slice(0, 8)
+        : "draft not saved: " + (((res.body||{}).detail) || res.status);
+    });
+  }
+
+  /* blur-time dry-run: the SERVER judges the half-built input and its
+     field errors land inline (schema 422s per field; anything else
+     waits for Check/submit — a guard 409 mid-typing would only nag) */
+  let dryTimer = null;
+  if (input && dryRunnable(entry.href)) {
+    form.addEventListener("focusout", () => {
+      clearTimeout(dryTimer);
+      dryTimer = setTimeout(async () => {
+        const payload = body();
+        if (!payload) return;
+        const sep = entry.href.includes("?") ? "&" : "?";
+        const res = await api(entry.href + sep + "dry_run=1",
+          {method: "POST", body: payload, headers: actHeaders()});
+        clearServerErrors();
+        if (!res.ok && res.status === 422) showFieldErrors(res.body);
+      }, 120);
+    });
+  }
+
+  function body() {
+    const values = input ? collectValues(form, input) : {};
+    if (bulkIds) values.ids = bulkIds;
+    return Object.keys(values).length ? JSON.stringify(values) : null;
+  }
+  function actHeaders() {
+    const h = {};
+    if (safety.fence && (doc.meta || {}).etag) h["If-Match"] = doc.meta.etag;
+    if (idemKey) h["Idempotency-Key"] = idemKey;
+    if (acknowledged.length) h["Waymark-Acknowledge"] = acknowledged.join(",");
+    return h;
+  }
+  function clearServerErrors() {
+    for (const node of dlg.querySelectorAll("[data-srverr]"))
+      node.textContent = "";
+  }
+  function showFieldErrors(problem) {
+    for (const [field, msgs] of Object.entries((problem || {}).errors || {})) {
+      const slot = dlg.querySelector('[data-srverr="' + field + '"]');
+      const text = Array.isArray(msgs) ? msgs.join("; ") : String(msgs);
+      if (slot) slot.textContent = text;
+      else errBox.append(el("div", {class: "problem"}, field + ": " + text));
+    }
+  }
+  function showErrors(problem) {
+    errBox.replaceChildren();
+    clearServerErrors();
+    showFieldErrors(problem);
+    if (!Object.keys((problem || {}).errors || {}).length)
+      errBox.append(el("div", {class: "problem"},
+        ((problem || {}).title || "Refused") +
+        ((problem || {}).detail ? ": " + problem.detail : "")));
+  }
+  async function check() {           /* dry-run pre-validation (rule 5) */
+    const sep = entry.href.includes("?") ? "&" : "?";
+    const res = await api(entry.href + sep + "dry_run=1",
+      {method: "POST", body: body(), headers: actHeaders()});
+    errBox.replaceChildren();
+    if (res.ok) {
+      const warns = (res.body || {}).warnings || [];
+      errBox.append(el("div", {class: "validok"},
+        "✓ schema and guards accept this input" +
+        (warns.length ? " (with warnings)" : "")));
+      for (const w of warns)
+        errBox.append(el("div", {class: "warnbox"}, w.reason || w.name));
+    } else showErrors(res.body);
+  }
+  async function submit() {
+    const res = await api(entry.href,
+      {method: "POST", body: body(), headers: actHeaders()});
+    if (res.ok) {
+      dlg.close(); dlg.remove();
+      if ((res.body || {}).kind === "bulk_report") reportDialog(res.body);
+      else toast(((res.body || {}).summary || "Done"));
+      onDone(res.body);
+      return;
+    }
+    const problem = res.body || {};
+    /* the acknowledge protocol: warnings are a dialog, not a dead end */
+    if (res.status === 409 && problem.acknowledge && problem.acknowledge.names) {
+      errBox.replaceChildren(el("div", {class: "warnbox"},
+        el("b", {}, "The server warns:"),
+        el("ul", {}, (problem.warnings || []).map(w =>
+          el("li", {}, (w.name ? w.name + ": " : "") + (w.reason || "")))),
+        el("div", {class: "actions"},
+          el("button", {class: "primary", onclick: () => {
+            acknowledged = problem.acknowledge.names;
+            submit();               /* same key: the retry is the same attempt */
+          }}, "Acknowledge and retry"))));
+      return;
+    }
+    if (res.status === 412) {
+      errBox.replaceChildren(el("div", {class: "problem"},
+        (problem.detail || "The resource changed since you read it."),
+        " ", el("button", {onclick: async () => {
+          const fresh = await api(doc.self);
+          if (fresh.ok) { doc = fresh.body; errBox.replaceChildren(
+            el("div", {class: "validok"}, "re-read — try again")); }
+        }}, "Re-read")));
+      return;
+    }
+    showErrors(problem);
+  }
+
+  document.body.append(dlg);
+  dlg.showModal();
+}
+function prefillFromDoc(doc, input) {
+  const out = {};
+  for (const name of Object.keys((input || {}).properties || {}))
+    if ((doc.data || {})[name] !== undefined) out[name] = doc.data[name];
+  return out;
+}
+function reportDialog(report) {
+  const d = (report.data || {});
+  const dlg = el("dialog", {},
+    el("div", {class: "dlghead"}, el("h3", {}, "Bulk report · " + report.action)),
+    el("div", {class: "dlgbody"},
+      el("p", {}, d.succeeded + " succeeded · " + d.refused + " refused · " +
+                  d.failed + " failed"),
+      (d.refusals || []).length
+        ? el("ul", {class: "notnow"}, d.refusals.map(r =>
+            el("li", {}, el("a", {href: "#" + r.self,
+              onclick: () => dlg.remove()}, r.self.split("/").pop()),
+              " — " + r.reason)))
+        : null),
+    el("div", {class: "dlgfoot"},
+      el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Close")));
+  document.body.append(dlg);
+  dlg.showModal();
+}
+function renderProblem(res) {
+  const p = res.body || {};
+  $main.replaceChildren(
+    el("h1", {}, res.status + " " + (p.title || "")),
+    el("div", {class: "problem"}, p.detail || "The server refused this read."),
+    el("p", {}, el("a", {href: "#"}, "‹ home")));
+}
+
+/* ════ live updates: the SSE firehose ═══════════════════════════════ */
+let SCOPE = {};                 /* what the current screen is watching */
+let refetchTimer = null;
+function watchScope(scope) { SCOPE = scope || {}; }
+function startEvents() {
+  const source = new EventSource("/api/-/events");
+  const live = document.getElementById("live");
+  source.onopen = () => live.classList.add("on");
+  source.onerror = () => live.classList.remove("on");
+  source.addEventListener("transition", ev => {
+    let t = null;
+    try { t = JSON.parse(ev.data); } catch (_e) { return; }
+    document.getElementById("ticker").replaceChildren(
+      el("span", {}, (t.at || "").slice(11, 19) + " · ",
+        el("b", {}, ((t.actor || {}).id || "?")), " ", t.action, " · ",
+        t.kind, " ", (t.from || "·") + " → " + (t.to || "·"), " · ",
+        el("a", {href: "#" + t.self, class: "mono"}, t.self)));
+    const hit = (SCOPE.self && t.self === SCOPE.self) ||
+                (SCOPE.kind && t.kind === SCOPE.kind);
+    if (hit) {                       /* debounce a burst into one refetch */
+      clearTimeout(refetchTimer);
+      refetchTimer = setTimeout(render, 350);
+    }
+  });
+  /* derivation class: maintenance changed a fact no transition
+     announces (cross-row recompute, clock flip, bulk restamp — self
+     is null when the whole kind restamped); refetch what's open */
+  source.addEventListener("derivation", ev => {
+    let t = null;
+    try { t = JSON.parse(ev.data); } catch (_e) { return; }
+    const hit = (SCOPE.self && t.self === SCOPE.self) ||
+                (SCOPE.kind && t.kind === SCOPE.kind);
+    if (hit) {
+      clearTimeout(refetchTimer);
+      refetchTimer = setTimeout(render, 350);
+    }
+  });
+}
+
+startEvents();
+render();
+</script>
+</body>
+</html>
