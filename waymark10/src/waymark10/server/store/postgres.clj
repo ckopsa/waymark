@@ -42,6 +42,9 @@
    "CREATE OR REPLACE FUNCTION waymark10_ts(t text) RETURNS timestamptz
       IMMUTABLE STRICT LANGUAGE sql AS $$SELECT t::timestamptz$$"])
 
+(defn- sortable-fields [rmap]
+  (get-in rmap [:sortable :fields]))
+
 (defn- generated-column-type
   "SQL type for a promoted filterable field, from its schema form;
   nil when the field has no single-value promotion (vocab arrays get
@@ -71,14 +74,19 @@
            ") STORED"))))
 
 (defn kind-ddl
-  "CREATE TABLE + indexes for one declared kind."
+  "CREATE TABLE + indexes for one declared kind. Promoted columns are
+  the filterable ∪ sortable fields (phase 7 widened filterable-only:
+  sort orders by the generated column, so sortable fields promote
+  too); vocab arrays have no single-value promotion and no GIN index
+  yet (named punt) — containment filters scan."
   [rmap]
   (let [table (store/definition-checked-name (:plural rmap))
-        promoted (keep (fn [[field _ops]]
+        promoted (keep (fn [field]
                          (when-not (= field :state)
                            (generated-column
                             field (schema/field-schema (:schema rmap) field))))
-                       (:filterable rmap))]
+                       (sort (into (set (keys (:filterable rmap)))
+                                   (sortable-fields rmap))))]
     (concat
      [(str "CREATE TABLE IF NOT EXISTS " table " (\n"
            (str/join ",\n"
@@ -127,7 +135,17 @@
         "  response text NOT NULL,\n"          ; text: replay is byte-identical
         "  media_type text NOT NULL DEFAULT 'application/waymark+json',\n"
         "  created_at timestamptz NOT NULL DEFAULT now(),\n"
-        "  PRIMARY KEY (key, kind))")])
+        "  PRIMARY KEY (key, kind))")
+   ;; phase 7: the draft rows — audience is "shared" or a principal id
+   (str "CREATE TABLE IF NOT EXISTS waymark10_drafts (\n"
+        "  kind text NOT NULL,\n"
+        "  resource_id text NOT NULL,\n"
+        "  action text NOT NULL,\n"
+        "  audience text NOT NULL,\n"
+        "  \"values\" jsonb NOT NULL DEFAULT '{}'::jsonb,\n"
+        "  base_version bigint,\n"
+        "  updated_at timestamptz NOT NULL DEFAULT now(),\n"
+        "  PRIMARY KEY (kind, resource_id, action, audience))")])
 
 ;; ── row mapping ─────────────────────────────────────────────────────
 
@@ -165,39 +183,52 @@
 (def ^:private jdbc-opts
   {:builder-fn rs/as-unqualified-maps})
 
-;; ── the maintainer's condition grammar (phase 6) ────────────────────
+;; ── the condition grammar (phase 6; collections widen it, phase 7) ──
 
-(def ^:private safe-casts #{"date" "boolean" "bigint" "numeric" "text"})
+(def ^:private safe-casts #{"date" "boolean" "bigint" "numeric" "text"
+                            "timestamptz"})
 
 (def ^:private cond-ops {:= "=" :< "<" :<= "<=" :>= ">=" :> ">"})
 
 (defn- cond-sql
-  "One maintainer cond → [sql-fragment params]. Identifiers come from
-  checked declarations; casts from a closed set — anything else is
-  refused loudly, never spliced."
+  "One cond → [sql-fragment params]. Identifiers come from checked
+  declarations; casts from a closed set — anything else is refused
+  loudly, never spliced. Phase 7 adds :op :in-any (JSONB array
+  membership, any-of — spelled through jsonb_exists_any because ?| is
+  a JDBC placeholder collision) and the timestamptz cast for _after
+  filters."
   [{:keys [target field cast op value values]}]
-  (let [cast (or cast "text")
-        _ (when-not (contains? safe-casts cast)
-            (throw (ex-info (str "cond cast " (pr-str cast)
-                                 " is not a known SQL type") {:cast cast})))
-        lval (case target
-               :state "state"
-               :id "id"
-               (let [f (store/definition-checked-name field)]
+  (if (= :in-any op)
+    (let [f (store/definition-checked-name field)]
+      [(str "jsonb_exists_any(data->'" f "', ARRAY["
+            (str/join ", " (repeat (count values) "?")) "])")
+       (vec values)])
+    (let [cast (or cast "text")
+          _ (when-not (contains? safe-casts cast)
+              (throw (ex-info (str "cond cast " (pr-str cast)
+                                   " is not a known SQL type") {:cast cast})))
+          lval (case target
+                 :state "state"
+                 :id "id"
+                 (let [f (store/definition-checked-name field)]
+                   (case cast
+                     "date" (str "waymark10_date(data->>'" f "')")
+                     "timestamptz" (str "waymark10_ts(data->>'" f "')")
+                     "text" (str "data->>'" f "'")
+                     (str "(data->>'" f "')::" cast))))
+          rval (if (or (contains? #{:state :id} target) (= "text" cast))
+                 "?"
                  (case cast
-                   "date" (str "waymark10_date(data->>'" f "')")
-                   "text" (str "data->>'" f "'")
-                   (str "(data->>'" f "')::" cast))))
-        rval (if (or (contains? #{:state :id} target) (= "text" cast))
-               "?"
-               (if (= "date" cast) "waymark10_date(?)" (str "(?)::" cast)))]
-    (if (= :in op)
-      [(str lval " IN (" (str/join ", " (repeat (count values) rval)) ")")
-       (vec values)]
-      [(str lval " " (or (get cond-ops op)
-                         (throw (ex-info (str "unknown cond op " op) {:op op})))
-            " " rval)
-       [value]])))
+                   "date" "waymark10_date(?)"
+                   "timestamptz" "waymark10_ts(?)"
+                   (str "(?)::" cast)))]
+      (if (= :in op)
+        [(str lval " IN (" (str/join ", " (repeat (count values) rval)) ")")
+         (vec values)]
+        [(str lval " " (or (get cond-ops op)
+                           (throw (ex-info (str "unknown cond op " op) {:op op})))
+              " " rval)
+         [value]]))))
 
 ;; ── the storage ─────────────────────────────────────────────────────
 
@@ -381,6 +412,70 @@
                    " FOR UPDATE")
               (Timestamp/from ^java.time.Instant now)]
              jdbc-opts))))
+
+  ;; ── phase 7: the collection surface and the draft rows ─────────────
+
+  (search-rows [_ tx kind conds {:keys [order-by desc limit offset]}]
+    (let [table (get @tables kind)
+          parts (map cond-sql conds)
+          order (case order-by
+                  nil "created_at"
+                  :state "state"
+                  (str "f_" (store/definition-checked-name order-by)))
+          sql (str "SELECT * FROM " table
+                   (when (seq parts)
+                     (str " WHERE " (str/join " AND " (map first parts))))
+                   " ORDER BY " order (when desc " DESC") ", id"
+                   " LIMIT " (long (or limit 100))
+                   " OFFSET " (long (or offset 0)))]
+      (mapv row->map (jdbc/execute! tx (into [sql] (mapcat second parts))
+                                    jdbc-opts))))
+
+  (facet-counts [_ tx kind field conds array?]
+    (let [table (get @tables kind)
+          parts (map cond-sql conds)
+          expr (cond
+                 (= :state field) "state"
+                 array? (str "jsonb_array_elements_text(data->'"
+                             (store/definition-checked-name field) "')")
+                 :else (str "data->>'"
+                            (store/definition-checked-name field) "'"))
+          sql (str "SELECT " expr " AS v, count(*) AS n FROM " table
+                   (when (seq parts)
+                     (str " WHERE " (str/join " AND " (map first parts))))
+                   " GROUP BY 1 ORDER BY 1")]
+      (into (sorted-map)
+            (keep (fn [r] (when (some? (:v r)) [(:v r) (:n r)])))
+            (jdbc/execute! tx (into [sql] (mapcat second parts)) jdbc-opts))))
+
+  (load-draft [_ tx kind id action audience]
+    (when-some [r (jdbc/execute-one!
+                   tx [(str "SELECT \"values\", base_version, updated_at"
+                            " FROM waymark10_drafts WHERE kind = ? AND"
+                            " resource_id = ? AND action = ? AND audience = ?")
+                       (name kind) id (name action) audience]
+                   jdbc-opts)]
+      {:values (read-jsonb (:values r))
+       :base-version (:base_version r)
+       :updated-at (->inst (:updated_at r))}))
+
+  (save-draft! [_ tx kind id action audience values base-version]
+    (jdbc/execute-one!
+     tx [(str "INSERT INTO waymark10_drafts"
+              " (kind, resource_id, action, audience, \"values\", base_version)"
+              " VALUES (?, ?, ?, ?, ?, ?)"
+              " ON CONFLICT (kind, resource_id, action, audience) DO UPDATE"
+              " SET \"values\" = EXCLUDED.\"values\","
+              " base_version = EXCLUDED.base_version, updated_at = now()")
+         (name kind) id (name action) audience (jsonb values) base-version])
+    nil)
+
+  (delete-draft! [_ tx kind id action audience]
+    (jdbc/execute-one!
+     tx [(str "DELETE FROM waymark10_drafts WHERE kind = ? AND"
+              " resource_id = ? AND action = ? AND audience = ?")
+         (name kind) id (name action) audience])
+    nil)
 
   (restamp-law! [_ tx kind where to-revision]
     (let [table (get @tables kind)

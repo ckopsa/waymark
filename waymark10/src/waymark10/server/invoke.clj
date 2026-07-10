@@ -43,11 +43,40 @@
   window, re-detected at the next boot).
 
   Returns {:row … :transition … :replayed? … :valid? …}; rendering to
-  the envelope is phase 3's job."
+  the envelope is phase 3's job.
+
+  Phase 7 additions, recorded:
+  - the single-write body (steps 2–15) is extracted to invoke-in-tx!
+    so bulk items and batch inputs run the SAME per-item algorithm
+    inside the fan-out's transaction — the step order is untouched;
+    :require-key? false waives step 2's 428 for fan-out items (the
+    bulk/batch call itself owns the key).
+  - a :bulk action's row form does not exist: single-invoking it is
+    404 (waymark9's allow_bulk gate).
+  - bulk! (one input, N resources): non-atomic runs one transaction
+    PER item so a refusal never poisons neighbors; :atomic runs ONE
+    transaction and any refusal rolls everything back, answering a
+    409 that carries the report; :defer-over refuses over-threshold
+    calls with a 422 naming the phase-9 deferred-jobs punt (no job
+    resource is built). Whole-call idempotency: the stored report
+    replays byte-identical under the bulk:<action> marker.
+  - batch! (N inputs, one resource): always atomic, one transaction,
+    one row lock held throughout, inputs applied in order — each
+    input is its own transition through the full per-item algorithm
+    (waymark9 semantics; consecutive identical idempotent inputs
+    natural-replay into one). The first refusal aborts the whole
+    batch with a 409 naming the input's index — recorded deviation:
+    waymark9 kept judging refused batches to report every verdict.
+  - finish! consumes the acted action's draft in the write's own
+    transaction (see waymark10.server.drafts) — the smallest honest
+    seam.
+  - after-write! runs per successfully committed bulk/batch item, so
+    the phase-5/6 hooks see fan-out writes like any other."
   (:require [clojure.string :as str]
             [waymark10.derived :as derived]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
+            [waymark10.server.drafts :as drafts]
             [waymark10.server.judgment :as judgment]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
@@ -204,6 +233,11 @@
         saved (store/save-row! (:storage engine) tx (:kind rdef)
                                (encode-row rdef (dissoc advanced :summary))
                                (:version row))]
+    ;; the effort landed; its draft has served its purpose — consumed
+    ;; in the same commit as the write it composed (phase 7)
+    (when (get-in defn [:edit :draft])
+      (store/delete-draft! (:storage engine) tx (:kind rdef) (:id row)
+                           (:name defn) (drafts/audience-of defn principal)))
     (when idempotency-key
       (store/idempotency-store!
        (:storage engine) tx idempotency-key (:kind rdef) (:name defn) digest
@@ -336,87 +370,337 @@
                         (adopt! engine rdef kind id opts)))
       (invoke-declared! engine rdef kind id action-name body opts))))
 
-(defn- invoke-declared!
-  [engine rdef kind id action-name body
+(defn- invoke-in-tx!
+  "Steps 2–15 inside the caller's transaction — the single-write body
+  invoke-declared! wraps in its own with-tx; bulk items and batch
+  inputs (phase 7) run it inside the fan-out's transaction.
+  :require-key? false waives step 2's 428 for fan-out items."
+  [engine tx rdef kind id defn digest body
    {:keys [principal if-match idempotency-key dry-run acknowledged
-           correlation-id]
-    :or {acknowledged #{}}}]
+           correlation-id require-key?]
+    :or {acknowledged #{} require-key? true}}]
+  (let [action-name (:name defn)]
+    ;; 2. idempotency: requirement, then stored replay
+    (when (and require-key?
+               (not dry-run)
+               (not (get-in defn [:safety :idempotent]))
+               (nil? idempotency-key))
+      (throw (p/idempotency-key-required action-name)))
+    (if-some [hit (when (and (not dry-run) idempotency-key)
+                    (store/idempotency-lookup (:storage engine) tx
+                                              idempotency-key kind))]
+      ;; a key replays only its own action + body; anything else
+      ;; is reuse, refused before touching the row
+      (if (and (= (:action hit) action-name)
+               (= (:request-digest hit) digest))
+        {:replayed? :idempotency :response hit}
+        (throw (p/idempotency-key-reuse action-name)))
+      ;; 3. the row lock
+      (let [raw (or (store/load-row (:storage engine) tx kind id
+                                    {:for-update (not dry-run)})
+                    (throw (p/not-found kind id)))
+            row (decode-row rdef raw)
+            ;; 4. the row's law judges the row: a non-resident
+            ;; stamp resolves this action's guards from that
+            ;; revision's stored trees (the judgment overlay)
+            defn (judgment/resolve-action rdef defn (:law-revision row))
+            ctx (make-ctx engine tx (if dry-run :dry-run :invoke) principal)]
+        (if-not (contains? (:from defn) (:state row))
+          ;; 5. out of state: replay, conceal, or narrate
+          (or (natural-replay engine tx rdef row defn digest)
+              (when (probe-hidden-only? defn row ctx)
+                (throw (p/not-found kind id)))
+              (throw (p/wrong-state action-name (:state row) (:from defn)
+                                    {:kind kind :id id
+                                     :summary (summary-of rdef row)})))
+          (do
+            ;; 6. the fence
+            (when (get-in defn [:safety :fence])
+              (let [current (etag kind id (:version row))]
+                (when (not= (some-> if-match str/trim) current)
+                  (throw (p/version-conflict action-name
+                                             {:kind kind :id id
+                                              :etag current})))))
+            ;; 7. input validation — decode first (validation
+            ;; speaks schema types), closed maps refuse unknowns
+            (let [inp (if (:input defn)
+                        (let [decoded (schema/decode (:input defn) (or body {}))]
+                          (when-some [errors (schema/closed-errors (:input defn) decoded)]
+                            (throw (p/schema-invalid action-name errors)))
+                          decoded)
+                        (if (seq body)
+                          (throw (p/schema-invalid
+                                  action-name
+                                  (into {} (map (fn [[k _]] [k ["unexpected field"]])) body)))
+                          nil))]
+              ;; 8. natural replay before guards
+              (or (when (and (not dry-run) (get-in defn [:safety :idempotent]))
+                    (natural-replay engine tx rdef row defn digest))
+                  ;; 9. the guard loop
+                  (let [{:keys [warned overridden]}
+                        (run-guards defn row inp ctx acknowledged rdef)]
+                    (cond
+                      ;; 10. dry-run exits before any effect
+                      dry-run {:valid? true :warnings (not-empty warned)}
+                      (seq warned) (throw (p/warning-refused action-name warned))
+                      :else (finish! engine tx rdef row defn inp ctx
+                                     {:digest digest
+                                      :overridden overridden
+                                      :idempotency-key idempotency-key
+                                      :principal principal
+                                      :correlation-id correlation-id})))))))))))
+
+(defn- invoke-declared!
+  [engine rdef kind id action-name body opts]
   (let [defn (or (some-> (get-in rdef [:actions action-name])
                          (assoc :name action-name))
                  (throw (p/no-such-action kind action-name)))
         digest (body-digest body)]
+    ;; a bulk action is a collection affordance; its row form does not
+    ;; exist (waymark9's allow_bulk gate) — bulk! fans out to
+    ;; invoke-in-tx! directly and never lands here
+    (when (:bulk defn)
+      (throw (p/no-such-action kind action-name)))
     (after-write!
      engine kind action-name
      (store/with-tx (:storage engine)
-      (fn [tx]
-        ;; 2. idempotency: requirement, then stored replay
-        (when (and (not dry-run)
-                   (not (get-in defn [:safety :idempotent]))
-                   (nil? idempotency-key))
-          (throw (p/idempotency-key-required action-name)))
-        (if-some [hit (when (and (not dry-run) idempotency-key)
-                        (store/idempotency-lookup (:storage engine) tx
-                                                  idempotency-key kind))]
-          ;; a key replays only its own action + body; anything else
-          ;; is reuse, refused before touching the row
-          (if (and (= (:action hit) action-name)
-                   (= (:request-digest hit) digest))
-            {:replayed? :idempotency :response hit}
-            (throw (p/idempotency-key-reuse action-name)))
-          ;; 3. the row lock
-          (let [raw (or (store/load-row (:storage engine) tx kind id
-                                        {:for-update (not dry-run)})
-                        (throw (p/not-found kind id)))
-                row (decode-row rdef raw)
-                ;; 4. the row's law judges the row: a non-resident
-                ;; stamp resolves this action's guards from that
-                ;; revision's stored trees (the judgment overlay)
-                defn (judgment/resolve-action rdef defn (:law-revision row))
-                ctx (make-ctx engine tx (if dry-run :dry-run :invoke) principal)]
-            (if-not (contains? (:from defn) (:state row))
-              ;; 5. out of state: replay, conceal, or narrate
-              (or (natural-replay engine tx rdef row defn digest)
-                  (when (probe-hidden-only? defn row ctx)
-                    (throw (p/not-found kind id)))
-                  (throw (p/wrong-state action-name (:state row) (:from defn)
-                                        {:kind kind :id id
-                                         :summary (summary-of rdef row)})))
-              (do
-                ;; 6. the fence
-                (when (get-in defn [:safety :fence])
-                  (let [current (etag kind id (:version row))]
-                    (when (not= (some-> if-match str/trim) current)
-                      (throw (p/version-conflict action-name
-                                                 {:kind kind :id id
-                                                  :etag current})))))
-                ;; 7. input validation — decode first (validation
-                ;; speaks schema types), closed maps refuse unknowns
-                (let [inp (if (:input defn)
-                            (let [decoded (schema/decode (:input defn) (or body {}))]
-                              (when-some [errors (schema/closed-errors (:input defn) decoded)]
-                                (throw (p/schema-invalid action-name errors)))
-                              decoded)
-                            (if (seq body)
-                              (throw (p/schema-invalid
-                                      action-name
-                                      (into {} (map (fn [[k _]] [k ["unexpected field"]])) body)))
-                              nil))]
-                  ;; 8. natural replay before guards
-                  (or (when (and (not dry-run) (get-in defn [:safety :idempotent]))
-                        (natural-replay engine tx rdef row defn digest))
-                      ;; 9. the guard loop
-                      (let [{:keys [warned overridden]}
-                            (run-guards defn row inp ctx acknowledged rdef)]
-                        (cond
-                          ;; 10. dry-run exits before any effect
-                          dry-run {:valid? true :warnings (not-empty warned)}
-                          (seq warned) (throw (p/warning-refused action-name warned))
-                          :else (finish! engine tx rdef row defn inp ctx
-                                         {:digest digest
-                                          :overridden overridden
-                                          :idempotency-key idempotency-key
-                                          :principal principal
-                                          :correlation-id correlation-id}))))))))))))))
+       (fn [tx]
+         (invoke-in-tx! engine tx rdef kind id defn digest body opts))))))
+
+;; ── bulk and batch (phase 7) ────────────────────────────────────────
+
+(defn- fan-out-spec
+  "A :bulk/:batch declaration as a spec map — `true` is the all-default
+  spelling."
+  [v]
+  (if (map? v) v {}))
+
+(defn- problem-reason [e]
+  (let [d (ex-data e)]
+    (or (:detail d) (ex-message e))))
+
+(defn- refusal?
+  "A per-item outcome that is a refusal (a tagged problem or a storage
+  version conflict), as opposed to a failure."
+  [e]
+  (boolean (or (p/problem? e)
+               (:waymark10/version-conflict (ex-data e)))))
+
+(defn- report-doc
+  "The bulk_report wire document."
+  [action-name data extra]
+  (p/wire-value (merge {:kind "bulk_report"
+                        :action action-name
+                        :data data}
+                       extra)))
+
+(defn- fan-out-replay
+  "Whole-call idempotency for bulk/batch: the stored report replays
+  byte-identical under its marker; nil means proceed (and store on
+  the way out)."
+  [engine kind action-name marker digest idempotency-key idempotent?]
+  (when-not idempotent?
+    (when (nil? idempotency-key)
+      (throw (p/idempotency-key-required action-name))))
+  (when idempotency-key
+    (when-some [hit (store/with-tx (:storage engine)
+                      #(store/idempotency-lookup (:storage engine) %
+                                                 idempotency-key kind))]
+      (if (and (= (:action hit) marker)
+               (= (:request-digest hit) digest))
+        {:replayed? :idempotency :response hit}
+        (throw (p/idempotency-key-reuse action-name))))))
+
+(defn- fan-out-store!
+  [engine kind marker digest idempotency-key doc]
+  (when idempotency-key
+    (store/with-tx (:storage engine)
+      #(store/idempotency-store! (:storage engine) % idempotency-key kind
+                                 marker digest 200 (wire/write-json doc)
+                                 "application/waymark+json"))))
+
+(defn bulk!
+  "One input, N resources: POST /api/{plural}/-/{action} with body
+  {:ids [...] …action input…}. Guards run per row through the same
+  per-item algorithm as a single invoke. Returns {:report wire-doc}
+  or an idempotency replay; atomic refusals throw (see the ns
+  docstring). opts: :principal, :idempotency-key, :acknowledged,
+  :correlation-id."
+  [engine kind action-name body
+   {:keys [principal idempotency-key acknowledged correlation-id]
+    :or {acknowledged #{}}}]
+  (let [rdef (rdef-of engine kind)
+        defn (some-> (get-in rdef [:actions action-name])
+                     (assoc :name action-name))
+        _ (when-not (:bulk defn)
+            (throw (p/no-such-action kind action-name)))
+        spec (fan-out-spec (:bulk defn))
+        max-items (:max-items spec 100)
+        ids (:ids body)]
+    (when-not (and (vector? ids) (seq ids) (every? string? ids))
+      (throw (p/schema-invalid action-name
+                               {:ids ["required, non-empty array of ids"]})))
+    (when-some [threshold (:defer-over spec)]
+      (when (< threshold (count ids))
+        ;; the named punt: deferred bulk runs on the job resource,
+        ;; which is phase 9's — refuse politely, do not half-build it
+        (throw (p/problem :bulk-deferred 422 "Bulk call too large"
+                          {:detail (str (count ids) " ids exceed the declared "
+                                        ":defer-over " threshold " for "
+                                        (name action-name) "; deferred bulk "
+                                        "jobs land with phase 9's job "
+                                        "resource — send at most " threshold
+                                        " ids per call for now.")
+                           :action-attempted action-name}))))
+    (when (< max-items (count ids))
+      (throw (p/schema-invalid action-name
+                               {:ids [(str "at most " max-items " ids per call")]})))
+    (let [item-body (not-empty (dissoc body :ids))
+          item-digest (body-digest item-body)
+          digest (body-digest body)
+          marker (keyword (str "bulk:" (name action-name)))
+          href #(str "/api/" (:plural rdef) "/" %)]
+      (or (fan-out-replay engine kind action-name marker digest
+                          idempotency-key (get-in defn [:safety :idempotent]))
+          (let [cid (or correlation-id (str (random-uuid)))
+                item-opts {:principal principal
+                           :acknowledged acknowledged
+                           :correlation-id cid
+                           :require-key? false}
+                run-item (fn [tx id]
+                           (invoke-in-tx! engine tx rdef kind id defn
+                                          item-digest item-body item-opts))
+                data
+                (if (:atomic spec)
+                  ;; all-or-nothing: one transaction, any refusal rolls
+                  ;; the whole call back — the 409 carries the report
+                  (let [at (volatile! nil)
+                        results
+                        (try
+                          (store/with-tx (:storage engine)
+                            (fn [tx]
+                              (mapv (fn [id] (vreset! at id) (run-item tx id))
+                                    ids)))
+                          (catch Exception e
+                            (if (refusal? e)
+                              (throw (p/problem
+                                      :bulk-refused 409 "Atomic bulk refused"
+                                      {:detail (str "Atomic bulk "
+                                                    (name action-name)
+                                                    " aborted: "
+                                                    (problem-reason e)
+                                                    "; nothing committed.")
+                                       :action-attempted action-name
+                                       :report {:succeeded 0 :refused 1 :failed 0
+                                                :refusals [{:self (href @at)
+                                                            :reason (problem-reason e)}]}}))
+                              (throw e))))]
+                    (doseq [res results]
+                      (after-write! engine kind action-name res))
+                    {:succeeded (count ids) :refused 0 :failed 0 :refusals []})
+                  ;; partial success: one transaction PER item — a
+                  ;; refusal never poisons its neighbors
+                  (reduce
+                   (fn [rep id]
+                     (try
+                       (let [res (store/with-tx (:storage engine)
+                                   #(run-item % id))]
+                         (after-write! engine kind action-name res)
+                         (update rep :succeeded inc))
+                       (catch Exception e
+                         (if (refusal? e)
+                           (-> rep
+                               (update :refused inc)
+                               (update :refusals conj
+                                       {:self (href id)
+                                        :reason (problem-reason e)}))
+                           (do (binding [*out* *err*]
+                                 (println "waymark10 bulk item error:"
+                                          (name kind) id "-" (ex-message e)))
+                               (-> rep
+                                   (update :failed inc)
+                                   (update :refusals conj
+                                           {:self (href id)
+                                            :reason "Internal error while processing this item."})))))))
+                   {:succeeded 0 :refused 0 :failed 0 :refusals []}
+                   ids))
+                doc (report-doc action-name data nil)]
+            (fan-out-store! engine kind marker digest idempotency-key doc)
+            {:report doc})))))
+
+(defn batch!
+  "N inputs, one resource: POST /api/{plural}/{id}/-/{action}/batch
+  with body {:inputs [{…} …]}. Always atomic — one transaction, one
+  row lock, inputs applied in order, each input its own transition;
+  the first refusal aborts the whole batch with a 409 naming its
+  index. Returns {:report wire-doc} or an idempotency replay."
+  [engine kind id action-name body
+   {:keys [principal idempotency-key acknowledged correlation-id]
+    :or {acknowledged #{}}}]
+  (let [rdef (rdef-of engine kind)
+        defn (some-> (get-in rdef [:actions action-name])
+                     (assoc :name action-name))
+        _ (when-not (:batch defn)
+            (throw (p/no-such-action kind action-name)))
+        spec (fan-out-spec (:batch defn))
+        max-items (:max-items spec 100)
+        body (or body {})
+        extras (dissoc body :inputs)
+        _ (when (seq extras)
+            (throw (p/schema-invalid
+                    action-name
+                    (into {} (map (fn [[k _]] [k ["unexpected field"]])) extras))))
+        inputs (:inputs body)]
+    (when-not (and (vector? inputs) (seq inputs) (every? map? inputs))
+      (throw (p/schema-invalid
+              action-name
+              {:inputs ["required, non-empty array of input objects"]})))
+    (when (< max-items (count inputs))
+      (throw (p/schema-invalid
+              action-name
+              {:inputs [(str "at most " max-items " inputs per batch")]})))
+    (let [digest (body-digest body)
+          marker (keyword (str "batch:" (name action-name)))]
+      (or (fan-out-replay engine kind action-name marker digest
+                          idempotency-key (get-in defn [:safety :idempotent]))
+          (let [cid (or correlation-id (str (random-uuid)))
+                item-opts {:principal principal
+                           :acknowledged acknowledged
+                           :correlation-id cid
+                           :require-key? false}
+                at (volatile! 0)
+                results
+                (try
+                  (store/with-tx (:storage engine)
+                    (fn [tx]
+                      (into []
+                            (map-indexed
+                             (fn [i input]
+                               (vreset! at i)
+                               (invoke-in-tx! engine tx rdef kind id defn
+                                              (body-digest input) input
+                                              item-opts)))
+                            inputs)))
+                  (catch Exception e
+                    (if (refusal? e)
+                      (throw (p/problem
+                              :batch-refused 409 "Atomic batch refused"
+                              {:detail (str "Atomic batch " (name action-name)
+                                            " aborted at input " @at ": "
+                                            (problem-reason e)
+                                            "; nothing committed.")
+                               :action-attempted action-name
+                               :index @at}))
+                      (throw e))))]
+            (doseq [res results]
+              (after-write! engine kind action-name res))
+            (let [doc (report-doc action-name
+                                  {:succeeded (count inputs)
+                                   :refused 0 :failed 0 :refusals []}
+                                  {:links {:target {:href (str "/api/" (:plural rdef)
+                                                               "/" id)}}})]
+              (fan-out-store! engine kind marker digest idempotency-key doc)
+              {:report doc}))))))
 
 (defn- create-law-revision
   "Creates stamp the kind's current law (phase 5); an after=true pilot

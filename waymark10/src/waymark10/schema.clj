@@ -110,6 +110,16 @@
   (some-> (m/explain (mu/closed-schema (schema form) options) value)
           (me/humanize)))
 
+(defn partial-closed-errors
+  "The draft contract (phase 7): closed like an input, but nothing is
+  required — a draft is allowed to be incomplete, never to smuggle
+  unknown fields or broken values. Validates DECODED values."
+  [form value]
+  (some-> (m/explain (mu/optional-keys (mu/closed-schema (schema form) options)
+                                       nil options)
+                     value)
+          (me/humanize)))
+
 ;; ── introspection (what the checks read) ────────────────────────────
 
 (defn map-schema?

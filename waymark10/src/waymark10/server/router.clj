@@ -3,17 +3,28 @@
   invoke!/create!/render; every refusal is a tagged ex-info the
   problem boundary projects to RFC 9457. Routes conflict by design
   (.well-known and schemas share the {plural}/{id} shape), so the
-  router is linear with static routes first."
+  router is linear with static routes first.
+
+  Phase 7 widens the surface: GET {plural} is the real filtered/
+  sorted/paged collection (waymark10.server.collections), POST
+  {plural}/-/{action} is bulk, POST …/{action}/batch is batch, and
+  …/{action}/draft carries the draft sub-resource (GET/PUT/DELETE).
+  Query params URL-decode at parse, so the collection's own
+  page[…]-carrying self hrefs round-trip."
   (:require [clojure.string :as str]
             [reitit.ring :as ring]
             [waymark10.schema :as schema]
+            [waymark10.server.collections :as collections]
+            [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
-            [waymark10.wire :as wire]))
+            [waymark10.wire :as wire])
+  (:import (java.net URLDecoder)
+           (java.nio.charset StandardCharsets)))
 
 (set! *warn-on-reflection* true)
 
@@ -47,11 +58,15 @@
                           (if (contains? t/actor-types at) at :human))})
     t/anonymous))
 
+(defn- url-decode ^String [^String s]
+  (URLDecoder/decode s StandardCharsets/UTF_8))
+
 (defn- query-params [req]
   (into {}
         (keep (fn [kv]
                 (let [[k v] (str/split kv #"=" 2)]
-                  (when-not (str/blank? k) [k (or v "")]))))
+                  (when-not (str/blank? k)
+                    [(url-decode k) (url-decode (or v ""))]))))
         (some-> (:query-string req) (str/split #"&"))))
 
 (defn- invoke-opts [req]
@@ -114,19 +129,11 @@
 (defn- collection [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
-          st (:storage eng)
-          rows (store/with-tx st #(store/query-rows st % (:kind rdef) {} {:limit 100}))
-          ctx-opts {:principal (principal-of (:headers req))
-                    :now ((:now-fn eng))
-                    :services (:services eng)}
-          items (mapv #(render/envelope-summary rdef (decode-row rdef %) ctx-opts)
-                      rows)]
-      (json-response 200
-                     {:waymark "10"
-                      :kind (str (name (:kind rdef)) "_collection")
-                      :self (str "/api/" plural)
-                      :data {:items items :total (count rows)}}
-                     media-type nil))))
+          env (collections/envelope eng rdef (query-params req)
+                                    {:principal (principal-of (:headers req))
+                                     :now ((:now-fn eng))
+                                     :services (:services eng)})]
+      (json-response 200 env media-type nil))))
 
 (defn- create [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
@@ -167,6 +174,57 @@
 
         :else
         (envelope-response eng rdef (:row result) (:principal opts) 200 nil)))))
+
+;; ── bulk, batch and drafts (phase 7) ────────────────────────────────
+
+(defn- report-response
+  "A bulk/batch result: a stored replay serves the first execution's
+  bytes verbatim, a fresh report renders like any envelope."
+  [result]
+  (if (= :idempotency (:replayed? result))
+    (let [hit (:response result)]
+      {:status (:status hit)
+       :headers {"Content-Type" (:media-type hit)}
+       :body (:response hit)})
+    (json-response 200 (:report result) media-type nil)))
+
+(defn- bulk-action [eng]
+  (fn [{{:keys [plural action]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)
+          opts (invoke-opts req)]
+      (report-response
+       (inv/bulk! eng (:kind rdef) (keyword action) (read-body req) opts)))))
+
+(defn- batch-action [eng]
+  (fn [{{:keys [plural id action]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)
+          opts (invoke-opts req)]
+      (report-response
+       (inv/batch! eng (:kind rdef) id (keyword action) (read-body req) opts)))))
+
+(defn- draft-view-response [view]
+  (json-response 200 (p/wire-value view) media-type nil))
+
+(defn- draft-get [eng]
+  (fn [{{:keys [plural id action]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)]
+      (draft-view-response
+       (drafts/fetch eng rdef id (keyword action)
+                     (principal-of (:headers req)))))))
+
+(defn- draft-put [eng]
+  (fn [{{:keys [plural id action]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)]
+      (draft-view-response
+       (drafts/save! eng rdef id (keyword action) (read-body req)
+                     (principal-of (:headers req)))))))
+
+(defn- draft-delete [eng]
+  (fn [{{:keys [plural id action]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)]
+      (drafts/discard! eng rdef id (keyword action)
+                       (principal-of (:headers req)))
+      {:status 204 :headers {}})))
 
 ;; ── events (SSE, phase 6) ───────────────────────────────────────────
 
@@ -247,9 +305,14 @@
          ["/api/schemas/:kind" {:get (kind-schema eng)}]
          ["/api/-/events" {:get (firehose-events eng)}]
          ["/api/:plural" {:get (collection eng) :post (create eng)}]
+         ["/api/:plural/-/:action" {:post (bulk-action eng)}]
          ["/api/:plural/:id" {:get (get-one eng)}]
          ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
-         ["/api/:plural/:id/-/:action" {:post (invoke-action eng)}]]
+         ["/api/:plural/:id/-/:action" {:post (invoke-action eng)}]
+         ["/api/:plural/:id/-/:action/batch" {:post (batch-action eng)}]
+         ["/api/:plural/:id/-/:action/draft" {:get (draft-get eng)
+                                              :put (draft-put eng)
+                                              :delete (draft-delete eng)}]]
         {:conflicts nil})
        not-found-handler)
       wrap-problems))

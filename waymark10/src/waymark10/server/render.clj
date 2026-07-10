@@ -85,9 +85,10 @@
 ;; ── entries ─────────────────────────────────────────────────────────
 
 (defn- action-entry [defn' rdef self row ctx]
-  (let [{:keys [to safety display]} defn']
+  (let [{:keys [to safety display]} defn'
+        href (str self "/-/" (name (:name defn')))]
     (cond-> {:method "POST"
-             :href (str self "/-/" (name (:name defn')))}
+             :href href}
       (:input defn')
       (assoc :input (fold-acceptance (schema/json-schema (:input defn'))
                                      defn' row ctx))
@@ -100,7 +101,12 @@
                               :confirm (boolean (:confirm safety))}
                        (:fence safety) (assoc :fence true)))
       (seq display)
-      (assoc :display display))))
+      (assoc :display display)
+      ;; the composition surface (phase 7): an :edit action with a
+      ;; declared draft policy affords its draft sub-resource
+      (get-in defn' [:edit :draft])
+      (assoc :draft {:href (str href "/draft")
+                     :shared (boolean (get-in defn' [:edit :draft :shared]))}))))
 
 (defn- unavailable-entry [denier deny row]
   (into {}

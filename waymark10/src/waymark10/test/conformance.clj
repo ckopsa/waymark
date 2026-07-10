@@ -302,3 +302,94 @@
   (when (not= (disj envelope-keys :data) (set (keys item)))
     [(str (where-of item) ": collection item keys "
           (vec (sort (keys item))) " are not the envelope minus data")]))
+
+;; ── the collection and fan-out obligations (phase 7) ────────────────
+
+(defn collection-envelope-violations
+  "The phase-7 collection shape for one parsed GET envelope: kind
+  <kind>_collection, state ok, a prose summary, items as
+  envelope-minus-data summaries, a real total ≥ the shown rows,
+  1-based page bookkeeping, and the create/query affordances (query
+  a GET with a generated object input schema)."
+  [env {:keys [kind]}]
+  (let [where (str (:kind env) " " (:self env))
+        data (:data env)
+        page (:page data)]
+    (-> (cond-> []
+          (not= "10" (:waymark env))
+          (conj (str where ": waymark is " (pr-str (:waymark env)) ", not \"10\""))
+
+          (and kind (not= (str (name kind) "_collection") (:kind env)))
+          (conj (str where ": kind is " (pr-str (:kind env)) ", not "
+                     (name kind) "_collection"))
+
+          (not= "ok" (:state env))
+          (conj (str where ": state is " (pr-str (:state env)) ", not \"ok\""))
+
+          (or (not (string? (:summary env))) (str/blank? (:summary env)))
+          (conj (str where ": summary " (pr-str (:summary env)) " is empty"))
+
+          (not (vector? (:items data)))
+          (conj (str where ": data.items " (pr-str (:items data))
+                     " is not an array"))
+
+          (not (int? (:total data)))
+          (conj (str where ": data.total " (pr-str (:total data))
+                     " is not an integer"))
+
+          (and (int? (:total data)) (vector? (:items data))
+               (< (:total data) (count (:items data))))
+          (conj (str where ": total " (:total data) " is below the "
+                     (count (:items data)) " shown rows"))
+
+          (not (and (pos-int? (:size page)) (pos-int? (:number page))))
+          (conj (str where ": data.page " (pr-str page)
+                     " is not {size ≥1, number ≥1}"))
+
+          (not= "POST" (get-in env [:actions :create :method]))
+          (conj (str where ": actions.create is not a POST entry"))
+
+          (not= "GET" (get-in env [:actions :query :method]))
+          (conj (str where ": actions.query is not a GET entry"))
+
+          (not (map? (get-in env [:actions :query :input :properties])))
+          (conj (str where ": actions.query.input carries no generated "
+                     "properties")))
+        (into (mapcat collection-item-violations (:items data))))))
+
+(defn bulk-report-violations
+  "The bulk-report shape: kind bulk_report, the acted action's name,
+  counts that add up to the fan-out, and one reasoned refusal entry
+  per refused/failed item."
+  [doc {:keys [action items]}]
+  (let [where (str "bulk_report " (:action doc))
+        data (:data doc)
+        {:keys [succeeded refused failed refusals]} data]
+    (cond-> []
+      (not= "bulk_report" (:kind doc))
+      (conj (str where ": kind is " (pr-str (:kind doc)) ", not bulk_report"))
+
+      (and action (not= (name action) (:action doc)))
+      (conj (str where ": action is " (pr-str (:action doc)) ", not "
+                 (name action)))
+
+      (not (every? nat-int? [succeeded refused failed]))
+      (conj (str where ": counts " (pr-str (select-keys data [:succeeded
+                                                              :refused
+                                                              :failed]))
+                 " are not non-negative integers"))
+
+      (and items (every? nat-int? [succeeded refused failed])
+           (not= items (+ succeeded refused failed)))
+      (conj (str where ": counts sum to " (+ succeeded refused failed)
+                 ", not the " items " items sent"))
+
+      (and (every? nat-int? [refused failed])
+           (not= (+ refused failed) (count refusals)))
+      (conj (str where ": " (count refusals) " refusal entries for "
+                 (+ refused failed) " refused+failed items"))
+
+      (not (every? #(and (string? (:reason %)) (not (str/blank? (:reason %))))
+                   refusals))
+      (conj (str where ": a refusal entry carries no reason sentence: "
+                 (pr-str refusals))))))

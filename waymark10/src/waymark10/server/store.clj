@@ -66,7 +66,28 @@
     Derivation maintenance is not a write (phase 6).")
   (due-flips [st tx kind now limit]
     "Rows whose next_flip_at <= now, oldest flip first, FOR UPDATE —
-    the clock sweep's page."))
+    the clock sweep's page.")
+
+  ;; ── phase 7: the collection surface and the draft rows ─────────────
+
+  (search-rows [st tx kind conds opts]
+    "The collection page: rows matching every cond (the maintainer's
+    grammar, widened with :op :in-any — vocab-array membership via
+    JSONB containment). opts {:order-by field-kw :desc bool :limit n
+    :offset n}; ordering runs over the promoted generated column
+    (f_<field>), :state over its column, nil over created_at — id
+    tiebreak always, so pages never overlap.")
+  (facet-counts [st tx kind field conds array?]
+    "Observed value → count for one faceted field under the same conds
+    the rows match — a real GROUP BY. array? true unrolls a JSON array
+    field (one row counts once per member).")
+  (load-draft [st tx kind id action audience]
+    "→ {:values … :base-version … :updated-at …} or nil.")
+  (save-draft! [st tx kind id action audience values base-version]
+    "Upsert the (kind, id, action, audience) draft row: values replace
+    wholesale, base_version restamps, updated_at now.")
+  (delete-draft! [st tx kind id action audience]
+    "Discard/consume: delete the draft row; absent is a no-op."))
 
 (defn with-tx
   "Sugar: (with-tx st [tx] …)."

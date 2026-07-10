@@ -25,7 +25,8 @@
         (fn [tx]
           (doseq [table (concat (map #(store/definition-checked-name (:plural %))
                                      resources)
-                                ["waymark10_transitions" "waymark10_idempotency"])]
+                                ["waymark10_transitions" "waymark10_idempotency"
+                                 "waymark10_drafts"])]
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
       (f (inv/engine {:storage st :resources resources}))
       (finally (pg/close! st)))))
