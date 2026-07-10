@@ -1,9 +1,12 @@
 (ns waymark10.server.problems
   "Refusals as data: every problem is a tagged ex-info the router
-  (phase 3) projects to RFC 9457 problem+json. Every refusal answers
-  \"what would a competent person do next\" — reasons, remedies,
-  becomes-available, acknowledge instructions ride the data."
-  (:require [clojure.string :as str]))
+  projects to RFC 9457 problem+json (->response). Every refusal
+  answers \"what would a competent person do next\" — reasons,
+  remedies, becomes-available, acknowledge instructions ride the
+  data. This namespace also owns the kebab→snake key converter the
+  whole wire boundary shares (wire-value)."
+  (:require [clojure.string :as str]
+            [waymark10.wire :as wire]))
 
 (def base-uri "https://waymark.dev/problems/")
 
@@ -85,3 +88,51 @@
            {:detail (str "One fact, one definition: handler for " (name action)
                          " wrote " (pr-str facts) ", which only their derivations may write.")
             :action-attempted action}))
+
+(defn malformed-body [detail]
+  (problem :malformed-body 400 "Malformed JSON body"
+           {:detail detail}))
+
+;; ── the wire projection ─────────────────────────────────────────────
+
+(defn wire-key
+  "Internal kebab keyword → snake wire string. JSON-Schema extension
+  keys (x-display, x-ref, …) keep their spec-conventional hyphens."
+  ^String [k]
+  (let [s (if (keyword? k) (name k) (str k))]
+    (if (str/starts-with? s "x-") s (str/replace s "-" "_"))))
+
+(defn wire-value
+  "The one kebab→snake boundary: keyword map keys become snake
+  strings, keyword values render as names (:plan/assign_meal →
+  \"plan.assign_meal\"). Values are otherwise untouched — nils are
+  data (an envelope's null fields), pruning is the caller's call."
+  [v]
+  (cond
+    (map? v) (into {} (map (fn [[k x]] [(wire-key k) (wire-value x)])) v)
+    (sequential? v) (mapv wire-value v)
+    (keyword? v) (if-some [ns' (namespace v)]
+                   (str ns' "." (name v))
+                   (name v))
+    :else v))
+
+(defn prune
+  "Drop nil-valued map entries, recursively. For refusal bodies —
+  never for envelope :data, where null is a value."
+  [v]
+  (cond
+    (map? v) (into {} (keep (fn [[k x]] (when (some? x) [k (prune x)]))) v)
+    (sequential? v) (mapv prune v)
+    :else v))
+
+(defn ->response
+  "The tagged ex-info as an RFC 9457 ring response: status from the
+  data, application/problem+json, body = the ex-data minus the tag,
+  snake-cased, present keys only."
+  [e]
+  (let [d (ex-data e)]
+    {:status (:status d 500)
+     :headers {"Content-Type" "application/problem+json"}
+     :body (wire/write-json (-> (dissoc d :waymark10/problem)
+                                prune
+                                wire-value))}))

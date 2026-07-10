@@ -173,9 +173,13 @@
     (when idempotency-key
       (store/idempotency-store!
        (:storage engine) tx idempotency-key (:kind rdef) (:name defn) digest
-       200 (wire/write-json {:id (:id saved) :state (name (:state advanced))
-                             :version (:version advanced)
-                             :summary (:summary advanced)})
+       200 (if-some [render-fn (:render-fn engine)]
+             ;; the render seam (phase 3): replay serves the same
+             ;; envelope bytes the first execution answered with
+             (render-fn rdef (decode-row rdef saved))
+             (wire/write-json {:id (:id saved) :state (name (:state advanced))
+                               :version (:version advanced)
+                               :summary (:summary advanced)}))
        "application/waymark+json"))
     {:row (decode-row rdef saved) :transition record}))
 
