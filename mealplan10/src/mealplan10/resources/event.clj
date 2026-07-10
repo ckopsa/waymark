@@ -16,7 +16,16 @@
   kind still exists so the plan's overlap predicate has something to
   filter on, but every pulled event is minted note (non-blocking) for
   now — the feed carries no signal for \"this evening is spoken for\"
-  (design note: revisit if that distinction turns out to matter)."
+  (design note: revisit if that distinction turns out to matter).
+
+  Spelled in the batch-G declaration style: filter/sort law rides the
+  :date and :kind entries (only :state filtering, which is not a
+  schema entry, stays top-level) — colocation projects through the
+  mirror weave, since the wrapper returns a plain map r/resource
+  normalizes like any other. The law is unchanged —
+  mealplan10.style-invariance-test pins this kind's fingerprint hash
+  byte-identical to the split spelling, around the same wrapper on
+  both sides."
   (:require [waymark10.resource :as r]
             [waymark10.server.mirror :as mirror]))
 
@@ -39,13 +48,11 @@
      :schema [:map
               [:title {:optional true}
                [:maybe [:string {:max 120}]]]
-              [:date {:optional true} [:maybe :waymark/date]]
-              [:kind {:optional true}
+              [:date {:optional true :filter #{:eq :range} :sort :default}
+               [:maybe :waymark/date]]
+              [:kind {:optional true :filter #{:eq :in}}
                [:maybe [:enum "blocking" "note"]]]]
-     :filterable {:date #{:eq :range}
-                  :kind #{:eq :in}
-                  :state #{:eq :in}}
-     :sortable {:fields [:date] :default "date"}
+     :filterable {:state #{:eq :in}}
      :display {:title "{data.title} — {data.date}"}}
     {:adapter adapter
      :ttl-seconds ttl-seconds

@@ -115,3 +115,42 @@ Validation timing — the def site validates exactly what it can see:
 
 Follow-up: the mealplan10 declarations are the real consumers of this
 style; their rewrite is a separate batch (owned elsewhere).
+
+## 5. The mealplan10 rewrite (the follow-up, done)
+
+All six mealplan10 kinds now live in the batch-G spelling;
+`mealplan10/test/mealplan10/style_invariance_test.clj` keeps the old
+split spellings alive (batch-G technique: constructed as data,
+sharing the namespaces' guard/handler objects — and the hoisted
+`g/require` gate, since `g/require` mints a fresh `:check` fn per
+call) and pins all six fingerprint hashes byte-identical, plus full
+normalized-map equality.
+
+Field notes from the real consumer, for the style guide:
+
+- **defderived + entry citation is what keeps colocation readable.**
+  plan's biggest derived (`all_days_covered`, the `every` tree) would
+  read badly inlined in entry props; def'd and cited
+  (`[:all_days_covered {:optional true :derived all-days-covered} …]`)
+  it reads better than the old top-level `:derived` block, because
+  the fact sits on its field. Only true one-liners
+  (`has_conflicts`, prep_task's `overdue`) went inline.
+- **A Mirror kind colocates fine.** `mirror/declaration` returns a
+  plain map, so entry-level `:filter`/`:sort` on the app schema
+  project through the weave. Pin around the SAME wrapper on both
+  sides; the weave re-mints the `observe_external` and
+  `resolve_conflict` handler fns per call — identical canonical-form
+  hashes (so the hash pin is exact) but distinct objects (so
+  normalized-map equality holds only modulo those two handlers).
+- **Some kinds have nothing to colocate.** rotation declares no
+  field-scoped law at all (only `:state` filtering, which is not a
+  schema entry); its whole style rewrite is two named safety values.
+  The style guide is a default, not a law — an honest no-op is fine.
+- **No colocated home exists for `:one-of`.** plan's `days/coverage`
+  group is field-scoped in spirit (it governs `:days` arms) but stays
+  top-level; a possible future projection, not claimed here.
+- **Line counts go up, not down** (+18/+13/+46/+33/+9/+7 across
+  meal/rotation/plan/grocery_list/prep_task/event): docstring style
+  notes, def headers, and named-safety comments cost lines. The win
+  is locality (the law on its field, the day-shaped actions one
+  group), not brevity.

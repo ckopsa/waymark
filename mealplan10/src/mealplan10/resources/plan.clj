@@ -35,6 +35,14 @@
   WARNS over the stored fact — a week with a recital in it finalizes
   with acknowledgment, not never.
 
+  Spelled in the batch-G declaration style: each derived fact is
+  def'd (defderived) and rides its own schema entry, filter/sort law
+  rides the entries it governs, the day-shaped actions are one group
+  (the two assignment actions def'd), and the two repeated safety
+  values are named. The law is unchanged —
+  mealplan10.style-invariance-test pins this kind's fingerprint hash
+  byte-identical to the split spelling.
+
   Recorded punts and deviations, each a sentence:
   - previous_plan resolves at create (batch E, design E7): the
     {:predecessor {:order :start_date}} entry property links each new
@@ -54,6 +62,7 @@
     there; every enforcement ctx (and the conformance probe) carries
     the hooks, so enforcement and the walker hold the line."
   (:require [mealplan10.themes :as themes]
+            [waymark10.declare :refer [defaction defderived]]
             [waymark10.guards :as g]
             [waymark10.resource :as r :refer [defresource defhandler]]
             [waymark10.types :as t])
@@ -296,7 +305,36 @@
     (update row :data assoc
             :start_date start :weeks weeks :rotation_id rid :days days)))
 
-;; ── the declaration ─────────────────────────────────────────────────
+;; ── derived facts, def'd — each rides its own schema entry ──────────
+
+(defderived end-date
+  {:over [:start_date :weeks]
+   :expr '(+ (var :start_date) (days (- (* 7 (var :weeks)) 1)))})
+
+;; the coverage rollup as a declared fact (design §2): one definition
+;; — the finalize gate judges it and the refusal reason rides the
+;; gate's declaration
+(defderived all-days-covered
+  {:over [:days]
+   :expr '(every [d (var :days)]
+                 (or (is-set (get d :meal_id))
+                     (= (get d :eating_out) true)))
+   :explain "Every day needs a meal or an eating-out mark before finalizing."})
+
+;; facts over the relation (design 6.0 §2): the conflict count badges
+;; the calendar link, filters the plan list, and feeds the finalize
+;; warning; nobody re-joins the calendar in a handler
+(defderived calendar-conflicts
+  {:count {:related :calendar
+           :where {:kind #{"blocking"}
+                   :state #{"fresh" "stale"}}}})
+
+;; the open-task rollup (design E4) as a phase-6 count fact
+(defderived open-tasks
+  {:count {:owns :prep_task
+           :where {:state #{"pending" "scheduled"}}}})
+
+;; ── the actions ─────────────────────────────────────────────────────
 
 (def day-input [:map [:date :waymark/date]])
 
@@ -312,6 +350,82 @@
    [:date :waymark/date]
    [:meal_id {:kind :meal} :waymark/ref]])
 
+;; named safety values: each spelled once, in full, and cited by name
+;; — never inferred
+(def routine
+  ;; honestly reversible: the paired action is the way back
+  {:idempotent true :reversible true :confirm false})
+(def overwrite
+  ;; an idempotent overwrite of a day's slot — nothing to confirm, and
+  ;; "reverse" is just writing the slot again (or clearing the day)
+  {:idempotent true :reversible false :confirm false})
+
+(defaction assign-meal-action
+  {:from #{:draft} :to :draft
+   :input assign-input :place :days
+   :guards [date-in-plan meal-fits-day]
+   :safety overwrite
+   :handler assign-meal
+   :display {:label "Assign meal" :style :primary :order 1}})
+
+(defaction assign-off-theme
+  ;; same input and handler as assign_meal; the law that differs is
+  ;; the judgment (listed, not theme-fitting) and the explicit confirm
+  {:from #{:draft} :to :draft
+   :input assign-input :place :days
+   :guards [date-in-plan meal-is-listed]
+   :safety {:idempotent true :reversible false :confirm true
+            :consequence "The day gets a meal that does not match its theme night."}
+   :handler assign-meal
+   :display {:label "Assign off-theme" :order 5}})
+
+;; the day-shaped action group: one part scope (:days), every input
+;; keyed by :date — merged into :actions beside the lifecycle
+(def day-actions
+  {:assign_meal assign-meal-action
+   :assign_off_theme assign-off-theme
+   :set_sunday_theme {:from #{:draft} :to :draft
+                      :input [:map
+                              [:date :waymark/date]
+                              [:theme [:string {:min 1 :max 50}]]]
+                      :place :days
+                      :guards [date-in-plan sunday-only theme-in-rotation]
+                      :safety overwrite
+                      :handler set-sunday-theme
+                      :display {:label "Pick Sunday theme" :order 2}}
+   :mark_eating_out {:from #{:draft} :to :draft
+                     :input [:map
+                             [:date :waymark/date]
+                             [:where {:optional true
+                                      :x-display {:label "Where"}}
+                              [:maybe [:string {:max 120}]]]]
+                     :place :days
+                     :guards [date-in-plan]
+                     :safety overwrite
+                     :handler mark-eating-out
+                     :display {:label "Eating out" :order 3}}
+   :clear_day {:from #{:draft} :to :draft
+               :input day-input :place :days
+               :guards [date-in-plan]
+               :safety overwrite
+               :handler clear-day
+               :display {:label "Clear day" :order 4}}
+   :add_side_dish {:from #{:draft} :to :draft
+                   :input side-dish-input :place :days
+                   :guards [date-in-plan day-has-meal has-free-side-slot
+                            meal-fits-day meal-is-listed]
+                   :safety routine
+                   :handler add-side-dish
+                   :display {:label "Add side dish" :order 6}}
+   :remove_side_dish {:from #{:draft} :to :draft
+                      :input side-dish-input :place :days
+                      :guards [date-in-plan]
+                      :safety routine
+                      :handler remove-side-dish
+                      :display {:label "Remove side dish" :order 7}}})
+
+;; ── the declaration ─────────────────────────────────────────────────
+
 (defresource plan
   {:kind :plan
    :states [:draft :planned :active :done :abandoned]
@@ -319,12 +433,16 @@
    :terminal #{:done :abandoned}
    :summary "Week of {data.start_date} · {data.weeks} wk · {state}"
    :schema [:map
-            [:start_date {:x-display {:label "Start date"}} :waymark/date]
+            [:start_date {:filter #{:eq :range} :sort :default-desc
+                          :x-display {:label "Start date"}}
+             :waymark/date]
             [:weeks [:int {:min 1 :max 2}]]
             ;; the week's far boundary as a stored fact: derived from
             ;; our own fields, materialized into a promoted column —
             ;; exactly what lets it serve as the calendar edge's join key
-            [:end_date {:optional true} [:maybe :waymark/date]]
+            [:end_date {:optional true :derived end-date
+                        :filter #{:eq :range}}
+             [:maybe :waymark/date]]
             [:rotation_id {:optional true :kind :rotation}
              [:maybe :waymark/ref]]
             ;; period chaining (design E7, batch E): the engine
@@ -333,32 +451,44 @@
             [:previous_plan {:optional true :kind :plan
                              :predecessor {:order :start_date}}
              [:maybe :waymark/ref]]
-            [:days [:vector
-                    [:map
-                     [:date :waymark/date]
-                     [:theme {:optional true}
-                      [:maybe [:string {:min 1 :max 50}]]]
-                     [:meal_id {:optional true :kind :meal :label :meal_name}
-                      [:maybe :waymark/ref]]
-                     [:meal_name {:optional true} [:maybe [:string {:max 200}]]]
-                     [:side_dish_id {:optional true :kind :meal
-                                     :label :side_dish_name}
-                      [:maybe :waymark/ref]]
-                     [:side_dish_name {:optional true}
-                      [:maybe [:string {:max 200}]]]
-                     [:second_side_dish_id {:optional true :kind :meal
-                                            :label :second_side_dish_name}
-                      [:maybe :waymark/ref]]
-                     [:second_side_dish_name {:optional true}
-                      [:maybe [:string {:max 200}]]]
-                     [:eating_out {:optional true} [:maybe :boolean]]
-                     [:eating_out_where {:optional true
-                                         :x-display {:label "Where"}}
-                      [:maybe [:string {:max 120}]]]]]]
-            [:all_days_covered {:optional true} [:maybe :boolean]]
-            [:calendar_conflicts {:optional true} [:maybe :int]]
-            [:has_conflicts {:optional true} [:maybe :boolean]]
-            [:open_tasks {:optional true} [:maybe :int]]
+            ;; per-day placement is declared here, once (design §3):
+            ;; the day-shaped actions all cite :place :days
+            [:days {:part-scope {:key :date}}
+             [:vector
+              [:map
+               [:date :waymark/date]
+               [:theme {:optional true}
+                [:maybe [:string {:min 1 :max 50}]]]
+               [:meal_id {:optional true :kind :meal :label :meal_name}
+                [:maybe :waymark/ref]]
+               [:meal_name {:optional true} [:maybe [:string {:max 200}]]]
+               [:side_dish_id {:optional true :kind :meal
+                               :label :side_dish_name}
+                [:maybe :waymark/ref]]
+               [:side_dish_name {:optional true}
+                [:maybe [:string {:max 200}]]]
+               [:second_side_dish_id {:optional true :kind :meal
+                                      :label :second_side_dish_name}
+                [:maybe :waymark/ref]]
+               [:second_side_dish_name {:optional true}
+                [:maybe [:string {:max 200}]]]
+               [:eating_out {:optional true} [:maybe :boolean]]
+               [:eating_out_where {:optional true
+                                   :x-display {:label "Where"}}
+                [:maybe [:string {:max 120}]]]]]]
+            [:all_days_covered {:optional true :derived all-days-covered}
+             [:maybe :boolean]]
+            [:calendar_conflicts {:optional true :derived calendar-conflicts
+                                  :filter #{:eq :range}}
+             [:maybe :int]]
+            ;; a one-liner fact stays inline: is-there-anything, over
+            ;; the count fact above
+            [:has_conflicts {:optional true :filter #{:eq}
+                             :derived {:over [:calendar_conflicts]
+                                       :expr '(< 0 (var :calendar_conflicts))}}
+             [:maybe :boolean]]
+            [:open_tasks {:optional true :derived open-tasks}
+             [:maybe :int]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    ;; the create form: only the decisions a human actually makes —
@@ -373,28 +503,6 @@
                    [:notes {:optional true :x-display {:widget "prose"}}
                     [:maybe [:string {:max 2000}]]]]
    :on-create plan-on-create
-   :derived
-   {:end_date {:over [:start_date :weeks]
-               :expr '(+ (var :start_date) (days (- (* 7 (var :weeks)) 1)))}
-    ;; the coverage rollup as a declared fact (design §2): one
-    ;; definition — the finalize gate judges it and the refusal reason
-    ;; rides the gate's declaration
-    :all_days_covered {:over [:days]
-                       :expr '(every [d (var :days)]
-                                     (or (is-set (get d :meal_id))
-                                         (= (get d :eating_out) true)))
-                       :explain "Every day needs a meal or an eating-out mark before finalizing."}
-    ;; facts over the relation (design 6.0 §2): the conflict count
-    ;; badges the calendar link, filters the plan list, and feeds the
-    ;; finalize warning; nobody re-joins the calendar in a handler
-    :calendar_conflicts {:count {:related :calendar
-                                 :where {:kind #{"blocking"}
-                                         :state #{"fresh" "stale"}}}}
-    :has_conflicts {:over [:calendar_conflicts]
-                    :expr '(< 0 (var :calendar_conflicts))}
-    ;; the open-task rollup (design E4) as a phase-6 count fact
-    :open_tasks {:count {:owns :prep_task
-                         :where {:state #{"pending" "scheduled"}}}}}
    ;; the relation the plan decision actually consults (design 6.0
    ;; §1): stored boundaries on our side against the event's date on
    ;; theirs; both directions promoted, which is what lets the
@@ -411,8 +519,6 @@
    ;; envelope link rendering stays v10's phase-3 punt
    :links [{:rel "calendar" :edge :calendar :badge :calendar_conflicts
             :summary "What the family already has planned"}]
-   ;; the one place per-day placement is declared (design §3)
-   :part-scopes {:days {:path :days :key :date}}
    :one-of {:days/coverage
             {:in [:days]
              :arms {:meal [:meal_id :meal_name
@@ -420,91 +526,31 @@
                            :second_side_dish_id :second_side_dish_name]
                     :eating_out [:eating_out :eating_out_where]}
              :clears true}}
-   :filterable {:state #{:eq :in}
-                :start_date #{:eq :range}
-                :end_date #{:eq :range}
-                :has_conflicts #{:eq}
-                :calendar_conflicts #{:eq :range}}
-   :sortable {:fields [:start_date] :default "-start_date"}
+   :filterable {:state #{:eq :in}}
    :display {:title "Meal plan — week of {data.start_date}"}
    :actions
-   {:assign_meal {:from #{:draft} :to :draft
-                  :input assign-input :place :days
-                  :guards [date-in-plan meal-fits-day]
-                  :safety {:idempotent true :reversible false :confirm false}
-                  :handler assign-meal
-                  :display {:label "Assign meal" :style :primary :order 1}}
-    :assign_off_theme {:from #{:draft} :to :draft
-                       :input assign-input :place :days
-                       :guards [date-in-plan meal-is-listed]
-                       :safety {:idempotent true :reversible false
-                                :confirm true
-                                :consequence "The day gets a meal that does not match its theme night."}
-                       :handler assign-meal
-                       :display {:label "Assign off-theme" :order 5}}
-    :set_sunday_theme {:from #{:draft} :to :draft
-                       :input [:map
-                               [:date :waymark/date]
-                               [:theme [:string {:min 1 :max 50}]]]
-                       :place :days
-                       :guards [date-in-plan sunday-only theme-in-rotation]
-                       :safety {:idempotent true :reversible false
-                                :confirm false}
-                       :handler set-sunday-theme
-                       :display {:label "Pick Sunday theme" :order 2}}
-    :mark_eating_out {:from #{:draft} :to :draft
-                      :input [:map
-                              [:date :waymark/date]
-                              [:where {:optional true
-                                       :x-display {:label "Where"}}
-                               [:maybe [:string {:max 120}]]]]
-                      :place :days
-                      :guards [date-in-plan]
-                      :safety {:idempotent true :reversible false
-                               :confirm false}
-                      :handler mark-eating-out
-                      :display {:label "Eating out" :order 3}}
-    :clear_day {:from #{:draft} :to :draft
-                :input day-input :place :days
-                :guards [date-in-plan]
-                :safety {:idempotent true :reversible false :confirm false}
-                :handler clear-day
-                :display {:label "Clear day" :order 4}}
-    :add_side_dish {:from #{:draft} :to :draft
-                    :input side-dish-input :place :days
-                    :guards [date-in-plan day-has-meal has-free-side-slot
-                             meal-fits-day meal-is-listed]
-                    :safety {:idempotent true :reversible true :confirm false}
-                    :handler add-side-dish
-                    :display {:label "Add side dish" :order 6}}
-    :remove_side_dish {:from #{:draft} :to :draft
-                       :input side-dish-input :place :days
-                       :guards [date-in-plan]
-                       :safety {:idempotent true :reversible true
-                                :confirm false}
-                       :handler remove-side-dish
-                       :display {:label "Remove side dish" :order 7}}
-    :finalize {:from #{:draft} :to :planned
-               :guards [all-days-covered-gate calendar-clear]
-               :safety {:idempotent true :reversible true :confirm false}
-               :display {:label "Finalize plan" :style :primary :order 1}}
-    :reopen {:from #{:planned} :to :draft
-             :safety {:idempotent true :reversible true :confirm false}
-             :display {:label "Reopen" :order 2}}
-    :begin {:from #{:planned} :to :active
-            :guards [plan-started]
-            :safety {:idempotent true :reversible false :confirm false
-                     :one-way "Starting the week only reflects the calendar; nothing is lost and the plan stays editable through its days."}
-            :display {:label "Start the week" :style :primary :order 1}}
-    :complete {:from #{:active} :to :done
-               :guards [no-open-tasks]
-               :safety {:idempotent true :reversible false :confirm false
-                        :one-way "Completing records a finished week; the plan remains readable as history."}
-               :display {:label "Week done" :style :primary :order 1}}
-    :abandon {:from #{:draft :planned :active} :to :abandoned
-              :safety {:idempotent true :reversible false :confirm true
-                       :consequence "The plan is discarded for good; its open prep tasks are cancelled; its days and any grocery list stay readable as records."}
-              :display {:label "Abandon plan" :style :danger :order 9}}}})
+   (merge day-actions
+          {:finalize {:from #{:draft} :to :planned
+                      :guards [all-days-covered-gate calendar-clear]
+                      :safety routine
+                      :display {:label "Finalize plan" :style :primary :order 1}}
+           :reopen {:from #{:planned} :to :draft
+                    :safety routine
+                    :display {:label "Reopen" :order 2}}
+           :begin {:from #{:planned} :to :active
+                   :guards [plan-started]
+                   :safety {:idempotent true :reversible false :confirm false
+                            :one-way "Starting the week only reflects the calendar; nothing is lost and the plan stays editable through its days."}
+                   :display {:label "Start the week" :style :primary :order 1}}
+           :complete {:from #{:active} :to :done
+                      :guards [no-open-tasks]
+                      :safety {:idempotent true :reversible false :confirm false
+                               :one-way "Completing records a finished week; the plan remains readable as history."}
+                      :display {:label "Week done" :style :primary :order 1}}
+           :abandon {:from #{:draft :planned :active} :to :abandoned
+                     :safety {:idempotent true :reversible false :confirm true
+                              :consequence "The plan is discarded for good; its open prep tasks are cancelled; its days and any grocery list stay readable as records."}
+                     :display {:label "Abandon plan" :style :danger :order 9}}})})
 
 ;; ── the week's decision surface (phase 9b, waymark9 mealplan9's
 ;;    WeekBoard) ──────────────────────────────────────────────────────

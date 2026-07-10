@@ -16,6 +16,12 @@
   removable themes is both the rendered enum and the enforcement;
   there is no separate check body to drift.
 
+  Batch-G style note: this kind declares no field-scoped law (no
+  sort, no derived, no part scope; only :state filtering, which is
+  not a schema entry), so nothing colocates — the style rewrite here
+  is just the two repeated safety values named. The law is unchanged;
+  mealplan10.style-invariance-test pins the fingerprint hash.
+
   Recorded deviation: v10 declares no field defaults, so the name and
   the starter themes land in :on-create when the create body leaves
   them blank."
@@ -75,6 +81,15 @@
 (def theme-input
   [:map [:theme [:string {:min 1 :max 50}]]])
 
+;; named safety values: each spelled once, in full, and cited by name
+;; — never inferred
+(def routine
+  ;; honestly reversible: activate/deactivate are each other's way back
+  {:idempotent true :reversible true :confirm false})
+(def overwrite
+  ;; an idempotent list edit — nothing to confirm, no strict reverse
+  {:idempotent true :reversible false :confirm false})
+
 (defresource rotation
   {:kind :rotation
    :states [:inactive :active]
@@ -96,24 +111,22 @@
    :display {:title "{data.name}"}
    :actions
    {:activate {:from #{:inactive} :to :active
-               ;; honestly reversible: deactivate is the unconditional
-               ;; way back
-               :safety {:idempotent true :reversible true :confirm false}
+               :safety routine
                :handler activate-rotation
                :display {:label "Make active" :style :primary :order 1
                          :description "New plans draw Sunday themes from the most recently activated rotation"}}
     :deactivate {:from #{:active} :to :inactive
-                 :safety {:idempotent true :reversible true :confirm false}
+                 :safety routine
                  :display {:label "Deactivate" :order 4}}
     :add_theme {:from #{:active} :to :active
                 :input theme-input
-                :safety {:idempotent true :reversible false :confirm false}
+                :safety overwrite
                 :handler add-theme
                 :display {:label "Add theme" :style :primary :order 1}}
     :remove_theme {:from #{:active} :to :active
                    :input theme-input
                    :guards [not-last-theme]
-                   :safety {:idempotent true :reversible false :confirm false}
+                   :safety overwrite
                    :handler remove-theme
                    :display {:label "Remove theme" :order 2}}
     :advance {:from #{:active} :to :active

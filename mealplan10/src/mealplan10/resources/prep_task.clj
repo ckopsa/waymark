@@ -20,13 +20,30 @@
   due_at demanded :waymark/instant into the schema vocabulary (phase
   8): a point in time the clock can compare.
 
+  Spelled in the batch-G declaration style: filter/sort law and the
+  one-line overdue fact ride the entries they govern, and schedule —
+  the one outward-facing action — is def'd. The law is unchanged —
+  mealplan10.style-invariance-test pins this kind's fingerprint hash
+  byte-identical to the split spelling.
+
   Recorded deviations: task_type carries no field default (v10
   declares none — the AI states it); the with_plan profile and href
   link render have no v10 spelling (the link declaration is carried)."
-  (:require [waymark10.resource :as r :refer [defresource defhandler]]))
+  (:require [waymark10.declare :refer [defaction]]
+            [waymark10.resource :as r :refer [defresource defhandler]]))
 
 (defhandler set-calendar-event [row inp _ctx]
   (assoc-in row [:data :calendar_event_id] (:event_id inp)))
+
+(defaction schedule
+  {:from #{:pending} :to :scheduled
+   ;; named for what it is: the id of the NEW event just created — not
+   ;; an edit of the stored one, so no prefill and no :edit
+   :input [:map [:event_id {:kind :event} :waymark/ref]]
+   :safety {:idempotent true :reversible false :confirm true
+            :consequence "An event goes on the family calendar for this prep step."}
+   :handler set-calendar-event
+   :display {:label "Put on calendar" :style :primary :order 1}})
 
 (defresource prep-task
   {:kind :prep_task
@@ -35,40 +52,32 @@
    :terminal #{:done :cancelled}
    :summary "{data.task_type} · {data.meal_name} ({data.date}) · {state}"
    :schema [:map
-            [:plan_id {:kind :plan} :waymark/ref]
+            [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
             [:date {:x-display {:label "Dinner date"}} :waymark/date]
             [:meal_name [:string {:min 1 :max 200}]]
-            [:task_type [:enum "thaw" "prep" "cook"]]
-            [:due_at {:x-display {:label "When to start"}} :waymark/instant]
-            [:overdue {:optional true} [:maybe :boolean]]
+            [:task_type {:filter #{:eq :in}} [:enum "thaw" "prep" "cook"]]
+            [:due_at {:filter #{:after} :sort :default
+                      :x-display {:label "When to start"}}
+             :waymark/instant]
+            ;; a one-liner fact stays inline: the clock flips it — no
+            ;; write, no poll
+            [:overdue {:optional true :filter #{:eq}
+                       :derived {:over [:due_at :now]
+                                 :expr '(< (var :due_at) (var :now))}}
+             [:maybe :boolean]]
             [:duration_minutes {:optional true} [:maybe [:int {:min 0}]]]
             [:calendar_event_id {:optional true :kind :event
                                  :x-display {:hidden true}}
              [:maybe :waymark/ref]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 1000}]]]]
-   :derived {:overdue {:over [:due_at :now]
-                       :expr '(< (var :due_at) (var :now))}}
    ;; carried declaration; envelope link render is v10's phase-3 punt
    :links [{:rel "plan" :kind :plan
             :summary "The meal plan this task serves"}]
-   :filterable {:state #{:eq :in}
-                :plan_id #{:eq}
-                :task_type #{:eq :in}
-                :due_at #{:after}
-                :overdue #{:eq}}
-   :sortable {:fields [:due_at] :default "due_at"}
+   :filterable {:state #{:eq :in}}
    :display {:title "{data.task_type}: {data.meal_name}"}
    :actions
-   {:schedule {:from #{:pending} :to :scheduled
-               ;; named for what it is: the id of the NEW event just
-               ;; created — not an edit of the stored one, so no
-               ;; prefill and no :edit
-               :input [:map [:event_id {:kind :event} :waymark/ref]]
-               :safety {:idempotent true :reversible false :confirm true
-                        :consequence "An event goes on the family calendar for this prep step."}
-               :handler set-calendar-event
-               :display {:label "Put on calendar" :style :primary :order 1}}
+   {:schedule schedule
     :complete {:from #{:pending :scheduled} :to :done
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "Marking a prep step done records kitchen reality; nothing external changes."}
