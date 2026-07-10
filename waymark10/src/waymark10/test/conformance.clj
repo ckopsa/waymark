@@ -103,7 +103,11 @@
 ;; ── the envelope obligations (phase 4b) ─────────────────────────────
 
 (def envelope-keys
-  "The reserved envelope keys — every GET envelope has exactly these."
+  "The reserved envelope keys — every GET envelope has exactly these.
+  :parts (batch A) is reserved-but-optional: only kinds with placed
+  actions carry it, so the shape check tolerates its absence and
+  refuses its co-conspirators via the parts obligations
+  (waymark10.test.envelope-obligations)."
   #{:waymark :kind :self :state :summary :data :actions :unavailable
     :links :meta})
 
@@ -129,9 +133,10 @@
         etag (:etag m)
         summary (:summary env)]
     (cond-> []
-      (not= envelope-keys (set (keys env)))
+      (not= envelope-keys (disj (set (keys env)) :parts))
       (conj (str where ": envelope keys " (vec (sort (keys env)))
-                 " are not exactly the reserved " (vec (sort envelope-keys))))
+                 " are not exactly the reserved " (vec (sort envelope-keys))
+                 " (+ optional :parts)"))
 
       (not= "10" (:waymark env))
       (conj (str where ": waymark is " (pr-str (:waymark env)) ", not \"10\""))

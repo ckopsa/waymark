@@ -107,6 +107,14 @@ dialog::backdrop { background: rgba(0,0,0,0.45); }
 .field textarea { min-height: 110px; font-family: ui-monospace, monospace;
   font-size: 13px; }
 .field .err { color: var(--danger); font-size: 12.5px; margin-top: 2px; }
+.field .err.srv::before { content: "server: "; color: var(--muted); }
+.field .const { padding: 7px 9px; border: 1px dashed var(--line);
+  border-radius: 7px; background: var(--chip); color: var(--muted); }
+.linkrel .badge { display: inline-block; min-width: 18px; text-align: center;
+  padding: 0 6px; border-radius: 10px; background: var(--accent);
+  color: var(--accent-ink); font-size: 12px; margin-left: 4px; }
+.partactions { white-space: nowrap; }
+.partactions button { padding: 3px 10px; font-size: 13px; margin: 1px 2px; }
 .consequence { background: var(--warn-bg); border: 1px solid var(--warn-line);
   border-radius: 8px; padding: 9px 12px; margin: 10px 0; font-size: 13.5px; }
 .problem { border: 1px solid var(--danger); border-radius: 8px;
@@ -446,6 +454,71 @@ function kvTable(obj, schema) {
 }
 
 /* ════ the resource screen: envelope in, screen out ═════════════════ */
+/* effort-aware emphasis: an assent action is one click — prominent
+   unless the declaration styles it; composition earns the compose
+   mark (the form is where the work is). display.style always wins. */
+function actionButton(name, entry, doc, onDone) {
+  const style = (entry.display || {}).style;
+  const cls = style === "primary" ? "primary"
+            : style === "danger" ? "danger"
+            : entry.effort === "assent" ? "primary" : "";
+  return el("button",
+    {class: cls, "data-effort": entry.effort || "",
+     title: (entry.display || {}).description || "",
+     onclick: () => actionDialog({name, entry, doc, onDone})},
+    (entry.display || {}).label || title(name),
+    (entry.safety || {}).confirm ? " …"
+      : entry.effort === "composition" ? " ✎" : "");
+}
+/* the declared links: a navigation strip, badges as scent */
+function linksStrip(doc) {
+  const entries = Object.entries(doc.links || {})
+    .filter(([, link]) => link && link.href);
+  if (!entries.length) return null;
+  return el("div", {class: "chips", "data-links": ""},
+    entries.map(([rel, link]) =>
+      el("a", {href: "#" + link.href, class: "chip linkrel",
+               title: link.summary || link.kind || ""},
+        title(rel),
+        link.badge !== undefined && link.badge !== null
+          ? el("b", {class: "badge"}, String(link.badge)) : null)));
+}
+/* embed=true links arrive with inlined envelope-minus-data items */
+function embeddedSections(doc) {
+  return Object.entries(doc.links || {})
+    .filter(([, link]) => (link.embedded || []).length)
+    .map(([rel, link]) =>
+      el("div", {},
+        el("h2", {}, title(rel) + " (embedded)"),
+        el("div", {class: "card tablewrap"},
+          el("table", {}, el("tbody", {}, link.embedded.map(item =>
+            el("tr", {class: "rowlink", onclick: () => go(item.self)},
+              el("td", {}, el("span", {class: "statechip"}, item.state)),
+              el("td", {}, item.summary))))))));
+}
+/* the parts namespace: placed actions re-rendered per data item — the
+   item rows render HERE (with their buttons), not in the data table */
+function partsSections(doc) {
+  return Object.entries(doc.parts || {}).map(([scope, group]) => {
+    const items = group.items || [];
+    const cols = [...new Set(items.flatMap(it => Object.keys(it.item || {})))];
+    return el("div", {},
+      el("h2", {}, title(scope)),
+      el("div", {class: "card tablewrap", "data-part": scope},
+        el("table", {},
+          el("thead", {}, el("tr", {},
+            cols.map(c => el("th", {}, c)), el("th", {}, ""))),
+          el("tbody", {}, items.map(it =>
+            el("tr", {"data-part-key": String(it.key)},
+              cols.map(c => el("td", {}, valueCell((it.item || {})[c]))),
+              el("td", {class: "partactions"},
+                Object.entries(it.actions || {}).map(([name, entry]) =>
+                  actionButton(name, entry, doc, () => render())),
+                Object.entries(it.unavailable || {}).map(([name, entry]) =>
+                  el("button", {disabled: "", title: entry.reason || ""},
+                     title(name))))))))));
+  });
+}
 async function renderResource(href) {
   const res = await api(href);
   if (!res.ok) return renderProblem(res);
@@ -458,18 +531,11 @@ async function renderResource(href) {
     .sort(([a, ea], [b, eb]) =>
       ((ea.display || {}).order ?? 99) - ((eb.display || {}).order ?? 99) ||
       a.localeCompare(b));
-  const buttons = entries.map(([name, entry]) => {
-    const style = (entry.display || {}).style;
-    return el("button",
-      {class: style === "primary" ? "primary" : style === "danger" ? "danger" : "",
-       title: (entry.display || {}).description || "",
-       onclick: () => actionDialog({name, entry, doc, onDone: out => {
-         if (out && out.self && out.self !== doc.self) go(out.self);
-         else render();
-       }})},
-      (entry.display || {}).label || title(name),
-      (entry.safety || {}).confirm ? " …" : "");
-  });
+  const buttons = entries.map(([name, entry]) =>
+    actionButton(name, entry, doc, out => {
+      if (out && out.self && out.self !== doc.self) go(out.self);
+      else render();
+    }));
   /* unavailable: disabled buttons with the server's reason as tooltip,
      plus the narrated list — absence would be dishonest */
   const gated = Object.entries(doc.unavailable || {});
@@ -490,6 +556,11 @@ async function renderResource(href) {
 
   const surfaceChips = await surfaceLinks(doc);
 
+  /* fields a parts group re-renders (with buttons) leave the kv table */
+  const partPaths = new Set(Object.keys(doc.parts || {}));
+  const plainData = Object.fromEntries(
+    Object.entries(doc.data || {}).filter(([k]) => !partPaths.has(k)));
+
   $main.replaceChildren(
     el("p", {class: "crumb"},
       el("a", {href: "#" + collectionOf(doc.self)}, "‹ " + title(doc.kind) + "s")),
@@ -500,11 +571,14 @@ async function renderResource(href) {
         (meta.law_revision ? " · law r" + meta.law_revision : "") +
         (meta.updated_at ? " · " + meta.updated_at.slice(0, 19).replace("T", " ") : "") +
         " · "), el("span", {class: "meta mono"}, doc.self)),
+    linksStrip(doc),
     surfaceChips,
     el("div", {class: "actions"}, buttons, gatedButtons),
     notNow,
+    ...partsSections(doc),
     el("h2", {}, "Data"),
-    el("div", {class: "card"}, kvTable(doc.data || {}, schema)));
+    el("div", {class: "card"}, kvTable(plainData, schema)),
+    ...embeddedSections(doc));
   watchScope({self: doc.self});
 }
 function collectionOf(self) { return self.split("/").slice(0, 3).join("/"); }
@@ -614,11 +688,73 @@ async function refOptions(select, prop, current) {
                      item.summary || id));
   }
 }
-function buildForm(schema, prefill) {
+/* ── keystroke validation: the JSON schema judges as you type ────── */
+function clientMessages(raw, prop, required) {
+  const msgs = [];
+  if (raw === "" || raw === null || raw === undefined) {
+    if (required) msgs.push("required");
+    return msgs;
+  }
+  if (prop.type === "integer" || prop.type === "number") {
+    const n = Number(raw);
+    if (Number.isNaN(n)) msgs.push("must be a number");
+    else {
+      if (prop.type === "integer" && !Number.isInteger(n))
+        msgs.push("must be an integer");
+      if (prop.minimum !== undefined && n < prop.minimum)
+        msgs.push("must be ≥ " + prop.minimum);
+      if (prop.maximum !== undefined && n > prop.maximum)
+        msgs.push("must be ≤ " + prop.maximum);
+    }
+    return msgs;
+  }
+  if (typeof raw === "string") {
+    if (prop.minLength !== undefined && raw.length < prop.minLength)
+      msgs.push("at least " + prop.minLength + " character(s)");
+    if (prop.maxLength !== undefined && raw.length > prop.maxLength)
+      msgs.push("at most " + prop.maxLength + " characters (" +
+                raw.length + " typed)");
+    if (prop.pattern && !(new RegExp(prop.pattern)).test(raw))
+      msgs.push("must match " + prop.pattern);
+    if (prop.enum && !prop.enum.map(String).includes(raw))
+      msgs.push("must be one of the offered values");
+  }
+  return msgs;
+}
+/* vocab fields: a combobox — facet counts from the target collection's
+   advertised query schema (x-facets) when the field is faceted there;
+   otherwise the input stays free text (open vocab is open). */
+function vocabProp(prop) {
+  return prop.format === "waymark-vocab" ||
+         ((prop.items || {}).format === "waymark-vocab") ||
+         !!prop["x-vocab"];
+}
+let vocabListSeq = 0;
+async function vocabOptions(listNode, kind, field) {
+  const idx = await wellKnown();
+  const href = (((idx || {}).resources || {})[kind] || {}).href;
+  if (!href) return;
+  const res = await api(href);
+  if (!res.ok) return;
+  const prop = (((((res.body || {}).actions || {}).query || {}).input || {})
+                .properties || {})[field] || {};
+  for (const [value, count] of Object.entries(prop["x-facets"] || {}))
+    listNode.append(el("option", {value, label: value + " · " + count}));
+}
+function buildForm(schema, prefill, kind) {
   const form = el("div", {});
-  const required = new Set(schema.required || []);
+  const required = new Set((schema.required || []).map(String));
   for (const [name, prop] of Object.entries(schema.properties || {})) {
     if (name === "ids") continue;           /* bulk ids ride the selection */
+    /* a const field is pre-bound: shown, fixed, still submitted */
+    if (prop.const !== undefined) {
+      form.append(el("div", {class: "field"},
+        el("label", {}, el("b", {}, name), " (bound)"),
+        el("div", {class: "const mono", "data-const": name},
+           String(prop.const)),
+        el("input", {type: "hidden", name, value: String(prop.const)})));
+      continue;
+    }
     let widget;
     if (prop.format === "waymark-ref" || prop["x-ref"]) {
       widget = el("select", {name}, el("option", {value: ""}, "…"));
@@ -626,11 +762,29 @@ function buildForm(schema, prefill) {
     } else {
       widget = fieldWidget(name, prop, (prefill || {})[name]);
     }
+    if (vocabProp(prop) && widget.tagName === "INPUT") {
+      const listId = "vocab-" + (++vocabListSeq);
+      const list = el("datalist", {id: listId});
+      widget.setAttribute("list", listId);
+      widget.setAttribute("data-vocab", name);
+      const ph = ((prop["x-vocab"] || {}).placeholder);
+      if (ph) widget.setAttribute("placeholder", ph);
+      form.append(list);
+      if (kind) vocabOptions(list, kind, name);
+    }
+    const errSlot = el("div", {class: "err", "data-err": name});
+    if (widget.tagName === "INPUT" || widget.tagName === "TEXTAREA") {
+      widget.addEventListener("input", () => {
+        errSlot.textContent =
+          clientMessages(widget.value, prop, required.has(name)).join("; ");
+      });
+    }
     form.append(el("div", {class: "field"},
       el("label", {}, el("b", {}, name), required.has(name) ? " *" : "",
-         prop["x-vocab"] ? el("span", {class: "meta"}, " (vocab)") : ""),
+         vocabProp(prop) ? el("span", {class: "meta"}, " (vocab)") : ""),
       widget,
-      el("div", {class: "err", "data-err": name})));
+      errSlot,
+      el("div", {class: "err srv", "data-srverr": name})));
   }
   return form;
 }
@@ -661,6 +815,14 @@ function collectValues(form, schema) {
 }
 
 /* ════ the action dialog: gate, form, fence, key, warnings ══════════ */
+/* dry_run=1 is honored on SINGLE-RESOURCE action invokes only — the
+   create and bulk paths execute regardless of the parameter (engine
+   fact, recorded), so the UI never offers to "check" those. This also
+   retires the phase-10 page's live-firing Check button on create
+   dialogs. */
+function dryRunnable(href) {
+  return /^\/api\/[^/]+\/(?!-\/)[^/]+\/-\/[^/?]+$/.test(href || "");
+}
 async function actionDialog({name, entry, doc, bulkIds, onDone}) {
   const safety = entry.safety || {};
   const input = entry.input || null;
@@ -676,7 +838,8 @@ async function actionDialog({name, entry, doc, bulkIds, onDone}) {
     if (d.ok) draftValues = Object.assign({}, d.body.prefill, d.body.values);
     else draftValues = prefillFromDoc(doc, input);
   }
-  const form = input ? buildForm(input, draftValues) : el("div", {});
+  const kind = (doc.kind || "").replace("_collection", "");
+  const form = input ? buildForm(input, draftValues, kind) : el("div", {});
 
   const errBox = el("div", {});
   const dlg = el("dialog", {},
@@ -706,7 +869,8 @@ async function actionDialog({name, entry, doc, bulkIds, onDone}) {
         toast("Draft discarded");
         dlg.close(); dlg.remove();
       }}, "Discard draft") : null,
-      input ? el("button", {onclick: () => check()}, "Check") : null,
+      input && dryRunnable(entry.href)
+        ? el("button", {onclick: () => check()}, "Check") : null,
       el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Cancel"),
       el("button", {class: safety.confirm ? "danger" : "primary",
                     onclick: () => submit()},
@@ -727,6 +891,25 @@ async function actionDialog({name, entry, doc, bulkIds, onDone}) {
     });
   }
 
+  /* blur-time dry-run: the SERVER judges the half-built input and its
+     field errors land inline (schema 422s per field; anything else
+     waits for Check/submit — a guard 409 mid-typing would only nag) */
+  let dryTimer = null;
+  if (input && dryRunnable(entry.href)) {
+    form.addEventListener("focusout", () => {
+      clearTimeout(dryTimer);
+      dryTimer = setTimeout(async () => {
+        const payload = body();
+        if (!payload) return;
+        const sep = entry.href.includes("?") ? "&" : "?";
+        const res = await api(entry.href + sep + "dry_run=1",
+          {method: "POST", body: payload, headers: actHeaders()});
+        clearServerErrors();
+        if (!res.ok && res.status === 422) showFieldErrors(res.body);
+      }, 120);
+    });
+  }
+
   function body() {
     const values = input ? collectValues(form, input) : {};
     if (bulkIds) values.ids = bulkIds;
@@ -739,16 +922,22 @@ async function actionDialog({name, entry, doc, bulkIds, onDone}) {
     if (acknowledged.length) h["Waymark-Acknowledge"] = acknowledged.join(",");
     return h;
   }
-  function showErrors(problem) {
-    errBox.replaceChildren();
-    for (const node of dlg.querySelectorAll("[data-err]"))
+  function clearServerErrors() {
+    for (const node of dlg.querySelectorAll("[data-srverr]"))
       node.textContent = "";
+  }
+  function showFieldErrors(problem) {
     for (const [field, msgs] of Object.entries((problem || {}).errors || {})) {
-      const slot = dlg.querySelector('[data-err="' + field + '"]');
+      const slot = dlg.querySelector('[data-srverr="' + field + '"]');
       const text = Array.isArray(msgs) ? msgs.join("; ") : String(msgs);
       if (slot) slot.textContent = text;
       else errBox.append(el("div", {class: "problem"}, field + ": " + text));
     }
+  }
+  function showErrors(problem) {
+    errBox.replaceChildren();
+    clearServerErrors();
+    showFieldErrors(problem);
     if (!Object.keys((problem || {}).errors || {}).length)
       errBox.append(el("div", {class: "problem"},
         ((problem || {}).title || "Refused") +

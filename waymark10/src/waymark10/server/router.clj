@@ -32,7 +32,24 @@
   threshold) mints a job and answers 202 with the job envelope and
   its Location; …/{action}/draft/collab upgrades to the live-collab
   websocket. Recorded: like SSE, the openapi/surface/collab routes
-  answer a grant-scoped request 404 — projecting them is a punt."
+  answer a grant-scoped request 404 — projecting them is a punt.
+
+  Batch A closes the depth/links punts:
+  - GET {plural}/{id}?depth=summary serves the envelope minus
+    data/parts (depth=full is the default; any other value is one
+    422 naming the parameter).
+  - GET {plural}?rows=none makes items the cheap stub (actions AND
+    unavailable null — explicitly unknown). rows is stripped BEFORE
+    the collection grammar parses, so page hrefs do not carry it
+    (recorded: a pager that wants to stay cheap re-appends it).
+  - a declared link with :embed true gains \"embedded\" on the full
+    envelope only: the target collection, filtered by the link's own
+    compiled href (the href and the inline items can never disagree),
+    as envelope-minus-data items capped at EMBED-CAP (5, recorded).
+    Loading happens HERE — render stays storage-free; a failed embed
+    drops with a *err* warning, never the GET.
+  - render ctx-opts gain :resources (the engine's kind map) so link
+    targets resolve their declared plurals."
   (:require [clojure.java.io :as io]
             [clojure.string :as str]
             [reitit.ring :as ring]
@@ -153,11 +170,19 @@
     :headers (merge {"Content-Type" ctype} extra-headers)
     :body (wire/write-json body)}))
 
+(defn- render-opts
+  "The one ctx-opts map every render call shares: identity, clock,
+  services, visibility, and the kind map link targets resolve
+  through."
+  [eng req]
+  {:principal (principal-of req)
+   :now ((:now-fn eng))
+   :services (:services eng)
+   :visibility (visibility-of req)
+   :resources (inv/resources eng)})
+
 (defn- envelope-response [eng rdef row req status extra-headers]
-  (let [env (render/envelope rdef row {:principal (principal-of req)
-                                       :now ((:now-fn eng))
-                                       :services (:services eng)
-                                       :visibility (visibility-of req)})]
+  (let [env (render/envelope rdef row (render-opts eng req))]
     (json-response status env media-type
                    (merge {"ETag" (get-in env ["meta" "etag"])} extra-headers))))
 
@@ -202,15 +227,24 @@
           (throw (p/not-found "kind" kind))))
       (json-response 200 (p/wire-value (schema/json-schema (:schema rdef)))))))
 
+(defn- rows-of
+  "The collection's rows= parameter: absent → full item summaries;
+  \"none\" → the cheap stub (null actions). Anything else is a 422."
+  [params]
+  (when-some [r (get params "rows")]
+    (if (= "none" r)
+      :none
+      (throw (p/schema-invalid :query {"rows" ["must be \"none\""]})))))
+
 (defn- collection [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
-          env (collections/envelope eng rdef (query-params req)
-                                    {:principal (principal-of req)
-                                     :now ((:now-fn eng))
-                                     :services (:services eng)
-                                     :visibility (visibility-of req)})]
+          params (query-params req)
+          rows (rows-of params)
+          env (collections/envelope eng rdef (dissoc params "rows")
+                                    (cond-> (render-opts eng req)
+                                      rows (assoc :rows rows)))]
       (json-response 200 env media-type nil))))
 
 (defn- create [eng]
@@ -234,10 +268,76 @@
           (envelope-response eng rdef row req 201
                              {"Location" (str "/api/" plural "/" (:id row))}))))))
 
+(defn- depth-of
+  "The GET's depth= parameter: absent/\"full\" → the whole envelope;
+  \"summary\" → envelope minus data/parts. Anything else is a 422."
+  [req]
+  (let [d (get (query-params req) "depth")]
+    (cond
+      (or (nil? d) (= "full" d)) :full
+      (= "summary" d) :summary
+      :else (throw (p/schema-invalid
+                    :query {"depth" ["must be \"summary\" or \"full\""]})))))
+
+(def embed-cap
+  "How many target items an :embed true link inlines (recorded cap:
+  embedding is an invitation to co-present, not a bulk export — the
+  href is the whole answer)."
+  5)
+
+(defn- splice-embeds
+  "The :embed true links of one FULL wired envelope gain \"embedded\":
+  the target collection filtered by the link's own compiled href —
+  parsed back through the collection grammar, so the href and the
+  inline items can never disagree — as envelope-minus-data items,
+  capped. Best-effort: a failed embed drops with a *err* warning,
+  never the GET. Template (:href) links have no target rdef to load
+  from and never embed."
+  [eng rdef env ctx-opts]
+  (reduce
+   (fn [env ld]
+     (let [rel (name (:rel ld))
+           link (get-in env ["links" rel])
+           target-kind (or (when-some [e (:edge ld)]
+                             (get-in rdef [:related e :kind]))
+                           (:owns ld))
+           trdef (when target-kind (get (inv/resources eng) target-kind))]
+       (if-not (and (:embed ld) link trdef)
+         env
+         (try
+           (let [q (second (str/split (str (get link "href")) #"\?" 2))
+                 params (into {}
+                              (keep (fn [kv]
+                                      (let [[k v] (str/split kv #"=" 2)]
+                                        (when-not (str/blank? k)
+                                          [(url-decode k) (url-decode (or v ""))]))))
+                              (when q (str/split q #"&")))
+                 {:keys [conds sort]} (collections/parse-query trdef params)
+                 st (:storage eng)
+                 rows (store/with-tx st
+                        (fn [tx]
+                          (store/search-rows st tx (:kind trdef) conds
+                                             {:order-by (:field sort)
+                                              :desc (:desc sort)
+                                              :limit embed-cap
+                                              :offset 0})))
+                 items (mapv #(render/envelope-summary
+                               trdef (inv/decode-row trdef %) ctx-opts)
+                             rows)]
+             (assoc-in env ["links" rel "embedded"] items))
+           (catch Exception e
+             (binding [*out* *err*]
+               (println "waymark10 embed failed for link" rel "-"
+                        (ex-message e)))
+             env)))))
+   env
+   (filter :embed (:links rdef))))
+
 (defn- get-one [eng]
   (fn [{{:keys [plural id]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-row! req rdef id)
+          depth (depth-of req)
           row (load-decoded eng rdef id)
           ;; the mirror's pull-through seam (phase 8): a stale mirrored
           ;; row refreshes from its adapter on read, system actor.
@@ -247,8 +347,13 @@
           ;; conformance fixture sets it — production reads pull through
           row (if (and (:mirror rdef) (not (:suppress-mirror-refresh eng)))
                 (mirror/refresh! eng rdef row)
-                row)]
-      (envelope-response eng rdef row req 200 nil))))
+                row)
+          opts (render-opts eng req)
+          env (if (= :summary depth)
+                (render/envelope-summary rdef row opts)
+                (splice-embeds eng rdef (render/envelope rdef row opts) opts))]
+      (json-response 200 env media-type
+                     {"ETag" (get-in env ["meta" "etag"])}))))
 
 (defn- invoke-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]

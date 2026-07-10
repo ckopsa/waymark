@@ -1,17 +1,29 @@
 /* ui-drive.mjs — the phase-10 UI verification, reproducible:
-   drive the generic UI (GET /api/-/ui) through the family-week story
-   in headless chromium over CDP. Zero deps beyond node >= 22.
+   drive the generic UI (GET /api/-/ui) in headless chromium over
+   CDP. Zero deps beyond node >= 22. Two drives share one harness:
 
+   DEFAULT (the family-week story, against mealplan10 dev):
    1. make dev10 (a fresh mealplan10_dev; seed a blocking event if you
       want the finalize warning: see docs/waymark10-design.md §10)
    2. chromium --headless=new --remote-debugging-port=9223 \
         --no-sandbox --user-data-dir=/tmp/wm10-chrome about:blank &
    3. node waymark10/scripts/ui-drive.mjs
 
-   The drive is self-normalizing: a re-run against mutated state
-   brings the plan back to `planned` before its checks. */
+   BATCH-A (parts/links/validation/vocab/effort, against the
+   FRAMEWORK fixtures — never mealplan10):
+   1. WAYMARK10_TEST_DSN=... clojure -Sdeps \
+        '{:aliases {:fx {:extra-paths ["test"]}}}' -M:fx -e \
+        "((requiring-resolve 'waymark10.batch-a-dev/start!) 8123) @(promise)"
+      (boot fresh per drive run — the drive seeds through the API)
+   2. the same chromium
+   3. node waymark10/scripts/ui-drive.mjs batch-a
+
+   The story drive is self-normalizing: a re-run against mutated
+   state brings the plan back to `planned` before its checks. */
+const MODE = process.argv[2] === "batch-a" ? "batch-a" : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
-const BASE = "http://localhost:8010";
+const BASE = process.env.BASE ||
+  (MODE === "batch-a" ? "http://localhost:8123" : "http://localhost:8010");
 
 const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json();
 const page = list.find(t => t.type === "page");
@@ -63,6 +75,7 @@ function ok(name, cond) {
 await send("Runtime.enable");
 await send("Page.enable");
 
+async function mealplanStory() {
 /* ── boot: principal + home ─────────────────────────────────────────── */
 console.log("· home");
 await send("Page.navigate", {url: BASE + "/api/-/ui"});
@@ -289,8 +302,149 @@ await waitFor(`document.querySelector(".statechip")?.textContent === "retired"`,
 ok("the firehose refetched the open envelope after a foreign write", true);
 ok("the ticker narrates the transition",
    await evaljs(`document.getElementById("ticker").innerText.includes("retire")`));
+}
 
-console.log(`\nUI drive: ${passed} checks passed` +
+/* ════ batch A: parts, links, validation, vocab, effort ═══════════════
+   Against the framework-fixture engine (waymark10.batch-a-dev) — the
+   page knows nothing; every check reads what batch A put on the wire. */
+async function batchAStory() {
+  const h = {"x-waymark-principal": "priya", "Content-Type": "application/json"};
+  const post = async (path, body) => {
+    const res = await fetch(BASE + path,
+      {method: "POST", headers: h, body: body ? JSON.stringify(body) : null});
+    return {status: res.status, body: await res.json().catch(() => null)};
+  };
+
+  /* seed through the API, like any client */
+  console.log("· seeding fixtures through the API");
+  await post("/api/meals", {name: "Carnitas tacos", themes: ["mexican"]});
+  await post("/api/meals", {name: "Smash burgers", themes: ["american"]});
+  await post("/api/meals", {name: "Traeger brisket", themes: ["bbq", "american"]});
+  const plan = await post("/api/plans", {start_date: "2026-07-14", weeks: 1,
+    days: [{date: "2026-07-14", theme: "mexican"}, {date: "2026-07-15"}]});
+  const proj = await post("/api/ba_projects", {name: "Kitchen"});
+  const pid = proj.body.self.split("/").pop();
+  await post("/api/ba_tickets", {title: "Sand the top", project_id: pid,
+                                 due_date: "2026-07-20", points: 3});
+  const t2 = await post("/api/ba_tickets", {title: "Oil the top", project_id: pid,
+                                            due_date: "2026-07-20", points: 1});
+  await post("/api/ba_days", {date: "2026-07-20", label: "Sanding day"});
+
+  console.log("· boot + principal");
+  await send("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await evaljs(`localStorage.setItem("wm10.principal", "priya"); location.reload(); true`);
+  await sleep(1200);
+
+  /* ── parts: the day row gets its Assign meal button back ─────────── */
+  console.log("· parts: per-item buttons with the pre-bound key");
+  await evaljs(`location.hash = ${JSON.stringify(plan.body.self)}; true`);
+  await waitFor(`document.querySelector('[data-part="days"]')`, "parts section");
+  ok("the day rows carry their per-item Assign meal buttons",
+     await evaljs(`[...document.querySelectorAll('[data-part="days"] tbody tr')].length === 2 &&
+                   [...document.querySelectorAll('[data-part="days"] .partactions button')]
+                     .filter(b => b.textContent.includes("Assign meal")).length === 2`));
+  ok("the parts-covered array left the data table",
+     await evaljs(`![...document.querySelectorAll(".kv td:first-child")]
+                     .some(td => td.textContent === "days")`));
+  await evaljs(`[...document.querySelectorAll('[data-part="days"] tr[data-part-key="2026-07-15"] button')]
+                .find(b => b.textContent.includes("Assign meal")).click(); true`);
+  await waitFor(`document.querySelector('dialog[open] [data-const="date"]')`, "bound key in form");
+  ok("the part dialog binds the key const — shown, never re-picked",
+     await evaljs(`document.querySelector('dialog[open] [data-const="date"]').textContent === "2026-07-15" &&
+                   !document.querySelector("dialog[open] select[name=date]")`));
+
+  /* ── blur dry-run: the server's field errors, inline ─────────────── */
+  console.log("· blur dry-run 422 inline");
+  await evaljs(`{ const d = document.querySelector("dialog[open]");
+    d.querySelector("select[name=meal_id]")
+      .dispatchEvent(new FocusEvent("focusout", {bubbles: true})); true }`);
+  await waitFor(`(document.querySelector('dialog[open] [data-srverr="meal_id"]')?.textContent || "").length > 0`,
+                "server field error inline");
+  ok("a blur dry-run 422 renders the server's field error inline", true);
+
+  await waitFor(`[...document.querySelectorAll("dialog[open] select[name=meal_id] option")].length > 2`,
+                "meal ref options");
+  await evaljs(`{ const d = document.querySelector("dialog[open]");
+    const sel = d.querySelector("select[name=meal_id]");
+    sel.value = [...sel.options].find(o => o.textContent.includes("Smash burgers")).value;
+    [...d.querySelectorAll(".dlgfoot button")].at(-1).click(); true }`);
+  await waitFor(`!document.querySelector("dialog[open]")`, "assign landed");
+  ok("the part-item invoke landed with the pre-bound key",
+     await evaljs(`fetch(${JSON.stringify(plan.body.self)},
+                         {headers: {"x-waymark-principal": "priya"}})
+                   .then(r => r.json())
+                   .then(b => b.data.days[1].meal_id != null)`));
+
+  /* ── keystroke validation from the JSON schema ────────────────────── */
+  console.log("· keystroke validation");
+  await evaljs(`location.hash = "/api/meals"; true`);
+  await waitFor(`[...document.querySelectorAll("button")].some(b => b.textContent.startsWith("New meal"))`,
+                "create button");
+  await evaljs(`[...document.querySelectorAll("button")].find(b => b.textContent.startsWith("New meal")).click(); true`);
+  await waitFor(`document.querySelector("dialog[open] input[name=name]")`, "create form");
+  await evaljs(`{ const inp = document.querySelector("dialog[open] input[name=name]");
+    inp.value = "x".repeat(130); inp.dispatchEvent(new Event("input", {bubbles: true})); true }`);
+  ok("a keystroke validation message appears from the schema",
+     await evaljs(`document.querySelector('dialog[open] [data-err="name"]')
+                   .textContent.includes("at most 120")`));
+  await evaljs(`{ const inp = document.querySelector("dialog[open] input[name=name]");
+    inp.value = ""; inp.dispatchEvent(new Event("input", {bubbles: true})); true }`);
+  ok("a required field says so as you erase it",
+     await evaljs(`document.querySelector('dialog[open] [data-err="name"]')
+                   .textContent === "required"`));
+
+  /* ── vocab combobox with facet counts ─────────────────────────────── */
+  console.log("· vocab combobox");
+  ok("the themes field is a combobox fed by the collection's x-facets",
+     await evaljs(`(async () => {
+       const inp = document.querySelector('dialog[open] input[data-vocab="themes"]');
+       if (!inp) return false;
+       const list = document.getElementById(inp.getAttribute("list"));
+       for (let i = 0; i < 40 && !list.children.length; i++)
+         await new Promise(r => setTimeout(r, 100));
+       return [...list.children].some(o => o.value === "american" &&
+                                           (o.label || "").includes("2"));
+     })()`));
+  await evaljs(`{ const d = document.querySelector("dialog[open]");
+    d.querySelector("input[name=name]").value = "Elote night";
+    const inp = d.querySelector('input[data-vocab="themes"]');
+    const list = document.getElementById(inp.getAttribute("list"));
+    inp.value = [...list.children].find(o => o.value === "mexican").value;
+    inp.dispatchEvent(new Event("input", {bubbles: true}));
+    [...d.querySelectorAll(".dlgfoot button")].at(-1).click(); true }`);
+  await waitFor(`decodeURIComponent(location.hash).match(/\\/api\\/meals\\/[0-9a-f-]+/)`,
+                "meal created");
+  ok("the combobox pick submitted through the create", true);
+
+  /* ── effort-aware emphasis ────────────────────────────────────────── */
+  console.log("· effort emphasis");
+  await waitFor(`document.querySelector('button[data-effort="assent"]')`, "effort-stamped buttons");
+  ok("an assent action's button is prominent (one click, offered as one)",
+     await evaljs(`[...document.querySelectorAll('button[data-effort="assent"]')]
+                   .some(b => b.className.includes("primary"))`));
+
+  /* ── links: navigation strip with badges ──────────────────────────── */
+  console.log("· links navigation");
+  await evaljs(`location.hash = ${JSON.stringify(t2.body.self)}; true`);
+  await waitFor(`document.querySelector("[data-links]")`, "links strip");
+  ok("the links strip renders the declared rels with badges",
+     await evaljs(`[...document.querySelectorAll("[data-links] a.chip")].some(a =>
+                     a.textContent.includes("Agenda") &&
+                     a.querySelector(".badge")?.textContent === "1")`));
+  await evaljs(`[...document.querySelectorAll("[data-links] a.chip")]
+                .find(a => a.textContent.includes("Agenda")).click(); true`);
+  await waitFor(`document.body.innerText.includes("filtered: date=2026-07-20")`,
+                "agenda target collection");
+  ok("a link navigates to the filtered target collection",
+     await evaljs(`decodeURIComponent(location.hash).includes("/api/ba_days?date=2026-07-20") &&
+                   document.body.innerText.includes("2026-07-20 · Scheduled")`));
+}
+
+if (MODE === "batch-a") await batchAStory();
+else await mealplanStory();
+
+console.log(`\nUI drive (${MODE}): ${passed} checks passed` +
             (consoleErrors.length ? `\nCONSOLE ERRORS:\n` + consoleErrors.join("\n") : ", no console errors"));
 ws.close();
 process.exit(consoleErrors.length ? 1 : 0);
