@@ -491,44 +491,62 @@
   [s]
   (if (vector? s) (first s) s))
 
-(defn- check-count-spec
-  "One aggregate spec: {:count {:related <edge> | :owns <child-kind>,
-  :where {field #{values}}}} — exactly one edge, a shaped where, an
-  :int fact, no :over (a count's inputs ARE its edge). The edge's
+(defn- check-aggregate-spec
+  "One aggregate spec (batch C generalizes phase 6's count check to
+  the pair): {:count|:sum {:related <edge> | :owns <child-kind>,
+  :where {field #{values}}, (:sum only) :of <field>}} — exactly one
+  edge, a shaped where, no :over (an aggregate's inputs ARE its
+  edge). A count fact is an :int; a sum fact is :int or :decimal and
+  MUST name :of, the summed target field. The edge's (and :of's)
   existence is an assembly question (checks-assembly)."
-  [r fact d]
-  (let [c (:count d)]
+  [r fact d agg-key]
+  (let [c (get d agg-key)
+        an (name agg-key)
+        allowed (if (= :sum agg-key) #{:related :owns :where :of}
+                    #{:related :owns :where})]
     (when (seq (:over d))
-      (err r :derived (str "derived field " fact ": a count's inputs are its "
+      (err r :derived (str "derived field " fact ": a " an "'s inputs are its "
                            "declared edge; :over does not apply")))
     (when-not (and (map? c)
                    (= 1 (count (select-keys c [:related :owns])))
-                   (every? #{:related :owns :where} (keys c))
+                   (every? allowed (keys c))
                    (every? keyword? (vals (select-keys c [:related :owns]))))
-      (err r :derived (str "derived field " fact ": :count is {:related <edge> "
-                           "| :owns <child-kind>, :where {field #{values}}} — "
-                           "exactly one edge")))
+      (err r :derived (str "derived field " fact ": :" an " is {:related <edge> "
+                           "| :owns <child-kind>, :where {field #{values}}"
+                           (when (= :sum agg-key) ", :of <field>")
+                           "} — exactly one edge")))
     (when (contains? c :where)
       (let [w (:where c)]
         (when-not (and (map? w) (seq w)
                        (every? keyword? (keys w))
                        (every? #(and (coll? %) (not (map? %)) (seq %)) (vals w)))
-          (err r :derived (str "derived field " fact ": :count :where is a "
+          (err r :derived (str "derived field " fact ": :" an " :where is a "
                                "{field #{values}} map of non-empty value sets")))))
-    (when-not (= :int (schema-head (schema/field-schema (:schema r) fact)))
-      (err r :derived (str "derived field " fact ": a count fact is an int — "
-                           "declare " fact " as :int in the schema")))))
+    (if (= :sum agg-key)
+      (do
+        (when-not (keyword? (:of c))
+          (err r :derived (str "derived field " fact ": :sum names :of, the "
+                               "summed target field")))
+        (when-not (contains? #{:int :decimal}
+                             (schema-head (schema/field-schema (:schema r) fact)))
+          (err r :derived (str "derived field " fact ": a sum fact is numeric — "
+                               "declare " fact " as :int or :decimal in the "
+                               "schema"))))
+      (when-not (= :int (schema-head (schema/field-schema (:schema r) fact)))
+        (err r :derived (str "derived field " fact ": a count fact is an int — "
+                             "declare " fact " as :int in the schema"))))))
 
 (defn- check-derived [r]
   (let [derived (:derived r)
         dkeys (data-keys r)]
     (doseq [[fact d] (sort-by key derived)]
-      (when (= (contains? d :expr) (contains? d :count))
+      (when-not (= 1 (count (filter #(contains? d %) [:expr :count :sum])))
         (err r :derived (str "derived field " fact ": declare exactly one of "
-                             ":expr (an expression fact) or :count (an "
+                             ":expr (an expression fact), :count, or :sum (an "
                              "aggregate over a declared edge)")))
-      (when (contains? d :count)
-        (check-count-spec r fact d))
+      (doseq [agg [:count :sum]
+              :when (contains? d agg)]
+        (check-aggregate-spec r fact d agg))
       (doseq [o (:over d)]
         (when-not (or (= :now o) (contains? dkeys o))
           (err r :derived (str "derived field " fact ": :over names " o

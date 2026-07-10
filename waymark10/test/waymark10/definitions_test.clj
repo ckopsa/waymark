@@ -83,8 +83,8 @@
   ;; code_or_shape and promote totally; 9.0/10 holds it
   '(<= (data :calendar_conflicts) 1))
 
-(defn- plan-body [conflicts & [{:keys [weeks]}]]
-  {:start_date "2026-07-14" :weeks (or weeks 1)
+(defn- plan-body [conflicts & [{:keys [weeks start-date]}]]
+  {:start_date (or start-date "2026-07-14") :weeks (or weeks 1)
    :days [{:date "2026-07-14" :eating_out true}
           {:date "2026-07-15" :eating_out true}]
    :calendar_conflicts conflicts})
@@ -218,7 +218,11 @@
     (with-eng [fx/meal (fx/plan-resource)] :promote
       (fn [eng]
         (swap! ids assoc
-               :p1 (:id (:row (inv/create! eng :plan (plan-body 1 {:weeks 1})
+               ;; the population splits on start_date — a FILTERABLE
+               ;; field, per the batch-C population grammar gate
+               ;; (weeks, unpromoted, no longer names a population)
+               :p1 (:id (:row (inv/create! eng :plan
+                                           (plan-body 1 {:start-date "2026-07-21"})
                                            {:principal elena})))
                :p2 (:id (:row (inv/create! eng :plan (plan-body 1 {:weeks 2})
                                            {:principal elena}))))))
@@ -227,12 +231,13 @@
       (fn [eng]
         (let [{:keys [p1 p2]} @ids
               d2 (def-row eng :plan 2)]
-          (inv/invoke! eng :definition (:id d2) :pilot {:where {:weeks 1}}
+          (inv/invoke! eng :definition (:id d2) :pilot
+                       {:where {:start_date "2026-07-21"}}
                        {:principal elena
                         :idempotency-key (str (random-uuid))})
           (testing "the population restamps; everyone else keeps current"
             (is (= :piloted (:state (def-row eng :plan 2))))
-            (is (= {:weeks 1}
+            (is (= {:start_date "2026-07-21"}
                    (get-in (rdef eng :plan)
                            [:piloted-law :population :where])))
             (is (= 2 (:law-revision (reload eng :plan p1))))

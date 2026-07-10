@@ -113,7 +113,10 @@
     (:expr d) (update :expr expr/normalize)
     (:vars d) (update :vars update-vals expr/normalize)
     (get-in d [:count :where])
-    (update-in [:count :where] update-vals set)))
+    (update-in [:count :where] update-vals set)
+    ;; :sum mirrors :count (batch C) — same membership rule
+    (get-in d [:sum :where])
+    (update-in [:sum :where] update-vals set)))
 
 (defn- normalize-derived [rmap]
   (update rmap :derived

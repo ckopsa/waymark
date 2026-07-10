@@ -29,9 +29,13 @@
   position: :becomes-available-at is a callable, so structured hope
   evaluates resident (waymark9's recorded deviation, kept). The
   derived-law overlay — recomputing a row's FACTS under stored trees
-  — is this namespace's structural twin and a NAMED PUNT for phase 5:
-  judgment diffs flip no stored value, so the laws this overlay can
-  hold never need it; a data-law derivation pilot is the trigger.
+  — is this namespace's structural twin and LIVE since batch C:
+  waymark10.derived/specs-under reads the same :judgment-laws slot
+  (and caches on the same :judgment-cache, under [revision
+  ::waymark10.derived/specs] keys, disjoint from this namespace's
+  [revision action-name] keys), so materialize and the maintainer
+  evaluate every fact under the row's law exactly as this namespace
+  serves its guards.
 
   Rebuilt guard vectors cache per (kind, revision, action): the cache
   atom lives on the rdef (:judgment-cache, installed and reset by the

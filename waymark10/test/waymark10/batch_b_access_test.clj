@@ -71,12 +71,9 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [eng (engine/engine {:storage st
-                                  ;; approval_request rides :resources
-                                  ;; here — enrolling it in
-                                  ;; engine/full-registry is the
-                                  ;; recorded one-line merge item
-                                  :resources [fx/meal fx/plan bb-doc
-                                              grants/approval-request]})]
+                                  ;; approval_request enrolls on every
+                                  ;; engine now (the merge item landed)
+                                  :resources [fx/meal fx/plan bb-doc]})]
           (binding [*eng* eng
                     *h* (engine/handler eng)]
             (f)))

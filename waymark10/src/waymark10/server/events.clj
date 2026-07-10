@@ -33,12 +33,31 @@
   - A slow consumer's full queue (1024) drops with a warning —
     truth is replayable from the log by Last-Event-ID; only liveness
     is lost.
-  - Derivation-class events (waymark9's second channel) remain a
-    named punt — this stream (and the phase-9b webhooks riding it)
-    carries transitions only; a consumer re-derives a missed flip
-    from the envelope.
   - Event frames carry the stored summary bytes, written under the
     law law_revision names — log prose is never re-rendered.
+
+  DERIVATION-CLASS EVENTS (batch C — waymark9's second channel comes
+  home). Maintenance changes — cross-row count/sum recomputes, clock
+  flips, bulk law restamps — are not transitions (no version, no log
+  row), so they get their own outbox: waymark10_observations (id
+  bigserial, kind, resource_id NULLABLE — a bulk restamp is
+  kind-wide, class, changed jsonb, at), appended INSIDE the
+  maintenance write's transaction with pg_notify on its own channel
+  (waymark10_observations), so an observation exists iff its commit
+  does. The dispatcher LISTENs both channels and drains both tables;
+  a subscription opts into classes ({:classes #{:transition
+  :derivation}}, default transitions-only so the coherence consumer
+  and the webhook deliverer — which ride subscriptions as transition
+  feeds — never see a shape they predate). SSE frames derivations as
+  `event: derivation` with NO id line: Last-Event-ID replay covers
+  transitions only (recorded scope — the observations table is the
+  record; a consumer that missed a flip re-derives from the
+  envelope). Derivations bypass a replaying subscription's pause
+  (their ids are a different sequence; ordering across classes is not
+  promised — recorded). Observations are a Postgres surface: on any
+  other backend record-observation! is a warned no-op (recorded
+  scope; the store protocol is another batch's file, so the DDL and
+  reads live here).
 
   SSE: http-kit channels, one writer thread per connection; a
   heartbeat comment frame every :sse-heartbeat-ms (default 15s)
@@ -47,14 +66,17 @@
   up within one heartbeat. Engines built without engine/start! have
   no dispatcher; the router answers 503 (documented pick — lazy-start
   would hide a lifecycle the operator should own)."
-  (:require [org.httpkit.server :as http]
+  (:require [next.jdbc :as jdbc]
+            [next.jdbc.result-set :as rs]
+            [org.httpkit.server :as http]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.wire :as wire])
   (:import (java.util.concurrent LinkedBlockingQueue TimeUnit)
-           (org.postgresql PGConnection)))
+           (org.postgresql PGConnection)
+           (org.postgresql.util PGobject)))
 
 (set! *warn-on-reflection* true)
 
@@ -62,18 +84,124 @@
   (binding [*out* *err*]
     (println (apply str "waymark10 events: " parts))))
 
+;; ── the derivation outbox (batch C) ─────────────────────────────────
+
+(def observations-channel "waymark10_observations")
+
+(def ^:private jdbc-opts {:builder-fn rs/as-unqualified-lower-maps})
+
+(def ^:private observations-ddl
+  ["CREATE TABLE IF NOT EXISTS waymark10_observations (
+      id bigserial PRIMARY KEY,
+      kind text NOT NULL,
+      resource_id text,
+      class text NOT NULL,
+      changed jsonb,
+      at timestamptz NOT NULL DEFAULT now())"
+   "CREATE INDEX IF NOT EXISTS ix_wm10_obs_kind
+      ON waymark10_observations (kind, id)"])
+
+(defn- pg-storage? [st]
+  (instance? waymark10.server.store.postgres.PostgresStorage st))
+
+(defonce ^:private obs-ensured (atom #{}))
+
+(defn- ensure-observations! [storage tx]
+  (when-not (contains? @obs-ensured storage)
+    (doseq [sql observations-ddl]
+      (jdbc/execute! tx [sql]))
+    (swap! obs-ensured conj storage)))
+
+(defn record-observation!
+  "Append one derivation-class observation INSIDE the caller's
+  transaction — the maintenance write's outbox half. class is
+  \"recompute\" | \"flip\" | \"restamp\"; resource-id nil means the
+  whole kind (a bulk restamp). changed is a JSON-able value (fact
+  names, or the restamp's revision map)."
+  [storage tx {:keys [kind resource-id class changed]}]
+  (if-not (pg-storage? storage)
+    (warn! "derivation observations are a Postgres surface; dropping "
+           class " on " (name kind) " (recorded scope)")
+    (do
+      (ensure-observations! storage tx)
+      (let [res (jdbc/execute-one!
+                 tx
+                 ["INSERT INTO waymark10_observations
+                     (kind, resource_id, class, changed)
+                   VALUES (?, ?, ?, ?) RETURNING id"
+                  (name kind) resource-id (str class)
+                  (when (some? changed)
+                    (doto (PGobject.)
+                      (.setType "jsonb")
+                      (.setValue (wire/write-json changed))))]
+                 jdbc-opts)]
+        (jdbc/execute-one! tx ["SELECT pg_notify(?, ?)"
+                               observations-channel (str (:id res))])
+        (:id res)))))
+
+(defn- obs->event [r]
+  {::class :derivation
+   :id (:id r)
+   :kind (keyword (:kind r))
+   :resource-id (:resource_id r)
+   :class (:class r)
+   :changed (when-some [c (:changed r)]
+              (wire/read-json (.getValue ^PGobject c)))
+   :at (when-some [t (:at r)]
+         (if (instance? java.sql.Timestamp t)
+           (.toInstant ^java.sql.Timestamp t)
+           t))})
+
+(defn- observations-since [storage after limit]
+  (if-not (pg-storage? storage)
+    []
+    (store/with-tx storage
+      (fn [tx]
+        (ensure-observations! storage tx)
+        (mapv obs->event
+              (jdbc/execute! tx
+                             [(str "SELECT * FROM waymark10_observations"
+                                   " WHERE id > ? ORDER BY id LIMIT " (long limit))
+                              (long after)]
+                             jdbc-opts))))))
+
+(defn- last-observation-id [storage]
+  (if-not (pg-storage? storage)
+    0
+    (store/with-tx storage
+      (fn [tx]
+        (ensure-observations! storage tx)
+        (or (:id (jdbc/execute-one!
+                  tx ["SELECT max(id) AS id FROM waymark10_observations"]
+                  jdbc-opts))
+            0)))))
+
 ;; ── subscriptions ───────────────────────────────────────────────────
 
 (defn- wants? [sub t]
-  (cond
-    (:resource sub) (= [(:kind t) (:resource-id t)] (:resource sub))
-    (:kinds sub) (contains? (:kinds sub) (:kind t))
-    :else true))
+  (and (contains? (:classes sub) (::class t :transition))
+       (cond
+         (:resource sub) (and (= (:kind t) (first (:resource sub)))
+                              ;; a kind-wide observation (bulk restamp,
+                              ;; resource_id nil) reaches every watcher
+                              ;; of the kind's rows
+                              (or (nil? (:resource-id t))
+                                  (= (:resource-id t) (second (:resource sub)))))
+         (:kinds sub) (contains? (:kinds sub) (:kind t))
+         :else true)))
 
 (defn- deliver-event! [sub t]
   (locking (:state sub)
     (let [{:keys [paused delivered]} @(:state sub)]
       (cond
+        ;; derivations ride a separate id sequence and promise no
+        ;; replay: they bypass the transition floor and the replay
+        ;; pause (recorded — ordering across classes is not promised)
+        (= :derivation (::class t))
+        (when-not (.offer ^LinkedBlockingQueue (:queue sub) t)
+          (warn! "subscriber queue full; dropping derivation " (:id t)
+                 " — the next transition refetch re-derives it"))
+
         paused
         (swap! (:state sub) update :pending conj t)
 
@@ -121,11 +249,15 @@
 (defn subscribe
   "→ a subscription. opts: :kinds (set, nil = all), :resource
   [kind id], :since (log id — replay everything after it before going
-  live)."
-  [d {:keys [kinds resource since]}]
+  live), :classes (set of :transition/:derivation; default
+  #{:transition}, so consumers that predate the derivation class —
+  coherence, the webhook deliverer — never see a shape they did not
+  ask for)."
+  [d {:keys [kinds resource since classes]}]
   (let [sub {:id (str (random-uuid))
              :kinds (not-empty (set (or kinds #{})))
              :resource resource
+             :classes (or (not-empty (set classes)) #{:transition})
              :queue (LinkedBlockingQueue. 1024)
              :state (atom {:paused (some? since)
                            :pending []
@@ -156,6 +288,15 @@
         (doseq [sub @(:subs d)]
           (when (wants? sub t) (deliver-event! sub t)))
         (swap! (:last-seen d) max (:id t)))
+      (when (= 500 (count rows)) (recur))))
+  ;; the second class: observations drain on the same wake-ups, their
+  ;; own id horizon (a different sequence, deliberately uncompared)
+  (loop []
+    (let [rows (observations-since (:storage d) @(:last-obs d) 500)]
+      (doseq [t rows]
+        (doseq [sub @(:subs d)]
+          (when (wants? sub t) (deliver-event! sub t)))
+        (swap! (:last-obs d) max (:id t)))
       (when (= 500 (count rows)) (recur)))))
 
 (defn dispatcher
@@ -169,6 +310,14 @@
                     (warn! "no LISTEN connection (" (ex-message e)
                            "); running on the poll backstop alone")
                     nil))
+        ;; the second channel rides the same parked connection
+        _ (when conn
+            (try
+              (with-open [stmt (.createStatement ^java.sql.Connection conn)]
+                (.execute stmt (str "LISTEN " observations-channel)))
+              (catch Exception e
+                (warn! "observations LISTEN failed (" (ex-message e)
+                       "); derivations ride the poll backstop"))))
         pg-conn (some-> ^java.sql.Connection conn (.unwrap PGConnection))
         d {:eng eng
            :storage storage
@@ -178,6 +327,7 @@
                                                  storage tx {}
                                                  {:newest-first true :limit 1})))))
                                 0))
+           :last-obs (atom (last-observation-id storage))
            :subs (atom #{})
            :running (atom true)
            :conn conn}
@@ -226,10 +376,28 @@
       :law-revision (:law-revision t)
       :summary (:summary t)})))
 
+(defn derivation-payload
+  "One observation as wire JSON — the derivation frame's data. self is
+  nil for a kind-wide observation (a bulk restamp names no row)."
+  [eng t]
+  (let [rdef (get (inv/resources eng) (:kind t))]
+    (p/wire-value
+     {:kind (:kind t)
+      :self (when (:resource-id t)
+              (str "/api/" (:plural rdef) "/" (:resource-id t)))
+      :class (:class t)
+      :changed (:changed t)
+      :at (str (:at t))})))
+
 (defn frame ^String [eng t]
-  (str "event: transition\n"
-       "id: " (:id t) "\n"
-       "data: " (wire/write-json (transition-payload eng t)) "\n\n"))
+  (if (= :derivation (::class t))
+    ;; no id line: Last-Event-ID resumes transitions only — a
+    ;; derivation's replay is recomputation from the envelope
+    (str "event: derivation\n"
+         "data: " (wire/write-json (derivation-payload eng t)) "\n\n")
+    (str "event: transition\n"
+         "id: " (:id t) "\n"
+         "data: " (wire/write-json (transition-payload eng t)) "\n\n")))
 
 ;; ── SSE over http-kit ───────────────────────────────────────────────
 
@@ -240,10 +408,13 @@
 
 (defn sse-handler
   "The streaming response for one subscription: replay from :since,
-  then live frames; heartbeat comments every hb-ms."
+  then live frames; heartbeat comments every hb-ms. The SSE surface
+  speaks both event classes — `event: transition` (with ids) and
+  `event: derivation` (without; batch C)."
   [eng d {:keys [kinds resource since]} req]
   (let [hb-ms (:sse-heartbeat-ms eng 15000)
-        sub (subscribe d {:kinds kinds :resource resource :since since})]
+        sub (subscribe d {:kinds kinds :resource resource :since since
+                          :classes #{:transition :derivation}})]
     (http/as-channel
      req
      {:on-open

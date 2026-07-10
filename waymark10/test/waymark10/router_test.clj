@@ -95,9 +95,10 @@
     ;; phase 5: the definition kind is registered beside the
     ;; application kinds — the deploy history is wire-readable.
     ;; phase 9a: the identity-and-access kinds enroll on every engine.
-    ;; phase 9b: so do the subscription (webhooks) and job kinds
-    (is (= ["attachment" "definition" "grant" "job" "meal" "member"
-            "plan" "role" "subscription" "task"]
+    ;; phase 9b: so do the subscription (webhooks) and job kinds;
+    ;; batch B: the negotiation machine's approval_request
+    (is (= ["approval_request" "attachment" "definition" "grant" "job"
+            "meal" "member" "plan" "role" "subscription" "task"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))))

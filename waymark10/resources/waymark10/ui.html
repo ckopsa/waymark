@@ -1053,6 +1053,19 @@ function startEvents() {
       refetchTimer = setTimeout(render, 350);
     }
   });
+  /* derivation class: maintenance changed a fact no transition
+     announces (cross-row recompute, clock flip, bulk restamp — self
+     is null when the whole kind restamped); refetch what's open */
+  source.addEventListener("derivation", ev => {
+    let t = null;
+    try { t = JSON.parse(ev.data); } catch (_e) { return; }
+    const hit = (SCOPE.self && t.self === SCOPE.self) ||
+                (SCOPE.kind && t.kind === SCOPE.kind);
+    if (hit) {
+      clearTimeout(refetchTimer);
+      refetchTimer = setTimeout(render, 350);
+    }
+  });
 }
 
 startEvents();

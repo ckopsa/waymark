@@ -33,17 +33,22 @@
 
 (def ops
   "Every operator the law may speak. Growing this set is a design act:
-  record the demanding declaration in docs/waymark10-design.md."
+  record the demanding declaration in docs/waymark10-design.md.
+
+  count/sum (batch C): the waymark8 quantifier pair, earned by the
+  blast-radius meter's own acceptance declarations (a flip count over
+  a collection fact and a summed quantity are the shapes the meter's
+  test laws speak) — recorded in docs/waymark10-c-notes.md."
   '#{data input var now it get date
      = not= < <= > >=
      and or not
      + - * min max abs
      days date-of is-set
-     every some})
+     every some count sum})
 
 (def ^:private ordering-ops '#{< <= > >=})
 (def ^:private commutative-ops '#{= not= min max + *})
-(def ^:private quantifier-ops '#{every some})
+(def ^:private quantifier-ops '#{every some count sum})
 
 (defn- scalar-literal? [x]
   (or (nil? x) (boolean? x) (string? x)
@@ -138,8 +143,13 @@
             (reduce (fn [p a] (check a env depth p)) problems args)
             (conj problems "(- …) takes one or two expressions"))
 
-          (every some)
+          (every some count sum)
           (cond
+            ;; (count <coll>) alone counts the items — the one 1-ary
+            ;; quantifier spelling (batch C)
+            (and (= op 'count) (= n 1))
+            (check (first args) env depth problems)
+
             ;; authored spelling: (every [d <coll>] <pred>)
             (and (= n 2) (vector? (first args)))
             (let [[binder coll] (first args)]
@@ -147,7 +157,7 @@
                 (-> problems
                     (as-> p (check coll env depth p))
                     (as-> p (check (second args) (conj env binder) depth p)))
-                (conj problems (str "(" op " [binder <coll>] <pred>) needs a "
+                (conj problems (str "(" op " [binder <coll>] <body>) needs a "
                                     "symbol binder and a collection expression"))))
             ;; canonical spelling: (every <coll> <pred>) with (it n) refs
             (= n 2)
@@ -156,7 +166,9 @@
                 (as-> p (check (second args) env (inc depth) p)))
             :else
             (conj problems (str "(" op " …) takes a binder vector (or collection) "
-                                "and a predicate"))))))
+                                "and a " (if (= op 'sum) "body expression" "predicate")
+                                (when (= op 'count)
+                                  "; (count <coll>) alone counts the items")))))))
 
     :else
     (conj problems (str "value " (pr-str form) " ("
@@ -225,9 +237,12 @@
                 (debruijn pred (assoc env binder depth) (inc depth))))
 
         (contains? quantifier-ops op)
-        (list op
-              (debruijn (first args) env depth)
-              (debruijn (second args) env (inc depth)))
+        (if (= 1 (clojure.core/count args))
+          ;; (count <coll>) — no binder, no depth
+          (list op (debruijn (first args) env depth))
+          (list op
+                (debruijn (first args) env depth)
+                (debruijn (second args) env (inc depth))))
 
         :else
         (cons op (map #(debruijn % env depth) args))))
@@ -396,6 +411,32 @@
       every (boolean (every? pred-of items))
       some  (boolean (some pred-of items)))))
 
+(defn- eval-count
+  "(count <coll>) — the item count; with a predicate, the count of
+  items satisfying it. A missing/non-sequential collection has no
+  items: 0 (the quantifier empty-collection rule, numerically)."
+  ^long [coll-expr pred scope]
+  (let [items (evaluate coll-expr scope)
+        items (if (sequential? items) items ())]
+    (if (nil? pred)
+      (long (clojure.core/count items))
+      (long (clojure.core/count
+             (filter #(truthy? (evaluate pred (update scope :its conj %)))
+                     items))))))
+
+(defn- eval-sum
+  "(sum <coll> <expr>) — the exact sum of the body over the items.
+  Empty/missing collections sum to 0; a non-numeric item value makes
+  the whole sum nil (a missing addend is a missing sum — arithmetic's
+  nil propagation, not a silent skip)."
+  [coll-expr body scope]
+  (let [items (evaluate coll-expr scope)
+        items (if (sequential? items) items ())]
+    (reduce (fn [acc item]
+              (let [v (evaluate body (update scope :its conj item))]
+                (if (number? v) (num-add acc v) (reduced nil))))
+            0 items)))
+
 (defn evaluate
   "Evaluate a canonical form under a scope map
   {:vars {} :data {} :input {} :now Instant :its (item …)}.
@@ -482,11 +523,14 @@
             (number? v) (clojure.core/abs v)
             :else nil))
 
-        (every some)
+        (every some count sum)
         (if (vector? (first args))
           ;; authored spelling — erase the binder names, then evaluate
           (evaluate (normalize form) scope)
-          (eval-quantifier op (first args) (second args) scope))))
+          (case op
+            (every some) (eval-quantifier op (first args) (second args) scope)
+            count (eval-count (first args) (second args) scope)
+            sum (eval-sum (first args) (second args) scope)))))
 
     ;; symbols/keywords outside the vocabulary reach here only on
     ;; un-validated input; missing means nil
@@ -507,11 +551,11 @@
                   input (update acc :inputs conj (first args))
                   now   (assoc acc :uses-now true)
                   (date it) acc
-                  (every some)
+                  (every some count sum)
                   (let [args (if (vector? (first args))
                                [(second (first args)) (second args)]
                                args)]
-                    (reduce #(walk %2 %1) acc args))
+                    (reduce #(walk %2 %1) acc (remove nil? args)))
                   (reduce #(walk %2 %1)
                           acc
                           (remove keyword? args))))

@@ -328,46 +328,135 @@
 
 ;; ── check-derived-cycles ────────────────────────────────────────────
 
-(defn- check-count-edge
-  "One count spec's assembly half (phase 6): its declared edge exists
-  on this kind, and every :where field is promoted on the target (or
-  :state, which is always its own indexed column) — a predicate the
-  maintainer's COUNT cannot run on an indexed column is a predicate it
-  cannot honor."
-  [reg kind r fact c]
-  (let [target-kind
-        (if-some [ek (:related c)]
-          (or (:kind (get (:related r) ek))
-              (err kind :derived-cycles
-                   (str "derived field " fact ": count reads related edge "
-                        ek ", which this kind never declares")))
-          (let [ck (:owns c)]
-            (when-not (some #(= ck (:kind %)) (:owns r))
-              (err kind :derived-cycles
-                   (str "derived field " fact ": count reads owned kind "
-                        ck ", which this kind never owns")))
-            ck))
+(defn- aggregate-target
+  "The kind an aggregate spec reads, resolved through its declared
+  edge — or the named refusal when the edge does not exist here."
+  [reg kind r fact an c]
+  (if-some [ek (:related c)]
+    (or (:kind (get (:related r) ek))
+        (err kind :derived-cycles
+             (str "derived field " fact ": " an " reads related edge "
+                  ek ", which this kind never declares")))
+    (let [ck (:owns c)]
+      (when-not (some #(= ck (:kind %)) (:owns r))
+        (err kind :derived-cycles
+             (str "derived field " fact ": " an " reads owned kind "
+                  ck ", which this kind never owns")))
+      ck)))
+
+(defn- check-aggregate-edge
+  "One aggregate spec's assembly half (phase 6's count check, batch C
+  widens it to :sum): its declared edge exists on this kind, every
+  :where field is promoted on the target (or :state, which is always
+  its own indexed column), and a sum's :of is a promoted target data
+  field — a column the maintainer's COUNT/SUM cannot run indexed is a
+  predicate it cannot honor (the rollup :sum precedent, verbatim)."
+  [reg kind r fact an c]
+  (let [target-kind (aggregate-target reg kind r fact an c)
         target (get-in reg [:kinds target-kind])]
     (doseq [f (sort (keys (:where c)))]
       (when-not (or (= :state f) (contains? (promoted-fields target) f))
         (err kind :derived-cycles
-             (str "derived field " fact ": count where field " f " is not "
+             (str "derived field " fact ": " an " where field " f " is not "
                   "promoted (filterable or sortable) on " target-kind
-                  " — the maintainer's COUNT runs on indexed columns"))))))
+                  " — the maintainer's aggregate runs on indexed columns"))))
+    (when-some [of (:of c)]
+      (when-not (contains? (set (schema/entry-keys (:schema target))) of)
+        (err kind :derived-cycles
+             (str "derived field " fact ": sum of " of " is not a data "
+                  "field of " target-kind)))
+      (when-not (contains? (promoted-fields target) of)
+        (err kind :derived-cycles
+             (str "derived field " fact ": sum of " of " must be filterable "
+                  "or sortable on " target-kind " — the SUM runs on the "
+                  "promoted column")))
+      (let [fact-head (head (schema/field-schema (:schema r) fact))
+            of-head (head (schema/field-schema (:schema target) of))]
+        (when-not (contains? #{:int :decimal :double} of-head)
+          (err kind :derived-cycles
+               (str "derived field " fact ": sum of " of " is not numeric "
+                    "on " target-kind)))
+        (when (and (= :int fact-head) (not= :int of-head))
+          (err kind :derived-cycles
+               (str "derived field " fact " is declared :int but sums "
+                    target-kind "." (name of) " (" of-head ") — an integer "
+                    "fact cannot hold a fractional sum; declare it "
+                    ":decimal")))))))
+
+;; ── the cross-kind fact DAG (batch C, closing the phase-6 punt) ─────
+
+(defn- fact-edges
+  "The kind.fact nodes one fact depends on: same-kind :over facts, and
+  — through an aggregate's declared edge — the target facts its
+  :where filters and :of read. The edges are the whole cross-kind
+  door, so this graph IS waymark9's kind.field node graph."
+  [reg kind r fact d]
+  (let [own-facts (set (keys (:derived r)))
+        over-deps (for [o (:over d)
+                        :when (contains? own-facts o)]
+                    [kind o])
+        agg (or (:count d) (:sum d))
+        agg-deps (when agg
+                   (let [tk (aggregate-target
+                             reg kind r fact
+                             (if (:count d) "count" "sum") agg)
+                         t (get-in reg [:kinds tk])
+                         tfacts (set (keys (:derived t)))]
+                     (for [f (concat (keys (:where agg))
+                                     (when-some [of (:of agg)] [of]))
+                           :when (contains? tfacts f)]
+                       [tk f])))]
+    (concat over-deps agg-deps)))
+
+(defn- check-fact-dag
+  "Walk the full cross-kind fact graph, refusing cycles by their
+  kind.fact path — an aggregate whose where/of reads a target fact
+  that (transitively) aggregates back closes a loop no single kind's
+  own cycle check can see; the maintainer's per-write visited set
+  would silently truncate it, so assembly refuses it instead."
+  [reg]
+  (let [nodes (for [[kind r] (sort-by key (:kinds reg))
+                    [fact _] (sort-by key (:derived r))]
+                [kind fact])
+        edges (into {}
+                    (map (fn [[kind fact]]
+                           (let [r (get-in reg [:kinds kind])]
+                             [[kind fact]
+                              (vec (fact-edges reg kind r fact
+                                               (get-in r [:derived fact])))])))
+                    nodes)
+        path-str (fn [cycle]
+                   (str/join " → " (map (fn [[k f]]
+                                          (str (name k) "." (name f)))
+                                        cycle)))]
+    (letfn [(visit [n stack on-stack done]
+              (cond
+                (contains? @done n) nil
+                (contains? on-stack n)
+                (conj (vec (drop-while #(not= % n) stack)) n)
+                :else
+                (or (some #(visit % (conj stack n) (conj on-stack n) done)
+                          (get edges n))
+                    (do (swap! done conj n) nil))))]
+      (let [done (atom #{})]
+        (doseq [n nodes]
+          (when-some [cycle (visit n [] #{} done)]
+            (err (ffirst cycle) :derived-cycles
+                 (str "cross-kind derived facts form a cycle: "
+                      (path-str cycle)
+                      " — a fact defined in terms of itself defines "
+                      "nothing"))))))))
 
 (defn- check-derived-cycles
   "Cross-kind derived cycles (waymark9 check_derived_cycles): v10's
-  cross-kind door is the phase-6 count spec — {:count {:related/:owns
-  …}} reads through a declared, admission-checked edge, validated here
-  where the other end exists. Everything else stays shut: an :over
-  entry that is neither :now nor an own data field is refused by name
-  (a count fact IS an own data field, so composition costs nothing).
-
-  ;; punt: the cross-kind fact DAG walk (waymark9's kind.field node
-  ;; graph) — count-where over another kind's derived fact can close a
-  ;; cross-kind cycle this check does not see; the maintainer's
-  ;; recompute terminates on a per-write visited set instead, and the
-  ;; assembly-time DAG check arrives when a declaration demands it."
+  cross-kind door is the aggregate spec — {:count|:sum
+  {:related/:owns …}} reads through a declared, admission-checked
+  edge, validated here where the other end exists. Everything else
+  stays shut: an :over entry that is neither :now nor an own data
+  field is refused by name (an aggregate fact IS an own data field,
+  so composition costs nothing). Batch C closes the phase-6 punt: the
+  full cross-kind fact DAG walks here, refusing cycles by their
+  kind.fact path."
   [reg]
   (doseq [[kind r] (sort-by key (:kinds reg))
           :let [dkeys (set (schema/entry-keys (:schema r)))]
@@ -376,10 +465,13 @@
       (when-not (or (= :now o) (contains? dkeys o))
         (err kind :derived-cycles
              (str "derived field " fact ": cross-kind derived inputs read "
-                  "through count edges only; over= names " o " — neither "
+                  "through aggregate edges only; over= names " o " — neither "
                   ":now nor a data field of " kind))))
     (when-some [c (:count d)]
-      (check-count-edge reg kind r fact c))))
+      (check-aggregate-edge reg kind r fact "count" c))
+    (when-some [c (:sum d)]
+      (check-aggregate-edge reg kind r fact "sum" c)))
+  (check-fact-dag reg))
 
 ;; ── the battery ─────────────────────────────────────────────────────
 

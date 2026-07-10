@@ -7,11 +7,13 @@
   promote (backfill!).
 
   A maintenance write is not a write: the document (and next_flip_at)
-  update in place, version untouched, NO transition logged. Recorded
-  deviation: waymark9 announced flips as derivation-class events on a
-  separate channel; v10 punts the derivation event class to the
-  webhook phase — the values are the truth and a consumer re-derives
-  a missed flip from the envelope; only liveness waits.
+  update in place, version untouched, NO transition logged. It IS an
+  event (batch C): a maintenance pass whose facts moved appends a
+  derivation-class observation to waymark10_observations inside its
+  own transaction (waymark10.server.events/record-observation!) —
+  class \"recompute\" (count/sum recomputes and backfill repairs) or
+  \"flip\" (the clock sweep) — so live consumers hear the changes no
+  transition announces.
 
   The trigger seam is invoke.clj's after-write! (the engine's
   :maintain hook): a committed, non-replayed write on kind T
@@ -40,9 +42,18 @@
   - The clock sweep does not chain into dependents (waymark9's tick
     had the same property); a count-where over a clock fact re-syncs
     at the target's next write or backfill.
-  - Count facts under a non-resident law compute from the RESIDENT
-    count spec — the derived-law overlay stays the named punt it was
-    in waymark10.server.judgment.
+  - Every recompute here evaluates under the ROW's law (batch C —
+    the derived-law overlay, waymark10.derived/specs-under): a
+    grandfathered row's expression facts, aggregate where-filters and
+    clock scans resolve from its revision's stored fingerprint; edge
+    identity rides resident, the judgment precedent. The reverse
+    dependency map (dependent-edges) stays RESIDENT — edges are
+    :code-or-shape, so no live revision's edges can differ.
+  - :sum (batch C) is the count's sibling: same edges, same where
+    grammar, SUM of the target's :of column. The SUM SQL renders here
+    against the maintainer's own cond grammar — the store protocol is
+    another batch's surface; a sum-matching protocol op is the named
+    follow-up. Sums (like observations) are a Postgres surface.
   - A spec's :flips-at fn is scheduling advice, never law: it changes
     when the index re-checks, not what any fact means, so it is not
     fingerprinted.
@@ -56,9 +67,13 @@
   swept once, silently, and advances the index). An inscrutable
   expression falls back to the spec's declared {:flips-at (fn [row]
   …)}, else to a fixed re-check interval (15 minutes)."
-  (:require [waymark10.derived :as derived]
+  (:require [clojure.string :as str]
+            [next.jdbc :as jdbc]
+            [next.jdbc.result-set :as rs]
+            [waymark10.derived :as derived]
             [waymark10.expr :as expr]
             [waymark10.schema :as schema]
+            [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store])
   (:import (java.time Instant LocalDate ZoneOffset)
@@ -87,11 +102,13 @@
 
 (defn- clock-specs
   "The kind's clock facts — expression facts that declare :now in
-  :over (the v10 spelling of waymark9's Clock input)."
-  [rmap]
-  (into {}
-        (filter (fn [[_ d]] (and (:expr d) (some #{:now} (:over d)))))
-        (:derived rmap)))
+  :over (the v10 spelling of waymark9's Clock input). With a
+  revision, the trees resolve under that law (batch C)."
+  ([rmap] (clock-specs rmap nil))
+  ([rmap revision]
+   (into {}
+         (filter (fn [[_ d]] (and (:expr d) (some #{:now} (:over d)))))
+         (derived/specs-under rmap revision))))
 
 (def ^:private comparison-ops '#{< <= = not=})
 
@@ -149,25 +166,27 @@
   "The earliest future instant at which any clock fact of this row
   can change its value — the maintained index the sweep reads. nil
   when the kind has no clock facts, or none can flip again without a
-  write. data is the DECODED document."
-  [rmap data ^Instant now]
-  (let [moments
-        (mapcat
-         (fn [[_fact spec]]
-           (if-some [fa (:flips-at spec)]
-             (when-some [t (try (fa {:data data}) (catch Exception _ nil))]
-               (when (.isAfter ^Instant t now) [t]))
-             (let [{:keys [fields inscrutable?]}
-                   (scan-clock (:expr spec) {:fields #{} :inscrutable? false})]
-               (if inscrutable?
-                 [(.plusMillis now recheck-interval-ms)]
-                 (into []
-                       (comp (mapcat #(flip-candidates (get data %)))
-                             (filter #(.isAfter ^Instant % now)))
-                       fields)))))
-         (clock-specs rmap))]
-    (when (seq moments)
-      (reduce #(if (.isBefore ^Instant %2 ^Instant %1) %2 %1) moments))))
+  write. data is the DECODED document; revision is the row's law
+  stamp (the flip scan reads the trees the row is judged by)."
+  ([rmap data ^Instant now] (next-flip-at rmap nil data now))
+  ([rmap revision data ^Instant now]
+   (let [moments
+         (mapcat
+          (fn [[_fact spec]]
+            (if-some [fa (:flips-at spec)]
+              (when-some [t (try (fa {:data data}) (catch Exception _ nil))]
+                (when (.isAfter ^Instant t now) [t]))
+              (let [{:keys [fields inscrutable?]}
+                    (scan-clock (:expr spec) {:fields #{} :inscrutable? false})]
+                (if inscrutable?
+                  [(.plusMillis now recheck-interval-ms)]
+                  (into []
+                        (comp (mapcat #(flip-candidates (get data %)))
+                              (filter #(.isAfter ^Instant % now)))
+                        fields)))))
+          (clock-specs rmap revision))]
+     (when (seq moments)
+       (reduce #(if (.isBefore ^Instant %2 ^Instant %1) %2 %1) moments)))))
 
 ;; ── the count read ──────────────────────────────────────────────────
 
@@ -199,20 +218,92 @@
 
 (def ^:private flip-op {:= := :< :> :<= :>= :>= :<= :> :<})
 
-(defn- count-value
-  "One count fact for one row: COUNT over the edge's target, join
-  conditions bound to this row's values, where-filtered. A nil join
-  value relates to nothing — the count is 0."
-  [eng tx rdef row spec]
-  (let [c (:count spec)
-        storage (:storage eng)]
+;; ── the SUM read (batch C) ──────────────────────────────────────────
+;; The maintainer's local twin of the storage cond renderer, for the
+;; one aggregate the store protocol does not yet speak — the store
+;; surface is another batch's file; a sum-matching protocol op is the
+;; named follow-up. Identifiers come from checked declarations, casts
+;; from the same closed set.
+
+(def ^:private safe-casts #{"date" "boolean" "bigint" "numeric" "text"
+                            "timestamptz"})
+(def ^:private cond-ops {:= "=" :< "<" :<= "<=" :>= ">=" :> ">"})
+
+(defn- cond-frag [{:keys [target field cast op value values]}]
+  (let [cast (or cast "text")
+        _ (when-not (contains? safe-casts cast)
+            (throw (ex-info (str "cond cast " (pr-str cast)
+                                 " is not a known SQL type") {:cast cast})))
+        lval (case target
+               :state "state"
+               :id "id"
+               (let [f (store/definition-checked-name field)]
+                 (case cast
+                   "date" (str "waymark10_date(data->>'" f "')")
+                   "timestamptz" (str "waymark10_ts(data->>'" f "')")
+                   "text" (str "data->>'" f "'")
+                   (str "(data->>'" f "')::" cast))))
+        rval (if (or (contains? #{:state :id} target) (= "text" cast))
+               "?"
+               (case cast
+                 "date" "waymark10_date(?)"
+                 "timestamptz" "waymark10_ts(?)"
+                 (str "(?)::" cast)))]
+    (if (= :in op)
+      [(str lval " IN (" (str/join ", " (repeat (count values) rval)) ")")
+       (vec values)]
+      [(str lval " " (or (get cond-ops op)
+                         (throw (ex-info (str "unknown cond op " op) {:op op})))
+            " " rval)
+       [value]])))
+
+(defn- strip-zeros ^java.math.BigDecimal [^java.math.BigDecimal d]
+  (let [s (.stripTrailingZeros d)]
+    (if (neg? (.scale s)) (.setScale s 0) s)))
+
+(defn- sum-matching
+  "SUM of the target's :of column over the cond-matched rows; the
+  empty set sums to 0. The value lands in the fact's declared type:
+  long for an :int fact, trailing-zero-stripped decimal otherwise —
+  so a re-read never disagrees with itself by scale alone."
+  [tx target-rdef fact-rdef fact of conds]
+  (let [table (:table (store/kind-projection target-rdef))
+        fname (store/definition-checked-name of)
+        parts (map cond-frag conds)
+        sql (str "SELECT COALESCE(SUM((data->>'" fname "')::numeric), 0) AS s"
+                 " FROM " table
+                 (when (seq parts)
+                   (str " WHERE " (str/join " AND " (map first parts)))))
+        s ^java.math.BigDecimal
+        (:s (jdbc/execute-one! tx (into [sql] (mapcat second parts))
+                               {:builder-fn rs/as-unqualified-lower-maps}))
+        int-fact? (= :int (let [fs (schema/field-schema (:schema fact-rdef) fact)]
+                            (if (vector? fs) (first fs) fs)))]
+    (if int-fact?
+      (long (.longValueExact (.setScale ^java.math.BigDecimal s 0)))
+      (strip-zeros s))))
+
+(defn- aggregate-value
+  "One aggregate fact for one row: COUNT (or SUM of :of) over the
+  edge's target, join conditions bound to this row's values,
+  where-filtered. A nil join value relates to nothing — the aggregate
+  is 0. spec arrives already resolved under the row's law (the
+  where-filters may be a stored revision's)."
+  [eng tx rdef row fact spec]
+  (let [c (or (:count spec) (:sum spec))
+        of (when (:sum spec) (:of (:sum spec)))
+        storage (:storage eng)
+        run (fn [target-kind target-rdef conds]
+              (if of
+                (sum-matching tx target-rdef rdef fact of conds)
+                (store/count-matching storage tx target-kind conds)))]
     (if-some [child-kind (:owns c)]
       (let [edge (owns-edge rdef child-kind)
             child-rdef (rdef-of eng child-kind)
             conds (into [{:target :data :field (name (:via edge)) :cast "text"
                           :op := :value (:id row)}]
                         (where-conds child-rdef (:where c)))]
-        (store/count-matching storage tx child-kind conds))
+        (run child-kind child-rdef conds))
       (let [edge (get (:related rdef) (:related c))
             target-rdef (rdef-of eng (:kind edge))
             joins (map (fn [[ours op theirs]]
@@ -231,46 +322,56 @@
                                        :op (flip-op op) :value (str v)}))
                                   joins)
                             (where-conds target-rdef (:where c)))]
-            (store/count-matching storage tx (:kind edge) conds)))))))
+            (run (:kind edge) target-rdef conds)))))))
 
 ;; ── the maintenance pass ────────────────────────────────────────────
 
 (defn- maintain-row!*
-  "tx-scoped: recompute the row's count facts (and, when they moved or
-  reclock? is set, its expression facts) plus the clock index; write
-  only when something changed. → {:row decoded' :changed [facts]} or
-  nil when the row is gone."
-  [eng tx kind id {:keys [reclock?]}]
+  "tx-scoped: recompute the row's aggregate facts (and, when they
+  moved or reclock? is set, its expression facts) plus the clock
+  index — every spec resolved under the ROW's law (batch C); write
+  only when something changed, and announce what changed as a
+  derivation-class observation (:obs-class, default \"recompute\") in
+  the same transaction. → {:row decoded' :changed [facts]} or nil
+  when the row is gone."
+  [eng tx kind id {:keys [reclock? obs-class]}]
   (let [storage (:storage eng)
         rdef (rdef-of eng kind)]
     (when-some [raw (store/load-row storage tx kind id {:for-update true})]
       (let [row (decode-row rdef raw)
+            revision (:law-revision row)
             now ((:now-fn eng))
-            counts (into {}
-                         (map (fn [[fact spec]]
-                                [fact (count-value eng tx rdef row spec)]))
-                         (derived/count-specs rdef))
-            counts-moved? (not= counts (select-keys (:data row) (keys counts)))
-            data (merge (:data row) counts)
-            data (if (or reclock? counts-moved?)
+            aggs (into {}
+                       (map (fn [[fact spec]]
+                              [fact (aggregate-value eng tx rdef row fact spec)]))
+                       (derived/aggregate-specs rdef revision))
+            aggs-moved? (not= aggs (select-keys (:data row) (keys aggs)))
+            data (merge (:data row) aggs)
+            data (if (or reclock? aggs-moved?)
                    (:data (derived/materialize rdef (assoc row :data data) now))
                    data)
-            nf (next-flip-at rdef data now)
+            nf (next-flip-at rdef revision data now)
             changed (into []
                           (filter #(not= (get data %) (get-in row [:data %])))
                           (sort (keys (:derived rdef))))]
         (when (or (seq changed) (not= nf (:next-flip-at row)))
           (store/update-data! storage tx kind id
                               (schema/encode (:schema rdef) data) nf))
+        (when (seq changed)
+          (events/record-observation! storage tx
+                                      {:kind kind :resource-id id
+                                       :class (or obs-class "recompute")
+                                       :changed (mapv name changed)}))
         {:row (assoc row :data data :next-flip-at nf)
          :changed changed}))))
 
 (defn recompute-counts!
-  "Recompute one row's count facts (SQL COUNT over the edge targets)
-  and, when values moved, the expression facts that read them — in
-  one transaction of its own. Maintenance, not a write: version
-  untouched, no transition logged. → {:row … :changed [facts]} or
-  nil."
+  "Recompute one row's aggregate facts (SQL COUNT/SUM over the edge
+  targets) and, when values moved, the expression facts that read
+  them — in one transaction of its own, under the row's law.
+  Maintenance, not a write: version untouched, no transition logged;
+  a change announces itself as a derivation observation. → {:row …
+  :changed [facts]} or nil."
   [eng kind row-id]
   (store/with-tx (:storage eng)
     (fn [tx] (maintain-row!* eng tx kind row-id {}))))
@@ -278,13 +379,15 @@
 ;; ── the invalidation map's other direction ──────────────────────────
 
 (defn- dependent-edges
-  "Which kinds' count facts read t-kind, and through what:
-  [{:kind R :via kw} (owns) | {:kind R :on [[ours op theirs]…]}]."
+  "Which kinds' aggregate facts read t-kind, and through what:
+  [{:kind R :via kw} (owns) | {:kind R :on [[ours op theirs]…]}].
+  Built from RESIDENT declarations — edges are :code-or-shape, so no
+  live revision's edges can differ (the recorded overlay boundary)."
   [eng t-kind]
   (distinct
    (for [[rk rdef] (inv/resources eng)
-         [_ spec] (derived/count-specs rdef)
-         :let [c (:count spec)
+         [_ spec] (derived/aggregate-specs rdef)
+         :let [c (or (:count spec) (:sum spec))
                entry (cond
                        (= t-kind (:owns c))
                        {:kind rk :via (:via (owns-edge rdef (:owns c)))}
@@ -353,7 +456,7 @@
   [eng kind _action res]
   (if-some [row (:row res)]
     (let [rdef (rdef-of eng kind)
-          own (when (or (seq (derived/count-specs rdef))
+          own (when (or (seq (derived/aggregate-specs rdef))
                         (seq (clock-specs rdef)))
                 (recompute-counts! eng kind (:id row)))
           row' (or (:row own) row)]
@@ -380,7 +483,7 @@
                                                 ((:now-fn eng)) 200)]
                        (doseq [raw due]
                          (maintain-row!* eng tx kind (:id raw)
-                                         {:reclock? true}))
+                                         {:reclock? true :obs-class "flip"}))
                        (count due))))]
            (if (= 200 n) (recur (+ total n)) (+ total n))))))
    0
@@ -416,12 +519,14 @@
   id-keyset batches — the stale-facts repair after a promote. The
   facts argument documents intent; the recompute is wholesale (one
   fact, one definition: recomputing every fact of a row lands the
-  same values). Returns the number of rows recomputed.
+  same values). Every row recomputes under ITS OWN law (the overlay),
+  so a grandfathered survivor repairs under its birth law while
+  adopted rows land the new one. Returns the number of rows
+  recomputed.
 
-  NAMED SEAM, not yet wired: the definitions lifecycle
-  (waymark10.server.definitions, phase 5's file) should call
-  (backfill! eng kind (fingerprint/stale-facts diff)) in its promote
-  effect; until that seam opens, the deploy calls this by hand."
+  The phase-6 named seam is WIRED (batch C): the definitions
+  lifecycle calls (backfill! eng kind (fingerprint/stale-facts diff))
+  in its promote effect."
   [eng kind _facts & {:keys [batch] :or {batch 500}}]
   (loop [after "" total 0]
     (let [ids (store/with-tx (:storage eng)
@@ -435,3 +540,93 @@
       (if (< (count ids) batch)
         (+ total (count ids))
         (recur (last ids) (+ total (count ids)))))))
+
+;; ── the blast-radius meter (batch C, waymark9's BlastRadiusMeter) ───
+
+(def sample-cap
+  "Ids per measured fact's sample (waymark9 design §2's SAMPLE_CAP)."
+  20)
+
+(defn- claims?
+  "Does a pilot population's where= equality map claim this decoded
+  row? String-fallback comparison — the restamp discipline."
+  [where row]
+  (every? (fn [[f expected]]
+            (let [v (if (= :state f)
+                      (name (:state row))
+                      (get-in row [:data f]))]
+              (or (= v expected) (= (str v) (str expected)))))
+          where))
+
+(defn blast-radius
+  "§2's measurer, synchronous (v10 has no meter job — recorded): for
+  each redefined derived fact, a full id-keyset scan of the target
+  kind's rows (the declared population's rows when piloted),
+  evaluating the fact under BOTH laws' specs over current data and
+  counting the rows whose value differs. Expression facts evaluate
+  through compute-facts; aggregate facts run both where-filters'
+  SQL. No silent sampling: the sample is capped, the scan is not,
+  and the report says so.
+
+  opts: :facts [fact-name-strings], :current-fp / :proposed-fp (the
+  two revisions' stored fingerprints, string-keyed), :population
+  (the pilot's where= map or nil).
+  → {:facts [{:fact \"kind.fact\" :flips n :of total :sample […]}]
+     :scan \"full\" :population …}"
+  [eng kind {:keys [facts current-fp proposed-fp population]}]
+  (let [rdef (rdef-of eng kind)
+        cur-specs (derived/specs-from rdef current-fp)
+        prop-specs (derived/specs-from rdef proposed-fp)
+        facts (into []
+                    (comp (map keyword)
+                          (filter #(contains? (:derived rdef) %)))
+                    facts)
+        now ((:now-fn eng))
+        tally (atom (into {}
+                          (map (fn [f] [f {:flips 0 :of 0 :sample []}]))
+                          facts))
+        measure-row!
+        (fn [tx raw]
+          (let [row (decode-row rdef raw)]
+            (when (or (nil? population) (claims? population row))
+              (let [cur-data (derived/compute-facts cur-specs (:data row) now)
+                    prop-data (derived/compute-facts prop-specs (:data row) now)]
+                (doseq [fact facts]
+                  (let [spec (get (:derived rdef) fact)
+                        aggregate? (or (:count spec) (:sum spec))
+                        [cur prop]
+                        (if aggregate?
+                          [(aggregate-value eng tx rdef row fact
+                                            (get cur-specs fact))
+                           (aggregate-value eng tx rdef row fact
+                                            (get prop-specs fact))]
+                          [(get cur-data fact) (get prop-data fact)])]
+                    (swap! tally update fact
+                           (fn [t]
+                             (cond-> (update t :of inc)
+                               (not= cur prop)
+                               (-> (update :flips inc)
+                                   (update :sample
+                                           #(if (< (count %) sample-cap)
+                                              (conj % (:id row))
+                                              %))))))))))))]
+    (loop [after ""]
+      (let [ids (store/with-tx (:storage eng)
+                  (fn [tx]
+                    (store/ids-matching (:storage eng) tx kind
+                                        [{:target :id :op :> :value after}]
+                                        200)))]
+        (store/with-tx (:storage eng)
+          (fn [tx]
+            (doseq [id ids]
+              (when-some [raw (store/load-row (:storage eng) tx kind id {})]
+                (measure-row! tx raw)))))
+        (when (= 200 (count ids))
+          (recur (last ids)))))
+    {:facts (mapv (fn [fact]
+                    (let [{:keys [flips of sample]} (get @tally fact)]
+                      {:fact (str (name kind) "." (name fact))
+                       :flips flips :of of :sample sample}))
+                  facts)
+     :scan "full"
+     :population population}))

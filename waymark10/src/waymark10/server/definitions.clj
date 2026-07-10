@@ -45,14 +45,42 @@
     (waymark9 counted non-terminal survivors): a law lives while
     anything cites it; adopting a closed row is the maintenance act
     that retires it.
-  - Populations are not validated against the query grammar
-    (waymark9's check_population) — the restamp accepts any stored
-    field; the grammar check is a named punt.
+  - Populations validate against the target kind's filter grammar
+    (batch C closes waymark9's check_population punt): pilot's
+    where= runs through the collections parser (collections.clj's
+    public parse-query) per field, and only plain equality
+    parameters pass — range suffixes and multi-values have no
+    restamp meaning. The guard needs the engine's registry, which a
+    static declaration cannot reach, so boot-revise! appends it to
+    the pilot action (engines that never boot the definitions
+    lifecycle also never pilot).
   - No unique (target_kind, revision) constraint yet: two racing
     boots could double-mint; single-process deploys until the
     storage grows declared uniqueness.
-  - Derived-law overlay, blast-radius meter (measure), settle/backfill
-    markers, renames: named punts, waiting on their v10 features.
+  - The derived-law overlay is LIVE (batch C): materialize and the
+    maintainer resolve specs through :judgment-laws
+    (waymark10.derived/specs-under) — the same slot this lifecycle
+    installs for judgment — so holds, pilots and grandfathered laws
+    are exact for expr facts and aggregate where-filters.
+  - Blast radius (batch C, waymark9's measure): the proposed/piloted
+    self-loop — spelled as TWO actions, :measure and :measure_pilot,
+    because a v10 action declares one :to (recorded deviation) —
+    counts, per redefined derived fact, the rows whose value would
+    change under the proposed law (both laws evaluated over current
+    data; the pilot's population scopes the scan). The report lands
+    on data.measure via a maintenance write AFTER the transition
+    commits (waymark9 deferred to a job; v10 is synchronous — the
+    measure POST's response predates the report, GET re-reads it),
+    announced as a derivation observation. Judgment blast radius
+    (newly-refused rows) stays punted, named.
+  - A promote/pilot/withdraw restamp emits a kind-wide
+    derivation-class observation (\"restamp\") and is followed by
+    maintainer/backfill! when the diff staled derived facts — the
+    phase-6 named seam, wired: every row recomputes under ITS law,
+    so adopted rows land the new values and grandfathered survivors
+    repair under their birth law.
+  - Settle/backfill markers, renames: named punts, waiting on their
+    v10 features.
   - The proposal-is-resident guard (waymark9's _resident_only) is
     unported: after a reboot-during-hold the re-adopted proposal is
     promotable by construction (its hash matched the resident code);
@@ -63,7 +91,11 @@
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
             [waymark10.resource :as r :refer [defresource defhandler]]
+            [waymark10.schema :as schema]
+            [waymark10.server.collections :as coll]
+            [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.maintainer :as maintainer]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.types :as t]))
@@ -109,6 +141,92 @@
            :when '(= (data :diff_class) "data_law")
            :explain "Only a data-law diff can pilot per-population — code does not interpret per-row; promote totally instead."}))
 
+(def ^:private data-law-measures
+  (g/expr {:name :data-law-measures
+           :when '(= (data :diff_class) "data_law")
+           :explain "Blast radius is measured for data-law diffs — a code-or-shape diff promotes totally; there are no stored parameters to compare."}))
+
+(def ^:private measurable
+  ;; input-free (no judges → :needs-input false), so render's probe
+  ;; grades it and the action narrates honestly before anyone POSTs
+  (g/guard {:name :redefines-derived-facts
+            :explain "This proposal redefines no derived fact; there is no blast radius to measure."
+            :check (fn [row _ _]
+                     (let [declared (into #{}
+                                          (map name)
+                                          (keys (get-in row [:data :fingerprint
+                                                             :derived])))
+                           stale (fp/stale-facts (get-in row [:data :diff]))]
+                       (if (some declared stale) (t/allow) (t/deny))))}))
+
+;; ── the population grammar (batch C, waymark9's check_population) ──
+
+(defn- population-where-problems
+  "Every way one pilot where= map fails the target kind's filter
+  grammar, as sentences. A population is an equality map over
+  filterable stored fields (or state): the collections parser grades
+  names, tokens and value types; range suffixes and multi-values are
+  refused here — a restamp is an equality, not a query."
+  [trdef where]
+  (into []
+        (mapcat
+         (fn [[f v]]
+           (let [pname (name f)]
+             (if (or (map? v) (sequential? v) (set? v))
+               [(str pname " pins one value — a population is an equality map")]
+               (try
+                 (let [{:keys [conds]} (coll/parse-query trdef {pname (str v)})]
+                   (if (= := (:op (first conds)))
+                     []
+                     [(str pname " does not pin a stored field to one value "
+                           "— range and multi-value parameters have no "
+                           "restamp meaning")]))
+                 (catch Exception e
+                   (let [errors (:errors (ex-data e))]
+                     (if (seq errors)
+                       (mapv (fn [[param msgs]]
+                               (str (name param) ": " (str/join "; " msgs)))
+                             (sort-by (comp str key) errors))
+                       [(str pname ": " (ex-message e))]))))))))
+        (sort-by (comp str key) where)))
+
+(defn- population-grammar-guard
+  "The one pilot guard a static declaration cannot spell: where=
+  validates against the TARGET kind's filter grammar, which lives on
+  the engine's registry — so this guard closes over the engine and
+  boot-revise! installs it (install-pilot-grammar!)."
+  [eng]
+  (g/guard
+   {:name :population-grammar
+    :explain "The population must speak {target_kind}'s filter grammar — {problem}"
+    :needs-input true
+    :check
+    (fn [row inp _ctx]
+      (let [where (:where inp)]
+        (if-not (and (map? where) (seq where))
+          (t/allow)   ; after=true — population-shape grades the pair
+          (let [kind (keyword (get-in row [:data :target_kind]))
+                trdef (get (inv/resources eng) kind)
+                problems (if trdef
+                           (population-where-problems trdef where)
+                           [(str "kind " (name kind)
+                                 " is not registered on this engine")])]
+            (if (seq problems)
+              (t/deny {:vars {:target_kind (name kind)
+                              :problem (str/join "; " problems)}})
+              (t/allow))))))}))
+
+(defn- install-pilot-grammar!
+  "Append the engine-closed population-grammar guard to the pilot
+  action, once (idempotent by guard name)."
+  [eng]
+  (swap! (:registry eng)
+         update-in [:kinds :definition :actions :pilot :guards]
+         (fn [gs]
+           (if (some #(= :population-grammar (:name %)) gs)
+             gs
+             (conj (vec gs) (population-grammar-guard eng))))))
+
 ;; ── the resource ────────────────────────────────────────────────────
 
 (defhandler record-population [row inp _ctx]
@@ -137,7 +255,10 @@
             [:change_summary {:optional true} [:maybe [:string {:max 120}]]]
             [:population {:optional true} :any]
             [:deploy_note {:optional true} [:maybe [:string {:max 120}]]]
-            [:held {:optional true} [:maybe :boolean]]]
+            [:held {:optional true} [:maybe :boolean]]
+            ;; the blast-radius report (batch C) — written by the
+            ;; measure lifecycle as maintenance, never by a handler
+            [:measure {:optional true} :any]]
    :filterable {:state #{:eq :in}
                 :target_kind #{:eq :in}}
    :create-guards [deploy-only]
@@ -169,6 +290,19 @@
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "The proposal closes; the current law continues to govern — served from its stored trees while the withdrawn code stays resident."}
                :display {:label "Withdraw" :order 3}}
+    ;; the proposed/piloted self-loop, spelled twice because a v10
+    ;; action declares one :to (recorded deviation; waymark9's single
+    ;; `measure` served proposed only)
+    :measure {:from #{:proposed} :to :proposed
+              :guards [data-law-measures measurable]
+              :safety {:idempotent false :reversible true :confirm false}
+              :display {:label "Measure blast radius" :order 4
+                        :description "Recompute every redefined fact over the live rows under both laws and report the flips; the report lands on data.measure."}}
+    :measure_pilot {:from #{:piloted} :to :piloted
+                    :guards [data-law-measures measurable]
+                    :safety {:idempotent false :reversible true :confirm false}
+                    :display {:label "Measure pilot blast radius" :order 4
+                              :description "The same meter, scoped to the pilot's declared population."}}
     :grandfather {:from #{:current} :to :grandfathered
                   :guards [deploy-only]
                   :safety {:idempotent true :reversible false :confirm false
@@ -273,6 +407,42 @@
            (install! eng kind
                      (fn [rd] (update rd :judgment-laws dissoc rev)))))))))
 
+;; ── restamps announce, repairs follow (batch C) ─────────────────────
+
+(defn- restamp!
+  "One population restamp plus its kind-wide derivation-class
+  observation (\"restamp\"), one transaction — the live-update gap a
+  bulk UPDATE with no per-row log used to leave. Returns rows moved."
+  [eng kind where to-rev]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (let [n (store/restamp-law! (:storage eng) tx kind where to-rev)]
+        (when (pos? n)
+          (events/record-observation!
+           (:storage eng) tx
+           {:kind kind :resource-id nil :class "restamp"
+            :changed {:law_revision to-rev :rows n}}))
+        n))))
+
+(defn- repair-stale!
+  "The stale-facts repair (phase 6's named backfill seam, wired):
+  when the revision's diff staled derived facts the resident law
+  still declares, recompute the kind — each row under ITS law. A
+  stale marker naming a since-removed fact drops with a *err* line
+  (waymark9's _still_declared)."
+  [eng kind diff]
+  (let [rdef (rdef-now eng kind)
+        stale (fp/stale-facts (or diff {}))
+        declared? (fn [f] (contains? (:derived rdef) (keyword f)))
+        kept (filterv declared? stale)]
+    (doseq [f (remove declared? stale)]
+      (binding [*out* *err*]
+        (println (str "waymark10 definitions: dropping backfill marker "
+                      (name kind) "." f
+                      " — the current law no longer declares the fact"))))
+    (when (seq kept)
+      (maintainer/backfill! eng kind (mapv keyword kept)))))
+
 ;; ── the promote effect (shared by boot auto-promote and the human
 ;;    promote) ────────────────────────────────────────────────────────
 
@@ -292,9 +462,7 @@
     (doseq [prior priors]
       (let [old-rev (rev-of prior)]
         (when (= :immediate (:adoption target-rdef))
-          (store/with-tx storage
-            (fn [tx] (store/restamp-law! storage tx kind
-                                         {:law-revision old-rev} new-rev))))
+          (restamp! eng kind {:law-revision old-rev} new-rev))
         (let [survivors (store/with-tx storage
                           (fn [tx] (store/law-count storage tx kind old-rev)))
               retire (if (pos? survivors) :grandfather :supersede)]
@@ -332,16 +500,21 @@
                       (assoc :proposed-law nil)
                       (assoc-in [:law-ids rev] (:id row)))))
       ;; existing where-matches restamp to the piloted revision —
-      ;; judged under it from now on (the resident code IS that law)
+      ;; judged under it from now on (the resident code IS that law) —
+      ;; and their stale facts recompute under it (each row under its
+      ;; own law, so the untouched population stays put)
       (when-some [where (:where pop)]
-        (store/with-tx (:storage eng)
-          (fn [tx] (store/restamp-law! (:storage eng) tx kind where rev)))))))
+        (restamp! eng kind where rev)
+        (repair-stale! eng kind (get-in row [:data :diff]))))))
 
 (defn- after-promote! [eng row]
   (let [kind (keyword (get-in row [:data :target_kind]))]
     (when (rdef-now eng kind)
       (install-current! eng kind
-                        (update-in row [:data :fingerprint] wire-keys)))))
+                        (update-in row [:data :fingerprint] wire-keys))
+      ;; the promote recomputes stale facts under the new law —
+      ;; grandfathered survivors repair under their birth law
+      (repair-stale! eng kind (get-in row [:data :diff])))))
 
 (defn- after-withdraw! [eng row]
   (let [kind (keyword (get-in row [:data :target_kind]))
@@ -359,9 +532,51 @@
       ;; :judgment-laws entry for the current law STAYS — the resident
       ;; code still expresses the withdrawn law.
       (when-some [cur (:current-law rd)]
-        (store/with-tx (:storage eng)
-          (fn [tx] (store/restamp-law! (:storage eng) tx kind
-                                       {:law-revision rev} cur)))))))
+        (when (pos? (restamp! eng kind {:law-revision rev} cur))
+          ;; the returned rows' facts were computed under the pilot;
+          ;; the same diff names what to repair
+          (repair-stale! eng kind (get-in row [:data :diff])))))))
+
+;; ── the blast-radius effect (batch C) ───────────────────────────────
+
+(defn- after-measure!
+  "waymark9's BlastRadiusMeter, run in the lifecycle seam: compare
+  every redefined derived fact under the current law's stored specs
+  vs this proposal's, over current data (the pilot's population when
+  piloted), and land the report on data.measure — a maintenance
+  write (no version, no transition), announced as a derivation
+  observation so an open definition screen refetches."
+  [eng row]
+  (let [kind (keyword (get-in row [:data :target_kind]))
+        rdef (rdef-now eng kind)]
+    (when rdef
+      (let [storage (:storage eng)
+            current (first (filter #(= :current (:state %))
+                                   (def-rows eng kind)))
+            report (maintainer/blast-radius
+                    eng kind
+                    {:facts (fp/stale-facts (get-in row [:data :diff]))
+                     :current-fp (some-> current fp-of)
+                     :proposed-fp (wire-keys (get-in row [:data :fingerprint]))
+                     :population (when (= :piloted (:state row))
+                                   (get-in row [:data :population :where]))})
+            report (assoc report
+                          :at (str ((:now-fn eng)))
+                          :from_revision (some-> current rev-of)
+                          :to_revision (rev-of row))
+            drdef (rdef-now eng :definition)]
+        (store/with-tx storage
+          (fn [tx]
+            (when-some [raw (store/load-row storage tx :definition (:id row)
+                                            {:for-update true})]
+              (let [data (assoc (:data (inv/decode-row drdef raw))
+                                :measure (p/wire-value report))]
+                (store/update-data! storage tx :definition (:id row)
+                                    (schema/encode (:schema drdef) data)
+                                    (:next-flip-at raw))
+                (events/record-observation!
+                 storage tx {:kind :definition :resource-id (:id row)
+                             :class "recompute" :changed ["measure"]})))))))))
 
 (defn lifecycle
   "The engine seam invoke!'s after-write! calls: definition
@@ -372,6 +587,7 @@
       :pilot (after-pilot! eng (:row res))
       :promote (after-promote! eng (:row res))
       :withdraw (after-withdraw! eng (:row res))
+      (:measure :measure_pilot) (after-measure! eng (:row res))
       nil)
     (when (= :adopt action)
       (sweep! eng kind)))
@@ -504,12 +720,18 @@
                                  :judgment-laws jlaws
                                  :proposed-law nil
                                  :piloted-law nil}))
-            (install-current! eng kind row)))))))
+            (install-current! eng kind row)
+            ;; the boot's promote repairs like the human one: stale
+            ;; facts recompute, each row under its own law
+            (repair-stale! eng kind diff)))))))
 
 (defn boot-revise!
   "Fingerprint every resident application kind, revise where the hash
-  moved, fill the law slots. One correlation id spans the deploy."
+  moved, fill the law slots. One correlation id spans the deploy.
+  Also installs the engine-closed pilot guards (population grammar —
+  batch C)."
   [eng]
+  (install-pilot-grammar! eng)
   (let [corr (str (random-uuid))]
     (doseq [kind (sort (keys (dissoc (inv/resources eng) :definition)))]
       (revise-kind! eng corr kind))))
