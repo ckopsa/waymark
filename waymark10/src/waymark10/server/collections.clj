@@ -30,6 +30,7 @@
   (:require [clojure.string :as str]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store])
@@ -63,10 +64,16 @@
 (defn- cast-of [head]
   (case head
     :waymark/date "date"
+    :waymark/instant "timestamptz"
     :int "bigint"
     :boolean "boolean"
     (:double :decimal) "numeric"
     "text"))
+
+(defn- check-instant [^String raw]
+  (when-not (or (try (OffsetDateTime/parse raw) true (catch Exception _ false))
+                (try (Instant/parse raw) true (catch Exception _ false)))
+    "must be an RFC 3339 date-time"))
 
 (defn- check-value
   "Decode-check one filter value against the field's schema head —
@@ -78,16 +85,12 @@
     :waymark/date (when-not (try (LocalDate/parse raw) true
                                  (catch Exception _ false))
                     "must be an ISO date (YYYY-MM-DD)")
+    :waymark/instant (check-instant raw)
     :int (when (nil? (parse-long raw)) "must be an integer")
     (:double :decimal) (when (nil? (parse-double raw)) "must be a number")
     :boolean (when-not (contains? #{"true" "false"} raw)
                "must be true or false")
     nil))
-
-(defn- check-instant [^String raw]
-  (when-not (or (try (OffsetDateTime/parse raw) true (catch Exception _ false))
-                (try (Instant/parse raw) true (catch Exception _ false)))
-    "must be an RFC 3339 date-time"))
 
 ;; ── the filter grammar ──────────────────────────────────────────────
 
@@ -386,7 +389,8 @@
                              "page[number]" number)))))
 
 (defn- decode-row [rdef row]
-  (update row :data #(schema/decode (:schema rdef) %)))
+  ;; inv/decode-row: coercion AND the shape fold (phase 8 upcasts)
+  (inv/decode-row rdef row))
 
 (defn envelope
   "The collection envelope for one parsed GET: parse the params (422

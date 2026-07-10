@@ -20,8 +20,9 @@
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.time LocalDate)))
+  (:import (java.time Instant LocalDate)))
 
 (set! *warn-on-reflection* true)
 
@@ -34,10 +35,12 @@
 ;; and vocab tokens generate as short readable strings.
 
 (def ^:private type-gens
-  {:waymark/date  (tcgen/fmap #(LocalDate/ofEpochDay (long %))
-                              (tcgen/choose 10957 20088))
-   :waymark/ref   (tcgen/fmap #(str "ref-" %) (tcgen/choose 0 999999))
-   :waymark/vocab (tcgen/elements ["family" "quick" "bbq" "soup" "veggie"])})
+  {:waymark/date    (tcgen/fmap #(LocalDate/ofEpochDay (long %))
+                                (tcgen/choose 10957 20088))
+   :waymark/instant (tcgen/fmap #(Instant/ofEpochSecond (long %))
+                                (tcgen/choose 946684800 1735689600))
+   :waymark/ref     (tcgen/fmap #(str "ref-" %) (tcgen/choose 0 999999))
+   :waymark/vocab   (tcgen/elements ["family" "quick" "bbq" "soup" "veggie"])})
 
 (defn- with-gens
   "Rewrite a schema form so every :waymark/* leaf carries :gen/gen.
@@ -106,6 +109,23 @@
   applications register at test-load time."
   (atom {}))
 
+(def state-factories
+  "The state-factory registry (waymark9 testing/factories.py's
+  @state_factory, ported with phase 8): {kind (fn [eng target-state]
+  → row)}. The override, not the baseline tax — with no registration
+  the machine walks itself; register one only when a path needs staged
+  context generation cannot supply (mealplan10's covered week: seven
+  mark_eating_out self-loops feed finalize's require gate, and a
+  shortest-path walk cannot spell a self-loop)."
+  (atom {}))
+
+(defn state-factory!
+  "Register a per-kind state factory: (fn [eng target-state] → the row
+  in that state, or {:skip {:state … :reason …}})."
+  [kind f]
+  (swap! state-factories assoc kind f)
+  f)
+
 (defn example-input!
   "Register an input override for the inputs generation can't satisfy
   — check-style guards with acknowledged open judgment keep these
@@ -146,12 +166,30 @@
 ;; ── probing (advertisement reads the same guards as enforcement) ────
 
 (defn probe-ctx
-  "A probe-mode context for guard evaluation outside an invocation."
+  "A probe-mode context for guard evaluation outside an invocation.
+  Carries :read/:find backed by their own transactions (phase 8) so
+  acceptance sets that read other kinds can synthesize inputs — the
+  render probe stays storage-free; this one is the suite's."
   [eng]
   (t/ctx {:principal (walker-principal)
           :now ((:now-fn eng))
           :services (:services eng)
-          :mode :probe}))
+          :mode :probe
+          :read (fn [kind id]
+                  (when-some [rdef (get (inv/resources eng) kind)]
+                    (store/with-tx (:storage eng)
+                      (fn [tx]
+                        (some->> (store/load-row (:storage eng) tx kind
+                                                 (str id) {})
+                                 (inv/decode-row rdef))))))
+          :find (fn [kind where opts]
+                  (when-some [rdef (get (inv/resources eng) kind)]
+                    (store/with-tx (:storage eng)
+                      (fn [tx]
+                        (mapv #(inv/decode-row rdef %)
+                              (store/query-rows (:storage eng) tx kind
+                                                (or where {})
+                                                (merge {:limit 100} opts)))))))}))
 
 (defn probe-denial
   "The first hard (non-warning) probe denial of an action on a row →
@@ -366,6 +404,9 @@
         skip (fn [reason] {:skip {:state target :reason reason}})]
     (cond
       (nil? rdef) (skip (str "no enrolled kind " kind))
+      ;; a registered factory shadows the machine walk outright
+      (get @state-factories kind)
+      ((get @state-factories kind) eng target)
       (nil? (machine/path-to rdef target))
       (skip (str (name target) " is unreachable from " (name (:initial rdef))
                  " by non-bulk transitions"))

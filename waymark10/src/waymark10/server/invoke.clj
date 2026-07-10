@@ -71,9 +71,39 @@
     transaction (see waymark10.server.drafts) — the smallest honest
     seam.
   - after-write! runs per successfully committed bulk/batch item, so
-    the phase-5/6 hooks see fan-out writes like any other."
+    the phase-5/6 hooks see fan-out writes like any other.
+
+  Phase 8 additions (the mealplan10 dogfood's engine gaps), recorded:
+  - make-ctx gains :read (kind, id → decoded row or nil) and :find
+    (kind, where, opts → decoded rows) — cross-resource guard reads
+    and on-create resolution, same transaction as the write. The
+    :reads [:kind] discipline on guards already named the dependency;
+    this is the hook. Render's probe ctx stays storage-free (render
+    is pure): an acceptance set that reads another kind must decline
+    (return nil) when ctx carries no :read/:find.
+  - decode-row is public and owns the SHAPE step: a stored row older
+    than the declaration folds forward through (:upcasts rdef) at
+    load, lazily, and the declared shape stamps at the next write.
+    Upcasts must be idempotent over already-upcast documents — a
+    maintenance write (update-data!) persists upcast data without the
+    shape stamp, so the fold can run again at the next load.
+  - finish!/create! maintain declared ref LABELS ({:kind … :label …}
+    on a :waymark/ref entry, data root and vector-of-map items):
+    whenever a write changes a labeled ref, the engine reads the
+    target in the same transaction and writes its label (the target
+    kind's :label-template, default \"{data.name}\" when the target
+    declares :name). Recorded scope: labels refresh at the write that
+    sets the ref — a target rename does not re-fan-out (waymark9's
+    maintainer did; the v10 seam is a named punt).
+  - the one-of pass (waymark10.groups) runs after labels — filling
+    one arm clears the others, cleared labels included.
+  - after-write! CASCADES declared owns edges: a parent action named
+    in an edge's :on map invokes the child action on every owned
+    child in the child action's :from states — through invoke!, per
+    child, system actor, the parent transition's correlation id."
   (:require [clojure.string :as str]
             [waymark10.derived :as derived]
+            [waymark10.groups :as groups]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
             [waymark10.server.drafts :as drafts]
@@ -105,11 +135,52 @@
   (or (get (resources engine) kind)
       (throw (p/not-found kind "?"))))
 
+(defn upcast-row
+  "The load boundary's shape step (phase 8): a stored row older than
+  the declaration folds forward through :upcasts — one fn per shape,
+  raw JSON document in and out — and carries the declared shape, so
+  the next write stamps it. Idempotence over already-upcast documents
+  is the upcast author's obligation (a maintenance write persists
+  upcast data without the stamp)."
+  [rdef row]
+  (let [stored (:shape row 1)
+        declared (:shape rdef 1)]
+    (if (< stored declared)
+      (-> row
+          (update :data (fn [d]
+                          (reduce (fn [d s] ((get (:upcasts rdef) s) d))
+                                  d
+                                  (range stored declared))))
+          (assoc :shape declared))
+      row)))
+
+(defn decode-row
+  "The load boundary owns coercion: stored JSON upcasts to the
+  declared shape, then becomes schema types (ISO strings → LocalDate)
+  so laws compare real values."
+  [rdef row]
+  (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
+
 (defn- make-ctx [engine tx mode principal]
   (t/ctx {:principal principal
           :now ((:now-fn engine))
           :services (:services engine)
           :mode mode
+          ;; the cross-resource read hooks (phase 8): guards declared
+          ;; :reads [:kind] and on-create resolution read OTHER kinds
+          ;; through the write's own transaction — decoded rows, the
+          ;; same values the target's own laws compare
+          :read (fn [target-kind id]
+                  (when-some [trdef (get (resources engine) target-kind)]
+                    (some->> (store/load-row (:storage engine) tx
+                                             target-kind (str id) {})
+                             (decode-row trdef))))
+          :find (fn [target-kind where opts]
+                  (when-some [trdef (get (resources engine) target-kind)]
+                    (mapv #(decode-row trdef %)
+                          (store/query-rows (:storage engine) tx target-kind
+                                            (or where {})
+                                            (merge {:limit 100} opts)))))
           :actor-of (fn [row transition]
                       ;; the newest matching transition's actor id
                       (some (fn [rec]
@@ -120,17 +191,108 @@
                              {:kind (:kind row) :resource-id (:id row)}
                              {:newest-first true})))}))
 
-(defn- decode-row
-  "The load boundary owns coercion: stored JSON becomes schema types
-  (ISO strings → LocalDate) so laws compare real values."
-  [rdef row]
-  (update row :data #(schema/decode (:schema rdef) %)))
-
 (defn- encode-row [rdef row]
   (update row :data #(schema/encode (:schema rdef) %)))
 
 (defn- summary-of [rdef row]
   (summary/render (:summary rdef) (assoc row :kind (:kind rdef))))
+
+;; ── ref labels (phase 8, design §4) ─────────────────────────────────
+
+(defn- schema-head*
+  "The leaf type of an entry's schema form, :maybe unwrapped."
+  [s]
+  (let [s (if (and (vector? s) (= :maybe (first s))) (second s) s)]
+    (if (vector? s) (first s) s)))
+
+(defn- item-map-form
+  "The [:map …] item form of a vector-of-map field, nil otherwise."
+  [form k]
+  (when-some [s (schema/field-schema form k)]
+    (when (and (vector? s) (= :vector (first s)))
+      (let [item (last s)]
+        (when (and (vector? item) (= :map (first item)))
+          item)))))
+
+(defn- labeled-ref-specs
+  "field → {:kind … :label …} for every :waymark/ref entry of one
+  :map form that declares both — the refs whose labels the engine
+  maintains."
+  [form]
+  (into {}
+        (keep (fn [[f {:keys [properties schema]}]]
+                (when (and (= :waymark/ref (schema-head* schema))
+                           (:kind properties)
+                           (:label properties))
+                  [f (select-keys properties [:kind :label])])))
+        (schema/entry-map form)))
+
+(defn- label-value
+  "The target's declared label: its :label-template, defaulting to
+  \"{data.name}\" when the target schema declares :name; nil when the
+  target is gone or unlabelable (dangling refs are the guards'
+  problem, loudly — never the label pass's)."
+  [engine tx target-kind id]
+  (when-some [trdef (get (resources engine) target-kind)]
+    (when-some [raw (store/load-row (:storage engine) tx target-kind
+                                    (str id) {})]
+      (when-some [template
+                  (or (:label-template trdef)
+                      (when (contains? (set (schema/entry-keys (:schema trdef)))
+                                       :name)
+                        "{data.name}"))]
+        (summary/render template
+                        (assoc (decode-row trdef raw) :kind target-kind))))))
+
+(defn- label-pass [engine tx specs m before]
+  (reduce-kv
+   (fn [m f {:keys [kind label]}]
+     (let [new-id (get m f)]
+       (cond
+         (= new-id (get before f)) m
+         (nil? new-id) (assoc m label nil)
+         :else (if-some [lv (label-value engine tx kind new-id)]
+                 (assoc m label lv)
+                 m))))
+   m
+   specs))
+
+(defn- maintain-ref-labels
+  "Denormalized ref labels are generated, never hand-copied: whenever
+  a write changes a labeled ref — data root or vector-of-map items —
+  the engine reads the target in the same transaction and writes its
+  label. before nil (create) treats every set ref as changed. Recorded
+  scope: labels refresh at the write that SETS the ref; a target
+  rename does not fan back out (named punt — waymark9's maintainer
+  did)."
+  [engine tx rdef data before]
+  (let [root-specs (labeled-ref-specs (:schema rdef))
+        data (if (seq root-specs)
+               (label-pass engine tx root-specs data before)
+               data)]
+    (reduce
+     (fn [data field]
+       (let [specs (some-> (item-map-form (:schema rdef) field)
+                           labeled-ref-specs)]
+         (if (empty? specs)
+           data
+           (let [prev (vec (get before field))]
+             (update data field
+                     (fn [items]
+                       (vec (map-indexed
+                             (fn [i item]
+                               (label-pass engine tx specs item (get prev i)))
+                             items))))))))
+     data
+     (schema/entry-keys (:schema rdef)))))
+
+(defn- labels-and-groups
+  "The two engine passes every write's data goes through after the
+  handler: ref labels first, then one-of enforcement — so a cleared
+  arm clears its label with it."
+  [engine tx rdef data before]
+  (-> (maintain-ref-labels engine tx rdef data before)
+      (as-> d (groups/enforce rdef d before))))
 
 (defn- natural-replay
   "The latest transition, when it is this same action with this same
@@ -208,6 +370,11 @@
                   row)
         _ (when-some [facts (seq (derived/tampered rdef row handled now))]
             (throw (p/derived-tampered (:name defn) (vec facts))))
+        ;; ref labels + one-of clears (phase 8): engine passes, never
+        ;; handler work — the handler sets the ref, the engine writes
+        ;; the label and clears the other arm
+        handled (update handled :data
+                        #(labels-and-groups engine tx rdef % (:data row)))
         materialized (derived/materialize rdef handled now)
         advanced (-> materialized
                      (assoc :state (:to defn))
@@ -253,6 +420,8 @@
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
+(declare cascade!)
+
 (defn- after-write!
   "A committed, non-replayed write may carry law-lifecycle effects: a
   definition transition flips slots and restamps populations; an adopt
@@ -273,12 +442,22 @@
   and create! now routes through after-write! so births feed both
   hooks. :maintain may refresh the result's :row (the response tells
   the maintained truth); the stored idempotency envelope, rendered
-  inside the write's transaction, predates it by design."
+  inside the write's transaction, predates it by design.
+
+  Phase 8 adds the CASCADE between the two: a parent action a declared
+  owns edge's :on map names fans out to the owned children BEFORE the
+  parent's own maintenance pass, so the response's rollup counts tell
+  the post-cascade truth. Each child write is an ordinary invoke! —
+  own transaction, full algorithm, its own after-write! — under the
+  system cascade actor and the parent transition's correlation id;
+  redelivery is a natural no-op (children are selected by the child
+  action's :from states)."
   [engine kind action-name res]
   (if (and (:transition res) (nil? (:replayed? res)))
     (do
       (when-some [lc (:lifecycle engine)]
         (lc engine kind action-name res))
+      (cascade! engine kind action-name res)
       (if-some [m (:maintain engine)]
         (or (m engine kind action-name res) res)
         res))
@@ -370,6 +549,48 @@
                         (adopt! engine rdef kind id opts)))
       (invoke-declared! engine rdef kind id action-name body opts))))
 
+;; ── the owns cascade (phase 8, design E4) ───────────────────────────
+
+(def cascade-actor
+  (t/principal {:id "waymark-cascade" :type :system :display "Cascade"}))
+
+(defn- cascade!
+  "Fan a parent transition out to its owned children: for every owns
+  edge whose :on map names this action, invoke the child action on
+  each owned child sitting in that action's :from states. Pages of 200
+  via the child's :via ref; the loop terminates because cascaded
+  children leave the state filter."
+  [engine kind action-name res]
+  (doseq [edge (:owns (get (resources engine) kind))
+          :let [child-action (get (:on edge) action-name)]
+          :when child-action]
+    (let [child-kind (:kind edge)
+          child-rdef (get (resources engine) child-kind)
+          eligible (get-in child-rdef [:actions child-action :from])
+          idempotent? (get-in child-rdef [:actions child-action
+                                          :safety :idempotent])
+          actor (assoc cascade-actor
+                       :display (str "Cascade — " (name kind) "."
+                                     (name action-name)))
+          cid (get-in res [:transition :correlation-id])
+          parent-id (get-in res [:row :id])]
+      (loop []
+        (let [children (store/with-tx (:storage engine)
+                         (fn [tx]
+                           (store/query-rows (:storage engine) tx child-kind
+                                             {(:via edge) parent-id}
+                                             {:limit 200})))
+              due (filterv #(contains? eligible (:state %)) children)]
+          (when (seq due)
+            (doseq [child due]
+              (invoke! engine child-kind (:id child) child-action nil
+                       {:principal actor
+                        :correlation-id cid
+                        :idempotency-key (when-not idempotent?
+                                           (str (random-uuid)))}))
+            (when (= 200 (count children))
+              (recur))))))))
+
 (defn- invoke-in-tx!
   "Steps 2–15 inside the caller's transaction — the single-write body
   invoke-declared! wraps in its own with-tx; bulk items and batch
@@ -414,6 +635,13 @@
                                     {:kind kind :id id
                                      :summary (summary-of rdef row)})))
           (do
+            ;; concealment precedes everything in-state too (phase 8's
+            ;; ordering amendment, forced by the mirror's sync doors):
+            ;; what a hide-flagged guard conceals must not leak through
+            ;; the fence (412), input validation (422), or a natural
+            ;; replay (200) — the wire answers 404 first
+            (when (probe-hidden-only? defn row ctx)
+              (throw (p/not-found kind id)))
             ;; 6. the fence
             (when (get-in defn [:safety :fence])
               (let [current (etag kind id (:version row))]
@@ -764,6 +992,10 @@
                      :owner (:id principal)
                      :law-revision (create-law-revision engine rdef kind)}
                 row (if-some [oc (:on-create rdef)] (oc row ctx) row)
+                ;; ref labels + one-of at birth too: before nil, every
+                ;; set ref is newly set
+                row (update row :data
+                            #(labels-and-groups engine tx rdef % nil))
                 row (derived/materialize rdef row now)
                 row (assoc row :summary (summary-of rdef row))
                 _ (store/insert-row! (:storage engine) tx kind

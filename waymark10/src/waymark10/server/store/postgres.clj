@@ -53,6 +53,7 @@
   (let [head (if (vector? field-schema) (first field-schema) field-schema)]
     (case head
       :waymark/date "date"
+      :waymark/instant "timestamptz"
       :boolean "boolean"
       :int "bigint"
       (:double :decimal) "numeric"
@@ -67,6 +68,7 @@
            " GENERATED ALWAYS AS ("
            (case sql-type
              "date" (str "waymark10_date(data->>'" fname "')")
+             "timestamptz" (str "waymark10_ts(data->>'" fname "')")
              "boolean" (str "(data->>'" fname "')::boolean")
              "bigint" (str "(data->>'" fname "')::bigint")
              "numeric" (str "(data->>'" fname "')::numeric")

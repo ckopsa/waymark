@@ -18,6 +18,7 @@
             [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mirror :as mirror]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
@@ -99,14 +100,12 @@
   (or (some (fn [[_ r]] (when (= plural (:plural r)) r)) (inv/resources eng))
       (throw (p/not-found "collection" plural))))
 
-(defn- decode-row [rdef row]
-  (update row :data #(schema/decode (:schema rdef) %)))
-
 (defn- load-decoded [eng rdef id]
   (let [st (:storage eng)
         raw (store/with-tx st #(store/load-row st % (:kind rdef) id {}))]
     (when-not raw (throw (p/not-found (:kind rdef) id)))
-    (decode-row rdef raw)))
+    ;; inv/decode-row: coercion AND the shape fold (phase 8 upcasts)
+    (inv/decode-row rdef raw)))
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
@@ -147,7 +146,16 @@
 (defn- get-one [eng]
   (fn [{{:keys [plural id]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
-          row (load-decoded eng rdef id)]
+          row (load-decoded eng rdef id)
+          ;; the mirror's pull-through seam (phase 8): a stale mirrored
+          ;; row refreshes from its adapter on read, system actor.
+          ;; :suppress-mirror-refresh is the walker-scoped conformance
+          ;; seam (waymark9's _suppress_mirror_refresh): a Mirror breaks
+          ;; the walker's reads-are-pure assumption, so ONLY a
+          ;; conformance fixture sets it — production reads pull through
+          row (if (and (:mirror rdef) (not (:suppress-mirror-refresh eng)))
+                (mirror/refresh! eng rdef row)
+                row)]
       (envelope-response eng rdef row (principal-of (:headers req)) 200 nil))))
 
 (defn- invoke-action [eng]

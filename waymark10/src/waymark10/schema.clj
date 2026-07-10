@@ -5,11 +5,14 @@
   fingerprint — all reading the same value.
 
   Waymark types:
-    :waymark/date   — a LocalDate; ISO string on the wire
-    :waymark/ref    — a cross-resource reference id; properties carry
-                      {:kind … :label … :pick …} for the engine
-    :waymark/vocab  — a vocabulary token; properties carry
-                      {:open … :facet …}"
+    :waymark/date    — a LocalDate; ISO string on the wire
+    :waymark/instant — a java.time.Instant; RFC 3339 string on the
+                       wire (phase 8: prep_task.due_at demanded a
+                       real point-in-time the clock can compare)
+    :waymark/ref     — a cross-resource reference id; properties carry
+                       {:kind … :label … :pick …} for the engine
+    :waymark/vocab   — a vocabulary token; properties carry
+                       {:open … :facet …}"
   (:require [clojure.string :as str]
             [clojure.walk]
             [malli.core :as m]
@@ -18,7 +21,7 @@
             [malli.registry :as mr]
             [malli.transform :as mt]
             [malli.util :as mu])
-  (:import (java.time LocalDate)))
+  (:import (java.time Instant LocalDate OffsetDateTime)))
 
 (set! *warn-on-reflection* true)
 
@@ -40,6 +43,26 @@
      :gen/schema [:int {:min 10957 :max 20088}]   ; 2000-01-01 … 2024-12-31
      :gen/fmap (fn [d] (LocalDate/ofEpochDay (long d)))
      :json-schema {:type "string" :format "date"}}}))
+
+(def ^:private waymark-instant
+  (m/-simple-schema
+   {:type :waymark/instant
+    :pred #(instance? Instant %)
+    :type-properties
+    {:error/message "must be an RFC 3339 date-time"
+     :decode/wire (fn [x]
+                    (if (string? x)
+                      (try (Instant/parse ^String x)
+                           (catch Exception _
+                             (try (.toInstant (OffsetDateTime/parse ^String x))
+                                  (catch Exception _ x))))
+                      x))
+     :encode/wire (fn [x] (if (instance? Instant x) (str x) x))
+     ;; generation mirrors :waymark/date — recent past, so clock-gated
+     ;; facts ("overdue") land in their default truth under the walker
+     :gen/schema [:int {:min 946684800 :max 1735689600}] ; 2000…2024, epoch s
+     :gen/fmap (fn [s] (Instant/ofEpochSecond (long s)))
+     :json-schema {:type "string" :format "date-time"}}}))
 
 (def ^:private waymark-ref
   (m/-simple-schema
@@ -64,6 +87,7 @@
    (m/default-schemas)
    (mu/schemas)
    {:waymark/date waymark-date
+    :waymark/instant waymark-instant
     :waymark/ref waymark-ref
     :waymark/vocab waymark-vocab}))
 

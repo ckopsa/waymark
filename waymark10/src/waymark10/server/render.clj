@@ -82,6 +82,49 @@
    js
    (mapcat g/iter-leaves (:guards defn'))))
 
+;; ── the empty-admission narration (phase 8, waymark9 render.py) ─────
+
+(defn- member-str? [v allowed]
+  (let [s (str v)]
+    (boolean (some #(= s (str %)) allowed))))
+
+(defn- empty-required-admission
+  "The first required input field whose guard-declared acceptance set
+  came back EMPTY — no value on this document currently qualifies, so
+  the action has nothing valid to offer no matter what the client
+  submits: it narrates as unavailable instead of advertising an empty
+  enum. Fields with no accepts guard are unaffected."
+  [defn' row ctx]
+  (when (:input defn')
+    (let [required (into #{}
+                         (keep (fn [[k e]] (when-not (:optional e) k)))
+                         (schema/entry-map (:input defn')))
+          singles (reduce
+                   (fn [m leaf]
+                     (if (and (:accepts leaf)
+                              (not (:relation leaf))
+                              (= 1 (count (:judges leaf))))
+                       (let [f (first (:judges leaf))]
+                         (if-some [vals (g/admitted leaf row ctx)]
+                           (assoc m f
+                                  (if-some [prior (get m f)]
+                                    (filterv #(member-str? % vals) prior)
+                                    (vec vals)))
+                           m))
+                       m))
+                   {}
+                   (mapcat g/iter-leaves (:guards defn')))]
+      (some (fn [f] (when (and (contains? singles f)
+                               (empty? (get singles f)))
+                      f))
+            (sort required)))))
+
+(defn- no-admissible-entry [defn' field]
+  (let [label (or (get-in defn' [:display :label])
+                  (str/replace (name (:name defn')) "_" " "))]
+    {:reason (str "No " (str/replace (name field) "_" " ")
+                  " currently qualifies for '" label "'.")}))
+
 ;; ── entries ─────────────────────────────────────────────────────────
 
 (defn- action-entry [defn' rdef self row ctx]
@@ -141,8 +184,12 @@
            (if (contains? (:from defn') state)
              (let [{:keys [status deny denier]} (probe-transition defn' row ctx)]
                (case status
-                 :available (assoc-in acc [:actions (:name defn')]
-                                      (action-entry defn' rdef self row ctx))
+                 :available
+                 (if-some [field (empty-required-admission defn' row ctx)]
+                   (assoc-in acc [:unavailable (:name defn')]
+                             (no-admissible-entry defn' field))
+                   (assoc-in acc [:actions (:name defn')]
+                             (action-entry defn' rdef self row ctx)))
                  :unavailable (assoc-in acc [:unavailable (:name defn')]
                                         (unavailable-entry denier deny row))
                  :hidden acc))

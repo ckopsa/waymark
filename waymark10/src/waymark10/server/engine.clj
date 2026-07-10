@@ -26,6 +26,7 @@
             [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
             [waymark10.server.maintainer :as maintainer]
+            [waymark10.server.mirror :as mirror]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
             [waymark10.server.store :as store]
@@ -44,7 +45,8 @@
   [{:keys [storage resources services now-fn deploy-mode] :as opts}]
   (let [reg (registry/registry (conj (vec resources) defs/definition))
         eng (merge (select-keys opts [:sweep-interval-ms :events-poll-ms
-                                      :sse-heartbeat-ms :maintainer-fan-out])
+                                      :sse-heartbeat-ms :maintainer-fan-out
+                                      :suppress-mirror-refresh])
                    {:storage storage
                     :registry (atom reg)
                     :services services
@@ -79,7 +81,11 @@
     (reset! rt {:dispatcher (events/dispatcher
                              eng {:poll-ms (:events-poll-ms eng 2000)})
                 :sweeper (maintainer/start-sweeper!
-                          eng {:interval-ms (:sweep-interval-ms eng 30000)})}))
+                          eng {:interval-ms (:sweep-interval-ms eng 30000)})
+                ;; mirror kinds get their declared discovery cadence
+                ;; (phase 8); an engine without mirrors pays nothing
+                :discovery (when (seq (mirror/mirror-kinds eng))
+                             (mirror/start-discovery! eng))}))
   (http/run-server (handler eng) {:port port :legacy-return-value? false}))
 
 (defn stop!
@@ -90,9 +96,10 @@
   ([eng server]
    (when server (http/server-stop! server))
    (when-some [rt (:runtime eng)]
-     (when-some [{:keys [dispatcher sweeper]} @rt]
+     (when-some [{:keys [dispatcher sweeper discovery]} @rt]
        (some-> dispatcher events/stop!)
-       (some-> sweeper maintainer/stop-sweeper!))
+       (some-> sweeper maintainer/stop-sweeper!)
+       (some-> discovery mirror/stop-discovery!))
      (reset! rt nil))))
 
 ;; ── the dev server (scripts/smoke10.sh) ─────────────────────────────

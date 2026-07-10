@@ -230,3 +230,108 @@ identity; respelling a law is not a revision; a diff confined to a
 | Node | Demanded by | Date |
 | --- | --- | --- |
 | (v1 set: see §1) | the waymark8 vocabulary, verbatim | 2026-07-09 |
+
+# 7. Phase 8 — the mealplan10 dogfood, and the engine it forced
+
+mealplan10/ is the full family meal planner (mealplan9's six kinds:
+meal, rotation, plan, grocery_list, prep_task, event) ported onto the
+Clojure engine at full fidelity — declaration-first, prose carried.
+`make test-mealplan10` runs its conformance suite (all six kinds
+enrolled in the waymark10.test library, over the ring handler) and the
+Priya family-week story; `make dev10` serves it on :8010 against
+mealplan10_dev (FakeEvents unless `MEALPLAN_GCAL_ICS_URL` is set).
+
+Engine features the port forced into existence, each with its spelling
+and its tests in waymark10's own suite (`waymark10.phase8-test`):
+
+- **Cross-resource guard reads (C1).** `make-ctx` gains `:read`
+  `(fn [kind id] → decoded row | nil)` and `:find` `(fn [kind where
+  opts] → decoded rows)`, same transaction as the write. Guards keep
+  declaring `:reads [:meal]`; the hook is what landed. Render's probe
+  ctx stays storage-free (render is pure), so a reading acceptance
+  set/check must decline (`nil`/allow) without the hook — the
+  conformance probe (`factories/probe-ctx`) carries own-transaction
+  hooks, so the walker still holds advertisement = enforcement.
+- **Ref labels (C2).** A `:waymark/ref` entry declaring `{:kind :meal
+  :label :meal_name}` gets its label engine-written at every write
+  that changes the ref (data root and vector-of-map items; create
+  treats every set ref as changed). The label is the target kind's
+  `:label-template`, default `"{data.name}"` when the target declares
+  `:name`. Recorded scope: a target rename does not fan back out
+  (waymark9's maintainer did — named punt).
+- **One-of clears (`waymark10.groups`).** `{:one-of {name {:in
+  [:days] :arms {…} :clears true}}}` enforces post-handler: filling
+  one arm clears the others (labels included — the label pass runs
+  first); two newly-filled arms refuse as a definition bug. Recorded
+  deviation: cleared fields become nil, not a model default (malli
+  declares none).
+- **The owns cascade (C3).** An owns edge's `:on {parent-action
+  child-action}` fans out in `after-write!`, before the maintainer
+  pass: each eligible child (selected by the child action's `:from`
+  states, so redelivery is a natural no-op) moves through an ordinary
+  `invoke!` — system actor `waymark-cascade`, the parent transition's
+  correlation id. The rollup half is the phase-6 count fact: the
+  `{:rollups …}` edge spelling is SUBSUMED by `:derived {:open_tasks
+  {:count {:owns :prep_task :where …}}}` — one fact, one writer — and
+  the gate is a plain expr guard over the stored count.
+- **The Mirror (C4, `waymark10.server.mirror`).** `mirror/declaration`
+  weaves the sync machine (fresh/stale/unreachable) and bookkeeping
+  fields (external_id/external_etag/synced_at) into an app map, with
+  `{:mirror {:adapter … :ttl-seconds … :discover-every …}}`. The
+  adapter protocol is discover/pull/pull-many; sync transitions are
+  system-actor-only and hidden. Seams: pull-through on GET (router;
+  `:suppress-mirror-refresh` is the walker-scoped conformance escape,
+  waymark9's `_suppress_mirror_refresh`), and discovery
+  (mint-per-unknown-id + eager pull-many; a daemon on the engine
+  runtime). Scoped to what the event kind needs — no push, no
+  conflicted/reconcile, no per-field authority, no discovery cursor.
+- **Shape upcasts (C5).** `inv/decode-row` (now the one load boundary
+  for invoke, router, collections, and the maintainer) folds a stored
+  row through `(:upcasts rdef)` when its shape lags, and the declared
+  shape stamps at the next write. Upcasts must be idempotent: a
+  maintenance write persists upcast data without the stamp.
+- **`:waymark/instant`** joins the schema vocabulary (prep_task's
+  `due_at` demanded a point the clock can compare): Instant in the
+  law, RFC 3339 on the wire, timestamptz in the promoted column, flip
+  candidates for the clock sweep.
+- **Two wire-honesty amendments the conformance suite forced:**
+  in-state concealment now precedes the fence, input validation, and
+  natural replay (a hidden door must 404, never 422 or replay-200);
+  and an available action whose REQUIRED field's folded acceptance
+  set is empty narrates as unavailable ("No date currently qualifies
+  for 'Add side dish'.") instead of advertising an empty enum —
+  both are waymark9 render/external semantics, ported.
+- **`factories/state-factory!`** — waymark9's `@state_factory`,
+  ported: mealplan10 registers plan and grocery_list factories
+  (finalize's require gate needs seven `mark_eating_out` self-loops a
+  shortest-path walk cannot spell).
+
+mealplan10's own recorded punts: previous_plan declared but
+predecessor-unresolved (E7 has no v10 spelling); links declared and
+assembly-checked but unrendered (envelope `:links` stays the phase-3
+punt); part-scope "parts" envelope rendering unbuilt (the placed
+actions carry `:place`, the key pre-binding waits for the parts
+surface); WeekBoard/spans/profiles have no v10 spelling; the real
+iCal adapter parses VEVENTs without RRULE expansion (a recurring
+series contributes its DTSTART only — revisit when the family's
+recurring events matter); v10 summary templates have no |join/|len
+filters; no field defaults (rotation/plan defaults land in
+:on-create).
+
+The hand walk (`make dev10`, then): create + activate a rotation
+(`POST /api/rotations {}`, `POST /api/rotations/{id}/-/activate`);
+suggest and accept a meal (`POST /api/meals`, `…/-/accept`); create
+the plan (`POST /api/plans {"start_date":"2026-07-14","weeks":1}` —
+days pre-themed, Sunday from the rotation); assign and mark days
+(`…/-/assign_meal`, `…/-/mark_eating_out`); finalize; `begin` answers
+409 with `becomes_available.at` until Tuesday; `POST /api/prep_tasks`
+then watch `data.open_tasks` gate `plan complete`; the grocery list
+add/finalize/check_item/complete flow; `POST /api/events
+{"external_id":"…"}` mints a mirror whose first GET pulls it through,
+and `mark_stale` as a human answers 404 (concealed).
+
+## Vocabulary additions log (phase 8)
+
+| Node | Demanded by | Date |
+| --- | --- | --- |
+| `:waymark/instant` (schema type, not an expr node) | prep_task.due_at | 2026-07-10 |

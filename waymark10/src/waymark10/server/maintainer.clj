@@ -78,7 +78,10 @@
 (defn- rdef-of [eng kind] (get (inv/resources eng) kind))
 
 (defn- decode-row [rdef row]
-  (update row :data #(schema/decode (:schema rdef) %)))
+  ;; inv/decode-row: coercion AND the shape fold (phase 8 upcasts) —
+  ;; which is why upcasts must be idempotent: this path's maintenance
+  ;; write persists upcast data without the shape stamp
+  (inv/decode-row rdef row))
 
 ;; ── clock facts and the flip instant ────────────────────────────────
 
@@ -175,6 +178,7 @@
         head (if (vector? s) (first s) s)]
     (case head
       :waymark/date "date"
+      :waymark/instant "timestamptz"
       :boolean "boolean"
       :int "bigint"
       (:double :decimal) "numeric"
