@@ -176,6 +176,23 @@
   (breaks :unless
           (with-action base :close (assoc close-action :unless :nonexistent))))
 
+(deftest renames
+  (testing "a rename whose target reaches no declared state"
+    (breaks :renames (assoc base :renames {:states {:draft :nowhere}})))
+  (testing "a still-declared token cannot be renamed"
+    (breaks :renames (assoc base :renames {:states {:open :closed}})))
+  (testing "a chain that cycles reaches nothing"
+    (breaks :renames (assoc base :renames {:states {:a :b, :b :a}})))
+  (testing "an action rename to no declared action"
+    (breaks :renames (assoc base :renames {:actions {:shut :nothing}})))
+  (testing "an unknown rename surface"
+    (breaks :renames (assoc base :renames {:columns {:a :b}})))
+  (testing "the chain resolves through retired intermediates"
+    (is (some? (load-quietly
+                (assoc base :renames {:states {:begun :started
+                                               :started :open}
+                                      :actions {:shut :close}}))))))
+
 (deftest require-check
   (testing "a fact nobody derives"
     (breaks :require

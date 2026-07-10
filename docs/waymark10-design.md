@@ -498,7 +498,7 @@ no securitySchemes, scoped requests 404.
 | oidc.py | `server/oidc.clj` | bearer RS256 verification; browser dance/sessions punted |
 | drafts.py | `server/drafts.clj` | per-field revs/authors unported (collab holds revs room-local) |
 | subscriptions.py | `server/webhooks.clj` | fail-the-subscription instead of skip-and-advance; revoked state punted |
-| migrate.py | **punt** | no schema diff/migration planner; ensure-kind! is additive-only |
+| migrate.py | `server/store/migrate.clj` | plan/apply from ONE projection (§11); expression drift invisible (name+type compare); engine tables additive-only; state renames the sole destructive class |
 | bus.py | **punt** | single-process engines; rooms and dispatcher are process-local |
 | members.py | `server/members.clj` | auto-provision on first sight; invite→bind flow punted |
 | judgment.py | `server/judgment.clj` | stored-tree overlay; derived-law overlay punted |
@@ -572,6 +572,15 @@ Live collab (an action with :draft {:shared true :live true}):
 OpenAPI:
 
     curl -s localhost:8010/api/openapi.json | jq '.paths | keys'
+
+Migrate — the plan is the deploy gate (§11):
+
+    make migrate10                         # print the plan; exit 1 while steps remain
+    make migrate10 APPLY=1                 # execute the non-destructive steps
+    make migrate10 APPLY=1 DESTRUCTIVE=1   # include the state-rename UPDATEs
+    # a production boot REFUSES on drift, listing these same steps;
+    # `make dev10` opts into self-reconciliation by passing
+    # WAYMARK10_AUTO_MIGRATE=1 explicitly — never a default
 
 # 10. Phase 10 — the clients close the loop
 
@@ -804,6 +813,127 @@ member; update_recipe's draft saved on blur, prefilled on reopen,
 consumed by the act; and a foreign retire refetching the open
 envelope through SSE with the ticker narrating it.
 
+# 11. Migrate — the largest punt comes home
+
+The parity ledger's biggest named punt was migrate.py: no schema
+diff, no planner, `ensure-kind!` additive-only — a new filterable
+field on a deployed kind simply never got its column. This section
+is the planner (`waymark10.server.store.migrate`), and the insight
+that makes it smaller than its ancestor is the design's spine:
+
+**In waymark10, ALL row data lives in the JSONB document.** Every
+per-kind column beyond the engine's fixed set is a GENERATED column
+derived from that document (the phase-7 promotion rule: filterable ∪
+sortable). So dropping or recreating a promoted column is ALWAYS
+data-safe — Postgres backfills a generated column on ADD, and a
+dropped one is regenerable from the document it derived from. Where
+waymark9 emitted `-- REVIEW:` comments and made a human finish the
+sentence, v10 can be aggressive about column reconciliation and
+conservative about exactly one thing: UPDATEs that rewrite state
+tokens. Those are the only steps marked `:destructive? true`, and
+nothing ever applies them silently.
+
+## One projection, three consumers
+
+`store/kind-projection` is the single description of a kind's table —
+the engine's fixed columns, one generated column per promoted field,
+the standard indexes. Three things read it and can therefore never
+disagree:
+
+1. the DDL (`postgres/kind-ddl` renders CREATE TABLE + indexes from
+   it; the engine's own five tables carry the same projection shape,
+   `postgres/engine-projections`);
+2. the desired snapshot (`postgres/desired-snapshot` canonicalizes it
+   for comparison against `postgres/table-snapshot`, the live shape
+   read from information_schema/pg_indexes);
+3. the fingerprint's **storage facet** (`"storage"` in
+   `fingerprint-of`: table, columns sorted by name with type-as-string
+   and the generated flag, index names). classify-path already filed
+   `storage.*` under :shape, so a promotion change is now LAW — the
+   diff is :code-or-shape and the boot promotes totally. Consequence,
+   recorded: the facet's landing re-hashed every kind once — each
+   kind minted one `code_or_shape` revision at its first boot after
+   this change (the suites, which drop their worlds, never noticed;
+   a long-lived database sees one extra revision row per kind).
+
+## The planner's step taxonomy
+
+`(plan st resources)` → ordered steps, each
+`{:kind … :table … :sql … :destructive? bool :reason "one sentence"}`:
+
+| :kind | when | destructive? |
+| --- | --- | --- |
+| `:create-table` | the table does not exist — the full kind DDL | no |
+| `:add-column` | a declared column (promotion or engine-fixed) has no live twin; Postgres backfills generated columns on ADD | no |
+| `:drop-column` | a live `f_*` generated column no declaration promotes — derived data, regenerable | no |
+| `:recreate-column` | a promoted column's declared type ≠ live type — two steps, DROP then ADD (honest about being a rebuild) | no |
+| `:add-index` / `:drop-index` | the engine's standard indexes, reconciled by NAME | no |
+| `:rename-state` | live rows occupy a token `:renames {:states …}` retires — `UPDATE … SET state = …` | **yes** |
+
+`(apply! st steps {:destructive? bool})` executes in order; steps
+marked destructive are skipped and returned under `:skipped` unless
+opted in.
+
+Recorded boundaries (the planner's honesty, not its gaps):
+
+- **Expression drift is invisible.** Postgres normalizes stored
+  generation expressions past honest text comparison, so drift
+  compares by column name + data type only. Acceptable because the
+  expression derives mechanically from (field, type) — it cannot
+  move unless one of them did, and the storage facet excludes it for
+  the same reason.
+- **Engine tables reconcile additively only** (transitions,
+  idempotency, drafts, cursors, job_leases): missing tables, columns,
+  indexes are created; engine-column drops and retypes are out of
+  scope — those columns hold real data, not derivations.
+- **A live non-generated column the projection does not declare is
+  left standing, unlisted**: only `f_*` columns are known-derived; a
+  hand-added column is someone's data, not the planner's to drop.
+
+## State tokens: the continuity map
+
+A declaration may carry `:renames {:states {old new} :actions {old
+new}}` — validated by the named `:renames` check (retired keys must
+not still be declared; every target reaches a declared token,
+directly or through the chain; no cycles). Three consumers:
+
+- **The boot's state-token gate** (waymark9's `check_state_tokens`):
+  after the schema gate, any kind whose live rows occupy a state
+  neither declared nor mapped refuses the boot with the fix named —
+  "declare :renames or migrate". With `:renames` declared but rows
+  unmoved, the PLAN gate refuses first (the rename step is pending),
+  so a serving engine never holds rows the machine cannot judge.
+- **The planner** emits the `:rename-state` UPDATE per retired token
+  with live rows.
+- **replay-history** (`conformance/replay-violations`) reads logged
+  action/state names AND the stored law's names FORWARD through the
+  resident chain before judging legality — so a grandfathered row
+  (adoption :never) acting after a rename, logging NEW tokens under
+  the OLD revision's stamp, still replays legal.
+
+Renames are boot/replay metadata, not fingerprinted law (recorded):
+the machine facet already moved when the states changed; the rename
+map only says where the old spellings went.
+
+## Boot posture and the CLI
+
+`engine/engine` runs the gate after `ensure-kind!`: non-empty plan →
+refuse to serve with a definition-error listing every step and the
+remedy. `{:auto-migrate true}` (passed explicitly — `make dev10`
+sets `WAYMARK10_AUTO_MIGRATE=1`; never a default) applies the
+non-destructive steps in place; a destructive remainder still
+refuses, naming `DESTRUCTIVE=1`. Production posture is refuse. The
+CLI is `make migrate10` (§9's walk): print / `APPLY=1` /
+`DESTRUCTIVE=1`, exit 1 while steps remain — a scriptable deploy
+gate. Acceptance held: a freshly-booted mealplan10_dev plans empty.
+
+The suites after this phase: `make test10` **196 tests, 1352
+assertions** (the migrate scenario suite: add-column backfills and
+serves the collection surface, drop, retype, the rename story
+refuse→migrate→serve→replay-green, drift-free empty plan, and the
+storage facet minting its revision); `make test-mealplan10` **11
+tests, 145 assertions**, untouched.
+
 # The 9→10 wire, closed: divergences the lineage should remember
 
 Wire "10" is a clean break, not a superset. Everything a waymark9
@@ -845,8 +975,9 @@ with their servers). Standing cross-cutting punts, restated one
 last time so nobody re-discovers them: RRULE/recurrence, spans, the
 predecessor resolver, `rows=none`/`depth=` collection modes, GIN
 indexes for vocab arrays, grant-projected SSE/surface/openapi
-routes, the grant negotiation machine and ApprovalRequest flow, the
-cross-process bus, and the migration planner. The law is a form,
+routes, the grant negotiation machine and ApprovalRequest flow, and
+the cross-process bus (the migration planner, this list's largest
+entry, came home in §11). The law is a form,
 the wire is its projection, and every client in this phase proved
 it can follow the projection without ever being told what the
 application is.

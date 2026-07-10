@@ -8,16 +8,26 @@
 
   The transition log is one append-only table wearing four hats:
   audit trail, outbox (pg_notify rides the write transaction),
-  activity feed, and the idempotency/natural-replay anchor."
-  (:require [waymark10.types :as t]))
+  activity feed, and the idempotency/natural-replay anchor.
+
+  This namespace also owns the STORAGE PROJECTION of a declaration
+  (kind-projection): the one description of a kind's table — engine
+  columns, promoted generated columns, standard indexes — that feeds
+  BOTH the DDL the backend emits (store.postgres) and the storage
+  facet the fingerprint records (waymark10.fingerprint). Never two
+  descriptions of one table."
+  (:require [waymark10.schema :as schema]
+            [waymark10.types :as t]))
 
 (defprotocol Storage
   (with-tx* [st f]
     "Run (f tx) inside one transaction; the invoke algorithm is one
     call of this.")
   (ensure-kind! [st rmap]
-    "Create/extend the kind's table from its declaration (crude
-    ensure; the migrate diff arrives with phase 2's tail).")
+    "Create the kind's table from its declaration when absent —
+    additive only (CREATE IF NOT EXISTS); drift on an EXISTING table
+    is the migrate planner's job (server.store.migrate), gated at
+    boot.")
   (load-row [st tx kind id opts]
     "The row map, or nil. {:for-update true} takes the row lock —
     exactly one per invocation.")
@@ -123,3 +133,105 @@
     (when-not (re-matches #"[a-z][a-z0-9_]*" s)
       (throw (t/definition-error (str "identifier " (pr-str s) " is not a checked snake_case token"))))
     s))
+
+;; ── the storage projection (the migrate planner's spine) ────────────
+;; In v10 ALL row data lives in the JSONB document; every per-kind
+;; column beyond the engine's fixed set is a GENERATED column derived
+;; from it. The projection below is therefore the whole truth about a
+;; kind's table, and the fingerprint's storage facet is this same map
+;; canonicalized — a promotion change is law, and dropping/recreating
+;; a promoted column is always data-safe.
+
+(def engine-columns
+  "The fixed columns every kind table carries, in DDL order. :type is
+  the canonical short spelling the live snapshot normalizes to; :ddl
+  is the full column clause."
+  [{:name "id" :type "text" :ddl "id text PRIMARY KEY"}
+   {:name "state" :type "text" :ddl "state text NOT NULL"}
+   {:name "version" :type "bigint" :ddl "version bigint NOT NULL DEFAULT 1"}
+   {:name "data" :type "jsonb" :ddl "data jsonb NOT NULL"}
+   {:name "shape" :type "int" :ddl "shape int NOT NULL DEFAULT 1"}
+   {:name "owner" :type "text" :ddl "owner text"}
+   {:name "law_revision" :type "int" :ddl "law_revision int"}
+   {:name "next_flip_at" :type "timestamptz" :ddl "next_flip_at timestamptz"}
+   {:name "created_at" :type "timestamptz"
+    :ddl "created_at timestamptz NOT NULL DEFAULT now()"}
+   {:name "updated_at" :type "timestamptz"
+    :ddl "updated_at timestamptz NOT NULL DEFAULT now()"}])
+
+(defn generated-column-type
+  "SQL type for a promoted filterable/sortable field, from its schema
+  form; nil when the field has no single-value promotion (vocab
+  arrays get GIN in phase 7)."
+  [field-schema]
+  (let [head (if (vector? field-schema) (first field-schema) field-schema)]
+    (case head
+      :waymark/date "date"
+      :waymark/instant "timestamptz"
+      :boolean "boolean"
+      :int "bigint"
+      (:double :decimal) "numeric"
+      (:string :waymark/ref :waymark/vocab :enum) "text"
+      nil)))
+
+(defn- generated-expression
+  "The extraction expression a promoted column derives by — mechanical
+  from (field, type), which is why expression-only drift never needs
+  detecting: the expression cannot move unless name or type did."
+  [sql-type fname]
+  (case sql-type
+    "date" (str "waymark10_date(data->>'" fname "')")
+    "timestamptz" (str "waymark10_ts(data->>'" fname "')")
+    "boolean" (str "(data->>'" fname "')::boolean")
+    "bigint" (str "(data->>'" fname "')::bigint")
+    "numeric" (str "(data->>'" fname "')::numeric")
+    (str "data->>'" fname "'")))
+
+(defn- promoted-column [rmap field]
+  (let [fname (definition-checked-name field)
+        sql-type (generated-column-type
+                  (schema/field-schema (:schema rmap) field))]
+    (when sql-type
+      {:name (str "f_" fname)
+       :type sql-type
+       :generated? true
+       :ddl (str "f_" fname " " sql-type " GENERATED ALWAYS AS ("
+                 (generated-expression sql-type fname) ") STORED")})))
+
+(defn kind-projection
+  "The one projection of a kind's table: the engine's fixed columns,
+  a generated column per promoted field (filterable ∪ sortable, phase
+  7's rule — sort orders by the generated column, so sortable fields
+  promote too; :state has its own column; vocab arrays have no
+  single-value promotion), and the standard indexes.
+  → {:table … :columns [{:name :type :generated? :ddl} …]
+     :indexes {name create-sql}}"
+  [rmap]
+  (let [table (definition-checked-name (:plural rmap))
+        promoted (keep (fn [field]
+                         (when-not (= field :state)
+                           (promoted-column rmap field)))
+                       (sort (into (set (keys (:filterable rmap)))
+                                   (get-in rmap [:sortable :fields]))))]
+    {:table table
+     :columns (into engine-columns promoted)
+     :indexes
+     {(str "ix_" table "_state")
+      (str "CREATE INDEX IF NOT EXISTS ix_" table "_state ON " table " (state)")
+      (str "ix_" table "_law")
+      (str "CREATE INDEX IF NOT EXISTS ix_" table "_law ON " table " (law_revision)")
+      (str "ix_" table "_flip")
+      (str "CREATE INDEX IF NOT EXISTS ix_" table "_flip ON " table
+           " (next_flip_at) WHERE next_flip_at IS NOT NULL")}}))
+
+(defn projection-snapshot
+  "A projection reduced to the comparable shape the live snapshot
+  reads back: columns by name with type + generated flag (expressions
+  deliberately excluded — see kind-projection), index names to their
+  creating SQL."
+  [{:keys [columns indexes]}]
+  {:columns (into {}
+                  (map (fn [{col :name :keys [type generated?]}]
+                         [col {:type type :generated? (boolean generated?)}]))
+                  columns)
+   :indexes indexes})

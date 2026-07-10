@@ -20,6 +20,7 @@
   - stale-facts → derived facts whose semantic surface moved."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
+            [waymark10.server.store :as store]
             [waymark10.wire :as wire]))
 
 (set! *warn-on-reflection* true)
@@ -99,6 +100,24 @@
    "reversible" (boolean (:reversible s))
    "confirm"    (boolean (:confirm s))})
 
+(defn- storage-fp
+  "The storage facet: the kind's table projection canonicalized —
+  columns sorted by name with type-as-string + generated flag, index
+  names sorted. The SAME projection the DDL renders from
+  (store/kind-projection), so a promotion change is law: classify-path
+  files storage.* under :shape, the diff is :code-or-shape, and the
+  boot promotes totally. Generation expressions are excluded on both
+  sides (they derive mechanically from field + type)."
+  [rmap]
+  (let [{:keys [table columns indexes]} (store/kind-projection rmap)]
+    {"table" table
+     "columns" (into (sorted-map)
+                     (map (fn [{col :name :keys [type generated?]}]
+                            [col {"type" type
+                                  "generated" (boolean generated?)}]))
+                     columns)
+     "indexes" (vec (sort (keys indexes)))}))
+
 (defn- action-fp [a]
   {"from"    (vec (sort (map name (:from a))))
    "to"      (name (:to a))
@@ -109,22 +128,28 @@
 (defn fingerprint-of
   "Deterministic, canonically-encodable projection of a resource
   declaration map. Phase-0 facets: machine (states, actions with
-  guards/safety/handler) and derived; later phases add create, schema,
-  owns, vocab, query, links, storage — each facet landing with the
+  guards/safety/handler) and derived; the migrate phase adds storage
+  (the table projection — present when the declaration carries a
+  schema, i.e. every normalized kind); later phases add create,
+  schema, owns, vocab, query, links — each facet landing with the
   feature that declares it."
   [rmap]
-  {"kind" (name (:kind rmap))
-   "machine"
-   {"states"   (mapv name (:states rmap))
-    "initial"  (name (:initial rmap))
-    "terminal" (vec (sort (map name (:terminal rmap))))
-    "actions"  (into (sorted-map)
-                     (map (fn [[k a]] [(name k) (action-fp a)]))
-                     (:actions rmap))}
-   "derived"
-   (into (sorted-map)
-         (map (fn [[k d]] [(name k) (derived-fp d)]))
-         (:derived rmap))})
+  (cond-> {"kind" (name (:kind rmap))
+           "machine"
+           {"states"   (mapv name (:states rmap))
+            "initial"  (name (:initial rmap))
+            "terminal" (vec (sort (map name (:terminal rmap))))
+            "actions"  (into (sorted-map)
+                             (map (fn [[k a]] [(name k) (action-fp a)]))
+                             (:actions rmap))}
+           "derived"
+           (into (sorted-map)
+                 (map (fn [[k d]] [(name k) (derived-fp d)]))
+                 (:derived rmap))}
+    ;; the facet exists exactly when the declaration names a table —
+    ;; :plural is normalized in, so every registered kind carries it
+    (and (:schema rmap) (:plural rmap))
+    (assoc "storage" (storage-fp rmap))))
 
 (defn fingerprint-hash ^String [fp]
   (wire/digest fp))

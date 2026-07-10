@@ -553,6 +553,42 @@
                                (vec clash) " — derived values are engine-computed; "
                                "an action cannot write them")))))))
 
+(defn- check-renames
+  "The continuity map validates hard: :renames {:states {old new}
+  :actions {old new}} — every key a retired snake token that is NOT
+  still declared, every target reaching a declared state/action
+  (directly or through the chain), no cycles. A rename that resolves
+  to nothing would strand the boot check and the replay obligation."
+  [r]
+  (let [renames (:renames r {})]
+    (when-some [unknown (seq (sort (remove #{:states :actions} (keys renames))))]
+      (err r :renames (str ":renames declares unknown surface(s) " (vec unknown)
+                           "; renames map :states and :actions")))
+    (doseq [[what m declared]
+            [["state" (:states renames) (set (:states r))]
+             ["action" (:actions renames) (set (keys (:actions r)))]]]
+      (doseq [[old target] (sort-by key m)]
+        (doseq [tok [old target]]
+          (when-not (and (keyword? tok) (re-matches snake (name tok)))
+            (err r :renames (str what " rename " old " → " target ": "
+                                 (pr-str tok) " is not a snake_case token"))))
+        (when (contains? declared old)
+          (err r :renames (str what " rename " old " → " target ": " old
+                               " is still declared — a token cannot be both "
+                               "live and renamed")))
+        (loop [t target seen #{old}]
+          (cond
+            (contains? declared t) nil
+            (contains? seen t)
+            (err r :renames (str what " rename chain from " old
+                                 " cycles at " t " — it reaches no declared "
+                                 what))
+            (contains? m t) (recur (get m t) (conj seen t))
+            :else
+            (err r :renames (str what " rename " old " → " target
+                                 " reaches no declared " what
+                                 " (directly or through the chain)"))))))))
+
 (defn- check-unless [r]
   (doseq [a (machine/actions-seq r)]
     (when-some [tr (:unless a)]
@@ -599,4 +635,4 @@
           check-handler-signatures check-summary-template check-waive-tokens
           check-place check-edit check-altitude check-long-text
           check-faceted check-oneof check-unique check-links
-          check-derived check-unless check-require])})
+          check-derived check-renames check-unless check-require])})

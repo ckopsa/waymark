@@ -6,4 +6,7 @@
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
                        lambdaisland/kaocha    {:mvn/version "1.91.1392"}}
          :main-opts   ["-m" "kaocha.runner"]}
-  :dev  {:main-opts ["-m" "mealplan10.main"]}}}
+  :dev  {:main-opts ["-m" "mealplan10.main"]}
+  ;; make migrate10: print the schema plan; APPLY=1 executes,
+  ;; DESTRUCTIVE=1 includes state renames
+  :migrate {:main-opts ["-e" "((requiring-resolve 'mealplan10.main/migrate!))"]}}}

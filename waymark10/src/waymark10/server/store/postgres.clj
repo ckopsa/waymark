@@ -7,7 +7,6 @@
   (:require [clojure.string :as str]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
-            [waymark10.schema :as schema]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (com.zaxxer.hikari HikariConfig HikariDataSource)
@@ -34,7 +33,10 @@
 (defn- ->inst [v]
   (if (instance? Timestamp v) (.toInstant ^Timestamp v) v))
 
-;; ── DDL projection ──────────────────────────────────────────────────
+(def ^:private jdbc-opts
+  {:builder-fn rs/as-unqualified-maps})
+
+;; ── DDL rendering (the projection lives in waymark10.server.store) ──
 
 (def ^:private helper-fns
   ["CREATE OR REPLACE FUNCTION waymark10_date(t text) RETURNS date
@@ -42,122 +44,159 @@
    "CREATE OR REPLACE FUNCTION waymark10_ts(t text) RETURNS timestamptz
       IMMUTABLE STRICT LANGUAGE sql AS $$SELECT t::timestamptz$$"])
 
-(defn- sortable-fields [rmap]
-  (get-in rmap [:sortable :fields]))
-
-(defn- generated-column-type
-  "SQL type for a promoted filterable field, from its schema form;
-  nil when the field has no single-value promotion (vocab arrays get
-  GIN in phase 7)."
-  [field-schema]
-  (let [head (if (vector? field-schema) (first field-schema) field-schema)]
-    (case head
-      :waymark/date "date"
-      :waymark/instant "timestamptz"
-      :boolean "boolean"
-      :int "bigint"
-      (:double :decimal) "numeric"
-      (:string :waymark/ref :waymark/vocab :enum) "text"
-      nil)))
-
-(defn- generated-column [field field-schema]
-  (let [fname (store/definition-checked-name field)
-        sql-type (generated-column-type field-schema)]
-    (when sql-type
-      (str "f_" fname " " sql-type
-           " GENERATED ALWAYS AS ("
-           (case sql-type
-             "date" (str "waymark10_date(data->>'" fname "')")
-             "timestamptz" (str "waymark10_ts(data->>'" fname "')")
-             "boolean" (str "(data->>'" fname "')::boolean")
-             "bigint" (str "(data->>'" fname "')::bigint")
-             "numeric" (str "(data->>'" fname "')::numeric")
-             (str "data->>'" fname "'"))
-           ") STORED"))))
+(defn table-ddl
+  "CREATE TABLE IF NOT EXISTS + its indexes, rendered from one
+  projection — the same map desired-snapshot canonicalizes; the DDL
+  and the drift comparison can never disagree about what a table is."
+  [{:keys [table columns constraints indexes]}]
+  (cons (str "CREATE TABLE IF NOT EXISTS " table " (\n"
+             (str/join ",\n" (map #(str "  " (:ddl %))
+                                  columns))
+             (str/join (map #(str ",\n  " %) constraints))
+             "\n)")
+        (map val (sort-by key indexes))))
 
 (defn kind-ddl
-  "CREATE TABLE + indexes for one declared kind. Promoted columns are
-  the filterable ∪ sortable fields (phase 7 widened filterable-only:
-  sort orders by the generated column, so sortable fields promote
-  too); vocab arrays have no single-value promotion and no GIN index
-  yet (named punt) — containment filters scan."
+  "CREATE TABLE + indexes for one declared kind, from its storage
+  projection (store/kind-projection — filterable ∪ sortable promote
+  to generated columns; vocab arrays have no single-value promotion
+  and no GIN index yet, a named punt — containment filters scan)."
   [rmap]
-  (let [table (store/definition-checked-name (:plural rmap))
-        promoted (keep (fn [field]
-                         (when-not (= field :state)
-                           (generated-column
-                            field (schema/field-schema (:schema rmap) field))))
-                       (sort (into (set (keys (:filterable rmap)))
-                                   (sortable-fields rmap))))]
-    (concat
-     [(str "CREATE TABLE IF NOT EXISTS " table " (\n"
-           (str/join ",\n"
-                     (concat
-                      ["  id text PRIMARY KEY"
-                       "  state text NOT NULL"
-                       "  version bigint NOT NULL DEFAULT 1"
-                       "  data jsonb NOT NULL"
-                       "  shape int NOT NULL DEFAULT 1"
-                       "  owner text"
-                       "  law_revision int"
-                       "  next_flip_at timestamptz"
-                       "  created_at timestamptz NOT NULL DEFAULT now()"
-                       "  updated_at timestamptz NOT NULL DEFAULT now()"]
-                      (map #(str "  " %) promoted)))
-           "\n)")
-      (str "CREATE INDEX IF NOT EXISTS ix_" table "_state ON " table " (state)")
-      (str "CREATE INDEX IF NOT EXISTS ix_" table "_law ON " table " (law_revision)")
-      (str "CREATE INDEX IF NOT EXISTS ix_" table "_flip ON " table
-           " (next_flip_at) WHERE next_flip_at IS NOT NULL")])))
+  (table-ddl (store/kind-projection rmap)))
 
-(def ^:private engine-ddl
-  [(str "CREATE TABLE IF NOT EXISTS waymark10_transitions (\n"
-        "  id bigserial PRIMARY KEY,\n"
-        "  kind text NOT NULL,\n"
-        "  resource_id text NOT NULL,\n"
-        "  action text NOT NULL,\n"
-        "  from_state text,\n"
-        "  to_state text NOT NULL,\n"
-        "  actor jsonb NOT NULL,\n"
-        "  at timestamptz NOT NULL DEFAULT now(),\n"
-        "  law_revision int,\n"
-        "  input_digest text,\n"
-        "  inputs jsonb,\n"
-        "  acknowledged jsonb,\n"
-        "  correlation_id text,\n"
-        "  idempotency_key text,\n"
-        "  summary text)")
-   "CREATE INDEX IF NOT EXISTS ix_wm10_t_resource ON waymark10_transitions (kind, resource_id, id)"
-   (str "CREATE TABLE IF NOT EXISTS waymark10_idempotency (\n"
-        "  key text NOT NULL,\n"
-        "  kind text NOT NULL,\n"
-        "  action text NOT NULL,\n"
-        "  request_digest text NOT NULL,\n"
-        "  status int NOT NULL,\n"
-        "  response text NOT NULL,\n"          ; text: replay is byte-identical
-        "  media_type text NOT NULL DEFAULT 'application/waymark+json',\n"
-        "  created_at timestamptz NOT NULL DEFAULT now(),\n"
-        "  PRIMARY KEY (key, kind))")
+(def engine-projections
+  "The engine's own tables in the same projection shape as a kind's
+  (constraints ride only the CREATE — the migrate planner reconciles
+  engine tables additively and never touches keys)."
+  [;; the transition log: audit + outbox + feed + idempotency anchor
+   {:table "waymark10_transitions"
+    :columns [{:name "id" :type "bigint" :ddl "id bigserial PRIMARY KEY"}
+              {:name "kind" :type "text" :ddl "kind text NOT NULL"}
+              {:name "resource_id" :type "text" :ddl "resource_id text NOT NULL"}
+              {:name "action" :type "text" :ddl "action text NOT NULL"}
+              {:name "from_state" :type "text" :ddl "from_state text"}
+              {:name "to_state" :type "text" :ddl "to_state text NOT NULL"}
+              {:name "actor" :type "jsonb" :ddl "actor jsonb NOT NULL"}
+              {:name "at" :type "timestamptz"
+               :ddl "at timestamptz NOT NULL DEFAULT now()"}
+              {:name "law_revision" :type "int" :ddl "law_revision int"}
+              {:name "input_digest" :type "text" :ddl "input_digest text"}
+              {:name "inputs" :type "jsonb" :ddl "inputs jsonb"}
+              {:name "acknowledged" :type "jsonb" :ddl "acknowledged jsonb"}
+              {:name "correlation_id" :type "text" :ddl "correlation_id text"}
+              {:name "idempotency_key" :type "text" :ddl "idempotency_key text"}
+              {:name "summary" :type "text" :ddl "summary text"}]
+    :indexes {"ix_wm10_t_resource"
+              "CREATE INDEX IF NOT EXISTS ix_wm10_t_resource ON waymark10_transitions (kind, resource_id, id)"}}
+   {:table "waymark10_idempotency"
+    :columns [{:name "key" :type "text" :ddl "key text NOT NULL"}
+              {:name "kind" :type "text" :ddl "kind text NOT NULL"}
+              {:name "action" :type "text" :ddl "action text NOT NULL"}
+              {:name "request_digest" :type "text" :ddl "request_digest text NOT NULL"}
+              {:name "status" :type "int" :ddl "status int NOT NULL"}
+              ;; text: replay is byte-identical
+              {:name "response" :type "text" :ddl "response text NOT NULL"}
+              {:name "media_type" :type "text"
+               :ddl "media_type text NOT NULL DEFAULT 'application/waymark+json'"}
+              {:name "created_at" :type "timestamptz"
+               :ddl "created_at timestamptz NOT NULL DEFAULT now()"}]
+    :constraints ["PRIMARY KEY (key, kind)"]
+    :indexes {}}
    ;; phase 7: the draft rows — audience is "shared" or a principal id
-   (str "CREATE TABLE IF NOT EXISTS waymark10_drafts (\n"
-        "  kind text NOT NULL,\n"
-        "  resource_id text NOT NULL,\n"
-        "  action text NOT NULL,\n"
-        "  audience text NOT NULL,\n"
-        "  \"values\" jsonb NOT NULL DEFAULT '{}'::jsonb,\n"
-        "  base_version bigint,\n"
-        "  updated_at timestamptz NOT NULL DEFAULT now(),\n"
-        "  PRIMARY KEY (kind, resource_id, action, audience))")
+   {:table "waymark10_drafts"
+    :columns [{:name "kind" :type "text" :ddl "kind text NOT NULL"}
+              {:name "resource_id" :type "text" :ddl "resource_id text NOT NULL"}
+              {:name "action" :type "text" :ddl "action text NOT NULL"}
+              {:name "audience" :type "text" :ddl "audience text NOT NULL"}
+              {:name "values" :type "jsonb"
+               :ddl "\"values\" jsonb NOT NULL DEFAULT '{}'::jsonb"}
+              {:name "base_version" :type "bigint" :ddl "base_version bigint"}
+              {:name "updated_at" :type "timestamptz"
+               :ddl "updated_at timestamptz NOT NULL DEFAULT now()"}]
+    :constraints ["PRIMARY KEY (kind, resource_id, action, audience)"]
+    :indexes {}}
    ;; phase 9b: consumer cursors (the webhook deliverer's at-least-once
    ;; checkpoint) and job leases (claim-or-steal on expiry)
-   (str "CREATE TABLE IF NOT EXISTS waymark10_cursors (\n"
-        "  consumer text PRIMARY KEY,\n"
-        "  position bigint NOT NULL DEFAULT 0,\n"
-        "  updated_at timestamptz NOT NULL DEFAULT now())")
-   (str "CREATE TABLE IF NOT EXISTS waymark10_job_leases (\n"
-        "  job_id text PRIMARY KEY,\n"
-        "  holder text NOT NULL,\n"
-        "  expires_at timestamptz NOT NULL)")])
+   {:table "waymark10_cursors"
+    :columns [{:name "consumer" :type "text" :ddl "consumer text PRIMARY KEY"}
+              {:name "position" :type "bigint"
+               :ddl "position bigint NOT NULL DEFAULT 0"}
+              {:name "updated_at" :type "timestamptz"
+               :ddl "updated_at timestamptz NOT NULL DEFAULT now()"}]
+    :indexes {}}
+   {:table "waymark10_job_leases"
+    :columns [{:name "job_id" :type "text" :ddl "job_id text PRIMARY KEY"}
+              {:name "holder" :type "text" :ddl "holder text NOT NULL"}
+              {:name "expires_at" :type "timestamptz"
+               :ddl "expires_at timestamptz NOT NULL"}]
+    :indexes {}}])
+
+(def ^:private engine-ddl
+  (mapcat table-ddl engine-projections))
+
+;; ── the live snapshot (the migrate planner's other half) ────────────
+
+(def ^:private canonical-type
+  "information_schema's long spellings back to the projection's short
+  ones, so desired and live compare in one vocabulary."
+  {"timestamp with time zone" "timestamptz"
+   "integer" "int"
+   "character varying" "text"})
+
+(defn table-snapshot
+  "The live shape of one table, read from information_schema and
+  pg_indexes: {:columns {name {:type … :generated? …}}
+  :indexes {name indexdef}}; nil when the table does not exist.
+  Postgres normalizes generation expressions, so the snapshot carries
+  none — drift compares by name + data type only (see migrate)."
+  [st table]
+  (with-open [conn (jdbc/get-connection ^HikariDataSource (:ds st))]
+    (let [cols (jdbc/execute!
+                conn
+                [(str "SELECT column_name, data_type, is_generated"
+                      " FROM information_schema.columns"
+                      " WHERE table_schema = 'public' AND table_name = ?")
+                 table]
+                jdbc-opts)]
+      (when (seq cols)
+        {:columns (into {}
+                        (map (fn [r]
+                               [(:column_name r)
+                                {:type (let [t (:data_type r)]
+                                         (get canonical-type t t))
+                                 :generated? (= "ALWAYS" (:is_generated r))}]))
+                        cols)
+         :indexes (into {}
+                        (map (juxt :indexname :indexdef))
+                        (jdbc/execute!
+                         conn
+                         [(str "SELECT indexname, indexdef FROM pg_indexes"
+                               " WHERE schemaname = 'public' AND tablename = ?")
+                          table]
+                         jdbc-opts))}))))
+
+(defn desired-snapshot
+  "The declaration's table in the snapshot shape — the SAME projection
+  kind-ddl renders, canonicalized for comparison."
+  [rmap]
+  (store/projection-snapshot (store/kind-projection rmap)))
+
+(defn distinct-states
+  "The state tokens live rows actually occupy — the boot's
+  check-state-tokens read and the rename planner's evidence. nil when
+  the table does not exist."
+  [st table]
+  (with-open [conn (jdbc/get-connection ^HikariDataSource (:ds st))]
+    (when (pos? (:n (jdbc/execute-one!
+                     conn
+                     ["SELECT count(*) AS n FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ?"
+                      table]
+                     jdbc-opts)))
+      (into (sorted-set)
+            (map :state)
+            (jdbc/execute! conn [(str "SELECT DISTINCT state FROM "
+                                      (store/definition-checked-name table))]
+                           jdbc-opts)))))
 
 ;; ── row mapping ─────────────────────────────────────────────────────
 
@@ -191,9 +230,6 @@
      :correlation-id (:correlation_id r)
      :idempotency-key (:idempotency_key r)
      :summary (:summary r)}))
-
-(def ^:private jdbc-opts
-  {:builder-fn rs/as-unqualified-maps})
 
 ;; ── the condition grammar (phase 6; collections widen it, phase 7) ──
 

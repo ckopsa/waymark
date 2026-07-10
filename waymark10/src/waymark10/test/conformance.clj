@@ -23,6 +23,7 @@
             [waymark10.machine :as machine]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
+            [waymark10.server.store.migrate :as migrate]
             [waymark10.summary :as summary]))
 
 (set! *warn-on-reflection* true)
@@ -37,12 +38,26 @@
 
 (def ^:private engine-actions #{:create :adopt})
 
+(def ^:private resolve-token
+  "One token read FORWARD through a rename map — the migrate
+  planner's own resolver, shared so replay and the planner can never
+  disagree about where a chain ends."
+  migrate/resolve-token)
+
 (defn replay-violations
   "Every logged transition with a non-nil law-revision, checked
   against its revision's stored fingerprint. Returns a vector of
-  violation maps — empty is conformance."
+  violation maps — empty is conformance.
+
+  The continuity map rides the judgment (migrate): logged names AND
+  the stored law's names both read FORWARD through the resident
+  declaration's :renames chain before comparing, so a grandfathered
+  row acting after a state rename (new tokens logged under the old
+  revision's stamp) still replays legal — waymark9's
+  check_state_tokens promise, kept over history."
   [eng]
   (let [st (:storage eng)
+        rdefs (if-some [reg (:registry eng)] (:kinds @reg) (:resources eng))
         laws (store/with-tx st
                (fn [tx]
                  (into {}
@@ -59,19 +74,29 @@
              (let [rev (:law-revision t)
                    witness (select-keys t [:kind :resource-id :action
                                            :from-state :to-state
-                                           :law-revision])]
+                                           :law-revision])
+                   renames (get-in rdefs [(:kind t) :renames] {})
+                   s-res #(resolve-token (:states renames) %)
+                   a-res #(resolve-token (:actions renames) %)]
                (when (and rev
                           (:from-state t)
                           (not (engine-actions (:action t))))
                  (if-some [fp' (get laws [(name (:kind t)) rev])]
-                   (if-some [a (get-in fp' ["machine" "actions"
-                                            (name (:action t))])]
-                     (when-not (and (some #(= % (name (:from-state t)))
-                                          (get a "from"))
-                                    (= (name (:to-state t)) (get a "to")))
-                       (assoc witness :violation :edge-not-in-law
-                              :law {:from (get a "from") :to (get a "to")}))
-                     (assoc witness :violation :action-not-in-law))
+                   (let [actions (get-in fp' ["machine" "actions"])
+                         logged-a (a-res (:action t))
+                         a (or (get actions (name (:action t)))
+                               (some (fn [[an av]]
+                                       (when (= (a-res an) logged-a) av))
+                                     actions))]
+                     (if a
+                       (when-not (and (some #(= (s-res %)
+                                                (s-res (:from-state t)))
+                                            (get a "from"))
+                                      (= (s-res (:to-state t))
+                                         (s-res (get a "to"))))
+                         (assoc witness :violation :edge-not-in-law
+                                :law {:from (get a "from") :to (get a "to")}))
+                       (assoc witness :violation :action-not-in-law)))
                    (assoc witness :violation :no-stored-law))))))
           ts)))
 

@@ -38,7 +38,8 @@
   (default 250), :webhook-timeout-ms (default 10s), :webhooks-poll-ms
   (deliverer backstop, default 2s), :jobs-poll-ms (worker cadence,
   default 1s), :jobs-batch-size (progress granularity, default 10)."
-  (:require [org.httpkit.server :as http]
+  (:require [clojure.string :as str]
+            [org.httpkit.server :as http]
             [waymark10.registry :as registry]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.definitions :as defs]
@@ -53,6 +54,7 @@
             [waymark10.server.roles :as roles]
             [waymark10.server.router :as router]
             [waymark10.server.store :as store]
+            [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.surface :as surface]
             [waymark10.server.webhooks :as webhooks]
@@ -61,18 +63,63 @@
 
 (set! *warn-on-reflection* true)
 
+(defn full-registry
+  "The application's resources plus every kind the engine itself
+  enrolls — the one list, shared with the migrate CLI so a plan
+  covers exactly the kinds a boot would serve."
+  [resources]
+  (registry/registry (into (vec resources)
+                           [defs/definition members/member
+                            roles/role grants/grant
+                            attachments/attachment
+                            webhooks/subscription jobs/job])))
+
+(defn- migrate-gate!
+  "The boot's schema gate (migrate): plan the drift; a non-empty plan
+  refuses to serve — the production posture — unless :auto-migrate,
+  which applies the NON-destructive steps. State renames are never
+  auto-applied: a destructive remainder refuses the boot too, naming
+  the explicit opt-in (the migrate CLI's DESTRUCTIVE=1). The
+  state-token check runs after either way: rows in state tokens no
+  declaration names or maps refuse the boot with the fix named
+  (waymark9's check_state_tokens)."
+  [storage reg opts]
+  (let [rdefs (vals (:kinds reg))
+        steps (migrate/plan storage rdefs)
+        refuse (fn [steps remedy]
+                 (throw (t/definition-error
+                         (str "storage drift: " (count steps)
+                              " migration step(s) pending — " remedy "\n"
+                              (str/join "\n" (map migrate/describe steps)))
+                         {:check :migrate :steps (vec steps)})))]
+    (when (seq steps)
+      (if (:auto-migrate opts)
+        (let [{:keys [skipped]}
+              (migrate/apply! storage steps {:destructive? false})]
+          (when (seq skipped)
+            (refuse skipped
+                    (str "these rewrite state tokens, which :auto-migrate "
+                         "never does; apply them deliberately "
+                         "(make migrate10 APPLY=1 DESTRUCTIVE=1)"))))
+        (refuse steps
+                "apply the plan (make migrate10 APPLY=1) or boot with :auto-migrate")))
+    (migrate/assert-known-states! storage rdefs)))
+
 (defn engine
   "The booted engine. render-fn runs inside the invoke transaction,
   so it stays pure: no storage reads, and the probe runs for the
   ANONYMOUS principal (threading the acting principal through
   finish! remains a recorded punt) — principal-sensitive guards may
-  render differently in a replay than they did live."
+  render differently in a replay than they did live.
+
+  Migrate (the schema gate): after every kind's storage is ensured,
+  the boot plans declared-vs-live drift and REFUSES to serve on a
+  non-empty plan — unless opts carry :auto-migrate true (dev
+  posture, passed explicitly; never a default), which applies the
+  non-destructive steps in place. Rows in state tokens no declaration
+  maps refuse the boot either way (waymark9's check_state_tokens)."
   [{:keys [storage resources services now-fn deploy-mode] :as opts}]
-  (let [reg (registry/registry (into (vec resources)
-                                     [defs/definition members/member
-                                      roles/role grants/grant
-                                      attachments/attachment
-                                      webhooks/subscription jobs/job]))
+  (let [reg (full-registry resources)
         eng (merge (select-keys opts [:sweep-interval-ms :events-poll-ms
                                       :sse-heartbeat-ms :maintainer-fan-out
                                       :suppress-mirror-refresh
@@ -102,6 +149,7 @@
                                                  :services (:services eng)}))))]
     (doseq [[_ rdef] (:kinds reg)]
       (store/ensure-kind! storage rdef))
+    (migrate-gate! storage reg opts)
     (defs/boot-revise! eng)
     eng))
 
@@ -170,6 +218,9 @@
                 "jdbc:postgresql://localhost:5433/mealplan10_dev?user=ckopsa")
         storage (pg/storage dsn)
         eng (engine {:storage storage
+                     ;; the dev fixture server reconciles its own drift;
+                     ;; production engines refuse and name the plan
+                     :auto-migrate true
                      :resources [@(requiring-resolve 'waymark10.fixtures/meal)
                                  @(requiring-resolve 'waymark10.fixtures/plan)]})
         server (start! eng 8010)]

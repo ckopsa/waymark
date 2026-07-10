@@ -186,6 +186,10 @@
         (update :nav #(or % :primary))
         (update :shape #(or % 1))
         (update :allow-dead set)
+        ;; the continuity map (migrate): retired tokens → their current
+        ;; spellings; boot refuses rows in states neither declared nor
+        ;; mapped, and replay-history reads the log through the chain
+        (update :renames #(merge {:states {} :actions {}} %))
         normalize-derived
         bind-require-specs
         merge-vocab-filters)))

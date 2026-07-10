@@ -21,7 +21,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: db test conformance conformance8 conformance9 check dist dev image deploy test-image db10 test10 test-mealplan10 dev10
+.PHONY: db test conformance conformance8 conformance9 check dist dev image deploy test-image db10 test10 test-mealplan10 dev10 migrate10
 
 dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
 	uv build
@@ -54,7 +54,12 @@ test-mealplan10: db10  ## mealplan10 conformance + family-week story
 	cd mealplan10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
 
 dev10: db10  ## serve mealplan10 on :8010 against mealplan10_dev (FakeEvents unless MEALPLAN_GCAL_ICS_URL is set)
-	cd mealplan10 && MEALPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/mealplan10_dev?user=$(PG_USER)" clojure -M:dev
+	cd mealplan10 && MEALPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/mealplan10_dev?user=$(PG_USER)" \
+		WAYMARK10_AUTO_MIGRATE=1 clojure -M:dev
+
+migrate10: db10  ## print mealplan10's schema plan against mealplan10_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
+	cd mealplan10 && MEALPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/mealplan10_dev?user=$(PG_USER)" \
+		clojure -M:migrate
 
 db10: db  ## waymark10 databases on the shared :5433 container
 	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \

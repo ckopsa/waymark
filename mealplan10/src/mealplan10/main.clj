@@ -12,7 +12,13 @@
 
   Env knobs: MEALPLAN10_DSN (default the local :5433 mealplan10_dev),
   MEALPLAN10_PORT (default 8010), WAYMARK10_DEPLOY_MODE (promote, the
-  default single-breath revise, or propose)."
+  default single-breath revise, or propose), WAYMARK10_AUTO_MIGRATE=1
+  (dev only — `make dev10` passes it explicitly; production boots
+  REFUSE on schema drift and name the plan).
+
+  Schema evolution: `make migrate10` prints the plan (migrate!, the
+  :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1 additionally
+  the state-rename UPDATEs."
   (:require [mealplan10.event-source :as es]
             [mealplan10.resources.event :as event]
             [mealplan10.resources.grocery-list :refer [grocery-list]]
@@ -21,6 +27,7 @@
             [mealplan10.resources.prep-task :refer [prep-task]]
             [mealplan10.resources.rotation :refer [rotation]]
             [waymark10.server.engine :as engine]
+            [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg])
   (:gen-class))
 
@@ -61,7 +68,11 @@
         eng (engine/engine {:storage storage
                             :resources (resources (events-adapter))
                             :surfaces surfaces
-                            :deploy-mode (deploy-mode)})
+                            :deploy-mode (deploy-mode)
+                            ;; dev-only, and only when asked: production
+                            ;; posture is refuse-on-drift
+                            :auto-migrate (= "1" (System/getenv
+                                                  "WAYMARK10_AUTO_MIGRATE"))})
         port (or (some-> (System/getenv "MEALPLAN10_PORT") parse-long) 8010)
         server (engine/start! eng port)]
     (reset! dev {:engine eng :server server :storage storage})
@@ -78,3 +89,38 @@
 (defn -main [& _]
   (start!)
   @(promise))
+
+;; ── the migrate CLI (make migrate10) ────────────────────────────────
+
+(defn migrate!
+  "Print the schema plan for this app's full registry (application
+  kinds + everything the engine enrolls) against MEALPLAN10_DSN;
+  APPLY=1 executes it, DESTRUCTIVE=1 additionally the state-rename
+  UPDATEs (otherwise destructive steps are skipped and said so).
+  Exits 0 on an empty plan or a fully applied one, 1 while steps
+  remain — scriptable as a deploy gate."
+  [& _]
+  (let [storage (pg/storage (dsn))]
+    (try
+      (let [reg (engine/full-registry (resources (events-adapter)))
+            steps (migrate/plan storage (vals (:kinds reg)))]
+        (if (empty? steps)
+          (println "mealplan10: storage matches the declarations — empty plan.")
+          (do
+            (println (str "mealplan10: " (count steps) " migration step(s):"))
+            (doseq [s steps] (println " " (migrate/describe s)))
+            (if (= "1" (System/getenv "APPLY"))
+              (let [destructive? (= "1" (System/getenv "DESTRUCTIVE"))
+                    {:keys [applied skipped]}
+                    (migrate/apply! storage steps {:destructive? destructive?})]
+                (println (str "applied " (count applied) " step(s)."))
+                (when (seq skipped)
+                  (println (str "SKIPPED " (count skipped)
+                                " destructive step(s) — re-run with DESTRUCTIVE=1:"))
+                  (doseq [s skipped] (println " " (migrate/describe s)))
+                  (System/exit 1)))
+              (do (println "dry run — APPLY=1 executes (DESTRUCTIVE=1 includes state renames).")
+                  (System/exit 1))))))
+      (finally
+        (pg/close! storage)
+        (shutdown-agents)))))
