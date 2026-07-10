@@ -419,3 +419,179 @@ async def w8_make_grocery_list(state: str, engine, services) -> GroceryList8:
 @w8_example_input(GroceryList8, "remove_item")
 def w8_remove_item_example(services) -> dict:
     return {"name": "paper towels"}
+
+
+# ═══ the waymark9 half: mealplan9 (the expression-law fork) ═════════════════
+import waymark9  # noqa: E402
+from waymark9.server.attachments import (  # noqa: E402
+    Attachment as Attachment9W, BYTES_ACTOR as BYTES_ACTOR9W)
+from waymark9.server.bus import InProcessBus as InProcessBus9  # noqa: E402
+from waymark9.server.members import Member as Member9W  # noqa: E402
+from waymark9.server.roles import Role as Role9W  # noqa: E402
+from waymark9.server.subscriptions import (  # noqa: E402
+    WebhookSubscription as Subscription9W)
+from waymark9.testing import (  # noqa: E402
+    conformance_resource as w9_conformance_resource,
+    example_input as w9_example_input,
+    state_factory as w9_state_factory,
+)
+
+from mealplan9.event_source import EVENTS as EVENTS9  # noqa: E402
+from mealplan9.resources.event import Event as Event9  # noqa: E402
+from mealplan9.resources.grocery_list import (  # noqa: E402
+    GroceryList as GroceryList9, GroceryState as GroceryState9)
+from mealplan9.resources.meal import Meal as Meal9  # noqa: E402
+from mealplan9.resources.plan import (  # noqa: E402
+    MealPlan as MealPlan9, PlanState as PlanState9)
+from mealplan9.resources.prep_task import PrepTask as PrepTask9  # noqa: E402
+from mealplan9.resources.rotation import (  # noqa: E402
+    SundayRotation as SundayRotation9)
+from mealplan9.services import Services as MealplanServices9  # noqa: E402
+
+
+@dataclass
+class ConformanceServices9(MealplanServices9):
+    """mealplan9's services plus the factory-to-example stash (see the
+    waymark7 twin above)."""
+
+    seeded: dict = field(default_factory=dict)
+
+
+@pytest.fixture
+async def waymark9_engine():
+    EVENTS9.docs.clear()
+    EVENTS9.discoverable.clear()
+    EVENTS9.down = False
+    EVENTS9.pulls = 0
+    Event9.adapter = EVENTS9
+
+    services = ConformanceServices9()
+    engine = waymark9.Engine(
+        resources=[Meal9, SundayRotation9, MealPlan9, GroceryList9,
+                   PrepTask9, Event9],
+        storage=TEST_DSN, services=services, bus=InProcessBus9())
+    await engine.storage.drop_all()
+    await engine.startup()
+    try:
+        yield engine
+    finally:
+        await engine.shutdown()
+
+
+w9_conformance_resource(Meal9)
+w9_conformance_resource(SundayRotation9)
+w9_conformance_resource(PrepTask9)
+w9_conformance_resource(Event9)
+
+w9_conformance_resource(Member9W)
+w9_conformance_resource(Role9W)
+w9_conformance_resource(Subscription9W)
+
+
+@w9_state_factory(Attachment9W)
+async def w9_make_attachment(state: str, engine, services) -> Attachment9W:
+    mid = await _mk(engine, "meal", {"name": "Attachment target",
+                                     "themes": ["mexican"]})
+    services.seeded["attachment_target"] = mid
+    aid = await _mk(engine, "attachment", {
+        "resource_kind": "meal", "resource_id": mid,
+        "name": "recipe.pdf", "mime": "application/pdf"})
+    if state in ("uploaded", "removed"):
+        await engine.invoker.invoke(
+            "attachment", aid, "mark_uploaded",
+            {"size": 3, "sha256": "a" * 64}, principal=BYTES_ACTOR9W)
+    if state == "removed":
+        await _step(engine, "attachment", aid, "remove")
+    return await _load(engine, "attachment", aid)
+
+
+@w9_example_input(Attachment9W, "duplicate")
+def w9_attachment_duplicate_example(services) -> dict:
+    return {"resource_kind": "meal",
+            "resource_id": services.seeded["attachment_target"]}
+
+
+@w9_example_input(Role9W, "create")
+def w9_role_create_example(services) -> dict:
+    return {"name": f"reader-{uuid.uuid4().hex[:8]}",
+            "description": "May read shared note titles"}
+
+
+@w9_example_input(Member9W, "create")
+def w9_member_create_example(services) -> dict:
+    return {"email": "mom@example.com", "display_name": "Grandma",
+            "roles": ["reader"]}
+
+
+@w9_example_input(Subscription9W, "create")
+def w9_subscription_create_example(services) -> dict:
+    return {"url": "https://budget.example/hooks", "kinds": ["plan"]}
+
+
+@w9_example_input(Meal9, "create")
+def w9_meal_create_example(services) -> dict:
+    return {"name": "Carnitas tacos", "themes": ["mexican"],
+            "recipe": "# Carnitas tacos\n\nSlow-cook the pork…",
+            "prep_minutes": 45, "thaw_hours": 12}
+
+
+@w9_example_input(PrepTask9, "create")
+def w9_prep_task_create_example(services) -> dict:
+    return prep_task_create_example(services)
+
+
+async def _listed_meal9(engine, services) -> str:
+    mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
+                                     "themes": ["mexican"]})
+    await _step(engine, "meal", mid, "accept")
+    services.seeded["meal_id"] = mid
+    return mid
+
+
+@w9_state_factory(MealPlan9)
+async def w9_make_plan(state: str, engine, services) -> MealPlan9:
+    rid = await _mk(engine, "rotation", {})
+    await _listed_meal9(engine, services)
+    pid = await _mk(engine, "plan", {"start_date": PLAN_START.isoformat(),
+                                     "weeks": 1, "rotation_id": rid})
+    services.seeded["plan_id"] = pid
+    target = PlanState9(state)
+    if target == PlanState9.ABANDONED:
+        await _step(engine, "plan", pid, "abandon")
+    elif target != PlanState9.DRAFT:
+        for i in range(7):
+            await _step(engine, "plan", pid, "mark_eating_out",
+                        {"date": (PLAN_START + timedelta(days=i)).isoformat()})
+        await _step(engine, "plan", pid, "finalize")
+        if target in (PlanState9.ACTIVE, PlanState9.DONE):
+            await _step(engine, "plan", pid, "begin")
+        if target == PlanState9.DONE:
+            await _step(engine, "plan", pid, "complete")
+    return await _load(engine, "plan", pid)
+
+
+@w9_example_input(MealPlan9, "assign_off_theme")
+def w9_assign_off_theme_example(services) -> dict:
+    return {"date": PLAN_START.isoformat(),
+            "meal_id": services.seeded["meal_id"]}
+
+
+@w9_state_factory(GroceryList9)
+async def w9_make_grocery_list(state: str, engine, services) -> GroceryList9:
+    plan = await w9_make_plan(PlanState9.PLANNED, engine, services)
+    gid = await _mk(engine, "grocery_list",
+                    {"plan_id": plan.id, "items": GROCERY_ITEMS})
+    target = GroceryState9(state)
+    if target != GroceryState9.DRAFT:
+        await _step(engine, "grocery_list", gid, "finalize")
+    if target == GroceryState9.DONE:
+        for item in GROCERY_ITEMS:
+            await _step(engine, "grocery_list", gid, "check_item",
+                        {"name": item["name"]})
+        await _step(engine, "grocery_list", gid, "complete")
+    return await _load(engine, "grocery_list", gid)
+
+
+@w9_example_input(GroceryList9, "remove_item")
+def w9_remove_item_example(services) -> dict:
+    return {"name": "paper towels"}

@@ -21,7 +21,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: db test conformance conformance8 check dist dev image deploy test-image
+.PHONY: db test conformance conformance8 conformance9 check dist dev image deploy test-image
 
 dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
 	uv build
@@ -43,6 +43,9 @@ conformance: db  ## waymark7 conformance suite (walks the app enrolled on this b
 
 conformance8: db  ## waymark8 conformance suite (mealplan8, the expression-law fork)
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark8 -n auto
+
+conformance9: db  ## waymark9 conformance suite (mealplan9)
+	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark9 -n auto
 
 check:  ## import-time definition checks (CI fast path); pass ENGINE=module:attr
 	uv run waymark7 check $(ENGINE)
