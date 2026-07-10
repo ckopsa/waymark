@@ -42,28 +42,35 @@
   fingerprint already knows how to hash.
 
   THE NEGOTIATION MACHINE (waymark9's request_access, resized to the
-  v10 grant): an :approval_request resource — {grant_id, task, scope,
-  expires_at} through offered → approved/denied. The scoped principal
-  itself may create one (its create is the one affordance the
-  own-surface grants); the approver is four-eyes'd from the requester
-  by guard; approve's post-commit effect (approval-effects!, the
-  router's one grants seam — the attachments put-bytes! precedent)
-  EXTENDS the named grant through the concealed :extend transition,
-  system actor, logged, idempotency-keyed on the approval id so
-  redelivery is a replay. Deny records the note and the grant never
-  moves — the 404s persist.
+  v10 grant): an :approval_request resource — {grant_id?, task,
+  scope, expires_at} through offered → approved/denied. ANY named
+  (non-anonymous) principal may file one — the grant anchor is
+  optional, because the machine's original purpose is bootstrap: an
+  agent asks for the access it needs, a human approves, and the
+  approval MINTS the grant. The approver is four-eyes'd from the
+  requester by guard; approve's post-commit effect
+  (approval-effects!, the router's one grants seam — the attachments
+  put-bytes! precedent) lands the grant, system actor, logged,
+  idempotency-keyed on the approval id so redelivery is a replay:
+  an ANCHORED ask (grant_id names a grant its requester holds)
+  EXTENDS that grant through the concealed :extend transition; an
+  ANCHORLESS ask mints a fresh grant — audience = requester, scope =
+  exactly the approved ask, accepted through the machine's own
+  accept (the ask WAS the audience's consent), its id stamped onto
+  the ask at the verdict so the requester can read where to go. Deny
+  records the note and no grant moves or exists — the 404s persist.
 
-  THE OWN-GRANT SURFACE: a scoped principal sees the grants whose
-  audience it is and the approval requests it filed — :grant and
-  :approval_request join its kinds, rows gated per row (audience /
-  requested_by = self), collections narrowed by the same visibility
-  cond every id-scoped grant uses (ids-of queries own ids; no special
-  route). GET-only besides approval_request/create: no grant or
-  approval action is granted, so envelopes render with empty action
-  maps — concealment discipline unchanged. Deliberate: the own
-  surface survives the grant's death (dead scopes the DOMAIN to
-  nothing; the negotiation surface is how a dead grant's holder asks
-  again).
+  THE OWN-GRANT SURFACE: every scoped request by a named principal
+  carries the negotiation surface — :grant and :approval_request join
+  its kinds whether the presented grant is live, dead, foreign or
+  unknown (the asking door is never concealed; it is how access
+  starts and how a dead grant's holder asks again). Rows stay gated
+  per row (audience / requested_by = self), collections narrowed by
+  the same visibility cond every id-scoped grant uses (ids-of queries
+  own ids; no special route). GET-only besides
+  approval_request/create: no grant or approval action is granted, so
+  envelopes render with empty action maps — concealment discipline
+  unchanged.
 
   Recorded deviations and named punts (each a sentence):
   - approver-edited scope maps and review-note round-trips are
@@ -74,9 +81,22 @@
     no per-member visibility to intersect; grants.py's ceiling is the
     live kind, not a max-grantable check, so nothing simpler stands
     in for it.
-  - approval extends the REQUEST'S named grant rather than minting a
-    sibling: the holder already carries the link; a fresh audience is
-    a fresh grant create, which is ungated.
+  - an anchored ask's approval extends the REQUEST'S named grant
+    rather than minting a sibling: the holder already carries the
+    link. The anchorless mint is the bootstrap path, not a widening
+    path — a holder widening scope still extends.
+  - an ungranted kind's 404 never grows a request-access remedy —
+    a remedy would leak existence. Discoverability is the negotiation
+    surface riding every named principal's scoped request instead;
+    the agent asks for what it believes exists (the 404 bytes are
+    pinned in batch_b_mint_test).
+  - anchorless creates are paced (20/hour/principal) and open asks
+    capped (10/requester), both guards reading the requester's own
+    rows through ctx :find — the guards/rate-limit builder wants the
+    engine's :rate hook, which v10 never wired (recorded). Past the
+    500th lifetime ask the pace window reads a stale oldest-first
+    page (query-rows' one ordering); the open cap, whose churn needs
+    a human verdict per ask, is the standing wall.
   - the approve effect rides the wire boundary (the router calls
     approval-effects! post-commit); an engine-internal invoke of
     approve does not extend — the attachments discipline, recorded.
@@ -108,7 +128,8 @@
     a scoped replay serves the first execution's unprojected envelope.
   - own-id collections cap at 200 held grants/requests per principal
     (the member-visibility page waymark9 also capped)."
-  (:require [waymark10.guards :as g]
+  (:require [clojure.string :as str]
+            [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
@@ -234,12 +255,21 @@
 
 ;; ── the approval_request resource (the negotiation machine) ─────────
 
+(defn- load-decoded [eng kind id]
+  (when-some [rdef (get (inv/resources eng) kind)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))
+             (inv/decode-row rdef))))
+
 (g/defguard requester-holds-the-grant
   {:reads [:principal :grant]
    :explain "An access request extends a grant its requester holds; the named grant's audience must be you."}
   [_row inp ctx]
   (let [p (:principal ctx)]
     (cond
+      ;; the anchorless ask holds nothing yet — its approval MINTS
+      ;; the grant, so there is nothing here to judge
+      (nil? (:grant_id inp)) (t/allow)
       (= :system (:type p)) (t/allow)
       ;; render's probe ctx carries no :read — cross-kind admissions
       ;; decline rather than guess (the phase-8 discipline)
@@ -247,6 +277,66 @@
       :else (let [row ((:read ctx) :grant (:grant_id inp))]
               (if (and row (= (get-in row [:data :audience]) (:id p)))
                 (t/allow) (t/deny))))))
+
+(g/defguard requester-is-named
+  {:reads [:principal]
+   :explain "An access request names its requester; an anonymous ask would grant nobody."}
+  [_row _inp ctx]
+  (if (= (:id (:principal ctx)) (:id t/anonymous))
+    (t/deny) (t/allow)))
+
+(def ask-pace-limit
+  "Anchorless asks per rolling hour per principal — the generous
+  ceiling on the one create any named principal may issue."
+  20)
+
+(g/defguard asks-are-paced
+  {:reads [:principal :now :approval_request]
+   :vars [:limit :retry_at]
+   :explain "Fresh access asks are paced to {limit} an hour; the window reopens at {retry_at}."}
+  [_row inp ctx]
+  (if (or (some? (:grant_id inp))       ; anchored asks ride the grant they hold
+          (nil? (:find ctx)))           ; probe ctx carries no :find — decline to guess
+    (t/allow)
+    (let [pid (:id (:principal ctx))
+          ^java.time.Instant now (:now ctx)
+          cutoff (.minusSeconds now 3600)
+          fresh (into []
+                      (filter (fn [r]
+                                (and (nil? (get-in r [:data :grant_id]))
+                                     (some? (:created-at r))
+                                     (neg? (compare cutoff (:created-at r))))))
+                      ((:find ctx) :approval_request {:requested_by pid}
+                       {:limit 500}))]
+      (if (< (count fresh) ask-pace-limit)
+        (t/allow)
+        (let [retry (.plusSeconds
+                     ^java.time.Instant (reduce (fn [a b] (if (neg? (compare a b)) a b))
+                                                (mapv :created-at fresh))
+                     3600)]
+          (t/deny {:vars {:limit ask-pace-limit :retry_at (str retry)}
+                   :retry-at retry}))))))
+
+(def open-asks-cap
+  "Open (offered) asks a requester may hold at once; a verdict on
+  those comes before a new one."
+  10)
+
+(g/defguard asks-are-few
+  {:reads [:principal :approval_request]
+   :vars [:cap :pending]
+   :explain "Open access asks are capped at {cap}; yours awaiting a verdict: {pending}."}
+  [_row inp ctx]
+  (if (or (some? (:grant_id inp)) (nil? (:find ctx)))
+    (t/allow)
+    (let [pid (:id (:principal ctx))
+          open ((:find ctx) :approval_request
+                {:requested_by pid :state :offered}
+                {:limit (inc open-asks-cap)})]
+      (if (< (count open) open-asks-cap)
+        (t/allow)
+        (t/deny {:vars {:cap open-asks-cap
+                        :pending (str/join ", " (sort (map :id open)))}})))))
 
 (g/defguard someone-else-decides
   {:reads [:principal]
@@ -260,13 +350,22 @@
    :explain "The named grant no longer accepts scope; offer a fresh grant instead."}
   [row _inp ctx]
   (if-some [read (:read ctx)]
-    (let [grant-row (read :grant (get-in row [:data :grant_id]))]
-      (if (and grant-row (= :accepted (:state grant-row)))
-        (t/allow) (t/deny)))
+    ;; an anchorless ask names no grant to judge — approval mints one
+    (if-some [gid (get-in row [:data :grant_id])]
+      (let [grant-row (read :grant gid)]
+        (if (and grant-row (= :accepted (:state grant-row)))
+          (t/allow) (t/deny)))
+      (t/allow))
     (t/allow)))
 
 (defhandler stamp-approver [row _inp ctx]
-  (assoc-in row [:data :approved_by] (:id (:principal ctx))))
+  (cond-> (assoc-in row [:data :approved_by] (:id (:principal ctx)))
+    ;; the anchorless ask learns the grant its approval will mint —
+    ;; stamped at the verdict, deterministically from the ask's own
+    ;; id, so a replay restamps the same name and the requester can
+    ;; read where to go
+    (nil? (get-in row [:data :grant_id]))
+    (assoc-in [:data :grant_id] (str "grant-" (:id row)))))
 
 (defhandler record-verdict-note [row inp _ctx]
   (assoc-in row [:data :note] (:note inp)))
@@ -279,8 +378,10 @@
    :terminal #{:approved :denied}
    :nav :secondary
    :summary "Access request by {data.requested_by} · {state}"
+   ;; grant_id is OPTIONAL: an anchorless ask is the bootstrap path —
+   ;; its approval mints the grant and stamps the id here
    :schema [:map
-            [:grant_id {:kind :grant} :waymark/ref]
+            [:grant_id {:optional true :kind :grant} [:maybe :waymark/ref]]
             [:task [:string {:min 1 :max 240}]]
             [:scope scope-schema]
             [:expires_at {:optional true} [:maybe :waymark/instant]]
@@ -292,14 +393,18 @@
              [:maybe [:string {:max 128}]]]
             [:note {:optional true} [:maybe [:string {:max 240}]]]]
    :create-schema [:map
-                   [:grant_id {:kind :grant} :waymark/ref]
+                   [:grant_id {:optional true :kind :grant}
+                    [:maybe :waymark/ref]]
                    [:task [:string {:min 1 :max 240}]]
                    [:scope scope-schema]
                    [:expires_at {:optional true} [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in}
                 :grant_id #{:eq}
                 :requested_by #{:eq}}
-   :create-guards [requester-holds-the-grant]
+   :create-guards [requester-is-named
+                   requester-holds-the-grant
+                   asks-are-paced
+                   asks-are-few]
    :on-create (fn [row ctx]
                 (assoc-in row [:data :requested_by]
                           (get-in ctx [:principal :id])))
@@ -330,30 +435,51 @@
 (defn approval-effects!
   "Post-commit, wire-boundary (the router calls this after every
   single invoke, the attachments put-bytes! precedent): a fresh,
-  non-replayed approve on an :approval_request extends its grant —
+  non-replayed approve on an :approval_request lands its grant —
   system actor, logged, keyed on the approval id so a redelivery
-  replays instead of double-appending. A refusal here (the grant
-  revoked between guard and effect) is warned on *err*, never thrown:
-  the approval committed; the grant honestly did not move."
+  replays instead of double-appending. The named grant EXTENDS when
+  it exists (the anchored ask) and is MINTED when it does not (the
+  anchorless ask, its id stamped by the approve handler): audience =
+  requester, scope = exactly the approved ask, then accepted through
+  the machine's own accept — the ask WAS the audience's consent, and
+  the requester's next presentation of the stamped grant id scopes it
+  in. A refusal here (the grant revoked between guard and effect) is
+  warned on *err*, never thrown: the approval committed; the grant
+  honestly did not move."
   [eng rdef action-name result]
   (when (and (= :approval_request (:kind rdef))
              (= :approve action-name)
              (:transition result)
              (nil? (:replayed? result)))
     (let [row (:row result)
-          body (cond-> {:scope (get-in row [:data :scope])}
-                 (get-in row [:data :expires_at])
-                 (assoc :expires_at (str (get-in row [:data :expires_at]))))]
+          gid (get-in row [:data :grant_id])
+          corr (get-in result [:transition :correlation-id])
+          expires (get-in row [:data :expires_at])]
       (try
-        (inv/invoke! eng :grant (get-in row [:data :grant_id]) :extend body
-                     {:principal approvals-actor
-                      :correlation-id (get-in result [:transition :correlation-id])
-                      :idempotency-key (str "approval-extend-" (:id row))})
+        (if (load-decoded eng :grant gid)
+          (inv/invoke! eng :grant gid :extend
+                       (cond-> {:scope (get-in row [:data :scope])}
+                         expires (assoc :expires_at (str expires)))
+                       {:principal approvals-actor
+                        :correlation-id corr
+                        :idempotency-key (str "approval-extend-" (:id row))})
+          (do
+            (inv/create! eng :grant
+                         (cond-> {:audience (get-in row [:data :requested_by])
+                                  :scope (get-in row [:data :scope])}
+                           expires (assoc :expires_at (str expires)))
+                         {:principal approvals-actor
+                          :id gid
+                          :correlation-id corr
+                          :idempotency-key (str "approval-mint-" (:id row))})
+            (inv/invoke! eng :grant gid :accept nil
+                         {:principal approvals-actor
+                          :correlation-id corr
+                          :idempotency-key (str "approval-accept-" (:id row))})))
         (catch Exception e
           (binding [*out* *err*]
             (println "waymark10 grants: approval" (:id row)
-                     "could not extend grant"
-                     (get-in row [:data :grant_id]) "-" (ex-message e)))))))
+                     "could not land grant" gid "-" (ex-message e)))))))
   result)
 
 ;; ── scope evaluation ────────────────────────────────────────────────
@@ -454,15 +580,10 @@
                                 actions)))]))
         surface))
 
-(defn- load-decoded [eng kind id]
-  (when-some [rdef (get (inv/resources eng) kind)]
-    (some->> (store/with-tx (:storage eng)
-               (fn [tx] (store/load-row (:storage eng) tx kind (str id) {})))
-             (inv/decode-row rdef))))
-
 (def ^:private own-kinds
-  "The negotiation surface's kinds — visible to any principal whose
-  presented grant row exists and names it as audience, live or dead."
+  "The negotiation surface's kinds — riding every named principal's
+  scoped request, whatever the presented grant's fate: the asking
+  door is never concealed, because it is how access starts."
   #{"grant" "approval_request"})
 
 (defn- own-ids
@@ -480,18 +601,22 @@
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an
   active grant confers its surface, anything else confers `dead` —
-  plus the own-grant surface (batch B) whenever the named row exists
-  with this principal as audience, any state. Returns closures the
-  render/router consult — {:kind? :row? :action? :field? :arg?
-  :ids-of} — plus :grant-id for narration-free diagnostics."
+  plus the own-grant surface (batch B, widened by the mint fix) for
+  every NAMED principal, whatever the presented grant's fate: the
+  negotiation kinds are how access starts, so a dead, foreign or
+  unknown grant conceals the domain but never the asking door.
+  Returns closures the render/router consult — {:kind? :row? :action?
+  :field? :arg? :ids-of} — plus :grant-id for narration-free
+  diagnostics."
   [eng grant-id principal]
   (let [pid (:id principal)
         row (load-decoded eng :grant grant-id)
         own? (boolean (and row (= (get-in row [:data :audience]) pid)))
+        named? (and (some? pid) (not= pid (:id t/anonymous)))
         surface (if (and own? (active? row ((:now-fn eng))))
                   (prune-unusable eng (surface-of row))
                   dead)
-        own-kind? (fn [k] (and own? (contains? own-kinds k)))
+        own-kind? (fn [k] (and named? (contains? own-kinds k)))
         own-row? (fn [k id]
                    (when (own-kind? k)
                      (case k

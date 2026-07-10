@@ -1725,7 +1725,8 @@ request); waymark9's **attenuation ceiling** — the approver's own live
 visibility intersected onto the holder's — is unported by name (v10
 has no per-member visibility to intersect; grants.py has no simpler
 max-grantable check to port instead); approval extends the request's
-named grant rather than minting a sibling; the effect rides the wire
+named grant rather than minting a sibling (superseded for the
+anchorless ask by the mint fix, below); the effect rides the wire
 boundary — an engine-internal invoke of approve does not extend.
 
 ## The own-grant surface
@@ -1796,6 +1797,71 @@ regression (phase9a / router / batch-a-envelope / collections,
 read-only): 33 tests, 338 assertions, 2 failures — both the stale
 pins above (since updated), nothing else moved. The suites now ride
 `make test10`.
+
+## The mint fix — approval mints the bootstrap grant
+
+Batch B's negotiation machine shipped extension-only: an
+approval_request was create-guarded to a grant its requester already
+held, so bootstrap-from-zero was unreachable and someone had to
+author grants ahead of time. That inverted the design intent —
+recorded as such; this is a fix, not a feature. The original purpose
+restored: **an agent requests the access it needs; a human approves;
+the approval MINTS the grant.**
+
+- **The create opens.** `grant_id` is optional; any NAMED
+  (non-anonymous) principal may file an ask — `{kind, ids?, actions,
+  fields?}` of what it believes exists, requester stamped by
+  on-create as before. An ask that names a grant still takes the
+  extension path unchanged (`requester-holds-the-grant` now judges
+  only when an anchor is present).
+- **The mint flow's state path.** Approve (four-eyes'd from the
+  requester, as before) stamps the minted grant's name onto the ask —
+  `grant-{approval-id}`, deterministic, so the requester reads where
+  to go and a replay restamps the same. The post-commit effect
+  (`approval-effects!`, keyed on the approval id exactly like the
+  :extend precedent) then lands the grant: EXTEND when the named
+  grant exists, MINT when it does not — `grant/create` (audience =
+  requester, scope = exactly the approved ask) then `grant/accept`,
+  both by the `waymark10-grants` system actor, both logged, both
+  idempotency-keyed (`approval-mint-{id}`, `approval-accept-{id}`).
+  Accepted on mint through the machine's own accept because the ask
+  WAS the audience's consent; the requester's next presentation of
+  the stamped grant id scopes it in. Deny stays deny: note recorded,
+  no grant moves or exists.
+- **The abuse surface.** Anchorless creates are paced to **20 per
+  rolling hour per principal** and open asks capped at **10 per
+  requester**; both guards read the requester's own rows through ctx
+  `:find` and refuse with sentences — the cap names every pending
+  ask's id, the pace names when the window reopens. Recorded
+  deviation: the `guards/rate-limit` builder wants the engine's
+  `:rate` hook, which v10 never wired, so the rows are the record;
+  past the 500th lifetime ask the pace window reads a stale
+  oldest-first page (query-rows' one ordering) — the open cap, whose
+  churn needs a human verdict per ask, is the standing wall.
+- **The concealment constraint, byte-pinned.** An ungranted kind's
+  404 grew NOTHING — no request-access remedy, which would leak
+  existence. The body's exact bytes are pinned in the test
+  (`ungranted-404`), live grant and dead grant answering identically.
+  Discoverability lives on the negotiation surface instead: `grant`
+  and `approval_request` now ride EVERY named principal's scoped
+  request — live, dead, foreign or unknown grant alike — so the
+  asking door is never concealed (it is how access starts, and how a
+  dead grant's holder asks again). Anonymous stays outside: scoped
+  anonymous sees no door (404), unscoped anonymous refuses by
+  sentence (an ask that would grant nobody).
+
+Run (own database, focused):
+
+```
+docker exec waymark-test-pg psql -U ckopsa -d postgres -c "CREATE DATABASE waymark10_grants_test"  # once
+cd waymark10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:5433/waymark10_grants_test?user=ckopsa" \
+  clojure -M:test --focus waymark10.batch-b-mint-test
+```
+
+At landing: **7 tests, 80 assertions, 0 failures**; grants-adjacent
+regression (batch-b-access / batch-b-members / phase9a / router): 28
+tests, 320 assertions, 0 failures; declaration suites (coherence /
+registry / batch-f-openapi): 32 tests, 107 assertions, 0 failures.
 
 # 18. Batch D — waymark-relay/2 and concurrent text
 
