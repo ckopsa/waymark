@@ -218,6 +218,8 @@ identity; respelling a law is not a revision; a diff confined to a
 
 - **`count`/`sum` quantifiers** — waymark9 has them; no ported
   declaration demands them yet. Added with the port that does.
+  (Earned since: batch C, §19 — the blast-radius meter and the
+  meal-prep sum rollup demanded them.)
 - **Division** — never earned in any version.
 - **String operations, `where=` unification** — inherited verbatim
   from 8.0's punt list.
@@ -306,17 +308,17 @@ and its tests in waymark10's own suite (`waymark10.phase8-test`):
   (finalize's require gate needs seven `mark_eating_out` self-loops a
   shortest-path walk cannot spell).
 
-mealplan10's own recorded punts: previous_plan declared but
-predecessor-unresolved (E7 has no v10 spelling); links declared and
-assembly-checked but unrendered (envelope `:links` stays the phase-3
-punt); part-scope "parts" envelope rendering unbuilt (the placed
-actions carry `:place`, the key pre-binding waits for the parts
-surface); WeekBoard/spans/profiles have no v10 spelling; the real
-iCal adapter parses VEVENTs without RRULE expansion (a recurring
-series contributes its DTSTART only — revisit when the family's
-recurring events matter); v10 summary templates have no |join/|len
-filters; no field defaults (rotation/plan defaults land in
-:on-create).
+mealplan10's own recorded punts, as of phase 8: previous_plan
+declared but predecessor-unresolved (since closed — batch E's
+predecessor resolver, §13); links declared and assembly-checked but
+unrendered (since closed — batch A, §14); part-scope "parts" envelope
+rendering unbuilt (since closed — batch A, §14, which binds the
+placed actions' `:place` keys); WeekBoard/spans/profiles have no v10
+spelling (WeekBoard since landed as a phase-9b surface, §9;
+spans/profiles still have none); the real iCal adapter parses VEVENTs
+without RRULE expansion (since closed at a recorded profile — batch
+E, §13); v10 summary templates have no |join/|len filters; no field
+defaults (rotation/plan defaults land in :on-create).
 
 The hand walk (`make dev10`, then): create + activate a rotation
 (`POST /api/rotations {}`, `POST /api/rotations/{id}/-/activate`);
@@ -384,7 +386,14 @@ punt, extended), invited-only membership, role uniqueness under race
 (a create guard, no unique index), OIDC's browser dance/sessions/
 logout, byte purge on delete (waymark9's BlobJanitor), duplication/
 sha256/S3/presigned URLs, and blob-write/metadata atomicity
-(waymark9's log-consumer choreography).
+(waymark9's log-consumer choreography). (Batch B, §17, since closed
+the negotiation machine at scope, the ApprovalRequest flow,
+field/argument modes, the own-grant surface, and invited-only
+membership; batch F, §16, closed byte purge, duplication, and
+sha256. Still open, by choice: approver-edited maps, the attenuation
+ceiling, grant-projected SSE, projection-blind idempotency replays,
+role uniqueness under race, OIDC's browser dance/sessions/logout,
+S3/presigned URLs, and blob-write/metadata atomicity.)
 
 # 9. Phase 9b — the outbox is a product, the screen is a declaration
 
@@ -411,6 +420,9 @@ and one broken endpoint stops only its own stream. A new
 subscription hears the world from its own creation transition.
 Recorded: subscription bookkeeping is never delivered; waymark9's
 revoked terminal state is unported (pause is the off switch).
+(Since closed — batch F, §16: `revoked` lands owner-gated, and the
+failure discipline becomes a per-subscription `:delivery_policy`,
+"fail" default or waymark9's "skip".)
 
 **Deferred jobs** (`server/jobs.clj`). The phase-7 `:defer-over`
 punt closes: an over-threshold bulk call now answers **202** with
@@ -430,8 +442,9 @@ recorded). Progress persists batchwise as a maintenance write (no
 version bump, no transition — the items already log on their own
 rows); cancel is a confirm-gated wire action that takes effect
 between batches. Recorded: waymark9's queued state and job
-artifacts are unported; deferred calls skip whole-call idempotency
-(the job row is the record).
+artifacts are unported (both since restored — batch F, §16, with an
+orphan sweep beside the lease steal); deferred calls skip whole-call
+idempotency (the job row is the record).
 
 **Surfaces** (`server/surface.clj`). The composed decision screen:
 `{:name :anchor :members :showcase :attention}` — members name
@@ -468,6 +481,10 @@ act consumes the draft in its own commit as before. Scoped honestly:
 no OT/CRDT, no relay/2 staleness rejection (`base_rev`/reject), no
 saved-acks, no presence frames, no affordance regate, no
 cross-worker bus, no closed frame on consumption — each recorded.
+(All of it since closed — batch D, §18, builds relay/2 with
+server-authoritative OT for prose, acks, staleness rejection,
+presence, regate, gone-on-consumption, and the cross-process relay;
+only the UI's collab chrome stays punted.)
 
 **OpenAPI** (`server/openapi.clj`). `GET /api/openapi.json` — a
 derived 3.1 overlay: per kind the collection (query parameters from
@@ -477,45 +494,53 @@ declarations, descriptions from display + the machine + safety, and
 the problem responses referenced once in `components.responses`.
 Enough for /docs-style tooling; recorded: response body schemas are
 stubs, SSE/attachments/surfaces/collab/well-known are undocumented,
-no securitySchemes, scoped requests 404.
+no securitySchemes, scoped requests 404. (Batch F, §16, since landed
+the shared response schemas, securitySchemes, and the surfaces
+routes; SSE/attachments/collab/well-known stay undocumented and
+scoped requests still 404.)
 
 ## The parity ledger — waymark9's server inventory → waymark10
 
+Kept current through the post-parity batches (§§11–19); this table is
+the standing truth, and each row names the section that moved it.
+
 | waymark9 module | waymark10 home | Scope notes / named punts |
 | --- | --- | --- |
-| invoke.py | `server/invoke.clj` | full transition algorithm; bulk/batch/bulk-item |
-| definitions.py | `server/definitions.clj` | promote/pilot/withdraw; population grammar check punted |
-| router.py | `server/router.clj` | linear reitit router, problem + identity boundaries |
-| render.py | `server/render.clj` | envelope links still the phase-3 punt; depth=expanded profiles punted |
-| storage/ | `server/store.clj` + `store/postgres.clj` | one backend (Postgres); memory twin punted |
-| grants.py | `server/grants.clj` | kinds/ids/actions only — field/argument visibility MODES punted; negotiation machine punted |
-| derived.py (maintainer) | `server/maintainer.clj` | counts, clocks, backfill; derivation-class events punted |
-| external.py (Mirror) | `server/mirror.clj` | pull-through + discovery only — external PUSH / write-back beyond pull is a punt |
-| engine.py | `server/engine.clj` | boot, runtime lifecycle (dispatcher/sweeper/discovery/webhooks/jobs) |
-| collab.py | `server/collab.clj` | LWW relay; relay/2 staleness rejection, presence, regate, bus **punted** |
-| events.py | `server/events.clj` | transitions only; derivation event class punted |
-| attachments.py | `server/attachments.clj` | bytes on disk; purge/S3/sha256 punted |
-| oidc.py | `server/oidc.clj` | bearer RS256 verification; browser dance/sessions punted |
-| drafts.py | `server/drafts.clj` | per-field revs/authors unported (collab holds revs room-local) |
-| subscriptions.py | `server/webhooks.clj` | fail-the-subscription instead of skip-and-advance; revoked state punted |
-| migrate.py | `server/store/migrate.clj` | plan/apply from ONE projection (§11); expression drift invisible (name+type compare); engine tables additive-only; state renames the sole destructive class |
-| bus.py | **punt** | single-process engines; rooms and dispatcher are process-local |
-| members.py | `server/members.clj` | auto-provision on first sight; invite→bind flow punted |
-| judgment.py | `server/judgment.clj` | stored-tree overlay; derived-law overlay punted |
-| jobs.py | `server/jobs.clj` | queued state, artifacts, orphan sweep punted (lease steal resumes) |
+| invoke.py | `server/invoke.clj` | full transition algorithm; bulk/batch/bulk-item; the predecessor seam (one threading line, §13) |
+| definitions.py | `server/definitions.clj` | promote/pilot/withdraw; population grammar gate landed (§19 — pilot's where= validated through the collections parser) |
+| router.py | `server/router.clj` | linear reitit router, problem + identity boundaries; kind-schema projection, check-args!, approval effects, invite token (§17's flagged seams) |
+| render.py | `server/render.clj` | links, parts, effort/demand classes, depth=summary, rows=none landed (§14); depth=expanded embed profiles and declared collection columns still punted |
+| storage/ | `server/store.clj` + `store/postgres.clj` + `store/memory.clj` | Postgres backend + the in-memory twin (§16); dispatcher/LISTEN liveness (SSE, webhooks, observations) stays Postgres-only |
+| grants.py | `server/grants.clj` | kinds/ids/actions + field/argument modes, the negotiation machine (approval_request), the own-grant surface (§17); hashed mode, approver-edited scopes, attenuation ceiling punted |
+| derived.py (maintainer) | `server/maintainer.clj` + `derived.clj` | counts, sums, clocks, backfill; derived-law overlay (`specs-under`) and derivation-class events landed (§19) |
+| external.py (Mirror) | `server/mirror.clj` | pull-through, discovery, push/write-back + conflicted + resolve_conflict (§13); per-field authority, discovery cursors, change feeds, pushing minted rows punted |
+| engine.py | `server/engine.clj` | boot, runtime lifecycle (dispatcher / coherence-elected deliverer+sweeper (§12) / discovery / jobs / orphan+purge sweepers (§16)) |
+| collab.py (waymark-relay/2) | `server/collab.clj` + `server/drafts.clj` | full relay/2 (state, acks, stale, presence, regate) + server-authoritative OT for prose (§18 — waymark9 named character-merge a different protocol token and never built it); cross-process relay on waymark10_collab with origin nonces + heartbeat-evicted merged rosters; UI chrome punted |
+| events.py | `server/events.clj` | transitions + the observation (derivation) class (§19); no Last-Event-ID replay for derivations |
+| attachments.py | `server/attachments.clj` | bytes on disk + sha256, duplicate-replay, purge sweep (§16); S3/presigned and blob-write/metadata atomicity punted |
+| oidc.py | `server/oidc.clj` | bearer RS256 verification; browser dance/sessions/logout punted (reaffirmed by name, §17) |
+| drafts.py | `server/drafts.clj` | per-field revs/authors/op logs persist in the draft document (§18); pre-envelope rows read as rev-0, no migration |
+| subscriptions.py | `server/webhooks.clj` | per-subscription `:delivery_policy` — "fail" (parked cursor) default, waymark9's "skip" opt-in; revoked terminal state landed (§16) |
+| migrate.py | `server/store/migrate.clj` | plan/apply from ONE projection (§11); expression drift invisible (name+type compare); engine tables additive-only; state renames the sole destructive class; GIN entries reconciled by name (§16) |
+| bus.py | `server/coherence.clj` | law refresh rides the outbox (guarded boot-revise!, never mints); deliverer + sweepers elected by advisory lock (WM10 keyspace) (§12); SSE per-process off the shared log; cross-process collab relay landed later (§18) |
+| members.py | `server/members.clj` | auto-provision or `{:members :invited-only}`; invite→bind landed (§17); unbind, SECRET_FIELDS owner-gating, token uniqueness under race punted |
+| judgment.py | `server/judgment.clj` | stored-tree overlay for actions AND (via `derived/specs-under`, §19) derivations; `fn=` facts stay resident |
+| jobs.py | `server/jobs.clj` | queued state, artifacts (the report), orphan sweep landed (§16); lease steal still resumes; whole-call idempotency skipped (recorded) |
 | problems.py | `server/problems.clj` | RFC 9457 projection |
-| openapi.py | `server/openapi.clj` | overlay only; no docs UI, response schemas stubbed |
+| openapi.py | `server/openapi.clj` | overlay + shared response schemas, securitySchemes, surfaces routes (§16); no docs UI; per-kind response models stay structural |
 | owns.py | `invoke.clj` cascade + `maintainer.clj` rollups | rollup_is subsumed by count facts |
-| consumers.py | **punt** | consumers-as-API (registered log consumers) unbuilt; webhooks cover the external case |
+| consumers.py | `server/consumers.clj` | named durable log consumers, park-on-throw, drain-consumer! (§16); the webhook deliverer's unification onto it deferred until a third consumer |
 | pipeline.py | **punt** | no pipeline/choreography surface |
 | roles.py | `server/roles.clj` | registry + uniqueness-under-race punt |
-| surface.py | `server/surface.clj` | fingerprint/grant/links/table-hints punted (see above) |
-| idempotency.py | `invoke.clj` + `waymark10_idempotency` | byte-identical replay; replays predate grant projection (recorded) |
+| surface.py | `server/surface.clj` | fingerprint/grant/links/table-hints punted (see above); routes documented in OpenAPI (§16) |
+| idempotency.py | `invoke.clj` + `waymark10_idempotency` | byte-identical replay; replays predate grant projection (recorded, re-extended §17) |
 
-Standing cross-cutting punts, restated so nobody re-discovers them:
-RRULE/recurrence, spans, the predecessor resolver (period chaining),
-rows=none/depth= collection modes, GIN indexes for vocab arrays, and
-the grant-projected SSE/surface/openapi routes.
+Standing cross-cutting punts as phase 9b named them, each since
+tracked: RRULE/recurrence (closed at a recorded profile, §13), spans
+(still open), the predecessor resolver (closed, §13), rows=none/depth=
+collection modes (closed, §14), GIN indexes for vocab arrays (closed,
+§16), and the grant-projected SSE/surface/openapi routes (still
+open). The full remaining list lives in the final section.
 
 ## The wire walk (curl + websocat)
 
@@ -789,7 +814,11 @@ objects input as a JSON textarea, `date-time` inputs as plain RFC
 3339 text, dry-run on demand rather than on blur, no grant-scoped
 chrome (a scoped request's data is projected by the API either
 way), no i18n, and no undo toast (v10 envelopes advertise the
-inverse action; the button is there, the toast isn't).
+inverse action; the button is there, the toast isn't). (Batch A,
+§14, since closed two of these: facet-fed vocab comboboxes, and
+dry-run moved to blur — scoped to single-resource actions after
+fixing the live Check-button bug. The live-collab join remains open
+after batch D built relay/2: the UI chrome is §18's named punt.)
 
 **Verified against live dev10** (2026-07-10) two ways: the
 automated floor (`waymark10.ui-test`: serves, self-contained,
@@ -934,6 +963,1183 @@ refuse→migrate→serve→replay-green, drift-free empty plan, and the
 storage facet minting its revision); `make test-mealplan10` **11
 tests, 145 assertions**, untouched.
 
+# 12. Multi-process coherence — two processes, one law
+
+Home: `server/coherence.clj`. Tests: `test/waymark10/coherence_test.clj`
+(two engine instances — separate pools, separate registry atoms — over
+one database in one JVM: the faithful two-process simulation). This
+section retires the bus.py punt ("single-process engines"); the parity
+ledger's row is updated above.
+
+The problem it closes: the law slots (`:current-law`,
+`:judgment-laws`, the proposed/piloted overlays, the judgment caches)
+live in each engine's registry ATOM, and the definitions lifecycle
+updates the local atom only. A second engine process against the same
+database kept serving the OLD law after a promote on the first —
+violating "every path that applies law to a row applies the row's
+law". And two running surfaces assumed they were singletons: the
+webhook deliverer (the per-subscription cursor is shared and
+unguarded — two processes double-deliver) and the clock sweeper
+(double work, lock contention on the due pages).
+
+## Law-slot refresh rides the outbox
+
+Definition transitions are ordinary logged transitions (kind
+`definition`), so the events dispatcher already delivers them to every
+process. The refresh consumer subscribes to exactly those, debounces
+bursts (a promote's effect logs several transitions — retire,
+supersede, adopt — and one refresh at the end of the burst covers them
+all; default 1s), and calls `definitions/boot-revise!`: on UNCHANGED
+code boot-revise! is idempotent — hash-equal against the stored
+current row, it adopts revisions, holds, pilots, and overlays from the
+store, writing nothing. definitions.clj is untouched.
+
+The concurrency reading of boot-revise! (the coherence finding):
+
+- **Safe beside traffic on the adoption paths.** Each kind's slots
+  install through ONE `swap!` (definitions' `install!`, which also
+  resets the judgment cache), so a concurrent request sees the old
+  slots or the new, never a partial set; every invocation resolves its
+  rdef from a single registry snapshot.
+- **Not safe unconditionally.** On a process whose resident code
+  matches no stored current/proposed/piloted revision (the mixed-code
+  window of a rolling deploy), boot-revise! would MINT law —
+  re-proposing (in `:promote` mode re-promoting) the old law from a
+  non-deploy context, and two processes with different resident code
+  would mint and withdraw each other's rows forever. Its
+  unchanged-code path also withdraws "lingering" proposals — which
+  from a refresh would withdraw a LIVE hold minted by a newer-code
+  peer. So `refresh!` guards: it runs boot-revise! only when every
+  application kind would take a pure-adoption path (resident hash
+  equals the stored current's with no foreign proposal rows, or equals
+  a stored proposed/piloted row's). Anything else warns and skips —
+  a mixed-code process serves what it has, and its replacement is the
+  rolling deploy's job, not the refresh's. **A refresh never mints
+  law** (tested: the skip, the surviving hold, the unmoved row count).
+- **Residual windows, recorded.** Refreshes serialize on the one
+  consumer thread, but a lifecycle effect invoked THROUGH a process
+  runs its installs on the request thread beside a peer-triggered
+  refresh; both derive from the store, every effect step logs a
+  transition, and the re-fired consumer converges on the committed
+  store. The guard's check and boot-revise!'s own read are separate
+  transactions (TOCTOU) — a transition landing between them likewise
+  re-fires the consumer. And between a peer's promote commit and this
+  process's debounced refresh (~debounce + dispatcher poll), the stale
+  slots still stamp creates and adopt targets with the prior law; rows
+  already stamped keep being judged by their own law where an overlay
+  entry exists, and by the resident code where the stamp is unknown
+  (judgment.clj's recorded fallback).
+
+## Singleton roles by advisory lock
+
+`start-role!` elects one holder per role name across every process
+sharing the database: `pg_try_advisory_lock` on a well-known bigint,
+held on a DEDICATED raw connection — never from the Hikari pool; the
+lock is session-scoped and a recycled session would drop it silently
+(the dispatcher's LISTEN-connection discipline). The holder runs the
+role's start-fn and holds until stopped or the session dies (checked
+every retry interval); non-holders retry every `:retry-ms` (default
+5s). Closing the session releases the lock, so a clean stop OR a
+crashed process hands the role over within one retry interval.
+
+The lock keyspace: the key's high 32 bits are the fixed namespace
+`0x574D3130` (the ASCII bytes "WM10"); the low 32 bits are the CRC32
+of the role name's UTF-8 bytes — deterministic across JVMs, disjoint
+from any other tenant's advisory keys unless it also claims the WM10
+word. Two roles existed at this batch's landing —
+`webhooks-deliverer` and `clock-sweeper`; batch F (§16) added
+`jobs-orphan-sweeper` and `attachments-purge` to the same keyspace.
+
+Tested: exactly one deliverer delivers (event-id counted at an
+in-process receiver), the cursor persists past delivery so a takeover
+replays nothing, the survivor acquires within the retry interval and
+delivery resumes; exactly one sweeper ever starts while a due clock
+flip lands (version untouched — maintenance, not a write).
+
+## What stays process-local, recorded
+
+- **SSE subscribers** — correct: each process serves its own
+  connections off the shared log; every dispatcher reads every
+  transition.
+- **Collab rooms** — cross-process live relay NOT built at this
+  batch: edits persisted through the shared draft rows, so late
+  joiners (and joiners on the other process) converged at sync/rejoin
+  only. **Since closed — batch D (§18) built the cross-process relay
+  on `waymark10_collab`;** the boundary is recorded here because the
+  batches landed in this order.
+- **Idempotency and natural replay** — DB-anchored, already safe.
+- **Jobs** — the worker claims leases (claim-or-steal on expiry),
+  already safe; it stays a per-process start, NOT a role.
+
+## The two-process wire walk
+
+    # process 1 and process 2, one database
+    PORT=8010 WAYMARK10_DEV_DSN=$DSN clojure -M:fx -e "(start-dev!)" &
+    PORT=8011 WAYMARK10_DEV_DSN=$DSN clojure -M:fx -e "(start-dev!)" &
+
+    # the law, revised through process 1 (propose-mode deploy + promote
+    # by a second principal) …
+    curl -s -X POST localhost:8010/api/definitions/$DEF_ID/-/promote \
+      -H 'x-waymark-principal: elena' -d '{}'
+
+    # … governs process 2 within its refresh debounce, no reboot:
+    curl -s localhost:8011/api/plans/$PLAN_ID | jq .meta.law_revision
+
+    # exactly one process delivers each webhook event (advisory-lock
+    # election); kill the holder and the other resumes within its
+    # retry interval — the cursor rides the database, nothing replays.
+
+## Integration, applied
+
+Coherence owns the deliverer and the sweeper — `coherence/start!`
+REPLACED the direct `webhooks/start-deliverer!` and
+`maintainer/start-sweeper!` calls: `engine/start!`'s runtime map
+carries `:coherence (coherence/start! eng dispatcher {})` in place of
+the `:sweeper`/`:webhooks` entries, and `engine/stop!` stops it
+before the dispatcher. The jobs worker and mirror discovery entries
+stayed as they were.
+
+# 13. Batch E — the outside world, at fidelity
+
+Three deliverables: RRULE expansion in the mealplan event adapter,
+the predecessor resolver (design E7), and Mirror push/write-back with
+the conflicted-state machine (waymark9 `push_mirror` + reconcile, at
+a recorded scope).
+
+## RRULE expansion (mealplan10.event-source)
+
+The pure expander `expand-rrule` closes mealplan10's biggest recorded
+deviation from mealplan9 (which leaned on `recurring_ical_events`).
+The profile implemented honestly — the one real family calendars use:
+
+- `FREQ=DAILY/WEEKLY/MONTHLY`, `INTERVAL`
+- `BYDAY` (weekly only, plain two-letter codes; WKST=MO grid)
+- a single `BYMONTHDAY` (monthly); otherwise DTSTART's day-of-month,
+  months lacking that day skipped (RFC 5545's rule — and skipped
+  months do not count against COUNT)
+- `UNTIL` (inclusive) or `COUNT` — COUNT limits the generated set
+  BEFORE the window filter and BEFORE EXDATE removal (RFC set
+  semantics)
+- `EXDATE`, accumulated across repeated lines and comma lists
+
+Outside the profile — `BYSETPOS`, `FREQ=YEARLY`, positional BYDAY
+(`2TU`), BYDAY on MONTHLY, multiple BYMONTHDAYs, non-Monday WKST on a
+multi-week interval, and `RDATE` (which ADDS occurrences we would
+silently lose) — the boundary is recorded, never a crash and never a
+silent partial expansion: THAT event is skipped whole with a `*err*`
+warning naming the offending part and the full rule. The grammar is
+case-insensitive.
+
+Identity is waymark9's: every occurrence is its own mirrored resource,
+`external_id = {uid}@{date}` — exactly what the plan's overlap
+predicate needs. `feed-occurrences` is the pure heart (iCal body +
+window in, `{external-id doc}` out); the HTTP fetch stays a thin
+shell. FakeEvents gained `seed-recurring!`, which drives the SAME
+expander, so family-week-style tests put a weekly recital on the fake
+calendar and prove plan conflicts flip on exactly the occurrence
+weeks (the EXDATE'd week stays clear).
+
+Recorded simplification: occurrences follow the rule grid — a DTSTART
+off its own BYDAY grid (which real calendars don't emit) contributes
+no extra occurrence.
+
+## The predecessor resolver (design E7)
+
+Period chaining is data, not date arithmetic. A `:waymark/ref` schema
+entry declaring
+
+    [:previous_plan {:optional true :kind :plan
+                     :predecessor {:order :start_date
+                                   :partition :ledger}}   ; partition optional
+     [:maybe :waymark/ref]]
+
+resolves at CREATE when the body left it blank: the newest existing
+row of the target kind by `:order` — ties break toward the smallest
+id (search-rows' id tiebreak, so resolution never flaps) — within the
+same `:partition` value when declared; no sibling → nil. A supplied
+body value always wins. The waymark9 ≤-seeding survives: when the new
+row already carries its own `:order` value, only siblings at or
+before it qualify — a backdated period links backward, never forward;
+a blank order value (an `:on-create` default not yet applied) takes
+the newest sibling overall.
+
+Where it lives: `waymark10.server.predecessor` owns all machinery;
+`create!` runs it at ONE surgical, documented seam — after decode,
+before `:on-create` (waymark9 invoke.py's step order, so the hook may
+read the resolved sibling for carry-forward). That is the whole
+invoke.clj diff: one require, one threading line with its comment.
+
+Recorded boundaries:
+
+- `:order` must be promoted on the TARGET kind (filterable or
+  sortable — the resolving query orders by its generated column);
+  refused loudly at create. waymark9 checked this at assembly
+  (`_check_predecessor`); the v10 assembly check is a named punt.
+- a declared `:partition` whose value is blank on the new row
+  resolves nothing — half a partition key must not link across
+  partitions.
+- mealplan10 wires `plan.previous_plan {:order :start_date}`; the
+  schema projection already carries `:predecessor` into `x-ref`.
+
+## Mirror push/write-back and the conflicted state
+
+`sync-states` is now `fresh / stale / unreachable / conflicted` —
+waymark9's full machine. The adapter protocol gained
+`(push adapter external-id document) → new-etag`.
+
+A mirror may declare `{:push-on-write true}` in its mirror spec, and
+ONLY then may it declare its own domain actions (local writes; moves
+between non-conflicted sync states — the machine stays the sync
+machine, domain state stays in data; names may not shadow the sync
+doors). After such a write commits:
+
+- push succeeds → `observe_external` (system actor) stamps the new
+  etag + synced_at; the response tells the post-push truth.
+- push fails → `mark_conflicted` with the adapter's own words: the
+  LOCAL document stands, `conflict_reason` renders, and the state
+  tells the truth about the gap. At this scope every push failure is
+  the conflicted state (unreachable-on-push vs true etag conflict is
+  a recorded non-distinction; the resolve covers both).
+
+`resolve_conflict` (from `conflicted` → `fresh`, confirm required) is
+the ONE human door on the sync machine — never a silent
+last-writer-wins: `keep=remote` re-pulls the authority's truth and
+adopts it; `keep=local` re-pushes ours and adopts the new etag. The
+adapter call runs inside the invoke — the same recorded impurity
+waymark9's reconcile carried; an unreachable adapter fails the invoke
+loudly and the row stays conflicted. A conflicted row never
+pull-through-refreshes and takes no further local writes: leaving
+conflicted is a person's move, not the clock's.
+
+Wiring: the push pass rides the engine's post-commit `:maintain` hook
+via `(mirror/with-push eng)` — an embedding that serves a
+push-on-write mirror wraps its engine before building the handler.
+Recorded punt: engine.clj's boot does not auto-wire it (no enrolled
+app declares one; mealplan's calendar stays pull-only — its adapters
+implement `push` only to refuse loudly / to serve tests). Creates
+never push (a locally-minted row reaching the authority is a named
+punt with the cursors).
+
+## Remaining punts, named
+
+- RRULE: `BYSETPOS`, yearly rules, positional BYDAY, `RDATE`,
+  non-Monday WKST on multi-week intervals — each skips its event with
+  a warning naming it.
+- Predecessor: the assembly-time promotion check (create-time refusal
+  holds the line today); `pick`-style carry-forward of sibling fields
+  stays the apps'.
+- Mirror: per-kind discovery cursors, mirror webhooks/change feeds,
+  per-field authority (AuthoredMeta), pushing locally-minted rows,
+  auto-wiring `with-push` in the engine boot.
+
+# 14. Batch A — the envelope grows parts, links, and effort
+
+The one post-parity batch that shipped without a notes file; recorded
+here from its commit (d8bb3e7), because it closes punts other
+sections name. Placed actions render where the user acts: `parts`
+projects each part-scope group per item — key const-bound, acceptance
+sets folded per item, per-item narration only where reasons differ
+(rendered from the same leaf enforcement uses; the 409 detail matches
+verbatim). Refinement, not replacement: render.py was checked against
+the brief's guess and top-level actions stay complete, with the why
+recorded (summary depth drops parts; the client and walker read the
+top-level map). Links render from the declared edges with badges from
+the row's own materialized facts (no N+1 — made checkable: the badge
+must equal the envelope's own data value), embeds capped and spliced
+through the link's own href so the two can never disagree.
+`depth=summary` and `rows=none` land (any other depth value is one
+422); every action carries its demand class
+(assent/selection/recall/composition — envelope-only, never law, in
+`demand.clj`).
+
+The UI gets its hands back: per-day action buttons, keystroke
+validation from the schema, blur-time dry-run with server field
+errors inline, facet-fed vocab comboboxes, effort-aware emphasis —
+12 headless-browser checks, zero console errors. One live bug fixed:
+the old Check button really fired creates and bulks (paths that
+ignore `dry_run`); dry-run UI is now scoped to single-resource
+actions.
+
+Six new obligations extend the conformance suite (parts truth, parts
+enforcement, links truth + wire, depth, rows=none, effort truth);
+`:parts` joins the envelope's reserved keys as optional. Home:
+`demand.clj`, `server/render.clj`, `server/router.clj`,
+`test/envelope_obligations.clj`, `batch_a_envelope_test.clj`. Still
+open after this batch: waymark9's `depth=expanded` embed profiles and
+declared collection columns/table hints.
+
+# 15. Batch G — declaration ergonomics (the defresource split)
+
+The declaration remains ONE EDN-able map after `normalize-resource`:
+the fingerprint, the diff gate, the registry, and the overlays all
+read that value. Everything in this batch is sugar that PROJECTS INTO
+the canonical map; normalize is the seam. The governing invariant:
+**two spellings, one law** — colocated vs split vs def'd vs inline
+spellings of the same declaration fingerprint identically, so a pure
+style refactor mints zero revisions. `batch_g_invariance_test` pins
+it: the rewritten fixtures against their old split spellings
+(byte-identical hashes), and a property over generated declarations
+rendered both ways (identical normalized maps AND identical
+fingerprint hashes).
+
+## Schema-entry colocation
+
+Field-scoped law may be declared on the schema entry's property map;
+`normalize-resource` (first step of its pipeline,
+`project-colocated` in `waymark10.resource`) projects it to the
+canonical top-level keys:
+
+| colocated (entry props)      | projects to                                    |
+|------------------------------|------------------------------------------------|
+| `{:derived spec}`            | `:derived {field spec}` — the fact's field IS the entry (waymark9's `Derived()`-as-field-default, restored) |
+| `{:filter #{:eq :range}}`    | `:filterable {field ops}`                      |
+| `{:sort true}`               | field joins `:sortable :fields`                |
+| `{:sort :default}`           | …and claims the default (`"field"`)            |
+| `{:sort :default-desc}`      | …and claims the descending default (`"-field"`) |
+| `{:part-scope {:key :date}}` | `:part-scopes {field {:path field :key …}}`    |
+
+Rules:
+
+- The sugar keys are **stripped from the entry props before the
+  schema compiles or fingerprints** — they are declaration
+  ergonomics, never schema properties. The stripped schema form is
+  the split spelling's form, and the published JSON Schema is
+  unchanged (pinned in `batch_g_declare_test`).
+- **Exactly one home.** Declaring a concern both colocated and
+  top-level for the same field is a definition error whose ex-data
+  names the check: `{:check :one-home}`. Different fields may split
+  across homes freely (e.g. `:state` filtering stays top-level — the
+  engine's state is not a schema entry).
+- **At most one sort default**, counting a top-level `:default` —
+  two claims are refused at normalize.
+- A colocated part scope's `:path` is its entry; naming a different
+  `:path` is refused. The scope's name is the field.
+- Colocation applies to the top-level entries of a `[:map …]`
+  resource schema — item fields of nested vectors have no top-level
+  concern to project.
+- Projection runs before vocab self-merge, so a vocab field may still
+  colocate an explicit `:filter` and win over the `#{:eq :in}`
+  default.
+
+## `waymark10.declare` — defaction and defderived
+
+In the `defguard` mold: each defs a **plain map identical to the
+inline spelling**, so the def'd value drops in anywhere the inline
+value does — directly in `:actions`/`:derived`, or colocated on a
+schema entry (`[:end_date {:derived end-date} …]`).
+
+Validation timing — the def site validates exactly what it can see:
+
+- **defaction** runs `resource/normalize-action` (now public — the
+  same construction-shape gate defresource runs) eagerly and
+  discards the result: a missing `:safety`, a draft on a bulk, a
+  fenced batch fails **at the def line** (`defaction/<name>: …`).
+  Normalization itself still happens once, at defresource; the
+  cross-referencing checks (states exist, judged fields are input
+  fields, place names a part scope) honestly wait there. An inline
+  `(fn …)` `:handler` gets its canonical printed form captured as
+  `:waymark10/form` metadata — the same identity `defhandler` mints —
+  so the fingerprint hashes the law, never the object.
+- **defderived** normalizes the spec (`normalize-derived-spec`,
+  factored public and idempotent: expression trees canonical, count
+  `:where` values as sets) and scope-validates at def time — `:over`
+  is right there, so an out-of-scope `(var …)`, a spec with both/
+  neither of `:expr`/`:count`, or `:over` on a count fails at the def
+  line. Whether the fact is a schema field, whether the edge exists,
+  whether facts cycle — defresource's and assembly's questions.
+
+## Blessed idioms
+
+- **Action groups**: a var holding a map of actions, merged into
+  `:actions` — `(merge {:assign_meal …} closing-actions)`. The merge
+  result is the same map the monolith spelled.
+- **Named safety values**: `(def routine {:idempotent true
+  :reversible true :confirm false})`, cited as `:safety routine`.
+  This honors safety-never-inferred: reference is explicit
+  declaration, not inference — the map is still spelled once, in
+  full, and every citation names it; no property is ever computed
+  from the action's behavior. What the rule forbids is the engine
+  *guessing* safety; a name is the opposite of a guess.
+- **Local builder fns** returning plain maps, when a family of
+  declarations differs by one parameter (the fixtures'
+  `calendar-clear-guard` is the house example).
+
+## The proof shape
+
+- `test/waymark10/fixtures.clj` is rewritten in the new style:
+  plan's derived/filterable/part-scope/sort colocated onto entries,
+  `update_recipe`/`assign_meal` def'd (one with an inline captured
+  handler, one referencing a `defhandler`), the closing pair as an
+  action group, `routine` as a named safety.
+- `batch_g_invariance_test` keeps the OLD split spellings alive,
+  constructed in the test **sharing the fixtures' guard/handler
+  objects** (a code guard without a stateable form hashes by printed
+  fn identity, so the comparison must share instances — exactly what
+  a style refactor does), and pins fingerprint hashes byte-identical
+  for both kinds, plus full normalized-map equality for plan.
+- The property (`a-style-refactor-mints-zero-revisions`, 100 trials):
+  a generator over small declarations (fields with optional
+  filter/sort law, at most one default, an optional derived fact, an
+  optional part-scoped vector) rendered colocated and split →
+  identical normalized maps and identical fingerprint hashes.
+
+## The mealplan10 rewrite (the follow-up, done)
+
+All six mealplan10 kinds now live in the batch-G spelling;
+`mealplan10/test/mealplan10/style_invariance_test.clj` keeps the old
+split spellings alive (batch-G technique: constructed as data,
+sharing the namespaces' guard/handler objects — and the hoisted
+`g/require` gate, since `g/require` mints a fresh `:check` fn per
+call) and pins all six fingerprint hashes byte-identical, plus full
+normalized-map equality.
+
+Field notes from the real consumer, for the style guide:
+
+- **defderived + entry citation is what keeps colocation readable.**
+  plan's biggest derived (`all_days_covered`, the `every` tree) would
+  read badly inlined in entry props; def'd and cited
+  (`[:all_days_covered {:optional true :derived all-days-covered} …]`)
+  it reads better than the old top-level `:derived` block, because
+  the fact sits on its field. Only true one-liners
+  (`has_conflicts`, prep_task's `overdue`) went inline.
+- **A Mirror kind colocates fine.** `mirror/declaration` returns a
+  plain map, so entry-level `:filter`/`:sort` on the app schema
+  project through the weave. Pin around the SAME wrapper on both
+  sides; the weave re-mints the `observe_external` and
+  `resolve_conflict` handler fns per call — identical canonical-form
+  hashes (so the hash pin is exact) but distinct objects (so
+  normalized-map equality holds only modulo those two handlers).
+- **Some kinds have nothing to colocate.** rotation declares no
+  field-scoped law at all (only `:state` filtering, which is not a
+  schema entry); its whole style rewrite is two named safety values.
+  The style guide is a default, not a law — an honest no-op is fine.
+- **No colocated home exists for `:one-of`.** plan's `days/coverage`
+  group is field-scoped in spirit (it governs `:days` arms) but stays
+  top-level; a possible future projection, not claimed here.
+  *(Claimed since: the part spelling — `defpart` + `:part` entry
+  citation — gives the group its colocated home;
+  `docs/waymark10-spellings.md`.)*
+- **Line counts go up, not down** (+18/+13/+46/+33/+9/+7 across
+  meal/rotation/plan/grocery_list/prep_task/event): docstring style
+  notes, def headers, and named-safety comments cost lines. The win
+  is locality (the law on its field, the day-shaped actions one
+  group), not brevity.
+
+# 16. Batch F — engine odds-and-ends
+
+Seven deliverables, each with its own test namespace
+(`test/waymark10/batch_f_*.clj`).
+
+## GIN indexes on vocab arrays (phase 7's named punt, closed)
+
+`store/kind-projection` gains a GIN entry per vector-typed
+`:waymark/vocab` filterable field —
+`ix_<table>_<field>_gin ON <table> USING gin ((data->'<field>'))` —
+so the DDL renders it, the migrate planner reconciles it by name
+(add on promotion, drop on retirement; the existing `ix_*` index
+discipline needed nothing new), and the fingerprint's storage facet
+records it (index names are already part of the facet). Vocab arrays
+still have no single-value promotion: the GIN entry is their whole
+storage story.
+
+The load-bearing companion change: the `:in-any` cond now spells the
+jsonb `?|` operator (JDBC-escaped `??|`) instead of
+`jsonb_exists_any(...)`. **Postgres matches indexes through operators
+only** — the function spelling could never walk the index. Semantics
+identical (`jsonb_exists_any` IS `?|`'s backing function); the test
+EXPLAINs the operator over a seeded table and asserts the plan names
+the index.
+
+Boundaries, each a sentence:
+- Scope is vector-of-vocab filterable fields only — a bare (scalar)
+  vocab keeps its promoted text column; `:string` arrays and other
+  array shapes stay unindexed (nothing filters them today).
+- Because vocab fields self-merge into `:filterable`
+  (resource.clj's rule), **every kind with a vocab array gains the
+  index and therefore a new storage-facet fingerprint** — mealplan10's
+  `meal` (themes) will mint a `code_or_shape` revision at its next
+  boot and its migrate plan will carry one `add-index`; both are the
+  designed paths, but the deploy should expect them.
+
+## Jobs completeness (waymark9's lifecycle pieces, restored)
+
+- **`:queued` is back**: a job is born `:queued`; the worker's claim
+  starts it (`:start`, queued → running, worker-gated and hidden).
+  The 202 envelope now honestly says nobody works the job yet.
+- **Job artifacts**: the worker persists the final per-item report on
+  the row's data (`:report` — action, kind, total/succeeded/refused/
+  failed, the refusal list with a per-entry `class` of
+  `refused`/`failed`) via a maintenance write just before `:complete`
+  fires, so the completed envelope carries the whole outcome, not
+  just the running progress.
+- **The orphan sweep**: `jobs/sweep-orphans!` re-queues `:running`
+  jobs whose lease is absent or expired (`store/job-lease`, a new
+  additive protocol read) — the re-queue is a logged transition
+  (`:requeue`, system actor), so the outage is in the audit trail.
+  `jobs/start-orphan-sweeper!` elects ONE sweeper per database via
+  `coherence/start-role!` (role `:jobs-orphan-sweeper`) — a role
+  ADDED to coherence's keyspace, nothing restructured. The lease
+  steal still resumes too; the sweep just makes the orphan visible as
+  queued instead of leaving it wearing a dead worker's `:running`.
+
+`engine/start!` now starts the orphan sweeper in its `:runtime` map
+(the one-liner landed post-merge). Two existing assertions
+(`jobs_test.clj:106`, `bulk_batch_test.clj:178`) were updated
+`"running"` → `"queued"` — the minimal tracking of the restored
+state; nothing else in either suite moved.
+
+## Webhooks: `:revoked` and the per-subscription delivery policy
+
+- `:revoke` (active/paused/failed → revoked, terminal) is
+  owner-gated: only the principal whose id is the row's owner may
+  revoke; the guard's refusal names the pause alternative. Revoked
+  never resumes and never hears another event.
+- `:delivery_policy` (`"fail"` default | `"skip"`), declaration-
+  driven on the subscription row: `"fail"` keeps v10's discipline
+  (bounded retries, then mark_failed, cursor PARKED at the refusing
+  event); `"skip"` is waymark9's liveness posture (log to `*err*`,
+  advance the cursor past the refusing event, stay active) — the
+  trade is now chosen per subscription instead of imposed globally.
+
+## Attachments: sha256, duplicate detection, the purge sweep
+
+- The byte PUT computes the content's sha256 and stamps it beside the
+  size (`mark_stored`'s input; the handler writes both to data, so
+  the envelope exposes them like any field).
+- Duplicate content detects by the sha: a re-PUT of byte-identical
+  content on a stored row natural-replays (same input digest → the
+  2.0 replay, 200); different content — same size or not — refuses
+  409 before the file is touched. Boundary: a row stored BEFORE this
+  batch carries no sha, so a re-PUT on it refuses 409 (the pre-sha
+  digest can never replay) — the honest answer for bytes whose
+  provenance was never recorded.
+- `attachments/purge-deleted!` removes `:deleted` attachments' bytes
+  from the directory (metadata rows stay — the audited record;
+  idempotent re-runs); `start-purge-sweeper!` elects one sweeper per
+  database via `coherence/start-role!` (role `:attachments-purge`).
+  Like the orphan sweeper, it is wired into `engine/start!`
+  (landed post-merge).
+
+## Consumers-as-API (`server/consumers.clj`, new)
+
+`(consumers/register-consumer! eng name f)` — named, durable log
+consumers: cursor rows in `waymark10_cursors` (`consumer:<name>`),
+checkpointed per processed event, riding the dispatcher as the wake
+signal exactly as the webhook deliverer does. At-least-once by
+construction (checkpoint after the call); a throwing consumer PARKS
+at the refusing event (nothing skipped silently — the webhook "fail"
+posture); registration seeds at the newest transition
+(`:from-origin? true` hears history); `drain-consumer!` is the
+deterministic test entry.
+
+**Deferred unification, named**: the webhook deliverer is NOT
+refactored onto this API. It predates it, its drain is
+per-subscription (N cursors behind one thread) where a consumer is
+one cursor, and its failure policy is a resource-state machine rather
+than a park. Folding the deliverer onto `register-consumer!` (one
+consumer per subscription, policy as the consumer's error fn) is a
+real simplification — deferred until a third consumer of the pattern
+exists, so the abstraction is grown from three points, not two.
+
+## OpenAPI: response schemas, security, surfaces
+
+`components.schemas` gains the four shared shapes — `envelope`,
+`collection` (items reference the envelope), `problem`,
+`bulk_report` — and every route references them (act/GET 200s and
+create 201s → envelope, collection GETs → collection, bulk/batch
+reports → bulk_report, 202 defers → envelope, problem responses →
+problem). `securitySchemes` names both identity doors (`bearer` —
+the OIDC relying party; `devHeader` — X-Waymark-Principal) and the
+document declares them as alternatives. The surfaces routes document
+per declared surface (`/api/surfaces/<name>/{id}`). Still structural,
+not per-kind: the per-kind data model rides `/api/schemas/{kind}`
+and the envelope's own affordances — recorded scope, unchanged.
+
+## The in-memory Storage twin (`store/memory.clj`, new)
+
+The full Storage protocol over one atom — tables, the transition log
+with assigned ids, idempotency, drafts, cursors, leases — faithful to
+the Postgres MEANINGS:
+
+- Documents round-trip through wire JSON on every write, so reads
+  hand back exactly what JSONB would (keyword keys, exact decimals,
+  keywords collapsed to strings).
+- The cond grammar interprets casts as value coercions (both sides
+  parse to the cast's type and compare with `compare` — numeric
+  `1.0 = 1` holds, unparseable values throw, exactly as SQL would);
+  nil left values fail every comparison (SQL NULL); `:in-any` matches
+  string elements only (jsonb `?|`'s reading).
+- Transactions are a global monitor + snapshot-rollback: writes
+  serialize (the row lock, coarsened to the store) and an exception
+  restores the snapshot — atomic bulk/batch refusals roll back
+  exactly as Postgres does; nested with-tx snapshots independently.
+- **The notify seam, recorded**: `pg_notify` becomes an in-process
+  callback registry (`memory/subscribe-notify!`), flushed when the
+  outermost with-tx completes — an event exists iff its transaction
+  did, like the wire original — but the events DISPATCHER (a LISTEN
+  connection) does not run over this storage; an engine over the twin
+  runs without a dispatcher or polls the log. SSE/webhook liveness is
+  therefore Postgres-only; the twin's consumers drain by hand.
+
+Acceptance: `batch_f_memory_test.clj` runs the invoke-test scenario
+suite (create + derived materialization, guards, acceptance sets,
+natural replay, idempotency discipline, the acknowledge protocol,
+serialized concurrent writes) plus collections (state filters, vocab
+membership, facet unrolling, typed range casts, paging with the id
+tiebreak, sort) and atomic-rollback against
+`(inv/engine {:storage (memory/storage) …})` — no database.
+
+## The focused runs
+
+    cd waymark10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:5433/waymark10_f_test?user=ckopsa" \
+      clojure -M:test --focus waymark10.batch-f-gin-test \
+                      --focus waymark10.batch-f-jobs-test \
+                      --focus waymark10.batch-f-webhooks-test \
+                      --focus waymark10.batch-f-attachments-test \
+                      --focus waymark10.batch-f-consumers-test \
+                      --focus waymark10.batch-f-openapi-test \
+                      --focus waymark10.batch-f-memory-test
+
+28 tests, 196 assertions, 0 failures at landing. Regression (same
+DSN, focused): jobs/bulk-batch/webhooks (15 tests, 155),
+phase9a/phase9b/collections (20, 226), invoke/migrate/fingerprint
+(16, 112), conformance/drafts (12, 191) — all green; the suites now
+ride `make test10`.
+
+# 17. Batch B — access completeness
+
+Phase 9a landed identity and the kind/id/action grant. Batch B closes
+four of its named punts: **field/argument visibility modes**, **the
+negotiation machine** (waymark9's request_access, resized), **the
+own-grant surface**, and **invite → bind membership**. Everything
+rides the existing seams — the visibility closure map the router
+resolves once per request, and render's projection — no new
+middleware, one new resource kind. Home:
+`server/{grants,members,oidc,render}.clj`, five flagged router seams,
+`test/waymark10/batch_b_{access,members}_test.clj`.
+
+## Field and argument modes
+
+A grant scope entry grows two optional keys:
+
+```clojure
+{:kind "plan"
+ :actions ["assign_meal" "finalize"]
+ :fields {:mode "deny" :names ["notes" "start_date"]}
+ :args   [{:action "assign_meal" :mode "deny" :names ["meal_id"]}]}
+```
+
+- `:fields` — `allow` renders only the named data fields, `deny`
+  renders all but. Entries sharing a kind UNION their admissions
+  (visible under any entry = visible); an entry without `:fields`
+  leaves the kind unrestricted and absorbs any sibling's narrowing —
+  the ids absorption rule, applied twice more.
+- `:args` — the same modes per granted action's input arguments.
+  **Recorded spelling deviation:** a vector of `{action, mode,
+  names}` entries, not waymark9's `kind→action→arg→mode` nested maps
+  — a shape the schema layer and fingerprint already hash.
+  waymark9's `hashed` field mode (render the digest) is unported.
+
+**A redacted field is ABSENT** — never nulled, never narrated:
+
+| surface                            | where enforced                        |
+|------------------------------------|---------------------------------------|
+| envelope `data`                    | render, post-probe projection          |
+| the summary                        | render (the honesty trap, below)       |
+| `parts` (a redacted path drops its whole group) | render                    |
+| links (badge, edge params, `{data.x}` templates) | render — the link pass reads the redacted row, so a hidden field omits its link exactly as a nil would |
+| `/api/schemas/{kind}`              | router → `grants/project-json-schema` |
+| collection items (every depth, stub included) | render (`envelope-summary`/`envelope-stub` share the projection) |
+
+A denied argument is absent from every advertised input schema (its
+folded acceptance enum with it), `required` shrinks to match, and
+`effort` recomputes over the projected schema.
+
+**The honesty trap, closed:** summaries render from templates that may
+read redacted fields (`"Week of {data.start_date} …"`). The recorded
+choice is **fallback, not re-rendering**: a template naming any
+redacted field renders as the honest generic line `"Plan · Draft"`.
+A template with a redaction hole would leak the shape of what it
+hides and read as a broken sentence besides.
+
+**Enforcement:** a denied arg arriving in a body — single invoke,
+bulk, batch, dry-run alike — answers a 422 with malli's own
+closed-map words (`"disallowed key"`), byte-identical to a field that
+never existed (`grants/check-args!`, pinned against a genuine unknown
+field in the test). **Denying a REQUIRED argument denies the action**
+(`prune-unusable`): an action advertised with an unsatisfiable form
+is a lie, and its missing-key 422 would name the hidden argument — so
+the surface drops it whole, concealment-style. waymark9 routed such
+invocations to approval mode, which is unported.
+
+**Recorded seams** (each deliberate):
+- Guards still probe the FULL row — advertisement equals enforcement;
+  the projection governs what leaves the building. Consequently an
+  acceptance-set enum folded from a redacted field (e.g. the `date`
+  enum folded from hidden `days`) may reflect hidden values, and an
+  `unavailable` narration's deny vars may name one. Named punts.
+- The 422 runs at the router boundary, AHEAD of invoke's step order;
+  a probing client could distinguish by ordering against the fence /
+  state checks.
+- Collection `query`/`create` input schemas and facet counts are
+  unprojected — items themselves project fully. Drafts likewise.
+- Create-argument modes are unported: `:args` grades declared actions.
+- Field granularity is the top-level data field; item fields inside a
+  part array are not separately gradable — redact the array.
+- Grant projection of SSE / surfaces / openapi / collab **stays the
+  phase-9b named punt**: a scoped request still 404s those routes.
+- Idempotency replays still serve the first execution's unprojected
+  bytes (the phase-3 render-fn punt, re-extended).
+
+## The negotiation machine
+
+`:approval_request` — `{grant_id, task, scope, expires_at}` through
+**offered → approved / denied** — ports grants.py's core shape onto
+the v10 grant:
+
+- The scoped principal itself files the request (`POST
+  /api/approval_requests`) — the ONE affordance its own-surface
+  grants. `requested_by` is stamped by the engine (`on-create`), the
+  create schema omits it; a create guard requires the named grant's
+  audience to be the requester.
+- **Four-eyes:** `someone-else-decides` refuses the requester's own
+  approve/deny. `grant-still-accepting` refuses approving onto a
+  revoked/expired grant, with the remedy named.
+- **Approve extends the grant** through the grant's new `:extend`
+  transition — concealed (hide guard, system-only, exactly the
+  attachments `mark_stored` discipline: absent from every envelope,
+  404 by hand), `record: true` so the widened scope is in the log,
+  idempotent (deliberately: a non-idempotent action's 428 fires
+  before the hide guard can conceal; a keyless human probe must see
+  404). The effect runs post-commit at the router
+  (`grants/approval-effects!` — the jobs-enqueue / put-bytes
+  precedent), system actor `waymark10-grants`, keyed
+  `approval-extend-{id}` so redelivery replays; a natural replay of
+  approve does not extend twice (tested).
+- **Deny** records the note; the grant never moves — the 404s persist
+  (tested).
+
+**Recorded punts:** approver-edited scope maps (approve grants the
+ask as-is; the send-back is deny-with-note, a new ask is a new
+request); waymark9's **attenuation ceiling** — the approver's own live
+visibility intersected onto the holder's — is unported by name (v10
+has no per-member visibility to intersect; grants.py has no simpler
+max-grantable check to port instead); approval extends the request's
+named grant rather than minting a sibling; the effect rides the wire
+boundary — an engine-internal invoke of approve does not extend.
+
+## The own-grant surface
+
+`:grant` and `:approval_request` join a scoped principal's kinds
+whenever the presented grant row EXISTS with it as audience — any
+state, deliberately: dead scopes the DOMAIN to nothing, but the
+negotiation surface is how a dead grant's holder asks again (tested:
+revoke, then file a new request). Rows gate per row (audience /
+requested_by = self); collections narrow through the same `:ids-of`
+visibility cond every id-scoped grant uses (own ids queried, capped
+at 200; an empty surface pushes an impossible id so the total stays
+honestly zero) — **no special route**. GET-only besides
+`approval_request/create`: envelopes render with empty action maps,
+concealment unchanged; well-known lists the two kinds beside the
+granted ones.
+
+## Invite → bind membership
+
+The member machine grows `:invited` (entered only by the on-create
+landing — a create carrying `:bind_token` — the definitions
+born-`:proposed` precedent, `:allow-dead` annotated). The first
+authenticated principal presenting the token (`X-Waymark-Invite`
+header, any resolver) binds: the concealed `:bind` transition
+(registrar system actor, logged, input recorded) writes the principal
+id into `:subject` and lands `:active`. The gate resolves by id, then
+by bound subject, then by binding a presented token; the token is
+spent because `:bind` fires only from `:invited` — the second binder
+is refused (tested). The MODE decides only the unknown-principal
+fallback: `{:members :invited-only}` → one 403 problem
+(`membership-invited`); default → auto-provision unchanged. Binding
+works under either mode.
+
+**Recorded:** no email, no outbox — the token travels out of band;
+`bind_token` renders like any field to an unscoped members reader
+(waymark9's SECRET_FIELDS owner-gating unported, beside the
+role-uniqueness race punt); token uniqueness under race unenforced;
+waymark9's `unbind` unported (suspend, or a fresh invite); the mode
+is per engine, not per kind.
+
+**OIDC sessions: punted by name.** A cookie wrapper around bearer
+verification would mint a second credential without the login flow
+that justifies one — it does not fit cleanly in oidc.clj, so the
+browser dance / session cookies / RP-initiated logout stay unported
+(docstring updated). The invite bind rides the members gate under the
+bearer resolver unchanged.
+
+## Merge items, landed post-merge
+
+The two engine.clj one-liners the batch could not land itself are in:
+`full-registry` enrolls `grants/approval-request` beside
+`grants/grant`, and `:members` survives `engine`'s opts whitelist so
+`{:members :invited-only}` survives boot. The two phase9a_test pins
+that asserted the punt this batch removes (`grant-scoped-surface`:
+the own grant's 404, well-known's kinds list) were updated to the new
+truth.
+
+## Runs
+
+```
+docker exec waymark-test-pg psql -U ckopsa -d postgres -c "CREATE DATABASE waymark10_b_test"  # once
+cd waymark10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:5433/waymark10_b_test?user=ckopsa" \
+  clojure -M:test --config-file /tmp/kaocha-b.edn        # ns-patterns waymark10\.batch-b-.*-test
+```
+
+Batch B at landing: **8 tests, 140 assertions, 0 failures.** Scoped
+regression (phase9a / router / batch-a-envelope / collections,
+read-only): 33 tests, 338 assertions, 2 failures — both the stale
+pins above (since updated), nothing else moved. The suites now ride
+`make test10`.
+
+# 18. Batch D — waymark-relay/2 and concurrent text
+
+This batch closes the phase-9b collab punts (staleness rejection,
+acks, presence, regate, the cross-worker bus) and §12's "collab live
+relay still process-local" boundary, and it adds what waymark9 never
+had: server-authoritative OT for prose fields, proved generatively.
+
+Home: `server/collab.clj` (protocol, OT core, cross-process relay)
+and `server/drafts.clj` (the draft document shape). Tests:
+`test/waymark10/batch_d_ot_test.clj` (the pure OT proof),
+`batch_d_collab_test.clj` (relay/2 on the wire, one engine),
+`batch_d_relay_test.clj` (two engine instances over one database —
+the faithful two-process simulation).
+
+## The draft document (drafts.clj owns the shape)
+
+Per-field revs and authors persist INSIDE the draft row's values
+jsonb — no schema change, `waymark10_drafts` is untouched:
+
+    {"_doc": 2, "values": {…}, "revs": {field: n},
+     "authors": {field: actor}, "ops": {field: [{rev, ops}]}}
+
+`drafts/document` and `drafts/envelope` are the only readers and
+writers; a pre-envelope row (a plain values map) reads as a rev-0
+document, so old rows keep working with no migration. The wire view
+still answers `{values, base_version, prefill}` — now with `revs`
+and `authors` beside them, additively. A draft PUT is a whole-
+document replace: changed fields' revs bump, their authors restamp,
+their op logs clear. Acting consumes the draft row and everything in
+it — op logs and revs are consumed, not archived.
+
+## The protocol
+
+    server → joiner   {type: "state", values, revs, authors,
+                       base_version, stale, participants}
+    client → server   {type: "set", field, value, rev}      (rev = base)
+    client → server   {type: "edit", field, rev, ops}       (prose only)
+    client → server   {type: "sync"}
+    server → sender   {type: "ack", field, rev}
+    server → sender   {type: "stale", field, rev, value}
+    server → others   {type: "update", field, value, rev, author}
+    server → others   {type: "edit", field, rev, ops, author}  (TRANSFORMED)
+    server → room     {type: "presence", event: joined|left|roster,
+                       actor?, participants}
+    server → room     {type: "regate", base_version, revs?, gone?}
+    server → room     {type: "resync", field}   (oversized-relay fallback)
+    server → sender   {type: "error", errors}
+
+Scalar fields: per-field revisions with explicit staleness rejection
+— base ≠ current answers `stale` with the field's truth; the silent
+per-field LWW of phase 9b is gone. Prose fields (`{:x-display
+{:widget "prose"}}`) take operation frames; a `set` on a prose field
+is still legal and acts as a rebase point (rev bumps, op log
+clears — in-flight edits against older revs go stale).
+
+## The OT core (in-house, no deps)
+
+Ops are `[{retain n} | {insert s} | {delete n}]`, normalized (no
+zeros, no adjacent same-type components). `transform-pair a b →
+[a' b']` is the component-wise text transform with `a` as the
+earlier/priority side (its inserts land first at a tie); the server
+holds a canonical per-field op log in the draft document and
+transforms an arriving edit against every op applied since the
+client's base rev, applies it, acks the author with the new rev, and
+broadcasts the TRANSFORMED op. The log is capped at **op-log-cap =
+200 entries per field** and compacts by dropping the oldest; an edit
+whose base rev predates the retained horizon answers `stale` and the
+client resyncs — compaction trades memory for a resync, never for
+corruption.
+
+THE PROOF (the acceptance bar): `batch_d_ot_test` drives exactly the
+functions the wire handlers call. TP1 (the transform identity,
+`apply(apply(s,a),b') = apply(apply(s,b),a')`) over 300 generated
+doc/op pairs; then the full convergence property — 2–4 model clients,
+each the protocol's real client half (one op in flight, unacked queue,
+incoming server ops transformed through the queue with the same
+transform-pair), issuing arbitrary interleaved insert/delete batches
+from arbitrary base revs under an arbitrary delivery schedule; after
+quiescence every client's locally-composed document must equal the
+server's, and every rev the server's rev — **250 trials per run,
+shrinkable, plus 61 wire assertions and the two-engine story; the
+suite has passed repeatedly (5+ consecutive full runs)**. A transform
+bug shrinks to a minimal action list here before it touches a socket.
+
+## The one write path, cross-process safe
+
+Every accepted set/edit persists through the same draft row a PUT
+writes, in a transaction that takes the resource row's FOR UPDATE
+lock — the same fence an invoke takes — so collab writers on separate
+processes serialize and rev assignment is race-free. pg_notify on
+**waymark10_collab** rides that same transaction (the outbox
+discipline: a relayed frame exists iff its commit does), stamped with
+a per-process origin nonce so the publisher skips its own echo.
+
+Each engine runs one dedicated LISTEN connection (raw, never from
+the Hikari pool), started lazily with its first room and stopped with
+its last. Presence rosters merge across origins: join/leave frames
+adjust a per-origin remote roster, a first-seen origin is answered
+with one targeted heartbeat (rosters converge in a round trip), the
+heartbeat (`:collab-heartbeat-ms`, default 5000) re-asserts each
+process's local members, and an origin silent for three heartbeats
+is evicted — a crashed process's ghosts leave on the clock. Frames
+over 7000 bytes relay as `{type: "resync", field}` (pg_notify's
+payload ceiling), recorded.
+
+## Regate
+
+When the row's version moves (any transition — the fence bumps):
+every field's rev bumps, prose op logs clear, the bumped document
+persists with the new base_version, and the room hears
+`{type: "regate", base_version, revs}`; sets/edits against the old
+base answer stale until clients re-pull the prefill. Detected on the
+write path (stored base_version ≠ the locked row's version) AND
+proactively by a per-relay consumer on the engine's events
+dispatcher — every process's rooms hear about an act that happened
+anywhere. An act that CONSUMES the draft broadcasts
+`{type: "regate", gone: true}`: the draft (op logs, revs, all of it)
+went with the act's commit; composition starts anew at rev 0. An
+engine that never started (no dispatcher) keeps write-path detection
+only, recorded.
+
+## Punts, each named
+
+- UI chrome: ui.html still speaks nothing of collab — cursors,
+  presence avatars, and its relay/2 client are future work. Any
+  client MUST now send the field's base rev on set (a rev-less set is
+  base 0 and goes stale after the first write).
+- Cursor positions / selections on the wire: not in relay/2's
+  vocabulary here (waymark9 didn't carry them either).
+- A plain draft PUT beside a live room bumps revs but broadcasts no
+  frame — live clients converge at their next stale/sync.
+- Presence rosters dedupe by principal id; the same principal on two
+  sockets of one origin leaves the roster on the first close and is
+  corrected by the next heartbeat.
+- `stale` on a prose edit answers the field's full current value,
+  not a patch — the resync is one frame.
+
+## Integration, applied post-merge
+
+`test/waymark10/collab_test.clj` (phase 9b) asserted the OLD relay/1
+semantics in three places (the sender-hears-no-echo assertion —
+relay/2 acks the sender by design — the room-global rev, and the old
+sync shape); it is superseded by `batch_d_collab_test.clj` and was
+deleted post-merge. No engine/router/store changes were needed:
+collab reads the dispatcher from the engine's `:runtime` atom when
+present and carries everything else in the draft document. The one
+new engine opt, `:collab-heartbeat-ms` (default 5000), survives
+`engine/engine`'s select-keys whitelist.
+
+## Focused runs (batch D's own database — waymark10_d_test)
+
+    cd waymark10
+    clojure -M:test --focus waymark10.batch-d-ot-test \
+      --focus waymark10.batch-d-collab-test --focus waymark10.batch-d-relay-test
+
+11 tests, 123 assertions (300 TP1 trials + 250 convergence trials
+per run inside them), 0 failures at landing. `WAYMARK10_D_DSN`
+overrides the default
+`jdbc:postgresql://localhost:5433/waymark10_d_test?user=ckopsa`. The
+suites now ride `make test10`.
+
+# 19. Batch C — law completeness
+
+Batch C closes the derivation-law gap: the derived-law overlay
+(judgment's structural twin), the derivation event class, the
+blast-radius meter, the population grammar gate, the earned
+count/sum vocabulary, and the cross-kind fact DAG. Owned files:
+`server/{definitions,judgment,maintainer,events}.clj`,
+`fingerprint.clj`, `derived.clj`, `expr.clj`, `checks_assembly.clj`,
+`resources/waymark10/ui.html` (one handler),
+`test/waymark10/batch_c_*.clj`.
+
+## The derived-law overlay
+
+`waymark10.derived/specs-under` — waymark9 `derived.py specs_for`,
+in the v10 medium: the rdef's `:judgment-laws` slot ({revision →
+stored fingerprint}, the SAME slot the judgment overlay reads,
+installed by the definitions lifecycle) resolves a row's derivation
+specs from its revision's stored trees. Recoverable leaves: the
+`expr` tree and the aggregate `where` filters — exactly the paths
+`classify-diff` files as `data_law`, so the overlay is EXACT for
+every law the slot can hold. Edge identity (`:over`, `:owns`,
+`:related`, `:of`) rides resident, the judgment precedent verbatim;
+`fn=` facts stay resident (a hash is not a law — the v7 deviation,
+now confined to fn facts). Resolved maps cache on `:judgment-cache`
+under `[revision ::waymark10.derived/specs]` keys, disjoint from
+judgment's `[revision action-name]` keys; every definitions
+`install!` resets the cache, so invalidation is free.
+
+Consumers, wired:
+
+- `derived/materialize` resolves `(:law-revision row)` itself — the
+  write boundary (invoke's finish! and create!) needed NO edit; a
+  grandfathered row's expr facts recompute under its birth law at
+  every write. `tampered` judges by the same law.
+- the maintainer: `maintain-row!*` computes aggregates from
+  `aggregate-specs rdef revision`, materializes (row-law-aware), and
+  derives the clock index from the row's law's trees
+  (`next-flip-at` gained a revision arity). The REVERSE dependency
+  map stays resident — edges are `:code-or-shape`, no live revision's
+  edges can differ (recorded boundary).
+- `backfill!` recomputes each row under ITS OWN law, which makes it
+  the correct repair for every restamp: adopted rows land the new
+  values, grandfathered survivors repair under their birth law.
+
+The phase-6 named seam is wired: promote (and pilot, and a withdraw
+that moved rows — the returning population's facts were computed
+under the pilot) call `repair-stale!` → `maintainer/backfill!` with
+the diff's `stale-facts`, markers naming since-removed facts dropped
+with a *err* line (waymark9's `_still_declared`).
+
+## Derivation-class events
+
+waymark9's second channel comes home WITHOUT making maintenance a
+transition. The observations table (events.clj owns the DDL — a
+store-protocol surface for it is the named follow-up):
+
+    waymark10_observations (
+      id bigserial PRIMARY KEY,
+      kind text NOT NULL,
+      resource_id text,          -- NULL = the whole kind (bulk restamp)
+      class text NOT NULL,       -- recompute | flip | restamp
+      changed jsonb,             -- fact names, or {law_revision, rows}
+      at timestamptz DEFAULT now())
+    + index (kind, id), pg_notify on waymark10_observations
+
+Appended INSIDE the maintenance write's transaction
+(`events/record-observation!`), so an observation exists iff its
+commit does — the outbox discipline. Emitters, covering the three
+live-update gaps:
+
+- cross-row count/sum recomputes: `maintain-row!*` when facts moved
+  (class `recompute`; backfill repairs use the same class),
+- clock flips: the sweep passes class `flip`,
+- bulk law restamps: `definitions/restamp!` (pilot, promote's
+  immediate adopt, withdraw's return) emits one kind-wide
+  observation (`restamp`, resource_id NULL, changed carries
+  `{law_revision, rows}`) beside the per-row backfill recomputes.
+- the measure report landing on `data.measure` announces itself
+  (`recompute` on the definition row).
+
+The dispatcher LISTENs the second channel on the same parked
+connection and drains both tables on every wake-up, each with its
+own id horizon. Subscriptions opt into classes (`:classes`, default
+`#{:transition}` — the coherence consumer and the webhook deliverer
+never see a shape they predate); the SSE handler subscribes to both
+and frames derivations as `event: derivation` with NO id line.
+
+Recorded scope: no Last-Event-ID replay for derivations (the table
+is the record; a missed flip re-derives from the envelope);
+derivations bypass a replaying subscription's transition pause, so
+ordering ACROSS classes is not promised; observations (like the SUM
+SQL) are a Postgres surface — any other backend warns and drops.
+
+ui.html: one handler beside the transition refetch — a derivation
+event whose self (or kind, for kind-wide restamps) matches the open
+screen debounces into the same refetch.
+
+## Blast radius (measure)
+
+waymark9's `measure` action + `BlastRadiusMeter`, synchronous (no
+meter job — v10 job artifacts landed in batch F, but the meter stays
+synchronous, recorded): `maintainer/blast-radius` full-scans the
+target kind in id-keyset pages and, per redefined derived fact,
+evaluates BOTH laws' specs over current data — expr facts through
+`compute-facts`, aggregates through both where-filters' SQL —
+counting the rows whose value differs. Population-scoped when
+piloted. Report:
+`{:facts [{:fact "kind.fact" :flips n :of total :sample [≤20 ids]}]
+:scan "full" :population … :from_revision :to_revision :at}` on the
+definition row's `data.measure`.
+
+Recorded deviations: the proposed/piloted self-loop is spelled as
+TWO actions (`measure`, `measure_pilot`) because a v10 action
+declares one `:to`; the report lands via a maintenance write AFTER
+the transition commits (the measure POST's response predates it —
+GET re-reads; waymark9's answer carried a job id, same shape of
+honesty). Guards are input-free and probe-able: `data-law-measures`
+(expr over `diff_class`) and `redefines-derived-facts` (a
+judgment-only data-law diff has no blast radius — waymark9's exact
+refusal sentence). Judgment blast radius (newly-refused rows) stays
+punted, named.
+
+## Population grammar
+
+waymark9's `check_population` punt closes: pilot's `where=` runs
+each field through the collections parser's PUBLIC `parse-query`
+(collections.clj untouched) against the TARGET kind's grammar, and
+only plain equality conds pass — range suffixes, multi-values and
+non-scalar values are refused by sentence (a restamp is an equality,
+not a query). The guard needs the engine's registry, which a static
+declaration cannot reach, so `boot-revise!` appends the
+engine-closed guard to the pilot action (idempotent by name);
+engines that never run the definitions boot also never pilot.
+
+## Vocabulary growth, earned
+
+| Node | Demanded by | Date |
+| --- | --- | --- |
+| `(count <coll>)` / `(count [d <coll>] <pred>)` expr quantifier | the blast-radius acceptance laws (batch_c_measure_test's flip-count shapes) — waymark8 §1 had the pair; v10 ports it with the meter that reads it | 2026-07-10 |
+| `(sum [d <coll>] <expr>)` expr quantifier | same admission — the summed-quantity flip the meter measures | 2026-07-10 |
+| `{:sum {:related|:owns …, :where …, :of field}}` aggregate spec | the meal-prep quantity rollup (batch_c_sum_test's total_qty) — mirrors `:count`: fingerprint facet, load/assembly checks, maintainer SQL | 2026-07-10 |
+
+Semantics recorded: `count`/`sum` of a missing/non-sequential
+collection are 0 (the quantifier empty rule, numerically); `sum`
+nil-propagates on any non-numeric item value (a missing addend is a
+missing sum, arithmetic's rule — never a silent skip). Neither is
+boolean-valued, so neither joins the and/or collapse set. Division
+stays unearned — no batch-C test needed it.
+
+`sum.where` classifies `data_law` (the count.where rule verbatim);
+`sum.of` is edge identity — `:code-or-shape`, with the edges. The
+SUM SQL renders in maintainer.clj against the maintainer's own cond
+grammar (a local twin of the storage renderer; a `sum-matching`
+protocol op is the named follow-up). An `:int` sum fact must sum an
+`:int` column (assembly check) — an integer fact cannot hold a
+fractional sum.
+
+## The cross-kind fact DAG
+
+`checks-assembly/check-fact-dag` (closing phase 6's named punt):
+nodes are `kind.fact`, edges are same-kind `:over` dependencies plus
+— through each aggregate's declared edge — the target facts its
+`where` filters and `of` read. DFS refuses cycles naming the path
+(`kind.fact → kind.fact → …`); the maintainer's per-write visited
+set now only ever truncates chains the assembly proved finite.
+
+## Ownership deviations, flagged (and since resolved)
+
+- `checks.clj` (2 scoped edits): the exactly-one-of gate and the
+  per-declaration aggregate-spec check live there and REFUSE any
+  `:sum` spec at `defresource` — the deliverable could not land
+  without admitting the key at the load boundary.
+- `resource.clj` (2 lines): `normalize-derived-spec` canonicalizes
+  `:sum :where` values to sets, the `:count` rule verbatim.
+- `test/waymark10/definitions_test.clj`: the pre-existing pilot test
+  piloted on `weeks`, an unpromoted field — legal only while
+  populations went unvalidated; it now splits its population on
+  `start_date` (filterable), asserting the same overlay story.
+- `waymark10.router-test/well-known-lists-the-kinds` failed at the
+  batch's landing on the then-in-flight `approval_request` kind from
+  batch B's working tree — resolved when both merged.
+
 # The 9→10 wire, closed: divergences the lineage should remember
 
 Wire "10" is a clean break, not a superset. Everything a waymark9
@@ -945,39 +2151,149 @@ client must relearn, in one table:
 | Dev principal | `X-Principal-Id` / `-Type` / `-Display` | `x-waymark-principal` / `x-waymark-roles` / `x-waymark-actor-type` |
 | Grant credential | minted opaque `wmk_…` bearer token | `X-Waymark-Grant: <grant-id>` — a scope SELECTOR, not a credential; the principal must be the grant's audience |
 | Guard names on the wire (warnings, acknowledge, `guard`) | snake (Python identifiers: `calendar_clear`) | kebab (Clojure keywords: `calendar-clear`) — problem KEYS are snake in both; only guard-name VALUES differ |
-| Count facts in stored/wire law trees | `["count", …]` expression node | no count node (unearned): a declarative `{:count {:owns … :where …}}` spec compiled by the maintainer — v9 and v10 definition fingerprints are not comparable |
-| Collection shape | `data.items` negotiable: `depth=`, `rows=none`, declared columns | fixed envelope-minus-data summaries; no depth param, no rows=none (named punt) |
-| Envelope `links` / `parts` | rendered (embeds, parts groups, placed actions) | `links` always `{}`, no parts surface (the standing phase-3 punt) |
+| Count facts in stored/wire law trees | `["count", …]` expression node | cross-row aggregates are declarative `{:count …}`/`{:sum …}` specs compiled by the maintainer; in-row `(count …)`/`(sum …)` expr quantifiers were earned later (batch C, §19) — v9 and v10 definition fingerprints are still not comparable |
+| Collection shape | `data.items` negotiable: `depth=`, `rows=none`, declared columns | envelope-minus-data summaries; `depth=summary` and `rows=none` landed (batch A, §14); declared columns and `depth=expanded` profiles still absent |
+| Envelope `links` / `parts` | rendered (embeds, parts groups, placed actions) | links render from declared edges (badges from the row's own facts, capped embeds) and `parts` projects part-scope groups per item (batch A, §14 — the phase-3 punt, closed) |
 | Draft GET with nothing stored | 200 empty open draft | 404 (a draft that was never saved does not exist) |
 | Create idempotency | key REQUIRED (428) + replay | key honored when present + replay; keyless creates accepted (recorded deviation, phase 10) |
-| Webhook failure | skip-and-advance per event | the subscription FAILS with the cursor parked; resume replays |
-| Deferred bulk | job + queued state + artifacts | 202 + job envelope; no queue state, lease-steal is the resume |
+| Webhook failure | skip-and-advance per event | per-subscription `:delivery_policy` (batch F, §16): "fail" (default) parks the cursor and fails the subscription — resume replays; "skip" is waymark9's advance |
+| Deferred bulk | job + queued state + artifacts | 202 + job envelope; queued → running with artifacts restored (batch F, §16); lease steal + orphan sweep are the resume |
 | Batch refusal | judged every input, full verdict report | first refusal aborts with its index (recorded deviation, phase 7) |
 | CLI exit codes | 1 problem/transport · 2 not afforded · 3 confirm · 4 divergence | 0 ok · 1 problem · 2 refused locally · 3 transport; divergence is a loud line on a landed write |
 
 ## The final state of the ledger
 
-`make test10`: **192 tests, 1302 assertions** (phase 9b's 179/1165
-plus the phase-10 client, CLI and UI suites). `make
-test-mealplan10`: **11 tests, 145 assertions** — the conformance
-walk and the family-week story, untouched by phase 10 (the one
-engine change, create-key honoring, is additive).
+`make test10`: **301 tests, 2152 assertions**. `make
+test-mealplan10`: **23 tests, 217 assertions** — the conformance
+walk, the family-week story (now with a recurring recital on the
+fake calendar), the batch-E recurrence and RRULE suites, and the
+style-invariance pins. Earlier sections quote the suite as it stood
+at their phase (31/103 at phase 0, 196/1352 after migrate, and the
+batch notes' focused runs); these two numbers are the standing truth.
 
-The parity ledger (§9) stands as written: every waymark9 server
-module has a waymark10 home or a named punt, and phase 10 adds the
-client column — waymark9's `client/py.py` + `client/agent.py` →
-`waymark10.client` (refusals as data; PendingConfirmation → the
-`:confirm!` seam; Divergence → a result key), `cli/client.py` →
-`waymark10.cli` (session file; exit-code table above),
-`server/static/ui.html` → `resources/waymark10/ui.html` (scope
-boundaries above; approvals/presence/relay/parts screens punted
-with their servers). Standing cross-cutting punts, restated one
-last time so nobody re-discovers them: RRULE/recurrence, spans, the
-predecessor resolver, `rows=none`/`depth=` collection modes, GIN
-indexes for vocab arrays, grant-projected SSE/surface/openapi
-routes, the grant negotiation machine and ApprovalRequest flow, and
-the cross-process bus (the migration planner, this list's largest
-entry, came home in §11). The law is a form,
-the wire is its projection, and every client in this phase proved
-it can follow the projection without ever being told what the
-application is.
+The git lineage, one commit per landing: phases 0–10 — Phase 0 (the
+law speaks Clojure), 1 (the declaration layer), 2 (storage + the
+transition algorithm), the registry, 3 (the first envelope), 4a (the
+conformance foundation), 5 (the law binds the row's judgment), 4b
+(the envelope keeps the declaration's promises), 6 (the maintainer
+and the outbox find their consumers), 7 (collections, bulk, batch,
+drafts), 8 (mealplan10, the dogfood that earned the engine), 9a
+(identity and access), 9b (async and composition), 10 (the clients
+close the loop) — then eleven post-parity commits: migrate (§11),
+coherence (§12), batch E (§13), batch A (§14), batch G (§15), batch
+F (§16), the mealplan10 style rewrite (§15's follow-up), batch B
+(§17), batch D (§18), batch C (§19), and this consolidation.
+
+The parity ledger (§9) is kept current through those batches: every
+waymark9 server module has a waymark10 home or a named punt. Phase
+10 added the client column — waymark9's `client/py.py` +
+`client/agent.py` → `waymark10.client` (refusals as data;
+PendingConfirmation → the `:confirm!` seam; Divergence → a result
+key), `cli/client.py` → `waymark10.cli` (session file; exit-code
+table above), `server/static/ui.html` →
+`resources/waymark10/ui.html` (scope boundaries above; batch A gave
+it parts, links, effort and comboboxes — the collab presence/relay
+chrome stays punted with §18).
+
+## Remaining punts, by choice
+
+Everything still open, in one place, so nobody re-discovers a punt
+or re-litigates a closure — cross-checked against every batch's own
+list:
+
+**Engine-wide**
+- Division — never earned, in any version.
+- String operations and `where=` unification (8.0's inheritance).
+- Spans; `depth=expanded` embed profiles and declared collection
+  columns/table hints.
+- Ref-label fan-out on target rename (the maintainer does not re-fan
+  out; §7's C2 punt stands).
+- Pipeline/choreography surface (pipeline.py).
+
+**Grants and identity**
+- The grant-projected firehose: SSE, surfaces, openapi and collab
+  routes answer a scoped principal with concealment-404 today, never
+  a projection; idempotency replays serve the first execution's
+  unprojected bytes (the phase-3 render-fn punt, twice re-extended).
+- Visibility modes: waymark9's `hashed` field mode; create-argument
+  modes; per-item grading inside part arrays (redact the array);
+  collection `query`/`create` input schemas and facet counts
+  unprojected; acceptance enums and deny vars may reflect redacted
+  values (guards probe the full row — advertisement equals
+  enforcement); the denied-arg 422 runs at the router boundary,
+  ahead of invoke's step order (order-distinguishable by a probe).
+- Negotiation: approver-edited scope maps; the attenuation ceiling;
+  approval extends the named grant (no sibling minting);
+  engine-internal approve does not extend.
+- Membership: `unbind`; SECRET_FIELDS owner-gating (`bind_token`
+  renders to unscoped readers); invite-token uniqueness under race;
+  no email/outbox (the token travels out of band); the invited-only
+  mode is per engine, not per kind.
+- Role uniqueness under race (a create guard, no unique index).
+- OIDC browser dance / session cookies / RP-initiated logout.
+
+**Attachments**
+- S3/presigned byte storage (bytes stay on `:attachment-dir` disk).
+- Blob-write/metadata atomicity (waymark9's log-consumer
+  choreography); pre-sha rows refuse re-PUTs 409 (recorded boundary).
+
+**The outside world**
+- RRULE outside the profile: `BYSETPOS`, `FREQ=YEARLY`, positional
+  BYDAY, BYDAY on MONTHLY, multiple BYMONTHDAYs, `RDATE`, non-Monday
+  WKST on multi-week intervals — each skips its event with a warning
+  naming it.
+- Predecessor: the assembly-time promotion check (the create-time
+  refusal holds the line); carry-forward of sibling fields stays the
+  apps'.
+- Mirror: per-kind discovery cursors; mirror webhooks/change feeds;
+  per-field authority (AuthoredMeta); pushing locally-minted rows;
+  auto-wiring `with-push` at boot.
+
+**Events, jobs, surfaces, storage**
+- Observations: no store-protocol op yet (a Postgres surface; the
+  memory twin's consumers drain by hand); no Last-Event-ID replay
+  for derivations; ordering across event classes unpromised; the
+  maintainer's SUM SQL awaits a `sum-matching` protocol op.
+- Judgment blast radius (newly-refused rows) unmeasured; the measure
+  runs synchronous (no meter job).
+- The webhook deliverer's unification onto consumers-as-API —
+  deferred until a third consumer of the pattern exists.
+- The memory twin runs no dispatcher: SSE/webhook/observation
+  liveness is Postgres-only.
+- Surfaces: not fingerprinted, not grantable, no member table hints
+  or title template, attention is field equality, no envelope
+  back-links.
+- OpenAPI: no docs UI; per-kind response models stay structural;
+  SSE/attachments/collab/well-known routes undocumented.
+
+**Collab and the generic UI**
+- UI collab chrome: the relay/2 client, cursors/selections (not in
+  relay/2's wire vocabulary either), presence avatars.
+- A plain draft PUT beside a live room broadcasts no frame (clients
+  converge at their next stale/sync).
+- i18n; the undo toast; attachment byte upload, the batch surface,
+  and a docs screen in the generic UI; arrays of objects as a JSON
+  textarea; `date-time` inputs as plain text; grant-scoped chrome.
+
+**mealplan10**
+- Summary templates have no |join/|len filters; no field defaults
+  (rotation/plan defaults land in :on-create); one-of clears to nil,
+  not a model default; spans/profiles have no v10 spelling.
+
+**Declaration ergonomics**
+- `:one-of`'s missing colocated home was batch G's one named punt
+  here; since claimed by the part spelling (`defpart` + `:part` entry
+  citation — the spelling law and its ledger live in
+  `docs/waymark10-spellings.md`).
+
+Recorded deviations that are choices, not gaps, restated once:
+Clojure truthiness in predicates (§2); keyless creates accepted (the
+428 waived, §10); batch refusal aborts at the first index (phase 7);
+deferred calls skip whole-call idempotency (the job row is the
+record) and the reconstructed requester carries no roles; renames
+are boot/replay metadata, never fingerprinted law (§11).
+
+The law is a form, the wire is its projection, and every client in
+phase 10 proved it can follow the projection without ever being told
+what the application is; everything since has widened what the
+projection carries without moving that claim.
