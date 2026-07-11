@@ -121,6 +121,20 @@ key (price sightings are one-per-`seen_on`; a re-record *replaces* that
 day). Write add/record handlers as upserts and removes as filters, so
 retries and replays are no-ops.
 
+## Deploying schema changes (learned from an outage)
+
+Boot runs `create_all` + backfill — it creates missing **tables** but never
+ALTERs existing ones. A field addition is safe as long as it stays in
+JSONB; the moment a NEW field on an EXISTING kind is `filterable`/
+`sortable` (or a Vocab), it promotes to a generated column and the deploy
+**crash-loops at boot backfill** (`UndefinedColumnError`). Before such a
+deploy, apply the DDL to prod yourself (pattern:
+`ALTER TABLE <t> ADD COLUMN <f> bigint GENERATED ALWAYS AS
+(((data ->> '<f>'))::bigint) STORED;` + a btree index named
+`ix_<table>_<field>`), or adopt the `waymark9 migrate` revision workflow.
+Note the prod DB port is dynamic per allocation — re-resolve with
+`nomad service info mealplan-db` after any restart.
+
 ## Conformance enrollment rules (learned from failures)
 
 - **A `@state_factory` must mint exactly ONE row of its own kind** — the
