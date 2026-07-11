@@ -248,6 +248,53 @@
     (is (= {:valid true} (json resp)))
     (is (= (:body before) (:body after)) "the row did not move")))
 
+;; the create door's rehearsal (design §23): ?dry_run=1 on the POST
+;; collection route answers the verdict and mints nothing
+
+(deftest create-dry-run-mints-nothing
+  (let [total #(get-in (json (req :get "/api/plans")) [:data :total])
+        before (total)
+        resp (*h* {:request-method :post
+                   :uri "/api/plans"
+                   :query-string "dry_run=1"
+                   :headers {"x-waymark-principal" "colton"}
+                   :body (wire/write-json {:start_date "2026-10-05" :weeks 1
+                                           :days [{:date "2026-10-05"}]})})]
+    (is (= 200 (:status resp)))
+    (is (= {:valid true} (json resp)))
+    (is (= before (total)) "nothing was minted")
+    (testing "a schema-invalid create rehearsal answers the same 422"
+      (let [resp (*h* {:request-method :post
+                       :uri "/api/plans"
+                       :query-string "dry_run=1"
+                       :headers {"x-waymark-principal" "colton"}
+                       :body (wire/write-json {:weeks 1})})]
+        (is (= 422 (:status resp)))
+        (is (contains? (:errors (json resp)) :start_date))))))
+
+;; the partial rehearsal on the wire (design §23): dry_run=partial is
+;; silent on unprovided fields and names what still waits
+
+(deftest partial-dry-run-on-the-wire
+  (let [pid (id-of (create-plan! "2026-10-12" ["2026-10-12"]))
+        resp (*h* {:request-method :post
+                   :uri (str "/api/plans/" pid "/-/assign_meal")
+                   :query-string "dry_run=partial"
+                   :headers {"x-waymark-principal" "colton"}
+                   :body (wire/write-json {:meal_id "m-x"})})]
+    (is (= 200 (:status resp)))
+    (is (= {:valid true :judged [] :awaiting ["date-in-plan"]}
+           (json resp))))
+  (testing "a provided field is judged now — errors keyed by it alone"
+    (let [pid (id-of (create-plan! "2026-10-19" ["2026-10-19"]))
+          resp (*h* {:request-method :post
+                     :uri (str "/api/plans/" pid "/-/assign_meal")
+                     :query-string "dry_run=partial"
+                     :headers {"x-waymark-principal" "colton"}
+                     :body (wire/write-json {:date "not-a-date"})})]
+      (is (= 422 (:status resp)))
+      (is (= [:date] (vec (keys (:errors (json resp)))))))))
+
 ;; ── 9. the collection ───────────────────────────────────────────────
 
 (deftest collection-lists-with-affordances

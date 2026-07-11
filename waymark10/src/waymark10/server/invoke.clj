@@ -20,7 +20,8 @@
       answer.
    9. the guard loop: warnings collect (acknowledged names pass and
       are recorded), hard denies refuse               (409)
-  10. dry-run exits: {:valid true} + warnings
+  10. dry-run exits: {:valid true} + warnings; :dry-run :partial is
+      the judged-when-answerable rehearsal (design §23)
   11. the handler (pure: row → row), tamper refusal
   12. derived materialization, in the same commit
   13. state advance, version+1, summary
@@ -63,7 +64,11 @@
     Whole-call idempotency: the stored report replays byte-identical
     under the bulk:<action> marker; a DEFERRED call does not
     participate (recorded: the job row is its record — replaying a
-    deferred call mints a second job).
+    deferred call mints a second job). A dry-run (design §23) judges
+    every id through the same per-item algorithm — self-keyed
+    verdicts, nothing committed, no key demanded or recorded, and
+    never a deferral (a job is an effect; over-threshold rehearsals
+    judge inline under max-items).
   - batch! (N inputs, one resource): always atomic, one transaction,
     one row lock held throughout, inputs applied in order — each
     input is its own transition through the full per-item algorithm
@@ -104,7 +109,20 @@
   - after-write! CASCADES declared owns edges: a parent action named
     in an edge's :on map invokes the child action on every owned
     child in the child action's :from states — through invoke!, per
-    child, system actor, the parent transition's correlation id."
+    child, system actor, the parent transition's correlation id.
+
+  Dry-run parity (design §23, 2026-07-10), recorded:
+  - create!, bulk! and batch! honor :dry-run as invoke! always did.
+    create! rehearses waymark9's tiers (schema-only without create
+    guards — no session opened; declared create guards judged with
+    warnings riding the body); never an insert, an :on-create, or an
+    idempotency demand. bulk!/batch! answer per-item verdicts with
+    nothing committed, and a dry-run never defers — a job is an
+    effect.
+  - :dry-run :partial judges only what the caller provided: provided
+    entries are schema-checked (absence is not an error) and only the
+    guard leaves whose every judged field arrived are evaluated — the
+    rest are named, :awaiting, never failed."
   (:require [clojure.string :as str]
             [waymark10.derived :as derived]
             [waymark10.groups :as groups]
@@ -326,6 +344,36 @@
              (and (t/deny? v) (:hide d))))
          (:guards defn))))
 
+(defn- deny-outcome
+  "One denying guard, graded the way every judgment door shares (the
+  full loop and §23's partial rehearsal — one grading, no drift): a
+  warning collects (acknowledged names pass, recorded as overridden);
+  a hide flag conceals — what render hides the wire must 404, not
+  narrate, since a 409 here would leak the very reason hide=
+  conceals; anything else refuses with the guard's own sentence."
+  [acc v d row acknowledged defn rdef]
+  (cond
+    (= :warning (:severity d))
+    (if (contains? acknowledged (:name d))
+      (update acc :overridden conj (:name d))
+      (update acc :warned conj
+              {:name (:name d)
+               :reason (g/render-reason d v row)
+               :remedies (:remedies d)}))
+
+    (:hide d)
+    (throw (p/not-found (:kind rdef) (:id row)))
+
+    :else
+    (throw (p/guard-refused
+            (:name defn) (:state row)
+            (g/render-reason d v row)
+            {:guard (:name d)
+             :remedies (:remedies d)
+             :becomes-available (g/becomes-available d v row)}
+            {:kind (:kind rdef) :id (:id row)
+             :summary (summary-of rdef row)}))))
+
 (defn- run-guards
   "→ {:warned [{:name :reason :remedies}] :overridden [names]} or
   throws guard-refused on the first hard deny."
@@ -335,32 +383,48 @@
      (let [[v d] (g/evaluate guard row inp ctx)]
        (if-not (t/deny? v)
          acc
-         (cond
-           (= :warning (:severity d))
-           (if (contains? acknowledged (:name d))
-             (update acc :overridden conj (:name d))
-             (update acc :warned conj
-                     {:name (:name d)
-                      :reason (g/render-reason d v row)
-                      :remedies (:remedies d)}))
-
-           ;; concealment holds in-state too: what render hides by a
-           ;; hide-flagged guard, the wire must 404, not narrate —
-           ;; a 409 here would leak the very reason hide= conceals
-           (:hide d)
-           (throw (p/not-found (:kind rdef) (:id row)))
-
-           :else
-           (throw (p/guard-refused
-                   (:name defn) (:state row)
-                   (g/render-reason d v row)
-                   {:guard (:name d)
-                    :remedies (:remedies d)
-                    :becomes-available (g/becomes-available d v row)}
-                   {:kind (:kind rdef) :id (:id row)
-                    :summary (summary-of rdef row)}))))))
+         (deny-outcome acc v d row acknowledged defn rdef))))
    {:warned [] :overridden []}
    (:guards defn)))
+
+(defn- split-leaves
+  "The partial rehearsal's coverage split (design §23): guard trees
+  flatten to their schema-visible leaves (g/iter-leaves — an :any
+  composite is atomic and carries no :judges of its own, so it waits
+  with the rest); row-only leaves (no :judges) drop entirely — the
+  envelope's available/unavailable already told that truth; and the
+  input-judging remainder divides into the leaves the provided keys
+  fully cover (judged now) and the leaves still waiting on a field
+  (:awaiting — named, never failed)."
+  [guards provided]
+  (let [input-leaves (into []
+                           (comp (mapcat g/iter-leaves)
+                                 (filter #(seq (:judges %))))
+                           guards)]
+    {:judged (filterv #(every? provided (:judges %)) input-leaves)
+     :awaiting (filterv #(not (every? provided (:judges %))) input-leaves)}))
+
+(defn- partial-verdict
+  "The judged-when-answerable rehearsal (design §23): evaluate only
+  the guard leaves whose entire :judges set the caller provided;
+  refusals and warnings grade exactly as the full loop's (deny-outcome
+  is shared). → {:valid? true :judged [names] :awaiting [names]
+  :warnings […]} — or the same 409/404 the full loop would throw."
+  [defn row inp ctx acknowledged rdef provided]
+  (let [{:keys [judged awaiting]} (split-leaves (:guards defn) provided)
+        {:keys [warned]}
+        (reduce
+         (fn [acc leaf]
+           (let [[v d] (g/evaluate leaf row inp ctx)]
+             (if-not (t/deny? v)
+               acc
+               (deny-outcome acc v d row acknowledged defn rdef))))
+         {:warned [] :overridden []}
+         judged)]
+    {:valid? true
+     :judged (mapv :name judged)
+     :awaiting (mapv :name awaiting)
+     :warnings (not-empty warned)}))
 
 (defn- finish!
   "Steps 11–15: handler, tamper refusal, materialize, advance,
@@ -658,10 +722,21 @@
                                              {:kind kind :id id
                                               :etag current})))))
             ;; 7. input validation — decode first (validation
-            ;; speaks schema types), closed maps refuse unknowns
-            (let [inp (if (:input defn)
-                        (let [decoded (schema/decode (:input defn) (or body {}))]
-                          (when-some [errors (schema/closed-errors (:input defn) decoded)]
+            ;; speaks schema types), closed maps refuse unknowns.
+            ;; The partial rehearsal (:dry-run :partial, design §23)
+            ;; judges only the entries the caller provided — a
+            ;; half-built form has no required-missing story yet,
+            ;; but a provided field's errors (and an unknown key)
+            ;; refuse exactly as ever
+            (let [partial? (= :partial dry-run)
+                  inp (if (:input defn)
+                        (let [decoded (schema/decode (:input defn) (or body {}))
+                              errors (cond-> (schema/closed-errors
+                                              (:input defn) decoded)
+                                       partial?
+                                       (-> (select-keys (keys (or body {})))
+                                           not-empty))]
+                          (when errors
                             (throw (p/schema-invalid action-name errors)))
                           decoded)
                         (if (seq body)
@@ -672,19 +747,23 @@
               ;; 8. natural replay before guards
               (or (when (and (not dry-run) (get-in defn [:safety :idempotent]))
                     (natural-replay engine tx rdef row defn digest))
-                  ;; 9. the guard loop
-                  (let [{:keys [warned overridden]}
-                        (run-guards defn row inp ctx acknowledged rdef)]
-                    (cond
-                      ;; 10. dry-run exits before any effect
-                      dry-run {:valid? true :warnings (not-empty warned)}
-                      (seq warned) (throw (p/warning-refused action-name warned))
-                      :else (finish! engine tx rdef row defn inp ctx
-                                     {:digest digest
-                                      :overridden overridden
-                                      :idempotency-key idempotency-key
-                                      :principal principal
-                                      :correlation-id correlation-id})))))))))))
+                  ;; 9. the guard loop — partial judges only the
+                  ;; leaves whose every judged field arrived
+                  (if partial?
+                    (partial-verdict defn row inp ctx acknowledged rdef
+                                     (set (keys (or body {}))))
+                    (let [{:keys [warned overridden]}
+                          (run-guards defn row inp ctx acknowledged rdef)]
+                      (cond
+                        ;; 10. dry-run exits before any effect
+                        dry-run {:valid? true :warnings (not-empty warned)}
+                        (seq warned) (throw (p/warning-refused action-name warned))
+                        :else (finish! engine tx rdef row defn inp ctx
+                                       {:digest digest
+                                        :overridden overridden
+                                        :idempotency-key idempotency-key
+                                        :principal principal
+                                        :correlation-id correlation-id}))))))))))))
 
 (defn- invoke-declared!
   [engine rdef kind id action-name body opts]
@@ -764,10 +843,12 @@
   {:ids [...] …action input…}. Guards run per row through the same
   per-item algorithm as a single invoke. Returns {:report wire-doc}
   or an idempotency replay; atomic refusals throw (see the ns
-  docstring). opts: :principal, :idempotency-key, :acknowledged,
-  :correlation-id."
+  docstring); a dry-run answers {:valid? … :verdicts […]}. opts:
+  :principal, :idempotency-key, :acknowledged, :correlation-id,
+  :dry-run."
   [engine kind action-name body
-   {:keys [principal idempotency-key acknowledged correlation-id]
+   {:keys [principal idempotency-key acknowledged correlation-id
+           dry-run]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -780,8 +861,9 @@
     (when-not (and (vector? ids) (seq ids) (every? string? ids))
       (throw (p/schema-invalid action-name
                                {:ids ["required, non-empty array of ids"]})))
-    (if (when-some [threshold (:defer-over spec)]
-          (< threshold (count ids)))
+    (if (and (not dry-run)
+             (when-some [threshold (:defer-over spec)]
+               (< threshold (count ids))))
       ;; phase 9b closes the phase-7 punt: an over-threshold call
       ;; defers to the job resource — bulk! answers the marker, the
       ;; router mints the job and 202s (which keeps this namespace
@@ -799,8 +881,44 @@
               digest (body-digest body)
               marker (keyword (str "bulk:" (name action-name)))
               href #(str "/api/" (:plural rdef) "/" %)]
-          (or (fan-out-replay engine kind action-name marker digest
-                              idempotency-key (get-in defn [:safety :idempotent]))
+          (if dry-run
+            ;; the rehearsal fans out too (design §23): every id
+            ;; judged through the same per-item algorithm with
+            ;; :dry-run riding along — no lock, no key demanded or
+            ;; recorded, nothing committed, never a deferral (a job
+            ;; is an effect). One transaction per item so a poisoned
+            ;; read never taints its neighbors; verdicts are
+            ;; self-keyed (waymark9's batch dry-run vocabulary —
+            ;; 9 never grew a bulk one, recorded).
+            (let [item-opts {:principal principal
+                             :acknowledged acknowledged
+                             :dry-run dry-run
+                             :require-key? false}
+                  verdicts
+                  (mapv
+                   (fn [id]
+                     (try
+                       (let [res (store/with-tx (:storage engine)
+                                   (fn [tx]
+                                     (invoke-in-tx! engine tx rdef kind id
+                                                    defn item-digest item-body
+                                                    item-opts)))]
+                         (cond-> {:self (href id) :verdict "ok"}
+                           (:warnings res) (assoc :warnings (:warnings res))))
+                       (catch Exception e
+                         (if (refusal? e)
+                           {:self (href id) :verdict "refused"
+                            :reason (problem-reason e)}
+                           (do (binding [*out* *err*]
+                                 (println "waymark10 bulk dry-run item error:"
+                                          (name kind) id "-" (ex-message e)))
+                               {:self (href id) :verdict "failed"
+                                :reason "Internal error while judging this item."})))))
+                   ids)]
+              {:valid? (every? #(= "ok" (:verdict %)) verdicts)
+               :verdicts verdicts})
+            (or (fan-out-replay engine kind action-name marker digest
+                                idempotency-key (get-in defn [:safety :idempotent]))
               (let [cid (or correlation-id (str (random-uuid)))
                     item-opts {:principal principal
                                :acknowledged acknowledged
@@ -866,7 +984,7 @@
                        ids))
                     doc (report-doc action-name data nil)]
                 (fan-out-store! engine kind marker digest idempotency-key doc)
-                {:report doc})))))))
+                {:report doc}))))))))
 
 (defn bulk-item!
   "One id through the SAME per-item algorithm bulk!'s partial-success
@@ -897,9 +1015,19 @@
   with body {:inputs [{…} …]}. Always atomic — one transaction, one
   row lock, inputs applied in order, each input its own transition;
   the first refusal aborts the whole batch with a 409 naming its
-  index. Returns {:report wire-doc} or an idempotency replay."
+  index. Returns {:report wire-doc} or an idempotency replay.
+
+  A dry-run (design §23) judges every input through the same per-item
+  algorithm against the row AS IT STANDS — one transaction, no lock,
+  nothing committed, EVERY verdict reported (the real atomic batch
+  aborts at its first refusal). Recorded deviation from waymark9 both
+  ways: 9's batch dry-run executed under a doomed transaction —
+  handlers ran, then rollback — so verdict i saw input i-1's effects;
+  10's iron rule is that a rehearsal never fires a handler, so each
+  input is judged independently."
   [engine kind id action-name body
-   {:keys [principal idempotency-key acknowledged correlation-id]
+   {:keys [principal idempotency-key acknowledged correlation-id
+           dry-run]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -923,10 +1051,38 @@
       (throw (p/schema-invalid
               action-name
               {:inputs [(str "at most " max-items " inputs per batch")]})))
-    (let [digest (body-digest body)
-          marker (keyword (str "batch:" (name action-name)))]
-      (or (fan-out-replay engine kind action-name marker digest
-                          idempotency-key (get-in defn [:safety :idempotent]))
+    (if dry-run
+      ;; the batch rehearsal: no key demanded or read (the caller is
+      ;; asking, not acting), each input its own verdict
+      (store/with-tx (:storage engine)
+        (fn [tx]
+          (let [item-opts {:principal principal
+                           :acknowledged acknowledged
+                           :dry-run dry-run
+                           :require-key? false}
+                verdicts
+                (into []
+                      (map-indexed
+                       (fn [i input]
+                         (try
+                           (let [res (invoke-in-tx! engine tx rdef kind id
+                                                    defn (body-digest input)
+                                                    input item-opts)]
+                             (cond-> {:index i :verdict "ok"}
+                               (:warnings res)
+                               (assoc :warnings (:warnings res))))
+                           (catch Exception e
+                             (if (refusal? e)
+                               {:index i :verdict "refused"
+                                :reason (problem-reason e)}
+                               (throw e))))))
+                      inputs)]
+            {:valid? (every? #(= "ok" (:verdict %)) verdicts)
+             :verdicts verdicts})))
+      (let [digest (body-digest body)
+            marker (keyword (str "batch:" (name action-name)))]
+        (or (fan-out-replay engine kind action-name marker digest
+                            idempotency-key (get-in defn [:safety :idempotent]))
           (let [cid (or correlation-id (str (random-uuid)))
                 item-opts {:principal principal
                            :acknowledged acknowledged
@@ -964,7 +1120,7 @@
                                   {:links {:target {:href (str "/api/" (:plural rdef)
                                                                "/" id)}}})]
               (fan-out-store! engine kind marker digest idempotency-key doc)
-              {:report doc}))))))
+              {:report doc})))))))
 
 (defn- create-law-revision
   "Creates stamp the kind's current law (phase 5); an after=true pilot
@@ -978,6 +1134,70 @@
       (:current-law rdef))
     (get-in engine [:current-law kind] 1)))
 
+(defn- create-guard-pass
+  "The create-time guard grading (design E9), ONE reduce for the real
+  path, the full rehearsal, and the partial rehearsal — so the three
+  judgments cannot drift: the validated create input judged with row
+  nil (no instance exists yet), warnings collect (acknowledged names
+  pass and are recorded), hard denies refuse."
+  [guards inp ctx acknowledged]
+  (reduce
+   (fn [acc guard]
+     (let [[v d] (g/evaluate guard nil inp ctx)]
+       (if-not (t/deny? v)
+         acc
+         (if (= :warning (:severity d))
+           (if (contains? acknowledged (:name d))
+             (update acc :overridden conj (:name d))
+             (update acc :warned conj {:name (:name d)
+                                       :reason (g/render-reason d v nil)
+                                       :remedies (:remedies d)}))
+           (throw (p/guard-refused :create nil
+                                   (g/render-reason d v nil)
+                                   {:guard (:name d)
+                                    :remedies (:remedies d)}
+                                   nil))))))
+   {:warned [] :overridden []}
+   guards))
+
+(defn- create-dry-run!
+  "The create rehearsal (design §23; waymark9 _create_entry's tiers):
+  no idempotency key demanded or read, nothing inserted, no
+  :on-create (its side effects must not fire), no transition. Tier
+  one — no create guards: schema validation IS the answer, and no
+  session is even opened. Tier two — declared create guards judged
+  exactly as the real path: refuse-severity throws its 409, pending
+  warnings ride the body as data. :dry-run :partial narrows both
+  tiers to what the caller provided (§23's judged-when-answerable
+  mode): provided entries schema-checked, fully covered guard leaves
+  judged, the rest :awaiting."
+  [engine rdef model body principal acknowledged mode]
+  (let [partial? (= :partial mode)
+        inp (schema/decode model (or body {}))
+        errors (cond-> (schema/closed-errors model inp)
+                 partial? (-> (select-keys (keys (or body {})))
+                              not-empty))]
+    (when errors (throw (p/schema-invalid :create errors)))
+    (if (empty? (:create-guards rdef))
+      (if partial? {:valid? true :judged [] :awaiting []} {:valid? true})
+      (store/with-tx (:storage engine)
+        (fn [tx]
+          (let [ctx (make-ctx engine tx :dry-run principal)]
+            (if partial?
+              (let [{:keys [judged awaiting]}
+                    (split-leaves (:create-guards rdef)
+                                  (set (keys (or body {}))))
+                    {:keys [warned]}
+                    (create-guard-pass judged inp ctx acknowledged)]
+                {:valid? true
+                 :judged (mapv :name judged)
+                 :awaiting (mapv :name awaiting)
+                 :warnings (not-empty warned)})
+              (let [{:keys [warned]}
+                    (create-guard-pass (:create-guards rdef) inp ctx
+                                       acknowledged)]
+                {:valid? true :warnings (not-empty warned)}))))))))
+
 (defn create!
   "The initial-state transition. Validates against :create-schema (or
   :schema), runs create guards with row nil, runs :on-create, then
@@ -986,6 +1206,10 @@
   declared create landing (a held definition is born :proposed) logs
   honestly.
 
+  Dry-run (design §23): :dry-run true rehearses waymark9's tiers —
+  see create-dry-run! above — and :dry-run :partial judges only what
+  the caller provided.
+
   Phase 10 (the client found the gap): a PRESENT Idempotency-Key is
   honored exactly as invoke's — stored replay is byte-identical,
   reuse with a different body refuses 409. Recorded deviation from
@@ -993,16 +1217,18 @@
   v10 never demanded it and every enrolled app creates bare; the
   affordance-following client always sends one."
   [engine kind body {:keys [principal acknowledged correlation-id id
-                            idempotency-key]
+                            idempotency-key dry-run]
                      :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         model (or (:create-schema rdef) (:schema rdef))
         create-action (first (:create-action-names rdef))
         digest (body-digest body)]
-    (after-write!
-     engine kind create-action
-     (store/with-tx (:storage engine)
-      (fn [tx]
+    (if dry-run
+      (create-dry-run! engine rdef model body principal acknowledged dry-run)
+      (after-write!
+       engine kind create-action
+       (store/with-tx (:storage engine)
+        (fn [tx]
         (if-some [hit (when idempotency-key
                         (store/idempotency-lookup (:storage engine) tx
                                                   idempotency-key kind))]
@@ -1015,24 +1241,7 @@
                   (throw (p/schema-invalid :create errors)))
               ctx (make-ctx engine tx :invoke principal)
               {:keys [warned overridden]}
-              (reduce
-               (fn [acc guard]
-                 (let [[v d] (g/evaluate guard nil inp ctx)]
-                   (if-not (t/deny? v)
-                     acc
-                     (if (= :warning (:severity d))
-                       (if (contains? acknowledged (:name d))
-                         (update acc :overridden conj (:name d))
-                         (update acc :warned conj {:name (:name d)
-                                                   :reason (g/render-reason d v nil)
-                                                   :remedies (:remedies d)}))
-                       (throw (p/guard-refused :create nil
-                                               (g/render-reason d v nil)
-                                               {:guard (:name d)
-                                                :remedies (:remedies d)}
-                                               nil))))))
-               {:warned [] :overridden []}
-               (:create-guards rdef))]
+              (create-guard-pass (:create-guards rdef) inp ctx acknowledged)]
           (when (seq warned)
             (throw (p/warning-refused :create warned)))
           (let [now (:now ctx)
@@ -1090,7 +1299,7 @@
                                        :version (:version row)
                                        :summary (:summary row)}))
                "application/waymark+json"))
-            {:row row :transition record}))))))))
+            {:row row :transition record})))))))))
 
 (defn engine
   "Phase-2 wiring: storage + resources, kinds ensured. Grows into

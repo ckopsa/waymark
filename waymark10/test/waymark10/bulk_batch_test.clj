@@ -298,3 +298,75 @@
     (testing "a batch route for a batchless action is 404"
       (is (= 404 (:status (req :post (str "/api/ledgers/" id "/-/close/batch")
                                {:inputs [{}]})))))))
+
+;; ── 8. the rehearsal fans out too (design §23) ──────────────────────
+;; ?dry_run=1 on the bulk and batch doors: per-item verdicts, nothing
+;; committed, no key demanded or recorded, never a deferral.
+
+(defn- dry-req
+  ([uri body] (dry-req uri body nil))
+  ([uri body headers]
+   (*h* {:request-method :post
+         :uri uri
+         :query-string "dry_run=1"
+         :headers (merge {"x-waymark-principal" "colton"} headers)
+         :body (wire/write-json body)})))
+
+(deftest bulk-dry-run-judges-without-committing
+  (let [[a b c] (chores! [true false true])
+        resp (dry-req "/api/chores/-/complete" {:ids [a b c]})
+        doc (json resp)]
+    (is (= 200 (:status resp)))
+    (is (= "application/waymark+json" (get-in resp [:headers "Content-Type"])))
+    (is (false? (:valid doc)))
+    (is (= ["ok" "refused" "ok"] (mapv :verdict (:verdicts doc))))
+    (testing "the refusing verdict names the row and speaks the guard's
+              own sentence"
+      (let [v (second (:verdicts doc))]
+        (is (= (str "/api/chores/" b) (:self v)))
+        (is (= "This chore is not ready." (:reason v)))))
+    (testing "no row moved — the ok verdicts included"
+      (doseq [id [a b c]]
+        (let [row (get-row (str "/api/chores/" id))]
+          (is (= "open" (:state row)))
+          (is (= 1 (get-in row [:meta :version]))))))))
+
+(deftest bulk-dry-run-never-defers-or-records
+  (testing "an over-threshold rehearsal judges inline — a job is an
+            effect, and a rehearsal mints none"
+    (let [ids (chores! [true true true])   ;; sweep defers over 2
+          total #(get-in (json (req :get "/api/jobs" nil)) [:data :total])
+          before (total)
+          resp (dry-req "/api/chores/-/sweep" {:ids ids})
+          doc (json resp)]
+      (is (= 200 (:status resp)))
+      (is (true? (:valid doc)))
+      (is (= 3 (count (:verdicts doc))))
+      (is (= before (total)) "no job minted")))
+  (testing "a keyed rehearsal records nothing under the key"
+    (let [[a] (chores! [true])
+          k {"idempotency-key" "bulk-dry-key-1"}
+          dry (dry-req "/api/chores/-/complete" {:ids [a]} k)
+          real (req :post "/api/chores/-/complete" {:ids [a]} k)]
+      (is (= 200 (:status dry)))
+      (is (= "bulk_report" (:kind (json real)))
+          "the real call ran fresh — the rehearsal stored nothing")
+      (is (= 1 (get-in (json real) [:data :succeeded]))))))
+
+(deftest batch-dry-run-full-verdicts
+  (let [id (id-of (req :post "/api/ledgers" {:name "rehearsal"}))
+        uri (str "/api/ledgers/" id "/-/note/batch")
+        resp (dry-req uri {:inputs [{:text "one"} {:text ""} {:text "three"}]})
+        doc (json resp)]
+    (is (= 200 (:status resp)))
+    (is (false? (:valid doc)))
+    (is (= ["ok" "refused" "ok"] (mapv :verdict (:verdicts doc)))
+        "EVERY verdict reports — the real atomic batch stops at the first")
+    (is (= 1 (:index (second (:verdicts doc)))))
+    (testing "nothing landed: no transition, no version bump"
+      (let [row (get-row (str "/api/ledgers/" id))]
+        (is (= 1 (get-in row [:meta :version])))
+        (is (nil? (get-in row [:data :notes])))))
+    (testing "no key demanded for the rehearsal — the real batch still
+              demands one"
+      (is (= 428 (:status (req :post uri {:inputs [{:text "one"}]})))))))

@@ -61,7 +61,14 @@
               :spin {:from #{:idle} :to :spun
                      :safety {:idempotent true :reversible false
                               :confirm false
-                              :one-way "Spun is history."}}}}))
+                              :one-way "Spun is history."}}
+              ;; the bulk door (§23): its dry-run reports a considering
+              ;; too — one card, the collection as self
+              :spin_many {:from #{:idle} :to :spun
+                          :bulk {:max-items 10}
+                          :safety {:idempotent true :reversible false
+                                   :confirm false
+                                   :one-way "Spun is history."}}}}))
 
 (def ^:private tables
   ["int_widgets" "definitions" "members" "roles" "grants"
@@ -262,6 +269,35 @@
                                            (str/includes? % "\"sous\"")
                                            (str/includes? % "\"spin\""))
                                      10000))))
+
+            (testing "beat 3 at the other doors (§23): the create and
+                      bulk rehearsals report too — one card per door,
+                      the collection as self"
+              (let [resp (h {:request-method :post
+                             :uri "/api/int_widgets"
+                             :query-string "dry_run=1"
+                             :headers sous-headers
+                             :body (wire/write-json {:name "pondered"})})]
+                (is (= 200 (:status resp)))
+                (is (true? (:valid (wire/read-json (:body resp))))))
+              (is (some? (await-line (:lines watcher)
+                                     #(and (str/includes? % "considering")
+                                           (str/includes? % "\"create\"")
+                                           (str/includes? % "\"/api/int_widgets\""))
+                                     10000))
+                  "the create door's card names the collection")
+              (let [resp (h {:request-method :post
+                             :uri "/api/int_widgets/-/spin_many"
+                             :query-string "dry_run=1"
+                             :headers sous-headers
+                             :body (wire/write-json {:ids [w2]})})]
+                (is (= 200 (:status resp)))
+                (is (true? (:valid (wire/read-json (:body resp))))))
+              (is (some? (await-line (:lines watcher)
+                                     #(and (str/includes? % "considering")
+                                           (str/includes? % "\"spin_many\""))
+                                     10000))
+                  "the bulk door's card rides the same stream"))
 
             (testing "beat 5: the warning wall IS the ask — the guard's
                       own sentence, addressed to whoever can see"

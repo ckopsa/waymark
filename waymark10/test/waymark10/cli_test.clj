@@ -114,6 +114,28 @@
       (is (= 0 code) out)
       (is (str/includes? out "state=retired"))))
 
+  (testing "act --dry-run answers the verdict and moves nothing (rule 5
+            at the shell; creates ride act as ever)"
+    (let [{:keys [code out]} (run "act" "/api/meals" "create"
+                                  "--input" "{\"name\": \"Dry probe\", \"themes\": []}"
+                                  "--dry-run")
+          {listing :out} (run "get" "/api/meals")]
+      (is (= 0 code) out)
+      (is (str/includes? out "✓ valid"))
+      (is (not (str/includes? listing "Dry probe")) "nothing was minted"))
+    (testing "an invalid input answers the problem → 1"
+      (let [{:keys [code out]} (run "act" "/api/meals" "create"
+                                    "--input" "{\"name\": \"\"}" "--dry-run")]
+        (is (= 1 code) out)
+        (is (str/includes? out "refused by the server"))))
+    (testing "a confirm-gated action rehearses without a prompt"
+      (let [{:keys [out]} (run "act" "/api/meals" "create"
+                               "--input" "{\"name\": \"Gated probe\", \"themes\": []}")
+            self (self-of out)
+            {:keys [code out]} (run "act" self "decline" "--dry-run")]
+        (is (= 0 code) out)
+        (is (str/includes? out "✓ valid")))))
+
   (testing "a server refusal → 1"
     (let [{:keys [code out]} (run "get" "/api/widgets")]
       (is (= 1 code) out)

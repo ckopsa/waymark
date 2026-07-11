@@ -234,6 +234,27 @@
     (is (= "Dry" (get-in (c/get-doc *session* (:self doc)) [:data :title]))
         "nothing moved")))
 
+;; ── rules 2 + 5 compose: the confirm gate pre-validates ─────────────
+
+(deftest confirm-gate-pre-validates
+  (let [meal (suggest! "Rule 5 probe")
+        prompts (atom 0)]
+    (testing "a doomed input answers the problem — the human is never
+              asked to approve what cannot land"
+      (let [res (c/act! *session* meal :decline {:junk 1}
+                        {:confirm! (fn [_] (swap! prompts inc) true)})]
+        (is (c/problem? res))
+        (is (= 422 (:status res)))
+        (is (zero? @prompts) "the prompt never fired")
+        (is (= "suggested" (:state (c/get-doc *session* (:self meal))))
+            "nothing moved")))
+    (testing "a valid input earns the prompt, and the yes proceeds"
+      (let [res (c/act! *session* meal :decline nil
+                        {:confirm! (fn [_] (swap! prompts inc) true)})]
+        (is (c/doc? res) (pr-str res))
+        (is (= 1 @prompts))
+        (is (= "retired" (:state res)))))))
+
 ;; ── rule 6: the acknowledge flow ────────────────────────────────────
 
 (deftest warnings-surface-and-acknowledge-retries

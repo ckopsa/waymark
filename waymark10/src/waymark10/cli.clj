@@ -7,6 +7,8 @@
       clojure -M:cli http://localhost:8010 get /api/plans/{id}
       clojure -M:cli http://localhost:8010 act /api/plans/{id} finalize
       clojure -M:cli http://localhost:8010 act /api/meals/{id} decline --yes
+      clojure -M:cli http://localhost:8010 act /api/plans create \\
+          --input '{\"weeks\": 1}' --dry-run
       clojure -M:cli http://localhost:8010 watch --kinds plan,meal
 
   Auth flags (persisted per base-url in the session file, so one
@@ -16,7 +18,9 @@
       --grant ID              grant-scoped visibility
   Other flags: --input '{json}' (action input) · --yes (approve
   confirm gates AND acknowledge warnings without prompting) ·
-  --raw (full JSON bodies) · --session PATH (default
+  --dry-run (rule 5 at the shell: the verdict, not the act — schema
+  AND guards judged server-side, nothing committed; creates ride act
+  as ever) · --raw (full JSON bodies) · --session PATH (default
   ~/.waymark10/session.edn).
 
   The session file persists the idempotency key store, so a re-run
@@ -31,10 +35,9 @@
   Exit codes: 0 ok · 1 the server refused (problem) · 2 refused
   locally (confirm/acknowledge declined, unknown action, no route)
   · 3 transport failure."
-  (:require [clojure.edn :as edn]
-            [clojure.java.io :as io]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [waymark10.client :as c]
+            [waymark10.session :as sessionfile]
             [waymark10.wire :as wire])
   (:gen-class))
 
@@ -44,19 +47,6 @@
 (def exit-problem 1)
 (def exit-refused 2)
 (def exit-transport 3)
-
-;; ── the session file ────────────────────────────────────────────────
-
-(defn- default-session-path []
-  (str (System/getProperty "user.home") "/.waymark10/session.edn"))
-
-(defn- load-session-file [path]
-  (try (or (edn/read-string (slurp path)) {})
-       (catch Exception _ {})))
-
-(defn- save-session-file! [path data]
-  (io/make-parents path)
-  (spit path (pr-str data)))
 
 ;; ── output ──────────────────────────────────────────────────────────
 
@@ -195,10 +185,38 @@
 (defn- cmd-get [session href {:keys [raw]}]
   (result-exit (c/get-doc session href) raw))
 
-(defn- cmd-act [session href action {:keys [input yes raw]}]
+(defn- dry-run-exit
+  "The rehearsal's printout: ✓ with any warnings on 0; a bulk/batch
+  door's refusing verdicts (or the server's problem) on 1."
+  [res raw?]
+  (cond
+    (c/transport? res)
+    (do (println (str "transport failure: " (get-in res [:transport :message])))
+        exit-transport)
+
+    (c/refused? res) (do (print-refused res) exit-refused)
+    (c/problem? res) (do (print-problem res raw?) exit-problem)
+
+    (false? (:valid res))
+    (do (println "✗ the rehearsal refuses:")
+        (doseq [v (:verdicts res) :when (not= "ok" (:verdict v))]
+          (println (str "  " (or (:self v) (str "input " (:index v)))
+                        ": " (:reason v))))
+        exit-problem)
+
+    :else
+    (do (println "✓ valid — schema and guards accept this input")
+        (doseq [w (:warnings res)]
+          (println (str "  warning " (:name w) ": " (:reason w))))
+        exit-ok)))
+
+(defn- cmd-act [session href action {:keys [input yes raw dry-run]}]
   (let [doc (c/get-doc session href)]
     (if-not (c/doc? doc)
       (result-exit doc raw)
+      (if dry-run
+        ;; rule 5 at the shell: the verdict, not the act
+        (dry-run-exit (c/dry-run session doc (keyword action) input) raw)
       (let [res (c/act! session doc (keyword action) input
                         {:confirm! (confirm-fn yes)})]
         (if (c/warnings? res)
@@ -209,7 +227,7 @@
                 (result-exit ((:acknowledge! res)) raw)
                 (do (println "not acknowledged; nothing done")
                     exit-refused)))
-          (result-exit res raw))))))
+          (result-exit res raw)))))))
 
 (defn- cmd-watch [session {:keys [kinds]}]
   (println (str "watching " (:base-url session) "/api/-/events"
@@ -252,6 +270,7 @@
             :else (recur (drop 2 remaining)
                          (assoc-in acc [:opts :input] parsed))))
         "--yes" (recur (rest remaining) (assoc-in acc [:opts :yes] true))
+        "--dry-run" (recur (rest remaining) (assoc-in acc [:opts :dry-run] true))
         "--raw" (recur (rest remaining) (assoc-in acc [:opts :raw] true))
         "--kinds" (if-some [v (second remaining)]
                     (recur (drop 2 remaining)
@@ -296,7 +315,7 @@
        "  index                          discover kinds and surfaces\n"
        "  get <href>                     fetch a resource or collection\n"
        "  act <href> <action>            invoke a declared action\n"
-       "      [--input '{json}'] [--yes]\n"
+       "      [--input '{json}'] [--yes] [--dry-run]\n"
        "  watch [--kinds a,b]            tail the transition firehose\n"
        "auth (persisted per base-url):\n"
        "  --as ID [--roles a,b] | --bearer TOKEN | --grant ID\n"
@@ -311,8 +330,8 @@
   (let [{:keys [usage-error base-url command args opts]} (parse-args args)]
     (if usage-error
       (do (println (str "✗ " usage-error)) (println usage) exit-refused)
-      (let [session-path (or (:session opts) (default-session-path))
-            file (load-session-file session-path)
+      (let [session-path (or (:session opts) (sessionfile/default-path))
+            file (sessionfile/load-file* session-path)
             stored (get file base-url {})
             ;; flags override stored auth; either way it persists
             auth (or (when (:as opts)
@@ -338,7 +357,7 @@
                          (println usage)
                          exit-refused))
                    (finally
-                     (try (save-session-file!
+                     (try (sessionfile/save-file!
                            session-path
                            (assoc file base-url {:auth auth
                                                  :keys @key-store}))

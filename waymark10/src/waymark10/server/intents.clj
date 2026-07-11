@@ -64,9 +64,11 @@
   presence discipline.
 
   Recorded boundaries, each a sentence:
-  - only ROW-level dry-runs report — bulk/batch dry-runs and direct
-    inv/invoke! calls are invisible (the router's seams are the
-    doors, the presence precedent for mid-request invisibility).
+  - every FULL dry-run door reports (single, batch, bulk, create —
+    §23 opened the last three; one card per door, the bulk/create
+    card naming the collection self), while partial rehearsals and
+    direct inv/invoke! calls are invisible (the router's seams are
+    the doors, the presence precedent for mid-request invisibility).
   - the confirm gate lives in clients (the server never refuses on
     it), so its ask arrives only through the explicit door.
   - resolution matches (self, action), not the actor: an act by

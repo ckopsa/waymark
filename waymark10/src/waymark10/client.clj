@@ -24,7 +24,11 @@
      document's meta.etag: the write is against the row you READ,
      or it is a 412, never a lost update.
   5. dry-run pre-validates input server-side (schema AND guards)
-     before anyone is asked to confirm anything.
+     before anyone is asked to confirm anything — ENFORCED at the
+     confirm gate (act!): when a :confirm! seam exists, the input is
+     dry-run first, a refusal comes back as the problem without the
+     human ever being asked, and pending warnings ride the confirm
+     payload so the yes is an informed one.
   6. Warning 409s (the E1 acknowledge protocol) surface as data:
      {:warnings … :acknowledge!} — calling (acknowledge!) retries
      with the Waymark-Acknowledge header naming every warning, and
@@ -292,7 +296,7 @@
       (request session req)
       res)))
 
-(declare act!)
+(declare act! dry-run)
 
 (defn- warning-result
   "The E1 protocol as data: the 409's warnings plus an :acknowledge!
@@ -310,10 +314,14 @@
 
 (defn act!
   "Invoke a DECLARED action on doc. opts:
-    :confirm!     (fn [{:keys [action effect consequence summary]}]
-                  → truthy) — the human-approval seam a confirm-gated
-                  action requires; absent or falsey → local refusal
-                  with the consequence text (rule 2)
+    :confirm!     (fn [{:keys [action effect consequence summary
+                  warnings]} → truthy) — the human-approval seam a
+                  confirm-gated action requires; absent or falsey →
+                  local refusal with the consequence text (rule 2).
+                  Before the seam fires, the input is dry-run
+                  server-side (rule 5): a refusal returns as the
+                  problem without a prompt, and pending warnings ride
+                  the payload's :warnings.
     :acknowledge  guard names to acknowledge up front (normally you
                   let the {:warnings … :acknowledge!} result drive)
   Returns the new envelope (with :waymark10.client/diverged attached
@@ -334,19 +342,35 @@
                                    " does not afford " (name aname)
                                    " in state " (:state doc) "."))}}
 
-       ;; rule 2: the confirm gate — a hard local stop
+       ;; rule 2: the confirm gate — a hard local stop. No callback
+       ;; refuses locally without a wire call, exactly as ever; a
+       ;; PRESENT callback earns rule 5 first: the server judges the
+       ;; input (schema AND guards, ?dry_run=1) before the human is
+       ;; asked — a doomed input is never worth a consequence prompt
        (and (get-in entry [:safety :confirm])
-            (not (::confirmed opts))
-            (not (and confirm!
-                      (confirm! {:action (name aname)
-                                 :effect (:effect entry)
-                                 :consequence (consequence-of entry)
-                                 :summary (:summary doc)}))))
-       {:refused {:code (if confirm! :confirm-declined :confirm-required)
-                  :action (name aname)
-                  :consequence (consequence-of entry)
-                  :reason (str "safety.confirm=true — a human must approve: "
-                               (consequence-of entry))}}
+            (not (::confirmed opts)))
+       (if-not confirm!
+         {:refused {:code :confirm-required
+                    :action (name aname)
+                    :consequence (consequence-of entry)
+                    :reason (str "safety.confirm=true — a human must approve: "
+                                 (consequence-of entry))}}
+         (let [pre (dry-run session doc aname input)]
+           (cond
+             (problem? pre) pre
+             (transport? pre) pre
+             (confirm! {:action (name aname)
+                        :effect (:effect entry)
+                        :consequence (consequence-of entry)
+                        :summary (:summary doc)
+                        :warnings (:warnings pre)})
+             (act! session doc aname input (assoc opts ::confirmed true))
+             :else
+             {:refused {:code :confirm-declined
+                        :action (name aname)
+                        :consequence (consequence-of entry)
+                        :reason (str "safety.confirm=true — a human must approve: "
+                                     (consequence-of entry))}})))
 
        :else
        (let [idempotent? (get-in entry [:safety :idempotent])
@@ -395,8 +419,11 @@
 (defn dry-run
   "Rule 5: pre-validate input server-side — schema AND guards, no
   transition — before asking a human to confirm anything. → {:valid
-  true (:warnings […])} or {:problem …}; refuses locally on an
-  undeclared action exactly like act!."
+  true (:warnings […])} (a bulk/batch door answers {:valid …
+  :verdicts […]}, per item) or {:problem …}; refuses locally on an
+  undeclared action exactly like act!. act!'s confirm gate calls
+  this itself; the fn stays public for callers pre-validating
+  outside a confirm flow."
   [session doc action input]
   (let [aname (keyword action)
         entry (get-in doc [:actions aname])]

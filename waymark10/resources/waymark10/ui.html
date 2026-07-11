@@ -376,6 +376,10 @@
   .problem b { color: var(--refusal); }
   .problem ul { margin: 6px 0 0; padding-left: 18px; font-size: 13.5px; }
   .validok { color: var(--verdigris-deep); font-size: 13.5px; margin: 8px 0; }
+  /* the blur judge's verdict line (§23): quiet company, not a wall */
+  .drynote { font-size: 12px; margin-right: 10px; }
+  .drynote.ok { color: var(--verdigris-deep); }
+  .drynote.bad { color: var(--warn); }
   .warnbox { border: 1px solid var(--line); border-left: 3px solid var(--warn);
              background: var(--warn-wash);
              border-radius: var(--radius); padding: 8px 12px; margin: 10px 0; }
@@ -1427,6 +1431,16 @@ async function renderResource(view, doc, hints) {
         else localStorage.setItem("wm10.grant", gid);
         grantChip(); render();
       }}, on ? "✓ scoped to this grant" : "🔭 act under this grant"));
+    /* the grant names its audience — the principal working under it.
+       Follow them from the page where the trust was granted, and this
+       screen goes where they look (the member page's affordance,
+       offered at the moment you'd want it) */
+    const aud = doc.data?.audience;
+    if (aud) bar.append(el("button", {
+      title: `follow ${aud} — this screen navigates where they look`,
+      onclick: () => { follow({id: aud, display: aud});
+                       toast(`following ${aud}`); }},
+      `👁 Follow ${aud}`));
   }
   /* the follow affordance: a member envelope names a principal —
      follow them and this screen goes where they LOOK (the presence
@@ -1625,21 +1639,31 @@ function fieldWidget(name, rawProp, value) {
   return el("input", {type: "text", name, value: value ?? "",
     placeholder: prop.format || ""});
 }
-/* a waymark-ref field offers the target kind's rows, labeled by summary */
-async function refOptions(select, rawProp, current) {
+/* a waymark-ref field offers the target kind's rows, labeled by summary.
+   A guard-folded enum on the field is the ADMITTED set (the render
+   layer's relation fold — e.g. which meals serve this day's theme):
+   the picker then offers exactly those rows, labeled where the page
+   had labels — the form never offers a value the server already knows
+   it will refuse. Without labels (fetch failed, or an admitted id
+   past the first page) the id keeps its seat raw rather than vanish. */
+async function refOptions(select, rawProp, current, admitted) {
   const prop = schemaProp(rawProp);
   const kind = ((rawProp["x-ref"] || prop["x-ref"]) || {}).kind;
-  let w;
-  try { w = await wellKnown(); } catch { return; }
-  const href = kind && collectionHref(w, kind);
-  if (!href) return;
-  const {ok, body} = await api(mergeParams(href, {"page[size]": "100"}));
-  if (!ok) return;
-  for (const item of (body.data || {}).items || []) {
-    const id = item.self.split("/").pop();
+  const admit = admitted ? admitted.map(String) : null;
+  const append = (id, label) =>
     select.append(el("option", {value: id, selected: id === current ? "" : null},
-                     item.summary || id));
-  }
+                     label || id));
+  let w;
+  try { w = await wellKnown(); } catch { (admit || []).forEach(id => append(id)); return; }
+  const href = kind && collectionHref(w, kind);
+  if (!href) { (admit || []).forEach(id => append(id)); return; }
+  const {ok, body} = await api(mergeParams(href, {"page[size]": "100"}));
+  if (!ok) { (admit || []).forEach(id => append(id)); return; }
+  const summaries = new Map();
+  for (const item of (body.data || {}).items || [])
+    summaries.set(item.self.split("/").pop(), item.summary);
+  for (const id of admit || [...summaries.keys()])
+    append(id, summaries.get(id));
 }
 /* keystroke validation: the JSON schema judges as you type */
 function clientMessages(raw, rawProp, required) {
@@ -1715,7 +1739,8 @@ function buildForm(schema, prefill, kind) {
     let widget;
     if (xref(rawProp)) {
       widget = el("select", {name}, el("option", {value: ""}, "…"));
-      refOptions(widget, rawProp, (prefill || {})[name]);
+      /* prop.enum here is the guard-folded admitted set — honor it */
+      refOptions(widget, rawProp, (prefill || {})[name], prop.enum);
     } else {
       widget = fieldWidget(name, rawProp, (prefill || {})[name]);
     }
@@ -1809,10 +1834,15 @@ function applyOps(s, ops) {
 }
 
 /* ── the action dialog: gate, form, fence, key, warnings, drafts ───── */
-/* dry_run=1 is honored on SINGLE-RESOURCE action invokes only (engine
-   fact, recorded) — the create and bulk paths execute regardless. */
+/* dry_run is honored on single-resource action invokes, creates
+   (POST /api/{plural}) and bulk invokes (POST /api/{plural}/-/{action})
+   — engine fact since §23; batch is the one door this page does not
+   drive. dry_run=1 is the full rehearsal (the Check button);
+   dry_run=partial judges only the fields provided (the blur judge). */
 function dryRunnable(href) {
-  return /^\/api\/[^/]+\/(?!-\/)[^/]+\/-\/[^/?]+$/.test(href || "");
+  return /^\/api\/[^/?]+$/.test(href || "") ||                        /* create */
+         /^\/api\/[^/]+\/-\/[^/?]+$/.test(href || "") ||              /* bulk */
+         /^\/api\/[^/]+\/(?!-\/)[^/]+\/-\/[^/?]+$/.test(href || "");  /* row action */
 }
 const dlgStamp = t => new Date(t || Date.now())
   .toTimeString().slice(0, 8);
@@ -1843,6 +1873,9 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone}) {
   const form = input ? buildForm(input, initialValues, kind) : el("div", {});
 
   const errBox = el("div", {});
+  /* the blur judge's verdict line (§23): "✓ so far" is the partial
+     rehearsal speaking — every field it can already judge, judged */
+  const dryNote = el("span", {class: "drynote"});
   const savedNote = el("span", {},
     draftView ? "draft loaded from the server" : "");
   const peers = el("span", {class:"muted"});
@@ -1881,6 +1914,7 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone}) {
       el("span", {class: "hint"},
         entry.draft ? (entry.draft.shared ? "shared draft — saved on blur"
                                           : "draft — saved on blur") : ""),
+      dryNote,
       entry.draft ? el("button", {onclick: async () => {
         disarmDraft();
         await api(entry.draft.href, {method: "DELETE"});
@@ -2040,21 +2074,50 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone}) {
     });
   }
 
-  /* blur-time dry-run: the SERVER judges the half-built input and its
-     schema 422s land inline per field (anything else waits for
-     Check/submit — a guard 409 mid-typing would only nag) */
+  /* blur-time dry-run, third chapter (design §23): the PARTIAL
+     rehearsal. Only the fields you have TOUCHED ride to the server
+     (?dry_run=partial), which judges exactly what it can already
+     answer — a provided field's schema errors land inline, guard
+     leaves those fields fully cover speak now (their sentence on the
+     verdict line, never a modal), and everything else waits without
+     nagging. "✓ so far" is that verdict; Check and submit remain the
+     FULL rehearsal. */
+  const touched = new Set();
   let dryTimer = null;
+  if (input) form.addEventListener("input", ev => {
+    if (ev.target && ev.target.name) touched.add(ev.target.name);
+  });
   if (input && dryRunnable(entry.href)) {
     form.addEventListener("focusout", () => {
       clearTimeout(dryTimer);
       dryTimer = setTimeout(async () => {
-        const payload = body();
-        if (!payload) return;
+        if (!touched.size) return;
+        const all = collectValues(form, input);
+        const partial = {};
+        for (const k of touched) if (k in all) partial[k] = all[k];
+        if (bulkIds) partial.ids = bulkIds;
+        if (!Object.keys(partial).length) return;
         const sep = entry.href.includes("?") ? "&" : "?";
-        const res = await api(entry.href + sep + "dry_run=1",
-          {method: "POST", body: payload, headers: actHeaders()});
+        const res = await api(entry.href + sep + "dry_run=partial",
+          {method: "POST", body: JSON.stringify(partial),
+           headers: actHeaders()});
         clearServerErrors();
-        if (!res.ok && res.status === 422) showFieldErrors(res.body);
+        const b = res.body || {};
+        if (res.ok) {
+          const iffy = (b.verdicts || []).filter(v => v.verdict !== "ok");
+          if (b.valid === false) {
+            dryNote.textContent = "✗ " + ((iffy[0] || {}).reason || "would refuse");
+            dryNote.className = "drynote bad";
+          } else {
+            dryNote.textContent = "✓ so far" +
+              ((b.warnings || []).length ? " (with warnings)" : "");
+            dryNote.className = "drynote ok";
+          }
+        } else {
+          dryNote.textContent = "✗ " + (b.detail || b.title || res.status);
+          dryNote.className = "drynote bad";
+          showFieldErrors(b);
+        }
       }, 120);
     });
   }
@@ -2090,23 +2153,39 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone}) {
     if (!Object.keys((problem || {}).errors || {}).length)
       errBox.append(problemBox(problem || {}));
   }
-  async function check() {           /* dry-run pre-validation (rule 5) */
+  async function check() {           /* dry-run pre-validation (rule 5):
+                                        the FULL rehearsal — every field,
+                                        every guard */
+    clearTimeout(dryTimer);          /* one door at a time — the blur
+                                        judge stands down */
     const sep = entry.href.includes("?") ? "&" : "?";
     const res = await api(entry.href + sep + "dry_run=1",
       {method: "POST", body: body(), headers: actHeaders()});
     errBox.replaceChildren();
     if (res.ok) {
-      const warns = (res.body || {}).warnings || [];
-      errBox.append(el("div", {class: "validok"},
-        "✓ schema and guards accept this input" +
-        (warns.length ? " (with warnings)" : "")));
-      for (const w of warns)
-        errBox.append(el("div", {class: "warnbox"},
-          el("span", {class:"prose"}, w.reason || w.name),
-          remedyChips(w.remedies, doc, () => closeDlg())));
+      const b = res.body || {};
+      const warns = b.warnings || [];
+      const iffy = (b.verdicts || []).filter(v => v.verdict !== "ok");
+      if (b.valid === false) {
+        /* a bulk rehearsal's refusing rows, each with the guard's
+           own sentence */
+        for (const v of iffy)
+          errBox.append(el("div", {class: "problem"},
+            (v.self ? v.self + ": " : "") + (v.reason || v.verdict)));
+      } else {
+        errBox.append(el("div", {class: "validok"},
+          "✓ schema and guards accept this input" +
+          (warns.length ? " (with warnings)" : "")));
+        for (const w of warns)
+          errBox.append(el("div", {class: "warnbox"},
+            el("span", {class:"prose"}, w.reason || w.name),
+            remedyChips(w.remedies, doc, () => closeDlg())));
+      }
     } else showErrors(res.body);
   }
   async function submit() {
+    clearTimeout(dryTimer);          /* a pending blur judge must not
+                                        speak over the landing */
     disarmDraft();                   /* the invoke consumes the draft */
     const res = await api(entry.href,
       {method: "POST", body: body(), headers: actHeaders()});

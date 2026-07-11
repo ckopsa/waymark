@@ -161,7 +161,13 @@
      :if-match (get headers "if-match")
      :idempotency-key (get headers "idempotency-key")
      :acknowledged (into #{} (map keyword) (csv (get headers "waymark-acknowledge")))
-     :dry-run (= "1" (get (query-params req) "dry_run"))}))
+     ;; dry_run=1 is the full rehearsal; dry_run=partial judges only
+     ;; what the caller provided (design §23) — anything else is a
+     ;; real invoke, as ever
+     :dry-run (case (get (query-params req) "dry_run")
+                "1" true
+                "partial" :partial
+                nil)}))
 
 ;; ── responses ───────────────────────────────────────────────────────
 
@@ -200,6 +206,59 @@
     (when-not raw (throw (p/not-found (:kind rdef) id)))
     ;; inv/decode-row: coercion AND the shape fold (phase 8 upcasts)
     (inv/decode-row rdef raw)))
+
+;; ── the dry-run doors' shared chrome (design §23) ───────────────────
+
+(defn- intents-running
+  "The engine's intents registry when one is running — the automatic
+  doors (dry-run, warning wall) report through it and never fail a
+  request over its absence."
+  [eng]
+  (some-> (:runtime eng) deref :intents))
+
+(defn- report-intent!
+  "Best-effort: an intent frame is ephemeral company, never the
+  request's fate — a failed report warns on *err* and the invoke
+  answers untouched."
+  [reg principal intent]
+  (try
+    (intents/report! reg principal intent)
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "waymark10 intent report failed -" (ex-message e))))))
+
+(defn- announce-considering!
+  "Beat 3 at a dry-run door — single, batch, bulk, create alike: a
+  valid FULL rehearsal is a considering, best-effort, named
+  principals on a started engine only. The partial rehearsal is
+  deliberately mute here: it fires at typing cadence, and company
+  must never cost the work (§23, recorded)."
+  [eng req self action result]
+  (when-some [reg (intents-running eng)]
+    (let [principal (principal-of req)]
+      (when (not= (:id principal) (:id t/anonymous))
+        (report-intent! reg principal
+                        {:self self :action action
+                         :status "considering"
+                         :warnings (some->> (:warnings result)
+                                            (mapv #(select-keys % [:name :reason])))})))))
+
+(defn- dry-run-response
+  "A dry-run's verdict, the invoke door's shape grown optional limbs:
+  {:valid …} plus :warnings (full and partial), :judged/:awaiting
+  (partial — always present there, even empty), and :verdicts
+  (bulk/batch — per item)."
+  [result]
+  (json-response 200
+                 (p/wire-value
+                  (cond-> {:valid (boolean (:valid? result))}
+                    (:warnings result)
+                    (assoc :warnings (mapv p/prune (:warnings result)))
+                    (:judged result) (assoc :judged (:judged result))
+                    (:awaiting result) (assoc :awaiting (:awaiting result))
+                    (:verdicts result)
+                    (assoc :verdicts (mapv p/prune (:verdicts result)))))
+                 media-type nil))
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
@@ -263,8 +322,20 @@
           opts (invoke-opts req)
           result (inv/create! eng (:kind rdef) (read-body req)
                               (select-keys opts [:principal :acknowledged
-                                                 :idempotency-key]))]
-      (if (= :idempotency (:replayed? result))
+                                                 :idempotency-key :dry-run]))]
+      (cond
+        ;; the create door's rehearsal (§23): the verdict body, and —
+        ;; full mode only — a considering card naming the COLLECTION
+        ;; self (no row exists to name yet; one card per door,
+        ;; recorded)
+        (:valid? result)
+        (do (when (true? (:dry-run opts))
+              (announce-considering!
+               eng req (str "/api/" plural)
+               (name (first (:create-action-names rdef))) result))
+            (dry-run-response result))
+
+        (= :idempotency (:replayed? result))
         ;; the first execution's bytes, verbatim (phase 10: creates
         ;; honor a present key; the Location header is not stored —
         ;; the body's self carries the same href)
@@ -272,6 +343,8 @@
           {:status (:status hit)
            :headers {"Content-Type" (:media-type hit)}
            :body (:response hit)})
+
+        :else
         (let [row (:row result)]
           (envelope-response eng rdef row req 201
                              {"Location" (str "/api/" plural "/" (:id row))}))))))
@@ -363,24 +436,6 @@
       (json-response 200 env media-type
                      {"ETag" (get-in env ["meta" "etag"])}))))
 
-(defn- intents-running
-  "The engine's intents registry when one is running — the automatic
-  doors (dry-run, warning wall) report through it and never fail a
-  request over its absence."
-  [eng]
-  (some-> (:runtime eng) deref :intents))
-
-(defn- report-intent!
-  "Best-effort: an intent frame is ephemeral company, never the
-  request's fate — a failed report warns on *err* and the invoke
-  answers untouched."
-  [reg principal intent]
-  (try
-    (intents/report! reg principal intent)
-    (catch Exception e
-      (binding [*out* *err*]
-        (println "waymark10 intent report failed -" (ex-message e))))))
-
 (defn- invoke-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
@@ -425,8 +480,9 @@
                                           :acknowledge (:acknowledge d)}))
                        (throw e))))
           ;; beat 3: the dry-run's shadow — "considering — <action> on
-          ;; <resource>", gone in a moment if abandoned
-          _ (when (and announce? (:dry-run opts) (:valid? result))
+          ;; <resource>", gone in a moment if abandoned. Only the FULL
+          ;; rehearsal reports; the partial blur judge is mute (§23)
+          _ (when (and announce? (true? (:dry-run opts)) (:valid? result))
               (report-intent! reg (:principal opts)
                               {:self self :action action
                                :status "considering"
@@ -441,12 +497,7 @@
            :body (:response hit)})
 
         (:valid? result)
-        (json-response 200
-                       (p/wire-value
-                        (cond-> {:valid true}
-                          (:warnings result)
-                          (assoc :warnings (mapv p/prune (:warnings result)))))
-                       media-type nil)
+        (dry-run-response result)
 
         :else
         (envelope-response eng rdef (:row result) req 200 nil)))))
@@ -476,14 +527,27 @@
                                 (dissoc body :ids))
           opts (invoke-opts req)
           result (inv/bulk! eng (:kind rdef) (keyword action) body opts)]
-      (if-some [d (:deferred result)]
+      (cond
+        (:deferred result)
         ;; the phase-7 punt closes (phase 9b): an over-threshold call
         ;; mints a job and answers 202 — the envelope is the body, the
         ;; Location is where to watch it
-        (let [{job :row} (jobs/enqueue! eng d (:principal opts))]
+        (let [{job :row} (jobs/enqueue! eng (:deferred result)
+                                        (:principal opts))]
           (envelope-response eng (get (inv/resources eng) :job) job req 202
                              {"Location" (str "/api/jobs/" (:id job))}))
-        (report-response result)))))
+
+        ;; the bulk door's rehearsal (§23): per-item verdicts, and —
+        ;; full mode, all-ok only — ONE considering card naming the
+        ;; collection self (a card per id would deal a hand per
+        ;; check, recorded)
+        (contains? result :valid?)
+        (do (when (and (true? (:dry-run opts)) (:valid? result))
+              (announce-considering! eng req (str "/api/" plural)
+                                     action result))
+            (dry-run-response result))
+
+        :else (report-response result)))))
 
 (defn- batch-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
@@ -495,9 +559,17 @@
           ;; a denied arg draws on a single invoke
           _ (doseq [inp (:inputs body)]
               (grants/check-args! (visibility-of req) rdef (keyword action) inp))
-          opts (invoke-opts req)]
-      (report-response
-       (inv/batch! eng (:kind rdef) id (keyword action) body opts)))))
+          opts (invoke-opts req)
+          result (inv/batch! eng (:kind rdef) id (keyword action) body opts)]
+      ;; the batch door's rehearsal (§23): index-keyed verdicts, and —
+      ;; full mode, all-ok only — the considering card names the row,
+      ;; exactly as the single door's
+      (if (contains? result :valid?)
+        (do (when (and (true? (:dry-run opts)) (:valid? result))
+              (announce-considering! eng req (str "/api/" plural "/" id)
+                                     action result))
+            (dry-run-response result))
+        (report-response result)))))
 
 (defn- draft-view-response [view]
   (json-response 200 (p/wire-value view) media-type nil))

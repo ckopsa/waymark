@@ -63,6 +63,47 @@
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A conformance fixture's door."}}}}))
 
+;; vetted: a create-guarded kind whose :on-create counts its calls, so
+;; the create dry-run's tiers (design §23) are observable — the guard
+;; tier judges, the hook must NOT fire, and nothing is minted.
+
+(def on-create-calls (atom 0))
+
+(def refuse-evil
+  (g/guard {:name :refuse-evil
+            :judges [:title]
+            :check (fn [_row inp _ctx]
+                     (if (= "evil" (:title inp)) (t/deny) (t/allow)))
+            :explain "Evil titles refuse at the door."}))
+
+(def sponsor-known
+  (g/guard {:name :sponsor-known
+            :severity :warning
+            :judges [:sponsor]
+            :check (fn [_row inp _ctx]
+                     (if (= "evil corp" (:sponsor inp)) (t/deny) (t/allow)))
+            :explain "That sponsor has a history."}))
+
+(def vetted
+  (r/resource
+   {:kind :vetted
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 60}]]
+             [:sponsor {:optional true} [:maybe [:string {:max 60}]]]
+             [:vetted_at {:optional true} [:maybe [:string {:max 40}]]]]
+    :create-guards [refuse-evil sponsor-known]
+    :on-create (fn [row _ctx]
+                 (swap! on-create-calls inc)
+                 (assoc-in row [:data :vetted_at] "birth"))
+    :actions
+    {:finish {:from #{:open} :to :done
+              :safety {:idempotent true :reversible false :confirm false
+                       :one-way "Vetting ends once."}}}}))
+
 ;; ── enrollment: what the fixtures must register ─────────────────────
 ;; plan: generation alone can't promise a walkable week — begin needs
 ;; a started start_date and finalize needs every day covered — so the
@@ -79,7 +120,7 @@
 
 (use-fixtures :once
   (fn [f]
-    (db/with-test-engine [fx/meal fx/plan chore locked]
+    (db/with-test-engine [fx/meal fx/plan chore locked vetted]
       (fn [eng] (binding [*eng* eng] (f))))))
 
 (def fixture-kinds [:meal :plan])
@@ -256,7 +297,114 @@
             res (inv/invoke! *eng* :chore (:id crow) :tick nil
                              (assoc opts :dry-run true))]
         (is (true? (:valid? res)))
-        (is (= t-before (transition-count :chore (:id crow))))))))
+        (is (= t-before (transition-count :chore (:id crow))))))
+    (testing "dry-run neither consumes nor records a key it was handed"
+      (let [{crow :row} (fac/create-example *eng* :chore {:seed 62})
+            keyed (assoc opts :idempotency-key "dry-then-real-1")
+            dry (inv/invoke! *eng* :chore (:id crow) :tick nil
+                             (assoc keyed :dry-run true))
+            first-real (inv/invoke! *eng* :chore (:id crow) :tick nil keyed)
+            replay (inv/invoke! *eng* :chore (:id crow) :tick nil keyed)]
+        (is (true? (:valid? dry)))
+        (is (nil? (:replayed? first-real))
+            "the rehearsal recorded nothing — the first real invoke executes")
+        (is (= :idempotency (:replayed? replay))
+            "the real execution's key then replays as ever")))))
+
+;; ── 5b. the dry-run rehearsals (design §23) ─────────────────────────
+;; The create tiers (waymark9 _create_entry's), and the partial mode's
+;; obligations: silence on unprovided fields, provided fields judged
+;; exactly as ever, guard leaves judged the moment their fields arrive.
+
+(defn- row-count [kind]
+  (store/with-tx (:storage *eng*)
+    (fn [tx] (count (store/query-rows (:storage *eng*) tx kind {}
+                                      {:limit 1000})))))
+
+(deftest create-dry-run-tiers
+  (let [opts {:principal (fac/walker-principal) :dry-run true}]
+    (testing "tier one — no create guards: schema validation IS the answer"
+      (let [n (row-count :chore)
+            res (inv/create! *eng* :chore {:title "Rehearsed"} opts)]
+        (is (= {:valid? true} res))
+        (is (= n (row-count :chore)) "nothing minted"))
+      (let [p (problem-of #(inv/create! *eng* :chore {:title ""} opts))]
+        (is (= 422 (:status p)) "the schema tier still refuses honestly")))
+    (testing "tier two — declared create guards judged as the real path,
+              warnings riding the body, on-create never firing"
+      (let [fired @on-create-calls
+            n (row-count :vetted)
+            ok (inv/create! *eng* :vetted {:title "Fine" :sponsor "acme"} opts)
+            warned (inv/create! *eng* :vetted
+                                {:title "Fine" :sponsor "evil corp"} opts)
+            p (problem-of #(inv/create! *eng* :vetted {:title "evil"} opts))]
+        (is (true? (:valid? ok)))
+        (is (nil? (:warnings ok)))
+        (is (true? (:valid? warned)))
+        (is (= [:sponsor-known] (mapv :name (:warnings warned)))
+            "the pending warning rides the body as data")
+        (is (= 409 (:status p)))
+        (is (= :guard-refused (:waymark10/problem p)))
+        (is (= n (row-count :vetted)) "nothing minted")
+        (is (= fired @on-create-calls) "on-create never fired")))
+    (testing "an acknowledged warning passes the rehearsal too"
+      (let [res (inv/create! *eng* :vetted {:title "Fine" :sponsor "evil corp"}
+                             (assoc opts :acknowledged #{:sponsor-known}))]
+        (is (true? (:valid? res)))
+        (is (nil? (:warnings res)))))
+    (testing "a create dry-run neither demands nor records a key"
+      (let [res (inv/create! *eng* :chore {:title "Keyed rehearsal"}
+                             (assoc opts :idempotency-key "create-dry-1"))
+            real (inv/create! *eng* :chore {:title "Keyed rehearsal"}
+                              {:principal (fac/walker-principal)
+                               :idempotency-key "create-dry-1"})]
+        (is (true? (:valid? res)))
+        (is (nil? (:replayed? real)) "the real create executed fresh")
+        (is (map? (:row real)))))))
+
+(deftest partial-dry-run-judges-when-answerable
+  (let [row (fac/walk-to-state *eng* :plan :draft {:seed 89})
+        pid (:id row)
+        opts {:principal (fac/walker-principal) :dry-run :partial}]
+    (testing "silence on unprovided fields is the obligation"
+      (let [v-before (:version (reload :plan pid))
+            t-before (transition-count :plan pid)
+            res (inv/invoke! *eng* :plan pid :assign_meal
+                             {:meal_id "m-x"} opts)]
+        (is (true? (:valid? res)))
+        (is (= [] (:judged res)))
+        (is (= [:date-in-plan] (:awaiting res))
+            "the date leaf waits — named, never failed")
+        (is (= v-before (:version (reload :plan pid))) "nothing moved")
+        (is (= t-before (transition-count :plan pid)))))
+    (testing "a provided field's errors refuse exactly as ever, keyed
+              only by what the caller provided"
+      (let [p (problem-of #(inv/invoke! *eng* :plan pid :assign_meal
+                                        {:date "not-a-date"} opts))]
+        (is (= 422 (:status p)))
+        (is (= [:date] (vec (keys (:errors p)))))))
+    (testing "a fully covered guard leaf is judged now"
+      (let [p (problem-of #(inv/invoke! *eng* :plan pid :assign_meal
+                                        {:date "2099-12-25"} opts))]
+        (is (= 409 (:status p)))
+        (is (= :guard-refused (:waymark10/problem p)))
+        (is (= :date-in-plan (:guard p))))
+      (let [res (inv/invoke! *eng* :plan pid :assign_meal
+                             {:date "2025-01-06"} opts)]
+        (is (true? (:valid? res)))
+        (is (= [:date-in-plan] (:judged res)))
+        (is (= [] (:awaiting res)))))
+    (testing "the partial create rehearsal shares the discipline"
+      (let [res (inv/create! *eng* :vetted {:sponsor "acme"}
+                             (assoc opts :dry-run :partial))]
+        (is (true? (:valid? res)))
+        (is (= [:sponsor-known] (:judged res)))
+        (is (= [:refuse-evil] (:awaiting res))
+            "the title leaf waits for its field"))
+      (let [p (problem-of #(inv/create! *eng* :vetted {:title "evil"}
+                                        (assoc opts :dry-run :partial)))]
+        (is (= 409 (:status p))
+            "a covered create leaf refuses the moment it can")))))
 
 ;; ── 6. the schema-guard gap (the fuzz) ──────────────────────────────
 

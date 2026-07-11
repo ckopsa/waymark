@@ -817,8 +817,11 @@ way), no i18n, and no undo toast (v10 envelopes advertise the
 inverse action; the button is there, the toast isn't). (Batch A,
 §14, since closed two of these: facet-fed vocab comboboxes, and
 dry-run moved to blur — scoped to single-resource actions after
-fixing the live Check-button bug. The live-collab join remains open
-after batch D built relay/2: the UI chrome is §18's named punt.)
+fixing the live Check-button bug. §23 then finished the blur story:
+the blur judge now speaks the PARTIAL rehearsal's verdict —
+judged-when-answerable — and the create/bulk doors rehearse too.
+The live-collab join remains open after batch D built relay/2: the
+UI chrome is §18's named punt.)
 
 **Verified against live dev10** (2026-07-10) two ways: the
 automated floor (`waymark10.ui-test`: serves, self-contained,
@@ -2594,7 +2597,9 @@ anonymous — exactly the door that existed before, pinned by test.
 
 - Only row-level dry-runs report intents — bulk/batch dry-runs and
   direct `inv/invoke!` calls are invisible (the router's seams are
-  the doors; presence's mid-request invisibility, again).
+  the doors; presence's mid-request invisibility, again). (§23 has
+  since opened the create/bulk/batch doors — one card per door, full
+  rehearsals only; direct `inv/` calls stay invisible.)
 - Intent reporting is best-effort: a failed report warns on *err*
   and the invoke answers untouched — company must never cost the
   work.
@@ -2880,3 +2885,186 @@ unrelated and passes focused); mealplan10 stays green.
 | per-origin `:consequence` map (safety + render) | cancel's three sentences | 2026-07-10 |
 | `wire/dec-nodes` at the input digest | the first `:decimal` input body | 2026-07-10 |
 | NAMED DEMANDS (not landed): `sole-preparer?` (checklist batch), `pushed?` (Beacon/mirror batch), `{:not …}` wheres, `past?` + state-reading derived facts (`:overdue?`), per-origin `:requires`, `:to :stay` multi-state self-loops, consequence interpolation, `{ref/label}` summary paths | the ideal disbursement spelling, §22 | 2026-07-10 |
+
+# 23. Dry-run parity — the rehearsal reaches every door
+
+waymark9's dry-run story was richer than v10's, and this section
+closes the gap. The survey first, because it corrects the folklore:
+v10's SINGLE-RESOURCE door was already at full waymark9 parity —
+`invoke-in-tx!` loads without the FOR UPDATE lock, demands and reads
+no idempotency key, resolves the row's own law revision before
+judging, walks state gate / fence / schema / guards identically to
+the real path, and exits at step 10 with `{:valid true}` and any
+pending warnings as data. What lagged: the CREATE door ignored
+`dry_run` outright (the batch-A UI grew a `dryRunnable` guard
+precisely because the old Check button really fired creates), the
+BULK and BATCH doors executed regardless, the client's rule 5 was
+offered but not enforced at the confirm gate, the CLI had no
+`--dry-run`, and the UI's blur judge had been muted to schema-only.
+Everything below is engine/router/client behavior — no declaration,
+no fingerprint, no expr moved, and the mealplan10 style-invariance
+suite pins that the law held still.
+
+## The create tiers (waymark9 `_create_entry`, reproduced)
+
+`?dry_run=1` on `POST /api/{plural}` (engine: `create!` with
+`:dry-run`) answers in two tiers. No declared create guards: schema
+validation IS the answer — no session is even opened, `:on-create`
+must not fire (its side effects are the whole reason this tier
+touches nothing), no idempotency key is demanded, read, or stored,
+nothing inserts, and the wire answers `{"valid": true}`. Declared
+create guards: judged exactly as the real path — one shared reduce
+(`create-guard-pass`) so the two judgments cannot drift — with
+refuse-severity throwing its 409 and pending warnings riding the
+body as `{"valid": true, "warnings": […]}`. Acknowledged names pass,
+as ever. The recorded deviation stands unchanged from §10: v10 never
+demanded the 428 on keyless creates, and the rehearsal doesn't
+either.
+
+## Bulk and batch verdicts
+
+`?dry_run=1` on the bulk and batch routes judges every item through
+the SAME per-item algorithm (`invoke-in-tx!` with `:dry-run` riding
+along) and answers `{"valid": <all-ok>, "verdicts": […]}` — verdicts
+self-keyed on the bulk door (`{"self", "verdict", "reason"?}`),
+index-keyed on the batch door, warnings riding each ok verdict when
+guards warn. Nothing locks, nothing commits, no key is demanded or
+recorded. Three recorded choices:
+
+- **waymark9 never had a bulk dry-run** (its `bulk()` took no flag);
+  v10 adds one in the image of 9's BATCH dry-run, self-keyed because
+  bulk is N resources.
+- **9's batch dry-run executed under a doomed transaction** —
+  handlers ran, then rollback — so verdict i saw input i-1's
+  effects. v10's iron rule is that a rehearsal never fires a
+  handler, so each input is judged independently against the row as
+  it stands. In exchange the batch rehearsal reports EVERY verdict
+  (9's own dry-run virtue), where the real atomic batch still aborts
+  at its first refusal (§7's recorded deviation).
+- **A dry-run never defers.** Deferral is an execution strategy and
+  a job row is an effect; an over-threshold bulk rehearsal judges
+  inline, still capped by `:max-items`.
+
+## The partial rehearsal — judged when answerable
+
+The phase-10 blur story now has three chapters, and each verdict
+speaks at the earliest moment it can be true. Chapter one (§10):
+dry-run on demand — the Check button — because a guard 409
+mid-typing would only nag. Chapter two (batch A, §14): blur-time
+dry-run, muted to schema 422s inline for exactly that reason.
+Chapter three (this section): the nag was never the dry-run, it was
+judging questions the form hadn't answered yet — so the wire grows
+`?dry_run=partial`, the judged-when-answerable mode:
+
+- **Schema**: only the entries PRESENT in the payload are validated —
+  type/range/format errors (and unknown keys) refuse per provided
+  field, and a missing required field is not an error, because
+  absence mid-composition is not a claim. Silence on unprovided
+  fields is a pinned obligation.
+- **Guards**: only the guard leaves whose entire `:judges` set the
+  provided keys cover are evaluated — the same field metadata
+  acceptance folding reads. A leaf still waiting on a field is named
+  in `awaiting`, never failed; a judged leaf refuses or warns
+  exactly as the full loop (one shared grading, `deny-outcome`).
+  Row-only leaves (no `:judges`) drop entirely — the envelope's
+  available/unavailable already told that truth — and an `:any`
+  composite carries no `:judges` of its own, so it waits with the
+  rest (recorded: an OR cannot honestly be judged one arm at a
+  time).
+- **Everything else is the full rehearsal's discipline**: state gate,
+  fence, and concealment judge as ever; no lock, no idempotency, no
+  transition, no handler, nothing committed. The 200 answers
+  `{"valid": true, "judged": […], "awaiting": […]}` (both arrays
+  always present in partial mode — the mode is recognizable on the
+  wire); refusals answer the usual problem shapes.
+
+Partial composes with every door: it rides `create!` (provided
+entries, covered create-guard leaves) and, per item, the bulk/batch
+fan-outs — for free, because they all run the one per-item
+algorithm.
+
+## The UI blur judge, one coherent behavior
+
+On focusout the form sends ONLY the fields the user has touched
+(`?dry_run=partial`, a touched-set beside the draft code's dirty
+set) and paints what came back: provided-field errors inline under
+their fields, a judged guard's own sentence on a quiet verdict line
+("✗ <reason>"), and "✓ so far" when everything answerable passed —
+never a modal. The Check button and submit remain the FULL
+rehearsal, and both disarm the pending blur timer so the two doors
+never speak over each other. `dryRunnable` now admits create and
+bulk hrefs (the engine honors them since this section; batch remains
+the one door the page does not drive), and Check renders a bulk
+rehearsal's refusing verdicts row by row.
+
+## Intents at the doors, recorded
+
+The §21 boundary — "only row-level dry-runs report" — is superseded:
+every FULL dry-run door now reports a considering through the same
+best-effort seam (a failed report warns on `*err*`; company never
+costs the work). One card per door: the single and batch doors name
+the row's self; the create and bulk doors name the COLLECTION self,
+because no row exists yet (create) and a card per id would deal a
+hand per Check (bulk). Two consequences, accepted for a 30-second
+shadow and recorded: a collection-self card expires on the TTL
+rather than resolving (the resolution consumer matches row selves),
+and a scoped viewer never sees it (`self-visible?` conceals non-row
+selves). The PARTIAL door is deliberately mute on the intents
+channel — it fires at typing cadence, and a card per keystroke would
+make company cost the work; the full rehearsal (Check, the client's
+confirm gate, the CLI's `--dry-run`) is the considering door.
+
+## Client rule 5 enforced; the CLI's `--dry-run`
+
+The client's rule 5 was a public `dry-run` fn and a docstring; now
+the confirm gate runs it. When `act!` meets `safety.confirm=true`
+and a `:confirm!` seam exists, the input is dry-run FIRST: a refusal
+returns as the problem and the human is never asked to approve what
+cannot land; pending warnings ride the confirm payload's `:warnings`
+so the yes is an informed one. No callback still refuses locally
+without a wire call (the pinned rule-2 behavior). The CLI gains
+`act <href> <action> --dry-run` — the verdict, not the act: ✓ with
+warnings on 0, the problem (or a bulk door's refusing verdicts) on
+1; creates ride `act` as ever, so waymark9's separate `create
+--dry-run` needs no twin.
+
+## The obligations, pinned
+
+`conformance_test` (engine level): dry-run of valid input answers
+valid, version unchanged, no transition appended; a dry-run neither
+demands, consumes, nor RECORDS an idempotency key (a real invoke
+with the same key executes fresh, then replays as ever); the create
+tiers (nothing minted, `:on-create` never fires — a counting hook
+proves it — warnings as data, acknowledged names pass); the partial
+obligations (silence on unprovided fields, provided-field errors
+keyed only by provided fields, covered leaves judged now, uncovered
+leaves named `awaiting`). `router_test` (wire): the create door's
+200/verdict/422 and the partial door's shape. `bulk_batch_test`:
+mixed verdicts with the guard's own sentence per item, no row moved,
+no job minted on an over-threshold rehearsal, nothing stored under a
+presented key, the batch rehearsal's full verdict list, and the 428
+still guarding the real batch. `client_test`/`cli_test`: the confirm
+gate's pre-validation (a doomed input never earns a prompt) and the
+shell's exit codes. `intents_test`: the create and bulk doors'
+considering cards on the live stream.
+
+## Runs
+
+    cd waymark10 && clojure -M:test --focus waymark10.conformance-test \
+      --focus waymark10.router-test --focus waymark10.bulk-batch-test \
+      --focus waymark10.client-test --focus waymark10.cli-test \
+      --focus waymark10.intents-test
+    cd mealplan10 && clojure -M:test   # style invariance: the law held still
+
+## Vocabulary / decisions log (§23)
+
+| Decision | Why | Date |
+| --- | --- | --- |
+| `?dry_run=partial` (wire mode; engine `:dry-run :partial`) | the blur judge should judge only what the form has answered — judged-when-answerable | 2026-07-10 |
+| `judged`/`awaiting` (partial verdict body), `verdicts` (bulk/batch dry-run body) | the rehearsal names what it judged and what still waits | 2026-07-10 |
+| create dry-run tiers = waymark9 `_create_entry` | schema-only without create guards; guards judged with warnings as data | 2026-07-10 |
+| bulk dry-run exists (9 had none); batch dry-run judges independently (9 rolled back real executions) | the iron rule: a rehearsal never fires a handler | 2026-07-10 |
+| dry-runs never defer, never touch idempotency | a job is an effect; a key is a record | 2026-07-10 |
+| intents: one card per door, collection self for create/bulk, partial mode mute | company must never cost the work | 2026-07-10 |
+| client confirm gate dry-runs before the `:confirm!` seam | rule 5 enforced, not remembered | 2026-07-10 |
+| blur = partial, Check/submit = full, timers disarmed across doors | one coherent blur behavior | 2026-07-10 |
