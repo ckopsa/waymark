@@ -452,6 +452,8 @@ from mealplan9.resources.product import (  # noqa: E402
     Product as Product9, ProductState as ProductState9)
 from mealplan9.resources.rotation import (  # noqa: E402
     SundayRotation as SundayRotation9)
+from mealplan9.resources.substitution import (  # noqa: E402
+    Substitution as Substitution9, SubstitutionState as SubstitutionState9)
 from mealplan9.services import Services as MealplanServices9  # noqa: E402
 
 
@@ -474,7 +476,8 @@ async def waymark9_engine():
     services = ConformanceServices9()
     engine = waymark9.Engine(
         resources=[Meal9, MealLine9, SundayRotation9, MealPlan9,
-                   GroceryList9, PrepTask9, Ingredient9, Product9, Event9],
+                   GroceryList9, PrepTask9, Ingredient9, Product9,
+                   Substitution9, Event9],
         storage=TEST_DSN, services=services, bus=InProcessBus9())
     # async example inputs (ingredient.absorb) mint rows through this handle
     services.engine = engine
@@ -711,3 +714,31 @@ def w9_meal_line_create_example(services) -> dict:
     return {"meal_id": services.seeded["meal_id"],
             "ingredient_id": services.seeded["ingredient_id"],
             "grams": 250}
+
+
+@w9_state_factory(Substitution9)
+async def w9_make_substitution(state: str, engine, services) -> Substitution9:
+    from_id = await _mk(engine, "ingredient",
+                        {"name": "Butter", "category": "dairy"})
+    await _step(engine, "ingredient", from_id, "accept")
+    to_id = await _mk(engine, "ingredient",
+                      {"name": "Margarine", "category": "dairy"})
+    await _step(engine, "ingredient", to_id, "accept")
+    services.seeded["sub_from_id"] = from_id
+    services.seeded["sub_to_id"] = to_id
+    sid = await _mk(engine, "substitution", {
+        "from_ingredient_id": from_id, "to_ingredient_id": to_id,
+        "ratio": 1.0, "context": "baking and sautéing"})
+    target = SubstitutionState9(state)
+    if target != SubstitutionState9.SUGGESTED:
+        await _step(engine, "substitution", sid, "accept")
+    if target == SubstitutionState9.RETIRED:
+        await _step(engine, "substitution", sid, "retire")
+    return await _load(engine, "substitution", sid)
+
+
+@w9_example_input(Substitution9, "create")
+def w9_substitution_create_example(services) -> dict:
+    return {"from_ingredient_id": services.seeded["sub_from_id"],
+            "to_ingredient_id": services.seeded["sub_to_id"],
+            "ratio": 0.8, "context": "baking only"}

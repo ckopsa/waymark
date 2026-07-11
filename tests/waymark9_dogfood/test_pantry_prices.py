@@ -34,6 +34,7 @@ from mealplan9.resources.plan import MealPlan
 from mealplan9.resources.prep_task import PrepTask
 from mealplan9.resources.product import Product
 from mealplan9.resources.rotation import SundayRotation
+from mealplan9.resources.substitution import Substitution
 from mealplan9.services import Services
 
 pytestmark = pytest.mark.asyncio
@@ -49,7 +50,7 @@ async def env():
     Event.adapter = FakeEvents()
     engine = waymark9.Engine(
         resources=[Meal, MealLine, SundayRotation, MealPlan, GroceryList,
-                   PrepTask, Ingredient, Product, Event],
+                   PrepTask, Ingredient, Product, Substitution, Event],
         storage=TEST_DSN, principal=header_principal, services=Services(),
         bus=InProcessBus())
     await engine.storage.drop_all()
@@ -341,3 +342,75 @@ async def test_a_meal_knows_what_it_potentially_costs(env):
     data = (await _fresh(client, meal))["data"]
     assert data["total_ingredients"] == 1
     assert data["est_cost_cents"] == 350
+
+
+async def test_a_substitute_prices_the_unpriceable(env):
+    """Substitution: the AI proposes, the family accepts, and an
+    unpriceable line prices through the stand-in — marked, never silent."""
+    engine, client = env
+
+    butter = await _ingredient(client, "Butter", category="dairy")
+    await _post(client, f"{butter['self']}/-/accept")
+    margarine = await _ingredient(client, "Margarine", category="dairy")
+    await _post(client, f"{margarine['self']}/-/accept")
+
+    # margarine is priced ($3.49 / 454 g → 77¢/100g); butter is not
+    res = await _post(client, "/api/products", {
+        "ingredient_id": _id(margarine), "store": "winco",
+        "name": "WinCo margarine 454 g", "package_grams": 454,
+        "sightings": [{"seen_on": "2026-07-10", "price_cents": 349,
+                       "source": "receipt", "ref": "winco-2026-07-10"}]})
+    await _post(client, f"{res.json()['self']}/-/confirm_match")
+
+    # self-substitution is unrepresentable — the create gate judges the
+    # declared fact
+    res = await _post(client, "/api/substitutions", {
+        "from_ingredient_id": _id(butter),
+        "to_ingredient_id": _id(butter)})
+    assert res.status_code == 409, res.text
+
+    res = await _post(client, "/api/substitutions", {
+        "from_ingredient_id": _id(butter),
+        "to_ingredient_id": _id(margarine),
+        "ratio": 1.0, "context": "baking and sautéing"})
+    assert res.status_code == 201, res.text
+    sub = res.json()
+    assert sub["state"] == "suggested"
+
+    # a butter line while the substitution awaits its verdict: unpriced —
+    # suggested substitutions price nothing
+    meal = (await _post(client, "/api/meals", {
+        "name": "Butter pancakes", "themes": ["american"]})).json()
+    await _post(client, f"{meal['self']}/-/accept")
+    line = (await _post(client, "/api/meal_lines", {
+        "meal_id": _id(meal), "ingredient_id": _id(butter),
+        "grams": 200})).json()
+    assert line["data"]["est_cost_cents"] is None
+
+    # the family verdict, then a reprice: 200 g × 77¢/100g = 154¢, and the
+    # estimate says what it priced through
+    await _post(client, f"{sub['self']}/-/accept")
+    await _post(client, f"{line['self']}/-/reprice")
+    data = (await _fresh(client, line))["data"]
+    assert data["est_cost_cents"] == 154
+    assert data["priced_via"] == "Margarine"
+    # the meal rollup includes the substituted estimate
+    assert (await _fresh(client, meal))["data"]["est_cost_cents"] == 154
+
+    # a direct price arriving later wins back the line: priced as itself
+    res = await _post(client, "/api/products", {
+        "ingredient_id": _id(butter), "store": "costco",
+        "name": "Kirkland butter 1.81 kg", "package_grams": 1810,
+        "sightings": [{"seen_on": "2026-07-11", "price_cents": 1099,
+                       "source": "receipt", "ref": "costco-2026-07-11"}]})
+    assert res.status_code == 201, res.text
+    butter_product = res.json()
+    r = await _post(client, f"{butter_product['self']}/-/confirm_match")
+    assert r.status_code == 200, r.text
+    fresh_bp = (await _fresh(client, butter_product))["data"]
+    assert fresh_bp["cents_per_100g"] == 61, fresh_bp
+    r = await _post(client, f"{line['self']}/-/reprice")
+    assert r.status_code == 200, r.text
+    data = (await _fresh(client, line))["data"]
+    assert data["est_cost_cents"] == 122  # 200 g × 61¢/100g, as butter
+    assert data["priced_via"] is None

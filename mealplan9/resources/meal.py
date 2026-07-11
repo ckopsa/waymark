@@ -213,10 +213,12 @@ class Meal(Resource):
         self.data.themes = list(dict.fromkeys(inp.themes))
 
     # write-time pricing goes stale the moment a receipt teaches a better
-    # price — reprice fans out to every on_recipe line (declared touches)
+    # price — reprice fans out to every on_recipe line (declared touches).
+    # NOT idempotent: the outcome depends on the price world outside the
+    # row, so natural replay must never skip a repeat
     @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
             touches=(Advances("meal_line", "reprice", may=True),),
-            safety=Safety(idempotent=True, reversible=False, confirm=False),
+            safety=Safety(idempotent=False, reversible=False, confirm=False),
             display=dict(label="Reprice", order=4,
                          description="Refresh every ingredient line's "
                                      "estimate from current tracked "

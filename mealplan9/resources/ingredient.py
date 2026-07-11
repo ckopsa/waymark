@@ -177,6 +177,10 @@ class Ingredient(Resource):
              href="/products?ingredient_id={id}",
              embed=True, badge="products_tracked",
              summary="How stores sell this ingredient"),
+        link("substitutions", kind="substitution_collection",
+             href="/substitutions?from_ingredient_id={id}&state=accepted",
+             embed=True,
+             summary="What the family accepts in its place"),
     )
 
     owns = (_products,)

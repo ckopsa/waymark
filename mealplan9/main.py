@@ -25,6 +25,7 @@ from .resources.plan import MealPlan, WeekBoard
 from .resources.prep_task import PrepTask
 from .resources.product import Product
 from .resources.rotation import SundayRotation
+from .resources.substitution import Substitution
 from .services import Services
 
 def _dsn() -> str:
@@ -60,7 +61,7 @@ Event.adapter = _events_backend()
 
 engine = waymark.Engine(
     resources=[Meal, MealLine, SundayRotation, MealPlan, GroceryList,
-               PrepTask, Ingredient, Product, Event],
+               PrepTask, Ingredient, Product, Substitution, Event],
     surfaces=[WeekBoard],
     storage=DSN,
     principal=header_principal,

@@ -150,6 +150,17 @@ Note the prod DB port is dynamic per allocation — re-resolve with
   from waymark9_transitions where kind='X' and action in (...)` tells you
   exactly which rows had used the removed surface.
 
+## Safety declarations are load-bearing (learned from a silent no-op)
+
+`Safety(idempotent=True)` is not just advertisement — the engine's
+**natural replay** returns the document unchanged, without running the
+handler, when the row's latest transition is the same action with the
+same input digest. An action whose outcome depends on state OUTSIDE the
+row (repricing from product prices, any refresh-from-world act) is NOT
+idempotent and must say so, or its second invocation silently does
+nothing. Genuinely idempotent upserts (same input → same outcome) keep
+the declaration and get replay safety for free.
+
 ## Conformance enrollment rules (learned from failures)
 
 - **A `@state_factory` must mint exactly ONE row of its own kind** — the
