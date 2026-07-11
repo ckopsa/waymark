@@ -440,10 +440,14 @@ from mealplan9.event_source import EVENTS as EVENTS9  # noqa: E402
 from mealplan9.resources.event import Event as Event9  # noqa: E402
 from mealplan9.resources.grocery_list import (  # noqa: E402
     GroceryList as GroceryList9, GroceryState as GroceryState9)
+from mealplan9.resources.ingredient import (  # noqa: E402
+    Ingredient as Ingredient9, IngredientState as IngredientState9)
 from mealplan9.resources.meal import Meal as Meal9  # noqa: E402
 from mealplan9.resources.plan import (  # noqa: E402
     MealPlan as MealPlan9, PlanState as PlanState9)
 from mealplan9.resources.prep_task import PrepTask as PrepTask9  # noqa: E402
+from mealplan9.resources.product import (  # noqa: E402
+    Product as Product9, ProductState as ProductState9)
 from mealplan9.resources.rotation import (  # noqa: E402
     SundayRotation as SundayRotation9)
 from mealplan9.services import Services as MealplanServices9  # noqa: E402
@@ -468,8 +472,10 @@ async def waymark9_engine():
     services = ConformanceServices9()
     engine = waymark9.Engine(
         resources=[Meal9, SundayRotation9, MealPlan9, GroceryList9,
-                   PrepTask9, Event9],
+                   PrepTask9, Ingredient9, Product9, Event9],
         storage=TEST_DSN, services=services, bus=InProcessBus9())
+    # async example inputs (ingredient.absorb) mint rows through this handle
+    services.engine = engine
     await engine.storage.drop_all()
     await engine.startup()
     try:
@@ -595,3 +601,85 @@ async def w9_make_grocery_list(state: str, engine, services) -> GroceryList9:
 @w9_example_input(GroceryList9, "remove_item")
 def w9_remove_item_example(services) -> dict:
     return {"name": "paper towels"}
+
+
+@w9_state_factory(Ingredient9)
+async def w9_make_ingredient(state: str, engine, services) -> Ingredient9:
+    # exactly ONE ingredient row: the collection contract counts the rows a
+    # factory mints against the states it returns — absorb's duplicate is
+    # created lazily by the async example input below, never here
+    iid = await _mk(engine, "ingredient", {
+        "name": "Chicken thighs",
+        "aliases": ["boneless skinless chicken thighs"],
+        "category": "meat", "preferred_stores": ["costco", "winco"]})
+    services.seeded["ingredient_id"] = iid
+    target = IngredientState9(state)
+    if target != IngredientState9.SUGGESTED:
+        await _step(engine, "ingredient", iid, "accept")
+    if target == IngredientState9.RETIRED:
+        await _step(engine, "ingredient", iid, "retire")
+    return await _load(engine, "ingredient", iid)
+
+
+@w9_example_input(Ingredient9, "create")
+def w9_ingredient_create_example(services) -> dict:
+    return {"name": "Crushed tomatoes", "aliases": ["tomatoes, crushed"],
+            "category": "pantry", "preferred_stores": ["costco"]}
+
+
+@w9_example_input(Ingredient9, "absorb")
+async def w9_ingredient_absorb_example(services) -> dict:
+    # example inputs may be async: mint a fresh active duplicate on demand
+    # through the engine handle the fixture stashes on services
+    engine = services.engine
+    dup_id = await _mk(engine, "ingredient",
+                       {"name": "Chicken thigh fillets", "category": "meat"})
+    await _step(engine, "ingredient", dup_id, "accept")
+    return {"duplicate_id": dup_id}
+
+
+PRODUCT_SIGHTING = {"seen_on": "2026-07-01", "price_cents": 1899,
+                    "source": "receipt", "ref": "costco-2026-07-01",
+                    "quantity": 1}
+
+
+@w9_state_factory(Product9)
+async def w9_make_product(state: str, engine, services) -> Product9:
+    iid = await _mk(engine, "ingredient",
+                    {"name": "Chicken thighs", "category": "meat"})
+    await _step(engine, "ingredient", iid, "accept")
+    services.seeded["ingredient_id"] = iid
+    pid = await _mk(engine, "product", {
+        "ingredient_id": iid, "store": "costco",
+        "name": "Kirkland chicken thighs 2.72 kg", "package_grams": 2720,
+        "upc": "096619123456", "sightings": [PRODUCT_SIGHTING]})
+    services.seeded["product_id"] = pid
+    target = ProductState9(state)
+    if target != ProductState9.SUGGESTED:
+        await _step(engine, "product", pid, "confirm_match")
+    if target == ProductState9.DISCONTINUED:
+        await _step(engine, "product", pid, "discontinue")
+    return await _load(engine, "product", pid)
+
+
+@w9_example_input(Product9, "create")
+def w9_product_create_example(services) -> dict:
+    return {"ingredient_id": services.seeded["ingredient_id"],
+            "store": "winco", "name": "WinCo chicken thighs 1 kg",
+            "package_grams": 1000, "sightings": [PRODUCT_SIGHTING]}
+
+
+@w9_example_input(Product9, "rematch")
+def w9_product_rematch_example(services) -> dict:
+    return {"ingredient_id": services.seeded["ingredient_id"]}
+
+
+@w9_example_input(Product9, "record_sighting")
+def w9_product_record_sighting_example(services) -> dict:
+    return {"seen_on": "2026-07-08", "price_cents": 1799,
+            "source": "scrape", "ref": "https://costco.example/thighs"}
+
+
+@w9_example_input(Product9, "remove_sighting")
+def w9_product_remove_sighting_example(services) -> dict:
+    return {"seen_on": PRODUCT_SIGHTING["seen_on"]}

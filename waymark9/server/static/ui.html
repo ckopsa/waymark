@@ -225,6 +225,21 @@
                               border-bottom: none; flex-wrap: wrap; }
   table.items tr:hover td { background: var(--paper); }
 
+  /* two or more row actions collapse behind a ⋯ menu (the nav-more idiom,
+     row-sized): one affordance stays a button, a button bar becomes a menu */
+  .row-menu { position: relative; display: inline-block; }
+  .row-menu > button { color: var(--muted); font-size: 15px; line-height: 1;
+                       padding: 2px 7px; }
+  .row-menu > button:hover { color: var(--ink); background: var(--chip); }
+  .row-menu-list { position: absolute; top: calc(100% + 4px); right: 0;
+                   z-index: 30; background: var(--panel);
+                   border: 1px solid var(--line); border-radius: var(--radius);
+                   box-shadow: var(--shadow); padding: 6px;
+                   display: none; flex-direction: column; gap: 4px;
+                   min-width: max-content; }
+  .row-menu-list.open { display: flex; }
+  .row-menu-list button { justify-content: flex-start; text-align: left; }
+
   /* a long scalar value doesn't blow out its column: it truncates to one
      ellipsized line and keeps a copy button one tap from the clipboard */
   .trunc-cell { display: inline-flex; align-items: center; gap: 4px;
@@ -1212,10 +1227,13 @@ function itemTable(items, hints, recomputing, declaredColumns, opts) {
       const cell = el("td", {class:"rowactions"});
       const extra = rowAction ? rowAction(item) : null;
       if (extra) cell.append(extra);
-      if (item.actions) {           // honest per-row buttons (§5)
-        for (const [name, entry] of Object.entries(item.actions))
-          cell.append(actionButton({name, entry, doc:item, small:true,
-            onDone: () => render()}));
+      if (item.actions) {           // honest per-row buttons (§5); two or
+        // more collapse behind the ⋯ menu (overflowRowActions)
+        const pairs = Object.entries(item.actions).sort((a, b) =>
+          (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5));
+        cell.append(...overflowRowActions(pairs, (name, entry) =>
+          actionButton({name, entry, doc:item, small:true,
+                        onDone: () => render()})));
       } else if (item.actions === null && !extra) {
         cell.append(el("span", {class:"muted", title:"row_affordances=False"}, "…"));
       }
@@ -1928,6 +1946,29 @@ function recomputingCell(v, blocks) {
     el("span", {class:"spin-dot"}), fmt(v));
 }
 
+/* Per-row affordances: a single action stays an inline button; two or
+   more collapse behind a ⋯ menu (the user reads rows, not button bars).
+   `pairs` are [name, entry] sorted by the caller; `make` builds the
+   button — the same actionButton either way, honesty unchanged. */
+function overflowRowActions(pairs, make) {
+  if (pairs.length <= 1) return pairs.map(([n, e]) => make(n, e));
+  const list = el("div", {class:"row-menu-list"});
+  const btn = el("button", {type:"button", title:"actions",
+                            "aria-haspopup":"menu"}, "⋯");
+  btn.addEventListener("click", (ev) => {
+    ev.stopPropagation();
+    const wasOpen = list.classList.contains("open");
+    document.querySelectorAll(".row-menu-list.open")
+      .forEach(l => l.classList.remove("open"));
+    if (!wasOpen) list.classList.add("open");
+  });
+  for (const [n, e] of pairs) list.append(make(n, e));
+  return [el("div", {class:"row-menu"}, btn, list)];
+}
+document.addEventListener("click", () =>
+  document.querySelectorAll(".row-menu-list.open")
+    .forEach(l => l.classList.remove("open")));
+
 /* A list of objects as a table: union of keys in first-appearance order,
    all-null columns dropped (they appear once any row fills them in).
    With a parts group (doc.parts[field]), each row gains the scoped actions
@@ -1958,10 +1999,11 @@ function rowsTable(rows, doc, partGroup, itemHints) {
     if (partGroup) {
       const part = partGroup.items.find(p => p.key === r[partGroup.key]);
       const cell = el("td", {style:"white-space:nowrap"});
-      for (const [name, entry] of Object.entries(part?.actions || {})
-          .sort((a,b) => (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5)))
-        cell.append(actionButton({name, entry, doc, small: true,
-                                  onDone: () => render()}));
+      const pairs = Object.entries(part?.actions || {})
+        .sort((a,b) => (a[1].display?.order ?? 5) - (b[1].display?.order ?? 5));
+      cell.append(...overflowRowActions(pairs, (name, entry) =>
+        actionButton({name, entry, doc, small: true,
+                      onDone: () => render()})));
       tr.append(cell);
     }
     tbody.append(tr);
@@ -2124,6 +2166,12 @@ function resourceRef(kind, id, text) {
    its declared provenance (x-source; x-authority names WHO owns an
    authored value). Written fields render plain. */
 function hintedValue(xd, value, row, src, authority, derived) {
+  // declared money (x-display {widget:"money", currency?}): integer minor
+  // units render as a localized amount — the declaration is the app's,
+  // the arithmetic stays integer cents on the wire
+  if (xd.widget === "money" && typeof value === "number" && isFinite(value))
+    value = (value / 100).toLocaleString(undefined,
+      {style: "currency", currency: xd.currency || "USD"});
   if (xd.widget === "resource" && value)
     return resourceRef(xd.kind, value, xd.label_field ? row?.[xd.label_field] : null);
   if (xd.widget === "prose" && value)

@@ -50,6 +50,7 @@ from waymark9 import (
     Relation,
     Resource,
     Safety,
+    Sum,
     action,
     filterable,
     guard,
@@ -122,6 +123,11 @@ _calendar = Related("event", on=(
     On(ours="end_date",   op=">=", theirs="date"),
 ))
 
+# the week's grocery lists are the plan's children (grocery_list.plan_id);
+# the cost fact rolls up from their own derived totals — one definition on
+# the list, one Sum here, and "what will this week cost" rides the plan
+_groceries = Owns("grocery_list", via="plan_id")
+
 
 class PlanData(BaseModel):
     start_date: date_t = Field(description="Our week runs Tuesday to Tuesday")
@@ -170,6 +176,19 @@ class PlanData(BaseModel):
     # nobody re-joins the calendar in a handler or a client
     calendar_conflicts: int = Count(
         _calendar, where={"kind": ("blocking",), "state": ("fresh", "stale")})
+    est_grocery_cost_cents: int = Sum(
+        _groceries, "estimated_total_cents",
+        description="Estimated grocery cost across this week's lists, from "
+                    "the AI-stamped item estimates",
+        json_schema_extra={"x-display": {"widget": "money",
+                                         "label": "Est. grocery cost"}})
+    priced_grocery_items: int = Sum(
+        _groceries, "priced_items",
+        description="Grocery items with a cost estimate — the estimate "
+                    "covers this many of total_grocery_items")
+    total_grocery_items: int = Sum(
+        _groceries, "total_items",
+        description="Grocery items across this week's lists")
     has_conflicts: bool = Derived(
         over=(_calendar.field("kind", where={"state": ("fresh", "stale")}),),
         expr=E.any(E.f("event.kind"), E.it.eq("blocking")),
@@ -420,7 +439,8 @@ class MealPlan(Resource):
     owns = (Owns("prep_task", via="plan_id",
                  on={"abandon": "cancel"},
                  rollups={"open_tasks": Rollup(
-                     filters={"state": ("pending", "scheduled")})}),)
+                     filters={"state": ("pending", "scheduled")})}),
+            _groceries)
 
     # the one place per-day placement is declared (design §3); every
     # day-shaped action places itself on it and the key is pre-bound per part

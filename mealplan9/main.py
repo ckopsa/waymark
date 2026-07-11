@@ -18,9 +18,11 @@ from waymark9.server.engine import header_principal
 from .event_source import EVENTS, GoogleCalendarEvents
 from .resources.event import Event
 from .resources.grocery_list import GroceryList
+from .resources.ingredient import Ingredient
 from .resources.meal import Meal
 from .resources.plan import MealPlan, WeekBoard
 from .resources.prep_task import PrepTask
+from .resources.product import Product
 from .resources.rotation import SundayRotation
 from .services import Services
 
@@ -56,7 +58,8 @@ DSN = _dsn()
 Event.adapter = _events_backend()
 
 engine = waymark.Engine(
-    resources=[Meal, SundayRotation, MealPlan, GroceryList, PrepTask, Event],
+    resources=[Meal, SundayRotation, MealPlan, GroceryList, PrepTask,
+               Ingredient, Product, Event],
     surfaces=[WeekBoard],
     storage=DSN,
     principal=header_principal,

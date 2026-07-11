@@ -71,6 +71,27 @@ it automatically at create time.
   from recipes and the plan. `schedule` (recording the calendar event id) is
   `confirm=true`: the agent hard-stops for human approval before anything
   touches the family calendar.
+- **`ingredient`** — the canonical pantry concept ("chicken thighs" —
+  store-agnostic, measured in grams). The AI proposes ingredients while
+  parsing receipts and recipes; humans `accept`/`decline` exactly as with
+  meal suggestions, which is what keeps the list canonical instead of
+  accreting three spellings of the same thing. `aliases` carries every
+  name it goes by (confirmed matches fold their spelling in);
+  `preferred_stores` says where the family buys it, and
+  `?preferred_stores=costco` is the trip planner's entry point. `absorb`
+  is the dedupe verdict: the survivor takes the duplicate's names,
+  repoints its products (declared touches), and retires it.
+- **`product`** — how a store sells an ingredient ("Kirkland chicken
+  thighs 2.72 kg" at costco), carrying the two machine keys the ingestion
+  paths converge on: `upc` for receipt lines, `url` for the scraper. Born
+  `suggested` from an unknown line with the AI's best-guess match and the
+  price sighting that minted it; `confirm_match`/`rematch` is the human
+  verdict — the match is the error-prone step, never the price. Sightings
+  embed one-per-day (a same-day re-record replaces, so retries are safe);
+  `latest_price_cents`, `cents_per_100g`, and `price_is_stale` are derived
+  facts, so `?store=costco&sort=cents_per_100g` answers "what would the
+  trip cost where" and `?state=tracked&price_is_stale=true` *is* the
+  scraper's work queue — no agent keeps a private list.
 
 ## Where the AI sits
 
@@ -89,6 +110,10 @@ affordances:
 4. *"Schedule the thawing"* → the agent `create`s `prep_task`s from
    `thaw_hours`/`prep_minutes`, then must get your confirmation on each
    `schedule` before creating calendar events.
+5. *"Here's the Costco receipt"* → the agent looks each line up by `upc`
+   and `record_sighting`s the price; an unknown line becomes a `suggested`
+   product (and a `suggested` ingredient, when even the concept is new)
+   for you to confirm or rematch.
 
 Because presence is permission, a prompt-injected recipe can at most *ask* —
 the agent only acts through these declared, guarded, confirm-gated actions.
@@ -98,9 +123,10 @@ the agent only acts through these declared, guarded, confirm-gated actions.
 This app runs on **waymark9** (see `docs/waymark9-design.md`). Meal,
 rotation, prep task, and the new event need no factories at all — the
 suite's derived walker reaches every state from their declarations; only
-the plan and grocery list register factories (their states need semantic
-setup), and the only example inputs left are the ones that need a *real*
-meal id. Everything is in the repo-root `conftest.py`:
+the plan, grocery list, ingredient, and product register factories (their
+states need semantic setup), and the only example inputs left are the ones
+that need a *real* meal, ingredient, or product id. Everything is in the
+repo-root `conftest.py`:
 
 ```bash
 uv run waymark9 check mealplan9.main:engine

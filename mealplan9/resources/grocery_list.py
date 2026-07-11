@@ -25,6 +25,7 @@ from waymark9 import (
     E,
     Guard,
     PartScope,
+    Query,
     Ref,
     RefField,
     Resource,
@@ -52,6 +53,18 @@ class GroceryItem(BaseModel):
                                  description="produce, meat, pantry, …")
     meals: list[str] = Field(default_factory=list,
                              description="Meals this item shops for")
+    # the cost wiring (pantry-prices phase 2): the AI stamps the estimate
+    # when it compiles or re-prices the list — a client judgment authored
+    # through add_item, like recipes; the list only owns the arithmetic
+    ingredient_id: Ref["ingredient"] | None = RefField(
+        default=None, pick=Query(state="active"),
+        description="The pantry ingredient this item shops for")
+    est_cost_cents: int | None = Field(
+        default=None, ge=0,
+        description="AI-estimated cost from tracked product prices; "
+                    "blank = no priced product yet",
+        json_schema_extra={"x-display": {"widget": "money",
+                                         "label": "Est. cost"}})
     have: bool = False
 
 
@@ -70,6 +83,22 @@ class GroceryData(BaseModel):
         explain="Still unchecked: {unchecked}.",
         vars=lambda items: {"unchecked": ", ".join(
             i.name for i in items if not i.have)})
+    # the trip's cost facts (pantry-prices phase 2): the arithmetic over
+    # the stamped estimates is the list's own law — one definition serves
+    # the envelope, the collection, and any client asking "what will this
+    # week cost"
+    estimated_total_cents: int = Derived(
+        over=("items",),
+        expr=E.sum(E.f("items"), of=E.it.est_cost_cents,
+                   where=E.it.est_cost_cents.is_set()),
+        json_schema_extra={"x-display": {"widget": "money",
+                                         "label": "Est. total"}})
+    priced_items: int = Derived(
+        over=("items",),
+        expr=E.count(E.f("items"), E.it.est_cost_cents.is_set()))
+    total_items: int = Derived(
+        over=("items",),
+        expr=E.count(E.f("items")))
     notes: str | None = Field(default=None, max_length=2000,
                               json_schema_extra={"x-display": {
                                   "widget": "prose"}})
@@ -87,6 +116,12 @@ class ItemInput(BaseModel):
     category: str | None = Field(default=None, max_length=50)
     meals: list[str] = Field(default_factory=list,
                              description="Meals this item shops for")
+    ingredient_id: Ref["ingredient"] | None = RefField(
+        default=None, pick=Query(state="active"),
+        description="The pantry ingredient this item shops for")
+    est_cost_cents: int | None = Field(
+        default=None, ge=0,
+        description="Estimated cost from tracked product prices")
 
 
 class NameInput(BaseModel):
@@ -174,10 +209,15 @@ class GroceryList(Resource):
             existing.quantity = inp.quantity or existing.quantity
             existing.category = inp.category or existing.category
             existing.meals += [m for m in inp.meals if m not in existing.meals]
+            if inp.ingredient_id is not None:
+                existing.ingredient_id = inp.ingredient_id
+            if inp.est_cost_cents is not None:
+                existing.est_cost_cents = inp.est_cost_cents
         else:
             self.data.items.append(GroceryItem(
                 name=inp.name, quantity=inp.quantity, category=inp.category,
-                meals=list(inp.meals)))
+                meals=list(inp.meals), ingredient_id=inp.ingredient_id,
+                est_cost_cents=inp.est_cost_cents))
 
     @action(from_=GroceryState.DRAFT, to=GroceryState.DRAFT,
             input=NameInput, place=items, guards=[item_on_list],
