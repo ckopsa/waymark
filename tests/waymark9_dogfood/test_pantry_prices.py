@@ -163,7 +163,15 @@ async def test_the_family_learns_what_dinner_costs(env):
         "/api/ingredients",
         params={"preferred_stores": "costco"})).json()["data"]["items"]
     assert _id(thighs) in [_id(i) for i in prefers_costco]
-    assert (await _fresh(client, thighs))["data"]["products_tracked"] == 2
+    fresh_thighs = await _fresh(client, thighs)
+    assert fresh_thighs["data"]["products_tracked"] == 2
+    # the ingredient page shows how stores sell it: the products link is
+    # the filtered child collection, badged with the tracked count
+    products_link = fresh_thighs["links"]["products"]
+    assert products_link["badge"] == 2
+    assert f"ingredient_id={_id(thighs)}" in products_link["href"]
+    linked = (await client.get(products_link["href"])).json()["data"]["items"]
+    assert {p["data"]["store"] for p in linked} == {"costco", "winco"}
 
     # ── dedupe: the AI later minted "Chicken thigh" and matched a product
     #    to it; the survivor absorbs — names fold in, products repoint,

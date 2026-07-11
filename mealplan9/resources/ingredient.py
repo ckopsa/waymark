@@ -47,6 +47,7 @@ from waymark9 import (
     action,
     filterable,
     guard,
+    link,
     sortable,
 )
 
@@ -167,6 +168,16 @@ class Ingredient(Resource):
     sortable = sortable("name", default="name")
 
     display = {"title": "{data.name}"}
+
+    # the ingredient page shows how stores sell it: the link is the child
+    # collection filtered to this row, the tracked count rides as badge
+    # scent, and embed invites the rows onto the page itself
+    links = (
+        link("products", kind="product_collection",
+             href="/products?ingredient_id={id}",
+             embed=True, badge="products_tracked",
+             summary="How stores sell this ingredient"),
+    )
 
     owns = (_products,)
 
