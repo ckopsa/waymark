@@ -29,7 +29,9 @@ from waymark9 import (
     DraftPolicy,
     E,
     Edit,
+    Guard,
     Observed,
+    PartScope,
     Query,
     Ref,
     RefField,
@@ -145,6 +147,33 @@ class IngredientsInput(BaseModel):
                     "current set")
 
 
+class IngredientLineInput(BaseModel):
+    """(ingredient, grams) is the whole form — the estimate prices itself
+    from tracked products; explicit stamps ride update_ingredients."""
+
+    ingredient_id: Ref["ingredient"] = RefField(
+        min_length=1, pick=Query(state="active"),
+        description="The pantry ingredient this line uses")
+    grams: int = Field(ge=1,
+                       description="Recipe quantity in grams — the family "
+                                   "convention, never cups")
+
+
+class IngredientRefInput(BaseModel):
+    ingredient_id: Ref["ingredient"] = RefField(min_length=1)
+
+
+# what's on the recipe: the rendered enum, the per-part availability, and
+# the enforcement, from one set (the grocery list's item_on_list, one
+# level down)
+line_on_recipe = Guard(
+    name="line_on_recipe",
+    judges=("ingredient_id",),
+    accepts=lambda r: [l.ingredient_id for l in r.data.ingredients],
+    explain="No line for that ingredient on this recipe.",
+)
+
+
 async def _price_lines(lines: list[MealIngredient], ctx: Ctx,
                        *, refresh: bool = False) -> None:
     """Price lines from tracked products: grams × the best offer's
@@ -190,6 +219,10 @@ class Meal(Resource):
 
     shape = 2
     upcasts = {1: _fold_theme}
+
+    # the one place per-line placement is declared (design §3); the
+    # remove button renders once per ingredient row, key pre-bound
+    ingredients = PartScope("ingredients", key="ingredient_id")
 
     async def on_create(self, ctx: Ctx) -> None:
         """A meal born with ingredient lines gets them priced immediately —
@@ -263,13 +296,44 @@ class Meal(Resource):
             input=IngredientsInput,
             edit=Edit(prefill=("ingredients",)),
             safety=Safety(idempotent=True, reversible=False, confirm=False),
-            display=dict(label="Update ingredients", order=4,
+            display=dict(label="Update ingredients", order=6,
                          description="Rewrite the recipe's ingredient lines "
-                                     "and their cost estimates"))
+                                     "wholesale — Add/Remove ingredient "
+                                     "handle single lines"))
     async def update_ingredients(self, inp: IngredientsInput,
                                  ctx: Ctx) -> None:
         self.data.ingredients = list(inp.ingredients)
         await _price_lines(self.data.ingredients, ctx)
+
+    @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
+            input=IngredientLineInput,
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
+            display=dict(label="Add ingredient", order=4,
+                         description="Add one line (or re-quantity an "
+                                     "existing one); a blank estimate "
+                                     "prices itself from tracked products"))
+    async def add_ingredient(self, inp: IngredientLineInput,
+                             ctx: Ctx) -> None:
+        existing = next((l for l in self.data.ingredients
+                         if l.ingredient_id == inp.ingredient_id), None)
+        if existing is not None:
+            existing.grams = inp.grams
+            existing.est_cost_cents = None  # re-quantity → re-price
+        else:
+            self.data.ingredients.append(MealIngredient(
+                ingredient_id=inp.ingredient_id, grams=inp.grams))
+        await _price_lines(self.data.ingredients, ctx)
+
+    @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
+            input=IngredientRefInput, place=ingredients,
+            guards=[line_on_recipe],
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
+            display=dict(label="Remove", order=5))
+    async def remove_ingredient(self, inp: IngredientRefInput,
+                                ctx: Ctx) -> None:
+        # removing an absent line is a no-op, so retries stay replay-safe
+        self.data.ingredients = [l for l in self.data.ingredients
+                                 if l.ingredient_id != inp.ingredient_id]
 
     # write-time pricing goes stale the moment a receipt teaches a better
     # price (or the first price) — reprice refreshes every line the lookup

@@ -330,3 +330,20 @@ async def test_a_meal_knows_what_it_potentially_costs(env):
     # keeps its value — no unit-priceable sauce product exists
     assert data["ingredients"][0]["est_cost_cents"] == 700
     assert data["est_cost_cents"] == 1012
+
+    # single-line editing: add one (auto-priced), re-quantity one (the
+    # upsert), remove one — the totals follow each write
+    rub = await _ingredient(client, "BBQ rub", category="pantry")
+    await _post(client, f"{meal['self']}/-/add_ingredient",
+                {"ingredient_id": _id(rub), "grams": 40})
+    await _post(client, f"{meal['self']}/-/add_ingredient",
+                {"ingredient_id": _id(thighs), "grams": 700})
+    data = (await _fresh(client, meal))["data"]
+    assert data["total_ingredients"] == 3
+    assert data["ingredients"][0]["grams"] == 700
+    assert data["ingredients"][0]["est_cost_cents"] == 350  # re-priced
+    await _post(client, f"{meal['self']}/-/remove_ingredient",
+                {"ingredient_id": _id(sauce)})
+    data = (await _fresh(client, meal))["data"]
+    assert data["total_ingredients"] == 2
+    assert data["est_cost_cents"] == 350  # rub has no product; sauce gone
