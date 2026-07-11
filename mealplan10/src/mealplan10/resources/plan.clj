@@ -35,11 +35,21 @@
   WARNS over the stored fact — a week with a recital in it finalizes
   with acknowledgment, not never.
 
-  Spelled in the batch-G declaration style: each derived fact is
-  def'd (defderived) and rides its own schema entry, filter/sort law
-  rides the entries it governs, the day-shaped actions are one group
-  (the two assignment actions def'd), and the two repeated safety
-  values are named. The law is unchanged —
+  Spelled in the batch-H declaration style: the lifecycle is :flow
+  rows, finalize/reopen and the side-dish pair declare each other as
+  :undo (the engine verifies the pointers — \"honestly reversible\"
+  is graph-checked instead of a comment), and abandon's three rows
+  cite one def'd opts value. Recorded deviations, each a sentence:
+  the day-shaped actions stay a plain group merged beside the flow
+  (six rows of place/guards/handler opts would bury the table, and
+  mark_eating_out's optional :where has no :args spelling anyway);
+  :states stays spelled because the flow rows are not the whole
+  machine; no guard adopts defguard — calendar-clear and plan-started
+  alias their sentence placeholders ({n}, {start}), plan-started
+  carries :becomes-available-at, and no-open-tasks carries :remedies,
+  none of which the sentence-first sugar can mint. Each derived fact
+  is still def'd and rides its own entry, filter/sort law rides the
+  entries it governs (batch G). The law is unchanged —
   mealplan10.style-invariance-test pins this kind's fingerprint hash
   byte-identical to the split spelling.
 
@@ -353,7 +363,8 @@
 ;; named safety values: each spelled once, in full, and cited by name
 ;; — never inferred
 (def routine
-  ;; honestly reversible: the paired action is the way back
+  ;; honestly reversible: the paired action is the way back, and the
+  ;; :undo pointer on each citation names it for the engine to verify
   {:idempotent true :reversible true :confirm false})
 (def overwrite
   ;; an idempotent overwrite of a day's slot — nothing to confirm, and
@@ -414,13 +425,13 @@
                    :input side-dish-input :place :days
                    :guards [date-in-plan day-has-meal has-free-side-slot
                             meal-fits-day meal-is-listed]
-                   :safety routine
+                   :safety routine :undo :remove_side_dish
                    :handler add-side-dish
                    :display {:label "Add side dish" :order 6}}
    :remove_side_dish {:from #{:draft} :to :draft
                       :input side-dish-input :place :days
                       :guards [date-in-plan]
-                      :safety routine
+                      :safety routine :undo :add_side_dish
                       :handler remove-side-dish
                       :display {:label "Remove side dish" :order 7}}})
 
@@ -528,29 +539,32 @@
              :clears true}}
    :filterable {:state #{:eq :in}}
    :display {:title "Meal plan — week of {data.start_date}"}
-   :actions
-   (merge day-actions
-          {:finalize {:from #{:draft} :to :planned
-                      :guards [all-days-covered-gate calendar-clear]
-                      :safety routine
-                      :display {:label "Finalize plan" :style :primary :order 1}}
-           :reopen {:from #{:planned} :to :draft
-                    :safety routine
-                    :display {:label "Reopen" :order 2}}
-           :begin {:from #{:planned} :to :active
-                   :guards [plan-started]
-                   :safety {:idempotent true :reversible false :confirm false
-                            :one-way "Starting the week only reflects the calendar; nothing is lost and the plan stays editable through its days."}
-                   :display {:label "Start the week" :style :primary :order 1}}
-           :complete {:from #{:active} :to :done
-                      :guards [no-open-tasks]
-                      :safety {:idempotent true :reversible false :confirm false
-                               :one-way "Completing records a finished week; the plan remains readable as history."}
-                      :display {:label "Week done" :style :primary :order 1}}
-           :abandon {:from #{:draft :planned :active} :to :abandoned
-                     :safety {:idempotent true :reversible false :confirm true
-                              :consequence "The plan is discarded for good; its open prep tasks are cancelled; its days and any grocery list stay readable as records."}
-                     :display {:label "Abandon plan" :style :danger :order 9}}})})
+   ;; the lifecycle as flow rows, each wearing its safety story —
+   ;; finalize and reopen name each other as the verified way back,
+   ;; and abandon's three origins cite one opts value (its rows must
+   ;; agree on everything but :confirm, so agreement is citation)
+   :flow
+   (let [discard {:confirm "The plan is discarded for good; its open prep tasks are cancelled; its days and any grocery list stay readable as records."
+                  :display {:label "Abandon plan" :style :danger :order 9}}]
+     [[:draft   :finalize :planned
+       {:requires [all-days-covered-gate calendar-clear]
+        :undo :reopen
+        :display {:label "Finalize plan" :style :primary :order 1}}]
+      [:planned :reopen   :draft
+       {:undo :finalize
+        :display {:label "Reopen" :order 2}}]
+      [:planned :begin    :active
+       {:requires [plan-started]
+        :one-way "Starting the week only reflects the calendar; nothing is lost and the plan stays editable through its days."
+        :display {:label "Start the week" :style :primary :order 1}}]
+      [:active  :complete :done
+       {:requires [no-open-tasks]
+        :one-way "Completing records a finished week; the plan remains readable as history."
+        :display {:label "Week done" :style :primary :order 1}}]
+      [:draft   :abandon  :abandoned discard]
+      [:planned :abandon  :abandoned discard]
+      [:active  :abandon  :abandoned discard]])
+   :actions day-actions})
 
 ;; ── the week's decision surface (phase 9b, waymark9 mealplan9's
 ;;    WeekBoard) ──────────────────────────────────────────────────────

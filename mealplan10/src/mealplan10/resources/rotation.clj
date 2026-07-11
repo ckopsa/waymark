@@ -16,11 +16,16 @@
   removable themes is both the rendered enum and the enforcement;
   there is no separate check body to drift.
 
-  Batch-G style note: this kind declares no field-scoped law (no
-  sort, no derived, no part scope; only :state filtering, which is
-  not a schema entry), so nothing colocates — the style rewrite here
-  is just the two repeated safety values named. The law is unchanged;
-  mealplan10.style-invariance-test pins the fingerprint hash.
+  Spelled in the batch-H declaration style: the whole machine is
+  :flow rows (so :states is not spelled — the rows name them), and
+  activate/deactivate declare each other as :undo — the engine
+  verifies the pointers, so \"honestly reversible\" is graph-checked
+  instead of a comment. Recorded deviations, each a sentence: advance
+  spells its :safety explicitly (a flow row mints idempotent, and
+  advance honestly is not — click again, move again); the theme edits
+  keep :input (a bounded 50-char string has no field word). The law
+  is unchanged; mealplan10.style-invariance-test pins the fingerprint
+  hash byte-identical to the split spelling.
 
   Recorded deviation: v10 declares no field defaults, so the name and
   the starter themes land in :on-create when the create body leaves
@@ -81,18 +86,8 @@
 (def theme-input
   [:map [:theme [:string {:min 1 :max 50}]]])
 
-;; named safety values: each spelled once, in full, and cited by name
-;; — never inferred
-(def routine
-  ;; honestly reversible: activate/deactivate are each other's way back
-  {:idempotent true :reversible true :confirm false})
-(def overwrite
-  ;; an idempotent list edit — nothing to confirm, no strict reverse
-  {:idempotent true :reversible false :confirm false})
-
 (defresource rotation
   {:kind :rotation
-   :states [:inactive :active]
    :initial :inactive
    :summary "{data.name} · {state}"
    :schema [:map
@@ -109,27 +104,30 @@
    :on-create rotation-on-create
    :filterable {:state #{:eq :in}}
    :display {:title "{data.name}"}
-   :actions
-   {:activate {:from #{:inactive} :to :active
-               :safety routine
-               :handler activate-rotation
-               :display {:label "Make active" :style :primary :order 1
-                         :description "New plans draw Sunday themes from the most recently activated rotation"}}
-    :deactivate {:from #{:active} :to :inactive
-                 :safety routine
-                 :display {:label "Deactivate" :order 4}}
-    :add_theme {:from #{:active} :to :active
-                :input theme-input
-                :safety overwrite
-                :handler add-theme
-                :display {:label "Add theme" :style :primary :order 1}}
-    :remove_theme {:from #{:active} :to :active
-                   :input theme-input
-                   :guards [not-last-theme]
-                   :safety overwrite
-                   :handler remove-theme
-                   :display {:label "Remove theme" :order 2}}
-    :advance {:from #{:active} :to :active
-              :safety {:idempotent false :reversible false :confirm false}
-              :handler advance-rotation
-              :display {:label "Next theme" :order 3}}}})
+   ;; the whole machine as rows — the rows name the states, and the
+   ;; activation pair name each other as the verified way back; the
+   ;; self-loop list edits mint the idempotent-overwrite safety
+   :flow
+   [[:inactive :activate     :active
+     {:undo :deactivate
+      :handler activate-rotation
+      :display {:label "Make active" :style :primary :order 1
+                :description "New plans draw Sunday themes from the most recently activated rotation"}}]
+    [:active   :deactivate   :inactive
+     {:undo :activate
+      :display {:label "Deactivate" :order 4}}]
+    [:active   :add_theme    :active
+     {:input theme-input
+      :handler add-theme
+      :display {:label "Add theme" :style :primary :order 1}}]
+    [:active   :remove_theme :active
+     {:input theme-input
+      :requires [not-last-theme]
+      :handler remove-theme
+      :display {:label "Remove theme" :order 2}}]
+    [:active   :advance      :active
+     ;; honestly NOT idempotent — click again, move again — so the
+     ;; row spells its safety instead of taking the minted overwrite
+     {:safety {:idempotent false :reversible false :confirm false}
+      :handler advance-rotation
+      :display {:label "Next theme" :order 3}}]]})

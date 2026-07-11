@@ -20,9 +20,16 @@
   :themes (design §8) — v10's load boundary runs it lazily and stamps
   the shape at the next write.
 
-  Spelled in the batch-G declaration style: the sort default rides the
-  :name entry, the two on-list editors are def'd actions, and their
-  shared safety value is named. The law is unchanged —
+  Spelled in the batch-H declaration style: the lifecycle doors are
+  :flow rows, each wearing its own safety story (the two :one-way
+  sentences, retire's :confirm); the sort default still rides the
+  :name entry (batch G). Recorded per-kind deviations, each a
+  sentence: accept_many stays a declared action (bulk has no flow-row
+  spelling); the two on-list editors stay def'd actions (:fields would
+  mint one all-optional writer, but apply-recipe writes conditionally
+  and apply-themes dedupes — a different law under different names);
+  no :undo pointers (nothing here is declared reversible, and nothing
+  walks retired back). The law is unchanged —
   mealplan10.style-invariance-test pins this kind's fingerprint hash
   byte-identical to the split spelling.
 
@@ -115,23 +122,24 @@
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}}
    :display {:title "{data.name}"}
+   ;; the lifecycle doors as flow rows, each wearing its safety story;
+   ;; :states stays spelled because the rows are not the whole machine
+   ;; (the bulk accept and the editors live in :actions below)
+   :flow
+   [[:suggested :accept  :on_list
+     {:one-way "Joining the meal list is low-stakes; Retire takes a meal off it again."
+      :display {:label "Add to meal list" :style :primary :order 1}}]
+    [:suggested :decline :retired
+     {:one-way "Declining a suggestion is cheap — the AI can suggest it again any time."
+      :display {:label "No thanks" :order 2}}]
+    [:on_list   :retire  :retired
+     {:confirm "The meal leaves the family list and can no longer be assigned to plan days."
+      :display {:label "Retire" :style :danger :order 9}}]]
    :actions
-   {:accept {:from #{:suggested} :to :on_list
-             :safety {:idempotent true :reversible false :confirm false
-                      :one-way "Joining the meal list is low-stakes; Retire takes a meal off it again."}
-             :display {:label "Add to meal list" :style :primary :order 1}}
-    :accept_many {:from #{:suggested} :to :on_list
+   {:accept_many {:from #{:suggested} :to :on_list
                   :bulk {:max-items 200 :defer-over 50}
                   :safety {:idempotent true :reversible false :confirm true
                            :consequence "Every selected suggestion joins the family meal list."}
                   :display {:label "Add selected to meal list" :style :primary}}
-    :decline {:from #{:suggested} :to :retired
-              :safety {:idempotent true :reversible false :confirm false
-                       :one-way "Declining a suggestion is cheap — the AI can suggest it again any time."}
-              :display {:label "No thanks" :order 2}}
     :update_recipe update-recipe
-    :update_themes update-themes
-    :retire {:from #{:on_list} :to :retired
-             :safety {:idempotent true :reversible false :confirm true
-                      :consequence "The meal leaves the family list and can no longer be assigned to plan days."}
-             :display {:label "Retire" :style :danger :order 9}}}})
+    :update_themes update-themes}})

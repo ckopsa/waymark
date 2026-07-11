@@ -12,12 +12,23 @@
   item_not_checked / item_checked are pure acceptance-set
   declarations; plan_id is a :waymark/ref.
 
-  Spelled in the batch-G declaration style: the part scope and the
-  plan_id filter ride their entries, the shopping rollup is a def'd
-  derived fact on its own entry, the item-shaped actions are one
-  group, and the two repeated safety values are named. The law is
-  unchanged — mealplan10.style-invariance-test pins this kind's
-  fingerprint hash byte-identical to the split spelling.
+  Spelled in the batch-H declaration style: the whole machine is
+  :flow rows (so :states is not spelled — the rows name them), the
+  draft-phase and shopping-phase item edits reading as rows of the
+  states they serve, and finalize/reopen declare each other as :undo
+  — the engine verifies the pointers, so \"honestly reversible\" is
+  graph-checked instead of a comment. Recorded deviation, a sentence:
+  the item edits keep :input (add_item's fields are optional, and
+  :args admits only required arguments). One deliberate law revision
+  rode this spelling (the batch-H candidate, taken): check/uncheck
+  declare each other as :undo — each is the other's exact inverse
+  (same :name input, the not-checked/checked guards fencing the
+  no-ops), so :reversible false was the law understating the truth.
+  The part scope, the plan_id filter, and the def'd shopping rollup
+  still ride their entries (batch G).
+  mealplan10.style-invariance-test pins this kind's fingerprint hash
+  byte-identical across spellings, the old split spelling carrying
+  the same revision.
 
   Recorded punts: the with_plan profile and the href link render have
   no v10 spelling — the link declaration is carried."
@@ -136,52 +147,8 @@
    :expr '(every [i (var :items)] (= (get i :have) true))
    :explain "Some items are still unchecked."})
 
-;; named safety values: each spelled once, in full, and cited by name
-;; — never inferred
-(def routine
-  ;; honestly reversible: finalize/reopen are each other's way back
-  {:idempotent true :reversible true :confirm false})
-(def overwrite
-  ;; an idempotent item edit — nothing to confirm, and the mirror
-  ;; action (or writing the item again) is the practical way back
-  {:idempotent true :reversible false :confirm false})
-
-;; the item-shaped action group: every input keyed by :name, the
-;; part-scoped ones citing :place :items — merged into :actions
-;; beside the list's lifecycle
-(def item-actions
-  {:add_item {:from #{:draft} :to :draft
-              :input [:map
-                      [:name [:string {:min 1 :max 200}]]
-                      [:quantity {:optional true} [:maybe [:string {:max 50}]]]
-                      [:category {:optional true} [:maybe [:string {:max 50}]]]
-                      [:meals {:optional true}
-                       [:maybe [:vector [:string {:max 200}]]]]]
-              :safety overwrite
-              :handler add-item
-              :display {:label "Add item" :style :primary :order 1}}
-   :remove_item {:from #{:draft} :to :draft
-                 :input name-input :place :items
-                 :guards [item-on-list]
-                 :safety overwrite
-                 :handler remove-item
-                 :display {:label "Remove item" :order 2}}
-   :check_item {:from #{:ready} :to :ready
-                :input name-input :place :items
-                :guards [item-on-list item-not-checked]
-                :safety overwrite
-                :handler check-item
-                :display {:label "Check off" :style :primary :order 1}}
-   :uncheck_item {:from #{:ready} :to :ready
-                  :input name-input :place :items
-                  :guards [item-on-list item-checked]
-                  :safety overwrite
-                  :handler uncheck-item
-                  :display {:label "Uncheck" :order 2}}})
-
 (defresource grocery-list
   {:kind :grocery_list
-   :states [:draft :ready :done]
    :initial :draft
    :terminal #{:done}
    :summary "Groceries · {state}"
@@ -213,17 +180,46 @@
             :summary "The meal plan this list shops for"}]
    :filterable {:state #{:eq :in}}
    :display {:title "Grocery list"}
-   :actions
-   (merge item-actions
-          {:finalize {:from #{:draft} :to :ready
-                      :guards [plan-is-planned]
-                      :safety routine
-                      :display {:label "Ready to shop" :style :primary :order 1}}
-           :reopen {:from #{:ready} :to :draft
-                    :safety routine
-                    :display {:label "Back to editing" :order 3}}
-           :complete {:from #{:ready} :to :done
-                      :guards [all-checked-gate]
-                      :safety {:idempotent true :reversible false :confirm false
-                               :one-way "Completing records a finished shop; the list stays readable as history."}
-                      :display {:label "Shopping done" :order 2}}})})
+   ;; the whole machine as rows: the draft phase (build the list),
+   ;; the shopping phase (check things off), and the doors between —
+   ;; the self-loop item edits mint the idempotent-overwrite safety,
+   ;; every input keyed by :name, the part-scoped rows citing
+   ;; :place :items
+   :flow
+   [[:draft :add_item     :draft
+     {:input [:map
+              [:name [:string {:min 1 :max 200}]]
+              [:quantity {:optional true} [:maybe [:string {:max 50}]]]
+              [:category {:optional true} [:maybe [:string {:max 50}]]]
+              [:meals {:optional true}
+               [:maybe [:vector [:string {:max 200}]]]]]
+      :handler add-item
+      :display {:label "Add item" :style :primary :order 1}}]
+    [:draft :remove_item  :draft
+     {:input name-input :place :items
+      :requires [item-on-list]
+      :handler remove-item
+      :display {:label "Remove item" :order 2}}]
+    [:draft :finalize     :ready
+     {:requires [plan-is-planned]
+      :undo :reopen
+      :display {:label "Ready to shop" :style :primary :order 1}}]
+    [:ready :check_item   :ready
+     {:input name-input :place :items
+      :requires [item-on-list item-not-checked]
+      :undo :uncheck_item
+      :handler check-item
+      :display {:label "Check off" :style :primary :order 1}}]
+    [:ready :uncheck_item :ready
+     {:input name-input :place :items
+      :requires [item-on-list item-checked]
+      :undo :check_item
+      :handler uncheck-item
+      :display {:label "Uncheck" :order 2}}]
+    [:ready :reopen       :draft
+     {:undo :finalize
+      :display {:label "Back to editing" :order 3}}]
+    [:ready :complete     :done
+     {:requires [all-checked-gate]
+      :one-way "Completing records a finished shop; the list stays readable as history."
+      :display {:label "Shopping done" :order 2}}]]})

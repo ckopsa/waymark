@@ -1,11 +1,21 @@
 (ns mealplan10.style-invariance-test
-  "Two spellings, one law — the batch-G proof, for the app that
-  consumes the style. The six resource declarations now live in the
-  colocated/def'd spelling; this suite keeps the OLD split spellings
-  alive (constructed here byte-for-byte from the pre-G sources,
-  sharing the namespaces' guard and handler objects so the imperative
-  residue hashes as itself) and pins every kind's fingerprint hash
-  byte-identical — a pure style refactor mints zero revisions.
+  "Two spellings, one law — the batch-G proof, extended through batch
+  H, for the app that consumes the style. The six resource
+  declarations now live in the batch-H spelling (:flow rows, :undo
+  pointers, typed field words, over batch G's colocation); this suite
+  keeps the OLD split spellings alive (constructed here byte-for-byte
+  from the pre-G sources, sharing the namespaces' guard and handler
+  objects so the imperative residue hashes as itself) and pins every
+  kind's fingerprint hash byte-identical — a pure style refactor
+  mints zero revisions. (One exception, deliberate and recorded:
+  grocery_list's check/uncheck became honestly reversible with batch
+  H — both spellings here carry that revision together.) The literal-hash pin at the bottom nails the
+  hash values themselves for the kinds whose residue is all
+  canonical-form (meal, prep_task, event), so no future respelling
+  can move those fingerprints even if it rewrites this file's old
+  spellings too; the bare-fn kinds' hashes bake in compilation order
+  (callable-hash's recorded stopgap) and hold their proof in the
+  shared-object pins instead.
 
   Sharing rules, inherited from waymark10.batch-g-invariance-test:
   - code guards and handlers hash by printed fn identity (unless
@@ -337,7 +347,11 @@
   (pin! :plan old-plan plan/plan))
 
 ;; ── grocery_list (old spelling; the complete gate is the hoisted
-;;    var — g/require mints a fresh :check fn per call) ───────────────
+;;    var — g/require mints a fresh :check fn per call). Carries the
+;;    one deliberate law revision taken with batch H: check/uncheck
+;;    became honestly reversible (mutual :undo in the new spelling),
+;;    so BOTH spellings moved together — the pin proves the spellings
+;;    agree on the revised law, not that the law never moved ─────────
 
 (def old-grocery-list
   {:kind :grocery_list
@@ -402,13 +416,13 @@
     :check_item {:from #{:ready} :to :ready
                  :input glist/name-input :place :items
                  :guards [glist/item-on-list glist/item-not-checked]
-                 :safety {:idempotent true :reversible false :confirm false}
+                 :safety {:idempotent true :reversible true :confirm false}
                  :handler glist/check-item
                  :display {:label "Check off" :style :primary :order 1}}
     :uncheck_item {:from #{:ready} :to :ready
                    :input glist/name-input :place :items
                    :guards [glist/item-on-list glist/item-checked]
-                   :safety {:idempotent true :reversible false :confirm false}
+                   :safety {:idempotent true :reversible true :confirm false}
                    :handler glist/uncheck-item
                    :display {:label "Uncheck" :order 2}}
     :complete {:from #{:ready} :to :done
@@ -511,3 +525,26 @@
         "event: one normalized map, two spellings (modulo the re-minted sync handler object)")
     (is (= (hash-of-map old) (hash-of-resource new))
         "event: byte-identical fingerprint hashes")))
+
+;; ── the batch-H pin: hashes as literals, where a literal is honest ──
+;; The pins above prove old-split ≡ current spelling in-process; this
+;; one nails the hash VALUES, captured before the batch-H respelling
+;; (:flow rows, :undo pointers, typed field words), so no future
+;; rewrite can drag both sides of an equality along with it. Only the
+;; kinds whose imperative residue all carries a canonical printed
+;; form (defhandler / the weave's minted forms) can be pinned this
+;; way: a bare :accepts/:check fn hashes by printed object identity
+;; (callable-hash's recorded stopgap), which bakes compilation order
+;; into the hash — rotation, plan, and grocery_list therefore hold
+;; their proof in the shared-object pins above, not in a literal.
+
+(def the-canonical-hashes
+  {:meal      "2d25d317cea61e94a8a7b0070970900a45171b463e2cc789862c8c25e937460f"
+   :prep_task "ce2927facbb3047747d5424d4afdf4ac2898317a36afec22c3b9397a461ddf33"
+   :event     "77fba0a5a46b83a3594170a75e5f0614a9980a5f57cf76f90e5ac3e699b32805"})
+
+(deftest the-canonical-residue-hashes-are-pinned-as-literals
+  (is (= (:meal the-canonical-hashes) (hash-of-resource meal/meal)))
+  (is (= (:prep_task the-canonical-hashes) (hash-of-resource ptask/prep-task)))
+  (is (= (:event the-canonical-hashes)
+         (hash-of-resource (event/event-resource (es/fake-events))))))

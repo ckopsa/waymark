@@ -18,15 +18,19 @@
   now — the feed carries no signal for \"this evening is spoken for\"
   (design note: revisit if that distinction turns out to matter).
 
-  Spelled in the batch-G declaration style: filter/sort law rides the
-  :date and :kind entries (only :state filtering, which is not a
-  schema entry, stays top-level) — colocation projects through the
-  mirror weave, since the wrapper returns a plain map r/resource
-  normalizes like any other. The law is unchanged —
-  mealplan10.style-invariance-test pins this kind's fingerprint hash
-  byte-identical to the split spelling, around the same wrapper on
-  both sides."
-  (:require [waymark10.resource :as r]
+  Spelled in the batch-H declaration style, which here is one word:
+  the :kind enum is a one-of — everything else on this kind is the
+  Mirror weave's, so there is no flow to row, no undo to point, no
+  guard to sentence (each absent because the weave declares the
+  machine, a recorded near-no-op like batch G's rotation). Filter and
+  sort law still ride the :date and :kind entries (batch G) —
+  colocation projects through the mirror weave, since the wrapper
+  returns a plain map r/resource normalizes like any other. The law
+  is unchanged — mealplan10.style-invariance-test pins this kind's
+  fingerprint hash byte-identical to the split spelling, around the
+  same wrapper on both sides."
+  (:require [waymark10.declare :refer [one-of]]
+            [waymark10.resource :as r]
             [waymark10.server.mirror :as mirror]))
 
 ;; a personal calendar changes rarely enough that an hour between
@@ -51,7 +55,7 @@
               [:date {:optional true :filter #{:eq :range} :sort :default}
                [:maybe :waymark/date]]
               [:kind {:optional true :filter #{:eq :in}}
-               [:maybe [:enum "blocking" "note"]]]]
+               [:maybe (one-of :blocking :note)]]]
      :filterable {:state #{:eq :in}}
      :display {:title "{data.title} — {data.date}"}}
     {:adapter adapter
