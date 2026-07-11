@@ -135,6 +135,21 @@ deploy, apply the DDL to prod yourself (pattern:
 Note the prod DB port is dynamic per allocation — re-resolve with
 `nomad service info mealplan-db` after any restart.
 
+## Removing or moving a Data field (learned from a near data-loss)
+
+- **JSONB residue does NOT survive the first boot.** Boot backfill loads
+  every row through the current model and writes it back — keys the model
+  no longer declares are silently dropped. If a migration plans to read a
+  removed field's residue "after deploy", it will find nothing. Extract
+  the data to a file (or migrate it) BEFORE deploying the model change.
+- **Removing an action needs a rename chain.** The boot guard refuses to
+  start if the transition log records actions the machine no longer
+  reaches: declare `renamed_actions = {"old": "surviving_action"}` on the
+  class in the SAME deploy that removes the action.
+- The transition log is the recovery map: `select distinct resource_id
+  from waymark9_transitions where kind='X' and action in (...)` tells you
+  exactly which rows had used the removed surface.
+
 ## Conformance enrollment rules (learned from failures)
 
 - **A `@state_factory` must mint exactly ONE row of its own kind** — the

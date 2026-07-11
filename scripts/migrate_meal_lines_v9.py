@@ -1,11 +1,11 @@
 """One-time migration: embedded meal ``data.ingredients`` → meal_line rows.
 
-Runs AFTER deploying the code that promotes lines to a resource (the old
-field is gone from the model, so its JSONB residue is invisible to the
-API — this script reads it straight from the database and re-creates each
-entry through the engine's own create surface, which prices blanks and
-maintains labels). Deterministic idempotency keys make re-runs safe;
-the residue key is stripped only after its lines all land.
+CAUTION (learned in production): boot backfill rewrites every row through
+the current model, so the removed field's JSONB residue does NOT survive
+the new code's first boot. Extract ``data->'ingredients'`` to a file
+BEFORE deploying, and feed the rows from there if the residue is already
+gone. Deterministic idempotency keys make re-runs safe; the residue key
+is stripped only after its lines all land.
 
     MEALPLAN_DSN=postgresql://user:pw@host:port/db \
     MEALPLAN_BASE=https://meals.kopsa.info \
