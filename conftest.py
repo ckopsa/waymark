@@ -443,6 +443,8 @@ from mealplan9.resources.grocery_list import (  # noqa: E402
 from mealplan9.resources.ingredient import (  # noqa: E402
     Ingredient as Ingredient9, IngredientState as IngredientState9)
 from mealplan9.resources.meal import Meal as Meal9  # noqa: E402
+from mealplan9.resources.meal_line import (  # noqa: E402
+    MealLine as MealLine9, MealLineState as MealLineState9)
 from mealplan9.resources.plan import (  # noqa: E402
     MealPlan as MealPlan9, PlanState as PlanState9)
 from mealplan9.resources.prep_task import PrepTask as PrepTask9  # noqa: E402
@@ -471,8 +473,8 @@ async def waymark9_engine():
 
     services = ConformanceServices9()
     engine = waymark9.Engine(
-        resources=[Meal9, SundayRotation9, MealPlan9, GroceryList9,
-                   PrepTask9, Ingredient9, Product9, Event9],
+        resources=[Meal9, MealLine9, SundayRotation9, MealPlan9,
+                   GroceryList9, PrepTask9, Ingredient9, Product9, Event9],
         storage=TEST_DSN, services=services, bus=InProcessBus9())
     # async example inputs (ingredient.absorb) mint rows through this handle
     services.engine = engine
@@ -683,3 +685,29 @@ def w9_product_record_sighting_example(services) -> dict:
 @w9_example_input(Product9, "remove_sighting")
 def w9_product_remove_sighting_example(services) -> dict:
     return {"seen_on": PRODUCT_SIGHTING["seen_on"]}
+
+
+@w9_state_factory(MealLine9)
+async def w9_make_meal_line(state: str, engine, services) -> MealLine9:
+    iid = await _mk(engine, "ingredient",
+                    {"name": "Chicken thighs", "category": "meat"})
+    await _step(engine, "ingredient", iid, "accept")
+    services.seeded["ingredient_id"] = iid
+    mid = await _mk(engine, "meal", {"name": "Tacos al pastor",
+                                     "themes": ["mexican"]})
+    await _step(engine, "meal", mid, "accept")
+    services.seeded["meal_id"] = mid
+    lid = await _mk(engine, "meal_line", {"meal_id": mid,
+                                          "ingredient_id": iid,
+                                          "grams": 500})
+    services.seeded["meal_line_id"] = lid
+    if MealLineState9(state) == MealLineState9.REMOVED:
+        await _step(engine, "meal_line", lid, "remove")
+    return await _load(engine, "meal_line", lid)
+
+
+@w9_example_input(MealLine9, "create")
+def w9_meal_line_create_example(services) -> dict:
+    return {"meal_id": services.seeded["meal_id"],
+            "ingredient_id": services.seeded["ingredient_id"],
+            "grams": 250}

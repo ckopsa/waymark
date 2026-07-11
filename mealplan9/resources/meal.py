@@ -24,24 +24,22 @@ from pydantic import BaseModel, Field
 
 from waymark9 import (
     Acknowledged,
+    Advances,
+    Count,
     Ctx,
-    Derived,
     DraftPolicy,
-    E,
     Edit,
-    Guard,
     Observed,
-    PartScope,
-    Query,
-    Ref,
-    RefField,
+    Owns,
     Resource,
     Safety,
+    Sum,
     Vocab,
     VocabField,
     action,
     Bulk,
     filterable,
+    link,
     sortable,
 )
 
@@ -55,29 +53,10 @@ class MealState(StrEnum):
 Theme = Annotated[str, Field(min_length=1, max_length=50)]
 
 
-class MealIngredient(BaseModel):
-    """One recipe line, tied to the pantry. Writing (ingredient, grams) is
-    enough: a blank est_cost_cents is priced by the engine at write time —
-    grams × the best tracked product's unit price (preferred store first,
-    else cheapest) — a deterministic lookup, not a judgment, so it doesn't
-    wait on an agent. An explicit stamp wins (a client may know better,
-    e.g. whole-package math)."""
-
-    ingredient_id: Ref["ingredient"] = RefField(
-        min_length=1, label="ingredient_name", pick=Query(state="active"),
-        description="The pantry ingredient this line uses")
-    ingredient_name: str | None = Field(default=None, max_length=200)
-    grams: int = Field(ge=1,
-                       description="Recipe quantity in grams — the family "
-                                   "convention, never cups")
-    est_cost_cents: int | None = Field(
-        default=None, ge=0,
-        description="Estimated cost of this line. Leave blank: it's priced "
-                    "from tracked products at write time (preferred store "
-                    "first, else cheapest per gram); stays blank only when "
-                    "no priced product exists yet. An explicit value wins.",
-        json_schema_extra={"x-display": {"widget": "money",
-                                         "label": "Est. cost"}})
+# the recipe's lines live as meal_line ROWS (their refs are promoted
+# columns, so the engine maintains the rollups below in the same commit
+# as any line write — the reason lines stopped being embedded data)
+_lines = Owns("meal_line", via="meal_id")
 
 
 class MealData(BaseModel):
@@ -96,26 +75,17 @@ class MealData(BaseModel):
         description="Markdown recipe — written by the AI, never by hand",
         json_schema_extra={"x-display": {"label": "Recipe",
                                          "widget": "prose"}})
-    ingredients: list[MealIngredient] = Field(
-        default_factory=list,
-        description="The recipe's ingredient lines, tied to the pantry — "
-                    "written by the AI alongside the recipe")
-    # what the meal potentially costs (pantry-prices, one level down from
-    # the grocery list): the arithmetic over the stamped lines is the
-    # meal's own law — one definition serves the envelope, the collection,
-    # and "what's the cheapest bbq night"
-    est_cost_cents: int = Derived(
-        over=("ingredients",),
-        expr=E.sum(E.f("ingredients"), of=E.it.est_cost_cents,
-                   where=E.it.est_cost_cents.is_set()),
+    # what the meal potentially costs: engine-maintained rollups over the
+    # meal_line edge — a line write (or its price) flips these in the same
+    # commit; only on_recipe lines count
+    est_cost_cents: int = Sum(
+        _lines, "est_cost_cents", where={"state": ("on_recipe",)},
         json_schema_extra={"x-display": {"widget": "money",
                                          "label": "Est. cost"}})
-    priced_ingredients: int = Derived(
-        over=("ingredients",),
-        expr=E.count(E.f("ingredients"), E.it.est_cost_cents.is_set()))
-    total_ingredients: int = Derived(
-        over=("ingredients",),
-        expr=E.count(E.f("ingredients")))
+    priced_ingredients: int = Count(
+        _lines, where={"state": ("on_recipe",), "priced": (True,)})
+    total_ingredients: int = Count(
+        _lines, where={"state": ("on_recipe",)})
     prep_minutes: int = Field(default=30, ge=0,
                               description="Active time from start to plated")
     thaw_hours: int = Field(default=0, ge=0,
@@ -140,66 +110,6 @@ class ThemesInput(BaseModel):
                     "replaces the current tags")
 
 
-class IngredientsInput(BaseModel):
-    ingredients: list[MealIngredient] = Field(
-        max_length=50,
-        description="The recipe's full ingredient lines — replaces the "
-                    "current set")
-
-
-class IngredientLineInput(BaseModel):
-    """(ingredient, grams) is the whole form — the estimate prices itself
-    from tracked products; explicit stamps ride update_ingredients."""
-
-    ingredient_id: Ref["ingredient"] = RefField(
-        min_length=1, pick=Query(state="active"),
-        description="The pantry ingredient this line uses")
-    grams: int = Field(ge=1,
-                       description="Recipe quantity in grams — the family "
-                                   "convention, never cups")
-
-
-class IngredientRefInput(BaseModel):
-    ingredient_id: Ref["ingredient"] = RefField(min_length=1)
-
-
-# what's on the recipe: the rendered enum, the per-part availability, and
-# the enforcement, from one set (the grocery list's item_on_list, one
-# level down)
-line_on_recipe = Guard(
-    name="line_on_recipe",
-    judges=("ingredient_id",),
-    accepts=lambda r: [l.ingredient_id for l in r.data.ingredients],
-    explain="No line for that ingredient on this recipe.",
-)
-
-
-async def _price_lines(lines: list[MealIngredient], ctx: Ctx,
-                       *, refresh: bool = False) -> None:
-    """Price lines from tracked products: grams × the best offer's
-    cents_per_100g. Preferred store first (the ingredient's own ordering),
-    else cheapest per gram — the same rule the trip math uses. By default
-    only blank lines fill (an explicit stamp wins); ``refresh`` recomputes
-    every line the lookup can reach — what reprice means. A line with no
-    unit-priceable product keeps what it has, blank included, honestly."""
-    for line in lines:
-        if line.est_cost_cents is not None and not refresh:
-            continue
-        products = await ctx.find("product", state="tracked",
-                                  ingredient_id=line.ingredient_id, limit=50)
-        offers = [p for p in products if p.data.cents_per_100g]
-        if not offers:
-            continue
-        ing = await ctx.read("ingredient", line.ingredient_id)
-        prefs = [s.lower() for s in
-                 (ing.data.preferred_stores if ing else [])]
-        offers.sort(key=lambda p: (prefs.index(p.data.store)
-                                   if p.data.store in prefs else 99,
-                                   p.data.cents_per_100g))
-        line.est_cost_cents = round(
-            line.grams * offers[0].data.cents_per_100g / 100)
-
-
 def _fold_theme(data: dict[str, Any]) -> dict[str, Any]:
     """shape 1 → 2: the single-theme era's ``theme`` becomes a one-tag
     ``themes`` list."""
@@ -220,15 +130,6 @@ class Meal(Resource):
     shape = 2
     upcasts = {1: _fold_theme}
 
-    # the one place per-line placement is declared (design §3); the
-    # remove button renders once per ingredient row, key pre-bound
-    ingredients = PartScope("ingredients", key="ingredient_id")
-
-    async def on_create(self, ctx: Ctx) -> None:
-        """A meal born with ingredient lines gets them priced immediately —
-        (ingredient, grams) in the create body is enough."""
-        await _price_lines(self.data.ingredients, ctx)
-
     summary = "{data.name} · {data.themes|join} · {state.label}"
 
     # themes is absent here on purpose: the Vocab declaration on MealData
@@ -238,6 +139,18 @@ class Meal(Resource):
     sortable = sortable("name", "est_cost_cents", default="name")
 
     display = {"title": "{data.name}"}
+
+    owns = (_lines,)
+
+    # the meal page shows its recipe lines: the child collection filtered
+    # to this row, the line count riding as badge scent, embed inviting
+    # the rows onto the page
+    links = (
+        link("ingredients", kind="meal_line_collection",
+             href="/meal_lines?meal_id={id}&state=on_recipe",
+             embed=True, badge="total_ingredients",
+             summary="The recipe's ingredient lines"),
+    )
 
     @action(from_=MealState.SUGGESTED, to=MealState.ON_LIST,
             safety=Safety(idempotent=True, reversible=False, confirm=False,
@@ -292,60 +205,25 @@ class Meal(Resource):
     async def update_themes(self, inp: ThemesInput, ctx: Ctx) -> None:
         self.data.themes = list(dict.fromkeys(inp.themes))
 
-    @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
-            input=IngredientsInput,
-            edit=Edit(prefill=("ingredients",)),
-            safety=Safety(idempotent=True, reversible=False, confirm=False),
-            display=dict(label="Update ingredients", order=6,
-                         description="Rewrite the recipe's ingredient lines "
-                                     "wholesale — Add/Remove ingredient "
-                                     "handle single lines"))
-    async def update_ingredients(self, inp: IngredientsInput,
-                                 ctx: Ctx) -> None:
-        self.data.ingredients = list(inp.ingredients)
-        await _price_lines(self.data.ingredients, ctx)
-
-    @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
-            input=IngredientLineInput,
-            safety=Safety(idempotent=True, reversible=False, confirm=False),
-            display=dict(label="Add ingredient", order=4,
-                         description="Add one line (or re-quantity an "
-                                     "existing one); a blank estimate "
-                                     "prices itself from tracked products"))
-    async def add_ingredient(self, inp: IngredientLineInput,
-                             ctx: Ctx) -> None:
-        existing = next((l for l in self.data.ingredients
-                         if l.ingredient_id == inp.ingredient_id), None)
-        if existing is not None:
-            existing.grams = inp.grams
-            existing.est_cost_cents = None  # re-quantity → re-price
-        else:
-            self.data.ingredients.append(MealIngredient(
-                ingredient_id=inp.ingredient_id, grams=inp.grams))
-        await _price_lines(self.data.ingredients, ctx)
-
-    @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
-            input=IngredientRefInput, place=ingredients,
-            guards=[line_on_recipe],
-            safety=Safety(idempotent=True, reversible=False, confirm=False),
-            display=dict(label="Remove", order=5))
-    async def remove_ingredient(self, inp: IngredientRefInput,
-                                ctx: Ctx) -> None:
-        # removing an absent line is a no-op, so retries stay replay-safe
-        self.data.ingredients = [l for l in self.data.ingredients
-                                 if l.ingredient_id != inp.ingredient_id]
-
     # write-time pricing goes stale the moment a receipt teaches a better
-    # price (or the first price) — reprice refreshes every line the lookup
-    # can reach from CURRENT tracked products, no input to fill
+    # price — reprice fans out to every on_recipe line (declared touches)
     @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
+            touches=(Advances("meal_line", "reprice", may=True),),
             safety=Safety(idempotent=True, reversible=False, confirm=False),
-            display=dict(label="Reprice", order=5,
+            display=dict(label="Reprice", order=4,
                          description="Refresh every ingredient line's "
                                      "estimate from current tracked "
                                      "product prices"))
     async def reprice(self, inp: None, ctx: Ctx) -> None:
-        await _price_lines(self.data.ingredients, ctx, refresh=True)
+        page = 1
+        while True:
+            lines = await ctx.find("meal_line", limit=200, page=page,
+                                   meal_id=self.id, state="on_recipe")
+            for line in lines:
+                await ctx.invoke("meal_line", line.id, "reprice", None)
+            if len(lines) < 200:
+                break
+            page += 1
 
     @action(from_=MealState.ON_LIST, to=MealState.RETIRED,
             safety=Safety(idempotent=True, reversible=False, confirm=True,

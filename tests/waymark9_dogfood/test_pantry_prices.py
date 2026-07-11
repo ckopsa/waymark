@@ -29,6 +29,7 @@ from mealplan9.resources.event import Event
 from mealplan9.resources.grocery_list import GroceryList
 from mealplan9.resources.ingredient import Ingredient
 from mealplan9.resources.meal import Meal
+from mealplan9.resources.meal_line import MealLine
 from mealplan9.resources.plan import MealPlan
 from mealplan9.resources.prep_task import PrepTask
 from mealplan9.resources.product import Product
@@ -47,8 +48,8 @@ PRIYA = {"X-Principal-Id": "priya", "X-Principal-Display": "Priya"}
 async def env():
     Event.adapter = FakeEvents()
     engine = waymark9.Engine(
-        resources=[Meal, SundayRotation, MealPlan, GroceryList, PrepTask,
-                   Ingredient, Product, Event],
+        resources=[Meal, MealLine, SundayRotation, MealPlan, GroceryList,
+                   PrepTask, Ingredient, Product, Event],
         storage=TEST_DSN, principal=header_principal, services=Services(),
         bus=InProcessBus())
     await engine.storage.drop_all()
@@ -264,14 +265,15 @@ async def test_the_grocery_list_knows_what_it_costs(env):
 
 
 async def test_a_meal_knows_what_it_potentially_costs(env):
-    """Ingredient lines on the meal: (ingredient, grams) is enough — a
-    blank estimate is priced from tracked products at write time, and the
-    meal derives what a night potentially costs."""
+    """Recipe lines are meal_line ROWS: (meal, ingredient, grams) is a
+    create — the estimate prices itself from tracked products, and the
+    meal's cost facts are engine-maintained rollups over the edge."""
     engine, client = env
 
     thighs = await _ingredient(client, "Chicken thighs", category="meat")
     await _post(client, f"{thighs['self']}/-/accept")
     sauce = await _ingredient(client, "BBQ sauce", category="pantry")
+    await _post(client, f"{sauce['self']}/-/accept")
 
     # a tracked, priced product is what makes the lookup possible:
     # $18.99 / 2720 g → 70¢ per 100 g
@@ -284,40 +286,35 @@ async def test_a_meal_knows_what_it_potentially_costs(env):
 
     res = await _post(client, "/api/meals", {
         "name": "Traeger BBQ chicken thighs", "themes": ["bbq"],
-        "recipe": "# Traeger BBQ chicken thighs\n\nTraeger at 275°F…",
-        "ingredients": [
-            {"ingredient_id": _id(thighs), "grams": 1400},  # priced at write
-            {"ingredient_id": _id(sauce), "grams": 250}]})  # no product yet
-    assert res.status_code == 201, res.text
+        "recipe": "# Traeger BBQ chicken thighs\n\nTraeger at 275°F…"})
     meal = res.json()
-    # 1400 g × 70¢/100g — computed by the engine, no stamp supplied
-    assert meal["data"]["ingredients"][0]["est_cost_cents"] == 980
-    assert meal["data"]["est_cost_cents"] == 980
-    assert meal["data"]["priced_ingredients"] == 1
-    assert meal["data"]["total_ingredients"] == 2
-    # the Ref label is the engine's to maintain, parts included
-    assert meal["data"]["ingredients"][0]["ingredient_name"] == \
-        "Chicken thighs"
-
-    # a re-price replaces the lines; the meal's law re-derives the total.
-    # update_ingredients is an Edit — a prefilled form is a snapshot, so
-    # the invoke carries the If-Match fence
     await _post(client, f"{meal['self']}/-/accept")
-    fresh = await _fresh(client, meal)
-    res = await _post(client, f"{meal['self']}/-/update_ingredients",
-                      {"ingredients": [
-                          {"ingredient_id": _id(thighs), "grams": 1400,
-                           "est_cost_cents": 989},
-                          {"ingredient_id": _id(sauce), "grams": 250,
-                           "est_cost_cents": 312}]},
-                      **{"If-Match": fresh["meta"]["etag"]})
-    assert res.status_code == 200, res.text
-    data = (await _fresh(client, meal))["data"]
-    assert data["est_cost_cents"] == 1301
-    assert data["priced_ingredients"] == 2
 
-    # prices move: a cheaper product appears AFTER the lines were written —
-    # reprice refreshes every reachable line from current tracked products
+    res = await _post(client, "/api/meal_lines", {
+        "meal_id": _id(meal), "ingredient_id": _id(thighs), "grams": 1400})
+    assert res.status_code == 201, res.text
+    line = res.json()
+    # 1400 g × 70¢/100g — priced at create, no stamp supplied; labels are
+    # the engine's to maintain
+    assert line["data"]["est_cost_cents"] == 980
+    assert line["data"]["priced"] is True
+    assert line["data"]["ingredient_name"] == "Chicken thighs"
+    assert line["data"]["meal_name"] == "Traeger BBQ chicken thighs"
+    await _post(client, "/api/meal_lines", {
+        "meal_id": _id(meal), "ingredient_id": _id(sauce),
+        "grams": 250})  # no priced product yet — stays blank
+
+    # the meal's facts are rollups over the edge — the line writes flipped
+    # them in the same commits, and the lines link badges the count
+    data = (await _fresh(client, meal))["data"]
+    assert data["est_cost_cents"] == 980
+    assert data["priced_ingredients"] == 1
+    assert data["total_ingredients"] == 2
+    fresh_meal = await _fresh(client, meal)
+    assert fresh_meal["links"]["ingredients"]["badge"] == 2
+
+    # prices move: a cheaper product appears AFTER the line was written —
+    # the meal's reprice fans out to every on_recipe line
     res = await _post(client, "/api/products", {
         "ingredient_id": _id(thighs), "store": "winco",
         "name": "WinCo chicken thighs 1 kg", "package_grams": 1000,
@@ -325,25 +322,22 @@ async def test_a_meal_knows_what_it_potentially_costs(env):
                        "source": "receipt", "ref": "winco-2026-07-09"}]})
     await _post(client, f"{res.json()['self']}/-/confirm_match")
     await _post(client, f"{meal['self']}/-/reprice")
-    data = (await _fresh(client, meal))["data"]
-    # thighs re-priced at 50¢/100g × 1400 g = 700; the sauce stamp (312)
-    # keeps its value — no unit-priceable sauce product exists
-    assert data["ingredients"][0]["est_cost_cents"] == 700
-    assert data["est_cost_cents"] == 1012
+    assert (await _fresh(client, line))["data"]["est_cost_cents"] == 700
+    assert (await _fresh(client, meal))["data"]["est_cost_cents"] == 700
 
-    # single-line editing: add one (auto-priced), re-quantity one (the
-    # upsert), remove one — the totals follow each write
-    rub = await _ingredient(client, "BBQ rub", category="pantry")
-    await _post(client, f"{meal['self']}/-/add_ingredient",
-                {"ingredient_id": _id(rub), "grams": 40})
-    await _post(client, f"{meal['self']}/-/add_ingredient",
-                {"ingredient_id": _id(thighs), "grams": 700})
+    # re-quantity re-prices (set_grams is an Edit — fenced); removing a
+    # line is a transition, and the rollups follow
+    fresh_line = await _fresh(client, line)
+    res = await _post(client, f"{line['self']}/-/set_grams", {"grams": 700},
+                      **{"If-Match": fresh_line["meta"]["etag"]})
+    assert res.status_code == 200, res.text
+    assert (await _fresh(client, line))["data"]["est_cost_cents"] == 350
+    lines = (await client.get(
+        "/api/meal_lines", params={"meal_id": _id(meal),
+                                   "state": "on_recipe"})).json()["data"]["items"]
+    sauce_line = next(l for l in lines
+                      if l["data"]["ingredient_id"] == _id(sauce))
+    await _post(client, f"{sauce_line['self']}/-/remove")
     data = (await _fresh(client, meal))["data"]
-    assert data["total_ingredients"] == 3
-    assert data["ingredients"][0]["grams"] == 700
-    assert data["ingredients"][0]["est_cost_cents"] == 350  # re-priced
-    await _post(client, f"{meal['self']}/-/remove_ingredient",
-                {"ingredient_id": _id(sauce)})
-    data = (await _fresh(client, meal))["data"]
-    assert data["total_ingredients"] == 2
-    assert data["est_cost_cents"] == 350  # rub has no product; sauce gone
+    assert data["total_ingredients"] == 1
+    assert data["est_cost_cents"] == 350
