@@ -104,13 +104,15 @@ async def test_the_family_learns_what_dinner_costs(env):
         "ingredient_id": _id(thighs), "store": "costco",
         "name": "Kirkland chicken thighs 2.72 kg", "package_grams": 2720,
         "upc": "096619123456",
-        "sightings": [{"seen_on": "2026-07-01", "price_cents": 1899,
+        "sightings": [{"seen_on": "2026-07-01", "price_cents": 3798,
                        "source": "receipt", "ref": "costco-2026-07-01",
                        "quantity": 2}]})
     assert res.status_code == 201, res.text
     kirkland = res.json()
     assert kirkland["state"] == "suggested"
-    # the rollups are already facts on the row — nobody recomputed them
+    # the rollups are already facts on the row — nobody recomputed them.
+    # the receipt line is the extended total ($37.98 for 2 packages); the
+    # derived latest price is per package
     assert kirkland["data"]["latest_price_cents"] == 1899
     assert kirkland["data"]["cents_per_100g"] == 70  # 1899 / 2720 g · 100
     assert kirkland["data"]["last_seen_on"] == "2026-07-01"

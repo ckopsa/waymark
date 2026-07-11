@@ -64,7 +64,10 @@ class ProductState(StrEnum):
 class PriceSighting(BaseModel):
     seen_on: date_t
     price_cents: int = Field(gt=0,
-                             description="What one package cost, in cents",
+                             description="What the line cost in cents — the "
+                                         "receipt's extended total across "
+                                         "all quantity packages; the "
+                                         "per-package price is derived",
                              json_schema_extra={"x-display": {
                                  "widget": "money", "label": "Price"}})
     source: Literal["receipt", "scrape"]
@@ -73,9 +76,10 @@ class PriceSighting(BaseModel):
                                         "where this price was seen",
                             json_schema_extra={"x-display": {"raw": True}})
     quantity: int = Field(default=1, ge=1,
-                          description="Packages bought (receipts) — what "
-                                      "actual spend sums over; 1 for a "
-                                      "scraped shelf price")
+                          description="Packages on the line (receipts) — "
+                                      "price_cents / quantity is the "
+                                      "package price; 1 for a scraped "
+                                      "shelf price")
     on_sale: bool = False
 
 
@@ -111,11 +115,15 @@ class ProductData(BaseModel):
         over=("sightings",),
         fn=lambda sightings: max((s.seen_on for s in sightings),
                                  default=None))
+    # per PACKAGE: a receipt line's price is the extended total, so the
+    # latest sighting's price divides by its quantity (a scrape's shelf
+    # price is quantity 1 and passes through unchanged)
     latest_price_cents: int | None = Derived(
         over=("sightings",),
-        fn=lambda sightings: (sorted(sightings,
-                                     key=lambda s: s.seen_on)[-1].price_cents
-                              if sightings else None),
+        fn=lambda sightings: (
+            (lambda s: round(s.price_cents / s.quantity))(
+                sorted(sightings, key=lambda s: s.seen_on)[-1])
+            if sightings else None),
         json_schema_extra={"x-display": {"widget": "money",
                                          "label": "Latest price"}})
     cents_per_100g: int | None = Derived(
