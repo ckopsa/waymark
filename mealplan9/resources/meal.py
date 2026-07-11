@@ -130,6 +130,13 @@ class Meal(Resource):
     shape = 2
     upcasts = {1: _fold_theme}
 
+    # the embedded-lines era's actions, resolved for the transition log
+    # (design §8): their semantics moved to the meal_line kind; reprice is
+    # the surviving meal-side pricing act the history maps onto
+    renamed_actions = {"update_ingredients": "reprice",
+                       "add_ingredient": "reprice",
+                       "remove_ingredient": "reprice"}
+
     summary = "{data.name} · {data.themes|join} · {state.label}"
 
     # themes is absent here on purpose: the Vocab declaration on MealData
