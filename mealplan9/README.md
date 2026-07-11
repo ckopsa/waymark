@@ -43,7 +43,10 @@ it automatically at create time.
   `update_recipe` exists so the AI can revise them. A meal carries `themes`,
   a tag list of every theme night it can serve (fajitas are `mexican` *and*
   `american`); `update_themes` retags it, and filtering `themes=bbq` means
-  "tagged bbq" (membership, not equality).
+  "tagged bbq" (membership, not equality). A meal also carries its recipe's
+  `ingredients` (lines tied to the pantry, grams + an AI-stamped
+  `est_cost_cents`), and derives `est_cost_cents` / `priced_ingredients` —
+  "what's the cheapest bbq night" is `?themes=bbq&sort=est_cost_cents`.
 - **`rotation`** — the dynamic lists of Sunday themes. Several can exist
   (seasonal lists, experiments); `activate` stamps `activated_at` and new
   plans draw from the most recently activated `active` rotation — an

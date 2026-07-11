@@ -253,3 +253,46 @@ async def test_the_grocery_list_knows_what_it_costs(env):
     assert plan_data["est_grocery_cost_cents"] == 2149
     assert plan_data["priced_grocery_items"] == 1
     assert plan_data["total_grocery_items"] == 2
+
+
+async def test_a_meal_knows_what_it_potentially_costs(env):
+    """Ingredient lines on the meal: the AI writes them with the recipe and
+    stamps estimates; the meal derives what a night potentially costs."""
+    engine, client = env
+
+    thighs = await _ingredient(client, "Chicken thighs", category="meat")
+    await _post(client, f"{thighs['self']}/-/accept")
+    sauce = await _ingredient(client, "BBQ sauce", category="pantry")
+
+    res = await _post(client, "/api/meals", {
+        "name": "Traeger BBQ chicken thighs", "themes": ["bbq"],
+        "recipe": "# Traeger BBQ chicken thighs\n\nTraeger at 275°F…",
+        "ingredients": [
+            {"ingredient_id": _id(thighs), "grams": 1400,
+             "est_cost_cents": 1106},
+            {"ingredient_id": _id(sauce), "grams": 250}]})  # unpriced
+    assert res.status_code == 201, res.text
+    meal = res.json()
+    assert meal["data"]["est_cost_cents"] == 1106
+    assert meal["data"]["priced_ingredients"] == 1
+    assert meal["data"]["total_ingredients"] == 2
+    # the Ref label is the engine's to maintain, parts included
+    assert meal["data"]["ingredients"][0]["ingredient_name"] == \
+        "Chicken thighs"
+
+    # a re-price replaces the lines; the meal's law re-derives the total.
+    # update_ingredients is an Edit — a prefilled form is a snapshot, so
+    # the invoke carries the If-Match fence
+    await _post(client, f"{meal['self']}/-/accept")
+    fresh = await _fresh(client, meal)
+    res = await _post(client, f"{meal['self']}/-/update_ingredients",
+                      {"ingredients": [
+                          {"ingredient_id": _id(thighs), "grams": 1400,
+                           "est_cost_cents": 989},
+                          {"ingredient_id": _id(sauce), "grams": 250,
+                           "est_cost_cents": 312}]},
+                      **{"If-Match": fresh["meta"]["etag"]})
+    assert res.status_code == 200, res.text
+    data = (await _fresh(client, meal))["data"]
+    assert data["est_cost_cents"] == 1301
+    assert data["priced_ingredients"] == 2

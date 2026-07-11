@@ -25,9 +25,14 @@ from pydantic import BaseModel, Field
 from waymark9 import (
     Acknowledged,
     Ctx,
+    Derived,
     DraftPolicy,
+    E,
     Edit,
     Observed,
+    Query,
+    Ref,
+    RefField,
     Resource,
     Safety,
     Vocab,
@@ -48,6 +53,26 @@ class MealState(StrEnum):
 Theme = Annotated[str, Field(min_length=1, max_length=50)]
 
 
+class MealIngredient(BaseModel):
+    """One recipe line, tied to the pantry: the AI writes these with the
+    recipe and stamps est_cost_cents from tracked product prices (a client
+    judgment, like the recipe itself — the meal owns only the sum)."""
+
+    ingredient_id: Ref["ingredient"] = RefField(
+        min_length=1, label="ingredient_name", pick=Query(state="active"),
+        description="The pantry ingredient this line uses")
+    ingredient_name: str | None = Field(default=None, max_length=200)
+    grams: int = Field(ge=1,
+                       description="Recipe quantity in grams — the family "
+                                   "convention, never cups")
+    est_cost_cents: int | None = Field(
+        default=None, ge=0,
+        description="AI-estimated cost of this line from tracked product "
+                    "prices; blank = no priced product yet",
+        json_schema_extra={"x-display": {"widget": "money",
+                                         "label": "Est. cost"}})
+
+
 class MealData(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     # one declaration (design §6): membership filtering over a GIN-indexed
@@ -64,6 +89,26 @@ class MealData(BaseModel):
         description="Markdown recipe — written by the AI, never by hand",
         json_schema_extra={"x-display": {"label": "Recipe",
                                          "widget": "prose"}})
+    ingredients: list[MealIngredient] = Field(
+        default_factory=list,
+        description="The recipe's ingredient lines, tied to the pantry — "
+                    "written by the AI alongside the recipe")
+    # what the meal potentially costs (pantry-prices, one level down from
+    # the grocery list): the arithmetic over the stamped lines is the
+    # meal's own law — one definition serves the envelope, the collection,
+    # and "what's the cheapest bbq night"
+    est_cost_cents: int = Derived(
+        over=("ingredients",),
+        expr=E.sum(E.f("ingredients"), of=E.it.est_cost_cents,
+                   where=E.it.est_cost_cents.is_set()),
+        json_schema_extra={"x-display": {"widget": "money",
+                                         "label": "Est. cost"}})
+    priced_ingredients: int = Derived(
+        over=("ingredients",),
+        expr=E.count(E.f("ingredients"), E.it.est_cost_cents.is_set()))
+    total_ingredients: int = Derived(
+        over=("ingredients",),
+        expr=E.count(E.f("ingredients")))
     prep_minutes: int = Field(default=30, ge=0,
                               description="Active time from start to plated")
     thaw_hours: int = Field(default=0, ge=0,
@@ -86,6 +131,13 @@ class ThemesInput(BaseModel):
         min_length=1, max_length=10,
         description="The full set of theme nights this meal can serve — "
                     "replaces the current tags")
+
+
+class IngredientsInput(BaseModel):
+    ingredients: list[MealIngredient] = Field(
+        max_length=50,
+        description="The recipe's full ingredient lines — replaces the "
+                    "current set")
 
 
 def _fold_theme(data: dict[str, Any]) -> dict[str, Any]:
@@ -113,7 +165,8 @@ class Meal(Resource):
     # themes is absent here on purpose: the Vocab declaration on MealData
     # carries its own filter (membership) and facet (observed) semantics
     filterable = filterable(state=filterable.Eq | filterable.In)
-    sortable = sortable("name", default="name")
+    # "what's the cheapest bbq night" = ?themes=bbq&sort=est_cost_cents
+    sortable = sortable("name", "est_cost_cents", default="name")
 
     display = {"title": "{data.name}"}
 
@@ -169,6 +222,17 @@ class Meal(Resource):
                                      "it can serve"))
     async def update_themes(self, inp: ThemesInput, ctx: Ctx) -> None:
         self.data.themes = list(dict.fromkeys(inp.themes))
+
+    @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
+            input=IngredientsInput,
+            edit=Edit(prefill=("ingredients",)),
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
+            display=dict(label="Update ingredients", order=4,
+                         description="Rewrite the recipe's ingredient lines "
+                                     "and their cost estimates"))
+    async def update_ingredients(self, inp: IngredientsInput,
+                                 ctx: Ctx) -> None:
+        self.data.ingredients = list(inp.ingredients)
 
     @action(from_=MealState.ON_LIST, to=MealState.RETIRED,
             safety=Safety(idempotent=True, reversible=False, confirm=True,
