@@ -414,3 +414,30 @@ async def test_a_substitute_prices_the_unpriceable(env):
     data = (await _fresh(client, line))["data"]
     assert data["est_cost_cents"] == 122  # 200 g × 61¢/100g, as butter
     assert data["priced_via"] is None
+
+    # ── the swap: a line can BECOME the stand-in, choices limited to the
+    #    family's accepted substitutions ─────────────────────────────────
+    oil = await _ingredient(client, "Vegetable oil", category="pantry")
+    await _post(client, f"{oil['self']}/-/accept")
+    res = await _post(client, "/api/substitutions", {
+        "from_ingredient_id": _id(butter), "to_ingredient_id": _id(oil),
+        "ratio": 0.8, "context": "sautéing"})
+    butter_to_oil = res.json()
+    # a suggested substitution is not offered — the acceptance set is
+    # accepted rows only
+    r = await _post(client, f"{line['self']}/-/substitute",
+                    {"substitution_id": _id(butter_to_oil)})
+    assert r.status_code == 409, r.text
+    await _post(client, f"{butter_to_oil['self']}/-/accept")
+    r = await _post(client, f"{line['self']}/-/substitute",
+                    {"substitution_id": _id(butter_to_oil)})
+    assert r.status_code == 200, r.text
+    data = (await _fresh(client, line))["data"]
+    assert data["ingredient_name"] == "Vegetable oil"
+    assert data["grams"] == 160          # 200 g × 0.8
+    assert data["est_cost_cents"] is None  # oil has no priced product yet
+    # the consumed acceptance no longer offers: butter→margarine doesn't
+    # apply to an oil line
+    r = await _post(client, f"{line['self']}/-/substitute",
+                    {"substitution_id": _id(sub)})
+    assert r.status_code == 409, r.text

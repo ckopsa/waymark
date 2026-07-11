@@ -704,6 +704,14 @@ async def w9_make_meal_line(state: str, engine, services) -> MealLine9:
                                           "ingredient_id": iid,
                                           "grams": 500})
     services.seeded["meal_line_id"] = lid
+    # an accepted substitution from the line's ingredient, so the walker
+    # can exercise the substitute action's acceptance set
+    to_id = await _mk(engine, "ingredient",
+                      {"name": "Chicken breast", "category": "meat"})
+    await _step(engine, "ingredient", to_id, "accept")
+    sub_id = await _mk(engine, "substitution", {
+        "from_ingredient_id": iid, "to_ingredient_id": to_id})
+    await _step(engine, "substitution", sub_id, "accept")
     if MealLineState9(state) == MealLineState9.REMOVED:
         await _step(engine, "meal_line", lid, "remove")
     return await _load(engine, "meal_line", lid)

@@ -27,6 +27,7 @@ from waymark9 import (
     Derived,
     E,
     Edit,
+    Guard,
     Query,
     Ref,
     RefField,
@@ -129,6 +130,33 @@ class GramsInput(BaseModel):
     grams: int = Field(ge=1)
 
 
+class SubstituteInput(BaseModel):
+    substitution_id: Ref["substitution"] = RefField(
+        min_length=1, pick=Query(state="accepted"),
+        description="A family-accepted substitution whose from-side is "
+                    "this line's ingredient")
+
+
+async def _applicable_subs(r, ctx: Ctx) -> list[str]:
+    """The accepted substitutions FROM this line's ingredient — the
+    rendered choices, the per-line availability, and the enforcement,
+    from one set (the plan's theme_in_rotation, one kind over)."""
+    subs = await ctx.find("substitution", state="accepted",
+                          from_ingredient_id=r.data.ingredient_id, limit=100)
+    return [s.id for s in subs]
+
+
+substitution_applies = Guard(
+    name="substitution_applies",
+    judges=("substitution_id",),
+    reads=("substitution",),
+    accepts=_applicable_subs,
+    explain="Not a family-accepted substitution for this line's "
+            "ingredient — accept one on the substitutions list first.",
+    remedies=("substitution.accept",),
+)
+
+
 class MealLine(Resource):
     kind = "meal_line"
     State = MealLineState
@@ -173,6 +201,27 @@ class MealLine(Resource):
     async def set_grams(self, inp: GramsInput, ctx: Ctx) -> None:
         self.data.grams = inp.grams
         self.data.est_cost_cents = None  # re-quantity → re-price
+        self.data.priced_via = None
+        await price_line(self.data, ctx)
+
+    # swapping to a stand-in is idempotent the natural-replay way: the
+    # first invoke consumes the acceptance (the line's ingredient changes,
+    # so the substitution no longer applies), and a double-tap replays
+    # unchanged instead of denying
+    @action(from_=MealLineState.ON_RECIPE, to=MealLineState.ON_RECIPE,
+            input=SubstituteInput, guards=[substitution_applies],
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
+            display=dict(label="Substitute", order=3,
+                         description="Swap this line to a family-accepted "
+                                     "stand-in — grams convert by the "
+                                     "ratio and the estimate re-prices"))
+    async def substitute(self, inp: SubstituteInput, ctx: Ctx) -> None:
+        sub = await ctx.read("substitution", inp.substitution_id)
+        assert sub is not None  # substitution_applies ensured it
+        self.data.ingredient_id = sub.data.to_ingredient_id
+        # ingredient_name is the engine's to maintain (Ref label)
+        self.data.grams = max(1, round(self.data.grams * sub.data.ratio))
+        self.data.est_cost_cents = None
         self.data.priced_via = None
         await price_line(self.data, ctx)
 
