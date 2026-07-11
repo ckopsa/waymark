@@ -125,7 +125,10 @@
   (str "W/\"" (name kind) "-" id "-v" version "\""))
 
 (defn- body-digest [body]
-  (wire/digest (or body {})))
+  ;; exact decimals in a wire body digest as their {"dec" …} nodes
+  ;; (batch H — the first :decimal input field met the digest);
+  ;; everything else is the same canonical bytes as ever
+  (wire/digest (wire/dec-nodes (or body {}))))
 
 (defn resources
   "The kind → rdef map this engine serves: the phase-5 registry atom's

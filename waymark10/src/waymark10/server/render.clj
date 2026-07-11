@@ -235,6 +235,16 @@
 
 (defn- action-entry [defn' rdef self row ctx arg?]
   (let [{:keys [to safety display]} defn'
+        ;; per-origin consequence (batch H): a {from-state sentence}
+        ;; map resolves by the row's CURRENT state at render time —
+        ;; the one moment the origin is known. A string consequence
+        ;; already landed in :display :description at normalize.
+        display (if (and (map? (:consequence safety))
+                         (nil? (:description display)))
+                  (if-some [sentence (get (:consequence safety) (:state row))]
+                    (assoc display :description sentence)
+                    display)
+                  display)
         href (str self "/-/" (name (:name defn')))
         input-js (when (:input defn')
                    (-> (fold-acceptance (schema/json-schema (:input defn'))

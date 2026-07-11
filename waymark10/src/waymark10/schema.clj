@@ -12,7 +12,14 @@
     :waymark/ref     — a cross-resource reference id; properties carry
                        {:kind … :label … :pick …} for the engine
     :waymark/vocab   — a vocabulary token; properties carry
-                       {:open … :facet …}"
+                       {:open … :facet …}
+    :decimal         — an exact BigDecimal (batch H: the capital
+                       activity's money/percent amounts demanded it —
+                       the E.lit(\"0.02\") lesson: never floats). The
+                       storage projection, the checks, and the
+                       collection grammar already spoke the :decimal
+                       head; this registers the type they anticipated.
+                       Properties honor {:min … :max …} exactly."
   (:require [clojure.string :as str]
             [clojure.walk]
             [malli.core :as m]
@@ -82,6 +89,39 @@
     {:error/message "must be a vocabulary token"
      :json-schema {:type "string" :format "waymark-vocab"}}}))
 
+(def ^:private waymark-decimal
+  ;; exact decimals only — a JSON float decodes to BigDecimal (the
+  ;; wire mapper already parses {:bigdecimals true}), an integer or
+  ;; string coerces exactly, and validation never accepts a double
+  (m/-simple-schema
+   {:type :decimal
+    :compile
+    (fn [{:keys [min max]} _children _opts]
+      {:pred (fn [x]
+               (and (decimal? x)
+                    (or (nil? min)
+                        (>= (.compareTo ^java.math.BigDecimal x (bigdec min)) 0))
+                    (or (nil? max)
+                        (<= (.compareTo ^java.math.BigDecimal x (bigdec max)) 0))))
+       :type-properties
+       {:error/message "must be an exact decimal number"
+        :decode/wire (fn [x]
+                       (cond
+                         (decimal? x) x
+                         (number? x) (bigdec x)
+                         (string? x) (try (bigdec x)
+                                          (catch Exception _ x))
+                         :else x))
+        :encode/wire identity
+        ;; generation mirrors the small-positive posture of the other
+        ;; waymark types: amounts the walker writes validate everywhere
+        :gen/schema [:int {:min (long (or min 0))
+                           :max (long (or max 100))}]
+        :gen/fmap (fn [n] (bigdec n))
+        :json-schema (cond-> {:type "number" :format "decimal"}
+                       min (assoc :minimum min)
+                       max (assoc :maximum max))}})}))
+
 (def registry
   (mr/composite-registry
    (m/default-schemas)
@@ -89,7 +129,8 @@
    {:waymark/date waymark-date
     :waymark/instant waymark-instant
     :waymark/ref waymark-ref
-    :waymark/vocab waymark-vocab}))
+    :waymark/vocab waymark-vocab
+    :decimal waymark-decimal}))
 
 (def options {:registry registry})
 

@@ -2623,3 +2623,260 @@ stream's byte-level absences, the 503; the minted ticket naming the
 roster/presence/authors, spent and expired tickets' 401, and the
 unchanged header/anonymous joins — 4 tests, 77 assertions. The full
 suite after this landing: 317 tests / 2358 assertions, 0 failures.
+
+# 22. Batch H — the spelling catches up with the design conversation
+
+The intake disbursement transaction was the first declaration to be
+written the way its designers actually talk — "a transaction goes to
+review with its fields set", "cancelling a COMPLETED transaction is a
+different sentence from cancelling a draft", "the amount is measured
+by its value type" — and the flat `:actions`/`:schema` spelling made
+every one of those sentences a translation exercise. Batch H closes
+the gap. The discipline is unchanged and non-negotiable: **two
+spellings, one law**. Every new spelling is sugar that desugars at the
+declaration gate (`normalize-resource`, before anything compiles or
+fingerprints) into the SAME plain map the split spelling writes by
+hand, so the fingerprint cannot tell the spellings apart.
+`ideal_declaration_test` is the acceptance: the disbursement
+declaration in the new spelling, its fully desugared twin, normalized
+maps equal, hashes byte-identical, and the whole lifecycle walked over
+the wire — draft → review → done, kick-backs, counts, the acknowledge
+protocol, the cancel cascade.
+
+## Typed field words (`waymark10.declare`)
+
+`one-of`, `date`, `flag`, `quantity`, `money`, `percent`, `prose`,
+`ref`, `measured-by` — plain functions returning the exact malli form
+the inline spelling writes (`(one-of :dollars :pct)` IS
+`[:enum "dollars" "pct"]`). Entry properties (a ref's `{:kind …}`, the
+prose/money/percent `:x-display`) and editor policy (a prose draft)
+ride as namespaced METADATA: a keyword cannot carry meta, so a word
+with properties wraps its form in a one-element vector the `:fields`
+reader unwraps — the form the schema compiles is identical either
+way. Outside `:fields`, spell the entry properties yourself; the
+words' metadata is `:fields` vocabulary.
+
+Money and percent forced `:decimal` into the schema registry — the
+exact-BigDecimal type the storage projection, the checks, and the
+collection grammar already spoke but nobody had registered (the
+`E.lit("0.02")` lesson: never floats; a double fails validation).
+`{:min … :max …}` are honored exactly; wire decode coerces JSON
+numbers and strings through `bigdec`. And the first `:decimal` INPUT
+field found a real engine gap: the input digest's canonical bytes
+refuse raw BigDecimals by design, so `body-digest` now re-spells
+decimals as the wire's `{"dec" "…"}` nodes before hashing
+(`wire/dec-nodes`) — the one lawful door the refusal message always
+named. No existing digest changes (a decimal would have thrown).
+
+## `measured-by` — the discriminated amount, scoped honestly
+
+`(measured-by :value_type {:dollars (money :usd) :shares (quantity)
+:pct (percent)})` wants a sibling-dispatched union: a Pct amount under
+a `:dollars` value type should be unrepresentable. **Recorded gap:**
+malli validates one entry's VALUE — a `:multi` dispatching on a
+sibling cannot live in the entry's form, and wrapping the whole data
+schema breaks every `:map` introspection. The closest check-based
+equivalent landed instead: the stored form is the arms' one shared
+scalar family (`:decimal`; mixed families refuse at the word), the arm
+map rides as `x-display` advertisement for the client, and the
+cross-field law lands as a generated code guard on the group's editor
+(`resource/measured-guard`, judging `[amount value_type]`, validating
+the input-else-stored amount against the input-else-stored measure's
+arm schema). Refused at the write, not unrepresentable — a true
+`:multi`-entry spelling is a recorded demand. The guard's check hashes
+by its canonical printed form over the sorted arm map, and the builder
+is memoized so both spellings of one editor hold one value.
+
+## `:flow` — the machine as rows
+
+    [[:draft :submit_for_review :ready_for_review
+      {:requires [fields-complete] :undo :kick_back}]
+     …]
+
+Rows of `[from action to opts?]` normalize into today's `:actions`
+map. Rules, each a refusal at the gate:
+
+- Rows sharing an action name union their origins; they must agree on
+  one destination and on everything except `:confirm` (per-origin
+  `:requires` has no spelling — a recorded demand; align the rows or
+  split the action).
+- `:requires` maps to `:guards`; `:args [[field (word …)] …]` builds
+  the required-input schema (`:input` stays legal, exclusive with
+  `:args`); `:record`, `:display`, `:edit`, `:place`, `:handler`,
+  `:emits`, `:waives`, `:unless` pass through; an unknown opt refuses
+  by name (the silent-drift rule).
+- Every non-self-loop row declares its safety story: `:undo` (the
+  honest reverse), `:confirm` (with its consequence), `:one-way`
+  (acknowledged), or an explicit `:safety`. The minted safety is
+  `{:idempotent true :reversible (from :undo) :confirm (from
+  :confirm)}` — a flow row is a lifecycle step, idempotent by
+  declaration.
+- When `:states` is not spelled, the rows ARE the machine: initial
+  first, then first appearance in row order, then unreached terminals.
+
+**Per-origin consequence — the one render capability.** An action
+reachable from several states may cost something different from each,
+and the engine had one consequence slot per action. `t/safety` now
+accepts `:consequence` as a `{from-state sentence}` map (every
+origin's sentence written — a state without one is a blind confirm
+from that state); flow rows' `:confirm` sentences assemble it
+(identical sentences collapse to the plain string — one meaning, one
+spelling). `render/action-entry` resolves the sentence by the row's
+CURRENT state — the one moment the origin is known — into
+`display.description`, exactly where a string consequence already
+rode. Consequence sentences are advertisement, never law: the
+fingerprint is untouched. Recorded limit: consequence sentences do not
+interpolate (`{prepared}` in a consequence renders literally) — the
+landed intake sentences are static.
+
+## `:undo` pointers — the honest reverse, by name
+
+`:undo :kick_back` declares reversibility by naming the reverse. At
+defresource time, once every action is normalized, the pointer is
+VERIFIED: the named action exists, departs from this edge's
+destination (`(:to a) ∈ (:from undo)`), and lands exactly where this
+edge began (`(:from a) = #{(:to undo)}` — so a multi-origin action has
+no single honest reverse, and says so). A verified pointer stamps
+`:safety :reversible true` — the one key the render layer reads — and
+is stripped; a lying pointer is a definition error at the declaration
+site. Bare `:reversible true` stays legal (check-reversible still
+guards it graph-wide); the pointer is the spelling that cannot rot.
+Works on flow rows and on plain `:actions` entries alike.
+
+## `defguard` — sentence-first guards
+
+    (defguard blocking-items-reviewed
+      (refuse "Every compliance-class checklist item is reviewed —
+               {open_blocking} remain.")
+      '(zero? (var :open_blocking)))
+
+`waymark10.declare/defguard` (the CODE-guard `g/defguard` is
+untouched) defs the plain expression-guard map `g/expr` builds — pure
+data, so the def'd and inline spellings are one value. Validation runs
+at the def line (the defaction pattern); a sentence with no law
+refuses ("a guard is a verdict"). Three authored conveniences desugar
+at the gate, before `g/expr` validates — they are defguard spellings,
+NOT expression-vocabulary nodes (the evaluator and the wire encoding
+never see them):
+
+- `(var :fact)` → `(data :fact)` — in a guard, a bare fact name reads
+  the stored document.
+- `(zero? e)` → `(= 0 e)`.
+- `(present? :a :b)` → `(and (is-set (data :a)) (is-set (data :b)))`.
+
+Sentence placeholders the law's own `(input …)` reads do not cover
+land as `(data placeholder)` `:vars` garnish — the same garnish the
+split spelling writes by hand, rendered by the existing
+`render-reason` machinery (no new interpolation). `(warn "…"
+:acknowledge-by-name)` is severity `:warning`; the flag documents the
+standing E1 protocol (warnings are always acknowledged by guard name)
+and changes nothing.
+
+**Named demands, not fakes:** `(sole-preparer? (var :actor)
+:checklist_items)` needs a query over the owned items' transition
+logs, `(pushed? :beacon)` needs mirror push state — engine facts that
+do not exist. The four-eyes and already-pushed guards stay OUT of the
+landed acceptance declaration; they are the checklist batch's and the
+Beacon batch's first demands, recorded in the log below.
+
+## `:fields` — lifecycle groups
+
+    :fields {:at-create […] :while-open […] :support […]
+             :when {:initial_subscription [[:risk_rating (ref …)]]}
+             :open #{:draft :ready_for_review}}
+
+Normalizes to `:schema` + `:create-schema` + generated editors + the
+`:when` create gates (one home: declaring `:schema`/`:create-schema`
+beside `:fields` refuses). Group semantics, each a sentence:
+
+- `:at-create` fields are create input and fixed after — required in
+  both schemas, written by no generated editor.
+- `:while-open` fields get a generated editor (`update_fields`) in
+  each OPEN state. `:open` (default `#{initial}`) names where
+  authoring still happens — the machine cannot infer where authoring
+  ends, so the declaration says.
+- `:support` fields' editor (`update_support`) exists in every
+  non-terminal state, carrying the union of the group's prose draft
+  policy (`{:shared true :live true}` — the update_recipe concept).
+- `:when {value rows}` fields are optional everywhere plus a
+  conditional-required create gate (a pure expr guard: `(or (not=
+  (input :type) "initial_subscription") (is-set (input
+  :risk_rating)))`) keyed on the one `:at-create` one-of field that
+  offers every `:when` value. Recorded scope: `:when` fields are
+  create-time only — no generated editor writes them.
+- A top-level `:derived` COUNT fact with no entry gets its
+  `[:maybe :int]` entry appended (a count fact is an `:int` by law);
+  any other derived fact still declares its own shape.
+
+Generated editors: all-optional `[:maybe …]` inputs, `:edit
+{:prefill …}` (so the fence rides — an Edit implies If-Match), the
+`overwrite` safety, and a handler whose whole behavior is
+`resource/apply-field-edits` (write exactly the keys sent), its
+identity the canonical printed form, its builder memoized so both
+spellings hold one value. **Recorded limit — the multi-state
+self-loop:** an action has one `:to`, so "editable in draft AND
+ready_for_review" cannot be one action; several open states mean
+several editors (`update_fields_in_<state>`; a single state keeps the
+bare name). A `:to :stay` spelling would touch the transition
+algorithm and is left as a named demand.
+
+## The owns map
+
+`:owns {:checklist_items {:kind :checklist_item :on {:cancel
+:cancel}}}` normalizes to today's vector spelling, `:via` defaulting
+to `<kind>_id` (the ref back at the parent), and every aggregate that
+names the EDGE (`{:count {:owns :checklist_items}}`) renames onto the
+child kind the engine's aggregate grammar speaks. Alongside it,
+`normalize-derived-spec` canonicalizes aggregate `:where` values one
+step further: scalars become one-value sets (`{:blocking true}` ≡
+`{:blocking #{true}}`) and keyword tokens become their names
+(`#{:reviewed}` ≡ `#{"reviewed"}` — stored data is JSON and never
+holds a keyword; the maintainer's SQL always compared them equal, so
+now the fingerprint does too).
+
+## What the acceptance declaration could not say, recorded
+
+- `{:not :reviewed}` count-wheres have no spelling — the landed law
+  names the open states positively (`#{:pending :prepared}`), which is
+  also the truth cancelled items demanded.
+- `:overdue?` is out: a derived fact cannot read the machine `:state`,
+  and `past?` (a clock-relative comparison word) lands only with the
+  declaration that can carry it — both named demands.
+- Summary templates still read `{data.…}` roots; `{fund/name}`-style
+  ref-label paths in summaries are unspelled (the `:label`-maintained
+  name field is the current door).
+- Field names keep the token rule (`:blocking?`/`:end_of_period?` →
+  `:blocking`/`:end_of_period` — a promoted column is a snake token).
+
+## The proof and the runs
+
+    cd waymark10 && clojure -M:test \
+      --focus waymark10.batch-h-defguard-test \
+      --focus waymark10.batch-h-flow-test \
+      --focus waymark10.batch-h-fields-test \
+      --focus waymark10.ideal-declaration-test
+
+Per-delta invariance in the batch-G pattern (sugared vs split →
+identical normalized maps AND identical fingerprint hashes), behavior
+where the engine grew capability (per-origin consequence renders per
+state; undo verification rejects the lying pointer three ways;
+measured-by refuses the mismatched amount over the wire; the
+conditional requirement fires only for the matching type; the E1
+acknowledge walk), and the disbursement acceptance end to end
+against the Postgres test engine. Full suite after this landing: 339
+tests / 2503 assertions, 0 failures (the pre-existing events-test
+dispatcher/table-drop flake under some namespace orderings is
+unrelated and passes focused); mealplan10 stays green.
+
+## Vocabulary additions log (batch H)
+
+| Node | Demanded by | Date |
+| --- | --- | --- |
+| `:decimal` (schema type, not an expr node) | disbursement.amount / the fee percents — exact money, never floats | 2026-07-10 |
+| `one-of`/`date`/`flag`/`quantity`/`money`/`percent`/`prose`/`ref` (declare words, not expr nodes) | the disbursement `:fields` groups | 2026-07-10 |
+| `measured-by` (declare word + generated editor check) | disbursement.amount measured by value_type | 2026-07-10 |
+| `zero?`, `present?`, guard-scope `(var …)` (defguard authored spellings, desugared at the def line — the expr vocabulary itself is unchanged) | fields-complete / blocking-items-reviewed / all-items-reviewed | 2026-07-10 |
+| `:flow` rows, `:undo` pointers, `:fields` groups, owns map (declaration sugar) | the disbursement lifecycle | 2026-07-10 |
+| per-origin `:consequence` map (safety + render) | cancel's three sentences | 2026-07-10 |
+| `wire/dec-nodes` at the input digest | the first `:decimal` input body | 2026-07-10 |
+| NAMED DEMANDS (not landed): `sole-preparer?` (checklist batch), `pushed?` (Beacon/mirror batch), `{:not …}` wheres, `past?` + state-reading derived facts (`:overdue?`), per-origin `:requires`, `:to :stay` multi-state self-loops, consequence interpolation, `{ref/label}` summary paths | the ideal disbursement spelling, §22 | 2026-07-10 |

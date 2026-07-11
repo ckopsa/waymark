@@ -47,7 +47,15 @@
   "Safety is declared, never inferred: :idempotent, :reversible and
   :confirm must all be present booleans. :confirm demands a
   :consequence sentence (no blind confirms); :one-way (an acknowledged
-  irreversible door) excludes :reversible and :confirm."
+  irreversible door) excludes :reversible and :confirm.
+
+  Batch H: :consequence may be a {from-state sentence} map — an action
+  reachable from several states may cost something different from each
+  (cancelling a draft discards nothing; cancelling a completed
+  transaction is a different sentence). Every origin's sentence must
+  be written — a state without one is a blind confirm from that state.
+  The render layer selects by the row's CURRENT state; the fingerprint
+  is untouched (consequence sentences are advertisement, never law)."
   [{:keys [idempotent reversible confirm fence consequence one-way]
     :as s}]
   (doseq [k [:idempotent :reversible :confirm]]
@@ -55,7 +63,21 @@
       (throw (definition-error
               (str "safety declares all of :idempotent/:reversible/:confirm explicitly; "
                    k " is missing or not a boolean")))))
-  (when (and confirm (or (nil? consequence) (str/blank? consequence)))
+  (when (map? consequence)
+    (when (empty? consequence)
+      (throw (definition-error
+              "a per-origin :consequence map with no entries says nothing — write the sentences")))
+    (doseq [[from sentence] consequence]
+      (when-not (keyword? from)
+        (throw (definition-error
+                (str "per-origin :consequence keys are from-state keywords, got "
+                     (pr-str from)))))
+      (when (or (not (string? sentence)) (str/blank? sentence))
+        (throw (definition-error
+                (str "per-origin :consequence for state " from
+                     " is blank — a blind confirm from that state"))))))
+  (when (and confirm (or (nil? consequence)
+                         (and (string? consequence) (str/blank? consequence))))
     (throw (definition-error
             "confirm=true without a :consequence is a blind confirm — say what happens")))
   (when (and one-way (or reversible confirm))

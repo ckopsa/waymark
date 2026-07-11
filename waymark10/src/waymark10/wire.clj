@@ -163,6 +163,19 @@
                    (.getBytes s java.nio.charset.StandardCharsets/UTF_8))]
     (str/join (map #(format "%02x" %) d))))
 
+(defn dec-nodes
+  "A JSON-shaped value with every exact decimal re-spelled as its wire
+  node ({\"dec\" \"0.02\"}) — the input-digest boundary's pre-pass
+  (batch H: the first :decimal input field met the digest). Raw
+  BigDecimals stay refused from canonical bytes everywhere else; this
+  walk is how a decimal-carrying body reaches them lawfully."
+  [v]
+  (cond
+    (decimal? v) {"dec" (.toPlainString ^BigDecimal v)}
+    (map? v) (into {} (map (fn [[k x]] [k (dec-nodes x)])) v)
+    (sequential? v) (mapv dec-nodes v)
+    :else v))
+
 (defn digest
   "Canonical digest of a JSON-shaped value (fingerprint hashes,
   input digests)."

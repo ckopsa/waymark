@@ -16,7 +16,17 @@
   compiles or fingerprints. Two spellings, one law: the colocated
   and split spellings normalize to the same map, so a pure style
   refactor mints zero revisions. Declaring a concern both ways for
-  one field is the :one-home definition error."
+  one field is the :one-home definition error.
+
+  Batch H widens the authored surface with the same discipline —
+  every spelling desugars at this gate, before anything compiles or
+  fingerprints: :fields lifecycle groups (→ :schema, :create-schema,
+  generated editors, conditional create gates), :flow transition rows
+  (→ :actions, per-origin :confirm sentences landing as a consequence
+  map the render layer resolves by current state), :undo pointers
+  (verified against the graph, stamping :reversible true, then
+  stripped), and the {edge-name {:kind …}} owns map (→ the vector
+  spelling, aggregates renamed onto the child kind)."
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
             [waymark10.expr :as expr]
@@ -91,7 +101,11 @@
                    (conj guards (g/unless unless-of))
                    guards)
           display (or (:display a) {})
-          display (if (and (:consequence safety) (nil? (:description display)))
+          ;; a string consequence advertises as the description here;
+          ;; a per-origin map waits for render, where the row's
+          ;; current state picks the sentence (batch H)
+          display (if (and (string? (:consequence safety))
+                           (nil? (:description display)))
                     (assoc display :description (:consequence safety))
                     display)]
       (assoc a
@@ -103,6 +117,22 @@
              :waives (set (:waives a))
              :emits (vec (:emits a))))))
 
+(defn- where-value-set
+  "One where entry's values as a canonical set: a collection becomes
+  a set, a scalar a one-value set ({:blocking true} means {:blocking
+  #{true}}), and keyword tokens become their names ({:state
+  #{:reviewed}} means {:state #{\"reviewed\"}} — stored data is JSON
+  and never holds a keyword; the maintainer's SQL already compared
+  them equal, so the gate spells them equal too). Batch H; a map
+  value ({:not …} has no spelling) passes through for the checks to
+  refuse by name."
+  [v]
+  (if (map? v)
+    v
+    (into #{}
+          (map (fn [x] (if (keyword? x) (name x) x)))
+          (if (coll? v) v [v]))))
+
 (defn normalize-derived-spec
   "Canonicalize one derived spec: expression trees normalized, count
   :where values as sets — two spellings of one membership are one
@@ -113,10 +143,10 @@
     (:expr d) (update :expr expr/normalize)
     (:vars d) (update :vars update-vals expr/normalize)
     (get-in d [:count :where])
-    (update-in [:count :where] update-vals set)
+    (update-in [:count :where] update-vals where-value-set)
     ;; :sum mirrors :count (batch C) — same membership rule
     (get-in d [:sum :where])
-    (update-in [:sum :where] update-vals set)))
+    (update-in [:sum :where] update-vals where-value-set)))
 
 (defn- normalize-derived [rmap]
   (update rmap :derived
@@ -314,9 +344,584 @@
                             (partial part-scope-spec kind))
               (project-sort kind (pick :sort))))))))
 
+;; ── batch H: the richer authored spellings ──────────────────────────
+;; :fields lifecycle groups, :flow transition rows, :undo pointers,
+;; and the owns map — sugar that desugars HERE, at the declaration
+;; gate, before anything compiles or fingerprints. Each spelling
+;; normalizes into the same canonical keys the split spelling writes
+;; by hand: two spellings, one law.
+
+;; — the word channel: waymark10.declare's typed field words return
+;;   plain malli forms; entry properties and editor policy ride as
+;;   namespaced metadata (a keyword cannot carry meta, so a word with
+;;   properties wraps its form in a one-element vector this reader
+;;   unwraps). Data, not code: this namespace never requires declare.
+
+(defn word-form
+  "The malli form of a field word's return value, the one-element
+  metadata wrapper unwrapped."
+  [w]
+  (if (and (vector? w) (= 1 (count w)) (seq (meta w)))
+    (first w)
+    w))
+
+(defn word-props
+  "The entry properties a field word carries as metadata."
+  [w]
+  (:waymark10/props (meta w)))
+
+(defn word-edit [w] (:waymark10/edit (meta w)))
+(defn word-measured [w] (:waymark10/measured (meta w)))
+
+;; — the generated editor's handler and the measured-by check: public
+;;   builders, so the split spelling can cite the same values (the
+;;   batch-G shared-object precedent) and the canonical printed form
+;;   is one law however it is spelled.
+
+(defn apply-field-edits
+  "The generated editor's whole behavior: write exactly the input
+  fields the caller sent, nothing else — an absent key is not an
+  erase."
+  [row inp fields]
+  (reduce (fn [r f]
+            (if (contains? inp f)
+              (assoc-in r [:data f] (get inp f))
+              r))
+          row
+          fields))
+
+(def field-writer
+  "The generated editor's handler, its identity the canonical printed
+  form (the defhandler discipline: the fingerprint hashes the law,
+  never the object). Memoized on the field list, so the sugared and
+  split spellings of one editor hold the SAME value — one law, one
+  object (the batch-G shared-object precedent, made automatic)."
+  (memoize
+   (fn [fields]
+     (let [fields (vec fields)]
+       (with-meta (fn [row inp _ctx] (apply-field-edits row inp fields))
+         {:waymark10/form (list 'fn '[row inp _ctx]
+                                (list 'waymark10.resource/apply-field-edits
+                                      'row 'inp fields))})))))
+
+(defn measured-verdict
+  "The measured-by law at the write: the amount (input, else stored)
+  must fit the arm its measure (input, else stored) selects. A blank
+  amount passes — required-ness is the schema's concern; a set amount
+  with no measure, or outside its arm, denies."
+  [row inp {:keys [field by arms]}]
+  (let [pick (fn [f] (if (contains? inp f) (get inp f) (get-in row [:data f])))
+        v (pick field)
+        m (pick by)]
+    (cond
+      (nil? v) (t/allow)
+      (nil? m) (t/deny {:vars {field v by "(unset)"}})
+      :else (let [arm (get arms (if (keyword? m) (name m) (str m)))]
+              (if (and arm (schema/validate arm v))
+                (t/allow)
+                (t/deny {:vars {field v by m}}))))))
+
+(def measured-guard
+  "The generated cross-field check a measured-by field lands on its
+  group's editor — the recorded closest-check equivalent of the
+  sibling-dispatched union the schema layer cannot express. The check
+  fn's identity is its canonical printed form over the sorted arm
+  map, so the spelling (generated or cited) never moves the law;
+  memoized like field-writer, so both spellings hold one value."
+  (memoize
+   (fn [{:keys [field by arms]}]
+     (let [spec {:field field :by by :arms (into (sorted-map) arms)}]
+       (g/guard
+        {:name (keyword (str (name field) "_measured_by_" (name by)))
+         :judges [field by]
+         :explain (str "{" (name field) "} is not a valid {" (name by)
+                       "} amount.")
+         :check (with-meta (fn [row inp _ctx] (measured-verdict row inp spec))
+                  {:waymark10/form
+                   (list 'fn '[row inp _ctx]
+                         (list 'waymark10.resource/measured-verdict
+                               'row 'inp spec))})})))))
+
+;; — :fields lifecycle groups (batch H, delta 6) ─────────────────────
+
+(defn- sugar-err [kind where msg]
+  (throw (t/definition-error
+          (str (some-> kind name) " " where " — " msg))))
+
+(def ^:private fields-group-keys #{:at-create :while-open :support :when :open})
+
+(defn- parse-field-rows [kind where rows]
+  (when-not (and (vector? rows) (every? vector? rows))
+    (sugar-err kind where "a group is a vector of [field (word …)] rows"))
+  (mapv (fn [row]
+          (when-not (and (= 2 (count row)) (keyword? (first row)))
+            (sugar-err kind where
+                       (str "rows are [field (word …)] pairs, got "
+                            (pr-str row))))
+          (let [[f w] row]
+            {:field f
+             :form (word-form w)
+             :props (word-props w)
+             :edit (word-edit w)
+             :measured (some-> (word-measured w) (assoc :field f))}))
+        rows))
+
+(defn- data-entry
+  "One row as a data-schema entry: at-create fields are required (the
+  document is born with them); every later field is optional and
+  nullable — it starts blank."
+  [{:keys [field form props]} required?]
+  (if required?
+    (if (seq props) [field props form] [field form])
+    [field (merge {:optional true} props) [:maybe form]]))
+
+(defn- editor-input-entry [{:keys [field form props]}]
+  [field (merge {:optional true} props) [:maybe form]])
+
+(defn- editor-name [base states s]
+  (if (= 1 (count states))
+    (keyword base)
+    (keyword (str base "_in_" (name s)))))
+
+(defn- group-draft
+  "The group's one draft policy: the union of its prose fields'
+  declared drafts (shared if any is shared, live if any is live) —
+  one editor, one draft sub-resource, the update_recipe shape."
+  [rows]
+  (let [drafts (keep (comp :draft :edit) rows)]
+    (when (seq drafts)
+      {:shared (boolean (some :shared drafts))
+       :live (boolean (some :live drafts))})))
+
+(defn- editor-action
+  [kind where label rows state]
+  (let [fields (mapv :field rows)
+        measured (keep :measured rows)
+        _ (doseq [m measured]
+            (when-not (some #(= (:by m) (:field %)) rows)
+              (sugar-err kind where
+                         (str "field " (:field m) " is measured by " (:by m)
+                              ", which is not a field of the same group — the "
+                              "generated editor judges them together"))))
+        draft (group-draft rows)]
+    (cond-> {:from #{state} :to state
+             :input (into [:map] (map editor-input-entry) rows)
+             :edit (cond-> {:prefill fields}
+                     draft (assoc :draft draft))
+             :guards (mapv measured-guard measured)
+             :safety {:idempotent true :reversible false :confirm false}
+             :handler (field-writer fields)
+             :display {:label label}})))
+
+(defn- when-discriminator
+  "The at-create one-of field whose values cover every :when key —
+  the field the conditional requirement dispatches on."
+  [kind at-create-rows when-map]
+  (let [wanted (set (map name (keys when-map)))
+        candidates (filterv (fn [{:keys [form]}]
+                              (and (vector? form) (= :enum (first form))
+                                   (every? (set (rest form)) wanted)))
+                            at-create-rows)]
+    (cond
+      (empty? candidates)
+      (sugar-err kind ":fields :when"
+                 (str "no :at-create one-of field offers every key of "
+                      (vec (sort wanted))
+                      " — the conditional requirement needs its discriminating "
+                      "selection"))
+      (< 1 (count candidates))
+      (sugar-err kind ":fields :when"
+                 (str "fields " (mapv :field candidates) " each offer every "
+                      ":when key — name the values so exactly one field "
+                      "discriminates"))
+      :else (:field (first candidates)))))
+
+(defn conditional-required-guard
+  "The :when groups' create gate: outside the discriminating value the
+  guard has nothing to say; under it, the field must be set. Pure
+  expression data — the split spelling writes the identical g/expr."
+  [by by-value field]
+  (g/expr {:name (keyword (str (name field) "_required_for_" (name by-value)))
+           :when (list 'or
+                       (list 'not= (list 'input by) (name by-value))
+                       (list 'is-set (list 'input field)))
+           :explain (str "A " (str/replace (name by-value) "_" " ")
+                         " declares its "
+                         (str/replace (name field) "_" " ")
+                         " at create.")}))
+
+(defn- desugar-fields
+  "The :fields lifecycle groups → :schema, :create-schema, generated
+  editors, and the :when create gates. Group semantics, each a
+  sentence:
+  - :at-create fields are create input and fixed after — required in
+    both schemas, written by no generated editor.
+  - :while-open fields get one generated editor per OPEN state
+    (:open, default #{initial} — the machine cannot infer where
+    authoring ends, so the declaration says; a multi-state self-loop
+    has no v10 spelling, so several open states mean several
+    editors, update_fields_in_<state>).
+  - :support fields' generated editor exists in every non-terminal
+    state, carrying the union of the group's prose draft policy.
+  - :when {value rows} fields are optional everywhere plus a
+    conditional-required create gate keyed on the one :at-create
+    one-of field that offers every :when value.
+  - a top-level :derived COUNT fact with no declared entry gets its
+    [:maybe :int] entry appended (a count fact is an :int by law);
+    any other derived fact still declares its own entry.
+  Editors write through waymark10.resource/apply-field-edits; a
+  measured-by field lands measured-guard on its group's editors."
+  [rmap]
+  (let [fields (:fields rmap)
+        kind (:kind rmap)]
+    (if (nil? fields)
+      rmap
+      (do
+        (when-not (map? fields)
+          (sugar-err kind ":fields" "is a map of lifecycle groups"))
+        (when-some [unknown (seq (sort (remove fields-group-keys (keys fields))))]
+          (sugar-err kind ":fields"
+                     (str "unknown group(s) " (vec unknown) "; groups are "
+                          ":at-create, :while-open, :support, :when, :open")))
+        (doseq [k [:schema :create-schema]]
+          (when (contains? rmap k)
+            (sugar-err kind ":fields"
+                       (str "declares " k " too — the groups ARE the schema; "
+                            "a concern has exactly one home"))))
+        (let [states (vec (:states rmap))
+              _ (when (empty? states)
+                  (sugar-err kind ":fields" "needs the declared :states"))
+              terminal (set (:terminal rmap))
+              initial (:initial rmap)
+              at-create (parse-field-rows kind ":fields :at-create"
+                                          (:at-create fields []))
+              while-open (parse-field-rows kind ":fields :while-open"
+                                           (:while-open fields []))
+              support (parse-field-rows kind ":fields :support"
+                                        (:support fields []))
+              when-map (:when fields {})
+              _ (when-not (and (map? when-map) (every? keyword? (keys when-map)))
+                  (sugar-err kind ":fields :when"
+                             "is a {discriminating-value [[field (word …)] …]} map"))
+              when-rows (into (sorted-map)
+                              (map (fn [[v rows]]
+                                     [v (parse-field-rows
+                                         kind (str ":fields :when " v) rows)]))
+                              when-map)
+              open (let [o (:open fields #{initial})]
+                     (when-not (and (set? o) (seq o) (every? keyword? o))
+                       (sugar-err kind ":fields :open"
+                                  "is a non-empty set of open (still-authoring) states"))
+                     (when-some [bad (seq (sort (remove (set states) o)))]
+                       (sugar-err kind ":fields :open"
+                                  (str (vec bad) " are not declared states")))
+                     (when-some [dead (seq (sort (filter terminal o)))]
+                       (sugar-err kind ":fields :open"
+                                  (str (vec dead) " are terminal — nothing is "
+                                       "authored after the end")))
+                     (filterv (set o) states))
+              non-terminal (filterv (complement terminal) states)
+              declared (set (map :field (concat at-create while-open support
+                                                (mapcat val when-rows))))
+              count-entries
+              (into []
+                    (keep (fn [[fact spec]]
+                            (when-not (contains? declared fact)
+                              (if (contains? spec :count)
+                                [fact {:optional true} [:maybe :int]]
+                                (sugar-err kind ":fields"
+                                           (str "derived fact " fact " has no "
+                                                "field entry — :fields appends "
+                                                ":int entries for count facts "
+                                                "only; declare this one's "
+                                                "shape yourself"))))))
+                    (sort-by key (:derived rmap)))
+              schema (-> [:map]
+                         (into (map #(data-entry % true)) at-create)
+                         (into (map #(data-entry % false)) while-open)
+                         (into (map #(data-entry % false)) support)
+                         (into (comp (mapcat val) (map #(data-entry % false)))
+                               when-rows)
+                         (into count-entries))
+              create-schema (-> [:map]
+                                (into (map #(data-entry % true)) at-create)
+                                (into (comp (mapcat val)
+                                            (map #(data-entry % false)))
+                                      when-rows))
+              editors
+              (into {}
+                    (concat
+                     (when (seq while-open)
+                       (for [s open]
+                         [(editor-name "update_fields" open s)
+                          (editor-action kind ":fields :while-open"
+                                         "Update fields" while-open s)]))
+                     (when (seq support)
+                       (for [s non-terminal]
+                         [(editor-name "update_support" non-terminal s)
+                          (editor-action kind ":fields :support"
+                                         "Update support" support s)]))))
+              _ (doseq [aname (keys editors)]
+                  (when (contains? (:actions rmap) aname)
+                    (sugar-err kind ":fields"
+                               (str "generated editor " aname " collides with "
+                                    "a declared action of the same name"))))
+              when-guards
+              (when (seq when-rows)
+                (let [by (when-discriminator kind at-create when-rows)]
+                  (into []
+                        (for [[v rows] when-rows
+                              {:keys [field]} rows]
+                          (conditional-required-guard by v field)))))]
+          (-> rmap
+              (dissoc :fields)
+              (assoc :schema schema)
+              (assoc :create-schema create-schema)
+              (update :actions #(merge editors (or % {})))
+              (cond-> (seq when-guards)
+                (update :create-guards #(into (vec (or % [])) when-guards)))))))))
+
+;; — :flow transition rows (batch H, delta 3) ────────────────────────
+
+(def ^:private flow-opt-keys
+  #{:requires :args :input :confirm :undo :one-way :safety :display
+    :record :edit :place :handler :emits :waives :unless})
+
+(defn- args->input
+  "Flow :args rows → the action's input schema. Every argument is
+  required — an action that asks, asks for a reason."
+  [kind aname rows]
+  (into [:map]
+        (map (fn [{:keys [field form props]}]
+               (if (seq props) [field props form] [field form])))
+        (parse-field-rows kind (str ":flow " (name aname) " :args") rows)))
+
+(defn- parse-flow-row [kind row]
+  (when-not (and (vector? row) (<= 3 (count row) 4)
+                 (every? keyword? (take 3 row)))
+    (sugar-err kind ":flow"
+               (str "rows are [from action to opts?], got " (pr-str row))))
+  (let [[from action to opts] row]
+    (when (and opts (not (map? opts)))
+      (sugar-err kind ":flow" (str (name action) ": opts must be a map")))
+    (when-some [unknown (seq (sort (remove flow-opt-keys (keys opts))))]
+      (sugar-err kind ":flow"
+                 (str (name action) " declares unknown opt(s) " (vec unknown)
+                      "; a flow row speaks " (vec (sort flow-opt-keys)))))
+    (when (and (:args opts) (:input opts))
+      (sugar-err kind ":flow"
+                 (str (name action) " declares both :args and :input — "
+                      "one spelling per action")))
+    {:from from :action action :to to :opts (or opts {})}))
+
+(defn- flow-action
+  "One action's rows → today's action map. Rows sharing a name agree
+  on everything but :confirm (each origin may cost something
+  different — the sentences land as a per-origin consequence map);
+  per-origin :requires has no spelling yet (a recorded demand)."
+  [kind aname rows]
+  (let [tos (distinct (map :to rows))
+        _ (when (< 1 (count tos))
+            (sugar-err kind ":flow"
+                       (str (name aname) " lands in " (vec tos)
+                            " — one action, one destination")))
+        to (first tos)
+        shared-of (fn [row] (dissoc (:opts row) :confirm))
+        shareds (distinct (map shared-of rows))
+        _ (when (< 1 (count shareds))
+            (let [ks (into (sorted-set)
+                           (comp (mapcat keys))
+                           shareds)
+                  differing (filterv (fn [k]
+                                       (< 1 (count (distinct
+                                                    (map #(get % k) shareds)))))
+                                     (vec ks))]
+              (sugar-err kind ":flow"
+                         (str (name aname) "'s rows disagree on " differing
+                              " — per-origin " differing " has no spelling "
+                              "(a recorded demand); align the rows or split "
+                              "the action"))))
+        opts (first shareds)
+        confirms (into {}
+                       (keep (fn [{:keys [from opts]}]
+                               (when-some [c (:confirm opts)]
+                                 (when (or (not (string? c)) (str/blank? c))
+                                   (sugar-err kind ":flow"
+                                              (str (name aname) " from " from
+                                                   ": :confirm is the consequence "
+                                                   "sentence")))
+                                 [from c])))
+                       rows)
+        _ (when (and (seq confirms) (< (count confirms) (count rows)))
+            (sugar-err kind ":flow"
+                       (str (name aname) " confirms from some origins and not "
+                            "others — every origin of a confirmed action "
+                            "writes its consequence")))
+        consequence (when (seq confirms)
+                      (let [sentences (distinct (vals confirms))]
+                        (if (= 1 (count sentences))
+                          (first sentences)
+                          confirms)))
+        self-loop? (every? #(= (:from %) to) rows)
+        safety
+        (if-some [s (:safety opts)]
+          (do (when (or (seq confirms) (:undo opts) (:one-way opts))
+                (sugar-err kind ":flow"
+                           (str (name aname) ": an explicit :safety is the "
+                                "whole story — :confirm/:undo/:one-way do not "
+                                "combine with it")))
+              s)
+          (let [reversible (boolean (:undo opts))
+                confirm? (boolean (seq confirms))
+                one-way (:one-way opts)]
+            (when-not (or reversible confirm? one-way self-loop?)
+              (sugar-err kind ":flow"
+                         (str (name aname) " declares no safety story — "
+                              ":undo names the honest reverse, :confirm "
+                              "writes the consequence, :one-way acknowledges "
+                              "the door, or spell :safety yourself")))
+            (cond-> {:idempotent true
+                     :reversible reversible
+                     :confirm confirm?}
+              consequence (assoc :consequence consequence)
+              one-way (assoc :one-way one-way))))]
+    (cond-> {:from (into #{} (map :from) rows)
+             :to to
+             :guards (vec (:requires opts))
+             :safety safety}
+      (:args opts) (assoc :input (args->input kind aname (:args opts)))
+      (:input opts) (assoc :input (:input opts))
+      (:undo opts) (assoc :undo (:undo opts))
+      (:display opts) (assoc :display (:display opts))
+      (:record opts) (assoc :record (:record opts))
+      (:edit opts) (assoc :edit (:edit opts))
+      (:place opts) (assoc :place (:place opts))
+      (:handler opts) (assoc :handler (:handler opts))
+      (:emits opts) (assoc :emits (:emits opts))
+      (:waives opts) (assoc :waives (:waives opts))
+      (:unless opts) (assoc :unless (:unless opts)))))
+
+(defn- desugar-flow
+  "The :flow rows → today's :actions map, merged beside any directly
+  declared actions (name collisions refuse — one home per action).
+  A :flow declaration IS the machine: when :states is not spelled,
+  the rows name them — initial first, then first appearance in row
+  order (each row's from, then to), then any terminal the rows never
+  reach."
+  [rmap]
+  (let [flow (:flow rmap)
+        kind (:kind rmap)]
+    (if (nil? flow)
+      rmap
+      (do
+        (when-not (vector? flow)
+          (sugar-err kind ":flow" "is a vector of [from action to opts?] rows"))
+        (let [rows (mapv #(parse-flow-row kind %) flow)
+              actions (into {}
+                            (map (fn [[aname rs]]
+                                   [aname (flow-action kind aname rs)]))
+                            (group-by :action rows))
+              states (or (:states rmap)
+                         (vec (distinct
+                               (concat (when-some [i (:initial rmap)] [i])
+                                       (mapcat (juxt :from :to) rows)
+                                       (:terminal rmap)))))]
+          (doseq [aname (keys actions)]
+            (when (contains? (:actions rmap) aname)
+              (sugar-err kind ":flow"
+                         (str (name aname) " is also declared in :actions — "
+                              "one home per action"))))
+          (-> rmap
+              (dissoc :flow)
+              (assoc :states states)
+              (update :actions #(merge actions (or % {})))))))))
+
+;; — :undo pointers (batch H, delta 4) ───────────────────────────────
+
+(defn- verify-undo-pointers
+  "An :undo pointer is verified where every action is known, then
+  stripped — its residue is the :reversible true it already stamped
+  (the one key the render layer reads). The precise inversion rule:
+  the undo departs from this action's destination, and lands exactly
+  where this action began — so a multi-origin action has no single
+  honest reverse. A bad pointer is a definition error at the
+  declaration site."
+  [rmap]
+  (let [kind (:kind rmap)]
+    (update rmap :actions
+            (fn [actions]
+              (into (sorted-map)
+                    (map (fn [[aname a]]
+                           (if-some [u-name (:undo a)]
+                             (let [u (get actions u-name)]
+                               (when-not u
+                                 (sugar-err kind (str "action " (name aname))
+                                            (str ":undo names " u-name
+                                                 ", which is not an action of "
+                                                 "this kind")))
+                               (when-not (contains? (:from u) (:to a))
+                                 (sugar-err kind (str "action " (name aname))
+                                            (str ":undo " (name u-name)
+                                                 " does not depart from "
+                                                 (:to a) " — it is not this "
+                                                 "edge's reverse")))
+                               (when-not (= (:from a) #{(:to u)})
+                                 (sugar-err kind (str "action " (name aname))
+                                            (str ":undo " (name u-name)
+                                                 " lands in " (:to u)
+                                                 ", but this action departs "
+                                                 "from " (vec (sort (:from a)))
+                                                 " — the undo must return "
+                                                 "exactly where it began")))
+                               [aname (dissoc a :undo)])
+                             [aname a])))
+                    actions)))))
+
+;; — the owns map (batch H) ──────────────────────────────────────────
+
+(defn- desugar-owns
+  "{edge-name {:kind child :on {…}}} → today's vector-of-edges
+  spelling, :via defaulting to <kind>_id (the ref back at the
+  parent), and every aggregate that names the EDGE renamed to the
+  child kind the engine's aggregate grammar speaks."
+  [rmap]
+  (let [o (:owns rmap)
+        kind (:kind rmap)]
+    (if-not (and (map? o) (seq o) (every? map? (vals o)))
+      rmap
+      (let [_ (doseq [[ename spec] (sort-by key o)]
+                (when-not (keyword? (:kind spec))
+                  (sugar-err kind ":owns"
+                             (str ename " declares no child :kind"))))
+            edges (mapv (fn [[_ spec]]
+                          (merge {:via (keyword (str (name kind) "_id"))}
+                                 spec))
+                        (sort-by key o))
+            alias->kind (into {} (map (fn [[ename spec]] [ename (:kind spec)]))
+                              o)
+            rename (fn [spec agg]
+                     (let [target (when (map? (get spec agg))
+                                    (get alias->kind
+                                         (get-in spec [agg :owns])))]
+                       (if target
+                         (assoc-in spec [agg :owns] target)
+                         spec)))]
+        (-> rmap
+            (assoc :owns edges)
+            (update :derived
+                    (fn [derived]
+                      (into {}
+                            (map (fn [[fact spec]]
+                                   [fact (-> spec (rename :count)
+                                             (rename :sum))]))
+                            derived))))))))
+
 (defn normalize-resource
   [rmap]
-  (let [{:keys [kind states initial summary]} rmap]
+  ;; flow first: a :flow declaration may derive :states, which the
+  ;; :fields groups read (open-state validation, support editors)
+  (let [rmap (-> rmap desugar-flow desugar-fields)
+        {:keys [kind states initial summary]} rmap]
     (doseq [[k v] {:kind kind :states states :initial initial :summary summary
                    :schema (:schema rmap)}]
       (when (nil? v)
@@ -335,14 +940,25 @@
       (throw (t/definition-error ":nav is :primary or :secondary")))
     (-> rmap
         project-colocated
+        desugar-owns
         (update :plural #(or % (str (name kind) "s")))
         (update :terminal set)
         (update :states vec)
         (update :actions (fn [actions]
                            (into (sorted-map)
                                  (map (fn [[aname a]]
-                                        [aname (normalize-action kind aname a)]))
+                                        ;; an :undo pointer IS the declaration
+                                        ;; of reversibility; the pointer itself
+                                        ;; is verified once every action is
+                                        ;; normalized (verify-undo-pointers)
+                                        [aname (normalize-action
+                                                kind aname
+                                                (cond-> a
+                                                  (:undo a)
+                                                  (assoc-in [:safety :reversible]
+                                                            true)))]))
                                  actions)))
+        verify-undo-pointers
         (update :create-guards #(vec (or % [])))
         (update :create-action-names #(or % #{:create}))
         (update :adoption #(or % :immediate))
