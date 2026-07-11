@@ -54,9 +54,12 @@ Theme = Annotated[str, Field(min_length=1, max_length=50)]
 
 
 class MealIngredient(BaseModel):
-    """One recipe line, tied to the pantry: the AI writes these with the
-    recipe and stamps est_cost_cents from tracked product prices (a client
-    judgment, like the recipe itself — the meal owns only the sum)."""
+    """One recipe line, tied to the pantry. Writing (ingredient, grams) is
+    enough: a blank est_cost_cents is priced by the engine at write time —
+    grams × the best tracked product's unit price (preferred store first,
+    else cheapest) — a deterministic lookup, not a judgment, so it doesn't
+    wait on an agent. An explicit stamp wins (a client may know better,
+    e.g. whole-package math)."""
 
     ingredient_id: Ref["ingredient"] = RefField(
         min_length=1, label="ingredient_name", pick=Query(state="active"),
@@ -67,8 +70,10 @@ class MealIngredient(BaseModel):
                                    "convention, never cups")
     est_cost_cents: int | None = Field(
         default=None, ge=0,
-        description="AI-estimated cost of this line from tracked product "
-                    "prices; blank = no priced product yet",
+        description="Estimated cost of this line. Leave blank: it's priced "
+                    "from tracked products at write time (preferred store "
+                    "first, else cheapest per gram); stays blank only when "
+                    "no priced product exists yet. An explicit value wins.",
         json_schema_extra={"x-display": {"widget": "money",
                                          "label": "Est. cost"}})
 
@@ -140,6 +145,29 @@ class IngredientsInput(BaseModel):
                     "current set")
 
 
+async def _price_lines(lines: list[MealIngredient], ctx: Ctx) -> None:
+    """Price every unstamped line from tracked products: grams × the best
+    offer's cents_per_100g. Preferred store first (the ingredient's own
+    ordering), else cheapest per gram — the same rule the trip math uses.
+    A line with no priced product stays blank, honestly."""
+    for line in lines:
+        if line.est_cost_cents is not None:
+            continue
+        products = await ctx.find("product", state="tracked",
+                                  ingredient_id=line.ingredient_id, limit=50)
+        offers = [p for p in products if p.data.cents_per_100g]
+        if not offers:
+            continue
+        ing = await ctx.read("ingredient", line.ingredient_id)
+        prefs = [s.lower() for s in
+                 (ing.data.preferred_stores if ing else [])]
+        offers.sort(key=lambda p: (prefs.index(p.data.store)
+                                   if p.data.store in prefs else 99,
+                                   p.data.cents_per_100g))
+        line.est_cost_cents = round(
+            line.grams * offers[0].data.cents_per_100g / 100)
+
+
 def _fold_theme(data: dict[str, Any]) -> dict[str, Any]:
     """shape 1 → 2: the single-theme era's ``theme`` becomes a one-tag
     ``themes`` list."""
@@ -159,6 +187,11 @@ class Meal(Resource):
 
     shape = 2
     upcasts = {1: _fold_theme}
+
+    async def on_create(self, ctx: Ctx) -> None:
+        """A meal born with ingredient lines gets them priced immediately —
+        (ingredient, grams) in the create body is enough."""
+        await _price_lines(self.data.ingredients, ctx)
 
     summary = "{data.name} · {data.themes|join} · {state.label}"
 
@@ -233,6 +266,7 @@ class Meal(Resource):
     async def update_ingredients(self, inp: IngredientsInput,
                                  ctx: Ctx) -> None:
         self.data.ingredients = list(inp.ingredients)
+        await _price_lines(self.data.ingredients, ctx)
 
     @action(from_=MealState.ON_LIST, to=MealState.RETIRED,
             safety=Safety(idempotent=True, reversible=False, confirm=True,

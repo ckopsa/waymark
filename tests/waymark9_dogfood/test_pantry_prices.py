@@ -256,24 +256,35 @@ async def test_the_grocery_list_knows_what_it_costs(env):
 
 
 async def test_a_meal_knows_what_it_potentially_costs(env):
-    """Ingredient lines on the meal: the AI writes them with the recipe and
-    stamps estimates; the meal derives what a night potentially costs."""
+    """Ingredient lines on the meal: (ingredient, grams) is enough — a
+    blank estimate is priced from tracked products at write time, and the
+    meal derives what a night potentially costs."""
     engine, client = env
 
     thighs = await _ingredient(client, "Chicken thighs", category="meat")
     await _post(client, f"{thighs['self']}/-/accept")
     sauce = await _ingredient(client, "BBQ sauce", category="pantry")
 
+    # a tracked, priced product is what makes the lookup possible:
+    # $18.99 / 2720 g → 70¢ per 100 g
+    res = await _post(client, "/api/products", {
+        "ingredient_id": _id(thighs), "store": "costco",
+        "name": "Kirkland chicken thighs 2.72 kg", "package_grams": 2720,
+        "sightings": [{"seen_on": "2026-07-01", "price_cents": 1899,
+                       "source": "receipt", "ref": "costco-2026-07-01"}]})
+    await _post(client, f"{res.json()['self']}/-/confirm_match")
+
     res = await _post(client, "/api/meals", {
         "name": "Traeger BBQ chicken thighs", "themes": ["bbq"],
         "recipe": "# Traeger BBQ chicken thighs\n\nTraeger at 275°F…",
         "ingredients": [
-            {"ingredient_id": _id(thighs), "grams": 1400,
-             "est_cost_cents": 1106},
-            {"ingredient_id": _id(sauce), "grams": 250}]})  # unpriced
+            {"ingredient_id": _id(thighs), "grams": 1400},  # priced at write
+            {"ingredient_id": _id(sauce), "grams": 250}]})  # no product yet
     assert res.status_code == 201, res.text
     meal = res.json()
-    assert meal["data"]["est_cost_cents"] == 1106
+    # 1400 g × 70¢/100g — computed by the engine, no stamp supplied
+    assert meal["data"]["ingredients"][0]["est_cost_cents"] == 980
+    assert meal["data"]["est_cost_cents"] == 980
     assert meal["data"]["priced_ingredients"] == 1
     assert meal["data"]["total_ingredients"] == 2
     # the Ref label is the engine's to maintain, parts included
