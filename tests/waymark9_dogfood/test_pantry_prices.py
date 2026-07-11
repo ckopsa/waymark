@@ -315,3 +315,18 @@ async def test_a_meal_knows_what_it_potentially_costs(env):
     data = (await _fresh(client, meal))["data"]
     assert data["est_cost_cents"] == 1301
     assert data["priced_ingredients"] == 2
+
+    # prices move: a cheaper product appears AFTER the lines were written —
+    # reprice refreshes every reachable line from current tracked products
+    res = await _post(client, "/api/products", {
+        "ingredient_id": _id(thighs), "store": "winco",
+        "name": "WinCo chicken thighs 1 kg", "package_grams": 1000,
+        "sightings": [{"seen_on": "2026-07-09", "price_cents": 500,
+                       "source": "receipt", "ref": "winco-2026-07-09"}]})
+    await _post(client, f"{res.json()['self']}/-/confirm_match")
+    await _post(client, f"{meal['self']}/-/reprice")
+    data = (await _fresh(client, meal))["data"]
+    # thighs re-priced at 50¢/100g × 1400 g = 700; the sauce stamp (312)
+    # keeps its value — no unit-priceable sauce product exists
+    assert data["ingredients"][0]["est_cost_cents"] == 700
+    assert data["est_cost_cents"] == 1012

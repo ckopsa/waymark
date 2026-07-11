@@ -145,13 +145,16 @@ class IngredientsInput(BaseModel):
                     "current set")
 
 
-async def _price_lines(lines: list[MealIngredient], ctx: Ctx) -> None:
-    """Price every unstamped line from tracked products: grams × the best
-    offer's cents_per_100g. Preferred store first (the ingredient's own
-    ordering), else cheapest per gram — the same rule the trip math uses.
-    A line with no priced product stays blank, honestly."""
+async def _price_lines(lines: list[MealIngredient], ctx: Ctx,
+                       *, refresh: bool = False) -> None:
+    """Price lines from tracked products: grams × the best offer's
+    cents_per_100g. Preferred store first (the ingredient's own ordering),
+    else cheapest per gram — the same rule the trip math uses. By default
+    only blank lines fill (an explicit stamp wins); ``refresh`` recomputes
+    every line the lookup can reach — what reprice means. A line with no
+    unit-priceable product keeps what it has, blank included, honestly."""
     for line in lines:
-        if line.est_cost_cents is not None:
+        if line.est_cost_cents is not None and not refresh:
             continue
         products = await ctx.find("product", state="tracked",
                                   ingredient_id=line.ingredient_id, limit=50)
@@ -267,6 +270,18 @@ class Meal(Resource):
                                  ctx: Ctx) -> None:
         self.data.ingredients = list(inp.ingredients)
         await _price_lines(self.data.ingredients, ctx)
+
+    # write-time pricing goes stale the moment a receipt teaches a better
+    # price (or the first price) — reprice refreshes every line the lookup
+    # can reach from CURRENT tracked products, no input to fill
+    @action(from_=MealState.ON_LIST, to=MealState.ON_LIST,
+            safety=Safety(idempotent=True, reversible=False, confirm=False),
+            display=dict(label="Reprice", order=5,
+                         description="Refresh every ingredient line's "
+                                     "estimate from current tracked "
+                                     "product prices"))
+    async def reprice(self, inp: None, ctx: Ctx) -> None:
+        await _price_lines(self.data.ingredients, ctx, refresh=True)
 
     @action(from_=MealState.ON_LIST, to=MealState.RETIRED,
             safety=Safety(idempotent=True, reversible=False, confirm=True,
