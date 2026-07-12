@@ -999,6 +999,13 @@
     (doseq [w warnings]
       (binding [*out* *err*]
         (println (str "waymark10 usability warning [" (name (:kind r)) "] " w))))
+    ;; the recall affordance advertises itself (probe defect D5):
+    ;; import-time prints scroll away, the metadata doesn't
+    (when (seq warnings)
+      (binding [*out* *err*]
+        (println (str "waymark10: warnings ride the declaration — "
+                      "(waymark10.dev/explain " (name (:kind r))
+                      ") re-reads them any time"))))
     (vary-meta r assoc :waymark10/warnings (vec warnings))))
 
 (defmacro defresource

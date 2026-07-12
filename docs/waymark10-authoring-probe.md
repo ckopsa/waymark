@@ -70,14 +70,63 @@ the doors, the gate, or the drive loop. Both leans were **vocabulary**
 lookups (D1, D2): the framework enforces a language it still doesn't
 teach. That is the whole next round.
 
-## Backlog seeded by run 1
+## Backlog seeded by run 1 — CLOSED 2026-07-12 (round 2)
 
-1. **D1/D2** — one reference page (or `dev/vocab`): expression ops,
-   colocated-law entry properties, the clock convention, each with one
-   worked example. Highest leverage; both leans die.
-2. **D3** — transition projection on `act!`'s return (or `dev/feed`).
-3. **D4** — `walk!` re-throws with the boundary sentence.
-4. **D5** — the warning footer advertises `dev/explain` as the re-reader.
+1. **D1/D2 — done.** `docs/waymark10-vocabulary.md` (ops, tree dialects,
+   the clock convention, colocated entry properties, the cross-resource
+   guard contract, each with a worked example) + `(waymark10.dev/vocab)`
+   printing the same sets from the enforcing vars, so page and REPL
+   cannot drift apart.
+2. **D3 — done.** `act!`/`create!` print the transition's one-line
+   projection (`dev (REPL) · meal accept: suggested → on_list · "…"`).
+3. **D4 — done.** `walk!` re-throws the missing-test.check case with the
+   boundary sentence.
+4. **D5 — done.** The import-time warning block ends by naming
+   `(waymark10.dev/explain <kind>)` as the re-reader.
 
-Rerun the probe (a different small kind — something with a ref and a
-cross-resource guard, to probe D1's guard half) after landing these.
+---
+
+## Run 2 — 2026-07-12, the `dish_request` kind (ref + cross-resource guard)
+
+Specimen: `mealplan10/dev/dish_request_probe.clj`. A request references a
+meal (`:kind :meal :label :meal_name`), and `queue` is gated by a
+`defguardfn` reading the meal's state — authored **entirely from
+docs/waymark10-vocabulary.md §5–§6**, framework source untouched, no lean
+on a neighboring resource. The vocabulary page did its job on the first
+try: the ref props, the `:reads` contract, the optimistic-probe tail, and
+the two-origin `drop` rows all came straight off the page.
+
+What the drive found:
+
+| # | Moment | Expected | What happened | Defect? |
+|---|--------|----------|---------------|---------|
+| 1 | Ref label | `meal_name` maintained by the engine | Landed on create without a handler touching it. | — |
+| 2 | `why-not e :dish_request … :queue` with the meal still `suggested` | The guard's sentence | `{:status :available}` — the pure render probe carries no `:read`, so a `:reads` guard advertises optimistically, exactly as declared; enforcement and dry-run both refused correctly (409, the guard's sentence). | **D6 — `why-not` overclaimed for cross-resource guards.** |
+| 3 | The new one-line transitions | readable | `dev (REPL) · dish_request queue: open → queued · "Brisket tacos for Dad · Queued"` — D3 landed. | — |
+
+**D6 was fixed in the same round:** `why-not` now verifies an
+`:available` answer through a **dry-run** (the enforcement's own verdict)
+whenever the action carries guards reading beyond the clock — before:
+`{:status :unavailable :reason "That meal isn't on the family list yet …"
+:guard :meal-on-list :via :dry-run}`; after accept:
+`{:status :available :verified :dry-run}`. Bodiless dry-runs can't judge
+input-taking actions, so that case answers `{:status :advertised}` with
+the guard names and the verify recipe instead of overclaiming.
+
+Score: **run 2 needed zero source dives and zero neighbor leans.** The
+vocabulary page closed run 1's whole defect class; run 2's one finding was
+a tooling honesty gap, not a teaching gap — and it's closed.
+
+## Backlog seeded by run 2 (round 3, when wanted)
+
+1. `why-not`'s `:advertised` branch — judge input-taking cross-resource
+   actions via `:dry-run :partial` with a caller-supplied body, so the
+   honest verdict covers every action shape.
+2. The framework's own source under its shipped kondo config (22 errors /
+   38 warnings at round 1's baseline) — lint the teacher.
+3. Standing boundaries worth retiring eventually: `sum-matching` into the
+   Storage protocol (`:sum` facts over memory), top-level `:display`
+   rendered or retired.
+
+Rerun the probe with a third author shape — `:fields` lifecycle groups
+and a generated editor — once round 3 lands.

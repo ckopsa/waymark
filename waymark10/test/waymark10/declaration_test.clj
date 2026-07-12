@@ -53,6 +53,16 @@
       (is (vector? (:path (ex-data e)))
           (pr-str (ex-data e))))))
 
+(deftest the-warning-footer-advertises-the-recall-affordance
+  ;; a shapeless text field mints a [long-text] warning; the footer
+  ;; must ride along, naming dev/explain as the re-reader (probe D5)
+  (let [err (with-out-str
+              (binding [*err* *out*]
+                (r/resource (assoc clean :schema
+                                   [:map [:notes :string]]))))]
+    (is (re-find #"\[long-text\]" err))
+    (is (re-find #"waymark10\.dev/explain decl_probe" err))))
+
 ;; ── the kondo drift guard ───────────────────────────────────────────
 ;; The shipped hook cannot require project code, so it carries copies
 ;; of the three key sets; this test is what holds them equal.

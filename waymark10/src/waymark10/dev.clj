@@ -32,7 +32,10 @@
   waymark10 via :local/root reaches it from a bare REPL — the
   waymark10.test.* precedent."
   (:require [clojure.string :as str]
+            [waymark10.declaration :as declaration]
+            [waymark10.expr :as expr]
             [waymark10.fingerprint :as fp]
+            [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
@@ -124,22 +127,42 @@
         (mapv #(inv/decode-row rdef %)
               (store/query-rows st tx kind {} {}))))))
 
+(defn- transition-line
+  "One readable line per recorded transition — the feed's projection,
+  the way explain projects the law (probe defect D3)."
+  [t]
+  (let [actor (:actor t)
+        display (:display actor)]
+    (str (:id actor)
+         (when (seq display) (str " (" display ")"))
+         " · " (name (:kind t)) " " (name (:action t)) ": "
+         (or (some-> (:from-state t) name) "∅")
+         " → " (name (:to-state t))
+         " · \"" (:summary t) "\"")))
+
 (defn create!
-  "Create and return the row. opts pass through to the engine
-  (:principal, :dry-run, :idempotency-key …)."
+  "Create and return the row, printing the transition's one-line
+  projection. opts pass through to the engine (:principal, :dry-run,
+  :idempotency-key …)."
   ([eng kind body] (create! eng kind body {}))
   ([eng kind body opts]
    (let [res (inv/create! eng kind body
                           (merge {:principal dev-principal} opts))]
+     (when-some [t (:transition res)]
+       (println (transition-line t)))
      (or (:row res) res))))
 
 (defn act!
-  "One write through the full invoke algorithm. Returns the engine's
-  own result (row, transition, warnings — or the dry-run verdict)."
+  "One write through the full invoke algorithm, printing the
+  transition's one-line projection. Returns the engine's own result
+  (row, transition, warnings — or the dry-run verdict)."
   ([eng kind id action body] (act! eng kind id action body {}))
   ([eng kind id action body opts]
-   (inv/invoke! eng kind (str id) action body
-                (merge {:principal dev-principal} opts))))
+   (let [res (inv/invoke! eng kind (str id) action body
+                          (merge {:principal dev-principal} opts))]
+     (when-some [t (:transition res)]
+       (println (transition-line t)))
+     res)))
 
 (defn envelope
   "The wire document a GET would answer, as data — the render probe
@@ -153,17 +176,57 @@
                      :services (:services eng)
                      :resources (inv/resources eng)})))
 
+(defn- guard-leaves [guard]
+  (cond
+    (:all guard) (mapcat guard-leaves (:all guard))
+    (:any guard) (mapcat guard-leaves (:any guard))
+    :else [guard]))
+
+(defn- reads-beyond-clock
+  "The guards of this action that consult other kinds — the ones the
+  PURE render probe advertises optimistically (probe run 2's D6)."
+  [action-def]
+  (into []
+        (comp (mapcat guard-leaves)
+              (filter #(seq (remove #{:now} (:reads %)))))
+        (:guards action-def)))
+
 (defn why-not
   "Why the action isn't offered, in the guard's own words — the same
   :unavailable entry a client renders. :status :available when it IS
-  offered; :absent when the declaration has no such action."
+  offered; :absent when the declaration has no such action.
+
+  Cross-resource guards (:reads beyond the clock) advertise
+  optimistically on the pure render probe, so an :available answer
+  for one is verified through a dry-run — the enforcement's own
+  verdict — before it is claimed."
   [eng kind id action]
   (let [doc (envelope eng kind id)
         rdef (rdef-of eng kind)
         wire-name (str/replace (name action) "-" "_")]
     (cond
       (contains? (get doc "actions") wire-name)
-      {:status :available}
+      (let [readers (reads-beyond-clock (get (:actions rdef) action))]
+        (if (empty? readers)
+          {:status :available}
+          (try
+            (inv/invoke! eng kind (str id) action nil
+                         {:principal dev-principal :dry-run true})
+            {:status :available :verified :dry-run}
+            (catch clojure.lang.ExceptionInfo e
+              (if (= :guard-refused (:waymark10/problem (ex-data e)))
+                {:status :unavailable
+                 :reason (:detail (ex-data e))
+                 :guard (:guard (ex-data e))
+                 :via :dry-run}
+                ;; an input-taking action can't dry-run bodiless —
+                ;; say what is known instead of overclaiming
+                {:status :advertised
+                 :note (str "guards " (mapv :name readers)
+                            " read other kinds and advertise "
+                            "optimistically on the pure probe; verify "
+                            "with (act! e kind id action body "
+                            "{:dry-run true})")})))))
 
       (contains? (get doc "unavailable") wire-name)
       (let [entry (get-in doc ["unavailable" wire-name])]
@@ -187,8 +250,12 @@
   factories (loaded lazily — test.check is :test-scope):
   (walk! e :prep_task :scheduled) → the row there, or {:skip …}."
   [eng kind state]
-  ((requiring-resolve 'waymark10.test.factories/walk-to-state)
-   eng kind state {}))
+  (let [f (try (requiring-resolve 'waymark10.test.factories/walk-to-state)
+               (catch java.io.FileNotFoundException e
+                 (throw (ex-info
+                         "walk! needs test.check on the classpath — start the REPL under the :test alias (clj -A:test)"
+                         {:missing 'clojure.test.check.generators} e))))]
+    (f eng kind state {})))
 
 (defn diff-law
   "What changed between two spellings of a kind's law, classified:
@@ -210,55 +277,32 @@
   [eng]
   (engine/handler eng))
 
-;; ── serve!: the browser-reachable sibling ───────────────────────────
+;; ── vocab: the enforced vocabulary, from the live vars ──────────────
 
-(defn serve!
-  "scratch!'s HTTP-capable sibling: a full engine over real Postgres
-  storage, started on a port — SSE, jobs, collab and the generic UI
-  all live. Returns the handle stop!/restart! take.
-
-  Defaults, each overridable in opts: :dsn (WAYMARK10_DEV_DSN, else
-  the local :5433 waymark10_dev), :port 8123, :auto-migrate true (the
-  dev posture, explicit here — production boots refuse on drift).
-  Remaining opts pass through to the engine."
-  ([resources] (serve! resources {}))
-  ([resources {:keys [dsn port] :as opts}]
-   (let [dsn (or dsn
-                 (System/getenv "WAYMARK10_DEV_DSN")
-                 "jdbc:postgresql://localhost:5433/waymark10_dev?user=ckopsa")
-         port (or port 8123)
-         storage (pg/storage dsn)
-         eng (engine/engine (merge {:storage storage
-                                    :resources (vec resources)
-                                    :auto-migrate true}
-                                   (dissoc opts :dsn :port)))
-         server (engine/start! eng port)
-         url (str "http://localhost:" port "/api/-/ui")]
-     (println url)
-     {:engine eng :server server :storage storage
-      :dsn dsn :port port :url url})))
-
-(defn stop!
-  "Tear a serve! handle down: runtime, HTTP server, connection pool."
-  [h]
-  (engine/stop! (:engine h) (:server h))
-  (pg/close! (:storage h))
-  nil)
-
-(defn restart!
-  "Stop and serve again with a (possibly different) resource vector —
-  same database, same port: (def h (dev/restart! h [meal plan]))."
-  [h resources]
-  (stop! h)
-  (serve! resources {:dsn (:dsn h) :port (:port h)}))
+(defn vocab
+  "The vocabulary the framework enforces, read from the enforcing
+  vars themselves — the REPL twin of docs/waymark10-vocabulary.md
+  (which carries the worked examples and the tree dialects). If the
+  page and this ever disagree, this is right."
+  []
+  (let [line (fn [label xs]
+               (println (str label ":"))
+               (println (str "  " (str/join " " (sort-by str xs)))))]
+    (line "expression ops (waymark10.expr/ops)" expr/ops)
+    (line "declaration keys (waymark10.declaration/top-level-keys)"
+          declaration/top-level-keys)
+    (line "action keys (waymark10.declaration/action-keys)"
+          declaration/action-keys)
+    (line "flow-row opts (waymark10.resource/flow-opt-keys)"
+          r/flow-opt-keys)
+    (line "entry filter ops" [:eq :in :range :after])
+    (line "entry sort marks" [true :default :default-desc])
+    (line "colocated entry law keys" [:filter :sort :derived :part-scope])
+    (line "ref entry props" [:kind :label :predecessor])
+    (println "worked examples: docs/waymark10-vocabulary.md")
+    nil))
 
 ;; ── explain: the declaration as prose ───────────────────────────────
-
-(defn- guard-leaves [guard]
-  (cond
-    (:all guard) (mapcat guard-leaves (:all guard))
-    (:any guard) (mapcat guard-leaves (:any guard))
-    :else [guard]))
 
 (defn- safety-sentence [safety]
   (cond
