@@ -123,6 +123,16 @@
   [st f]
   (with-tx* st f))
 
+(defn migratable?
+  "Does this storage expose a live SQL schema the migrate planner can
+  snapshot? The Postgres backend carries its datasource under :ds;
+  the in-memory twin has no schema beyond ensure-kind!'s fresh
+  tables, so drift cannot exist and the boot's migrate gate is
+  vacuous. A duck-type on :ds today — promote to a protocol method
+  when a third backend arrives."
+  [storage]
+  (some? (:ds storage)))
+
 (defn version-conflict [kind id expected]
   (ex-info (str "version conflict: " (name kind) " " id
                 " moved past v" expected)

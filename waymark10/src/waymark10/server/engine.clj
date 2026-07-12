@@ -90,26 +90,30 @@
   declaration names or maps refuse the boot with the fix named
   (waymark9's check_state_tokens)."
   [storage reg opts]
-  (let [rdefs (vals (:kinds reg))
-        steps (migrate/plan storage rdefs)
-        refuse (fn [steps remedy]
-                 (throw (t/definition-error
-                         (str "storage drift: " (count steps)
-                              " migration step(s) pending — " remedy "\n"
-                              (str/join "\n" (map migrate/describe steps)))
-                         {:check :migrate :steps (vec steps)})))]
-    (when (seq steps)
-      (if (:auto-migrate opts)
-        (let [{:keys [skipped]}
-              (migrate/apply! storage steps {:destructive? false})]
-          (when (seq skipped)
-            (refuse skipped
-                    (str "these rewrite state tokens, which :auto-migrate "
-                         "never does; apply them deliberately "
-                         "(make migrate10 APPLY=1 DESTRUCTIVE=1)"))))
-        (refuse steps
-                "apply the plan (make migrate10 APPLY=1) or boot with :auto-migrate")))
-    (migrate/assert-known-states! storage rdefs)))
+  ;; a storage with no SQL schema to snapshot (the in-memory twin)
+  ;; cannot drift — the gate is vacuous there, and the planner's
+  ;; Postgres reads would crash it (store/migratable?)
+  (when (store/migratable? storage)
+    (let [rdefs (vals (:kinds reg))
+          steps (migrate/plan storage rdefs)
+          refuse (fn [steps remedy]
+                   (throw (t/definition-error
+                           (str "storage drift: " (count steps)
+                                " migration step(s) pending — " remedy "\n"
+                                (str/join "\n" (map migrate/describe steps)))
+                           {:check :migrate :steps (vec steps)})))]
+      (when (seq steps)
+        (if (:auto-migrate opts)
+          (let [{:keys [skipped]}
+                (migrate/apply! storage steps {:destructive? false})]
+            (when (seq skipped)
+              (refuse skipped
+                      (str "these rewrite state tokens, which :auto-migrate "
+                           "never does; apply them deliberately "
+                           "(make migrate10 APPLY=1 DESTRUCTIVE=1)"))))
+          (refuse steps
+                  "apply the plan (make migrate10 APPLY=1) or boot with :auto-migrate")))
+      (migrate/assert-known-states! storage rdefs))))
 
 (defn engine
   "The booted engine. render-fn runs inside the invoke transaction,

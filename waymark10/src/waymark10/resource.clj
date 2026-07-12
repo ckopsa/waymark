@@ -29,6 +29,7 @@
   spelling, aggregates renamed onto the child kind)."
   (:require [clojure.string :as str]
             [waymark10.checks :as checks]
+            [waymark10.declaration :as declaration]
             [waymark10.expr :as expr]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
@@ -68,6 +69,7 @@
   runs it eagerly at the def site so a malformed action fails at its
   own line; the cross-referencing checks still wait for defresource."
   [kind aname a]
+  (declaration/check-action! kind aname a)
   (let [err (fn [msg] (throw (t/definition-error
                               (str (name kind) "/" (name aname) ": " msg))))]
     (when-not (contains? a :safety)
@@ -683,7 +685,9 @@
 
 ;; — :flow transition rows (batch H, delta 3) ────────────────────────
 
-(def ^:private flow-opt-keys
+(def flow-opt-keys
+  "A flow row's legal opts — public so the shipped clj-kondo hook's
+  copy can be held equal by test (waymark10.declaration-test)."
   #{:requires :args :input :confirm :undo :one-way :safety :display
     :record :edit :place :handler :emits :waives :unless})
 
@@ -938,6 +942,14 @@
       (throw (t/definition-error ":adoption is :immediate or :never")))
     (when-not (contains? #{:primary :secondary} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary or :secondary")))
+    ;; recorded deviations, each a sentence (the docstring bookkeeping
+    ;; the prose used to carry by hand) — fingerprint-carried, so a
+    ;; deviation is reviewable law, and deleting one shows in the diff
+    (let [ds (:deviations rmap)]
+      (when-not (and (or (nil? ds) (vector? ds))
+                     (every? #(and (string? %) (not (str/blank? %))) ds))
+        (throw (t/definition-error
+                ":deviations is a vector of sentences — each recorded deviation explains itself"))))
     (-> rmap
         project-colocated
         desugar-owns
@@ -965,6 +977,7 @@
         (update :nav #(or % :primary))
         (update :shape #(or % 1))
         (update :allow-dead set)
+        (update :deviations #(vec (or % [])))
         ;; the continuity map (migrate): retired tokens → their current
         ;; spellings; boot refuses rows in states neither declared nor
         ;; mapped, and replay-history reads the log through the chain
@@ -980,6 +993,7 @@
   DefinitionError), surface usability warnings on *err*, and return
   the declaration the engine serves."
   [rmap]
+  (declaration/check! rmap)
   (let [r (normalize-resource rmap)
         {:keys [warnings]} (checks/run-all r)]
     (doseq [w warnings]

@@ -156,7 +156,11 @@
                                           (map name)
                                           (keys (get-in row [:data :fingerprint
                                                              :derived])))
-                           stale (fp/stale-facts (get-in row [:data :diff]))]
+                           ;; a genesis definition (never diffed against a
+                           ;; prior revision) carries no :diff — nothing
+                           ;; redefines a derived fact when nothing changed
+                           stale (when-some [diff (get-in row [:data :diff])]
+                                   (fp/stale-facts diff))]
                        (if (some declared stale) (t/allow) (t/deny))))}))
 
 ;; ── the population grammar (batch C, waymark9's check_population) ──

@@ -20,25 +20,9 @@
   due_at demanded :waymark/instant into the schema vocabulary (phase
   8): a point in time the clock can compare.
 
-  Spelled in the batch-H declaration style: the whole machine is
-  :flow rows (so :states is not spelled — the rows name them),
-  schedule's input is one :args row spelled with the ref word, and
-  task_type is a one-of. Recorded deviations, each a sentence: no
-  :undo pointers — every edge here is honestly one-way or confirmed,
-  and nothing walks a task back; the two-origin rows (complete,
-  cancel) cite one def'd opts value each, since per-origin anything
-  except :confirm has no spelling. Filter/sort law and the one-line
-  overdue fact still ride the entries they govern (batch G). The law
-  is unchanged — mealplan10.style-invariance-test pins this kind's
-  fingerprint hash byte-identical to the split spelling.
-
-  Recorded deviations from mealplan9: task_type carries no field
-  default (v10 declares none — the AI states it); the with_plan
-  profile and href link render have no v10 spelling (the link
-  declaration is carried)."
-  (:refer-clojure :exclude [ref])
-  (:require [waymark10.declare :refer [one-of ref]]
-            [waymark10.resource :as r :refer [defresource defhandler]]))
+  Recorded deviations ride the declaration itself (:deviations, DX
+  phase 5) — fingerprint-carried, rendered by waymark10.dev/explain."
+  (:require [waymark10.dsl :refer [defresource defhandler one-of ref-to]]))
 
 (defhandler set-calendar-event [row inp _ctx]
   (assoc-in row [:data :calendar_event_id] (:event_id inp)))
@@ -84,12 +68,16 @@
             :summary "The meal plan this task serves"}]
    :filterable {:state #{:eq :in}}
    :display {:title "{data.task_type}: {data.meal_name}"}
+   :deviations
+   ["No :undo pointers — every edge here is honestly one-way or confirmed, and nothing walks a task back."
+    "task_type carries no field default — the AI states it with each task."
+    "The with_plan profile and the href link render have no v10 spelling; the link declaration is carried."]
    ;; the whole machine as rows — the rows name the states
    :flow
    [[:pending   :schedule :scheduled
      ;; the arg is named for what it is: the id of the NEW event just
      ;; created — not an edit of the stored one, so no prefill, no :edit
-     {:args [[:event_id (ref :event)]]
+     {:args [[:event_id (ref-to :event)]]
       :confirm "An event goes on the family calendar for this prep step."
       :handler set-calendar-event
       :display {:label "Put on calendar" :style :primary :order 1}}]

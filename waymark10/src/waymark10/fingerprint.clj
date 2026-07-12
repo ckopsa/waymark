@@ -153,7 +153,14 @@
     ;; the facet exists exactly when the declaration names a table —
     ;; :plural is normalized in, so every registered kind carries it
     (and (:schema rmap) (:plural rmap))
-    (assoc "storage" (storage-fp rmap))))
+    (assoc "storage" (storage-fp rmap))
+
+    ;; recorded deviations are reviewable law (advertisement-class):
+    ;; editing one shows in the diff and mints a revision. Projected
+    ;; only when non-empty, so every deviation-free kind's hash is
+    ;; byte-identical to the pre-deviations era
+    (seq (:deviations rmap))
+    (assoc "deviations" (vec (:deviations rmap)))))
 
 (defn fingerprint-hash ^String [fp]
   (wire/digest fp))
@@ -170,7 +177,8 @@
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"
                                       "input_schema" "schema" "edit" "place"
-                                      "row_affordances" "plural" "nav"})
+                                      "row_affordances" "plural" "nav"
+                                      "deviations"})
 (def ^:private derived-garnish #{"explain" "vars"})
 
 (defn classify-path

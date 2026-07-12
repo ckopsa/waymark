@@ -32,9 +32,8 @@
 
   Recorded punts: the with_plan profile and the href link render have
   no v10 spelling — the link declaration is carried."
-  (:require [waymark10.declare :refer [defderived]]
-            [waymark10.guards :as g]
-            [waymark10.resource :as r :refer [defresource defhandler]]
+  (:require [waymark10.dsl :refer [defderived defguardfn defresource
+                                   defhandler guard require-fact]]
             [waymark10.types :as t]))
 
 ;; ── guards ──────────────────────────────────────────────────────────
@@ -43,7 +42,7 @@
 ;; state is not pure over (row, input, clock), so it stays code —
 ;; :reads [:plan] names the dependency honestly. The pure render probe
 ;; carries no :read and declines; every enforcement ctx carries it.
-(g/defguard plan-is-planned
+(defguardfn plan-is-planned
   {:reads [:plan]
    :explain "Finalize the meal plan first — the grocery list follows from it."
    :remedies [:plan/finalize]}
@@ -59,39 +58,39 @@
 ;; what's on the list: the rendered enum, the per-part availability,
 ;; and the enforcement, from one set
 (def item-on-list
-  (g/guard {:name :item-on-list
-            :judges [:name]
-            :accepts (fn [row] (mapv :name (get-in row [:data :items])))
-            :explain "No item named '{name}' on this list."}))
+  (guard {:name :item-on-list
+          :judges [:name]
+          :accepts (fn [row] (mapv :name (get-in row [:data :items])))
+          :explain "No item named '{name}' on this list."}))
 
 ;; a checked item drops out of check_item's admitted set — so the
 ;; button disappears from that row instead of staying clickable for a
 ;; no-op
 (def item-not-checked
-  (g/guard {:name :item-not-checked
-            :judges [:name]
-            :accepts (fn [row]
-                       (into [] (keep #(when-not (:have %) (:name %)))
-                             (get-in row [:data :items])))
-            :explain "'{name}' is already checked off."}))
+  (guard {:name :item-not-checked
+          :judges [:name]
+          :accepts (fn [row]
+                     (into [] (keep #(when-not (:have %) (:name %)))
+                           (get-in row [:data :items])))
+          :explain "'{name}' is already checked off."}))
 
 ;; the mirror of item_not_checked: uncheck_item only admits rows that
 ;; are actually checked, so an accidental tap has a one-tap way back
 (def item-checked
-  (g/guard {:name :item-checked
-            :judges [:name]
-            :accepts (fn [row]
-                       (into [] (keep #(when (:have %) (:name %)))
-                             (get-in row [:data :items])))
-            :explain "'{name}' isn't checked off yet."}))
+  (guard {:name :item-checked
+          :judges [:name]
+          :accepts (fn [row]
+                     (into [] (keep #(when (:have %) (:name %)))
+                           (get-in row [:data :items])))
+          :explain "'{name}' isn't checked off yet."}))
 
 ;; the gate judges the stored rollup fact; hoisted so its :check fn
 ;; has one identity per process (a fresh g/require per boot would
 ;; fingerprint as a different guard)
 (def all-checked-gate
-  (g/require :all_items_checked
-             {:explain "Some items are still unchecked — check them off (or remove them) before closing the list."
-              :remedies [:grocery_list/check_item]}))
+  (require-fact :all_items_checked
+                {:explain "Some items are still unchecked — check them off (or remove them) before closing the list."
+                 :remedies [:grocery_list/check_item]}))
 
 ;; ── handlers ────────────────────────────────────────────────────────
 

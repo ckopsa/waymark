@@ -7,6 +7,9 @@
                        lambdaisland/kaocha    {:mvn/version "1.91.1392"}}
          :main-opts   ["-m" "kaocha.runner"]}
   :dev  {:main-opts ["-m" "mealplan10.main"]}
+  ;; make check10: the declaration-time gate — warnings on stdout,
+  ;; exit 1 on a definition error; no database, no env
+  :check {:main-opts ["-m" "waymark10.check" "mealplan10.main/check-resources"]}
   ;; make migrate10: print the schema plan; APPLY=1 executes,
   ;; DESTRUCTIVE=1 includes state renames
   :migrate {:main-opts ["-e" "((requiring-resolve 'mealplan10.main/migrate!))"]}}}

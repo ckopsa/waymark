@@ -99,7 +99,7 @@
   (when (and v (<= 8 (count v)))
     (let [ymd (subs v 0 8)]
       (try
-        (let [d (LocalDate/parse ymd (java.time.format.DateTimeFormatter/BASIC_ISO_DATE))]
+        (let [d (LocalDate/parse ymd java.time.format.DateTimeFormatter/BASIC_ISO_DATE)]
           (when (<= min-sane-year (.getYear d) max-sane-year)
             d))
         (catch Exception _ nil)))))

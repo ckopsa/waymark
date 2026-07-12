@@ -82,6 +82,12 @@
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:name] :default "name"}
    :display {:title "{data.name}"}
+   :deviations
+   ["accept_many stays a declared action — bulk has no flow-row spelling."
+    "The on-list editors stay def'd actions — :fields would mint one all-optional writer, but apply-recipe writes conditionally and apply-themes dedupes: a different law under different names."
+    "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
+    "v10 summary templates carry no |join filter — the summary names the meal and its state only."
+    "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."]
    :actions
    {:accept {:from #{:suggested} :to :on_list
              :safety {:idempotent true :reversible false :confirm false
@@ -466,6 +472,10 @@
                 :overdue #{:eq}}
    :sortable {:fields [:due_at] :default "due_at"}
    :display {:title "{data.task_type}: {data.meal_name}"}
+   :deviations
+   ["No :undo pointers — every edge here is honestly one-way or confirmed, and nothing walks a task back."
+    "task_type carries no field default — the AI states it with each task."
+    "The with_plan profile and the href link render have no v10 spelling; the link declaration is carried."]
    :actions
    {:schedule {:from #{:pending} :to :scheduled
                :input [:map [:event_id {:kind :event} :waymark/ref]]
@@ -539,8 +549,13 @@
 ;; their proof in the shared-object pins above, not in a literal.
 
 (def the-canonical-hashes
-  {:meal      "2d25d317cea61e94a8a7b0070970900a45171b463e2cc789862c8c25e937460f"
-   :prep_task "ce2927facbb3047747d5424d4afdf4ac2898317a36afec22c3b9397a461ddf33"
+  ;; meal and prep_task re-pinned 2026-07-12 (DX phase 5): recorded
+  ;; deviations moved from docstring prose into the fingerprint-carried
+  ;; :deviations vector — a deliberate advertisement-class law change.
+  ;; event carries no deviations, so its hash is byte-identical to the
+  ;; pre-deviations era (the empty-vector ≡ absent property).
+  {:meal      "7d2d323c3dacae059888f55112d9a37d482fd833d1cc9660bbbecdbabae8f1eb"
+   :prep_task "2a88c7421751a8c5e7f45386667c60bd1717693651052dc4521dca749eb2e50d"
    :event     "77fba0a5a46b83a3594170a75e5f0614a9980a5f57cf76f90e5ac3e699b32805"})
 
 (deftest the-canonical-residue-hashes-are-pinned-as-literals

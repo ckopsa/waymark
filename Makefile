@@ -21,7 +21,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: db test conformance conformance8 conformance9 check dist dev image deploy test-image db10 test10 test-mealplan10 dev10 migrate10
+.PHONY: db test conformance conformance8 conformance9 check dist dev image deploy test-image db10 test10 test-mealplan10 dev10 migrate10 check10
 
 dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
 	uv build
@@ -46,6 +46,9 @@ conformance8: db  ## waymark8 conformance suite (mealplan8, the expression-law f
 
 conformance9: db  ## waymark9 conformance suite (mealplan9)
 	WAYMARK_TEST_DSN=$(TEST_DSN) uv run pytest --waymark9 -n auto
+
+check10:  ## mealplan10 declaration-time checks + usability warnings (no database)
+	cd mealplan10 && clojure -M:check
 
 test10: db10  ## waymark10 (Clojure) framework tests
 	cd waymark10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test

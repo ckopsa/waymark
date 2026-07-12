@@ -72,9 +72,9 @@
     there; every enforcement ctx (and the conformance probe) carries
     the hooks, so enforcement and the walker hold the line."
   (:require [mealplan10.themes :as themes]
-            [waymark10.declare :refer [defaction defderived]]
-            [waymark10.guards :as g]
-            [waymark10.resource :as r :refer [defresource defhandler]]
+            [waymark10.dsl :refer [defaction defderived defguardfn
+                                   defresource defhandler expr-guard
+                                   guard relation require-fact]]
             [waymark10.types :as t])
   (:import (java.time DayOfWeek Instant LocalDate ZoneOffset)))
 
@@ -83,62 +83,62 @@
 ;; and the enforcement. There is no separate body to drift out of sync.
 
 (def date-in-plan
-  (g/guard {:name :date-in-plan
-            :judges [:date]
-            :accepts (fn [row] (mapv :date (get-in row [:data :days])))
-            :explain "{date} is not a day of this plan."}))
+  (guard {:name :date-in-plan
+          :judges [:date]
+          :accepts (fn [row] (mapv :date (get-in row [:data :days])))
+          :explain "{date} is not a day of this plan."}))
 
 (def day-has-meal
-  (g/guard {:name :day-has-meal
-            :judges [:date]
-            :accepts (fn [row]
-                       (into [] (keep #(when (some? (:meal_id %)) (:date %)))
-                             (get-in row [:data :days])))
-            :explain "Assign the main meal for {date} before adding a side dish."
-            :remedies [:plan/assign_meal]}))
+  (guard {:name :day-has-meal
+          :judges [:date]
+          :accepts (fn [row]
+                     (into [] (keep #(when (some? (:meal_id %)) (:date %)))
+                           (get-in row [:data :days])))
+          :explain "Assign the main meal for {date} before adding a side dish."
+          :remedies [:plan/assign_meal]}))
 
 (def has-free-side-slot
-  (g/guard {:name :has-free-side-slot
-            :judges [:date]
-            :accepts (fn [row]
-                       (into []
-                             (keep #(when (or (nil? (:side_dish_id %))
-                                              (nil? (:second_side_dish_id %)))
-                                      (:date %)))
-                             (get-in row [:data :days])))
-            :explain "{date} already has 2 side dishes — remove one first."
-            :remedies [:plan/remove_side_dish]}))
+  (guard {:name :has-free-side-slot
+          :judges [:date]
+          :accepts (fn [row]
+                     (into []
+                           (keep #(when (or (nil? (:side_dish_id %))
+                                            (nil? (:second_side_dish_id %)))
+                                    (:date %)))
+                           (get-in row [:data :days])))
+          :explain "{date} already has 2 side dishes — remove one first."
+          :remedies [:plan/remove_side_dish]}))
 
 (def sunday-only
-  (g/guard {:name :sunday-only
-            :judges [:date]
-            :accepts (fn [row]
-                       (into []
-                             (keep #(when (= DayOfWeek/SUNDAY
-                                             (.getDayOfWeek ^LocalDate (:date %)))
-                                      (:date %)))
-                             (get-in row [:data :days])))
-            :explain "Only Sunday rotates; {date} has a fixed weeknight theme."}))
+  (guard {:name :sunday-only
+          :judges [:date]
+          :accepts (fn [row]
+                     (into []
+                           (keep #(when (= DayOfWeek/SUNDAY
+                                           (.getDayOfWeek ^LocalDate (:date %)))
+                                    (:date %)))
+                           (get-in row [:data :days])))
+          :explain "Only Sunday rotates; {date} has a fixed weeknight theme."}))
 
 (def theme-in-rotation
   ;; the linked rotation's themes — resolved through ctx :read so the
   ;; theme field offers real choices; nil (no constraint) when no
   ;; rotation is linked, or when the probe carries no :read
-  (g/guard {:name :theme-in-rotation
-            :judges [:theme]
-            :reads [:rotation]
-            :accepts (fn [row ctx]
-                       (when-some [read (:read ctx)]
-                         (when-some [rid (get-in row [:data :rotation_id])]
-                           (when-some [rotation (read :rotation rid)]
-                             (vec (get-in rotation [:data :themes]))))))
-            :explain "'{theme}' is not in the Sunday rotation. Add it there first."
-            :remedies [:rotation/add_theme]}))
+  (guard {:name :theme-in-rotation
+          :judges [:theme]
+          :reads [:rotation]
+          :accepts (fn [row ctx]
+                     (when-some [read (:read ctx)]
+                       (when-some [rid (get-in row [:data :rotation_id])]
+                         (when-some [rotation (read :rotation rid)]
+                           (vec (get-in rotation [:data :themes]))))))
+          :explain "'{theme}' is not in the Sunday rotation. Add it there first."
+          :remedies [:rotation/add_theme]}))
 
 ;; the recorded 8.0 §5 residue: a verdict that READS (the input's ref,
 ;; another kind's state) is not pure over (row, input, clock), so it
 ;; stays code — :reads [:meal] names the dependency honestly
-(g/defguard meal-is-listed
+(defguardfn meal-is-listed
   {:judges [:meal_id] :reads [:meal]
    :explain "That meal is not on the family meal list yet. Accept a suggestion (or ask the AI for one) first."
    :remedies [:meal/accept]}
@@ -155,7 +155,7 @@
 ;; binds nothing), and the invoke enforces membership in the same
 ;; tuple set.
 (def meal-fits-day
-  (g/relation
+  (relation
    {:name :meal-fits-day
     :judges [:meal_id :date]
     :reads [:meal]
@@ -175,37 +175,37 @@
 ;; recital on taco night is worth a warning, not a wall — the verdict
 ;; is a tree over the stored facts.
 (def calendar-clear
-  (g/expr {:name :calendar-clear
-           :severity :warning
-           :when '(not (data :has_conflicts))
-           :explain "{n} calendar conflict(s) overlap this week — move or cancel them on the calendar itself, or acknowledge to finalize anyway."
-           :vars {:n '(data :calendar_conflicts)}}))
+  (expr-guard {:name :calendar-clear
+               :severity :warning
+               :when '(not (data :has_conflicts))
+               :explain "{n} calendar conflict(s) overlap this week — move or cancel them on the calendar itself, or acknowledge to finalize anyway."
+               :vars {:n '(data :calendar_conflicts)}}))
 
 ;; the clock gate as data; becomes-available-at stays a callable:
 ;; structured hope is scheduling garnish, not the verdict
 (def plan-started
-  (g/expr {:name :plan-started
-           :when '(<= (data :start_date) (date-of (now)))
-           :explain "The plan starts {start}."
-           :vars {:start '(data :start_date)}
-           :becomes-available-at (fn [row] (get-in row [:data :start_date]))}))
+  (expr-guard {:name :plan-started
+               :when '(<= (data :start_date) (date-of (now)))
+               :explain "The plan starts {start}."
+               :vars {:start '(data :start_date)}
+               :becomes-available-at (fn [row] (get-in row [:data :start_date]))}))
 
 ;; the gate judges the stored fact; the refusal reason is one
 ;; declaration, never re-derived in a handler
 (def all-days-covered-gate
-  (g/require :all_days_covered
-             {:explain "Every day needs a meal or an eating-out mark before finalizing."
-              :remedies [:plan/assign_meal :plan/mark_eating_out]}))
+  (require-fact :all_days_covered
+                {:explain "Every day needs a meal or an eating-out mark before finalizing."
+                 :remedies [:plan/assign_meal :plan/mark_eating_out]}))
 
 ;; the open-task rollup gate: the phase-6 count fact (the v10 spelling
 ;; of waymark9's Owns rollup + rollup_is — recorded: the {:rollups …}
 ;; edge spelling is subsumed by the count fact, one fact one writer)
 (def no-open-tasks
-  (g/expr {:name :no-open-tasks
-           :when '(= 0 (data :open_tasks))
-           :explain "{n} prep task(s) are still open — finish or cancel them before closing the week."
-           :vars {:n '(data :open_tasks)}
-           :remedies [:prep_task/complete :prep_task/cancel]}))
+  (expr-guard {:name :no-open-tasks
+               :when '(= 0 (data :open_tasks))
+               :explain "{n} prep task(s) are still open — finish or cancel them before closing the week."
+               :vars {:n '(data :open_tasks)}
+               :remedies [:prep_task/complete :prep_task/cancel]}))
 
 ;; ── handlers ────────────────────────────────────────────────────────
 

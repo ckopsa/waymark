@@ -20,25 +20,9 @@
   :themes (design §8) — v10's load boundary runs it lazily and stamps
   the shape at the next write.
 
-  Spelled in the batch-H declaration style: the lifecycle doors are
-  :flow rows, each wearing its own safety story (the two :one-way
-  sentences, retire's :confirm); the sort default still rides the
-  :name entry (batch G). Recorded per-kind deviations, each a
-  sentence: accept_many stays a declared action (bulk has no flow-row
-  spelling); the two on-list editors stay def'd actions (:fields would
-  mint one all-optional writer, but apply-recipe writes conditionally
-  and apply-themes dedupes — a different law under different names);
-  no :undo pointers (nothing here is declared reversible, and nothing
-  walks retired back). The law is unchanged —
-  mealplan10.style-invariance-test pins this kind's fingerprint hash
-  byte-identical to the split spelling.
-
-  Recorded deviations from mealplan9, each a sentence: v10 summary
-  templates carry no |join filter, so the summary names the meal and
-  its state only; prep_minutes/thaw_hours carry no field defaults
-  (malli entries declare none) — the AI writes them with the recipe."
-  (:require [waymark10.declare :refer [defaction]]
-            [waymark10.resource :as r :refer [defresource defhandler]]))
+  Recorded deviations ride the declaration itself (:deviations, DX
+  phase 5) — fingerprint-carried, rendered by waymark10.dev/explain."
+  (:require [waymark10.dsl :refer [defaction defresource defhandler]]))
 
 (defn fold-theme
   "shape 1 → 2: the single-theme era's :theme becomes a one-tag
@@ -122,6 +106,12 @@
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}}
    :display {:title "{data.name}"}
+   :deviations
+   ["accept_many stays a declared action — bulk has no flow-row spelling."
+    "The on-list editors stay def'd actions — :fields would mint one all-optional writer, but apply-recipe writes conditionally and apply-themes dedupes: a different law under different names."
+    "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
+    "v10 summary templates carry no |join filter — the summary names the meal and its state only."
+    "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."]
    ;; the lifecycle doors as flow rows, each wearing its safety story;
    ;; :states stays spelled because the rows are not the whole machine
    ;; (the bulk accept and the editors live in :actions below)

@@ -1,0 +1,2 @@
+;; the framework lints itself with its own shipped exports
+{:config-paths ["../resources/clj-kondo.exports/waymark10/waymark10"]}

@@ -29,8 +29,7 @@
   is unchanged — mealplan10.style-invariance-test pins this kind's
   fingerprint hash byte-identical to the split spelling, around the
   same wrapper on both sides."
-  (:require [waymark10.declare :refer [one-of]]
-            [waymark10.resource :as r]
+  (:require [waymark10.dsl :refer [one-of resource]]
             [waymark10.server.mirror :as mirror]))
 
 ;; a personal calendar changes rarely enough that an hour between
@@ -45,7 +44,7 @@
   mealplan10.main). An event enters by its feed identity alone: the
   display fields are the calendar's, filled by the sync path."
   [adapter]
-  (r/resource
+  (resource
    (mirror/declaration
     {:kind :event
      :summary "{data.title} · {data.date}"

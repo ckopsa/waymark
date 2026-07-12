@@ -50,6 +50,12 @@
   "The declared decision screens (phase 9b): the week board."
   [week-board])
 
+(defn check-resources
+  "All six kinds over the offline adapter — what `make check10`
+  (waymark10.check) assembles. Zero-arg so the gate needs no env."
+  []
+  (resources events))
+
 (defn- dsn []
   (or (System/getenv "MEALPLAN10_DSN")
       "jdbc:postgresql://localhost:5433/mealplan10_dev?user=ckopsa"))
