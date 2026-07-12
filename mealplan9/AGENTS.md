@@ -1,8 +1,10 @@
 # Adding a resource to mealplan9 — the field guide
 
 What an agent has to know to add a waymark9 resource to this app without
-re-deriving it from the framework source. Written after adding
-`ingredient`/`product`; every rule below was learned by hitting it.
+re-deriving it from the framework source. Started after adding
+`ingredient`/`product`, grown through the meal_line promotion and the
+substitution flow; every rule below was learned by hitting it — several
+in production.
 
 ## Where everything goes
 
@@ -94,13 +96,23 @@ without a database.
   generic client renders it as dollars (display-only — forms still take
   cents). Works on plain, Derived, and Sum fields alike.
 - Guard flavors, in preference order: `require("<derived bool>")` for
-  gates over declared facts; declarative `Guard(judges=, accepts=,
-  explain=)` when the verdict is "input value ∈ set computable from the
-  row" (the set also becomes the rendered enum); `guard.expr(when=E...,
-  severity=...)` for expression verdicts over stored facts
-  (`severity="warning"` = acknowledgeable); `@guard("reason",
-  judges=, reads=("other_kind",))` async code only when the verdict reads
-  another row — name the read honestly.
+  gates over declared facts — this also works in `create_guards`, and
+  paired with a cross-field derived fact it makes invalid input
+  unrepresentable at create (substitution's `distinct`:
+  `expr=~E.f("a").eq(E.f("b"))`, gate `require("distinct")`); declarative
+  `Guard(judges=, accepts=, explain=)` when the verdict is "input value ∈
+  set" — `accepts=` may be an async `(r, ctx)` that reads other kinds
+  (declare `reads=`), which is how an action offers exactly the
+  cross-kind choices that apply (plan's theme_in_rotation, meal_line's
+  substitution_applies) and the walker samples the same set; `guard.expr`
+  for expression verdicts over stored facts (`severity="warning"` =
+  acknowledgeable); `@guard` async code only as the last resort.
+- Page composition is declared on the class: `link(rel,
+  kind="<kind>_collection", href="/things?parent_id={id}", embed=True,
+  badge="<rollup field>")` makes the detail page show related rows inline
+  with a count as scent ({id}/{data.x} template over the instance).
+  `link(edge=)` compiles the href from a predicate but accepts only
+  `Related`, not `Owns`.
 
 ## Cross-resource writes
 
@@ -112,6 +124,22 @@ pages: loop `page=` until a short batch, don't trust one read. A cascade
 still hits the target's guards (a warning guard will 409 the whole
 transaction), so sequence handler work to make them pass — e.g. rematch
 every product away *before* invoking the duplicate's `retire`.
+
+## Parts vs resources (the promotion rule)
+
+Embedded parts are right while every fact about them derives from the
+parent's own data. The moment an item's fact must read ANOTHER kind's
+rows (a recipe line's cost from product prices), parts hit a wall: a ref
+inside JSONB is invisible to the join grammar — no promoted column, no
+Owns/Related edge, no maintainer index — so the fact can't be derived or
+live-maintained, only stamped-and-repriced. Promoting the item to a
+resource (meal_line) makes its refs real columns: the parent's rollups
+become engine-maintained `Sum`/`Count` over an `Owns` edge (filter to the
+live state: `where={"state": ("on_recipe",)}`), flipping in the same
+commit as any item write. Costs of promotion: N creates instead of one
+body, "remove" becomes a transition (which is also a benefit — history),
+and existing embedded data needs the residue-extraction migration above.
+Sightings stay embedded because no fact of theirs crosses kinds.
 
 ## Parts (embedded item lists)
 
@@ -159,7 +187,10 @@ same input digest. An action whose outcome depends on state OUTSIDE the
 row (repricing from product prices, any refresh-from-world act) is NOT
 idempotent and must say so, or its second invocation silently does
 nothing. Genuinely idempotent upserts (same input → same outcome) keep
-the declaration and get replay safety for free.
+the declaration and get replay safety for free — and so does an
+acceptance-consuming action (meal_line.substitute changes the very field
+its guard judges): the double-tap replays unchanged where a guard re-run
+would deny, which is exactly the case natural replay exists for.
 
 ## Conformance enrollment rules (learned from failures)
 
