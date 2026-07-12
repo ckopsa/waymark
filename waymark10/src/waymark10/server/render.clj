@@ -533,6 +533,25 @@
          (summary/state-label (:state row)))
     (summary/render (:summary rdef) (assoc row :kind (:kind rdef)))))
 
+(defn- project-display
+  "Top-level :display, resolved per row (the recorded demand, landed:
+  authored in three mealplan10 kinds, consumed nowhere until now).
+  :title is a summary-grammar template; the honesty trap holds — a
+  title reading a redacted field renders the generic label instead.
+  Reserved-but-optional on the wire, the :parts precedent: only kinds
+  that declare :display carry it."
+  [rdef row redacted]
+  (when-some [d (:display rdef)]
+    (let [title (:title d)
+          hidden? (and (seq redacted) (string? title)
+                       (some #(contains? redacted (keyword (second %)))
+                             (re-seq summary-data-token (str title))))]
+      (cond-> d
+        (string? title)
+        (assoc :title (if hidden?
+                        (summary/state-label (:kind rdef))
+                        (summary/render title (assoc row :kind (:kind rdef)))))))))
+
 (defn- redact-row
   "The public view of the row: redacted data fields removed — the one
   value the summary/link passes read, so a hidden field omits its
@@ -635,7 +654,8 @@
                              :etag (inv/etag (:kind rdef) (:id row) (:version row))}
                       (:updated-at row) (assoc :updated-at (str (:updated-at row)))
                       (:law-revision row) (assoc :law-revision (:law-revision row)))}
-       (seq parts) (assoc :parts parts)))))
+       (seq parts) (assoc :parts parts)
+       (:display rdef) (assoc :display (project-display rdef row redacted))))))
 
 (defn envelope-stub
   "The rows=none item (batch A): no probe runs — actions and

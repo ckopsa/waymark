@@ -46,8 +46,6 @@
      days date-of is-set
      every some count sum})
 
-(def ^:private ordering-ops '#{< <= > >=})
-(def ^:private commutative-ops '#{= not= min max + *})
 (def ^:private quantifier-ops '#{every some count sum})
 
 (defn- scalar-literal? [x]

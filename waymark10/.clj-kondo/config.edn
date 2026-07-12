@@ -1,2 +1,12 @@
 ;; the framework lints itself with its own shipped exports
-{:config-paths ["../resources/clj-kondo.exports/waymark10/waymark10"]}
+{:config-paths ["../resources/clj-kondo.exports/waymark10/waymark10"]
+ ;; test-suite property checks: defspec defines its name as a var
+ :lint-as {clojure.test.check.clojure-test/defspec clojure.core/def}
+ ;; these namespaces lock objects fetched off shared registries —
+ ;; (locking (:lock reg)) — which kondo's local-object heuristic
+ ;; cannot see is the same object across threads; a real local-lock
+ ;; bug in NEW code still flags everywhere else
+ :config-in-ns {waymark10.server.presence {:linters {:locking-suspicious-lock {:level :off}}}
+                waymark10.server.intents {:linters {:locking-suspicious-lock {:level :off}}}
+                waymark10.server.events {:linters {:locking-suspicious-lock {:level :off}}}
+                waymark10.server.collab {:linters {:locking-suspicious-lock {:level :off}}}}}

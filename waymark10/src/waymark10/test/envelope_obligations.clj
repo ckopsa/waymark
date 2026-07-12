@@ -321,7 +321,7 @@
         props (get-in entry [:input :properties])
         required (into #{} (map keyword) (get-in entry [:input :required]))
         demanding (into {}
-                        (remove (fn [[f prop]]
+                        (remove (fn [[_f prop]]
                                   (contains? prop :const)))
                         props)]
     (cond-> []

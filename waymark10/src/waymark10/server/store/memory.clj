@@ -293,6 +293,16 @@
     (count (filter #(matches-all? % conds)
                    (vals (get-in @state [:tables kind])))))
 
+  (sum-matching [_ _tx kind of conds]
+    ;; SQL SUM skips NULLs; the twin skips non-numbers. Always a
+    ;; BigDecimal, exactly as the ::numeric cast answers.
+    (transduce (comp (filter #(matches-all? % conds))
+                     (keep #(get-in % [:data of]))
+                     (filter number?)
+                     (map bigdec))
+               + 0M
+               (vals (get-in @state [:tables kind]))))
+
   (ids-matching [_ _tx kind conds limit]
     (into []
           (take limit)

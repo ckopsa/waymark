@@ -6,8 +6,7 @@
   walker's problem — the graph only promises edges exist.
 
   Ported from waymark9 core/machine.py; path-to feeds the conformance
-  walker (any state reachable without a hand-written factory)."
-  (:require [clojure.set :as set]))
+  walker (any state reachable without a hand-written factory).")
 
 (defn actions-seq
   "Actions in deterministic (name-sorted) order, each with :name

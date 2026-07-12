@@ -15,8 +15,7 @@
   Boundaries, each a sentence: engine/start! over a scratch engine
   works and serves the generic UI — memory has no LISTEN wire, so
   events fall back to poll-only and presence/collab/coherence stay
-  process-local; :sum derived facts need Postgres (the maintainer's
-  SUM is raw SQL); walk! needs test.check on the classpath (run
+  process-local; walk! needs test.check on the classpath (run
   under -A:test).
 
   For a browser-reachable UI, serve! is scratch!'s HTTP-capable
@@ -155,10 +154,21 @@
 (defn act!
   "One write through the full invoke algorithm, printing the
   transition's one-line projection. Returns the engine's own result
-  (row, transition, warnings — or the dry-run verdict)."
+  (row, transition, warnings — or the dry-run verdict). A fenced
+  action (an :edit implies If-Match) gets the live row's own etag
+  unless opts carry :if-match — the scratchpad reads what it just
+  wrote, so the fence is bookkeeping here, not protection (probe run
+  3's D8)."
   ([eng kind id action body] (act! eng kind id action body {}))
   ([eng kind id action body opts]
-   (let [res (inv/invoke! eng kind (str id) action body
+   (let [adef (get (:actions (rdef-of eng kind)) action)
+         opts (if (and (get-in adef [:safety :fence])
+                       (nil? (:if-match opts)))
+                (assoc opts :if-match
+                       (inv/etag kind (str id)
+                                 (:version (row eng kind id))))
+                opts)
+         res (inv/invoke! eng kind (str id) action body
                           (merge {:principal dev-principal} opts))]
      (when-some [t (:transition res)]
        (println (transition-line t)))
@@ -199,51 +209,57 @@
   Cross-resource guards (:reads beyond the clock) advertise
   optimistically on the pure render probe, so an :available answer
   for one is verified through a dry-run — the enforcement's own
-  verdict — before it is claimed."
-  [eng kind id action]
-  (let [doc (envelope eng kind id)
-        rdef (rdef-of eng kind)
-        wire-name (str/replace (name action) "-" "_")]
-    (cond
-      (contains? (get doc "actions") wire-name)
-      (let [readers (reads-beyond-clock (get (:actions rdef) action))]
-        (if (empty? readers)
-          {:status :available}
-          (try
-            (inv/invoke! eng kind (str id) action nil
-                         {:principal dev-principal :dry-run true})
-            {:status :available :verified :dry-run}
-            (catch clojure.lang.ExceptionInfo e
-              (if (= :guard-refused (:waymark10/problem (ex-data e)))
-                {:status :unavailable
-                 :reason (:detail (ex-data e))
-                 :guard (:guard (ex-data e))
-                 :via :dry-run}
-                ;; an input-taking action can't dry-run bodiless —
-                ;; say what is known instead of overclaiming
-                {:status :advertised
-                 :note (str "guards " (mapv :name readers)
-                            " read other kinds and advertise "
-                            "optimistically on the pure probe; verify "
-                            "with (act! e kind id action body "
-                            "{:dry-run true})")})))))
+  verdict. Bodiless, the partial rehearsal judges every guard whose
+  inputs are already answerable (the row-reading ones); guards still
+  awaiting input fields are named under :awaiting, and passing a body
+  — (why-not e kind id action body) — judges those too."
+  ([eng kind id action] (why-not eng kind id action nil))
+  ([eng kind id action body]
+   (let [doc (envelope eng kind id)
+         rdef (rdef-of eng kind)
+         wire-name (str/replace (name action) "-" "_")]
+     (cond
+       (contains? (get doc "actions") wire-name)
+       (let [readers (reads-beyond-clock (get (:actions rdef) action))]
+         (if (and (empty? readers) (nil? body))
+           {:status :available}
+           (try
+             (let [res (inv/invoke! eng kind (str id) action body
+                                    {:principal dev-principal
+                                     :dry-run (if (some? body) true :partial)})]
+               (cond-> {:status :available :verified :dry-run}
+                 (seq (:awaiting res))
+                 (assoc :awaiting (vec (:awaiting res))
+                        :note "these guards judge input fields — pass a body to judge them too")))
+             (catch clojure.lang.ExceptionInfo e
+               (condp = (:waymark10/problem (ex-data e))
+                 :guard-refused
+                 {:status :unavailable
+                  :reason (:detail (ex-data e))
+                  :guard (:guard (ex-data e))
+                  :via :dry-run}
+                 :schema-invalid
+                 {:status :invalid-input
+                  :errors (:errors (ex-data e))
+                  :note "the body failed the input schema before any guard judged"}
+                 (throw e))))))
 
-      (contains? (get doc "unavailable") wire-name)
-      (let [entry (get-in doc ["unavailable" wire-name])]
-        (cond-> {:status :unavailable :reason (get entry "reason")}
-          (get entry "remedies")
-          (assoc :remedies (get entry "remedies"))
-          (get entry "becomes_available")
-          (assoc :becomes-available (get entry "becomes_available"))))
+       (contains? (get doc "unavailable") wire-name)
+       (let [entry (get-in doc ["unavailable" wire-name])]
+         (cond-> {:status :unavailable :reason (get entry "reason")}
+           (get entry "remedies")
+           (assoc :remedies (get entry "remedies"))
+           (get entry "becomes_available")
+           (assoc :becomes-available (get entry "becomes_available"))))
 
-      (contains? (:actions rdef) action)
-      {:status :concealed
-       :note "declared, but rendered neither available nor unavailable (a :hide guard conceals it for this principal)"}
+       (contains? (:actions rdef) action)
+       {:status :concealed
+        :note "declared, but rendered neither available nor unavailable (a :hide guard conceals it for this principal)"}
 
-      :else
-      {:status :absent
-       :note (str "no action " action " on " (name kind) " — actions: "
-                  (vec (keys (:actions rdef))))})))
+       :else
+       {:status :absent
+        :note (str "no action " action " on " (name kind) " — actions: "
+                   (vec (keys (:actions rdef))))}))))
 
 (defn walk!
   "Drive the machine to a state with the conformance walker's own

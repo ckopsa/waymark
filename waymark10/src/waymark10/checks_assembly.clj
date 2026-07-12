@@ -331,7 +331,7 @@
 (defn- aggregate-target
   "The kind an aggregate spec reads, resolved through its declared
   edge — or the named refusal when the edge does not exist here."
-  [reg kind r fact an c]
+  [_reg kind r fact an c]
   (if-some [ek (:related c)]
     (or (:kind (get (:related r) ek))
         (err kind :derived-cycles

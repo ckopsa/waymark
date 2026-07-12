@@ -72,7 +72,7 @@
                                                {:limit 200})))
             outcome
             (reduce
-             (fn [[cursor n] t]
+             (fn [[_cursor n] t]
                (try
                  (f t)
                  (store/with-tx st

@@ -86,7 +86,7 @@
   [reg decls]
   (let [kinds (:kinds reg)]
     (reduce
-     (fn [out {:keys [name anchor members showcase attention] :as decl}]
+     (fn [out {:keys [name anchor members showcase attention]}]
        (let [sname (clojure.core/name (or name
                                           (throw (t/definition-error
                                                   "a surface declares :name"))))]

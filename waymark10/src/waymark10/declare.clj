@@ -92,11 +92,12 @@
   (let [err (fn [msg]
               (throw (t/definition-error
                       (str "defderived " (name dname) ": " msg))))]
-    (when (= (contains? spec :expr) (contains? spec :count))
-      (err (str "declare exactly one of :expr (an expression fact) or "
-                ":count (an aggregate over a declared edge)")))
-    (when (and (contains? spec :count) (seq (:over spec)))
-      (err "a count's inputs are its declared edge; :over does not apply"))
+    (when (not= 1 (count (filter #(contains? spec %) [:expr :count :sum])))
+      (err (str "declare exactly one of :expr (an expression fact), "
+                ":count, or :sum (aggregates over a declared edge)")))
+    (when (and (or (contains? spec :count) (contains? spec :sum))
+               (seq (:over spec)))
+      (err "an aggregate's inputs are its declared edge; :over does not apply"))
     (let [spec (r/normalize-derived-spec spec)]
       (when-some [e (:expr spec)]
         (when-some [p (first (concat (expr/problems e)

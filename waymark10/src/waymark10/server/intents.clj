@@ -86,7 +86,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
-            [waymark10.server.store.postgres :as pg]
+            ;; loaded for the PostgresStorage record class alone
+            [waymark10.server.store.postgres]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (com.zaxxer.hikari HikariDataSource)

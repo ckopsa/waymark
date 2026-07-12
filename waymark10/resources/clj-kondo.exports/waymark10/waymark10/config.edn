@@ -11,7 +11,8 @@
            waymark10.dsl/defderived       clojure.core/def
            waymark10.dsl/defguard         clj-kondo.lint-as/def-catch-all
            waymark10.dsl/defhandler       clojure.core/defn
-           waymark10.dsl/defguardfn       clojure.core/defn}
+           waymark10.dsl/defguardfn       clojure.core/defn
+           waymark10.dsl/defalias         clojure.core/def}
  :hooks {:analyze-call {waymark10.resource/defresource hooks.waymark10.resource/defresource
                         waymark10.dsl/defresource      hooks.waymark10.resource/defresource}}
  :linters {:waymark10/unknown-key {:level :warning}}}

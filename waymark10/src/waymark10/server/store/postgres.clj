@@ -432,6 +432,16 @@
                      (str " WHERE " (str/join " AND " (map first parts)))))]
       (:n (jdbc/execute-one! tx (into [sql] (mapcat second parts)) jdbc-opts))))
 
+  (sum-matching [_ tx kind of conds]
+    (let [table (get @tables kind)
+          fname (store/definition-checked-name of)
+          parts (map cond-sql conds)
+          sql (str "SELECT COALESCE(SUM((data->>'" fname "')::numeric), 0) AS s"
+                   " FROM " table
+                   (when (seq parts)
+                     (str " WHERE " (str/join " AND " (map first parts)))))]
+      (:s (jdbc/execute-one! tx (into [sql] (mapcat second parts)) jdbc-opts))))
+
   (ids-matching [_ tx kind conds limit]
     (let [table (get @tables kind)
           parts (map cond-sql conds)

@@ -113,9 +113,9 @@
    :explain (:explain (first parts))
    :judges []
    :reads (dedup (mapcat :reads parts))
-   :hide (boolean (every? :hide parts))
+   :hide (every? :hide parts)
    :severity :refuse
-   :needs-input (boolean (every? :needs-input parts))})
+   :needs-input (every? :needs-input parts)})
 
 ;; ── evaluation ──────────────────────────────────────────────────────
 

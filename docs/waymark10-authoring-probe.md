@@ -117,16 +117,59 @@ Score: **run 2 needed zero source dives and zero neighbor leans.** The
 vocabulary page closed run 1's whole defect class; run 2's one finding was
 a tooling honesty gap, not a teaching gap — and it's closed.
 
-## Backlog seeded by run 2 (round 3, when wanted)
+## Backlog seeded by run 2 — CLOSED 2026-07-12 (round 3)
 
-1. `why-not`'s `:advertised` branch — judge input-taking cross-resource
-   actions via `:dry-run :partial` with a caller-supplied body, so the
-   honest verdict covers every action shape.
-2. The framework's own source under its shipped kondo config (22 errors /
-   38 warnings at round 1's baseline) — lint the teacher.
-3. Standing boundaries worth retiring eventually: `sum-matching` into the
-   Storage protocol (`:sum` facts over memory), top-level `:display`
-   rendered or retired.
+1. **Done, one level deeper than planned.** The `:advertised` punt's root
+   cause was the framework's own `split-leaves`: the partial rehearsal
+   dropped row-only guards on the premise that "the envelope already told
+   that truth" — false for `:reads` guards (D6's discovery, restated).
+   Now the rehearsal judges cross-resource row guards (their inputs ARE
+   answerable), `why-not` rides it bodiless (naming input-judging guards
+   as `:awaiting`), and a body arity judges those too. `:advertised` is
+   gone — every action shape gets the enforcement's own verdict.
+2. **Done.** Framework `src/` lints 0 errors / 0 warnings under its own
+   shipped config (was 22/38). Real fixes (dead vars, unused
+   requires/bindings, redundant coercions, `invoke!`'s decorative
+   destructure); the one heuristic false-positive class
+   (`(locking (:lock reg))` — a shared object kondo can't see) is
+   suppressed per-namespace with the reason written down.
+3. **Done, both.** `sum-matching` is a Storage protocol op (batch C's
+   named follow-up) — `:sum` facts maintain over the memory engine, and
+   `defderived` now accepts `:sum` specs. Top-level `:display` is
+   **rendered**: the envelope carries the resolved title
+   (reserved-but-optional, the `:parts` precedent; redaction's honesty
+   trap holds).
 
-Rerun the probe with a third author shape — `:fields` lifecycle groups
-and a generated editor — once round 3 lands.
+---
+
+## Run 3 — 2026-07-12, the `gift` kind (`:fields` lifecycle groups)
+
+Specimen: `mealplan10/dev/gift_probe.clj`. Idea → bought → given, the
+whole schema declared by phase: `:at-create` recipient + occasion,
+`:when {:other …}` (the conditional create gate), `:while-open` shared
+prose notes with `:open #{:idea}`, `:support` a money budget.
+
+| # | Moment | Expected | What happened | Defect? |
+|---|--------|----------|---------------|---------|
+| 1 | Authoring the groups | somewhere to learn the `:fields` dialect | The vocabulary page had **nothing** — predicted, and confirmed on contact. | **D7 — fixed in-round:** vocabulary §7 (group semantics, row shape, `:open` rules, the found-not-named discriminator, editor naming, the count-fact append). The specimen was then authored from §7 alone — zero source dives. |
+| 2 | Create missing the `:when` field | the generated gate refuses | It did, with its generated sentence: "A other declares its occasion note at create." | Grammar nit for round 4: the sentence generator's article mangles awkward one-of values ("A other"). |
+| 3 | `act!` on the generated editor | the write lands | **412 version conflict** — generated editors carry `:edit`, an edit implies the fence, and `act!` sent no If-Match. | **D8 — fixed in-round:** `act!` supplies the live row's own etag for fenced actions (an explicit `:if-match` still wins, and a stale one still refuses — the fence stays real). |
+| 4 | Misnaming `update_support` (support spans two states → `…_in_idea`) | recovery without source | `why-not`'s `:absent` answer listed the real action names — the designed recovery worked. | Nit for round 4: the raw 404 problem could suggest near-miss action names the way the declaration gate suggests keys. |
+| 5 | The open-state boundary | notes editor dies at `buy` | `update_fields` rendered `:unavailable` after `idea → bought`; support editors kept serving per non-terminal state; the drive closed at `given`. | — |
+
+Score: one teaching gap (predicted, closed same round), one tooling gap
+(closed same round), zero forced source dives after the §7 fix. Three
+dialects — split, flow, fields — are now all probe-proven authorable
+from the vocabulary page.
+
+## Backlog seeded by run 3 (round 4, when wanted)
+
+1. The generated `:when`-gate sentence's article ("A other…") — teach
+   the generator to name the value ("An occasion of 'other' declares…").
+2. The unknown-action 404 could carry near-miss suggestions, the
+   `:unknown-law-key` precedent applied to action names.
+3. Test-tree lint tail: 9 warnings under `test/` (src is 0/0).
+
+No fourth authoring dialect remains to probe; the next run should be a
+**cold-start** probe — a fresh session authoring into mealplan10 proper
+(not `dev/`), measuring the whole loop from `make check10` onward.

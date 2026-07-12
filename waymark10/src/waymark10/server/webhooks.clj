@@ -259,7 +259,7 @@
                        (:id t))
             outcome
             (reduce
-             (fn [cursor t]
+             (fn [_cursor t]
                (if (or (= :subscription (:kind t)) (not (wants? sub t)))
                  (advance! t)
                  (let [body (wire-body eng t)]

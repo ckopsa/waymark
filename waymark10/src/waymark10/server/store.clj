@@ -66,6 +66,12 @@
     aggregate read. A cond is {:target :state|:id|:data, :field name,
     :cast sql-type, :op :=|:<|:<=|:>=|:>|:in, :value v | :values [vs]};
     :data values cross as strings and cast server-side.")
+  (sum-matching [st tx kind of conds]
+    "Exact SUM of the :of data field over the cond-matched rows (same
+    grammar as count-matching) — the :sum aggregate's read (batch C's
+    named follow-up, landed). Nil/absent fields don't contribute; the
+    empty set sums to 0. → a BigDecimal; landing it in the fact's
+    declared type is the maintainer's job.")
   (ids-matching [st tx kind conds limit]
     "Row ids matching every cond (same grammar as count-matching),
     id-ordered, LIMIT'd — the inverted dependent query and the

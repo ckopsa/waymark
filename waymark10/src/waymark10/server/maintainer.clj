@@ -50,10 +50,10 @@
     dependency map (dependent-edges) stays RESIDENT — edges are
     :code-or-shape, so no live revision's edges can differ.
   - :sum (batch C) is the count's sibling: same edges, same where
-    grammar, SUM of the target's :of column. The SUM SQL renders here
-    against the maintainer's own cond grammar — the store protocol is
-    another batch's surface; a sum-matching protocol op is the named
-    follow-up. Sums (like observations) are a Postgres surface.
+    grammar, SUM of the target's :of column — read through
+    store/sum-matching (the protocol op batch C named as follow-up,
+    landed in DX round 3), so sums work over every Storage backend;
+    the maintainer only lands the value in the fact's declared type.
   - A spec's :flips-at fn is scheduling advice, never law: it changes
     when the index re-checks, not what any fact means, so it is not
     fingerprinted.
@@ -67,10 +67,7 @@
   swept once, silently, and advances the index). An inscrutable
   expression falls back to the spec's declared {:flips-at (fn [row]
   …)}, else to a fixed re-check interval (15 minutes)."
-  (:require [clojure.string :as str]
-            [next.jdbc :as jdbc]
-            [next.jdbc.result-set :as rs]
-            [waymark10.derived :as derived]
+  (:require [waymark10.derived :as derived]
             [waymark10.expr :as expr]
             [waymark10.schema :as schema]
             [waymark10.server.events :as events]
@@ -121,7 +118,7 @@
       (= 'date-of (first form)) (bare-field (second form)))))
 
 (defn- now-reader? [form]
-  (boolean (contains? (:vars (expr/info form)) :now)))
+  (contains? (:vars (expr/info form)) :now))
 
 (defn- scan-clock
   "Walk a clock fact's normalized expr for the invertible comparison
@@ -218,69 +215,22 @@
 
 (def ^:private flip-op {:= := :< :> :<= :>= :>= :<= :> :<})
 
-;; ── the SUM read (batch C) ──────────────────────────────────────────
-;; The maintainer's local twin of the storage cond renderer, for the
-;; one aggregate the store protocol does not yet speak — the store
-;; surface is another batch's file; a sum-matching protocol op is the
-;; named follow-up. Identifiers come from checked declarations, casts
-;; from the same closed set.
-
-(def ^:private safe-casts #{"date" "boolean" "bigint" "numeric" "text"
-                            "timestamptz"})
-(def ^:private cond-ops {:= "=" :< "<" :<= "<=" :>= ">=" :> ">"})
-
-(defn- cond-frag [{:keys [target field cast op value values]}]
-  (let [cast (or cast "text")
-        _ (when-not (contains? safe-casts cast)
-            (throw (ex-info (str "cond cast " (pr-str cast)
-                                 " is not a known SQL type") {:cast cast})))
-        lval (case target
-               :state "state"
-               :id "id"
-               (let [f (store/definition-checked-name field)]
-                 (case cast
-                   "date" (str "waymark10_date(data->>'" f "')")
-                   "timestamptz" (str "waymark10_ts(data->>'" f "')")
-                   "text" (str "data->>'" f "'")
-                   (str "(data->>'" f "')::" cast))))
-        rval (if (or (contains? #{:state :id} target) (= "text" cast))
-               "?"
-               (case cast
-                 "date" "waymark10_date(?)"
-                 "timestamptz" "waymark10_ts(?)"
-                 (str "(?)::" cast)))]
-    (if (= :in op)
-      [(str lval " IN (" (str/join ", " (repeat (count values) rval)) ")")
-       (vec values)]
-      [(str lval " " (or (get cond-ops op)
-                         (throw (ex-info (str "unknown cond op " op) {:op op})))
-            " " rval)
-       [value]])))
+;; ── the SUM read (batch C; protocol op since round 3) ───────────────
 
 (defn- strip-zeros ^java.math.BigDecimal [^java.math.BigDecimal d]
   (let [s (.stripTrailingZeros d)]
     (if (neg? (.scale s)) (.setScale s 0) s)))
 
-(defn- sum-matching
-  "SUM of the target's :of column over the cond-matched rows; the
-  empty set sums to 0. The value lands in the fact's declared type:
-  long for an :int fact, trailing-zero-stripped decimal otherwise —
-  so a re-read never disagrees with itself by scale alone."
-  [tx target-rdef fact-rdef fact of conds]
-  (let [table (:table (store/kind-projection target-rdef))
-        fname (store/definition-checked-name of)
-        parts (map cond-frag conds)
-        sql (str "SELECT COALESCE(SUM((data->>'" fname "')::numeric), 0) AS s"
-                 " FROM " table
-                 (when (seq parts)
-                   (str " WHERE " (str/join " AND " (map first parts)))))
-        s ^java.math.BigDecimal
-        (:s (jdbc/execute-one! tx (into [sql] (mapcat second parts))
-                               {:builder-fn rs/as-unqualified-lower-maps}))
-        int-fact? (= :int (let [fs (schema/field-schema (:schema fact-rdef) fact)]
+(defn- land-sum
+  "store/sum-matching's exact decimal, landed in the fact's declared
+  type: long for an :int fact, trailing-zero-stripped decimal
+  otherwise — so a re-read never disagrees with itself by scale
+  alone."
+  [^java.math.BigDecimal s fact-rdef fact]
+  (let [int-fact? (= :int (let [fs (schema/field-schema (:schema fact-rdef) fact)]
                             (if (vector? fs) (first fs) fs)))]
     (if int-fact?
-      (long (.longValueExact (.setScale ^java.math.BigDecimal s 0)))
+      (long (.longValueExact (.setScale s 0)))
       (strip-zeros s))))
 
 (defn- aggregate-value
@@ -293,9 +243,10 @@
   (let [c (or (:count spec) (:sum spec))
         of (when (:sum spec) (:of (:sum spec)))
         storage (:storage eng)
-        run (fn [target-kind target-rdef conds]
+        run (fn [target-kind _target-rdef conds]
               (if of
-                (sum-matching tx target-rdef rdef fact of conds)
+                (land-sum (store/sum-matching storage tx target-kind of conds)
+                          rdef fact)
                 (store/count-matching storage tx target-kind conds)))]
     (if-some [child-kind (:owns c)]
       (let [edge (owns-edge rdef child-kind)

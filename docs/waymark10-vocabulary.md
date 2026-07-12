@@ -155,7 +155,49 @@ An acceptance-set guard (`guard` with `:accepts (fn [row ctx] …)` and
 `:reads`) does the same through its set: the rendered enum, the picker, and
 the enforcement are one declaration.
 
-## 7 · Declaration and action key sets
+## 7 · `:fields` lifecycle groups — the schema by phase
+
+The third authoring dialect (besides `:schema` + `:actions` and `:flow`
+rows): declare each field by **when it matters in the resource's life**,
+and the schema, the create form, the editors, and the create gates all
+derive. `:fields` and `:schema`/`:create-schema` are exclusive — the
+groups ARE the schema, one home per concern. The machine's states must
+be known (declare `:states`, or let `:flow` rows name them — flow
+desugars first).
+
+```clojure
+:fields
+{:at-create  [[:recipient [:string {:min 1 :max 80}]]
+              [:occasion  (one-of :birthday :christmas :other)]]
+ :when       {:other [[:occasion_note [:string {:min 1 :max 120}]]]}
+ :while-open [[:idea_notes (prose "Ideas" {:shared true})]]
+ :open       #{:idea}
+ :support    [[:budget (money :usd)]]}
+```
+
+Every row is a `[field word-or-form]` pair — the typed field words
+(§5) are the natural spelling because their entry properties ride as
+metadata and get hoisted; a plain malli form works but carries no
+properties. The five group keys, each a sentence:
+
+| Group | Means |
+|---|---|
+| `:at-create` | create input, fixed after — required in both schemas, written by no generated editor |
+| `:while-open` | authoring-phase fields: one generated editor per **open** state — `update_fields` (one open state) or `update_fields_in_<state>` (several) |
+| `:open` | the still-authoring states (default `#{initial}`); must be declared, non-terminal states |
+| `:support` | bookkeeping fields whose generated editor (`update_support`/`…_in_<state>`) exists in every non-terminal state |
+| `:when` | `{discriminating-value [[field word] …]}` — fields optional everywhere plus a generated create gate: required exactly when the discriminator holds that value |
+
+The `:when` discriminator is found, not named: exactly one `:at-create`
+`one-of` field must offer every `:when` key, or the declaration refuses
+with the fix spelled out. Generated editors prefill their group, carry
+the union of the group's prose draft policies, mint the idempotent
+overwrite safety, and refuse at the def site if they'd collide with a
+declared action name. A top-level `:derived` **count** fact with no
+declared entry gets its `[:maybe :int]` entry appended; every other
+derived fact still declares its own shape.
+
+## 8 · Declaration and action key sets
 
 The closed sets themselves (what the declaration gate and the kondo hook
 refuse against) print from the REPL — `(waymark10.dev/vocab)` — and live in

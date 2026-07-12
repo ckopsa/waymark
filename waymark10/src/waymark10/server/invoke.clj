@@ -391,17 +391,23 @@
   "The partial rehearsal's coverage split (design §23): guard trees
   flatten to their schema-visible leaves (g/iter-leaves — an :any
   composite is atomic and carries no :judges of its own, so it waits
-  with the rest); row-only leaves (no :judges) drop entirely — the
-  envelope's available/unavailable already told that truth; and the
-  input-judging remainder divides into the leaves the provided keys
-  fully cover (judged now) and the leaves still waiting on a field
-  (:awaiting — named, never failed)."
+  with the rest). Judged-when-answerable, literally: an input-judging
+  leaf is judged when the provided keys cover its whole :judges set,
+  else it waits (:awaiting — named, never failed). A row-only leaf
+  that READS beyond the clock is judged too — the pure render probe
+  advertises those optimistically (it carries no :read hook), so the
+  envelope has NOT told their truth; the rehearsal's ctx has the
+  hooks and is the first door that can answer honestly (the authoring
+  probe's D6). A pure row-only leaf still drops: the envelope's
+  available/unavailable really did tell that one."
   [guards provided]
-  (let [input-leaves (into []
-                           (comp (mapcat g/iter-leaves)
-                                 (filter #(seq (:judges %))))
-                           guards)]
-    {:judged (filterv #(every? provided (:judges %)) input-leaves)
+  (let [leaves (into [] (mapcat g/iter-leaves) guards)
+        cross-row? (fn [g] (and (empty? (:judges g))
+                                (seq (remove #{:now} (:reads g)))))
+        input-leaves (filterv #(seq (:judges %)) leaves)]
+    {:judged (into (filterv cross-row? leaves)
+                   (filter #(every? provided (:judges %)))
+                   input-leaves)
      :awaiting (filterv #(not (every? provided (:judges %))) input-leaves)}))
 
 (defn- partial-verdict
@@ -604,11 +610,7 @@
 (defn invoke!
   "One write. opts: :principal (required), :if-match, :idempotency-key,
   :dry-run, :acknowledged (set of guard names), :correlation-id."
-  [engine kind id action-name body
-   {:keys [principal if-match idempotency-key dry-run acknowledged
-           correlation-id]
-    :or {acknowledged #{}}
-    :as opts}]
+  [engine kind id action-name body opts]
   (let [rdef (rdef-of engine kind)]
     (if (and (= :adopt action-name)
              (nil? (get-in rdef [:actions :adopt]))

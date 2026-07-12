@@ -104,9 +104,10 @@
 
 (def envelope-keys
   "The reserved envelope keys — every GET envelope has exactly these.
-  :parts (batch A) is reserved-but-optional: only kinds with placed
-  actions carry it, so the shape check tolerates its absence and
-  refuses its co-conspirators via the parts obligations
+  :parts (batch A) and :display (DX round 3 — the resolved page-title
+  advertisement, carried only by kinds that declare one) are
+  reserved-but-optional, so the shape check tolerates their absence;
+  parts' co-conspirators are refused via the parts obligations
   (waymark10.test.envelope-obligations)."
   #{:waymark :kind :self :state :summary :data :actions :unavailable
     :links :meta})
@@ -133,10 +134,10 @@
         etag (:etag m)
         summary (:summary env)]
     (cond-> []
-      (not= envelope-keys (disj (set (keys env)) :parts))
+      (not= envelope-keys (disj (set (keys env)) :parts :display))
       (conj (str where ": envelope keys " (vec (sort (keys env)))
                  " are not exactly the reserved " (vec (sort envelope-keys))
-                 " (+ optional :parts)"))
+                 " (+ optional :parts/:display)"))
 
       (not= "10" (:waymark env))
       (conj (str where ": waymark is " (pr-str (:waymark env)) ", not \"10\""))
@@ -327,9 +328,12 @@
 
 (defn collection-item-violations
   "The collection-honesty shape half: an item is the envelope minus
-  data — exactly the reserved keys without :data."
+  data — exactly the reserved keys without :data, plus the same
+  optional :display a full envelope may carry (a list row is where
+  the resolved title earns its keep)."
   [item]
-  (when (not= (disj envelope-keys :data) (set (keys item)))
+  (when (not= (disj envelope-keys :data)
+              (disj (set (keys item)) :display))
     [(str (where-of item) ": collection item keys "
           (vec (sort (keys item))) " are not the envelope minus data")]))
 

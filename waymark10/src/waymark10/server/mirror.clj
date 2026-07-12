@@ -235,7 +235,7 @@
   :actions either; a kind declared {:push-on-write true} may add
   domain actions (local writes the post-commit pass pushes — see
   check-domain-actions! for their shape)."
-  [rmap {:keys [adapter ttl-seconds discover-every push-on-write] :as spec}]
+  [rmap {:keys [adapter ttl-seconds discover-every push-on-write]}]
   (when (nil? adapter)
     (throw (t/definition-error
             (str (some-> (:kind rmap) name) ": a mirror declares its :adapter"))))
