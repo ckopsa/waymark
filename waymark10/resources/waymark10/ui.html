@@ -3277,12 +3277,14 @@ sse("/api/-/presence", ({event, data: f}) => {
   else PRESENCE.set(f.principal.id, f);   // join | move
   paintPresence();
   /* follow-me: go where they LOOK — debounced, and never yank a human
-     out of an open dialog (the transition-steering discipline) */
+     out of an open dialog (the transition-steering discipline) or off
+     the Access panel (the balcony parks BOTH steering signals) */
   if ((f.event === "move" || f.event === "join") &&
       followId && f.principal.id === followId && f.self) {
     clearTimeout(followMoveTimer);
     followMoveTimer = setTimeout(() => {
-      if (f.self !== hereHref() && !$("dialog[open]"))
+      if (f.self !== hereHref() && hereHref() !== "access" &&
+          !$("dialog[open]"))
         location.hash = "#" + f.self;
     }, 250);
   }
