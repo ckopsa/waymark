@@ -409,7 +409,11 @@
   the href's own params before parse-query runs. A param already
   present in the href-derived params is locked (an :owns/:via or
   :edge/:on join key, e.g. plan_id) — an override naming one refuses
-  (422), never silently overwritten. A rel with no declared,
+  (422), never silently overwritten, and the SAME locked keys are
+  dropped from both \"columns\" (nothing to filter on when every row
+  already shares one value) and every embedded item's \"fields\"
+  (nothing to show when the value is baked into the link itself,
+  already visible on the parent). A rel with no declared,
   embeddable link, or an override parse-query itself rejects (an
   unfilterable/unsortable field, a bad value, page[size] past the
   global cap), refuses the same way — the client's own input is never
@@ -458,12 +462,19 @@
                      (throw (p/schema-invalid
                              :query {(str "embed." rel ".page[size]")
                                      [(str "must be an integer 1.." max-limit)]})))
+                 ;; every row of THIS embed already shares one value for
+                 ;; a locked key (it's what the href is filtered to) —
+                 ;; nothing to filter on, nothing worth a column either
+                 locked-keys (set (keys href-params))
                  ;; the target's own filter/sort vocabulary, so a
                  ;; client builds grid controls for this embed without
                  ;; a second GET to its bare href — pure computation,
                  ;; so it lands even if the storage read below fails
                  env (assoc-in env ["links" rel "columns"]
-                               (p/wire-value (collections/query-input-schema trdef)))]
+                               (p/wire-value
+                                (update (collections/query-input-schema trdef)
+                                        :properties
+                                        #(apply dissoc % locked-keys))))]
              (try
                (let [st (:storage eng)
                      [rows total]
@@ -475,8 +486,10 @@
                                               :limit (:size page)
                                               :offset (* (:size page) (dec (:number page)))})
                           (store/count-matching st tx (:kind trdef) conds)]))
-                     items (mapv #(render/envelope-summary
-                                   trdef (inv/decode-row trdef %) ctx-opts)
+                     items (mapv #(update (render/envelope-summary
+                                           trdef (inv/decode-row trdef %) ctx-opts)
+                                          "fields"
+                                          (fn [flds] (apply dissoc flds locked-keys)))
                                  rows)]
                  (-> env
                      (assoc-in ["links" rel "embedded"] items)

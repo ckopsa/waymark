@@ -250,15 +250,21 @@
     (testing "embedded items carry real field values, not just state+summary"
       (let [sanding (first (filter #(str/includes? (:summary %) "Sand the top")
                                    (get-in project-env [:links :tickets :embedded])))]
-        (is (= {:title "Sand the top" :project_id pid :due_date "2026-07-20" :points 3}
+        (is (= {:title "Sand the top" :due_date "2026-07-20" :points 3}
                (:fields sanding))
-            "notes (a prose field) is excluded; everything else rides through")))
-    (testing "an embed link carries the target's own filter/sort vocabulary — no second GET"
+            "notes (a prose field) is excluded; project_id is excluded too — it's
+             locked by this embed's own href (every row already shares this
+             project), the parent envelope is where it's meaningful")))
+    (testing "an embed link carries the target's own filter/sort vocabulary minus its locked keys"
       (let [direct (:body (get-json (str "/api/ba_tickets?project_id=" pid)))]
-        (is (= (get-in direct [:actions :query :input])
-               (get-in project-env [:links :tickets :columns]))
-            "the embed's columns are exactly what a direct collection GET's own
-             query action advertises — one shared shape, not a second one")))
+        (is (= (dissoc (get-in direct [:actions :query :input :properties]) :project_id)
+               (get-in project-env [:links :tickets :columns :properties]))
+            "same shape a direct collection GET advertises, minus project_id —
+             the embed's own href already fixes it, so filtering on it would
+             refuse (422) and every row would show one repeated value")
+        (is (not (contains? (get-in project-env [:links :tickets :columns :properties])
+                             :project_id))
+            "project_id itself never rides — nothing to pick in the Filters popover")))
     (testing "the pure and wire obligations"
       (is (empty? (ob/links-violations bafx/ba-ticket ticket-env)))
       (is (empty? (ob/links-violations bafx/ba-project project-env)))
