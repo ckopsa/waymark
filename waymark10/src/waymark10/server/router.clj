@@ -269,6 +269,19 @@
 
 ;; ── handlers ────────────────────────────────────────────────────────
 
+(defn- scope-action-names
+  "Every action-name string a scope entry for this kind may name in
+  :actions — declared actions, generated field editors, and the
+  create verb — exactly the vocabulary check-action! enforces.
+  Exposed on well-known so building a grant/approval_request scope
+  needs no source read: an invited agent sees the real strings, not
+  a guess at hyphen-vs-underscore or at what a :while-open group
+  generated."
+  [rdef]
+  (into (sorted-set)
+        (map name)
+        (concat (keys (:actions rdef)) (:create-action-names rdef))))
+
 (defn- well-known [eng]
   (fn [req]
     (let [vis (visibility-of req)
@@ -279,7 +292,10 @@
        (cond-> {:waymark "10"
                 :kinds (vec (sort (map (comp name key) resources)))
                 :resources (into (sorted-map)
-                                 (map (fn [[k r]] [(name k) {:href (str "/api/" (:plural r))}]))
+                                 (map (fn [[k r]]
+                                        [(name k)
+                                         {:href (str "/api/" (:plural r))
+                                          :actions (vec (scope-action-names r))}]))
                                  resources)}
          ;; the declared surfaces (phase 9b) — hidden from a scoped
          ;; request, whose surface routes 404 anyway
@@ -906,7 +922,14 @@
   IS the secret); an unknown or already-spent token answers 404 and
   says nothing. No side effects: the token spends on the agent's
   first real request carrying X-Waymark-Invite — which can be the
-  access request itself, so joining is one POST."
+  access request itself, so joining is one POST.
+
+  :ask.vocabulary is the closing-the-loop link: well-known's
+  per-kind :actions names the exact scope-entry strings this engine
+  understands (declared actions, generated field editors, the create
+  verb), so a scope gets built from wire data alone — no reading the
+  resource declaration to learn a hyphen-vs-underscore convention or
+  guess at what a :while-open group generated."
   [eng]
   (fn [req]
     (let [token (get (query-params req) "invite")
@@ -924,18 +947,40 @@
                :token token
                :note (str "send this header on your FIRST request — it "
                           "binds this invitation to your principal id; "
-                          "one use, then the link goes dark")}
+                          "one use, then the link goes dark")
+               :if_it_goes_wrong
+               (str "binding spends the invite, not the ask: if the "
+                    "request carrying this header fails validation, you "
+                    "are ALREADY bound — retry the ask without the "
+                    "invite header, as many times as it takes")
+               :cautious_path
+               (str "bind first with a harmless read — GET "
+                    "/api/.well-known/waymark carrying the invite "
+                    "header — then file the ask as a plain named "
+                    "request; same end state, nothing rides on one shot")}
         :identity {:header "x-waymark-principal"
                    :note "your stable agent id — every act is recorded under it"
                    :actor_type "agent"}
         :ask {:href "/api/approval_requests"
               :method "POST"
               :body {:task "what you are here to do, one sentence"
-                     :scope [{:kind "<kind>"
-                              :actions ["<action>" "…"]
+                     :scope [{:kind "a kind name from the vocabulary"
+                              :actions ["exact action-name strings from the vocabulary"]
                               :ids "optional — specific rows"
                               :fields "optional — {mode allow|deny, names […]}"}]
                      :expires_at "RFC3339 instant, optional"}
+              :vocabulary
+              {:href "/api/.well-known/waymark"
+               :note (str "each kind's :actions there lists every string "
+                          "a scope entry may name for that kind — the "
+                          "exact spellings, generated field editors and "
+                          "the create verb included; there is no "
+                          "wildcard, so name each one. Reading "
+                          "(GET/list) needs no action at all: a scope "
+                          "entry with :actions [] grants read-only "
+                          "sight of the kind (the key itself is "
+                          "required). Name actions only for create and "
+                          "state-changing acts.")}
               :ttl {:default_seconds default-ttl
                     :max_seconds max-ttl
                     :note "propose the shortest leash your task needs; unstated means the default"}}

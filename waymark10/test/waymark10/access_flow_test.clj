@@ -7,6 +7,7 @@
   world 404s again."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
+            [waymark10.dsl :as dsl]
             [waymark10.resource :as r]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
@@ -34,9 +35,35 @@
            {:one-way "Finishing records reality; nothing external changes."
             :display {:label "Done"}}]]})
 
+;; a :fields kind (generates editor actions no schema endpoint shows)
+;; and a hyphenated action name — the joining probe's two vocabulary
+;; traps, planted so the wire must teach them
+(r/defresource memo
+  {:kind :access_memo
+   :initial :draft
+   :terminal #{:sent}
+   :summary "{data.title} · {state}"
+   :fields {:at-create [[:title [:string {:min 1 :max 80}]]]
+            :while-open [[:body (dsl/prose "Body")]]}
+   :flow [[:draft :send :sent
+           {:one-way "Sending records it; nothing external changes."
+            :display {:label "Send"}}]]})
+
+(r/defresource winch
+  {:kind :access_winch
+   :states [:slack :tight]
+   :initial :slack
+   :terminal #{:tight}
+   :summary "{data.name} · {state}"
+   :schema [:map [:name [:string {:min 1 :max 80}]]]
+   :actions {:lock-in {:from #{:slack} :to :tight
+                       :safety {:idempotent true :reversible false :confirm false
+                                :one-way "Locking in records the set; nothing external changes."}
+                       :display {:label "Lock in"}}}})
+
 (defn- scratch []
   (let [clock (atom (Instant/parse "2026-07-13T08:00:00Z"))
-        eng (dev/scratch! [chore errand] {:now-fn (fn [] @clock)})]
+        eng (dev/scratch! [chore errand memo winch] {:now-fn (fn [] @clock)})]
     {:clock clock :eng eng :h (dev/handler eng)}))
 
 (defn- req [h method uri {:keys [body headers]}]
@@ -167,3 +194,56 @@
           (is (= 404 (:status (req h :post "/api/access_chores"
                                    {:headers (agent-headers gid)
                                     :body {:name "late"}})))))))))
+
+(deftest the-wire-teaches-the-vocabulary
+  ;; the joining probe's findings 4–6: the exact scope strings —
+  ;; hyphens kept, generated editors included, the create verb named —
+  ;; live on well-known, no source read
+  (let [{:keys [h]} (scratch)
+        w (json (req h :get "/api/.well-known/waymark" {:headers human}))
+        actions-of #(set (get-in w [:resources % :actions]))]
+    (is (contains? (actions-of :access_winch) "lock-in")
+        "hyphenated action names keep their exact spelling")
+    (is (contains? (actions-of :access_memo) "update_fields")
+        "generated field editors are in the vocabulary")
+    (is (contains? (actions-of :access_memo) "create"))
+    (is (contains? (actions-of :access_chore) "finish"))))
+
+(deftest the-cautious-path-and-the-retry-truth
+  ;; the joining probe's finding 3: binding spends the invite, not the
+  ;; ask — both escape hatches the doc now teaches actually work
+  (let [{:keys [h]} (scratch)
+        token "tok-scout-invite"]
+    (is (= 201 (:status (req h :post "/api/members"
+                             {:headers human
+                              :body {:display "Scout" :actor_type "agent"
+                                     :bind_token token}}))))
+    (let [doc (json (req h :get (str "/api/-/welcome?invite=" token) {}))]
+      (is (string? (get-in doc [:bind :if_it_goes_wrong])))
+      (is (string? (get-in doc [:bind :cautious_path])))
+      (is (= "/api/.well-known/waymark" (get-in doc [:ask :vocabulary :href]))))
+    (testing "bind rides a harmless read; the ask follows bare"
+      (is (= 200 (:status (req h :get "/api/.well-known/waymark"
+                               {:headers (assoc (agent-headers)
+                                                "x-waymark-principal" "scout-1"
+                                                "x-waymark-invite" token)}))))
+      (is (= 404 (:status (req h :get (str "/api/-/welcome?invite=" token) {})))
+          "the read spent the invite")
+      (let [ask (req h :post "/api/approval_requests"
+                     {:headers {"x-waymark-principal" "scout-1"
+                                "x-waymark-actor-type" "agent"}
+                      :body {:task "Watch the errands, touch nothing."
+                             :scope [{:kind "access_errand" :actions []}]}})]
+        (is (= 201 (:status ask)) (pr-str (json ask)))
+        (testing "an empty :actions grants read-only sight"
+          (let [self (:self (json ask))
+                _ (req h :post (str self "/-/approve") {:headers human})
+                gid (get-in (json (req h :get self {:headers human}))
+                            [:data :grant_id])
+                gh {"x-waymark-principal" "scout-1"
+                    "x-waymark-grant" gid}]
+            (is (= 200 (:status (req h :get "/api/access_errands"
+                                     {:headers gh}))))
+            (is (= 404 (:status (req h :post "/api/access_errands"
+                                     {:headers gh
+                                      :body {:name "nope"}}))))))))))

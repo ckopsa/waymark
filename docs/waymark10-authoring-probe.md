@@ -173,3 +173,46 @@ from the vocabulary page.
 No fourth authoring dialect remains to probe; the next run should be a
 **cold-start** probe — a fresh session authoring into mealplan10 proper
 (not `dev/`), measuring the whole loop from `make check10` onward.
+
+---
+
+## Run 4 — 2026-07-13, the JOINING probe (agent-side, reported live)
+
+A different instrument, same doctrine: a real agent was handed an
+invite link to a live server (eveningplan10) and reported, verbatim,
+every piece of knowledge it needed and where it had to get it. Eight
+findings; every one named something **the server already knew and the
+welcome document didn't say** — the authoring probe's defect class,
+relocated to the joining surface.
+
+| # | The agent needed | It had to | Landed as |
+|---|---|---|---|
+| 1 | which app the link pointed at | inspect the listening process | the vocabulary answers practically: well-known's kinds ARE the app |
+| 2 | the one-shot shape of the invite | read the welcome handler | already in the doc — the one finding the doc had covered |
+| 3 | whether a malformed ask burns the invite | read `wrap-identity` middleware ordering | **the fear was false and the doc now dispels it**: binding spends the invite, not the ask — `bind.if_it_goes_wrong` (already bound; retry bare) and `bind.cautious_path` (bind on a harmless GET first) |
+| 4–5 | the kind AND exact action vocabulary, generated editors included, no-wildcard truth | read every resource declaration plus `resource.clj`'s editor generator | **well-known now publishes per-kind `:actions`** — declared + generated + the create verbs, the exact strings `check-action!` enforces; the welcome doc's `ask.vocabulary` points at it and states there is no wildcard |
+| 6 | hyphen vs underscore on the wire | trace the route keyword path | the vocabulary emits the enforced spelling (`lock-in` stays `lock-in`); pinned by test |
+| 7 | that reads need no action grant | read the router's check functions | the vocabulary note says it: `:actions []` grants read-only sight; the key itself is required |
+| 8 | the ask's create-schema | read grants.clj | the doc's body sketch now names only real fields, placeholders marked as such |
+
+The verdict sentence, quoted, because it is the whole lesson: *"since
+the invite was single-use and the bind happened unconditionally on
+that first tagged request, I wanted the POST to be right on the first
+try rather than probing live."* A protocol that scares its client out
+of iterating has a teaching gap even when every mechanism is correct.
+
+Landed in `waymark10.access-flow-test` (the-wire-teaches-the-vocabulary,
+the-cautious-path-and-the-retry-truth). Note on process: this round's
+first draft was written by a smaller model; review found the scope
+sketch rendering prose fragments as array elements and a false
+"omitted is fine" claim (the scope schema requires `:actions`; only
+`[]` grants read-only) — the vocabulary-on-well-known design itself
+was right and kept.
+
+## Backlog after run 4 (round 5, when wanted)
+
+1. Run 3's leftovers: the `:when`-gate article, 404 near-miss action
+   suggestions, the test-tree lint tail.
+2. The joining probe's residue: nothing structural — rerun it cold on
+   the next real invite and see if the source dives hit zero.
+3. The cold-start authoring probe (run 5's shape), unchanged.
