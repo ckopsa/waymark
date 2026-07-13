@@ -23,6 +23,7 @@
   depth=summary drops parts and would conceal live affordances."
   (:require [clojure.string :as str]
             [waymark10.demand :as demand]
+            [waymark10.server.collections :as collections]
             [waymark10.server.problems :as p]))
 
 (set! *warn-on-reflection* true)
@@ -198,14 +199,22 @@
 
 ;; ── links ───────────────────────────────────────────────────────────
 
+(defn- effective-limit
+  "A link's own :limit if declared, else the framework default — every
+  :embed link is grid mode now, no bool-form exemption."
+  [ld]
+  (or (:limit (when (map? (:embed ld)) (:embed ld)))
+      collections/page-size-default))
+
 (defn links-violations
   "The links-shape obligation for one envelope: every rendered rel is
   declared, carries an href, and its badge equals the envelope's OWN
   data value for the declared badge field (the no-N+1 rule made
   checkable: scent comes from materialized facts, so the envelope
-  already carries the truth). Embedded inlines are envelope-minus-data
-  items within the declared cap."
-  [rdef env & [{:keys [embed-cap] :or {embed-cap 5}}]]
+  already carries the truth). Every embed is grid mode: embedded
+  inlines are envelope-minus-data items within the link's own
+  effective limit, and total/page are present whenever embedded is."
+  [rdef env]
   (let [where (where-of env)
         declared (into {} (map (juxt (comp wire-name :rel) identity))
                        (:links rdef))]
@@ -232,16 +241,23 @@
                 [(str where " links." (name rel) ": badge "
                       (pr-str (:badge link))
                       " rides a null fact — absence, not zero")])))
-          (when-some [embedded (:embedded link)]
+          (when (:embed ld)
             (concat
-             (when (< embed-cap (count embedded))
-               [(str where " links." (name rel) ": " (count embedded)
-                     " embedded items exceed the cap " embed-cap)])
-             (for [item embedded
-                   :when (contains? item :data)]
-               (str where " links." (name rel)
-                    ": an embedded item carries data — inlines are"
-                    " envelope-minus-data")))))))
+             (when-not (and (contains? link :total) (contains? link :page))
+               [(str where " links." (name rel)
+                     ": an :embed link carries no total/page — every "
+                     "embed is grid mode now")])
+             (when-some [embedded (:embedded link)]
+               (let [limit (effective-limit ld)]
+                 (concat
+                  (when (< limit (count embedded))
+                    [(str where " links." (name rel) ": " (count embedded)
+                          " embedded items exceed the effective limit " limit)])
+                  (for [item embedded
+                        :when (contains? item :data)]
+                    (str where " links." (name rel)
+                         ": an embedded item carries data — inlines are"
+                         " envelope-minus-data"))))))))))
      (:links env))))
 
 (defn links-wire-violations

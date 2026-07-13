@@ -490,9 +490,20 @@
       (cond-> {:href out}
         kind (assoc :kind (name kind))))))
 
+;; mirrors waymark10.server.collections/page-size-default and
+;; page-size-max — duplicated, not required, because collections.clj
+;; already requires this namespace (splice-embeds reads the same
+;; rendered links back); a shared def would need a third namespace
+;; neither wants
+(def ^:private embed-limit-default 25)
+(def ^:private embed-limit-max 100)
+
 (defn- render-links
   "The declared :links of one row. resources is the engine's kind
-  map (ctx-opts :resources) for target plurals."
+  map (ctx-opts :resources) for target plurals. A truthy :embed
+  advertises its EFFECTIVE :limit/:max-limit (declared, else the
+  framework defaults) rather than a bare true, so a client can read
+  the grid affordance's bounds straight off the envelope."
   [rdef row resources]
   (into {}
         (keep (fn [{:keys [rel summary badge embed] :as ld}]
@@ -502,7 +513,11 @@
                                     (:href ld) (template-link row ld))]
                   [rel (cond-> entry
                          summary (assoc :summary summary)
-                         embed (assoc :embed true)
+                         embed (assoc :embed
+                                      {:limit (or (:limit (when (map? embed) embed))
+                                                  embed-limit-default)
+                                       :max-limit (or (:max-limit (when (map? embed) embed))
+                                                      embed-limit-max)})
                          (some? (get-in row [:data badge]))
                          (assoc :badge (encode-enum
                                         (get-in row [:data badge]))))])))

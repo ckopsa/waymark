@@ -21,7 +21,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-.PHONY: db test conformance conformance8 conformance9 check dist dev image deploy test-image db10 test10 test-mealplan10 dev10 migrate10 check10
+.PHONY: db test conformance conformance8 conformance9 check dist dev image deploy test-image db10 test10 test-mealplan10 dev10 migrate10 check10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10
 
 dist:  ## rebuild the CLI wheel served at /cli (stale wheels break agent bootstrap)
 	uv build
@@ -71,6 +71,23 @@ db10: db  ## waymark10 databases on the shared :5433 container
 	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
 		"SELECT 1 FROM pg_database WHERE datname='mealplan10_dev'" | grep -q 1 || \
 		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE mealplan10_dev"
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
+		"SELECT 1 FROM pg_database WHERE datname='eveningplan10_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE eveningplan10_dev"
+
+check-eveningplan10:  ## eveningplan10 declaration-time checks + usability warnings (no database)
+	cd eveningplan10 && clojure -M:check
+
+test-eveningplan10: db10  ## eveningplan10 conformance suite
+	cd eveningplan10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
+
+dev-eveningplan10: db10  ## serve eveningplan10 on :8011 against eveningplan10_dev
+	cd eveningplan10 && EVENINGPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/eveningplan10_dev?user=$(PG_USER)" \
+		WAYMARK10_AUTO_MIGRATE=1 clojure -M:dev
+
+migrate-eveningplan10: db10  ## print eveningplan10's schema plan against eveningplan10_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
+	cd eveningplan10 && EVENINGPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/eveningplan10_dev?user=$(PG_USER)" \
+		clojure -M:migrate
 
 check:  ## import-time definition checks (CI fast path); pass ENGINE=module:attr
 	uv run waymark7 check $(ENGINE)

@@ -13,6 +13,7 @@
             [waymark10.fixtures :as fx]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
+            [waymark10.server.collections :as collections]
             [waymark10.server.engine :as engine]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -227,16 +228,82 @@
              (get-in project-env [:links :tickets :href])))
       (is (= 2 (get-in project-env [:links :tickets :badge]))
           "the rollup fact rides as the badge"))
-    (testing "embed inlines capped envelope-minus-data items"
+    (testing "embed is grid mode: capped envelope-minus-data items, total+page always present"
       (let [embedded (get-in project-env [:links :tickets :embedded])]
         (is (= 2 (count embedded)))
         (is (every? #(not (contains? % :data)) embedded))
-        (is (some #(str/includes? (:summary %) "Sand the top") embedded))))
+        (is (some #(str/includes? (:summary %) "Sand the top") embedded))
+        (is (= 2 (get-in project-env [:links :tickets :total]))
+            "total is the real filtered count, same as a collection GET's data.total")
+        (is (= {:size collections/page-size-default :number 1}
+               (get-in project-env [:links :tickets :page]))
+            "no override → the framework's own default page size, not the old flat cap")))
+    (testing "the link object advertises its own effective bounds"
+      ;; the wire boundary kebab→snakes keys: :max-limit renders as
+      ;; max_limit, same as everywhere else on the wire
+      (is (= {:limit collections/page-size-default :max_limit collections/page-size-max}
+             (get-in project-env [:links :tickets :embed]))
+          "bool-form :embed true renders its effective limits, not a bare true")
+      (is (= {:limit 1 :max_limit 3}
+             (get-in project-env [:links :tickets_limited :embed]))
+          "map-form :embed renders its declared limits verbatim"))
     (testing "the pure and wire obligations"
       (is (empty? (ob/links-violations bafx/ba-ticket ticket-env)))
       (is (empty? (ob/links-violations bafx/ba-project project-env)))
       (is (empty? (ob/links-wire-violations ticket-env get-json)))
       (is (empty? (ob/links-wire-violations project-env get-json))))))
+
+(deftest embed-overrides-filter-sort-and-page-through-the-parent
+  (let [{:keys [project pid]} (stage-linked-rows)
+        overridden (get-json (str (:self project)
+                                  "?embed.tickets.state=open"
+                                  "&embed.tickets.sort=points"
+                                  "&embed.tickets.page[size]=1"))
+        direct (get-json (str "/api/ba_tickets?project_id=" pid
+                              "&state=open&sort=points&page[size]=1"))]
+    (is (= 200 (:status overridden)))
+    (is (= 1 (count (get-in overridden [:body :links :tickets :embedded]))))
+    (is (= 2 (get-in overridden [:body :links :tickets :total]))
+        "total counts every match, independent of the requested page size")
+    (is (= (mapv :self (get-in direct [:body :data :items]))
+           (mapv :self (get-in overridden [:body :links :tickets :embedded])))
+        "the embed's override channel and the real collection endpoint answer
+         the identical query the identical way — same parse-query underneath")))
+
+(deftest embed-locked-param-refuses-and-never-leaks
+  (let [{:keys [project pid]} (stage-linked-rows)
+        other (created "/api/ba_projects" {:name "Garage"})
+        other-pid (last (str/split (:self other) #"/"))
+        _ (created "/api/ba_tickets" {:title "Sweep the floor"
+                                      :project_id other-pid})
+        resp (get-json (str (:self project) "?embed.tickets.project_id=" other-pid))]
+    (is (= 422 (:status resp)))
+    (is (contains? (:errors (:body resp)) :embed.tickets.project_id))))
+
+(deftest embed-unknown-rel-refuses
+  (let [{:keys [project]} (stage-linked-rows)
+        resp (get-json (str (:self project) "?embed.nonexistent.state=open"))]
+    (is (= 422 (:status resp)))
+    (is (contains? (:errors (:body resp)) :embed.nonexistent))))
+
+(deftest embed-max-limit-refuses
+  (let [{:keys [project]} (stage-linked-rows)
+        resp (get-json (str (:self project) "?embed.tickets_limited.page[size]=5"))]
+    (is (= 422 (:status resp))
+        "5 exceeds tickets_limited's own declared :max-limit 3, distinct from
+         parse-query's global 100")
+    ;; page[size]'s brackets aren't valid in a bare keyword literal
+    ;; (the reader treats [ ] as terminating macro chars) — build it
+    (is (contains? (:errors (:body resp))
+                   (keyword "embed.tickets_limited.page[size]")))))
+
+(deftest embed-unfilterable-field-refuses
+  (let [{:keys [project]} (stage-linked-rows)
+        resp (get-json (str (:self project) "?embed.tickets.title=Sand"))]
+    (is (= 422 (:status resp))
+        "title isn't declared :filterable on ba_ticket — \"if the column
+         supports it\" is enforced, not just documented")
+    (is (contains? (:errors (:body resp)) :title))))
 
 (deftest a-null-join-value-omits-the-link
   (let [{:keys [pid]} (stage-linked-rows)

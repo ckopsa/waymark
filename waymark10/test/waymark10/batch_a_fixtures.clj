@@ -22,7 +22,13 @@
    :derived {:open_tickets {:count {:owns :ba_ticket
                                     :where {:state #{"open"}}}}}
    :links [{:rel :tickets :owns :ba_ticket :embed true
-            :badge :open_tickets :summary "This project's tickets"}]
+            :badge :open_tickets :summary "This project's tickets"}
+           ;; the map-form embed: same target, a tighter declared
+           ;; ceiling than the framework default — exercises :max-limit
+           ;; distinctly from parse-query's own global cap
+           {:rel :tickets_limited :owns :ba_ticket
+            :embed {:limit 1 :max-limit 3}
+            :summary "This project's tickets, a smaller page"}]
    :actions
    {:close {:from #{:open} :to :closed
             :safety {:idempotent true :reversible false :confirm false

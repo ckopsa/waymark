@@ -50,12 +50,25 @@
         (map (fn [k] [k {:optional true} :any]))
         action-keys))
 
+(def link-keys
+  "One :links entry's whole authored surface — the same closure
+  action-keys already gives :actions, extended here so a typo'd link
+  key (:rel misspelled, an :emebd) refuses at the def site instead of
+  rendering nothing."
+  [:rel :owns :edge :href :kind :summary :badge :embed])
+
+(def ^:private link-schema
+  (into [:map {:closed true}]
+        (map (fn [k] [k {:optional true} :any]))
+        link-keys))
+
 (def ^:private declaration-schema
   (m/schema
    (-> [:map {:closed true}]
        (into (map (fn [k] [k {:optional true} :any]))
-             (remove #{:actions} top-level-keys))
-       (conj [:actions {:optional true} [:map-of :keyword action-schema]]))))
+             (remove #{:actions :links} top-level-keys))
+       (conj [:actions {:optional true} [:map-of :keyword action-schema]])
+       (conj [:links {:optional true} [:vector link-schema]]))))
 
 (def ^:private lone-action-schema (m/schema action-schema))
 

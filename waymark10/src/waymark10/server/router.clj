@@ -42,12 +42,19 @@
     unavailable null — explicitly unknown). rows is stripped BEFORE
     the collection grammar parses, so page hrefs do not carry it
     (recorded: a pager that wants to stay cheap re-appends it).
-  - a declared link with :embed true gains \"embedded\" on the full
-    envelope only: the target collection, filtered by the link's own
-    compiled href (the href and the inline items can never disagree),
-    as envelope-minus-data items capped at EMBED-CAP (5, recorded).
-    Loading happens HERE — render stays storage-free; a failed embed
-    drops with a *err* warning, never the GET.
+  - a declared :embed link gains \"embedded\" on the full envelope
+    only: the target collection, filtered by the link's own compiled
+    href (the href and the inline items can never disagree) — the
+    SAME query grammar (collections/parse-query) the real collection
+    endpoint uses, so every embed is a paginated, filtered, sorted
+    view (\"embedded\"/\"total\"/\"page\"), never a flat teaser.
+    embed.<rel>.<param>=value on the PARENT's own GET overrides that
+    view per link; a param the link's own href already fixes (an
+    :owns/:edge join key — plan_id, say) is locked and refuses (422)
+    if an override names it. Loading happens HERE — render stays
+    storage-free; override/parse errors are real 422s (the client's
+    own input, never silent), but a STORAGE failure once the query is
+    valid stays best-effort: a *err* warning, never the GET.
   - render ctx-opts gain :resources (the engine's kind map) so link
     targets resolve their declared plurals."
   (:require [clojure.java.io :as io]
@@ -360,59 +367,116 @@
       :else (throw (p/schema-invalid
                     :query {"depth" ["must be \"summary\" or \"full\""]})))))
 
-(def embed-cap
-  "How many target items an :embed true link inlines (recorded cap:
-  embedding is an invitation to co-present, not a bulk export — the
-  href is the whole answer)."
-  5)
+(def ^:private embed-override-re
+  "embed.<rel>.<param> — dot-namespaced, not bracket-nested: page[size]
+  is one opaque literal parse-query already matches by =, not a real
+  nesting grammar, so there's nothing to reuse there; dot needs a
+  strictly simpler, unambiguous regex to peel a rel off the front."
+  #"^embed\.([^.]+)\.(.+)$")
+
+(defn- embed-overrides
+  "Every embed.<rel>.<param>=value in the request's query params,
+  grouped by rel: {rel {param value}}. The rel itself isn't validated
+  here — splice-embeds refuses one naming a rel that isn't a declared,
+  embeddable link."
+  [req]
+  (reduce-kv
+   (fn [acc k v]
+     (if-some [[_ rel param] (re-matches embed-override-re k)]
+       (update acc rel assoc param v)
+       acc))
+   {}
+   (query-params req)))
+
+(defn- warn-embed-failed! [rel e]
+  (binding [*out* *err*]
+    (println "waymark10 embed failed for link" rel "-" (ex-message e))))
 
 (defn- splice-embeds
-  "The :embed true links of one FULL wired envelope gain \"embedded\":
-  the target collection filtered by the link's own compiled href —
-  parsed back through the collection grammar, so the href and the
-  inline items can never disagree — as envelope-minus-data items,
-  capped. Best-effort: a failed embed drops with a *err* warning,
-  never the GET. Template (:href) links have no target rdef to load
-  from and never embed."
-  [eng rdef env ctx-opts]
-  (reduce
-   (fn [env ld]
-     (let [rel (name (:rel ld))
-           link (get-in env ["links" rel])
-           target-kind (or (when-some [e (:edge ld)]
-                             (get-in rdef [:related e :kind]))
-                           (:owns ld))
-           trdef (when target-kind (get (inv/resources eng) target-kind))]
-       (if-not (and (:embed ld) link trdef)
-         env
-         (try
-           (let [q (second (str/split (str (get link "href")) #"\?" 2))
-                 params (into {}
-                              (keep (fn [kv]
-                                      (let [[k v] (str/split kv #"=" 2)]
-                                        (when-not (str/blank? k)
-                                          [(url-decode k) (url-decode (or v ""))]))))
-                              (when q (str/split q #"&")))
-                 {:keys [conds sort]} (collections/parse-query trdef params)
-                 st (:storage eng)
-                 rows (store/with-tx st
-                        (fn [tx]
-                          (store/search-rows st tx (:kind trdef) conds
+  "Every declared :embed link of one FULL wired envelope gains
+  \"embedded\"/\"total\"/\"page\": the target collection, filtered by
+  the link's own compiled href — parsed through the SAME collection
+  grammar (collections/parse-query) the real collection endpoint
+  uses, so the href and the inline items can never disagree, and an
+  embed is a real paginated/filtered/sorted view, not a flat teaser.
+
+  overrides ({rel {param value}}, from embed-overrides) merge into
+  the href's own params before parse-query runs. A param already
+  present in the href-derived params is locked (an :owns/:via or
+  :edge/:on join key, e.g. plan_id) — an override naming one refuses
+  (422), never silently overwritten. A rel with no declared,
+  embeddable link, or an override parse-query itself rejects (an
+  unfilterable/unsortable field, a bad value, page[size] past the
+  global cap), refuses the same way — the client's own input is never
+  best-effort. Once the query is valid, the STORAGE read is
+  best-effort: a failure there drops with a *err* warning, never the
+  GET. Template (:href) links have no target rdef to load from and
+  never embed."
+  [eng rdef env ctx-opts overrides]
+  (let [embeddable (filter :embed (:links rdef))
+        embeddable-rels (into #{} (map (comp name :rel)) embeddable)]
+    (doseq [rel (keys overrides)
+            :when (not (contains? embeddable-rels rel))]
+      (throw (p/schema-invalid
+              :query {(str "embed." rel) ["not a declared embeddable link"]})))
+    (reduce
+     (fn [env ld]
+       (let [rel (name (:rel ld))
+             link (get-in env ["links" rel])
+             target-kind (or (when-some [e (:edge ld)]
+                               (get-in rdef [:related e :kind]))
+                             (:owns ld))
+             trdef (when target-kind (get (inv/resources eng) target-kind))]
+         (if-not (and link trdef)
+           env
+           (let [href-q (second (str/split (str (get link "href")) #"\?" 2))
+                 href-params (into {}
+                                   (keep (fn [kv]
+                                           (let [[k v] (str/split kv #"=" 2)]
+                                             (when-not (str/blank? k)
+                                               [(url-decode k) (url-decode (or v ""))]))))
+                                   (when href-q (str/split href-q #"&")))
+                 embed-decl (:embed ld)
+                 limit (when (map? embed-decl) (:limit embed-decl))
+                 max-limit (when (map? embed-decl) (:max-limit embed-decl))
+                 rel-overrides (get overrides rel {})
+                 _ (doseq [k (keys rel-overrides)
+                           :when (contains? href-params k)]
+                     (throw (p/schema-invalid
+                             :query {(str "embed." rel "." k)
+                                     ["is fixed by this link and cannot be overridden"]})))
+                 params (cond-> (merge href-params rel-overrides)
+                          (and limit (not (contains? rel-overrides "page[size]")))
+                          (assoc "page[size]" (str limit)))
+                 {:keys [conds sort page]} (collections/parse-query trdef params)
+                 _ (when (and max-limit (> (:size page) max-limit))
+                     (throw (p/schema-invalid
+                             :query {(str "embed." rel ".page[size]")
+                                     [(str "must be an integer 1.." max-limit)]})))]
+             (try
+               (let [st (:storage eng)
+                     [rows total]
+                     (store/with-tx st
+                       (fn [tx]
+                         [(store/search-rows st tx (:kind trdef) conds
                                              {:order-by (:field sort)
                                               :desc (:desc sort)
-                                              :limit embed-cap
-                                              :offset 0})))
-                 items (mapv #(render/envelope-summary
-                               trdef (inv/decode-row trdef %) ctx-opts)
-                             rows)]
-             (assoc-in env ["links" rel "embedded"] items))
-           (catch Exception e
-             (binding [*out* *err*]
-               (println "waymark10 embed failed for link" rel "-"
-                        (ex-message e)))
-             env)))))
-   env
-   (filter :embed (:links rdef))))
+                                              :limit (:size page)
+                                              :offset (* (:size page) (dec (:number page)))})
+                          (store/count-matching st tx (:kind trdef) conds)]))
+                     items (mapv #(render/envelope-summary
+                                   trdef (inv/decode-row trdef %) ctx-opts)
+                                 rows)]
+                 (-> env
+                     (assoc-in ["links" rel "embedded"] items)
+                     (assoc-in ["links" rel "total"] total)
+                     (assoc-in ["links" rel "page"]
+                               {"size" (:size page) "number" (:number page)})))
+               (catch Exception e
+                 (warn-embed-failed! rel e)
+                 env))))))
+     env
+     embeddable)))
 
 (defn- get-one [eng]
   (fn [{{:keys [plural id]} :path-params :as req}]
@@ -432,7 +496,8 @@
           opts (render-opts eng req)
           env (if (= :summary depth)
                 (render/envelope-summary rdef row opts)
-                (splice-embeds eng rdef (render/envelope rdef row opts) opts))]
+                (splice-embeds eng rdef (render/envelope rdef row opts) opts
+                               (embed-overrides req)))]
       (json-response 200 env media-type
                      {"ETag" (get-in env ["meta" "etag"])}))))
 

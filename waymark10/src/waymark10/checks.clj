@@ -464,12 +464,26 @@
 
 (defn- check-links [r]
   (let [dkeys (data-keys r)]
-    (doseq [ld (:links r)
-            :when (:badge ld)]
-      (when-not (contains? dkeys (:badge ld))
-        (err r :links (str "link " (:rel ld) ": badge " (:badge ld)
-                           " is not a data field — the badge renders the "
-                           "instance's current value of that field"))))))
+    (doseq [ld (:links r)]
+      (when (:badge ld)
+        (when-not (contains? dkeys (:badge ld))
+          (err r :links (str "link " (:rel ld) ": badge " (:badge ld)
+                             " is not a data field — the badge renders the "
+                             "instance's current value of that field"))))
+      ;; :embed true takes every default; the map form only exists to
+      ;; override :limit/:max-limit, so a stray non-positive or
+      ;; inverted pair is refused here rather than misbehaving quietly
+      ;; at request time
+      (when (map? (:embed ld))
+        (let [{:keys [limit max-limit]} (:embed ld)]
+          (doseq [[k v] [[:limit limit] [:max-limit max-limit]]
+                  :when (some? v)]
+            (when-not (and (int? v) (pos? v))
+              (err r :links (str "link " (:rel ld) ": :embed " k " " (pr-str v)
+                                 " must be a positive int"))))
+          (when (and limit max-limit (> limit max-limit))
+            (err r :links (str "link " (:rel ld) ": :embed :limit " limit
+                               " exceeds its own :max-limit " max-limit))))))))
 
 ;; ── derivations and history ─────────────────────────────────────────
 
