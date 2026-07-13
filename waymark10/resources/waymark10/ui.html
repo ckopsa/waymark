@@ -1549,8 +1549,38 @@ function embedFilterOps(doc, rel) {
       nav(p);
     },
     remove: name => { const p = new URLSearchParams(params); p.delete(prefix + name); nav(p); },
-    onSort: next => { const p = new URLSearchParams(params); p.set(prefix + "sort", next); nav(p); }
+    onSort: next => { const p = new URLSearchParams(params); p.set(prefix + "sort", next); nav(p); },
+    /* paging is the one mutation that must NOT go through nav's
+       page[number]-reset (that reset is for filter/sort changes
+       landing on page 1, not for paging itself) */
+    setPage: n => {
+      const p = new URLSearchParams(params);
+      p.set(prefix + "page[number]", String(n));
+      go(path + (p.toString() ? "?" + p : ""));
+    }
   };
+}
+
+/* an embed's own pager. Unlike a top-level collection, an embed link
+   carries no prev/next hrefs (router.clj's splice-embeds only stamps
+   total/page/embed — precomputing dot-namespaced prev/next hrefs
+   isn't worth it when the client already builds embed.<rel>.* urls
+   for filter/sort). has-more is computed here from total/page.size/
+   page.number, mirroring pagerOf's look. */
+function embedPager(link, setPage) {
+  const page = link.page || {};
+  const number = page.number || 1;
+  const size = page.size || 1;
+  const total = link.total ?? 0;
+  const pager = el("div", {class:"pager"});
+  if (number > 1)
+    pager.append(el("a", {href:"#",
+      onclick: e => { e.preventDefault(); setPage(number - 1); }}, "← prev"));
+  pager.append(el("span", {class:"muted"}, `page ${number} · ${total} total`));
+  if (number * size < total)
+    pager.append(el("a", {href:"#",
+      onclick: e => { e.preventDefault(); setPage(number + 1); }}, "next →"));
+  return pager;
 }
 
 /* embed=true links arrive with server-spliced envelope-minus-data items
@@ -1563,7 +1593,7 @@ function embeddedSections(doc, hints) {
     .filter(([, link]) => (link.embedded || []).length)
     .map(([rel, link]) => {
       const gridQuery = link.columns;
-      const {scoped, apply, remove, onSort} = embedFilterOps(doc, rel);
+      const {scoped, apply, remove, onSort, setPage} = embedFilterOps(doc, rel);
       const bar = el("div", {class: "filterbar"});
       if (gridQuery) {
         const fp = filterPopover(gridQuery, scoped, apply, hints);
@@ -1583,7 +1613,8 @@ function embeddedSections(doc, hints) {
           query: gridQuery ? gridColumns(gridQuery) : null, hints,
           currentSort: scoped.get("sort"),
           onSort: gridQuery ? onSort : null
-        }));
+        }),
+        embedPager(link, setPage));
     });
 }
 
