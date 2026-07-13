@@ -2925,26 +2925,47 @@ function parseFrame(frame) {
   if (!data) return null;
   try { return {event, id, data: JSON.parse(data)}; } catch { return null; }
 }
+let sseRefusalToldFor = null;   // one narration per cause, not per retry
 async function sse(href, onFrame) {
   while (true) {
+    let refused = false;
     try {
       const res = await fetch(href, {headers: principalHeaders()});
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = "";
-      while (true) {
-        const {done, value} = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, {stream: true});
-        let idx;
-        while ((idx = buf.indexOf("\n\n")) >= 0) {
-          const f = parseFrame(buf.slice(0, idx));
-          buf = buf.slice(idx + 2);
-          if (f) onFrame(f);
+      if (!res.ok) {
+        /* a live surface answering a problem is a CAUSE, not noise —
+           the classic: a leftover grant selector conceals the SSE
+           routes (they are not grant-projected), and every live
+           surface goes dark while looking merely quiet */
+        refused = true;
+        const cause = localStorage.getItem("wm10.grant")
+          ? "live surfaces are concealed under a grant scope — "
+            + "leave the grant (✕ on the chip) to watch again"
+          : `the live stream ${href} answers ${res.status}`;
+        if (sseRefusalToldFor !== cause) {
+          sseRefusalToldFor = cause;
+          $("#ticker").replaceChildren(el("span", {}, "⚠ " + cause));
+          console.warn("waymark10 ui:", cause);
+        }
+      } else {
+        if (sseRefusalToldFor) { sseRefusalToldFor = null;
+                                 $("#ticker").textContent = ""; }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = "";
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, {stream: true});
+          let idx;
+          while ((idx = buf.indexOf("\n\n")) >= 0) {
+            const f = parseFrame(buf.slice(0, idx));
+            buf = buf.slice(idx + 2);
+            if (f) onFrame(f);
+          }
         }
       }
     } catch (_e) { /* server restarting */ }
-    await new Promise(r => setTimeout(r, 2000));
+    await new Promise(r => setTimeout(r, refused ? 15000 : 2000));
   }
 }
 /* a one-shot replay: read frames until the burst goes quiet, then stop */
@@ -2995,6 +3016,18 @@ function follow(actor) {
   localStorage.setItem("wm10.follow.id", followId);
   localStorage.setItem("wm10.follow.name", followName);
   followChip();
+  /* meet them where they already are: if their gaze is on the board
+     right now, jump immediately — following that only reacts to the
+     NEXT event looks dead beside an idle agent (the balcony still
+     parks, dialogs still guard). Deferred one tick: the ?follow=
+     boot param calls this before the presence consts evaluate. */
+  const id = followId;
+  setTimeout(() => {
+    const known = followId === id && PRESENCE.get(id);
+    if (known && known.self && known.self !== hereHref() &&
+        hereHref() !== "access" && !$("dialog[open]"))
+      location.hash = "#" + known.self;
+  }, 0);
 }
 function unfollow() {
   followId = followName = null;
