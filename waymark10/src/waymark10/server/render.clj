@@ -534,6 +534,31 @@
      (into #{} (remove #(field? (:kind rdef) %))
            (schema/entry-keys (:schema rdef))))))
 
+(defn- unwrap-maybe
+  [s] (if (and (vector? s) (= :maybe (first s))) (second s) s))
+
+(defn grid-fields
+  "The bounded column set a summary/embedded item's :fields projects
+  from :data — every schema-declared field EXCEPT a :vector (a
+  part-scoped sub-item or array doesn't fit a flat cell; a vocab
+  array already surfaces via facetChips/x-facets, nothing lost) and a
+  prose-widget field (up to 8000 chars — too large to ship on every
+  row of a paginated page). entry-map's :schema is the raw child
+  form, [:maybe …] for an optional field, so the vector check unwraps
+  it first the same way schema/field-schema does — otherwise an
+  optional vector field would wrongly read as a column. Public: the
+  same rule envelope's :fields uses is what
+  waymark10.test.envelope-obligations checks summary items against,
+  so there is one rule, never two that could drift."
+  [rdef]
+  (into #{}
+        (keep (fn [[f {:keys [properties schema]}]]
+                (let [s (unwrap-maybe schema)]
+                  (when-not (or (and (vector? s) (= :vector (first s)))
+                                (= "prose" (get-in properties [:x-display :widget])))
+                    f))))
+        (schema/entry-map (:schema rdef))))
+
 (def ^:private summary-data-token #"\{data\.([A-Za-z0-9_]+)")
 
 (defn- project-summary
@@ -651,6 +676,13 @@
         ;; link pass; guards above judged the full row
         enc-data (cond-> (schema/encode (:schema rdef) (:data row))
                    (seq redacted) (as-> d (apply dissoc d redacted)))
+        ;; the grid projection: a bounded, purpose-built column set,
+        ;; distinct from :data — envelope-summary dissocs "data" but
+        ;; not "fields", so a summary/embedded item keeps just enough
+        ;; to render real DataGrid-style columns without carrying the
+        ;; whole document (prose text, sub-item vectors) on every row
+        ;; of a paginated page
+        fields (select-keys enc-data (grid-fields rdef))
         public-row (redact-row row redacted)
         ;; parts render over the SURVIVING actions — a concealed placed
         ;; action never re-renders per item
@@ -662,6 +694,7 @@
               :state (name state)
               :summary (project-summary rdef row redacted)
               :data enc-data
+              :fields fields
               :actions actions
               :unavailable unavailable
               :links (render-links rdef public-row resources)
@@ -698,9 +731,12 @@
 
 (defn envelope-summary
   "Depth summary: the full envelope minus data AND parts — state,
-  summary, the COMPLETE actions/unavailable partition, links and meta
-  stay (collection items; ?depth=summary). ctx-opts :rows :none is
-  the cheap stub instead (see envelope-stub)."
+  summary, fields (the bounded grid-column projection — envelope
+  only ever dissocs \"data\"/\"parts\" here, so fields rides through
+  unchanged), the COMPLETE actions/unavailable partition, links and
+  meta stay (collection items; ?depth=summary). ctx-opts :rows :none
+  is the cheap stub instead (see envelope-stub), which stays
+  fields-free too — it costs nothing on purpose."
   [rdef row ctx-opts]
   (if (= :none (:rows ctx-opts))
     (envelope-stub rdef row ctx-opts)

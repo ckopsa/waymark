@@ -225,6 +225,10 @@
   table.items th { text-align: left; font-size: 11px; color: var(--muted);
                    font-weight: 600; padding: 6px 10px 6px 0;
                    border-bottom: 2px solid var(--line); white-space: nowrap; }
+  table.items th.sortable { cursor: pointer; user-select: none; }
+  table.items th.sortable:hover { color: var(--ink); }
+  table.items th.sorted { color: var(--ink); }
+  .sort-arrow { font-family: var(--mono); color: var(--muted); }
   table.items td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--line);
                    vertical-align: middle; }
   table.items td.rowactions { text-align: right; white-space: nowrap; }
@@ -232,10 +236,15 @@
   .partactions { white-space: nowrap; }
   .partactions button { padding: 3px 10px; font-size: 12px; margin: 1px 2px; }
 
-  .filterbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: end;
+  .filterbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: start;
                margin-bottom: 12px; }
-  .filterbar label { display: flex; flex-direction: column;
-                     font-size: 11px; color: var(--muted); gap: 3px; }
+  .filterwrap { display: inline-block; }
+  .filterpanel { position: absolute; z-index: 20; margin-top: 4px;
+                 background: var(--panel); border: 1px solid var(--line);
+                 border-radius: var(--radius); box-shadow: var(--shadow);
+                 padding: 12px; display: flex; flex-direction: column; gap: 8px;
+                 min-width: 220px; }
+  .filterpanel select, .filterpanel input { font-size: 12px; }
   .facet-count { font-family: var(--mono); font-size: 10.5px;
                  color: var(--muted); }
 
@@ -873,41 +882,126 @@ function filterPrefill(selfHref, entry) {
   return out;
 }
 
-function filterBar(query, selfHref) {
-  const {path, params} = parseHrefQuery(selfHref);
-  const bar = el("div", {class:"filterbar"});
-  const props = query.input?.properties || {};
-  const apply = (name, value) => {
-    const p = new URLSearchParams(params);
-    if (value) p.set(name, value); else p.delete(name);
-    p.delete("page[number]");
-    go(path + (p.toString() ? "?" + p : ""));
-  };
-  for (const [name, prop] of Object.entries(props)) {
-    if (name.startsWith("page[")) continue;
-    let input;
-    if (prop.enum) {
-      input = el("select", {name});
-      input.append(el("option", {value: ""},
-        name === "sort" ? "sort: default" : "—"));
-      for (const v of prop.enum) {
-        const count = prop["x-facets"]?.[v];
-        input.append(el("option", {value: v},
-          (name === "sort" ? "sort: " : "") + pretty(v)
-          + (count !== undefined ? ` (${count})` : "")));
-      }
-      input.value = params.get(name) || "";
-      input.addEventListener("change", () => apply(name, input.value));
-    } else {
-      input = el("input", {name, value: params.get(name) || "",
-        type: prop.type === "integer" || prop.type === "number" ? "number" : "text",
-        step: "any", placeholder: prop.format || prop.type || ""});
-      input.addEventListener("change", () => apply(name, input.value));
+/* the Filters button: pick a column (from ones with any declared op),
+   pick an operator that column actually supports, a value control
+   matching its type/format/enum — then Apply. Sort moved to clickable
+   column headers (itemTable's onSort); this is filtering only now. */
+const FILTER_OP_LABELS = {eq: "=", in: "in list", gte: "≥", lte: "≤",
+                          between: "between", after: "after"};
+function opsFor(col) {
+  const out = [];
+  if (col.ops.eq) out.push("eq");
+  if (col.ops.in) out.push("in");
+  if (col.ops.gte && col.ops.lte) out.push("between");
+  else { if (col.ops.gte) out.push("gte"); if (col.ops.lte) out.push("lte"); }
+  if (col.ops.after) out.push("after");
+  return out;
+}
+/* the top-level-collection flavor of apply/remove: mutate doc.self's
+   own hash directly via go(). An embedded table needs a different
+   flavor (embed.<rel>.* prefixed params on the PARENT's hash — see
+   embeddedSections), so this stays a named, swappable pair rather
+   than baked into filterPopover/filterChips themselves. */
+function hashFilterOps(path, params) {
+  const nav = p => { p.delete("page[number]"); go(path + (p.toString() ? "?" + p : "")); };
+  return {
+    apply: updates => {
+      const p = new URLSearchParams(params);
+      for (const [k, v] of Object.entries(updates)) if (v) p.set(k, v); else p.delete(k);
+      nav(p);
+    },
+    remove: name => {
+      const p = new URLSearchParams(params);
+      p.delete(name);
+      nav(p);
     }
-    bar.append(el("label", {title: name},
-      xdisplay(query.input, name).label || title(name), input));
+  };
+}
+
+/* query: gridColumns-input-schema shape. params: the CURRENT active
+   params, already unprefixed (an embedded table passes its own
+   embed.<rel>.* slice, stripped of the prefix — see embeddedSections).
+   apply(updates): {name: value|""} to set/clear, called on Apply —
+   the caller decides what that MEANS (go() for a top-level
+   collection, an embed.<rel>.* param mutation for an embedded
+   table); this fn only builds the picker. */
+function filterPopover(query, params, apply, hints) {
+  const gc = gridColumns(query);
+  const cols = Object.values(gc).filter(c => Object.keys(c.ops).length);
+  if (!cols.length) return null;
+  const mkValueInput = (name, col) => {
+    if (col.enum) {
+      const s = el("select", {name});
+      s.append(el("option", {value: ""}, "—"));
+      for (const v of col.enum) s.append(el("option", {value: v}, pretty(v)));
+      return s;
+    }
+    return el("input", {name, type: (col.type === "integer" || col.type === "number") ? "number" : "text",
+      step: "any", placeholder: col.format || col.type || ""});
+  };
+  const valueRow = el("div", {"data-role": "values"});
+  const fieldSel = el("select", {});
+  fieldSel.append(el("option", {value: ""}, "Column…"));
+  for (const c of cols)
+    fieldSel.append(el("option", {value: c.field}, xdisplay(hints, c.field).label || title(c.field)));
+  const opSel = el("select", {});
+  const refreshValue = () => {
+    valueRow.replaceChildren();
+    const col = gc[fieldSel.value], op = opSel.value;
+    if (!col || !op) return;
+    if (op === "between")
+      valueRow.append(mkValueInput(col.field + "_gte", col), " – ", mkValueInput(col.field + "_lte", col));
+    else if (op === "gte" || op === "lte" || op === "after")
+      valueRow.append(mkValueInput(col.field + "_" + op, col));
+    else
+      valueRow.append(mkValueInput(col.field, col));
+  };
+  const refreshOps = () => {
+    opSel.replaceChildren();
+    const col = gc[fieldSel.value];
+    if (!col) return;
+    for (const op of opsFor(col)) opSel.append(el("option", {value: op}, FILTER_OP_LABELS[op] || op));
+    refreshValue();
+  };
+  fieldSel.addEventListener("change", refreshOps);
+  opSel.addEventListener("change", refreshValue);
+  const panel = el("div", {class: "filterpanel", style: "display:none"});
+  const doApply = () => {
+    const updates = {};
+    for (const inp of valueRow.querySelectorAll("input,select")) updates[inp.name] = inp.value;
+    panel.style.display = "none";
+    apply(updates);
+  };
+  panel.append(el("div", {}, fieldSel, opSel), valueRow,
+    el("button", {class: "primary", onclick: doApply}, "Apply"));
+  const btn = el("button", {onclick: () =>
+    panel.style.display = panel.style.display === "none" ? "block" : "none"}, "Filters ▾");
+  return el("div", {class: "filterwrap", style: "position:relative;display:inline-block"}, btn, panel);
+}
+
+/* removable chips for whatever's currently applied — mirrors
+   facetChips' own chip markup so the two visually match. params/
+   remove(name) follow the same unprefixed-params contract as
+   filterPopover above. */
+function filterChips(query, params, remove, hints) {
+  const gc = gridColumns(query);
+  const props = (query || {}).properties || {};
+  const SUFFIX_LABEL = {gte: "≥", lte: "≤", after: "after"};
+  const chips = [];
+  for (const [name, value] of params) {
+    if (name === "sort" || name.startsWith("page[")) continue;
+    const m = /^(.*)_(gte|lte|after)$/.exec(name);
+    const field = m ? m[1] : name;
+    // facets render their own chips (facetChips) — skip here so an
+    // active x-in facet doesn't get a redundant second chip
+    if (!(field in gc) || (!m && props[field]?.["x-facets"])) continue;
+    const lbl = xdisplay(hints, field).label || title(field);
+    const opTxt = m ? SUFFIX_LABEL[m[2]] : "=";
+    chips.push(el("span", {class: "chip on"},
+      `${lbl} ${opTxt} ${value}`,
+      el("span", {style: "cursor:pointer;margin-left:4px", onclick: () => remove(name)}, "✕")));
   }
-  return bar;
+  return chips.length ? el("div", {class: "chips"}, chips) : null;
 }
 
 /* facet chips: x-facets counts per faceted field, current filters lit —
@@ -946,18 +1040,38 @@ function pagerOf(doc) {
   return pager;
 }
 
-/* Collection items as a table. v10 items are envelope-minus-data
-   summaries (declared columns are a recorded absence on this wire), so
-   the columns are the honest ones: state, the server's own sentence,
-   updated — plus each row's HONEST action buttons. */
+/* Collection items as a table. Items now carry :fields (a bounded,
+   real projection of :data — render.clj's grid-fields), so columns
+   are schema-derived, not hardcoded — State stays pinned first (the
+   machine's own governing fact, not just another field) and Summary/
+   Updated/Actions stay pinned last. opts.query (gridColumns-shaped)
+   supplies column order/typing/sortability; a sortable header click
+   calls opts.onSort(nextSortParam) — the CALLER decides what that
+   means (go() for a top-level collection, an embed.<rel>.sort
+   override for an embedded table), itemTable only knows "a header
+   was clicked." */
 function itemTable(items, opts) {
   opts = opts || {};
   if (!items.length) return el("p", {class:"muted"}, "No rows.");
   const anyActions = !!opts.rowAction ||
     items.some(i => i.actions && Object.keys(i.actions).length);
+  const cols = fieldColumns(items, opts.query);
+  const sortField = (opts.currentSort || "").replace(/^-/, "");
+  const sortDesc = (opts.currentSort || "").startsWith("-");
+  const colHead = f => {
+    const c = (opts.query || {})[f];
+    const lbl = xdisplay(opts.hints, f).label || title(f);
+    if (!c || !c.sortable || !opts.onSort) return el("th", {title: f}, lbl);
+    const active = sortField === f;
+    return el("th", {title: f, class: "sortable" + (active ? " sorted" : ""),
+      onclick: () => opts.onSort(active && !sortDesc ? "-" + f : f)},
+      lbl, el("span", {class: "sort-arrow"}, active ? (sortDesc ? " ↓" : " ↑") : " ↕"));
+  };
   const head = el("tr", {},
     opts.selectable ? el("th", {}, "") : null,
-    el("th", {}, "State"), el("th", {}, "Summary"), el("th", {}, "Updated"),
+    el("th", {}, "State"),
+    ...cols.map(colHead),
+    el("th", {}, "Summary"), el("th", {}, "Updated"),
     anyActions ? el("th", {}, "") : null);
   const tbody = el("tbody", {});
   for (const item of items) {
@@ -966,8 +1080,9 @@ function itemTable(items, opts) {
         el("input", {type: "checkbox", "data-bulk-check": "",
           onclick: e => e.stopPropagation()})) : null,
       el("td", {}, el("span", {class:"statechip"}, item.state)),
+      ...cols.map(f => el("td", {}, fieldCell(opts.hints, f, (item.fields || {})[f]))),
       el("td", {}, el("a", {href:"#"+item.self, title: item.self,
-        style:"display:inline-block;max-width:420px;overflow:hidden;" +
+        style:"display:inline-block;max-width:280px;overflow:hidden;" +
               "text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom"},
         item.summary)),
       el("td", {class:"metaline mono"},
@@ -1004,9 +1119,19 @@ function renderCollection(view, doc, hints) {
      echo ("filtered: state=retired") and count */
   if (doc.summary) panel.append(el("div", {class:"metaline"}, doc.summary));
 
+  const {path, params} = parseHrefQuery(doc.self);
   const query = doc.actions?.query;
-  if (query) { panel.append(filterBar(query, doc.self));
-               panel.append(...facetChips(query, doc.self)); }
+  const gridQuery = query?.input;
+  if (query) {
+    const {apply, remove} = hashFilterOps(path, params);
+    const fp = filterPopover(gridQuery, params, apply, hints);
+    const bar = el("div", {class: "filterbar"});
+    if (fp) bar.append(fp);
+    const fc = filterChips(gridQuery, params, remove, hints);
+    if (fc) bar.append(fc);
+    panel.append(bar);
+    panel.append(...facetChips(query, doc.self));
+  }
 
   /* bulk affordances: a checkbox column plus one button per bulk action */
   const bulkActions = Object.entries(doc.actions || {})
@@ -1035,6 +1160,13 @@ function renderCollection(view, doc, hints) {
   const items = doc.data?.items || [];
   panel.append(itemTable(items, {
     selectable: bulkActions.length > 0, selected,
+    query: gridQuery ? gridColumns(gridQuery) : null, hints,
+    currentSort: params.get("sort"),
+    onSort: gridQuery ? (next) => {
+      const p = new URLSearchParams(params);
+      p.set("sort", next); p.delete("page[number]");
+      go(path + "?" + p);
+    } : null,
     ...(kind === "attachment" ? {rowAction: it => downloadButton(it, true)} : {})}));
   panel.append(pagerOf(doc));
   view.append(panel);
@@ -1052,8 +1184,15 @@ function renderDeployHistory(view, doc) {
     el("a", {href:"#"}, "Workspace"), " / ", "Deploy history"));
   panel.append(el("h2", {}, "Deploy history"));
   if (doc.summary) panel.append(el("div", {class:"metaline"}, doc.summary));
+  const {path, params} = parseHrefQuery(doc.self);
   const query = doc.actions?.query;
-  if (query) panel.append(filterBar(query, doc.self));
+  if (query) {
+    const {apply, remove} = hashFilterOps(path, params);
+    const fp = filterPopover(query.input, params, apply);
+    if (fp) panel.append(fp);
+    const fc = filterChips(query.input, params, remove);
+    if (fc) panel.append(fc);
+  }
   const items = doc.data?.items || [];
   for (const item of items) {
     /* the stored summary is "Law of {kind} · revision {n} · {state}" —
@@ -1268,16 +1407,73 @@ function nestedTable(rows) {
     el("tbody", {}, rows.map(r => el("tr", {},
       cols.map(c => el("td", {}, valueCell(r[c]))))))));
 }
+/* one field's value, the ref-or-plain rule kvTable and the grid body
+   both need — a ref field with a set value links to the target
+   (labeled by a LIVE depth=summary fetch, resourceRef's own job:
+   always current, unlike a denormalized label copy), anything else
+   is valueCell's honest rendering. */
+function fieldCell(schema, field, value) {
+  const xd = xdisplay(schema, field);
+  const ref = xref(((schema || {}).properties || {})[field]);
+  return ref && value ? resourceRef(ref.kind, value) : valueCell(value, xd);
+}
 function kvTable(obj, schema) {
   const t = el("table", {class:"kv"});
   for (const [k, v] of Object.entries(obj)) {
     const xd = xdisplay(schema, k);
-    const ref = xref(((schema || {}).properties || {})[k]);
     t.append(el("tr", {},
       el("td", {class:"k", title: xd.label || title(k)}, k),
-      el("td", {}, ref && v ? resourceRef(ref.kind, v) : valueCell(v, xd))));
+      el("td", {}, fieldCell(schema, k, v))));
   }
   return t;
+}
+
+/* ── grid columns: folding a query-input-schema-shaped object (either
+   doc.actions.query.input for a top-level collection, or an embed
+   link's own .columns — same shape, per router.clj's splice-embeds)
+   into one entry per LOGICAL column. field_gte/field_lte/field_after
+   fold back onto field; the sort enum becomes the sortable set. One
+   helper, every table (top-level and every embedded one) folds
+   through it. */
+function gridColumns(schema) {
+  const props = (schema || {}).properties || {};
+  const sortable = new Set((props.sort?.enum || []).map(s => s.replace(/^-/, "")));
+  const cols = {};
+  const ensure = f => cols[f] || (cols[f] = {field: f, ops: {}});
+  for (const [name, prop] of Object.entries(props)) {
+    if (name === "sort" || name.startsWith("page[")) continue;
+    const m = /^(.*)_(gte|lte|after)$/.exec(name);
+    if (m) {
+      const c = ensure(m[1]);
+      c.ops[m[2]] = true;
+      c.type = c.type || prop.type; c.format = c.format || prop.format;
+    } else {
+      const c = ensure(name);
+      c.ops[prop["x-in"] ? "in" : "eq"] = true;
+      c.type = prop.type; c.format = prop.format; c.enum = prop.enum;
+    }
+  }
+  // a sortable field need not be filterable (meal's `name`, e.g.) — it
+  // still needs a cols entry so its <th> can render sort arrows, even
+  // though it never appears in the Filters popover (empty ops)
+  for (const f of sortable) ensure(f);
+  for (const c of Object.values(cols)) c.sortable = sortable.has(c.field);
+  return cols;
+}
+
+/* the actual column list to render: query-declared fields first (a
+   stable, schema-driven order), then anything present in the items'
+   own :fields that the query schema doesn't know about (present but
+   not independently filterable/sortable — still a real column). */
+function fieldColumns(items, query) {
+  const seen = new Set(), ordered = [];
+  for (const f of Object.keys(query || {}))
+    if (items.some(it => it.fields && f in it.fields) && !seen.has(f))
+      { seen.add(f); ordered.push(f); }
+  for (const it of items)
+    for (const f of Object.keys(it.fields || {}))
+      if (!seen.has(f)) { seen.add(f); ordered.push(f); }
+  return ordered;
 }
 
 /* A cross-resource reference: a link to the referenced resource,
@@ -1327,19 +1523,68 @@ function partsSections(doc) {
   });
 }
 
+/* an embedded table's filter/sort must mutate the PARENT resource's own
+   hash with embed.<rel>.<param>=… overrides (router.clj's
+   embed-override-re), not navigate to the embed's bare href — this is
+   the embed-scoped flavor of hashFilterOps, prefixing/stripping
+   "embed.<rel>." on the way in and out. */
+function embedFilterOps(doc, rel) {
+  /* doc.self is the resource's own canonical identity — it never
+     echoes embed.<rel>.* overrides (unlike a collection's self,
+     which DOES echo its own applied query). The live params are
+     only visible in the browser's own current hash. */
+  const {path, params} = parseHrefQuery(decodeURIComponent(location.hash.slice(1)) || doc.self);
+  const prefix = `embed.${rel}.`;
+  const scoped = new URLSearchParams();
+  for (const [k, v] of params) if (k.startsWith(prefix)) scoped.set(k.slice(prefix.length), v);
+  const nav = p => { p.delete(prefix + "page[number]"); go(path + (p.toString() ? "?" + p : "")); };
+  return {
+    scoped,
+    apply: updates => {
+      const p = new URLSearchParams(params);
+      for (const [k, v] of Object.entries(updates)) {
+        const full = prefix + k;
+        if (v) p.set(full, v); else p.delete(full);
+      }
+      nav(p);
+    },
+    remove: name => { const p = new URLSearchParams(params); p.delete(prefix + name); nav(p); },
+    onSort: next => { const p = new URLSearchParams(params); p.set(prefix + "sort", next); nav(p); }
+  };
+}
+
 /* embed=true links arrive with server-spliced envelope-minus-data items
-   under links.<rel>.embedded — the rows are already in the envelope */
-function embeddedSections(doc) {
+   under links.<rel>.embedded — the rows are already in the envelope,
+   and link.columns is the target's own filter/sort vocabulary, so each
+   embedded table gets its own Filters popover and sort-arrows, exactly
+   like a top-level collection screen. */
+function embeddedSections(doc, hints) {
   return Object.entries(doc.links || {})
     .filter(([, link]) => (link.embedded || []).length)
-    .map(([rel, link]) => el("div", {class:"embed"},
-      el("div", {class:"embed-head"},
-        el("b", {}, link.summary || title(rel)),
-        link.badge !== undefined && link.badge !== null
-          ? el("span", {class:"badge", title:"count, per the server"},
-              String(link.badge)) : null,
-        el("a", {class:"open", href:"#"+link.href}, "open ↗")),
-      itemTable(link.embedded, {})));
+    .map(([rel, link]) => {
+      const gridQuery = link.columns;
+      const {scoped, apply, remove, onSort} = embedFilterOps(doc, rel);
+      const bar = el("div", {class: "filterbar"});
+      if (gridQuery) {
+        const fp = filterPopover(gridQuery, scoped, apply, hints);
+        if (fp) bar.append(fp);
+        const fc = filterChips(gridQuery, scoped, remove, hints);
+        if (fc) bar.append(fc);
+      }
+      return el("div", {class:"embed"},
+        el("div", {class:"embed-head"},
+          el("b", {}, link.summary || title(rel)),
+          link.badge !== undefined && link.badge !== null
+            ? el("span", {class:"badge", title:"count, per the server"},
+                String(link.badge)) : null,
+          el("a", {class:"open", href:"#"+link.href}, "open ↗")),
+        bar.childElementCount ? bar : null,
+        itemTable(link.embedded, {
+          query: gridQuery ? gridColumns(gridQuery) : null, hints,
+          currentSort: scoped.get("sort"),
+          onSort: gridQuery ? onSort : null
+        }));
+    });
 }
 
 /* ── resource screen ───────────────────────────────────────────────── */
@@ -1479,7 +1724,7 @@ async function renderResource(view, doc, hints) {
     el("details", {open:""},
       el("summary", {class:"muted"}, "Data"),
       kvTable(plainData, hints)));
-  for (const sec of embeddedSections(doc)) dataPanel.append(sec);
+  for (const sec of embeddedSections(doc, hints)) dataPanel.append(sec);
   /* the resource's own history: its transition log, replayed from the
      events stream (Last-Event-ID 0), collapsed by default */
   dataPanel.append(historySection(`${doc.self}/-/events`));

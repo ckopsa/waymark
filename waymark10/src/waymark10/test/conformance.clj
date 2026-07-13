@@ -104,13 +104,16 @@
 
 (def envelope-keys
   "The reserved envelope keys — every GET envelope has exactly these.
-  :parts (batch A) and :display (DX round 3 — the resolved page-title
-  advertisement, carried only by kinds that declare one) are
-  reserved-but-optional, so the shape check tolerates their absence;
-  parts' co-conspirators are refused via the parts obligations
-  (waymark10.test.envelope-obligations)."
-  #{:waymark :kind :self :state :summary :data :actions :unavailable
-    :links :meta})
+  :fields (the bounded grid-column projection of :data — every
+  vector/prose field excluded) is always present, full depth or
+  summary alike, so it joins the base set rather than riding as
+  optional. :parts (batch A) and :display (DX round 3 — the resolved
+  page-title advertisement, carried only by kinds that declare one)
+  are reserved-but-optional, so the shape check tolerates their
+  absence; parts' co-conspirators are refused via the parts
+  obligations (waymark10.test.envelope-obligations)."
+  #{:waymark :kind :self :state :summary :data :fields :actions
+    :unavailable :links :meta})
 
 (defn wire-name
   "A declared keyword as it lands after read-json: kebab keys cross

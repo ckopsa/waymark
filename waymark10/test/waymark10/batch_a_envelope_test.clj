@@ -247,11 +247,25 @@
       (is (= {:limit 1 :max_limit 3}
              (get-in project-env [:links :tickets_limited :embed]))
           "map-form :embed renders its declared limits verbatim"))
+    (testing "embedded items carry real field values, not just state+summary"
+      (let [sanding (first (filter #(str/includes? (:summary %) "Sand the top")
+                                   (get-in project-env [:links :tickets :embedded])))]
+        (is (= {:title "Sand the top" :project_id pid :due_date "2026-07-20" :points 3}
+               (:fields sanding))
+            "notes (a prose field) is excluded; everything else rides through")))
+    (testing "an embed link carries the target's own filter/sort vocabulary — no second GET"
+      (let [direct (:body (get-json (str "/api/ba_tickets?project_id=" pid)))]
+        (is (= (get-in direct [:actions :query :input])
+               (get-in project-env [:links :tickets :columns]))
+            "the embed's columns are exactly what a direct collection GET's own
+             query action advertises — one shared shape, not a second one")))
     (testing "the pure and wire obligations"
       (is (empty? (ob/links-violations bafx/ba-ticket ticket-env)))
       (is (empty? (ob/links-violations bafx/ba-project project-env)))
       (is (empty? (ob/links-wire-violations ticket-env get-json)))
-      (is (empty? (ob/links-wire-violations project-env get-json))))))
+      (is (empty? (ob/links-wire-violations project-env get-json)))
+      (is (empty? (ob/fields-violations bafx/ba-ticket ticket-env)))
+      (is (empty? (ob/fields-violations bafx/ba-project project-env))))))
 
 (deftest embed-overrides-filter-sort-and-page-through-the-parent
   (let [{:keys [project pid]} (stage-linked-rows)

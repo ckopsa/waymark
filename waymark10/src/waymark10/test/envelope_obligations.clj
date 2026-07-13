@@ -24,7 +24,8 @@
   (:require [clojure.string :as str]
             [waymark10.demand :as demand]
             [waymark10.server.collections :as collections]
-            [waymark10.server.problems :as p]))
+            [waymark10.server.problems :as p]
+            [waymark10.server.render :as render]))
 
 (set! *warn-on-reflection* true)
 
@@ -276,11 +277,31 @@
 
 ;; ── depth ───────────────────────────────────────────────────────────
 
+(defn fields-violations
+  "The grid-column obligation for one envelope (full or summary
+  alike — :fields is always present at both depths, unlike :data):
+  every key rides render/grid-fields' own rule (no :vector, no
+  prose-widget field — the SAME fn envelope itself calls, so this
+  checks the rule was actually applied, not a second copy of it that
+  could drift), and :fields is never absent."
+  [rdef env]
+  (let [where (where-of env)
+        eligible (render/grid-fields rdef)]
+    (cond-> []
+      (not (contains? env :fields))
+      (conj (str where ": no :fields — every depth carries a grid projection"))
+
+      (seq (remove eligible (keys (:fields env))))
+      (conj (str where ": fields " (vec (remove eligible (keys (:fields env))))
+                 " are not grid-eligible (vector or prose-widget) per "
+                 (name (:kind rdef)) "'s own declaration")))))
+
 (defn depth-violations
   "The depth contract over one row read twice: the summary is the
   full envelope minus data and parts — same identity, same COMPLETE
   action partition (the refinement shape is what keeps a summary
-  honest)."
+  honest), and the SAME :fields (both depths project from the same
+  :data, so they must agree byte-for-byte)."
   [{:keys [full summary]}]
   (let [where (where-of full)]
     (cond-> []
@@ -289,6 +310,10 @@
 
       (contains? summary :parts)
       (conj (str where ": depth=summary still carries parts"))
+
+      (not= (:fields full) (:fields summary))
+      (conj (str where ": summary depth changed :fields "
+                 (pr-str (:fields summary)) " ≠ " (pr-str (:fields full))))
 
       (not= (select-keys full [:kind :self :state :summary])
             (select-keys summary [:kind :self :state :summary]))

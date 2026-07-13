@@ -394,11 +394,16 @@
 
 (defn- splice-embeds
   "Every declared :embed link of one FULL wired envelope gains
-  \"embedded\"/\"total\"/\"page\": the target collection, filtered by
-  the link's own compiled href — parsed through the SAME collection
-  grammar (collections/parse-query) the real collection endpoint
-  uses, so the href and the inline items can never disagree, and an
-  embed is a real paginated/filtered/sorted view, not a flat teaser.
+  \"embedded\"/\"total\"/\"page\"/\"columns\": the target collection,
+  filtered by the link's own compiled href — parsed through the SAME
+  collection grammar (collections/parse-query) the real collection
+  endpoint uses, so the href and the inline items can never disagree,
+  and an embed is a real paginated/filtered/sorted view, not a flat
+  teaser. \"columns\" is the target's own query-input-schema (the same
+  filter/sort vocabulary collections/envelope advertises at
+  actions.query.input) — a client builds grid controls for this embed
+  straight from the parent's own envelope, no second GET to the
+  bare href.
 
   overrides ({rel {param value}}, from embed-overrides) merge into
   the href's own params before parse-query runs. A param already
@@ -452,7 +457,13 @@
                  _ (when (and max-limit (> (:size page) max-limit))
                      (throw (p/schema-invalid
                              :query {(str "embed." rel ".page[size]")
-                                     [(str "must be an integer 1.." max-limit)]})))]
+                                     [(str "must be an integer 1.." max-limit)]})))
+                 ;; the target's own filter/sort vocabulary, so a
+                 ;; client builds grid controls for this embed without
+                 ;; a second GET to its bare href — pure computation,
+                 ;; so it lands even if the storage read below fails
+                 env (assoc-in env ["links" rel "columns"]
+                               (p/wire-value (collections/query-input-schema trdef)))]
              (try
                (let [st (:storage eng)
                      [rows total]

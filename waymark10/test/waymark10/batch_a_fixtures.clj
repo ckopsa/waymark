@@ -47,7 +47,12 @@
             [:title [:string {:min 1 :max 100}]]
             [:project_id {:kind :ba_project} :waymark/ref]
             [:due_date {:optional true} [:maybe :waymark/date]]
-            [:points {:optional true} [:maybe :int]]]
+            [:points {:optional true} [:maybe :int]]
+            ;; the one prose-widget field in the batch-a fixtures — an
+            ;; exclusion case for render/grid-fields (too large to
+            ;; ship as a grid column on every row of a paginated page)
+            [:notes {:optional true :x-display {:widget "prose"}}
+             [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}
                 :project_id #{:eq}
                 :due_date #{:eq :range}}

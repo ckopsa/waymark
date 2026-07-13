@@ -316,6 +316,23 @@
             facets (get-in fb [:actions :query :input :properties :themes :x-facets])]
         (is (= {:bbq 1 :family 2 :mexican 1} facets))))))
 
+(deftest fields-on-collection-items
+  (let [items (get-in (json (get-q "/api/visits" "sort=arrives_on"))
+                      [:data :items])]
+    (testing "every item carries real field values, not just state+summary"
+      (is (= 5 (count items)))
+      (is (= (mapv first visit-specs) (mapv #(get-in % [:fields :guest]) items)))
+      (is (= (mapv (comp str second) visit-specs)
+             (mapv #(get-in % [:fields :arrives_on]) items)))
+      (is (= (mapv #(nth % 2) visit-specs)
+             (mapv #(get-in % [:fields :party]) items))))
+    (testing "no item's fields carry a vector or prose-widget field"
+      ;; :visit has none declared — the exclusion itself is covered
+      ;; by waymark10.batch-a-fixtures' ba_ticket (a real prose field)
+      ;; and ba_roster (a real vector field); this just confirms a
+      ;; kind with neither still gets exactly its plain scalar fields
+      (is (every? #(= #{:guest :arrives_on :party} (set (keys (:fields %)))) items)))))
+
 ;; ── 7. filtered self round-trips ────────────────────────────────────
 
 (deftest filtered-self-round-trips

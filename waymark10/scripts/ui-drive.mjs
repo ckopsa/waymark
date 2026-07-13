@@ -126,17 +126,57 @@ await waitFor(`document.querySelectorAll("tbody tr").length >= 6`, "meal rows");
 ok("collection rows carry state + summary",
    await evaljs(`document.body.innerText.includes("on_list") &&
                  document.body.innerText.includes("Carnitas tacos")`));
-ok("filter bar built from the query grammar (state enum + sort)",
-   await evaljs(`[...document.querySelectorAll("select option")].map(o => o.value)
-                 .filter(v => ["suggested","on_list","retired","name","-name"].includes(v)).length >= 4`));
+ok("schema-derived columns render real field values (name, themes)",
+   await evaljs(`document.querySelector('th[title="name"]') !== null &&
+                 [...document.querySelectorAll("tbody tr td")]
+                   .some(td => td.textContent.includes("Carnitas tacos"))`));
+ok("a sortable column's header carries an arrow, an unfilterable one doesn't offer Filters",
+   await evaljs(`document.querySelector('th[title="name"]').classList.contains("sortable")`));
 
-/* state filter drives a real filtered fetch */
-await evaljs(`{ const sel = [...document.querySelectorAll("select")]
-    .find(s => [...s.options].some(o => o.value === "retired"));
-  sel.value = "retired"; sel.dispatchEvent(new Event("change")); true }`);
+/* the name column sorts by header click — no dropdown, an arrow. The
+   hash updates synchronously but the re-render is async (a fresh
+   fetch), so wait for the arrow itself, not just the hash. */
+await evaljs(`document.querySelector('th[title="name"]').click(); true`);
+await waitFor(`decodeURIComponent(location.hash).includes("sort=name")`, "sort=name in href");
+await waitFor(`document.querySelector('th[title="name"]').textContent.includes("↑")`,
+              "ascending arrow rendered");
+ok("clicking a sortable header sorts ascending and shows the arrow", true);
+await evaljs(`document.querySelector('th[title="name"]').click(); true`);
+await waitFor(`decodeURIComponent(location.hash).includes("sort=-name")`, "sort=-name in href");
+await waitFor(`document.querySelector('th[title="name"]').textContent.includes("↓")`,
+              "descending arrow rendered");
+ok("clicking it again flips to descending", true);
+
+/* the Filters popover: pick State, its sole "in" op, a value, apply */
+await evaljs(`[...document.querySelectorAll("button")]
+  .find(b => b.textContent.startsWith("Filters")).click(); true`);
+await waitFor(`getComputedStyle(document.querySelector(".filterpanel")).display !== "none"`,
+              "filters panel open");
+await evaljs(`{ const sel = [...document.querySelectorAll(".filterpanel select")]
+    .find(s => [...s.options].some(o => o.textContent === "State"));
+  sel.value = [...sel.options].find(o => o.textContent === "State").value;
+  sel.dispatchEvent(new Event("change")); true }`);
+await waitFor(`document.querySelector('.filterpanel [data-role=values] select[name=state]')`,
+              "state value select populated");
+ok("the operator picker matches the column's declared ops (state is x-in only)",
+   await evaljs(`[...document.querySelectorAll(".filterpanel select")][1].options.length === 1 &&
+                 [...document.querySelectorAll(".filterpanel select")][1]
+                   .options[0].textContent === "in list"`));
+await evaljs(`{ const sel = document.querySelector('.filterpanel [data-role=values] select[name=state]');
+  sel.value = "retired"; true }`);
+await evaljs(`[...document.querySelectorAll(".filterpanel button")]
+  .find(b => b.textContent === "Apply").click(); true`);
 await waitFor(`decodeURIComponent(location.hash).includes("state=retired")`, "state filter in href");
 await waitFor(`document.body.innerText.includes("filtered: state=retired")`, "filtered summary");
-ok("state filter round-trips through the collection self href", true);
+ok("the Filters popover applies a column+operator+value filter", true);
+await waitFor(`[...document.querySelectorAll(".chip.on")]
+              .some(c => c.textContent.includes("State") && c.textContent.includes("retired"))`,
+              "removable chip rendered");
+ok("the applied filter renders as a removable chip", true);
+await evaljs(`[...document.querySelectorAll(".chip.on span")]
+  .find(s => s.textContent === "✕").click(); true`);
+await waitFor(`!decodeURIComponent(location.hash).includes("state=retired")`, "chip removal clears filter");
+ok("removing the chip clears the filter from the href", true);
 
 /* ── create a meal through the generated form ───────────────────────── */
 console.log("· meal create dialog");
@@ -622,6 +662,90 @@ async function batchAStory() {
   ok("a link navigates to the filtered target collection",
      await evaljs(`decodeURIComponent(location.hash).includes("/api/ba_days?date=2026-07-20") &&
                    document.body.innerText.includes("2026-07-20 · Scheduled")`));
+
+  /* ── DataGrid columns: a top-level collection ─────────────────────── */
+  console.log("· datagrid: real field columns + sort arrows on a collection");
+  await evaljs(`location.hash = "/api/ba_tickets"; true`);
+  await waitFor(`document.querySelectorAll("tbody tr").length >= 2`, "ticket rows");
+  ok("schema-derived columns replace the old hardcoded four (State/Summary/Updated/Actions)",
+     await evaljs(`document.querySelectorAll("thead th").length > 4 &&
+                   !!document.querySelector('th[title="due_date"]') &&
+                   [...document.querySelectorAll("tbody td")]
+                     .some(td => td.textContent.trim() === "2026-07-20")`));
+  ok("points (sortable, not filterable) still carries an arrow",
+     await evaljs(`document.querySelector('th[title="points"]')?.classList.contains("sortable")`));
+  ok("due_date (filterable, not declared sortable) carries none",
+     await evaljs(`!document.querySelector('th[title="due_date"]').classList.contains("sortable")`));
+
+  await evaljs(`document.querySelector('th[title="points"]').click(); true`);
+  await waitFor(`decodeURIComponent(location.hash).includes("sort=points")`, "sort=points in href");
+  await waitFor(`document.querySelector('th[title="points"]').textContent.includes("↑")`,
+                "ascending arrow rendered");
+  ok("clicking a sortable header sorts ascending with an up arrow", true);
+  await evaljs(`document.querySelector('th[title="points"]').click(); true`);
+  await waitFor(`decodeURIComponent(location.hash).includes("sort=-points")`, "sort=-points in href");
+  await waitFor(`document.querySelector('th[title="points"]').textContent.includes("↓")`,
+                "descending arrow rendered");
+  ok("clicking it again flips to descending with a down arrow", true);
+
+  /* Filters popover: pick a column, an operator matching its declared
+     ops, a value, apply — then remove via the chip */
+  await evaljs(`[...document.querySelectorAll("button")]
+    .find(b => b.textContent.startsWith("Filters")).click(); true`);
+  await waitFor(`getComputedStyle(document.querySelector(".filterpanel")).display !== "none"`,
+                "filters panel open");
+  await evaljs(`{ const sel = [...document.querySelectorAll(".filterpanel select")]
+      .find(s => [...s.options].some(o => o.textContent === "Project id"));
+    sel.value = [...sel.options].find(o => o.textContent === "Project id").value;
+    sel.dispatchEvent(new Event("change")); true }`);
+  await waitFor(`document.querySelector('.filterpanel [data-role=values] input[name=project_id]')`,
+                "project_id value input populated (eq — a plain input, not a select)");
+  await evaljs(`document.querySelector('.filterpanel [data-role=values] input[name=project_id]')
+    .value = ${JSON.stringify(pid)}; true`);
+  await evaljs(`[...document.querySelectorAll(".filterpanel button")]
+    .find(b => b.textContent === "Apply").click(); true`);
+  await waitFor(`decodeURIComponent(location.hash).includes("project_id=" + ${JSON.stringify(pid)})`,
+                "project_id filter in href");
+  ok("the Filters popover applies a column+operator+value filter", true);
+  await waitFor(`[...document.querySelectorAll(".chip.on")]
+                .some(c => c.textContent.includes("Project id"))`,
+                "removable chip rendered");
+  ok("the applied filter renders as a removable chip", true);
+  await evaljs(`[...document.querySelectorAll(".chip.on span")]
+    .find(s => s.textContent === "✕").click(); true`);
+  await waitFor(`!decodeURIComponent(location.hash).includes("project_id=")`, "chip removal clears filter");
+  ok("removing the chip clears the filter from the href", true);
+
+  /* ── DataGrid columns: an embedded table, parent-scoped controls ──── */
+  console.log("· datagrid: embedded table columns + parent-scoped sort");
+  await evaljs(`location.hash = ${JSON.stringify(proj.body.self)}; true`);
+  await waitFor(`document.querySelector(".embed")`, "embed section");
+  const findTickets = `[...document.querySelectorAll(".embed")]
+    .find(d => d.querySelector(".embed-head b").textContent === "This project's tickets")`;
+  ok("the embedded tickets table shows real per-field columns, not just summary",
+     await evaljs(`{ const div = ${findTickets};
+       !!div.querySelector('th[title="due_date"]') &&
+              !!div.querySelector('th[title="points"]') &&
+              [...div.querySelectorAll("tbody td")].some(td => td.textContent.trim() === "2026-07-20");
+     }`));
+  ok("its columns carry the same sort/no-sort declarations as the top-level collection",
+     await evaljs(`{ const div = ${findTickets};
+       div.querySelector('th[title="points"]').classList.contains("sortable") &&
+              !div.querySelector('th[title="due_date"]').classList.contains("sortable");
+     }`));
+  await evaljs(`${findTickets}.querySelector('th[title="points"]').click(); true`);
+  await waitFor(`decodeURIComponent(location.hash).includes("embed.tickets.sort=points")`,
+                "embed.tickets.sort=points on the parent's own hash");
+  ok("a sort click on the embedded table mutates the PARENT's embed.<rel>.sort param " +
+     "(not a navigation to the embed's bare href)",
+     await evaljs(`decodeURIComponent(location.hash).includes("/api/ba_projects/") &&
+                   !decodeURIComponent(location.hash).includes("/api/ba_tickets?")`));
+  await waitFor(`{ const div = ${findTickets};
+    const rows = [...div.querySelectorAll("tbody tr")].map(tr => tr.textContent);
+    rows.findIndex(t => t.includes("Oil the top")) <
+           rows.findIndex(t => t.includes("Sand the top"));
+  }`, "embedded rows visibly reordered");
+  ok("the embedded rows visibly reordered (ascending points first)", true);
 }
 
 if (MODE === "batch-a") await batchAStory();
