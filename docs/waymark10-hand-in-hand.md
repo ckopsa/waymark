@@ -125,7 +125,7 @@ what it did never does.*
 
 | Beat | Built (and committed) | Missing |
 | --- | --- | --- |
-| 1 The knock | approval_request bootstrap, mint-on-approve, default 24h TTL, four-eyes, scope-in-a-sentence | the ask arriving LIVE on the approver's screen (it is a poll/visit today — asks should ride the events surface into the UI) |
+| 1 The knock | approval_request bootstrap, mint-on-approve, four-eyes, scope-in-a-sentence; **landed 2026-07-13:** the invite link (`GET /api/-/welcome?invite=…` teaches the joining protocol cold; the agent's ONE request binds and asks), agent-proposed TTL capped at 24h (default now 1h), and the UI's Access panel (`#access`) — name an agent, mint its link, and the ask arrives LIVE on the approver's screen over the firehose, approve/deny straight off the envelope, approve hands off into follow | — (the beat runs end to end; waymark10.access-flow-test drives it) |
 | 2 Company | presence surface, viewing dots, Follow on member pages, presence-steered follow, concealment-projected | — (landed; needs the story's polish pass) |
 | 3 Thinking out loud | dry-run exists; transitions feed the ledger | **intent frames** — landed (design §21): a dry-run IS a considering on `/api/-/intents`, TTL-evicted, abandoned or resolved by the real act; the presence discipline throughout. UI card still owed |
 | 4 Four hands | relay/2 + proven OT, per-field authors, stale never loses words, draft consumed by the act | **cursors/selections in the UI** (the named batch-D punt); identity over the WS — landed (design §21): the one-time `?ticket=` names the join, authors carry real names, anonymous joins unchanged |

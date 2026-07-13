@@ -217,6 +217,12 @@
             [:expires_at {:optional true} [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in}
                 :audience #{:eq}}
+   ;; the agent behind the leash — audience IS the member id for
+   ;; bound/provisioned principals (beat 7: one navigation, not a
+   ;; hand-built filter)
+   :links [{:rel "member" :kind :member
+            :href "/api/members/{data.audience}"
+            :summary "The member this grant empowers"}]
    :actions
    {:accept {:from #{:offered} :to :accepted
              :guards [audience-only]
@@ -338,6 +344,20 @@
         (t/deny {:vars {:cap open-asks-cap
                         :pending (str/join ", " (sort (map :id open)))}})))))
 
+(g/defguard asks-are-short
+  {:judges [:expires_at]
+   :reads [:now]
+   :vars [:max_hours :asked]
+   :explain "A leash is short — at most {max_hours} hours; this ask runs to {asked}. Propose less; an approved follow-up ask can always extend."}
+  [_row inp ctx]
+  (if-some [^java.time.Instant exp (:expires_at inp)]
+    (let [max-s (long (:grant-max-ttl-seconds (:services ctx) 86400))
+          cap (.plusSeconds ^java.time.Instant (:now ctx) max-s)]
+      (if (pos? (compare exp cap))
+        (t/deny {:vars {:max_hours (quot max-s 3600) :asked (str exp)}})
+        (t/allow)))
+    (t/allow)))
+
 (g/defguard someone-else-decides
   {:reads [:principal]
    :explain "The requester cannot judge its own ask; another principal decides."}
@@ -401,24 +421,34 @@
    :filterable {:state #{:eq :in}
                 :grant_id #{:eq}
                 :requested_by #{:eq}}
+   ;; the grant this ask anchors or (once approved) minted; a nil
+   ;; grant_id omits the link — an unjudged bootstrap ask points at
+   ;; nothing yet
+   :links [{:rel "grant" :kind :grant
+            :href "/api/grants/{data.grant_id}"
+            :summary "The grant this request extends or minted"}]
    :create-guards [requester-is-named
                    requester-holds-the-grant
                    asks-are-paced
-                   asks-are-few]
+                   asks-are-few
+                   asks-are-short]
    :on-create (fn [row ctx]
                 (-> row
                     (assoc-in [:data :requested_by]
                               (get-in ctx [:principal :id]))
                     ;; short-lived is the DEFAULT, not an opt-in: an ask
-                    ;; naming no expiry gets the engine's TTL (24h) —
-                    ;; stamped at create, so the approver approves the
-                    ;; leash that will actually exist. An agent may ask
-                    ;; for longer; the approver sees the number either way.
+                    ;; naming no expiry gets the engine's default TTL
+                    ;; (1h; :grant-default-ttl-seconds) — stamped at
+                    ;; create, so the approver approves the leash that
+                    ;; will actually exist. An agent proposes longer at
+                    ;; will up to the cap (asks-are-short,
+                    ;; :grant-max-ttl-seconds, 24h); the approver sees
+                    ;; the number either way.
                     (update-in [:data :expires_at]
                                #(or % (.plusSeconds
                                        ^java.time.Instant (:now ctx)
                                        (long (:grant-default-ttl-seconds
-                                              (:services ctx) 86400)))))))
+                                              (:services ctx) 3600)))))))
    :actions
    {:approve {:from #{:offered} :to :approved
               :guards [someone-else-decides grant-still-accepting]

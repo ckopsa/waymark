@@ -897,6 +897,56 @@
                        (presence/self-visible? eng (visibility-of req)))
       {:status 204 :headers {}})))
 
+;; ── the welcome document (the invite link's destination) ───────────
+
+(defn- welcome-doc
+  "GET /api/-/welcome?invite=TOKEN: what the invite link the human
+  hands an agent points at — the whole joining protocol as one wire
+  document, readable cold. Token-gated, not authenticated (the token
+  IS the secret); an unknown or already-spent token answers 404 and
+  says nothing. No side effects: the token spends on the agent's
+  first real request carrying X-Waymark-Invite — which can be the
+  access request itself, so joining is one POST."
+  [eng]
+  (fn [req]
+    (let [token (get (query-params req) "invite")
+          member (or (members/invited-by-token eng token)
+                     (throw (p/problem :not-found 404 "Not found"
+                                       {:detail "No standing invitation."})))
+          services (:services eng)
+          default-ttl (long (:grant-default-ttl-seconds services 3600))
+          max-ttl (long (:grant-max-ttl-seconds services 86400))]
+      (json-response
+       200
+       {:waymark "10"
+        :welcome (get-in member [:data :display])
+        :bind {:header "X-Waymark-Invite"
+               :token token
+               :note (str "send this header on your FIRST request — it "
+                          "binds this invitation to your principal id; "
+                          "one use, then the link goes dark")}
+        :identity {:header "x-waymark-principal"
+                   :note "your stable agent id — every act is recorded under it"
+                   :actor_type "agent"}
+        :ask {:href "/api/approval_requests"
+              :method "POST"
+              :body {:task "what you are here to do, one sentence"
+                     :scope [{:kind "<kind>"
+                              :actions ["<action>" "…"]
+                              :ids "optional — specific rows"
+                              :fields "optional — {mode allow|deny, names […]}"}]
+                     :expires_at "RFC3339 instant, optional"}
+              :ttl {:default_seconds default-ttl
+                    :max_seconds max-ttl
+                    :note "propose the shortest leash your task needs; unstated means the default"}}
+        :then {:poll (str "GET /api/approval_requests — your own asks are "
+                          "always visible to you; approval stamps grant_id")
+               :grant {:header "X-Waymark-Grant"
+                       :note (str "send the stamped grant_id on every "
+                                  "request — it selects your approved "
+                                  "scope; outside it, resources answer 404")}}
+        :discovery "/api/.well-known/waymark"}))))
+
 ;; ── the generic UI (phase 10) ───────────────────────────────────────
 
 (defn- ui-page
@@ -1007,6 +1057,7 @@
          ["/api/-/intents/abandon" {:post (intents-abandon eng)}]
          ["/api/-/intents/answer" {:post (intents-answer eng)}]
          ["/api/-/collab-ticket" {:post (collab-ticket-mint eng)}]
+         ["/api/-/welcome" {:get (welcome-doc eng)}]
          ["/api/-/ui" {:get (ui-page eng "waymark10/ui.html")}]
          ["/api/-/ui-lite" {:get (ui-page eng "waymark10/ui_lite.html")}]
          ["/api/attachments/:id/bytes" {:put (bytes-put eng)

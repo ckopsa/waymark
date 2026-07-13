@@ -669,6 +669,10 @@ async function render() {
   const view = $("#view");               // superseded render never blanks
   renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
   if (!href) { lawStamp(null); return renderHome(view, seq); }
+  if (href === "access") {
+    lawStamp(null);
+    return renderAccess(view, seq);
+  }
   if (/^\/api\/surfaces\//.test(href)) {
     const {ok, body} = await api(href);
     if (seq !== renderSeq) return;
@@ -722,6 +726,10 @@ async function renderNav(current) {
     if (!ENGINE_KINDS.has(kind))
       nav.append(el("a", {href: "#" + href,
         style: current === href ? "font-weight:700" : ""}, title(kind) + "s"));
+  /* the hand-in-hand door: invite an agent, judge its ask, follow it */
+  if (w.resources && w.resources.member && w.resources.approval_request)
+    nav.append(el("a", {href: "#access",
+      style: current === "access" ? "font-weight:700" : ""}, "Access"));
   const tucked = entries.filter(([kind]) => ENGINE_KINDS.has(kind));
   if (tucked.length) nav.append(overflowMenu(tucked));
 }
@@ -1267,6 +1275,184 @@ function splitRefusals(doc) {
 
 /* A live countdown from becomes_available.at — the literal moment
    stays printed (machine truth), the tick is the courtesy. */
+/* ── the Access panel (#access): the hand-in-hand loop on one screen —
+   invite an agent by name and mint its link, watch its ask arrive
+   live, judge it (four-eyes and the confirm banner ride the
+   declarations), then follow the leash: scope, expiry, and the
+   agent's actions as they land. Everything here is envelope-driven;
+   the panel invents no affordances. ───────────────────────────────── */
+function scopeTable(scope) {
+  return el("table", {style:"margin:4px 0;border-collapse:collapse"},
+    (scope || []).map(s => el("tr", {},
+      el("td", {class:"mono", style:"padding:1px 10px 1px 0;vertical-align:top"},
+        s.kind),
+      el("td", {style:"padding:1px 0"},
+        (s.actions || []).join(", "),
+        s.ids ? el("span", {class:"muted"}, ` · rows: ${s.ids.join(", ")}`) : null))));
+}
+function leashEl(at) {
+  const span = el("span", {class:"mono",
+    title: at ? new Date(at).toLocaleString() : ""});
+  if (!at) { span.textContent = "no expiry"; return span; }
+  const tick = () => {
+    const ms = new Date(at) - Date.now();
+    if (Number.isNaN(ms)) { span.textContent = String(at); return true; }
+    if (ms <= 0) { span.textContent = "expired"; return true; }
+    span.textContent = `${dur(ms)} left`;
+    return false;
+  };
+  if (!tick()) {
+    const t = setInterval(() => { if (tick()) clearInterval(t); }, 1000);
+    liveTimers.push(t);
+  }
+  return span;
+}
+async function fullItems(colHref) {
+  const col = await api(colHref);
+  if (!col.ok) return [];
+  const items = (col.body.data?.items || []).slice(0, 50);
+  const envs = await Promise.all(items.map(it => api(it.self)));
+  return envs.filter(r => r.ok).map(r => r.body);
+}
+async function renderAccess(view, seq) {
+  const [members, asks, grants] = await Promise.all([
+    fullItems("/api/members"), fullItems("/api/approval_requests"),
+    fullItems("/api/grants")]);
+  if (seq !== renderSeq) return;
+  clearLiveTimers();
+  view.textContent = "";
+  const agents = members.filter(m => m.data?.actor_type === "agent");
+  const byPrincipal = id =>
+    agents.find(m => m.data.subject === id || String(m.self).endsWith("/" + id));
+
+  /* 1 · the knock's first half: name an agent, mint its link */
+  const invite = el("div", {class:"panel"});
+  invite.append(el("h2", {}, "Invite an agent"));
+  invite.append(el("div", {class:"muted"},
+    "Name it, copy the link, hand the link to the agent. The link "
+    + "teaches the agent how to introduce itself and ask for exactly "
+    + "the access its task needs — you approve the leash below."));
+  const nameIn = el("input", {placeholder: "the agent's name — e.g. Sous",
+                              style:"margin:8px 8px 8px 0"});
+  const linkBox = el("div", {});
+  const mintLink = token =>
+    `${location.origin}/api/-/welcome?invite=${encodeURIComponent(token)}`;
+  const showLink = (display, token) => {
+    const url = mintLink(token);
+    linkBox.replaceChildren(el("div", {class:"field", style:"margin-top:8px"},
+      el("div", {class:"muted"}, `${display}'s invitation — one use:`),
+      el("input", {value: url, readonly: "true",
+                   style:"width:100%;font-family:var(--mono)",
+                   onclick: e => e.target.select()}),
+      el("button", {style:"margin-top:4px", onclick: () =>
+        navigator.clipboard?.writeText(url).then(
+          () => toast("link copied — hand it to the agent"),
+          () => toast("select and copy the link above"))}, "Copy link")));
+  };
+  invite.append(el("div", {}, nameIn,
+    el("button", {class:"primary", onclick: async () => {
+      const display = nameIn.value.trim();
+      if (!display) { toast("name the agent first"); return; }
+      const token = uuid();
+      const {ok, body} = await api("/api/members", {method: "POST",
+        body: JSON.stringify({display, actor_type: "agent",
+                              bind_token: token})});
+      if (!ok) { linkBox.replaceChildren(problemBox(body)); return; }
+      nameIn.value = "";
+      showLink(display, token);
+    }}, "Invite")), linkBox);
+  const pending = agents.filter(m => m.state === "invited" && m.data.bind_token);
+  if (pending.length)
+    invite.append(el("div", {style:"margin-top:10px"},
+      el("div", {class:"muted"}, "standing invitations, unclaimed:"),
+      pending.map(m => el("div", {},
+        el("b", {}, m.data.display), " · ",
+        el("a", {href: mintLink(m.data.bind_token), class:"mono",
+                 onclick: e => { e.preventDefault();
+                   showLink(m.data.display, m.data.bind_token); }},
+          "show link")))));
+  view.append(invite);
+
+  /* 2 · the asks awaiting a verdict — approve/deny straight off the
+     envelope (four-eyes and the consequence banner come with them) */
+  const asksPanel = el("div", {class:"panel"});
+  asksPanel.append(el("h2", {}, "Access requests"));
+  const offered = asks.filter(a => a.state === "offered");
+  if (!offered.length)
+    asksPanel.append(el("div", {class:"muted"},
+      "none pending — an agent's ask lands here the moment it is filed"));
+  for (const ask of offered) {
+    const d = ask.data;
+    const who = byPrincipal(d.requested_by);
+    const card = el("div", {class:"field",
+      style:"border:1px solid var(--line);border-radius:var(--radius);padding:10px;margin:8px 0"});
+    card.append(el("div", {},
+      el("b", {}, who ? who.data.display : d.requested_by),
+      el("span", {class:"muted"}, ` (${d.requested_by}) asks:`)));
+    card.append(el("div", {style:"font-size:15px;margin:4px 0"},
+      `“${d.task}”`));
+    card.append(scopeTable(d.scope));
+    card.append(el("div", {class:"muted"}, "leash: ", leashEl(d.expires_at)));
+    const bar = el("div", {class:"actionbar", style:"margin-top:8px"});
+    for (const [name, entry] of Object.entries(ask.actions || {}))
+      bar.append(actionButton({name, entry, doc: ask, small: true,
+        onDone: () => {
+          if (name === "approve") {
+            follow({id: d.requested_by,
+                    display: who ? who.data.display : d.requested_by});
+            toast(`approved — following ${who ? who.data.display : d.requested_by}`);
+          }
+          render();
+        }}));
+    for (const [name, entry] of Object.entries(ask.unavailable || {}))
+      bar.append(el("span", {class:"muted", title: entry.reason || ""},
+        `${label(name, entry)}: ${entry.reason || "unavailable"}`));
+    card.append(bar);
+    asksPanel.append(card);
+  }
+  view.append(asksPanel);
+
+  /* 3 · the company: each agent, its live leash, and its actions as
+     they land (the feed fills from the firehose; follow steers) */
+  const agentsPanel = el("div", {class:"panel"});
+  agentsPanel.append(el("h2", {}, "Agents"));
+  const active = agents.filter(m => m.state !== "invited");
+  if (!active.length && !pending.length)
+    agentsPanel.append(el("div", {class:"muted"},
+      "no agents yet — mint an invitation above"));
+  for (const m of active) {
+    const pid = m.data.subject || String(m.self).split("/").pop();
+    const grant = grants.find(g =>
+      g.state === "accepted" && g.data.audience === pid);
+    const card = el("div", {class:"field",
+      style:"border:1px solid var(--line);border-radius:var(--radius);padding:10px;margin:8px 0"});
+    card.append(el("div", {},
+      el("b", {}, m.data.display),
+      el("span", {class:"statechip", style:"margin-left:6px"}, m.state),
+      el("span", {class:"muted mono", style:"margin-left:6px"}, pid),
+      el("button", {style:"margin-left:10px;font-size:12px;padding:3px 8px",
+        onclick: () => { follow({id: pid, display: m.data.display});
+                         toast(`following ${m.data.display}`); }},
+        "👁 Follow"),
+      el("a", {href: "#" + m.self, style:"margin-left:8px"}, "member ↗")));
+    if (grant) {
+      card.append(el("div", {class:"muted", style:"margin-top:6px"},
+        "granted · ", leashEl(grant.data.expires_at), " · ",
+        el("a", {href: "#" + grant.self}, "grant ↗")));
+      card.append(scopeTable(grant.data.scope));
+    } else {
+      card.append(el("div", {class:"muted", style:"margin-top:6px"},
+        "no live grant — its next ask lands above"));
+    }
+    card.append(el("div", {"data-agent-feed": pid,
+      class:"feed", style:"margin-top:8px;max-height:180px;overflow-y:auto"},
+      el("div", {class:"muted"}, "actions land here live…")));
+    agentsPanel.append(card);
+  }
+  view.append(agentsPanel);
+  watchScope({});   /* liveness rides the access branch of the firehose */
+}
+
 function countdownEl(at) {
   const span = el("span", {class:"countdown", style:"margin-left:6px",
                            title: new Date(at).toLocaleString()});
@@ -3023,6 +3209,25 @@ sse("/api/-/events", ({event, id, data: ev}) => {
     paintPip();
   }
   const here = decodeURIComponent(location.hash.slice(1)).split("?")[0];
+  /* the Access panel is itself a following view: agent feeds fill in
+     place, access-kind transitions re-render the panel, and the
+     follow-navigate stays parked — watching from the balcony is the
+     point of standing on it */
+  if (here === "access") {
+    const feedBox = document.querySelector(
+      `[data-agent-feed="${CSS.escape((ev.actor || {}).id || "")}"]`);
+    if (feedBox) {
+      const placeholder = feedBox.querySelector(".muted");
+      if (placeholder && feedBox.children.length === 1) placeholder.remove();
+      feedBox.prepend(ledgerRow(ev, isFollowed));
+      while (feedBox.children.length > 20) feedBox.lastChild.remove();
+    }
+    if (["member", "approval_request", "grant"].includes(ev.kind)) {
+      clearTimeout(refetchTimer);
+      refetchTimer = setTimeout(render, 350);
+    }
+    return;
+  }
   /* following: go where they went — unless a dialog is open (never yank
      a human out of a form they're typing in) */
   if (isFollowed && ev.self && ev.self !== here && !$("dialog[open]")) {

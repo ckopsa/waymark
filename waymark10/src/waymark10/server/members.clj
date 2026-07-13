@@ -198,6 +198,20 @@
            (fn [tx] (store/query-rows (:storage eng) tx :member
                                       {:subject subject} {:limit 1})))))
 
+(defn invited-by-token
+  "The still-INVITED member row a presented token names, nil when the
+  token matches nothing invited — the bind! lookup, public for the
+  welcome document (GET /api/-/welcome), which teaches the invited
+  agent its protocol without spending the token."
+  [eng token]
+  (when-not (str/blank? (str token))
+    (let [candidate (first (store/with-tx (:storage eng)
+                             (fn [tx] (store/query-rows
+                                       (:storage eng) tx :member
+                                       {:bind_token token} {:limit 1}))))]
+      (when (and candidate (= :invited (:state candidate)))
+        candidate))))
+
 (defn- bind!
   "First sight of a presented invite token: the matching INVITED row
   binds to this principal through the concealed :bind transition
@@ -206,11 +220,8 @@
   from-state is gone) and lands here as nil too."
   [eng principal token]
   (when-not (str/blank? (str token))
-    (let [candidate (first (store/with-tx (:storage eng)
-                             (fn [tx] (store/query-rows
-                                       (:storage eng) tx :member
-                                       {:bind_token token} {:limit 1}))))]
-      (when (and candidate (= :invited (:state candidate)))
+    (let [candidate (invited-by-token eng token)]
+      (when candidate
         (try
           (inv/invoke! eng :member (:id candidate) :bind
                        {:subject (:id principal)}
