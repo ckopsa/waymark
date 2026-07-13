@@ -990,6 +990,18 @@
                        :note (str "send the stamped grant_id on every "
                                   "request — it selects your approved "
                                   "scope; outside it, resources answer 404")}}
+        :presence {:href "/api/-/presence"
+                   :method "POST"
+                   :body {:self "the resource href you are reading"}
+                   :note (str "how you are SEEN, not what you may do — "
+                              "ephemeral, never law. Beat this as you "
+                              "read (every ~10s while you linger; "
+                              "silence fades you out) and a human "
+                              "following you watches your attention "
+                              "move, not just your acts. The reference "
+                              "client (waymark10.client) beats it for "
+                              "you on every read; skipping it costs "
+                              "you nothing but company.")}
         :discovery "/api/.well-known/waymark"}))))
 
 ;; ── the generic UI (phase 10) ───────────────────────────────────────

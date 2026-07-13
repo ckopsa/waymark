@@ -6,7 +6,8 @@
   persistence and reuse, the fence's auto-If-Match, the acknowledge
   flow, the unknown-action LOCAL refusal (no request leaves), the
   plan/divergence discipline, and the MCP projection shape."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
             [waymark10.client :as c]
             [waymark10.fixtures :as fx]
@@ -15,7 +16,8 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
-            [waymark10.test.db :as db]))
+            [waymark10.test.db :as db]
+            [waymark10.wire :as wire]))
 
 ;; ── the fixture kinds ───────────────────────────────────────────────
 ;; meal (confirm-gated decline, terminal retire) and plan (finalize's
@@ -114,6 +116,32 @@
     (let [res (c/follow *session* (meals) :sideways)]
       (is (c/refused? res))
       (is (= :no-such-link (get-in res [:refused :code]))))))
+
+;; ── presence: reads breathe (hand-in-hand beat 2) ───────────────────
+
+(deftest reads-beat-presence
+  (let [beats (atom [])
+        recording (fn [req]
+                    (if (and (= :post (:request-method req))
+                             (= "/api/-/presence" (:uri req)))
+                      (do (swap! beats conj (wire/read-json (:body req)))
+                          {:status 204 :headers {}})
+                      (*handler* req)))
+        s (c/connect "http://test" {:principal "sous" :handler recording})]
+    (c/get-doc s "/api/meals")
+    (is (= 1 (count @beats)) "a successful read marks its gaze")
+    (is (str/starts-with? (str (:self (first @beats))) "/api/meals"))
+    (c/get-doc s "/api/meals")
+    (is (= 1 (count @beats)) "same-self beats throttle")
+    (c/get-doc s "/api/widgets")
+    (is (= 1 (count @beats))
+        "a refused read marks nothing — probing paints no gaze")
+    (testing ":presence false opts out entirely"
+      (let [quiet (c/connect "http://test" {:principal "sous"
+                                            :handler recording
+                                            :presence false})]
+        (c/get-doc quiet "/api/gadgets")
+        (is (= 1 (count @beats)))))))
 
 ;; ── rule 1: act only on declared actions ────────────────────────────
 

@@ -221,7 +221,10 @@
     (let [doc (json (req h :get (str "/api/-/welcome?invite=" token) {}))]
       (is (string? (get-in doc [:bind :if_it_goes_wrong])))
       (is (string? (get-in doc [:bind :cautious_path])))
-      (is (= "/api/.well-known/waymark" (get-in doc [:ask :vocabulary :href]))))
+      (is (= "/api/.well-known/waymark" (get-in doc [:ask :vocabulary :href])))
+      ;; presence taught where joining is taught: how to be seen
+      (is (= "/api/-/presence" (get-in doc [:presence :href])))
+      (is (re-find #"following you" (str (get-in doc [:presence :note])))))
     (testing "bind rides a harmless read; the ask follows bare"
       (is (= 200 (:status (req h :get "/api/.well-known/waymark"
                                {:headers (assoc (agent-headers)

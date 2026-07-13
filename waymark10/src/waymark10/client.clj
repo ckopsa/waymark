@@ -158,7 +158,7 @@
                 (the CLI's session file does exactly this)
   The session also carries :graph — effect.to edges learned from
   every document seen, the basis for plan."
-  [base-url {:keys [principal bearer grant handler key-store]}]
+  [base-url {:keys [principal bearer grant handler key-store presence]}]
   {:base-url base-url
    :headers (cond-> {"content-type" "application/json"}
               principal (merge (principal-headers principal))
@@ -168,6 +168,11 @@
                  (ring-request-fn handler)
                  (http-request-fn base-url))
    :key-store (or key-store (atom {}))
+   ;; presence: the session marks where it is looking as it reads
+   ;; (hand-in-hand beat 2 — a following human's screen breathes with
+   ;; the agent's attention). :presence false opts out.
+   :presence? (not (false? presence))
+   :presence-at (atom [nil 0])
    :graph (atom {})})
 
 ;; ── the state graph (Part IV rule 7's memory) ───────────────────────
@@ -220,14 +225,40 @@
   [session]
   (request session {:method :get :path "/api/.well-known/waymark"}))
 
+(def ^:private presence-beat-ms
+  "Same-self beats are throttled to one per this window — the
+  registry only keeps the latest gaze anyway."
+  5000)
+
+(defn- presence-beat!
+  "Fire-and-forget: mark where this session is looking, so a
+  following human's screen breathes with the agent's attention
+  (hand-in-hand beat 2). Presence is ephemeral, never law: every
+  outcome — 204, a 503 from an unstarted engine, a scoped 404 — is
+  ignored, and a read never fails because its gaze went unseen."
+  [session self]
+  (when (and (:presence? session) (string? self))
+    (let [now (System/currentTimeMillis)
+          [prev at] @(:presence-at session)]
+      (when (or (not= prev self) (< (+ ^long at presence-beat-ms) now))
+        (reset! (:presence-at session) [self now])
+        (try
+          (request session {:method :post :path "/api/-/presence"
+                            :body (wire/write-json {:self self})})
+          (catch Exception _ nil))))))
+
 (defn get-doc
   "GET an advertised href (a doc's :self, a well-known collection
-  href, a links entry) → the envelope, learning its effect.to edges.
+  href, a links entry) → the envelope, learning its effect.to edges
+  and marking presence on what was actually seen (a refused read
+  marks nothing — probing must not paint gaze on concealed rows).
   Accepts a doc in place of an href (re-reads its self)."
   [session href]
   (let [href (if (map? href) (:self href) href)
         res (request session {:method :get :path href})]
     (learn! session res)
+    (when (:self res)
+      (presence-beat! session (:self res)))
     res))
 
 (defn follow
