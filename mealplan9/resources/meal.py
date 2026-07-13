@@ -123,6 +123,7 @@ class Meal(Resource):
     kind = "meal"
     State = MealState
     Data = MealData
+    nav = "secondary"
 
     initial = MealState.SUGGESTED
     terminal = {MealState.RETIRED}

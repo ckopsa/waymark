@@ -74,6 +74,7 @@ class SundayRotation(Resource):
     State = RotationState
     Data = RotationData
     Create = RotationCreate
+    nav = "secondary"
 
     initial = RotationState.INACTIVE
 

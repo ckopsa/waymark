@@ -193,6 +193,7 @@ class Product(Resource):
     State = ProductState
     Data = ProductData
     Create = ProductCreate
+    nav = "secondary"
 
     initial = ProductState.SUGGESTED
     terminal = {ProductState.DISCONTINUED}

@@ -153,6 +153,7 @@ class Ingredient(Resource):
     kind = "ingredient"
     State = IngredientState
     Data = IngredientData
+    nav = "secondary"
 
     initial = IngredientState.SUGGESTED
     terminal = {IngredientState.RETIRED}

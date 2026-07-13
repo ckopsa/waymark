@@ -80,6 +80,7 @@ class Substitution(Resource):
     kind = "substitution"
     State = SubstitutionState
     Data = SubstitutionData
+    nav = "secondary"
 
     initial = SubstitutionState.SUGGESTED
     terminal = {SubstitutionState.RETIRED}

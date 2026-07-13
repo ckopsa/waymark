@@ -66,6 +66,7 @@ class Event(Mirror):
     kind = "event"
     Data = EventData
     Create = EventCreate
+    nav = "secondary"
 
     adapter = EVENTS
     ttl_seconds = TTL_SECONDS

@@ -161,6 +161,7 @@ class MealLine(Resource):
     kind = "meal_line"
     State = MealLineState
     Data = MealLineData
+    nav = "secondary"
 
     initial = MealLineState.ON_RECIPE
     terminal = {MealLineState.REMOVED}

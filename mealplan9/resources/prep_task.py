@@ -84,6 +84,7 @@ class PrepTask(Resource):
     kind = "prep_task"
     State = PrepState
     Data = PrepData
+    nav = "secondary"
 
     initial = PrepState.PENDING
     terminal = {PrepState.DONE, PrepState.CANCELLED}
