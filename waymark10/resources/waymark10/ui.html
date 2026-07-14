@@ -1276,6 +1276,18 @@ function renderCollection(view, doc, hints) {
       actionDialog({name, entry, doc, bulkIds: [...selected],
                     onDone: () => render()});
     }}, (entry.display?.label || title(name)) + " (selected)"));
+  /* the worksheet round-trip, when the kind declares one: the link
+     already carries THIS view's filters */
+  const ws = doc.links?.worksheet;
+  if (ws) {
+    bar.append(el("button", {"data-worksheet":"download",
+      title: ws.summary || "download this view as an editable workbook",
+      onclick: () => downloadWorksheet(ws.href)}, "⬇ Excel"));
+    bar.append(el("button", {"data-worksheet":"import",
+      title: "upload an edited workbook — every change replays as actions",
+      onclick: () => worksheetImportDialog(ws.href, () => render())},
+      "⬆ Import"));
+  }
   panel.append(bar);
 
   const items = doc.data?.items || [];
@@ -2907,6 +2919,114 @@ function problemBox(p) {
     box.append(el("div", {style:"margin-top:4px"},
       el("a", {href:"#"+p.resource.self}, "view current state")));
   return box;
+}
+
+/* ── the worksheet round-trip: the filtered view leaves as xlsx, the
+   edited file comes back and every cell diff replays as the kind's
+   own actions (the server's report says exactly what happened) ────── */
+const XLSX_MIME =
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+async function downloadWorksheet(href) {
+  try {
+    const res = await fetch(href, {headers: principalHeaders()});
+    if (!res.ok) {
+      const b = await res.json().catch(() => null);
+      toast(b?.detail || `couldn't build the worksheet — ${res.status}`);
+      return;
+    }
+    const blob = await res.blob();
+    const plural = href.replace(/^\/api\//, "").split("/")[0];
+    const obj = URL.createObjectURL(blob);
+    const a = el("a", {href: obj, download: `${plural}.xlsx`});
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(obj), 10000);
+  } catch { toast("couldn't reach the worksheet route"); }
+}
+function worksheetReport(report) {
+  const box = el("div", {});
+  box.append(el("p", {class:"metaline"}, report.summary || ""));
+  const rows = report.data?.rows || [];
+  if (!rows.length) {
+    box.append(el("p", {class:"muted"}, "no data rows in the workbook"));
+    return box;
+  }
+  const head = el("tr", {}, ...["line", "outcome", "actions", "detail"]
+    .map(h => el("th", {}, h)));
+  const tbody = el("tbody", {});
+  for (const r of rows) {
+    const detail = [r.reason, ...(r.refusals || []), ...(r.notes || [])]
+      .filter(Boolean).join(" · ");
+    tbody.append(el("tr", {},
+      el("td", {class:"mono"}, String(r.line)),
+      el("td", {}, r.outcome || ""),
+      el("td", {class:"mono"}, (r.actions || []).join(", ")),
+      el("td", {class:"muted"}, detail)));
+  }
+  box.append(el("div", {style:"overflow:auto;max-height:40vh"},
+    el("table", {class:"items"}, el("thead", {}, head), tbody)));
+  return box;
+}
+/* choose a file → the server rehearses it (dry_run=1) and shows the
+   plan → Apply runs it for real → the final report stays up */
+function worksheetImportDialog(href, onDone) {
+  const postHref = q => href + (href.includes("?") ? "&" : "?") + q;
+  const file = el("input", {type:"file", accept:".xlsx"});
+  const reportBox = el("div", {});
+  const applyBtn = el("button", {class:"primary", disabled:"true"}, "Apply");
+  let chosen = null, applied = false;
+  async function post(query) {
+    const res = await fetch(query ? postHref(query) : href, {
+      method: "POST",
+      headers: {...principalHeaders(), "Content-Type": XLSX_MIME},
+      body: chosen});
+    const body = await res.json().catch(() => null);
+    return {ok: res.ok, body};
+  }
+  file.addEventListener("change", async () => {
+    chosen = file.files && file.files[0];
+    applyBtn.setAttribute("disabled", "true");
+    reportBox.textContent = "";
+    if (!chosen) return;
+    reportBox.append(el("p", {class:"muted"}, "rehearsing…"));
+    const {ok, body} = await post("dry_run=1");
+    reportBox.textContent = "";
+    if (!ok) { reportBox.append(problemBox(body)); return; }
+    reportBox.append(el("p", {class:"metaline"},
+      "the rehearsal — nothing has been applied yet"));
+    reportBox.append(worksheetReport(body));
+    applyBtn.removeAttribute("disabled");
+  });
+  const dlg = el("dialog", {},
+    el("div", {class:"dlghead"}, el("h3", {}, "Import a worksheet"),
+      el("p", {class:"metaline"},
+        "edits replay through the row's own actions · stale rows "
+        + "conflict instead of overwriting · an empty id creates")),
+    el("div", {class:"dlgbody"},
+      el("div", {class:"field"},
+        el("label", {}, el("b", {}, "Edited workbook (.xlsx)")), file),
+      reportBox),
+    el("div", {class:"dlgfoot"},
+      el("button", {onclick: () => { dlg.close(); dlg.remove();
+                                     if (applied) onDone && onDone(); }},
+        applied ? "Close" : "Cancel"),
+      applyBtn));
+  applyBtn.addEventListener("click", async () => {
+    if (!chosen) return;
+    applyBtn.setAttribute("disabled", "true");
+    reportBox.textContent = "";
+    reportBox.append(el("p", {class:"muted"}, "applying…"));
+    const {ok, body} = await post(null);
+    reportBox.textContent = "";
+    if (!ok) { reportBox.append(problemBox(body));
+               applyBtn.removeAttribute("disabled"); return; }
+    applied = true;
+    reportBox.append(el("p", {class:"metaline"}, "applied ✓"));
+    reportBox.append(worksheetReport(body));
+    dlg.querySelector(".dlgfoot button").textContent = "Close";
+    toast("worksheet applied ✓");
+  });
+  document.body.append(dlg);
+  dlg.showModal();
 }
 
 /* ── attachments: the bytes ride the engine's static route

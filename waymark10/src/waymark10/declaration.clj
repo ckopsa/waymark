@@ -37,7 +37,7 @@
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; collection surface
-   :filterable :sortable :faceted
+   :filterable :sortable :faceted :worksheet
    ;; edges
    :owns :links :related
    ;; advertisement
