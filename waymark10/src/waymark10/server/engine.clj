@@ -62,6 +62,7 @@
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.surface :as surface]
+            [waymark10.server.worksheet :as worksheet]
             [waymark10.server.coherence :as coherence]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as t]
@@ -72,13 +73,15 @@
 (defn full-registry
   "The application's resources plus every kind the engine itself
   enrolls — the one list, shared with the migrate CLI so a plan
-  covers exactly the kinds a boot would serve."
+  covers exactly the kinds a boot would serve. The worksheet kind
+  enrolls only when some application kind declares :worksheet."
   [resources]
   (registry/registry (into (vec resources)
-                           [defs/definition members/member
-                            roles/role grants/grant grants/approval-request
-                            attachments/attachment
-                            webhooks/subscription jobs/job])))
+                           (concat [defs/definition members/member
+                                    roles/role grants/grant grants/approval-request
+                                    attachments/attachment
+                                    webhooks/subscription jobs/job]
+                                   (worksheet/kinds resources)))))
 
 (defn- migrate-gate!
   "The boot's schema gate (migrate): plan the drift; a non-empty plan
@@ -149,7 +152,15 @@
                     :now-fn (or now-fn (fn [] (java.time.Instant/now)))
                     :deploy-mode (or deploy-mode :promote)
                     :lifecycle defs/lifecycle
-                    :maintain maintainer/after-write
+                    ;; the worksheet pass composes over the derivation
+                    ;; maintainer — the engine's own kind, so the boot
+                    ;; wires it (an app-level with-push wraps outside)
+                    :maintain (fn [engine kind action-name res]
+                                (worksheet/after-write!
+                                 engine kind action-name
+                                 (or (maintainer/after-write
+                                      engine kind action-name res)
+                                     res)))
                     ;; the declared surfaces, validated where every
                     ;; kind is known (phase 9b)
                     :surfaces (surface/assemble reg (:surfaces opts))

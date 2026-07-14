@@ -1,16 +1,20 @@
 (ns waymark10.worksheet-test
-  "The worksheet round-trip: export carries the filtered view with
-  its identity columns; import diffs cells against stored rows and
-  replays the diffs through the kind's OWN actions (push-on-write
-  rides along), refuses stale versions as conflicts, notes read-only
-  edits, creates from id-less rows (create-push claims the mint), and
-  a dry run plans everything while applying nothing. Needs the test
-  database: WAYMARK10_TEST_DSN=…waymark10_test."
+  "The worksheet resource: an upload STAGES as a row of the engine's
+  worksheet kind — the plan is recorded data on it before the 201
+  renders — and revalidate / apply / discard are its own actions.
+  Apply replays every line through the target kind's actions as the
+  person who applied (push-on-write rides along); stale versions
+  conflict, read-only edits become notes, id-less lines create (a
+  create-push mirror claims its mint). Needs the test database:
+  WAYMARK10_TEST_DSN=…waymark10_test."
   (:require [clojure.test :refer [deftest is testing]]
+            [next.jdbc :as jdbc]
             [waymark10.resource :as r :refer [defhandler]]
+            [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.store :as store]
+            [waymark10.server.store.postgres :as pg]
             [waymark10.server.worksheet :as worksheet]
             [waymark10.server.xlsx :as xlsx]
             [waymark10.test.db :as db]
@@ -105,29 +109,59 @@
     {:adapter adapter :ttl-seconds 3600 :discover-every 3600
      :push-on-write true :create-push true})))
 
-(defn- with-worksheet-engine [f]
-  (let [rm (remote)]
-    (db/with-test-engine
-      [(note-kind rm)]
-      (fn [eng] (f (mirror/with-push eng) rm)))))
+(defn- with-worksheet-engine
+  "The FULL boot (engine/engine — the worksheet kind and its pass are
+  the engine's own wiring, which the low-level test engine skips),
+  fresh tables, the push pass wrapped exactly as an app would."
+  [f]
+  (let [rm (remote)
+        st (pg/storage db/dsn)]
+    (try
+      (store/with-tx st
+        (fn [tx]
+          (doseq [table ["notes" "worksheets" "definitions"
+                         "waymark10_transitions" "waymark10_idempotency"
+                         "waymark10_drafts" "waymark10_cursors"]]
+            (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
+      (let [eng (mirror/with-push
+                 (engine/engine {:storage st
+                                 :resources [(note-kind rm)]
+                                 :suppress-mirror-refresh true}))]
+        (f eng rm))
+      (finally (pg/close! st)))))
+
+(defn- note-rdef [eng] (get (inv/resources eng) :note))
 
 (defn- export-rows [eng params]
-  (let [rdef (get (inv/resources eng) :note)
-        res (worksheet/export eng rdef params)]
+  (let [res (worksheet/export eng (note-rdef eng) params)]
     (is (= 200 (:status res)))
     (xlsx/read-sheet (:body res))))
 
-(defn- import-rows [eng rows & [opts]]
-  (let [rdef (get (inv/resources eng) :note)]
-    (worksheet/import! eng rdef (xlsx/write-sheet rows)
-                       (merge {:principal ana} opts))))
+(defn- stage! [eng rows & [filename]]
+  (:row (worksheet/stage! eng (note-rdef eng) (xlsx/write-sheet rows)
+                          {:principal ana :filename filename})))
+
+(defn- fresh-key [] (str (random-uuid)))
+
+(defn- apply! [eng ws-id]
+  (:row (inv/invoke! eng :worksheet ws-id :apply nil
+                     {:principal ana :idempotency-key (fresh-key)})))
+
+(defn- report-of [row] (get-in row [:data :report]))
+
+(defn- by-line [row]
+  (into {} (map (juxt :line identity)) (report-of row)))
 
 (defn- col
-  "The value under a header in one exported row."
   [sheet row-i header]
   (let [idx (some (fn [[i h]] (when (= header h) i))
                   (map-indexed vector (first sheet)))]
     (get-in sheet [row-i idx])))
+
+(defn- set-cell [sheet row-i header v]
+  (let [idx (some (fn [[i h]] (when (= header h) i))
+                  (map-indexed vector (first sheet)))]
+    (assoc-in sheet [row-i idx] v)))
 
 (defn- row-of [eng xid]
   (store/with-tx (:storage eng)
@@ -147,12 +181,35 @@
         (is (= ["id" "version" "state" "title" "score" "done_at" "author"]
                (first sheet)))
         (is (= 3 (count sheet)))
-        (let [titles (set (map #(col sheet % "title") [1 2]))]
-          (is (= #{"One" "Two"} titles)))
+        (is (= #{"One" "Two"} (set (map #(col sheet % "title") [1 2]))))
         (is (every? #(some? (col sheet % "id")) [1 2]))
         (is (every? #(number? (col sheet % "version")) [1 2]))))))
 
-(deftest the-round-trip-applies-edits-through-the-actions
+(deftest an-upload-stages-as-a-planned-resource
+  (with-worksheet-engine
+    (fn [eng rm]
+      (swap! (:state rm) assoc :docs
+             {"n1" {:title "One" :score 1.5M :done_at nil :author "feed"}})
+      (mirror/discover! eng :note)
+      (let [sheet (export-rows eng {})
+            edited (set-cell sheet 1 "title" "One, renamed")
+            ws (stage! eng edited "notes.xlsx")]
+        (is (= :staged (:state ws)))
+        (is (= "note" (get-in ws [:data :target])))
+        (is (= "notes.xlsx" (get-in ws [:data :filename])))
+        (testing "the 201's row already carries the recorded plan"
+          (is (= "planned" (:outcome (get (by-line ws) 2))))
+          (is (= ["retitle"] (:actions (get (by-line ws) 2))))
+          (is (= {:planned 1} (get-in ws [:data :tally]))))
+        (testing "staging applied nothing"
+          (is (= "One" (get-in (row-of eng "n1") [:data :title]))))
+        (testing "discard abandons the batch, audited"
+          (let [{:keys [row]} (inv/invoke! eng :worksheet (:id ws) :discard
+                                           nil {:principal ana})]
+            (is (= :discarded (:state row)))
+            (is (= "One" (get-in (row-of eng "n1") [:data :title])))))))))
+
+(deftest apply-replays-the-lines-and-records-the-outcomes
   (with-worksheet-engine
     (fn [eng rm]
       (swap! (:state rm) assoc :docs
@@ -161,121 +218,127 @@
                     :author "feed"}})
       (mirror/discover! eng :note)
       (let [sheet (export-rows eng {})
-            edit (fn [row-i header v]
-                   (let [idx (some (fn [[i h]] (when (= header h) i))
-                                   (map-indexed vector (first sheet)))]
-                     [row-i idx v]))
             n1-i (if (= "One" (col sheet 1 "title")) 1 2)
             n2-i (- 3 n1-i)
-            edited (reduce (fn [s [r c v]] (assoc-in s [r c] v))
-                           sheet
-                           [(edit n1-i "title" "One, renamed")
-                            (edit n1-i "score" 3.25)
-                            (edit n1-i "done_at" "2026-02-01")
-                            (edit n2-i "done_at" nil)])
-            report (import-rows eng edited)
-            outcomes (into {} (map (juxt :line :outcome))
-                           (get-in report [:data :rows]))]
-        (is (= "applied" (get outcomes (inc n1-i))))
-        (is (= "applied" (get outcomes (inc n2-i))))
-        (let [n1 (row-of eng "n1")
-              n2 (row-of eng "n2")]
+            edited (-> sheet
+                       (set-cell n1-i "title" "One, renamed")
+                       (set-cell n1-i "score" 3.25)
+                       (set-cell n1-i "done_at" "2026-02-01")
+                       (set-cell n2-i "done_at" nil))
+            ws (stage! eng edited)
+            applied (apply! eng (:id ws))]
+        (is (= :applied (:state applied)))
+        (is (some? (get-in applied [:data :applied_at])))
+        (let [lines (by-line applied)]
+          (is (= "applied" (:outcome (get lines (inc n1-i)))))
+          (is (= #{"retitle" "rescore" "finish"}
+                 (set (:actions (get lines (inc n1-i))))))
+          (is (= ["unfinish"] (:actions (get lines (inc n2-i))))))
+        (let [n1 (row-of eng "n1")]
           (is (= "One, renamed" (get-in n1 [:data :title])))
           (is (= 3.25M (get-in n1 [:data :score])))
-          (is (= "2026-02-01T00:00:00Z" (str (get-in n1 [:data :done_at])))
-              "a bare date cell lands as UTC midnight through :on-set")
-          (is (nil? (get-in n2 [:data :done_at]))
-              "a blanked cell rides :on-clear"))
-        (testing "every edit pushed back to the authority"
+          (is (= "2026-02-01T00:00:00Z" (str (get-in n1 [:data :done_at])))))
+        (is (nil? (get-in (row-of eng "n2") [:data :done_at])))
+        (testing "the target writes rode the push pass"
           (is (= "One, renamed" (get-in @(:state rm) [:docs "n1" :title]))))
-        (testing "re-importing the same file is all unchanged"
-          (let [sheet2 (export-rows eng {})
-                report2 (import-rows eng sheet2)]
-            (is (every? #(= "unchanged" (:outcome %))
-                        (get-in report2 [:data :rows])))))))))
+        (testing "the audit names the person, not the runner"
+          (let [ts (store/with-tx (:storage eng)
+                     (fn [tx] (store/transitions
+                               (:storage eng) tx
+                               {:kind :note
+                                :resource-id (:id (row-of eng "n1"))}
+                               {})))]
+            (is (some #(and (= "retitle" (name (:action %)))
+                            (= "ana" (get-in % [:actor :id])))
+                      ts))))
+        (testing "an applied worksheet is terminal — no further applies"
+          (let [e (try (apply! eng (:id ws)) nil (catch Exception e e))]
+            (is (= 409 (:status (ex-data e))))))
+        (testing "re-staging the applied view plans all-unchanged"
+          (let [ws2 (stage! eng (export-rows eng {}))]
+            (is (every? #(= "unchanged" (:outcome %)) (report-of ws2)))))))))
 
-(deftest stale-versions-conflict-and-read-only-cells-note
+(deftest stale-lines-conflict-and-revalidate-re-plans
   (with-worksheet-engine
     (fn [eng rm]
-      (swap! (:state rm) assoc :docs {"n1" {:title "One" :score nil
-                                            :done_at nil :author "feed"}})
+      (swap! (:state rm) assoc :docs
+             {"n1" {:title "One" :score nil :done_at nil :author "feed"}})
       (mirror/discover! eng :note)
       (let [sheet (export-rows eng {})
-            id (col sheet 1 "id")]
-        ;; the row moves after the export
-        (inv/invoke! eng :note id :retitle {:title "Moved"} {:principal ana})
-        (testing "a stale sheet edit is a conflict, not a lost update"
-          (let [edited (assoc-in sheet [1 3] "From the sheet")
-                report (import-rows eng edited)
-                row (first (get-in report [:data :rows]))]
-            (is (= "conflict" (:outcome row)))
-            (is (= "Moved" (get-in (row-of eng "n1") [:data :title])))))
-        (testing "a read-only cell that moved is a note, never a write"
-          (let [sheet (export-rows eng {})
-                author-idx 6
-                report (import-rows eng (assoc-in sheet [1 author-idx] "me"))
-                row (first (get-in report [:data :rows]))]
-            (is (= "unchanged" (:outcome row)))
-            (is (some #(re-find #"read-only" %) (:notes row)))
-            (is (= "feed" (get-in (row-of eng "n1") [:data :author])))))))))
+            ws (stage! eng (set-cell sheet 1 "title" "From the sheet"))]
+        ;; the row moves after the staging
+        (inv/invoke! eng :note (col sheet 1 "id") :retitle {:title "Moved"}
+                     {:principal ana})
+        (testing "revalidate sees the world as it stands now"
+          (let [{:keys [row]} (inv/invoke! eng :worksheet (:id ws) :revalidate
+                                           nil {:principal ana
+                                                :idempotency-key (fresh-key)})]
+            (is (= :staged (:state row)))
+            (is (= "conflict" (:outcome (first (report-of row)))))))
+        (testing "apply skips the conflicted line — never a lost update"
+          (let [applied (apply! eng (:id ws))]
+            (is (= "conflict" (:outcome (first (report-of applied)))))
+            (is (= "Moved" (get-in (row-of eng "n1") [:data :title])))))))))
 
-(deftest id-less-rows-create-and-claim
+(deftest id-less-lines-create-and-claim
   (with-worksheet-engine
     (fn [eng rm]
-      (swap! (:state rm) assoc :docs {"n1" {:title "One" :score nil
-                                            :done_at nil :author "feed"}})
+      (swap! (:state rm) assoc :docs
+             {"n1" {:title "One" :score nil :done_at nil :author "feed"}})
       (mirror/discover! eng :note)
       (let [sheet (export-rows eng {})
-            new-row [nil nil nil "Born offline" 4.5 "2026-03-01" nil]
-            report (import-rows eng (conj sheet new-row))
-            row (last (get-in report [:data :rows]))]
-        (is (= "created" (:outcome row)))
-        (is (= ["create" "finish"] (:actions row))
-            "the :on-set cell applies as an ordinary edit on the fresh row")
-        (let [minted (row-of eng "r-1")]
-          (is (some? minted) "the authority minted and the claim stamped")
-          (is (= "Born offline" (get-in minted [:data :title])))
-          (is (= "local" (get-in minted [:data :author]))
-              "the birth hook ran")
-          (is (= "2026-03-01T00:00:00Z"
-                 (str (get-in minted [:data :done_at])))))
-        (testing "the created row round-trips as unchanged"
-          (let [report2 (import-rows eng (export-rows eng {}))]
-            (is (every? #(= "unchanged" (:outcome %))
-                        (get-in report2 [:data :rows])))))))))
+            good [nil nil nil "Born offline" 4.5 "2026-03-01" nil]
+            bad [nil nil nil nil 1 nil nil]      ; no title: the create door refuses
+            ws (stage! eng (-> sheet (conj good) (conj bad)))
+            plan (by-line ws)]
+        (testing "the plan rehearses the create door — bad births refuse at staging"
+          (is (= ["create" "finish"] (:actions (get plan 3))))
+          (is (= "refused" (:outcome (get plan 4))))
+          (is (re-find #"title" (str (:reason (get plan 4))))))
+        (let [applied (apply! eng (:id ws))
+              lines (by-line applied)]
+          (is (= "created" (:outcome (get lines 3))))
+          (is (= ["create" "finish"] (:actions (get lines 3))))
+          (is (= "refused" (:outcome (get lines 4))))
+          (let [minted (row-of eng "r-1")]
+            (is (some? minted) "the authority minted and the claim stamped")
+            (is (= "Born offline" (get-in minted [:data :title])))
+            (is (= "local" (get-in minted [:data :author])))
+            (is (= "2026-03-01T00:00:00Z"
+                   (str (get-in minted [:data :done_at]))))))))))
 
-(deftest dry-run-plans-and-applies-nothing
+(deftest the-json-door-is-the-same-door
   (with-worksheet-engine
     (fn [eng rm]
-      (swap! (:state rm) assoc :docs {"n1" {:title "One" :score nil
-                                            :done_at nil :author "feed"}})
+      (swap! (:state rm) assoc :docs
+             {"n1" {:title "One" :score nil :done_at nil :author "feed"}})
       (mirror/discover! eng :note)
-      (let [sheet (export-rows eng {})
-            edited (-> (assoc-in sheet [1 3] "Would rename")
-                       (conj [nil nil nil "Would create" nil nil nil]))
-            report (import-rows eng edited {:dry-run true})
-            [r1 r2] (get-in report [:data :rows])]
-        (is (true? (:dry_run report)))
-        (is (= "planned" (:outcome r1)))
-        (is (= ["retitle"] (:actions r1)))
-        (is (= "planned" (:outcome r2)))
-        (is (= ["create"] (:actions r2)))
-        (is (= "One" (get-in (row-of eng "n1") [:data :title])))
-        (is (nil? (row-of eng "r-1")))))))
+      (let [n1 (row-of eng "n1")
+            {:keys [row]} (inv/create!
+                           eng :worksheet
+                           {:target "note"
+                            :lines [{:line 2 :id (str (:id n1))
+                                     :version (:version n1)
+                                     :cells {:title "Via JSON"}}]}
+                           {:principal ana})]
+        (is (= "planned" (:outcome (first (report-of row))))
+            "a bare JSON create plans exactly like an upload")
+        (let [applied (apply! eng (:id row))]
+          (is (= "applied" (:outcome (first (report-of applied)))))
+          (is (= "Via JSON" (get-in (row-of eng "n1") [:data :title]))))))))
 
 (deftest worksheets-refuse-what-they-do-not-declare
   (with-worksheet-engine
     (fn [eng _rm]
       (testing "an upload with no id column names the mistake"
-        (let [e (try (import-rows eng [["title"] ["x"]])
+        (let [e (try (stage! eng [["title"] ["x"]])
                      nil
                      (catch Exception e e))]
           (is (= 422 (:status (ex-data e))))
           (is (re-find #"names no id column"
                        (str (get-in (ex-data e) [:errors :id]))))))
       (testing "a body that is not a workbook refuses 400"
-        (let [rdef (get (inv/resources eng) :note)]
-          (is (thrown-with-msg?
-               Exception #"not an xlsx workbook"
-               (worksheet/import! eng rdef (byte-array [1 2 3])
-                                  {:principal ana}))))))))
+        (is (thrown-with-msg?
+             Exception #"not an xlsx workbook"
+             (worksheet/stage! eng (note-rdef eng) (byte-array [1 2 3])
+                               {:principal ana})))))))

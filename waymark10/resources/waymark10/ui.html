@@ -1277,16 +1277,17 @@ function renderCollection(view, doc, hints) {
                     onDone: () => render()});
     }}, (entry.display?.label || title(name)) + " (selected)"));
   /* the worksheet round-trip, when the kind declares one: the link
-     already carries THIS view's filters */
+     already carries THIS view's filters; an upload STAGES as a
+     worksheet row and this screen goes there */
   const ws = doc.links?.worksheet;
   if (ws) {
     bar.append(el("button", {"data-worksheet":"download",
       title: ws.summary || "download this view as an editable workbook",
       onclick: () => downloadWorksheet(ws.href)}, "⬇ Excel"));
     bar.append(el("button", {"data-worksheet":"import",
-      title: "upload an edited workbook — every change replays as actions",
-      onclick: () => worksheetImportDialog(ws.href, () => render())},
-      "⬆ Import"));
+      title: "upload an edited workbook — it stages as a worksheet you "
+        + "review, revalidate, and apply",
+      onclick: () => pickWorksheet(ws.href)}, "⬆ Import"));
   }
   panel.append(bar);
 
@@ -2090,7 +2091,17 @@ async function renderResource(view, doc, hints) {
   const partPaths = new Set(Object.keys(doc.parts || {}));
   const plainData = Object.fromEntries(
     Object.entries(doc.data || {}).filter(([k]) => !partPaths.has(k)));
+  /* a worksheet row: the report IS the page — the staged lines and
+     the raw report leave the kv table for their own panel */
+  if (kind === "worksheet")
+    for (const k of ["lines", "report", "tally"]) delete plainData[k];
   view.append(panel);
+  if (kind === "worksheet")
+    view.append(el("div", {class:"panel"},
+      el("h3", {}, doc.state === "applied"
+        ? "What the apply did"
+        : "The plan — what apply would do"),
+      worksheetReport(doc)));
   view.append(...partsSections(doc));
   const dataPanel = el("div", {class:"panel"},
     el("details", {open:""},
@@ -2942,15 +2953,47 @@ async function downloadWorksheet(href) {
     setTimeout(() => URL.revokeObjectURL(obj), 10000);
   } catch { toast("couldn't reach the worksheet route"); }
 }
-function worksheetReport(report) {
+/* choose a file → POST stages it as a worksheet ROW (the plan is
+   already recorded on the 201) → navigate there; review, revalidate,
+   and apply are the row's own actions, not a dialog's */
+function pickWorksheet(href) {
+  const input = el("input", {type:"file", accept:".xlsx",
+                             style:"display:none"});
+  input.addEventListener("change", async () => {
+    const f = input.files && input.files[0];
+    input.remove();
+    if (!f) return;
+    const sep = href.includes("?") ? "&" : "?";
+    try {
+      const res = await fetch(href + sep + "filename="
+                              + encodeURIComponent(f.name),
+        {method: "POST",
+         headers: {...principalHeaders(), "Content-Type": XLSX_MIME},
+         body: f});
+      const body = await res.json().catch(() => null);
+      if (!res.ok) {
+        toast(body?.detail || body?.title
+              || `upload failed — ${res.status}`);
+        return;
+      }
+      toast(`${f.name} staged ✓`);
+      if (body?.self) go(body.self);
+    } catch { toast("couldn't reach the worksheet route"); }
+  });
+  document.body.append(input);
+  input.click();
+}
+/* the worksheet row's report: the plan while staged, the outcomes
+   once applied — one line per spreadsheet line */
+function worksheetReport(doc) {
+  const rows = doc.data?.report || [];
+  const tally = Object.entries(doc.data?.tally || {})
+    .map(([o, n]) => `${n} ${o}`).join(" · ");
   const box = el("div", {});
-  box.append(el("p", {class:"metaline"}, report.summary || ""));
-  const rows = report.data?.rows || [];
-  if (!rows.length) {
-    box.append(el("p", {class:"muted"}, "no data rows in the workbook"));
-    return box;
-  }
-  const head = el("tr", {}, ...["line", "outcome", "actions", "detail"]
+  box.append(el("p", {class:"metaline"},
+    tally || "no lines in this workbook"));
+  if (!rows.length) return box;
+  const head = el("tr", {}, ...["line", "row", "outcome", "actions", "detail"]
     .map(h => el("th", {}, h)));
   const tbody = el("tbody", {});
   for (const r of rows) {
@@ -2958,75 +3001,16 @@ function worksheetReport(report) {
       .filter(Boolean).join(" · ");
     tbody.append(el("tr", {},
       el("td", {class:"mono"}, String(r.line)),
+      el("td", {class:"mono"},
+        r.self ? el("a", {href: "#" + r.self}, "created row")
+               : (r.id || "")),
       el("td", {}, r.outcome || ""),
       el("td", {class:"mono"}, (r.actions || []).join(", ")),
       el("td", {class:"muted"}, detail)));
   }
-  box.append(el("div", {style:"overflow:auto;max-height:40vh"},
+  box.append(el("div", {style:"overflow:auto;max-height:60vh"},
     el("table", {class:"items"}, el("thead", {}, head), tbody)));
   return box;
-}
-/* choose a file → the server rehearses it (dry_run=1) and shows the
-   plan → Apply runs it for real → the final report stays up */
-function worksheetImportDialog(href, onDone) {
-  const postHref = q => href + (href.includes("?") ? "&" : "?") + q;
-  const file = el("input", {type:"file", accept:".xlsx"});
-  const reportBox = el("div", {});
-  const applyBtn = el("button", {class:"primary", disabled:"true"}, "Apply");
-  let chosen = null, applied = false;
-  async function post(query) {
-    const res = await fetch(query ? postHref(query) : href, {
-      method: "POST",
-      headers: {...principalHeaders(), "Content-Type": XLSX_MIME},
-      body: chosen});
-    const body = await res.json().catch(() => null);
-    return {ok: res.ok, body};
-  }
-  file.addEventListener("change", async () => {
-    chosen = file.files && file.files[0];
-    applyBtn.setAttribute("disabled", "true");
-    reportBox.textContent = "";
-    if (!chosen) return;
-    reportBox.append(el("p", {class:"muted"}, "rehearsing…"));
-    const {ok, body} = await post("dry_run=1");
-    reportBox.textContent = "";
-    if (!ok) { reportBox.append(problemBox(body)); return; }
-    reportBox.append(el("p", {class:"metaline"},
-      "the rehearsal — nothing has been applied yet"));
-    reportBox.append(worksheetReport(body));
-    applyBtn.removeAttribute("disabled");
-  });
-  const dlg = el("dialog", {},
-    el("div", {class:"dlghead"}, el("h3", {}, "Import a worksheet"),
-      el("p", {class:"metaline"},
-        "edits replay through the row's own actions · stale rows "
-        + "conflict instead of overwriting · an empty id creates")),
-    el("div", {class:"dlgbody"},
-      el("div", {class:"field"},
-        el("label", {}, el("b", {}, "Edited workbook (.xlsx)")), file),
-      reportBox),
-    el("div", {class:"dlgfoot"},
-      el("button", {onclick: () => { dlg.close(); dlg.remove();
-                                     if (applied) onDone && onDone(); }},
-        applied ? "Close" : "Cancel"),
-      applyBtn));
-  applyBtn.addEventListener("click", async () => {
-    if (!chosen) return;
-    applyBtn.setAttribute("disabled", "true");
-    reportBox.textContent = "";
-    reportBox.append(el("p", {class:"muted"}, "applying…"));
-    const {ok, body} = await post(null);
-    reportBox.textContent = "";
-    if (!ok) { reportBox.append(problemBox(body));
-               applyBtn.removeAttribute("disabled"); return; }
-    applied = true;
-    reportBox.append(el("p", {class:"metaline"}, "applied ✓"));
-    reportBox.append(worksheetReport(body));
-    dlg.querySelector(".dlgfoot button").textContent = "Close";
-    toast("worksheet applied ✓");
-  });
-  document.body.append(dlg);
-  dlg.showModal();
 }
 
 /* ── attachments: the bytes ride the engine's static route
