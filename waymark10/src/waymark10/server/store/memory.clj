@@ -20,7 +20,9 @@
     boolean, text) and compares with compare — numeric 1.0 = 1 holds,
     exactly as SQL numeric does; an unparseable value throws, exactly
     as the SQL cast would.
-  - A nil left value fails every comparison (SQL NULL semantics);
+  - A nil left value fails every comparison (SQL NULL semantics) —
+    :not=/:not-in included, exactly as Postgres's <> and NOT IN
+    exclude NULL rows; :set? alone answers presence itself;
     :in-any matches when any given token is a string element of the
     field's array (jsonb ?|'s reading — non-string elements never
     match a text token).
@@ -44,7 +46,8 @@
     ASC nulls-last / DESC nulls-first (Postgres's defaults), id
     tiebreak always; ids-matching orders ids as text, as the id
     column does."
-  (:require [waymark10.server.store :as store]
+  (:require [clojure.string :as str]
+            [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (java.math BigDecimal)
            (java.time Instant LocalDate OffsetDateTime)))
@@ -102,17 +105,27 @@
                  :state (name (:state row))
                  :id (:id row)
                  (json-text (get-in row [:data (keyword field)])))]
-      ;; SQL NULL: a nil left side fails every comparison
-      (when (some? text)
-        (let [cast (if (contains? #{:state :id} target) "text" cast)
-              lval (coerce cast text)]
-          (if (= :in op)
-            (boolean (some #(zero? (cmp lval (coerce cast (str %)))) values))
-            (let [c (cmp lval (coerce cast (str value)))]
-              (case op
-                := (zero? c) :< (neg? c) :<= (<= c 0)
-                :>= (>= c 0) :> (pos? c)
-                (throw (ex-info (str "unknown cond op " op) {:op op}))))))))))
+      (if (= :set? op)
+        ;; presence is the one op a SQL NULL answers instead of failing
+        (= (boolean value) (some? text))
+        ;; SQL NULL: a nil left side fails every comparison
+        (when (some? text)
+          (let [cast (if (contains? #{:state :id} target) "text" cast)
+                lval (coerce cast text)]
+            (case op
+              :in (boolean (some #(zero? (cmp lval (coerce cast (str %))))
+                                 values))
+              :not-in (not-any? #(zero? (cmp lval (coerce cast (str %))))
+                                values)
+              :contains (str/includes? (str/lower-case (str lval))
+                                       (str/lower-case (str value)))
+              (let [c (cmp lval (coerce cast (str value)))]
+                (case op
+                  := (zero? c) :not= (not (zero? c))
+                  :< (neg? c) :<= (<= c 0)
+                  :>= (>= c 0) :> (pos? c)
+                  (throw (ex-info (str "unknown cond op " op)
+                                  {:op op})))))))))))
 
 (defn- matches-all? [row conds]
   (every? #(cond-matches? row %) conds))

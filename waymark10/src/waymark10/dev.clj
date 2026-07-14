@@ -311,7 +311,8 @@
           declaration/action-keys)
     (line "flow-row opts (waymark10.resource/flow-opt-keys)"
           r/flow-opt-keys)
-    (line "entry filter ops" [:eq :in :range :after])
+    (line "entry filter ops (waymark10.declaration/filter-ops)"
+          declaration/filter-ops)
     (line "entry sort marks" [true :default :default-desc])
     (line "colocated entry law keys" [:filter :sort :derived :part-scope])
     (line "ref entry props" [:kind :label :predecessor])

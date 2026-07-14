@@ -50,6 +50,15 @@
         (map (fn [k] [k {:optional true} :any]))
         action-keys))
 
+(def filter-ops
+  "The closed set of ops a :filterable entry (or colocated :filter)
+  may declare — the collection grammar (waymark10.server.collections)
+  serves exactly these: field= (:eq), field=a,b (:in), field_ne=
+  (:ne), field_gte=/field_lte= (:range), field_after= (:after),
+  field_before= (:before), field_set= (:set), field_contains=
+  (:contains). checks.clj refuses an op outside this set at boot."
+  #{:eq :in :ne :range :after :before :set :contains})
+
 (def link-keys
   "One :links entry's whole authored surface — the same closure
   action-keys already gives :actions, extended here so a typo'd link

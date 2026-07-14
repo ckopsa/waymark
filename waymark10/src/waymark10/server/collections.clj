@@ -1,8 +1,11 @@
 (ns waymark10.server.collections
   "The collection surface (phase 7): GET /api/{plural} filtered by the
   declared :filterable grammar — field= (:eq), field=a,b (:in comma
-  list), field_gte=/field_lte= (:range), field_after= (:after), state=
-  always, vocab-array membership via JSONB containment — ordered by
+  list), field_ne= (:ne, comma list negates as NOT IN), field_gte=/
+  field_lte= (:range), field_after=/field_before= (:after/:before,
+  strict bounds), field_set=true|false (:set, presence), field_contains=
+  (:contains, case-insensitive substring), state= always, vocab-array
+  membership via JSONB containment — ordered by
   the declared :sortable fields over their promoted columns, paged
   1-based (size cap 100, default 25). The envelope carries the items
   as envelope-minus-data summaries, the REAL filtered total, the
@@ -111,11 +114,20 @@
                       (when (or (:eq ops) (:in ops) array?)
                         [[fname (assoc e :mode :eq
                                        :in? (boolean (or (:in ops) array?)))]])
+                      (when (:ne ops)
+                        [[(str fname "_ne") (assoc e :mode :ne :in? true)]])
                       (when (:range ops)
                         [[(str fname "_gte") (assoc e :mode :gte)]
                          [(str fname "_lte") (assoc e :mode :lte)]])
                       (when (:after ops)
-                        [[(str fname "_after") (assoc e :mode :after)]]))))))
+                        [[(str fname "_after") (assoc e :mode :after)]])
+                      (when (:before ops)
+                        [[(str fname "_before") (assoc e :mode :before)]])
+                      (when (:set ops)
+                        [[(str fname "_set") (assoc e :mode :set)]])
+                      (when (:contains ops)
+                        [[(str fname "_contains")
+                          (assoc e :mode :contains)]]))))))
               (:filterable rdef))]
     (assoc entries "state" {:field :state :state? true :mode :eq :in? true
                             :states (into #{} (map name) (:states rdef))})))
@@ -131,7 +143,8 @@
       (:state? e) (if multi?
                     {:target :state :op :in :values values}
                     {:target :state :op := :value v})
-      (:array? e) {:target :data :field f :op :in-any :values values}
+      (and (:array? e) (= :eq (:mode e)))
+      {:target :data :field f :op :in-any :values values}
       :else
       (let [cast (cast-of (:head e))
             base {:target :data :field f :cast cast}]
@@ -139,10 +152,18 @@
           :eq (if multi?
                 (assoc base :op :in :values values)
                 (assoc base :op := :value v))
+          :ne (if multi?
+                (assoc base :op :not-in :values values)
+                (assoc base :op :not= :value v))
           :gte (assoc base :op :>= :value v)
           :lte (assoc base :op :<= :value v)
           :after (assoc base :op :> :value v
-                        :cast (if (= "date" cast) "date" "timestamptz")))))))
+                        :cast (if (= "date" cast) "date" "timestamptz"))
+          :before (assoc base :op :< :value v
+                         :cast (if (= "date" cast) "date" "timestamptz"))
+          ;; presence and substring read the raw text, never the cast
+          :set (assoc base :op :set? :value (= "true" v) :cast "text")
+          :contains (assoc base :op :contains :value v :cast "text"))))))
 
 (defn parse-query
   "Query params ({string string}) → {:conds […] :sort {:field :desc}
@@ -194,7 +215,13 @@
                                            (when-not (contains? (:states e) v)
                                              (str (pr-str v) " is not a state; one of "
                                                   (vec (sort (:states e)))))
-                                           (and (= :after (:mode e))
+                                           (= :set (:mode e))
+                                           (when-not (contains? #{"true" "false"} v)
+                                             "must be true or false")
+                                           ;; substring search takes any text,
+                                           ;; whatever the field's own type
+                                           (= :contains (:mode e)) nil
+                                           (and (#{:after :before} (:mode e))
                                                 (not= :waymark/date (:head e)))
                                            (check-instant v)
                                            :else (check-value (:head e) v))))
@@ -255,13 +282,23 @@
                    (or (:eq ops) (:in ops) array?)
                    (assoc fname (cond-> base
                                   (or (:in ops) array?) (assoc :x-in true)))
+                   (:ne ops)
+                   (assoc (str fname "_ne") (assoc base :x-in true))
                    (:range ops)
                    (assoc (str fname "_gte") (bound-of base)
                           (str fname "_lte") (bound-of base))
                    (:after ops)
                    (assoc (str fname "_after")
                           {:type "string"
-                           :format (or (:format base) "date-time")}))))))
+                           :format (or (:format base) "date-time")})
+                   (:before ops)
+                   (assoc (str fname "_before")
+                          {:type "string"
+                           :format (or (:format base) "date-time")})
+                   (:set ops)
+                   (assoc (str fname "_set") {:type "boolean"})
+                   (:contains ops)
+                   (assoc (str fname "_contains") {:type "string"}))))))
          {} (sort-by (comp name key) (:filterable rdef)))
         props (cond-> props
                 (not (contains? props "state")) (assoc "state" state-prop))
