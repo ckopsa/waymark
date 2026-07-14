@@ -54,6 +54,15 @@
     defense): the resync census holds it loudly instead of executing
     N silent nil-outs, releases when the key returns, and ratifying a
     real sunset is declaring :frozen.
+  - FIELD DYNAMICS (:expect — the reporting scenario's second half):
+    :immutable trips to conflicted when a document moves a set-once
+    value (the id may now name a different entity — a person
+    ratifies); {:churn n} holds a field changing on more rows than
+    the declared percent (a reorg and a botched import look identical
+    at first sight; widening the bound is the law-shaped
+    ratification); :volatile warns when a should-move field moves
+    nowhere (the feed froze while still answering). All fingerprinted
+    in the authority facet.
   - EXTERNAL-KEYED REFS (paydesk's assignment demanded it): a
     :waymark/ref entry declaring {:kind … :external-key <field>}
     resolves at every sync write — the sibling field's external id
@@ -272,6 +281,41 @@
       (err (str ":adopts " adopts " does not precede :frozen " frozen
                 " — an authority window opens before it closes")))))
 
+;; ── field dynamics: the :expect grammar ─────────────────────────────
+;; An entry may declare how its value BEHAVES, and the sync passes
+;; measure reality against the model: {:expect :immutable} — set
+;; once, never moves; a document moving (or, under :whole,
+;; destroying) a stored value is conflict-shaped, row by row — the
+;; external id may now name a different logical entity, and
+;; resolve_conflict is the ratification door. {:expect :volatile} —
+;; expected to move; a whole pass where it moves NOWHERE is the
+;; inverse alarm (the feed's pipeline froze while still answering).
+;; {:expect {:churn 25}} — at most that percent of rows may change
+;; per pass; a breach is held like the mass-absence census (a reorg
+;; and a botched import look identical at first sight) and ratifying
+;; a legitimate mass change is a law event: widen the bound, promote,
+;; revert. All three are law — fingerprinted in the authority facet.
+
+(defn expectations
+  "field → :immutable | :volatile | {:churn percent} for every entry
+  declaring :expect — the field's declared dynamics."
+  [data-schema]
+  (into {}
+        (keep (fn [[f {:keys [properties]}]]
+                (when-some [e (:expect properties)] [f e])))
+        (schema/entry-map data-schema)))
+
+(defn- check-expectations! [kind data-schema]
+  (doseq [[f e] (expectations data-schema)]
+    (when-not (or (contains? #{:immutable :volatile} e)
+                  (and (map? e) (= #{:churn} (set (keys e)))
+                       (integer? (:churn e)) (<= 1 (:churn e) 100)))
+      (throw (t/definition-error
+              (str (some-> kind name) "/" (name f)
+                   ": :expect is :immutable, :volatile, or {:churn 1..100}"
+                   " (the percent of rows that may change per pass), got "
+                   (pr-str e)))))))
+
 (defonce ^:private field-census
   ;; adapter-instance → {:absent #{field} :as-of Instant}: the last
   ;; whole-population resync's presence census. One row's absence is
@@ -285,8 +329,61 @@
   ;; Keyed by adapter instance so engines never share censuses.
   (atom {}))
 
-(defn- censused [adapter]
-  (get-in @field-census [adapter :absent] #{}))
+(defn- all-held
+  "Every field the last census pass is defending — mass absence plus
+  churn breaches; both hold the same way."
+  [adapter]
+  (let [{:keys [absent churned]} (get @field-census adapter)]
+    (into (or absent #{}) churned)))
+
+(defn- window-open?
+  "Is external authority live for this field at now? (engine-owned
+  fields are never the feed's to write)"
+  [{:keys [engine-fields windows]} f ^Instant now]
+  (let [{:keys [adopts frozen]} (get windows f)]
+    (and (not (contains? engine-fields f))
+         (or (nil? adopts) (not (.isBefore now ^Instant adopts)))
+         (not (true? frozen))
+         (or (nil? frozen) (.isBefore now ^Instant frozen)))))
+
+(defn- kind-sync-ctx
+  "The sync-law view the batch passes need, derived from a NORMALIZED
+  rdef (declaration's own sync-ctx closes over the handlers; this one
+  serves resync!/refresh!)."
+  [rdef]
+  (let [ds (:schema rdef)]
+    {:declared (vec (declared-fields ds))
+     :engine-fields (into (set (keys (external-ref-specs ds)))
+                          (keys (:derived rdef)))
+     :windows (authority-windows ds)
+     :expects (expectations ds)
+     :mode (get-in rdef [:mirror :document] :whole)
+     :adapter (get-in rdef [:mirror :adapter])}))
+
+(defn- trunc-val [v]
+  (let [s (pr-str v)]
+    (if (> (count s) 40) (str (subs s 0 37) "…") s)))
+
+(defn- immutable-violation
+  "The :immutable tripwire: the first field whose stored, non-nil
+  value the document would move (or, under :whole, destroy) → the
+  conflict sentence; nil when the document honors every declared
+  immutability. First-set (stored nil) is never a violation, and a
+  censused/churn-held field is already defended."
+  [{:keys [expects mode adapter] :as kctx} row doc ^Instant now]
+  (some (fn [[f e]]
+          (when (= :immutable e)
+            (let [stored (get-in row [:data f])]
+              (when (and (some? stored)
+                         (window-open? kctx f now)
+                         (not (contains? (all-held adapter) f))
+                         (if (contains? doc f)
+                           (not= (get doc f) stored)
+                           (= :whole mode)))
+                (let [s (str "immutable " (name f) " moved "
+                             (trunc-val stored) " → " (trunc-val (get doc f)))]
+                  (if (> (count s) 270) (subs s 0 270) s))))))
+        expects))
 
 (defn- apply-document
   "The fields a sync write applies from an external document, under
@@ -302,10 +399,12 @@
          (and adopts (.isBefore now ^Instant adopts)) m       ; not yet adopted
          (true? frozen) m                                     ; frozen as of now
          (and frozen (not (.isBefore now ^Instant frozen))) m ; past the sunset
+         ;; a held field neither applies (churn breach: the incoming
+         ;; value IS the suspect) nor nils (mass absence)
+         (contains? (all-held adapter) f) m
          (contains? doc f) (assoc m f (get doc f))
          (= :partial mode) m                                  ; absence is silence
          frozen m                     ; declared sunset: pre-boundary absence holds
-         (contains? (censused adapter) f) m                   ; observed deprecation
          :else (assoc m f nil))))                             ; :whole — absent is unset
    {} declared))
 
@@ -473,6 +572,7 @@
         ;; the definition error, never a raw parse exception
         _ (check-external-refs! (:kind rmap) data-schema)
         _ (check-authority-windows! (:kind rmap) data-schema)
+        _ (check-expectations! (:kind rmap) data-schema)
         mode (or document :whole)
         sync-ctx {:declared (vec (declared-fields data-schema))
                   ;; engine-maintained fields: external-keyed refs and
@@ -579,9 +679,17 @@
             (if (and (= etag (get-in row [:data :external_etag]))
                      (= :fresh (:state row)))
               row
-              (:row (inv/invoke! eng (:kind rdef) (:id row) :observe_external
-                                 {:document doc :etag etag}
-                                 {:principal system-observer})))))))))
+              ;; the :immutable tripwire runs before the observe: a
+              ;; changed document moving a set-once value is
+              ;; conflict-shaped, not syncable
+              (if-some [reason (immutable-violation (kind-sync-ctx rdef) row doc
+                                                    ((:now-fn eng)))]
+                (:row (inv/invoke! eng (:kind rdef) (:id row) :mark_conflicted
+                                   {:reason reason}
+                                   {:principal system-observer}))
+                (:row (inv/invoke! eng (:kind rdef) (:id row) :observe_external
+                                   {:document doc :etag etag}
+                                   {:principal system-observer}))))))))))
 
 ;; ── push on write (batch E, waymark9 push_mirror at this scope) ─────
 
@@ -834,56 +942,106 @@
                                 (mapv #(get-in % [:data :external_id]) batch))))
                     {} (partition-all 500 candidates))
             now ^Instant ((:now-fn eng))
-            ;; the presence census (whole-document kinds): a field
-            ;; absent from EVERY pulled document while stored rows
-            ;; still carry values is an observed deprecation (or a
-            ;; feed bug — same defense) — held, not nil'd, loudly
-            prior (censused adapter)
-            census
-            (if-not (= :whole (:document spec :whole))
-              #{}
-              (let [windows (authority-windows (:schema rdef))
-                    engine-fields (into (set (keys (external-ref-specs
-                                                    (:schema rdef))))
-                                        (keys (:derived rdef)))
-                    docs (mapv first (vals pulled))
-                    open? (fn [f]
-                            (let [{:keys [adopts frozen]} (get windows f)]
-                              (and (not (contains? engine-fields f))
-                                   (or (nil? adopts)
-                                       (not (.isBefore now ^Instant adopts)))
-                                   (not (true? frozen))
-                                   (or (nil? frozen)
-                                       (.isBefore now ^Instant frozen)))))]
-                (into #{}
-                      (filter (fn [f]
-                                (and (open? f) (seq docs)
-                                     (not-any? #(contains? % f) docs)
-                                     (some #(some? (get-in % [:data f]))
-                                           candidates))))
-                      (declared-fields (:schema rdef)))))
+            kctx (kind-sync-ctx rdef)
+            ;; the pass statistics: per open field, how many documents
+            ;; carry the key, how many rows it would change on, how
+            ;; many rows hold a value — the census's, the churn
+            ;; bounds', and the stagnation alarm's shared evidence
+            pairs (into []
+                        (keep (fn [row]
+                                (when-some [[doc _] (get pulled
+                                                         (get-in row [:data :external_id]))]
+                                  [row doc])))
+                        candidates)
+            npairs (count pairs)
+            stats (into {}
+                        (map (fn [f]
+                               [f {:present (count (filter (fn [[_ d]] (contains? d f)) pairs))
+                                   :changed (count (filter (fn [[r d]]
+                                                             (not= (get d f)
+                                                                   (get-in r [:data f])))
+                                                           pairs))
+                                   :was-set (count (filter (fn [[r _]]
+                                                             (some? (get-in r [:data f])))
+                                                           pairs))}]))
+                        (filter #(window-open? kctx % now) (:declared kctx)))
+            prior (all-held adapter)
+            ;; mass absence (whole-document kinds): a field absent
+            ;; from EVERY pulled document while stored rows still
+            ;; carry values is an observed deprecation (or a feed bug
+            ;; — same defense) — held, not nil'd, loudly
+            absent (if-not (= :whole (:mode kctx))
+                     #{}
+                     (into #{}
+                           (keep (fn [[f {:keys [present was-set]}]]
+                                   (when (and (pos? npairs) (zero? present)
+                                              (pos? was-set))
+                                     f)))
+                           stats))
+            ;; churn bounds: more rows changing than the declared
+            ;; percent allows is held the same way (a reorg and a
+            ;; botched import look identical at first sight);
+            ;; ratifying a legitimate mass change is a law event
+            churned (into #{}
+                          (keep (fn [[f {:keys [changed]}]]
+                                  (let [e (get-in kctx [:expects f])]
+                                    (when (and (map? e)
+                                               (> (* 100 (long changed))
+                                                  (* (long (:churn e)) npairs))
+                                               (not (contains? absent f)))
+                                      f))))
+                          stats)
             ;; a field the census just released was held with a
-            ;; matching etag — re-observe those rows even though
+            ;; matching etag — re-apply those rows even though
             ;; nothing else changed, or the hold would ghost forever
-            released (set/difference prior census)]
-        (swap! field-census assoc adapter {:absent census :as-of now})
-        (doseq [f census]
+            released (set/difference prior (into absent churned))]
+        (swap! field-census assoc adapter
+               {:absent absent :churned churned :as-of now})
+        (doseq [f absent]
           (warn! "census for " (name kind) ": " (name f)
                  " is absent from the entire feed (" (count pulled)
                  " documents) while stored rows carry values — held, not "
                  "nil'd; ratify a real sunset with :frozen, or investigate "
                  "the feed"))
+        (doseq [f churned]
+          (warn! "churn for " (name kind) ": " (name f) " changed on "
+                 (get-in stats [f :changed]) " of " npairs
+                 " documents — over the declared {:churn "
+                 (get-in kctx [:expects f :churn]) "} bound; held. A "
+                 "legitimate mass change ratifies by widening the bound "
+                 "(a law change), a feed bug by fixing the feed"))
+        (doseq [[f {:keys [changed]}] stats]
+          (when (and (= :volatile (get-in kctx [:expects f]))
+                     (zero? (long changed)) (>= npairs 2))
+            (warn! "stagnation for " (name kind) ": " (name f)
+                   " is declared :expect :volatile but moved on none of "
+                   npairs " documents — the feed may be stale (or this "
+                   "resync ran hot on the heels of the last)")))
         (reduce
          (fn [acc row]
            (let [xid (get-in row [:data :external_id])]
              (if-some [[doc etag] (get pulled xid)]
-               (let [releasable (into []
-                                      (filter #(and (not (contains? doc %))
-                                                    (some? (get-in row [:data %]))))
+               (let [changed? (or (not= etag (get-in row [:data :external_etag]))
+                                  (not= :fresh (:state row)))
+                     releasable (into []
+                                      (filter #(not= (get doc %)
+                                                     (get-in row [:data %])))
                                       released)]
                  (cond
-                   (or (not= etag (get-in row [:data :external_etag]))
-                       (not= :fresh (:state row)))
+                   ;; the :immutable tripwire precedes the observe: a
+                   ;; document moving a set-once value is
+                   ;; conflict-shaped — the id may now name a
+                   ;; different logical entity; resolve_conflict is
+                   ;; the ratification door
+                   (and changed?
+                        (immutable-violation kctx row doc now))
+                   (do (inv/invoke! eng kind (:id row) :mark_conflicted
+                                    {:reason (immutable-violation kctx row doc now)}
+                                    {:principal system-observer})
+                       (-> acc (update :checked inc)
+                           (update :conflicted inc)))
+
+                   changed?
                    (do (inv/invoke! eng kind (:id row) :observe_external
                                     {:document doc :etag etag}
                                     {:principal system-observer})
@@ -891,24 +1049,27 @@
                            (update :rewritten inc)))
 
                    ;; a released hold with an unchanged etag: the
-                   ;; absence was already RECORDED by the holding
-                   ;; observe (its transition's document lacks the
-                   ;; key) — completing its application is a
-                   ;; maintenance write, not a new event (and a fresh
-                   ;; observe would natural-replay anyway)
+                   ;; holding observe already RECORDED this document —
+                   ;; completing its application (the doc's value, or
+                   ;; nil where it lacks the key) is a maintenance
+                   ;; write, not a new event (a fresh observe would
+                   ;; natural-replay anyway). Derived facts over a
+                   ;; released field recompute at the row's next
+                   ;; transition (recorded).
                    (seq releasable)
                    (do (store/with-tx st
                          (fn [tx]
                            (store/update-data!
                             st tx kind (:id row)
-                            (reduce #(assoc %1 %2 nil) (:data row) releasable)
+                            (reduce #(assoc %1 %2 (get doc %2))
+                                    (:data row) releasable)
                             (:next-flip-at row))))
                        (-> acc (update :checked inc)
                            (update :rewritten inc)))
 
                    :else (update acc :checked inc)))
                (-> acc (update :checked inc) (update :gone inc)))))
-         {:checked 0 :rewritten 0 :gone 0}
+         {:checked 0 :rewritten 0 :gone 0 :conflicted 0}
          candidates))
       (catch Exception e
         (warn! "resync for " (name kind) " failed (" (ex-message e)

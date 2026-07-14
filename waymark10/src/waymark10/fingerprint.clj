@@ -142,13 +142,18 @@
   (let [spec (:mirror rmap)
         fields (into (sorted-map)
                      (keep (fn [[f {:keys [properties]}]]
-                             (let [{:keys [external-key adopts frozen]} properties
+                             (let [{:keys [external-key adopts frozen
+                                           expect]} properties
                                    m (cond-> {}
                                        external-key
                                        (assoc "external_key" (name external-key))
                                        adopts (assoc "adopts" adopts)
                                        (true? frozen) (assoc "frozen" true)
-                                       (string? frozen) (assoc "frozen" frozen))]
+                                       (string? frozen) (assoc "frozen" frozen)
+                                       (keyword? expect)
+                                       (assoc "expect" (name expect))
+                                       (map? expect)
+                                       (assoc "expect" {"churn" (:churn expect)}))]
                                (when (seq m) [(name f) m]))))
                      (schema/entry-map (:schema rmap)))]
     (cond-> {}

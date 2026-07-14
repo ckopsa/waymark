@@ -168,14 +168,14 @@
         (mirror/discover! eng :author)
 
         (testing "an unchanged world resyncs to zero rewrites"
-          (is (= {:checked 1 :rewritten 0 :gone 0}
+          (is (= {:checked 1 :rewritten 0 :gone 0 :conflicted 0}
                  (mirror/resync! eng :author))))
 
         (testing "a changed document rewrites; unchanged rows untouched"
           (seed! authors "r2" {:name "Second"})
           (mirror/discover! eng :author)
           (seed! authors "r1" {:name "First, renamed"})
-          (is (= {:checked 2 :rewritten 1 :gone 0}
+          (is (= {:checked 2 :rewritten 1 :gone 0 :conflicted 0}
                  (mirror/resync! eng :author)))
           (is (= "First, renamed"
                  (get-in (row-of eng :author "r1") [:data :name]))))

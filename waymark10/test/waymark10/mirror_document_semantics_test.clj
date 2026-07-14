@@ -155,7 +155,7 @@
         (testing "the key vanishing from EVERY document holds values"
           (seed! reports "c1" {:name "C1"})
           (seed! reports "c2" {:name "C2"})
-          (is (= {:checked 2 :rewritten 2 :gone 0}
+          (is (= {:checked 2 :rewritten 2 :gone 0 :conflicted 0}
                  (mirror/resync! eng :report))
               "both rows re-observed (etags changed), values held")
           (is (= "111" (field eng :report "c1" :total_aum)))
@@ -164,7 +164,7 @@
         (testing "the key returning anywhere releases the hold — and
                   the release re-observes held rows, so ghosts clear"
           (seed! reports "c2" {:name "C2" :total_aum "222b"})
-          (is (= {:checked 2 :rewritten 2 :gone 0}
+          (is (= {:checked 2 :rewritten 2 :gone 0 :conflicted 0}
                  (mirror/resync! eng :report))
               "c2 for the change, c1 for the release")
           (is (= "222b" (field eng :report "c2" :total_aum)))
