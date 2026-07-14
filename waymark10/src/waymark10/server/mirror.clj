@@ -126,7 +126,9 @@
   #{:external_id :external_etag :synced_at :conflict_reason})
 
 (def ^:private bookkeeping-schema
-  [[:external_id [:string {:min 1 :max 256}]]
+  ;; external_id renders nowhere (machine plumbing — the row's own
+  ;; summary and refs say who it is) but stays filterable on the wire
+  [[:external_id {:x-display {:hidden true}} [:string {:min 1 :max 256}]]
    [:external_etag {:optional true :x-display {:hidden true}}
     [:maybe [:string {:max 256}]]]
    [:synced_at {:optional true} [:maybe :waymark/instant]]
@@ -153,14 +155,27 @@
   (let [f (if (and (vector? form) (= :maybe (first form))) (second form) form)]
     (if (vector? f) (first f) f)))
 
+(defn- ref-shape
+  ":one for a :waymark/ref entry, :many for a vector of them (a
+  mirror document's id ARRAY — team members, team funds), nil for
+  anything else."
+  [form]
+  (let [f (if (and (vector? form) (= :maybe (first form))) (second form) form)]
+    (cond
+      (= :waymark/ref (if (vector? f) (first f) f)) :one
+      (and (vector? f) (= :vector (first f))
+           (= :waymark/ref (schema-head (last f)))) :many)))
+
 (defn external-ref-specs
-  "field → {:kind … :external-key …} for every entry of the woven
-  schema declaring :external-key — the refs the sync path resolves."
+  "field → {:kind … :external-key … :shape :one|:many} for every
+  entry of the woven schema declaring :external-key — the refs the
+  sync path resolves."
   [data-schema]
   (into {}
-        (keep (fn [[f {:keys [properties]}]]
+        (keep (fn [[f {:keys [properties schema]}]]
                 (when (:external-key properties)
-                  [f (select-keys properties [:kind :external-key])])))
+                  [f (assoc (select-keys properties [:kind :external-key])
+                            :shape (ref-shape schema))])))
         (schema/entry-map data-schema)))
 
 (defn- check-external-refs!
@@ -175,8 +190,8 @@
             :when ek]
       (let [err (fn [msg] (throw (t/definition-error
                                   (str (some-> kind name) "/" (name f) ": " msg))))]
-        (when-not (= :waymark/ref (schema-head schema))
-          (err ":external-key rides a :waymark/ref entry — this one isn't"))
+        (when-not (ref-shape schema)
+          (err ":external-key rides a :waymark/ref entry (or a vector of them) — this one isn't"))
         (when-not (:kind properties)
           (err ":external-key needs :kind — the target kind the external id resolves against"))
         (when-not (contains? fields ek)
@@ -184,21 +199,28 @@
 
 (defn- resolve-external-refs
   "The encoded document with each external-keyed ref recomputed from
-  its sibling external id through the ctx :find hook — one indexed
-  lookup per ref; unset or unmatched external ids land nil (the
-  honest gap). A ctx without :find (never the sync writes' case)
-  leaves the document untouched."
+  its sibling external id(s) through the ctx :find hook — one indexed
+  lookup per id. A scalar ref lands nil when unset or unmatched (the
+  honest gap); a :many ref lands the vector of RESOLVABLE row ids —
+  the sibling external array stays the full truth, the ref vector is
+  its resolvable projection. A ctx without :find (never the sync
+  writes' case) leaves the document untouched."
   [specs merged ctx]
   (if-some [find-rows (:find ctx)]
-    (reduce-kv
-     (fn [m field {:keys [kind external-key]}]
-       (let [xid (get m external-key)]
-         (assoc m field
-                (when (and (some? xid) (not= "" (str xid)))
-                  (some-> (first (find-rows kind {:external_id (str xid)}
-                                            {:limit 1}))
-                          :id str)))))
-     merged specs)
+    (let [lookup (fn [kind xid]
+                   (when (and (some? xid) (not= "" (str xid)))
+                     (some-> (first (find-rows kind {:external_id (str xid)}
+                                               {:limit 1}))
+                             :id str)))]
+      (reduce-kv
+       (fn [m field {:keys [kind external-key shape]}]
+         (let [xv (get m external-key)]
+           (assoc m field
+                  (if (= :many shape)
+                    (when (sequential? xv)
+                      (into [] (keep #(lookup kind %)) xv))
+                    (lookup kind xv)))))
+       merged specs))
     merged))
 
 (defn- observe-handler
@@ -531,14 +553,20 @@
                     (warn! "resolve-refs! for " (name kind) " hit the "
                            backfill-limit "-row bound — rows beyond it "
                            "keep their unresolved refs until the next pass"))
-                ;; the distinct unresolved (target-kind, external-id)
-                ;; pairs across every row and spec
+                ;; the distinct (target-kind, external-id) pairs a
+                ;; heal could need across every row and spec — for a
+                ;; scalar only when its ref is unset; for a :many
+                ;; every array element (the resolved vector may grow)
                 wanted (into #{}
                              (for [row rows
-                                   [field {target :kind ek :external-key}] specs
-                                   :let [xid (get-in row [:data ek])]
-                                   :when (and (nil? (get-in row [:data field]))
-                                              (some? xid) (not= "" (str xid)))]
+                                   [field {target :kind ek :external-key
+                                           shape :shape}] specs
+                                   xid (if (= :many shape)
+                                         (let [xv (get-in row [:data ek])]
+                                           (when (sequential? xv) xv))
+                                         (when (nil? (get-in row [:data field]))
+                                           [(get-in row [:data ek])]))
+                                   :when (and (some? xid) (not= "" (str xid)))]
                                [target (str xid)]))
                 resolved (into {}
                                (keep (fn [[target xid]]
@@ -552,14 +580,30 @@
              (fn [healed row]
                (let [data (:data row)
                      data' (reduce-kv
-                            (fn [d field {target :kind ek :external-key}]
-                              (let [xid (get d ek)]
-                                (if (and (nil? (get d field)) (some? xid)
-                                         (not= "" (str xid)))
-                                  (if-some [rid (get resolved [target (str xid)])]
-                                    (assoc d field rid)
-                                    d)
-                                  d)))
+                            (fn [d field {target :kind ek :external-key
+                                          shape :shape}]
+                              (if (= :many shape)
+                                ;; grow-only: write the recomputed
+                                ;; resolvable projection when it has
+                                ;; MORE elements than stored — a heal
+                                ;; never shrinks a ref vector (only
+                                ;; the sync writes recompute in full)
+                                (let [xv (get d ek)
+                                      cur (get d field)
+                                      new (when (sequential? xv)
+                                            (into []
+                                                  (keep #(get resolved [target (str %)]))
+                                                  xv))]
+                                  (if (> (count new) (count cur))
+                                    (assoc d field new)
+                                    d))
+                                (let [xid (get d ek)]
+                                  (if (and (nil? (get d field)) (some? xid)
+                                           (not= "" (str xid)))
+                                    (if-some [rid (get resolved [target (str xid)])]
+                                      (assoc d field rid)
+                                      d)
+                                    d))))
                             data specs)]
                  (if (= data data')
                    healed

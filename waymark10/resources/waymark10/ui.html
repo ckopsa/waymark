@@ -112,7 +112,7 @@
   button.primary .effort-chip, button.danger:hover .effort-chip {
     background: rgba(255,255,255,.25); color: #fff; }
 
-  main { max-width: 1200px; margin: 18px auto; padding: 0 20px; }
+  main { margin: 18px auto; padding: 0 20px; }
   .panel { background: var(--panel); border: 1px solid var(--line);
            border-radius: var(--radius); padding: 16px 18px; margin-bottom: 16px;
            overflow-x: auto; box-shadow: var(--shadow); }
@@ -664,6 +664,20 @@ function xref(prop) {
   return prop["x-ref"] || sub["x-ref"] ||
     (prop.format === "waymark-ref" || sub.format === "waymark-ref" ? {} : null);
 }
+/* a field's human label: the declared x-display label, else — for a
+   ref, whose cell shows the target's live summary — the bare thing
+   ("fund_id" → "Fund", "member_ids" → "Members"), else the titled
+   field name. */
+function fieldLabel(hints, f) {
+  const xd = xdisplay(hints, f);
+  if (xd.label) return xd.label;
+  if (xref(((hints || {}).properties || {})[f])) {
+    const m = /^(.*?)_(ids?)$/.exec(f);
+    if (m) return title(m[1]) + (m[2] === "ids" ? "s" : "");
+  }
+  return title(f);
+}
+function fieldHidden(hints, f) { return !!xdisplay(hints, f).hidden; }
 
 /* ── routing: the URL hash IS the resource href ────────────────────── */
 function go(href) { location.hash = href; }
@@ -672,7 +686,7 @@ window.addEventListener("hashchange", render);
 let renderSeq = 0;
 async function render() {
   const seq = ++renderSeq;               // fetch first, swap after — a
-  const href = decodeURIComponent(location.hash.slice(1)) || null;
+  const href = location.hash.slice(1) || null;
   const view = $("#view");               // superseded render never blanks
   renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
   if (!href) { lawStamp(null); return renderHome(view, seq); }
@@ -962,16 +976,27 @@ function showcaseFilters(query, params, apply, hints) {
   };
   const controls = cols.map(col => {
     const f = col.field;
-    const lbl = xdisplay(hints, f).label || title(f);
+    const lbl = fieldLabel(hints, f);
     let body;
-    if (col.enum && (col.ops.eq || col.ops.in)) {
-      const facets = props[f]?.["x-facets"] || {};
+    const facets = props[f]?.["x-facets"];
+    if ((col.enum || facets || col.type === "boolean") &&
+        (col.ops.eq || col.ops.in)) {
+      /* options: the declared enum, a boolean's two values, or the
+         observed facet values (an open vocab has no declared enum —
+         what the data holds IS the option list). The active value
+         always keeps its seat even when the now-filtered facets no
+         longer carry it. */
+      const counts = facets || {};
+      const active = params.get(f) || "";
+      const options = col.enum ||
+        (col.type === "boolean" ? ["true", "false"] : Object.keys(counts));
+      if (active && !options.includes(active)) options.push(active);
       const s = el("select", {});
       s.append(el("option", {value: ""}, "All"));
-      for (const v of col.enum)
+      for (const v of options)
         s.append(el("option", {value: v},
-          pretty(v) + (v in facets ? ` · ${facets[v]}` : "")));
-      s.value = params.get(f) || "";
+          pretty(v) + (v in counts ? ` · ${counts[v]}` : "")));
+      s.value = active;
       s.addEventListener("change", () => apply({[f]: s.value}));
       body = [s];
     } else if (col.ops.gte || col.ops.lte) {
@@ -1011,7 +1036,7 @@ function filterPopover(query, params, apply, hints) {
   const fieldSel = el("select", {});
   fieldSel.append(el("option", {value: ""}, "Column…"));
   for (const c of cols)
-    fieldSel.append(el("option", {value: c.field}, xdisplay(hints, c.field).label || title(c.field)));
+    fieldSel.append(el("option", {value: c.field}, fieldLabel(hints, c.field)));
   const opSel = el("select", {});
   const refreshValue = () => {
     valueRow.replaceChildren();
@@ -1065,7 +1090,7 @@ function filterChips(query, params, remove, hints) {
     // both here so an active filter doesn't get a redundant second UI
     if (!(field in gc) || (!m && props[field]?.["x-facets"]) ||
         xdisplay(hints, field).showcase) continue;
-    const lbl = xdisplay(hints, field).label || title(field);
+    const lbl = fieldLabel(hints, field);
     const opTxt = m ? SUFFIX_LABEL[m[2]] : "=";
     chips.push(el("span", {class: "chip on"},
       `${lbl} ${opTxt} ${value}`,
@@ -1127,12 +1152,12 @@ function itemTable(items, opts) {
   if (!items.length) return el("p", {class:"muted"}, "No rows.");
   const anyActions = !!opts.rowAction ||
     items.some(i => i.actions && Object.keys(i.actions).length);
-  const cols = fieldColumns(items, opts.query);
+  const cols = fieldColumns(items, opts.query, opts.hints);
   const sortField = (opts.currentSort || "").replace(/^-/, "");
   const sortDesc = (opts.currentSort || "").startsWith("-");
   const colHead = f => {
     const c = (opts.query || {})[f];
-    const lbl = xdisplay(opts.hints, f).label || title(f);
+    const lbl = fieldLabel(opts.hints, f);
     if (!c || !c.sortable || !opts.onSort) return el("th", {title: f}, lbl);
     const active = sortField === f;
     return el("th", {title: f, class: "sortable" + (active ? " sorted" : ""),
@@ -1142,8 +1167,9 @@ function itemTable(items, opts) {
   const head = el("tr", {},
     opts.selectable ? el("th", {}, "") : null,
     el("th", {}, "State"),
+    el("th", {}, "Summary"),
     ...cols.map(colHead),
-    el("th", {}, "Summary"), el("th", {}, "Updated"),
+    el("th", {}, "Updated"),
     anyActions ? el("th", {}, "") : null);
   const tbody = el("tbody", {});
   for (const item of items) {
@@ -1152,11 +1178,11 @@ function itemTable(items, opts) {
         el("input", {type: "checkbox", "data-bulk-check": "",
           onclick: e => e.stopPropagation()})) : null,
       el("td", {}, el("span", {class:"statechip"}, item.state)),
-      ...cols.map(f => el("td", {}, fieldCell(opts.hints, f, (item.fields || {})[f]))),
       el("td", {}, el("a", {href:"#"+item.self, title: item.self,
         style:"display:inline-block;max-width:280px;overflow:hidden;" +
               "text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom"},
         item.summary)),
+      ...cols.map(f => el("td", {}, fieldCell(opts.hints, f, (item.fields || {})[f]))),
       el("td", {class:"metaline mono"},
         ((item.meta || {}).updated_at || "").slice(0, 16).replace("T", " ")));
     if (opts.selectable) {
@@ -1667,14 +1693,23 @@ function nestedTable(rows) {
 function fieldCell(schema, field, value) {
   const xd = xdisplay(schema, field);
   const ref = xref(((schema || {}).properties || {})[field]);
-  return ref && value ? resourceRef(ref.kind, value) : valueCell(value, xd);
+  if (ref && Array.isArray(value) && value.length)
+    /* a ref ARRAY (a mirror's external-keyed :many — team members,
+       team funds): one live-labeled link per id */
+    return el("span", {},
+      ...value.flatMap((id, i) =>
+        i ? [", ", resourceRef(ref.kind, id)] : [resourceRef(ref.kind, id)]));
+  return ref && value && !Array.isArray(value)
+    ? resourceRef(ref.kind, value) : valueCell(value, xd);
 }
 function kvTable(obj, schema) {
   const t = el("table", {class:"kv"});
-  for (const [k, v] of Object.entries(obj)) {
-    const xd = xdisplay(schema, k);
+  /* same grouping (refs, data, raw ids) and hiding as the table */
+  for (const k of groupFields(
+         Object.keys(obj).filter(f => !fieldHidden(schema, f)), schema)) {
+    const v = obj[k];
     t.append(el("tr", {},
-      el("td", {class:"k", title: xd.label || title(k)}, k),
+      el("td", {class:"k", title: k}, fieldLabel(schema, k)),
       el("td", {}, fieldCell(schema, k, v))));
   }
   return t;
@@ -1713,11 +1748,27 @@ function gridColumns(schema) {
   return cols;
 }
 
+/* field grouping, one rule for tables and kv panels: refs lead (a
+   linked row beats its raw token), plain data follows, raw id
+   plumbing trails (*_id/*_ids/external_id that ISN'T a ref — the
+   machine correlation a human rarely reads first). */
+function fieldGroup(hints, f) {
+  if (xref(((hints || {}).properties || {})[f])) return 0;
+  return (f === "external_id" || /_ids?$/.test(f)) ? 2 : 1;
+}
+function groupFields(fields, hints) {
+  return fields
+    .map((f, i) => [fieldGroup(hints, f), i, f])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    .map(t => t[2]);
+}
+
 /* the actual column list to render: query-declared fields first (a
    stable, schema-driven order), then anything present in the items'
    own :fields that the query schema doesn't know about (present but
-   not independently filterable/sortable — still a real column). */
-function fieldColumns(items, query) {
+   not independently filterable/sortable — still a real column) —
+   then the whole list regrouped: refs, data, raw ids. */
+function fieldColumns(items, query, hints) {
   const seen = new Set(), ordered = [];
   for (const f of Object.keys(query || {}))
     if (items.some(it => it.fields && f in it.fields) && !seen.has(f))
@@ -1725,7 +1776,7 @@ function fieldColumns(items, query) {
   for (const it of items)
     for (const f of Object.keys(it.fields || {}))
       if (!seen.has(f)) { seen.add(f); ordered.push(f); }
-  return ordered;
+  return groupFields(ordered.filter(f => !fieldHidden(hints, f)), hints);
 }
 
 /* A cross-resource reference: a link to the referenced resource,
@@ -1785,7 +1836,7 @@ function embedFilterOps(doc, rel) {
      echoes embed.<rel>.* overrides (unlike a collection's self,
      which DOES echo its own applied query). The live params are
      only visible in the browser's own current hash. */
-  const {path, params} = parseHrefQuery(decodeURIComponent(location.hash.slice(1)) || doc.self);
+  const {path, params} = parseHrefQuery(location.hash.slice(1) || doc.self);
   const prefix = `embed.${rel}.`;
   const scoped = new URLSearchParams();
   for (const [k, v] of params) if (k.startsWith(prefix)) scoped.set(k.slice(prefix.length), v);
@@ -3307,7 +3358,7 @@ sse("/api/-/events", ({event, id, data: ev}) => {
     if (lawLine) ledgerUnreadLaw = true;
     paintPip();
   }
-  const here = decodeURIComponent(location.hash.slice(1)).split("?")[0];
+  const here = decodeURIComponent(location.hash.slice(1).split("?")[0]);
   /* the Access panel is itself a following view: agent feeds fill in
      place, access-kind transitions re-render the panel, and the
      follow-navigate stays parked — watching from the balcony is the
@@ -3350,7 +3401,7 @@ sse("/api/-/events", ({event, id, data: ev}) => {
    evicts after 3 missed 15s heartbeats). ───────────────────────────── */
 const PRESENCE = new Map();   // pid → {principal, self, source, at}
 function hereHref() {
-  return decodeURIComponent(location.hash.slice(1)).split("?")[0];
+  return decodeURIComponent(location.hash.slice(1).split("?")[0]);
 }
 function paintPresence() {
   const box = $("[data-presence]");

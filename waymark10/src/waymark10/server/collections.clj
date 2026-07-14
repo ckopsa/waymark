@@ -334,9 +334,11 @@
 ;; ── facets ──────────────────────────────────────────────────────────
 
 (defn- facet-map
-  "value→count per :faceted field under the applied conds — its own
-  transaction, best-effort: a failed facet drops with a warning,
-  never the page."
+  "value→count per :faceted field under the applied conds MINUS the
+  field's own (standard faceting: picking a value must not collapse
+  the field's other options to zero — the showcase select and the
+  facet chips both need the road back) — its own transaction,
+  best-effort: a failed facet drops with a warning, never the page."
   [eng rdef conds]
   (let [st (:storage eng)]
     (not-empty
@@ -345,9 +347,13 @@
                    (try
                      (let [array? (and (not= :state f)
                                        (:array? (field-info rdef f)))
+                           own? (fn [c] (if (= :state f)
+                                          (= :state (:target c))
+                                          (= f (:field c))))
                            counts (store/with-tx st
                                     #(store/facet-counts st % (:kind rdef)
-                                                         f conds array?))]
+                                                         f (remove own? conds)
+                                                         array?))]
                        (when (seq counts) [f counts]))
                      (catch Exception e
                        (binding [*out* *err*]

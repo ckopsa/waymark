@@ -45,7 +45,14 @@
     {:kind :author
      :summary "{data.name}"
      :label-template "{data.name}"
-     :schema [:map [:name {:optional true} [:maybe [:string {:max 120}]]]]}
+     :schema [:map
+              [:name {:optional true} [:maybe [:string {:max 120}]]]
+              ;; the self-referential shape (an employee's manager):
+              ;; the target kind is this kind
+              [:mentor_external_id {:optional true} [:maybe [:string {:max 64}]]]
+              [:mentor_id {:optional true :kind :author
+                           :external-key :mentor_external_id}
+               [:maybe :waymark/ref]]]}
     {:adapter adapter :ttl-seconds 3600 :discover-every 3600})))
 
 (defn- book-kind [adapter]
@@ -58,7 +65,13 @@
               [:author_external_id {:optional true} [:maybe [:string {:max 64}]]]
               [:author_id {:optional true :kind :author
                            :external-key :author_external_id}
-               [:maybe :waymark/ref]]]}
+               [:maybe :waymark/ref]]
+              ;; the :many shape (a team's member/fund arrays)
+              [:coauthor_external_ids {:optional true}
+               [:maybe [:vector [:string {:max 64}]]]]
+              [:coauthor_ids {:optional true :kind :author
+                              :external-key :coauthor_external_ids}
+               [:maybe [:vector :waymark/ref]]]]}
     {:adapter adapter :ttl-seconds 3600 :discover-every 3600})))
 
 (defn- row-of [eng kind xid]
@@ -85,6 +98,14 @@
                    (get-in book-row [:data :author_id]))
                 "the ref holds the target's ROW id, not the external id")))
 
+        (testing "a SELF-referential ref resolves within one discovery
+                  pass (mints land before the observes run)"
+          (seed! authors "a9" {:name "Mentor"})
+          (seed! authors "a10" {:name "Mentee" :mentor_external_id "a9"})
+          (mirror/discover! eng :author)
+          (is (= (str (:id (row-of eng :author "a9")))
+                 (get-in (row-of eng :author "a10") [:data :mentor_id]))))
+
         (testing "edge first: nil ref, then the target's discovery heals it"
           (seed! books "b2" {:title "Dispossessed" :author_external_id "a2"})
           (mirror/discover! eng :book)
@@ -104,6 +125,28 @@
           (seed! books "b3" {:title "No Author"})
           (mirror/discover! eng :book)
           (is (nil? (get-in (row-of eng :book "b3") [:data :author_id]))))
+
+        (testing "a :many ref resolves to the resolvable projection"
+          (seed! books "b4" {:title "Anthology"
+                             :coauthor_external_ids ["a1" "missing" "a2"]})
+          (mirror/discover! eng :book)
+          (let [a1 (str (:id (row-of eng :author "a1")))
+                a2 (str (:id (row-of eng :author "a2")))
+                b4 (row-of eng :book "b4")]
+            (is (= [a1 a2] (get-in b4 [:data :coauthor_ids]))
+                "resolvable ids in array order; the unresolved one is
+                 the external array's to tell")))
+
+        (testing "a :many ref GROWS when its missing target arrives"
+          (let [before (row-of eng :book "b4")]
+            (seed! authors "missing" {:name "Found Author"})
+            (mirror/discover! eng :author)
+            (let [b4 (row-of eng :book "b4")
+                  found (str (:id (row-of eng :author "missing")))]
+              (is (= 3 (count (get-in b4 [:data :coauthor_ids]))))
+              (is (some #{found} (get-in b4 [:data :coauthor_ids])))
+              (is (= (:version before) (:version b4))
+                  "still a maintenance write — no transition"))))
 
         (testing "a later heal pass never clobbers an already-set ref"
           ;; regression: the backfill once wrote `false` over resolved
