@@ -27,6 +27,7 @@
       [doc (etag-of doc)]
       (throw (ex-info (str xid " is gone from the remote") {}))))
   (pull-many [_ xids]
+    (when (:down @state) (throw (ex-info "remote unreachable" {})))
     (into {}
           (keep (fn [xid]
                   (when-some [doc (get-in @state [:docs xid])]
@@ -157,6 +158,48 @@
             (is (= (get-in b2-before [:data :author_id])
                    (get-in (row-of eng :book "b2") [:data :author_id]))
                 "b2's resolved ref survives the a3-triggered heal")))))))
+
+(deftest resync-heals-the-whole-kind
+  (let [authors (remote) books (remote)]
+    (db/with-test-engine
+      [(author-kind authors) (book-kind books)]
+      (fn [eng]
+        (seed! authors "r1" {:name "First"})
+        (mirror/discover! eng :author)
+
+        (testing "an unchanged world resyncs to zero rewrites"
+          (is (= {:checked 1 :rewritten 0 :gone 0}
+                 (mirror/resync! eng :author))))
+
+        (testing "a changed document rewrites; unchanged rows untouched"
+          (seed! authors "r2" {:name "Second"})
+          (mirror/discover! eng :author)
+          (seed! authors "r1" {:name "First, renamed"})
+          (is (= {:checked 2 :rewritten 1 :gone 0}
+                 (mirror/resync! eng :author)))
+          (is (= "First, renamed"
+                 (get-in (row-of eng :author "r1") [:data :name]))))
+
+        (testing "a conflicted row is a person's decision, not resync's"
+          (inv/invoke! eng :author (:id (row-of eng :author "r1"))
+                       :mark_conflicted {:reason "test conflict"}
+                       {:principal mirror/system-observer})
+          (seed! authors "r1" {:name "Remote moved on"})
+          (mirror/resync! eng :author)
+          (let [r1 (row-of eng :author "r1")]
+            (is (= :conflicted (:state r1)))
+            (is (= "First, renamed" (get-in r1 [:data :name]))
+                "the local document stands until resolve_conflict")))
+
+        (testing "a gone-from-feed id keeps serving its stored truth"
+          (swap! (:state authors) update :docs dissoc "r2")
+          (let [res (mirror/resync! eng :author)]
+            (is (= 1 (:gone res)))
+            (is (some? (row-of eng :author "r2")))))
+
+        (testing "an unreachable adapter warns and returns nil"
+          (swap! (:state authors) assoc :down true)
+          (is (nil? (mirror/resync! eng :author))))))))
 
 (deftest def-site-refusals
   (testing ":external-key naming no declared field refuses"

@@ -42,6 +42,18 @@
   - Sync transitions are system-actor only and HIDDEN (a hide guard);
     resolve_conflict alone is a human door — reconciling is a
     person's decision, never a silent last-writer-wins.
+  - THE DOCUMENT CONTRACT (paydesk's reporting scenario demanded it):
+    {:document :whole} — the default — reads a pulled document as the
+    authority's complete record (absence is unset); :partial reads
+    absence as silence (webhook diffs, multi-feed kinds).
+    Engine-maintained fields (refs, derived) and entries outside
+    their AUTHORITY WINDOW (:adopts/:frozen dates on the entry — law
+    content, clock-evaluated, fingerprinted) are excluded from the
+    replace. A field absent from the ENTIRE feed while stored rows
+    carry values is an OBSERVED DEPRECATION (or a feed bug — same
+    defense): the resync census holds it loudly instead of executing
+    N silent nil-outs, releases when the key returns, and ratifying a
+    real sunset is declaring :frozen.
   - EXTERNAL-KEYED REFS (paydesk's assignment demanded it): a
     :waymark/ref entry declaring {:kind … :external-key <field>}
     resolves at every sync write — the sibling field's external id
@@ -62,12 +74,13 @@
   distinguishing unreachable-on-push from a true etag conflict (at
   this scope every push failure is the conflicted state; the resolve
   decides either way)."
-  (:require [waymark10.guards :as g]
+  (:require [clojure.set :as set]
+            [waymark10.guards :as g]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
-  (:import (java.time Duration Instant)
+  (:import (java.time Duration Instant LocalDate ZoneOffset)
            (java.util.concurrent CountDownLatch TimeUnit)))
 
 (set! *warn-on-reflection* true)
@@ -197,6 +210,105 @@
         (when-not (contains? fields ek)
           (err (str ":external-key " ek " names no declared field")))))))
 
+;; ── authority windows and the document contract ─────────────────────
+;; The document contract is law: :document :whole (the default) reads
+;; a pulled document as the authority's COMPLETE record — a declared
+;; field absent from it is unset, not unknown — while :partial reads
+;; absence as silence (webhook diffs, multi-feed kinds). Excluded from
+;; the whole-document replace: bookkeeping (the engine's),
+;; engine-maintained fields (external-keyed refs, derived facts — both
+;; recomputed by their own machinery), and entries outside their
+;; AUTHORITY WINDOW. [:f {:adopts "2026-09-01"} …] ignores the feed
+;; until the date (pre-release noise never lands; the field is local
+;; territory); [:f {:frozen "2026-08-01"} …] syncs until the date and
+;; stands as history after — and absence BEFORE a declared sunset
+;; holds the stored value, because an early yank must not destroy the
+;; record; :frozen true freezes as of now. The dates are law CONTENT
+;; evaluated against each write's own clock — the clock-flipped-fact
+;; discipline; nothing wakes on the boundary, behavior changes at the
+;; first write after it. They ride the schema entries, so a date
+;; change mints a revision (the fingerprint's authority facet); the
+;; sync CADENCES (:ttl-seconds :discover-every) are operations,
+;; deliberately outside the law.
+
+(defn- window-instant ^Instant [s]
+  (-> (LocalDate/parse ^String s) (.atStartOfDay ZoneOffset/UTC) (.toInstant)))
+
+(defn authority-windows
+  "field → {:adopts Instant|nil :frozen Instant|true|nil} for every
+  entry declaring an authority boundary."
+  [data-schema]
+  (into {}
+        (keep (fn [[f {:keys [properties]}]]
+                (let [{:keys [adopts frozen]} properties]
+                  (when (or adopts frozen)
+                    [f {:adopts (some-> adopts window-instant)
+                        :frozen (cond (true? frozen) true
+                                      frozen (window-instant frozen))}]))))
+        (schema/entry-map data-schema)))
+
+(defn- iso-date? [s]
+  (and (string? s)
+       (try (LocalDate/parse ^String s) true
+            (catch Exception _ false))))
+
+(defn- check-authority-windows!
+  "Window law refuses at the def site: dates are ISO dates, :adopts
+  never takes true (adoption without a boundary is just declaring the
+  field), and a window opens before it closes."
+  [kind data-schema]
+  (doseq [[f {:keys [properties]}] (schema/entry-map data-schema)
+          :let [{:keys [adopts frozen]} properties
+                err (fn [msg]
+                      (throw (t/definition-error
+                              (str (some-> kind name) "/" (name f) ": " msg))))]]
+    (when (and (some? adopts) (not (iso-date? adopts)))
+      (err ":adopts takes an ISO date — the day external authority begins"))
+    (when (and (some? frozen) (not (true? frozen)) (not (iso-date? frozen)))
+      (err ":frozen takes an ISO date (the day authority ends) or true (frozen as of now)"))
+    (when (and (iso-date? adopts) (iso-date? frozen)
+               (not (.isBefore (LocalDate/parse ^String adopts)
+                               (LocalDate/parse ^String frozen))))
+      (err (str ":adopts " adopts " does not precede :frozen " frozen
+                " — an authority window opens before it closes")))))
+
+(defonce ^:private field-census
+  ;; adapter-instance → {:absent #{field} :as-of Instant}: the last
+  ;; whole-population resync's presence census. One row's absence is
+  ;; data (unset); the WHOLE population's absence is the provider
+  ;; speaking about the field — an observed deprecation, or a feed
+  ;; bug, and at first sight the two are indistinguishable, so both
+  ;; get the same defense: sync writes HOLD censused fields instead
+  ;; of nil-ing, loudly. The census clears at the next resync that
+  ;; sees the key anywhere (and the resync re-observes rows holding
+  ;; released values); ratifying a real sunset is declaring :frozen.
+  ;; Keyed by adapter instance so engines never share censuses.
+  (atom {}))
+
+(defn- censused [adapter]
+  (get-in @field-census [adapter :absent] #{}))
+
+(defn- apply-document
+  "The fields a sync write applies from an external document, under
+  the kind's document contract, the authority windows, and the
+  census. Under :whole, absence is unset (nil applied); holds are
+  expressed by omission — the merge keeps the stored value."
+  [{:keys [declared engine-fields windows mode adapter]} doc ^Instant now]
+  (reduce
+   (fn [m f]
+     (let [{:keys [adopts frozen]} (get windows f)]
+       (cond
+         (contains? engine-fields f) m                        ; refs/derived: their machinery's
+         (and adopts (.isBefore now ^Instant adopts)) m       ; not yet adopted
+         (true? frozen) m                                     ; frozen as of now
+         (and frozen (not (.isBefore now ^Instant frozen))) m ; past the sunset
+         (contains? doc f) (assoc m f (get doc f))
+         (= :partial mode) m                                  ; absence is silence
+         frozen m                     ; declared sunset: pre-boundary absence holds
+         (contains? (censused adapter) f) m                   ; observed deprecation
+         :else (assoc m f nil))))                             ; :whole — absent is unset
+   {} declared))
+
 (defn- resolve-external-refs
   "The encoded document with each external-keyed ref recomputed from
   its sibling external id(s) through the ctx :find hook — one indexed
@@ -229,12 +341,11 @@
   stamped, any conflict note cleared. Closes over the woven data
   schema so the applied document decodes to schema types like any
   other load."
-  [data-schema]
-  (let [declared (declared-fields data-schema)
-        ref-specs (external-ref-specs data-schema)]
+  [data-schema sync-ctx]
+  (let [ref-specs (external-ref-specs data-schema)]
     (with-meta
       (fn [row inp ctx]
-        (let [applied (select-keys (:document inp) declared)
+        (let [applied (apply-document sync-ctx (:document inp) (:now ctx))
               merged (-> (merge (schema/encode data-schema (:data row))
                                 applied
                                 {:external_etag (:etag inp)
@@ -265,9 +376,9 @@
   runs inside the invoke — the same recorded impurity waymark9's
   reconcile carried; an unreachable adapter fails the invoke loudly
   and the row stays conflicted."
-  [adapter data-schema]
-  (let [declared (declared-fields data-schema)
-        ref-specs (external-ref-specs data-schema)]
+  [adapter data-schema sync-ctx]
+  (let [ref-specs (external-ref-specs data-schema)
+        declared (declared-fields data-schema)]
     (with-meta
       (fn [row inp ctx]
         (let [xid (get-in row [:data :external_id])
@@ -275,7 +386,7 @@
           (if (= "remote" (:keep inp))
             (let [[doc etag] (pull adapter xid)
                   merged (-> (merge encoded
-                                    (select-keys doc declared)
+                                    (apply-document sync-ctx doc (:now ctx))
                                     {:external_etag etag
                                      :synced_at (str (:now ctx))
                                      :conflict_reason nil})
@@ -335,10 +446,16 @@
   :actions either; a kind declared {:push-on-write true} may add
   domain actions (local writes the post-commit pass pushes — see
   check-domain-actions! for their shape)."
-  [rmap {:keys [adapter ttl-seconds discover-every push-on-write]}]
+  [rmap {:keys [adapter ttl-seconds discover-every push-on-write document]}]
   (when (nil? adapter)
     (throw (t/definition-error
             (str (some-> (:kind rmap) name) ": a mirror declares its :adapter"))))
+  (when-not (contains? #{nil :whole :partial} document)
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :document is :whole (the default — a pulled document is "
+                 "the authority's complete record) or :partial (absence is "
+                 "silence), got " (pr-str document)))))
   (when (some rmap [:states :initial])
     (throw (t/definition-error
             (str (some-> (:kind rmap) name)
@@ -351,8 +468,25 @@
                  ":push-on-write true to add domain actions"))))
   (when push-on-write
     (check-domain-actions! (:kind rmap) (:actions rmap)))
-  (let [data-schema (into [:map] (concat bookkeeping-schema (rest (:schema rmap))))]
-    (check-external-refs! (:kind rmap) data-schema)
+  (let [data-schema (into [:map] (concat bookkeeping-schema (rest (:schema rmap))))
+        ;; refusals precede the window parse — a malformed date gets
+        ;; the definition error, never a raw parse exception
+        _ (check-external-refs! (:kind rmap) data-schema)
+        _ (check-authority-windows! (:kind rmap) data-schema)
+        mode (or document :whole)
+        sync-ctx {:declared (vec (declared-fields data-schema))
+                  ;; engine-maintained fields: external-keyed refs and
+                  ;; derived facts (colocated or top-level) — their own
+                  ;; machinery writes them; the document never does
+                  :engine-fields
+                  (into (set (keys (external-ref-specs data-schema)))
+                        (concat (keys (:derived rmap))
+                                (keep (fn [[f {:keys [properties]}]]
+                                        (when (:derived properties) f))
+                                      (schema/entry-map data-schema))))
+                  :windows (authority-windows data-schema)
+                  :mode mode
+                  :adapter adapter}]
     (-> rmap
         (assoc :schema data-schema
                :states sync-states
@@ -361,6 +495,7 @@
                :mirror {:adapter adapter
                         :ttl-seconds (or ttl-seconds 300)
                         :discover-every (or discover-every 300)
+                        :document mode
                         :push-on-write (boolean push-on-write)}
                :actions
                (merge
@@ -373,7 +508,7 @@
                   :guards [system-only]
                   :safety {:idempotent true :reversible false :confirm false
                            :one-way "Recording what the external system already says loses nothing here."}
-                  :handler (observe-handler data-schema)
+                  :handler (observe-handler data-schema sync-ctx)
                   :display {:label "Observed external change"}}
                  :mark_stale
                  {:from #{:fresh :stale :unreachable} :to :stale
@@ -402,7 +537,7 @@
                            [:enum "local" "remote"]]]
                   :safety {:idempotent true :reversible false :confirm true
                            :consequence "The losing version of this document is overwritten, here and externally."}
-                  :handler (resolve-handler adapter data-schema)
+                  :handler (resolve-handler adapter data-schema sync-ctx)
                   :display {:label "Resolve conflict" :style :primary
                             :order 1}}}))
         ;; discovery's mint check queries the promoted column
@@ -669,6 +804,130 @@
   (into [] (keep (fn [[k rdef]] (when (:mirror rdef) k)))
         (inv/resources eng)))
 
+;; ── resync: the whole-kind heal ─────────────────────────────────────
+
+(defn resync!
+  "One full re-pull for one mirror kind: every non-conflicted row's
+  external id batch-pulls through the adapter, and any changed etag
+  (or off-fresh state) lands as observe_external — the whole-kind
+  heal a document-shape change needs. migrate! covers SQL drift; the
+  mirrored documents otherwise heal only row-by-row on read past
+  TTL, which leaves collection views serving the old shape for
+  hours. Conflicted rows stay a person's decision; an id the feed no
+  longer carries keeps serving its stored truth (counted :gone).
+  Returns {:checked n :rewritten n :gone n}, or nil after warning
+  when the adapter is unreachable — resync is a heal, never a gate."
+  [eng kind]
+  (let [rdef (get (inv/resources eng) kind)
+        spec (:mirror rdef)
+        adapter (:adapter spec)
+        st (:storage eng)
+        rows (store/with-tx st
+               (fn [tx] (store/query-rows st tx kind {}
+                                          {:limit backfill-limit})))
+        candidates (into [] (remove #(= :conflicted (:state %))) rows)]
+    (try
+      (let [pulled (reduce
+                    (fn [m batch]
+                      (merge m (pull-many
+                                adapter
+                                (mapv #(get-in % [:data :external_id]) batch))))
+                    {} (partition-all 500 candidates))
+            now ^Instant ((:now-fn eng))
+            ;; the presence census (whole-document kinds): a field
+            ;; absent from EVERY pulled document while stored rows
+            ;; still carry values is an observed deprecation (or a
+            ;; feed bug — same defense) — held, not nil'd, loudly
+            prior (censused adapter)
+            census
+            (if-not (= :whole (:document spec :whole))
+              #{}
+              (let [windows (authority-windows (:schema rdef))
+                    engine-fields (into (set (keys (external-ref-specs
+                                                    (:schema rdef))))
+                                        (keys (:derived rdef)))
+                    docs (mapv first (vals pulled))
+                    open? (fn [f]
+                            (let [{:keys [adopts frozen]} (get windows f)]
+                              (and (not (contains? engine-fields f))
+                                   (or (nil? adopts)
+                                       (not (.isBefore now ^Instant adopts)))
+                                   (not (true? frozen))
+                                   (or (nil? frozen)
+                                       (.isBefore now ^Instant frozen)))))]
+                (into #{}
+                      (filter (fn [f]
+                                (and (open? f) (seq docs)
+                                     (not-any? #(contains? % f) docs)
+                                     (some #(some? (get-in % [:data f]))
+                                           candidates))))
+                      (declared-fields (:schema rdef)))))
+            ;; a field the census just released was held with a
+            ;; matching etag — re-observe those rows even though
+            ;; nothing else changed, or the hold would ghost forever
+            released (set/difference prior census)]
+        (swap! field-census assoc adapter {:absent census :as-of now})
+        (doseq [f census]
+          (warn! "census for " (name kind) ": " (name f)
+                 " is absent from the entire feed (" (count pulled)
+                 " documents) while stored rows carry values — held, not "
+                 "nil'd; ratify a real sunset with :frozen, or investigate "
+                 "the feed"))
+        (reduce
+         (fn [acc row]
+           (let [xid (get-in row [:data :external_id])]
+             (if-some [[doc etag] (get pulled xid)]
+               (let [releasable (into []
+                                      (filter #(and (not (contains? doc %))
+                                                    (some? (get-in row [:data %]))))
+                                      released)]
+                 (cond
+                   (or (not= etag (get-in row [:data :external_etag]))
+                       (not= :fresh (:state row)))
+                   (do (inv/invoke! eng kind (:id row) :observe_external
+                                    {:document doc :etag etag}
+                                    {:principal system-observer})
+                       (-> acc (update :checked inc)
+                           (update :rewritten inc)))
+
+                   ;; a released hold with an unchanged etag: the
+                   ;; absence was already RECORDED by the holding
+                   ;; observe (its transition's document lacks the
+                   ;; key) — completing its application is a
+                   ;; maintenance write, not a new event (and a fresh
+                   ;; observe would natural-replay anyway)
+                   (seq releasable)
+                   (do (store/with-tx st
+                         (fn [tx]
+                           (store/update-data!
+                            st tx kind (:id row)
+                            (reduce #(assoc %1 %2 nil) (:data row) releasable)
+                            (:next-flip-at row))))
+                       (-> acc (update :checked inc)
+                           (update :rewritten inc)))
+
+                   :else (update acc :checked inc)))
+               (-> acc (update :checked inc) (update :gone inc)))))
+         {:checked 0 :rewritten 0 :gone 0}
+         candidates))
+      (catch Exception e
+        (warn! "resync for " (name kind) " failed (" (ex-message e)
+               "); stored truth keeps serving")
+        nil))))
+
+(defn resync-all!
+  "resync! every enrolled mirror kind — the boot heal. The discovery
+  daemon runs it once, before its first pass, so a restart
+  deterministically re-pulls the world: a document-shape change (or
+  an outage a failed discovery would otherwise wait out for a full
+  :discover-every interval) heals at the next boot."
+  [eng]
+  (doseq [kind (mirror-kinds eng)]
+    (when-some [{:keys [checked rewritten gone]} (resync! eng kind)]
+      (warn! "resync for " (name kind) ": " checked " checked, "
+             rewritten " rewritten"
+             (when (pos? (long gone)) (str ", " gone " gone-from-feed"))))))
+
 (defn start-discovery!
   "The discovery daemon: one pass per kind on its declared
   :discover-every cadence (checked every 5s against a per-kind
@@ -691,6 +950,10 @@
                                (ex-message e))))))
         t (Thread. ^Runnable
                    (fn []
+                     ;; the boot heal precedes the first discovery:
+                     ;; a restart re-pulls what it already holds, then
+                     ;; discovers what it doesn't
+                     (resync-all! eng)
                      (tick)
                      (loop []
                        (when-not (.await stop 5000 TimeUnit/MILLISECONDS)

@@ -20,6 +20,7 @@
   - stale-facts → derived facts whose semantic surface moved."
   (:require [clojure.string :as str]
             [waymark10.expr :as expr]
+            [waymark10.schema :as schema]
             [waymark10.server.store :as store]
             [waymark10.wire :as wire]))
 
@@ -129,6 +130,32 @@
    "guards"  (mapv guard-fp (:guards a []))
    "handler" (callable-hash (:handler a))})
 
+(defn- authority-fp
+  "The mirror sync-law facet: the document contract, push-on-write,
+  and per-field authority (external keys, adopts/frozen windows).
+  The sync CADENCES (:ttl-seconds :discover-every) are OPERATIONS,
+  deliberately outside the law — a polling tweak must not mint a
+  revision. Empty (and omitted) for a pull-only, whole-document,
+  window-less mirror, so every such kind's hash stays byte-identical
+  to the pre-authority era."
+  [rmap]
+  (let [spec (:mirror rmap)
+        fields (into (sorted-map)
+                     (keep (fn [[f {:keys [properties]}]]
+                             (let [{:keys [external-key adopts frozen]} properties
+                                   m (cond-> {}
+                                       external-key
+                                       (assoc "external_key" (name external-key))
+                                       adopts (assoc "adopts" adopts)
+                                       (true? frozen) (assoc "frozen" true)
+                                       (string? frozen) (assoc "frozen" frozen))]
+                               (when (seq m) [(name f) m]))))
+                     (schema/entry-map (:schema rmap)))]
+    (cond-> {}
+      (= :partial (:document spec)) (assoc "document" "partial")
+      (:push-on-write spec) (assoc "push_on_write" true)
+      (seq fields) (assoc "fields" fields))))
+
 (defn fingerprint-of
   "Deterministic, canonically-encodable projection of a resource
   declaration map. Phase-0 facets: machine (states, actions with
@@ -136,7 +163,9 @@
   (the table projection — present when the declaration carries a
   schema, i.e. every normalized kind); later phases add create,
   schema, owns, vocab, query, links — each facet landing with the
-  feature that declares it."
+  feature that declares it. A mirror kind additionally projects its
+  AUTHORITY facet (sync law: document contract, push-on-write,
+  external keys, adopts/frozen windows) — never its cadences."
   [rmap]
   (cond-> {"kind" (name (:kind rmap))
            "machine"
@@ -160,7 +189,10 @@
     ;; only when non-empty, so every deviation-free kind's hash is
     ;; byte-identical to the pre-deviations era
     (seq (:deviations rmap))
-    (assoc "deviations" (vec (:deviations rmap)))))
+    (assoc "deviations" (vec (:deviations rmap)))
+
+    (and (:mirror rmap) (seq (authority-fp rmap)))
+    (assoc "authority" (authority-fp rmap))))
 
 (defn fingerprint-hash ^String [fp]
   (wire/digest fp))
@@ -172,7 +204,7 @@
                                  "safety" "tolerance"})
 (def ^:private truth-family #{"derived" "machine" "authored" "owns" "compound"
                               "touches" "batch" "bulk" "handler" "renames"
-                              "renamed_actions" "renamed_fields"})
+                              "renamed_actions" "renamed_fields" "authority"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"
