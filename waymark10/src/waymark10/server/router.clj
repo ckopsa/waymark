@@ -1041,22 +1041,23 @@
 
 (defn- worksheet-post
   "POST /api/:plural/-/worksheet — the edited workbook back, raw
-  bytes in the body; dry_run=1 plans without applying. Every edit
-  replays through the kind's own actions under the request's
-  principal; a scoped grant's action projection gates each one."
+  bytes in the body. The upload STAGES: it lands as a worksheet row
+  (the engine's own kind) whose post-commit pass plans every line,
+  so the 201 already carries the full report; revalidate / apply /
+  discard are the row's own actions from there. ?filename= names the
+  file for the record."
   [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
-          vis (visibility-of req)
-          report (worksheet/import!
+          result (worksheet/stage!
                   eng rdef (:body req)
                   {:principal (principal-of req)
-                   :dry-run (= "1" (get (query-params req) "dry_run"))
-                   :allowed? (if vis
-                               (fn [aname] ((:action? vis) (:kind rdef) aname))
-                               (constantly true))})]
-      (json-response 200 report media-type nil))))
+                   :filename (get (query-params req) "filename")})
+          row (:row result)
+          ws-rdef (get (inv/resources eng) :worksheet)]
+      (envelope-response eng ws-rdef row req 201
+                         {"Location" (str "/api/worksheets/" (:id row))}))))
 
 ;; ── attachment bytes (phase 9a) ─────────────────────────────────────
 

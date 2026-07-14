@@ -1,14 +1,35 @@
 (ns waymark10.server.worksheet
   "The offline round-trip (paydesk's assignment workflow demanded it): a
   filtered collection view leaves as an xlsx workbook, a person edits
-  it where waymark isn't, and the upload replays their edits through
-  the kind's OWN declared actions — guards, audit trail, and (for
-  mirrors) push-on-write all apply unchanged. The import endpoint
-  never writes a field directly: it is a translator from cell diffs
-  to invocations, and an id-less row becomes an ordinary create!
-  (a :create-push mirror's post-commit pass claims its identity).
+  it where waymark isn't, and the upload comes back as a RESOURCE —
+  the worksheet kind, the engine's own — whose row is the batch: the
+  staged edits, the validation report, and the outcomes are all data,
+  so a broken upload is a navigable, auditable thing a person can fix
+  and retry, never a dialog's transient state.
 
-  Declared per kind as
+  The machine:
+
+     staged ──apply──▶ applying ──record_outcomes──▶ applied
+        │ ▲                          (system)
+        │ └─ revalidate / record_report (re-plan against today's rows)
+        └──discard──▶ discarded
+
+  A POST of workbook bytes to /api/:plural/-/worksheet STAGES: the
+  sheet parses into normalized per-line cells (coerced by each
+  field's declared type) and lands as an ordinary create! of a
+  worksheet row — the same door a JSON client may use directly. The
+  post-commit pass (after-write!, wired by the engine boot) computes
+  the plan — which lines create, which replay which actions, which
+  conflict on a stale version, which cells are read-only — and
+  records it through the system door, so the upload's 201 already
+  carries the full report. Fix what it names (in the app, or in the
+  file and upload afresh), revalidate to re-plan, then apply: the
+  pass replays every line through the TARGET kind's own declared
+  actions AS THE PERSON WHO APPLIED — guards, audit, push-on-write
+  all unchanged; the import never writes a field directly — and the
+  outcomes land as the applied row's report.
+
+  Per target kind the surface is declared as
 
      :worksheet
      {:columns [{:field :functional_role :action :change_role}
@@ -21,28 +42,36 @@
                 {:field :employee_name}]          ; no action: read-only
       :create true}
 
-  Column grammar (gated at the def site — resource/check-worksheet!):
-  :action invokes with {param cell} on a changed cell (param defaults
-  to the field); :on-set/:on-clear split an optional field's set and
-  cleared moves across two actions; :ref names a mirror kind whose
-  external id the cell speaks — the import resolves it to a row id
-  before it rides the input; :create-only participates in creation
-  alone; a column with none of these exports as read-only context.
+  (gated at the def site — resource/check-worksheet!): :action
+  invokes with {param cell} on a changed cell (param defaults to the
+  field); :on-set/:on-clear split an optional field's set and cleared
+  moves across two actions; :ref names a mirror kind whose external
+  id the cell speaks — resolved to a row id before it rides the
+  input; :create-only participates in creation alone; a column with
+  none of these exports as read-only context. An id-less line rides
+  the target's create door (a :create-push mirror's post-commit pass
+  claims its minted identity).
 
   The export reuses the collection query grammar verbatim, so the
   file holds exactly what the filtered view shows — unpaged up to
   export-cap, refused loudly past it (never a silent truncation).
-  Each row leads with id / version / state: id matches the row back
+  Each row leads with id / version / state: id matches the line back
   on upload, version is the optimistic-concurrency token (a row that
   moved since the download reports as a conflict, the edit skipped),
-  state is context. dry_run=1 plans every row and applies nothing."
+  state is context.
+
+  The worksheet kind enrolls only when some application kind declares
+  :worksheet — an app without the round-trip grows no extra kind."
   (:require [clojure.string :as str]
+            [waymark10.guards :as g]
+            [waymark10.resource :as r]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.server.xlsx :as xlsx]
+            [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.io ByteArrayOutputStream InputStream)
            (java.nio.charset StandardCharsets)
@@ -51,7 +80,8 @@
 (set! *warn-on-reflection* true)
 
 (def export-cap
-  "Rows an export serves before asking for a narrower filter."
+  "Rows an export serves — and lines an upload stages — before asking
+  for a narrower filter."
   10000)
 
 (def ^:private byte-cap
@@ -59,6 +89,11 @@
   (* 10 1024 1024))
 
 (def ^:private reserved-headers ["id" "version" "state"])
+
+(def runner
+  "The system actor the post-commit pass plans and records through."
+  (t/principal {:id "waymark10-worksheet" :type :system
+                :display "Worksheet runner"}))
 
 (defn- spec-of [rdef]
   (or (:worksheet rdef)
@@ -186,9 +221,9 @@
                                             (:plural rdef) ".xlsx\"")}
        :body (xlsx/write-sheet (into [header] body))})))
 
-;; ── import ──────────────────────────────────────────────────────────
+;; ── staging: workbook bytes → normalized lines ──────────────────────
 
-(defn- read-capped ^bytes [body]
+(defn read-capped ^bytes [body]
   (cond
     (bytes? body) body
     (string? body) (.getBytes ^String body StandardCharsets/UTF_8)
@@ -214,6 +249,46 @@
     (some? v) (str v)
     :else nil))
 
+(defn stage-lines
+  "One parsed sheet → the worksheet row's :lines — per data line, its
+  id and version cells plus every declared-column cell coerced to the
+  field's wire type; a column absent from the sheet stays absent from
+  :cells (unknown headers are ignored; blank trailing lines skip).
+  Line numbers are the spreadsheet's own (1-based, after the header)."
+  [rdef sheet]
+  (let [ws (spec-of rdef)
+        headers (first sheet)
+        col-idx (into {}
+                      (keep-indexed (fn [i h]
+                                      (when-some [n (header-name h)] [n i])))
+                      headers)]
+    (when-not (contains? col-idx "id")
+      (throw (p/schema-invalid
+              :worksheet
+              {:id ["the header row names no id column — export first, edit that file"]})))
+    (into []
+          (keep-indexed
+           (fn [i sheet-row]
+             (when (some some? sheet-row)
+               (let [id (coerce-cell {:type "string"}
+                                     (get sheet-row (col-idx "id")))
+                     version (some->> (col-idx "version")
+                                      (get sheet-row)
+                                      (coerce-cell {:type "integer"}))
+                     cells (into {}
+                                 (keep (fn [col]
+                                         (let [f (:field col)]
+                                           (when-some [idx (get col-idx (name f))]
+                                             [f (coerce-cell (field-json rdef f)
+                                                             (get sheet-row idx))]))))
+                                 (:columns ws))]
+                 (cond-> {:line (+ 2 i) :cells cells}
+                   id (assoc :id id)
+                   version (assoc :version (long version)))))))
+          (rest sheet))))
+
+;; ── planning and applying one staged line ───────────────────────────
+
 (defn- resolve-ref
   "A :ref cell speaks the target kind's external id; the input wants
   the target's row id — one indexed lookup (the same closing move the
@@ -238,20 +313,19 @@
         (:title d)
         (ex-message e))))
 
-(defn- plan-row
-  "One data row's cell diffs → {:invocations [[action input] …]
-  :notes […] :blocked reason?}. Read-only cells that moved become
-  notes, unresolvable refs block the single action, and same-valued
-  cells plan nothing."
-  [eng rdef cols col-idx sheet-row stored-enc]
+(defn- plan-cells
+  "One line's cells against one stored row's encoded data →
+  {:invocations [[action input] …] :notes […]}. Read-only cells that
+  moved become notes, unresolvable refs block their one action, and
+  same-valued cells plan nothing."
+  [eng rdef cells stored-enc]
   (reduce
    (fn [acc col]
-     (let [f (:field col)
-           idx (get col-idx (name f))]
-       (if (nil? idx)
+     (let [f (:field col)]
+       (if-not (contains? cells f)
          acc
          (let [js (field-json rdef f)
-               cell (coerce-cell js (get sheet-row idx))
+               cell (get cells f)
                stored (get stored-enc f)]
            (cond
              (same-value? js cell stored) acc
@@ -289,20 +363,20 @@
                               (if (nil? cell) ":on-clear" ":on-set")
                               " action declared — the cell was ignored")))))))))
    {:invocations [] :notes []}
-   cols))
+   (:columns (:worksheet rdef))))
 
 (defn- create-body
-  "An id-less row's participating cells (an :action or :create-only
+  "An id-less line's participating cells (an :action or :create-only
   column, keyed by its param) → the create! body; a resolvable :ref
   cell rides as the target's row id. Returns {:body … :notes […]}."
-  [eng rdef cols col-idx sheet-row]
+  [eng rdef cells]
   (reduce
    (fn [acc col]
-     (let [f (:field col)
-           idx (get col-idx (name f))]
-       (if (or (nil? idx) (not (or (:action col) (:create-only col))))
+     (let [f (:field col)]
+       (if (or (not (contains? cells f))
+               (not (or (:action col) (:create-only col))))
          acc
-         (let [cell (coerce-cell (field-json rdef f) (get sheet-row idx))
+         (let [cell (get cells f)
                param (or (:param col) f)]
            (cond
              (nil? cell) acc
@@ -312,15 +386,80 @@
                (update acc :notes conj (ref-note col cell)))
              :else (assoc-in acc [:body param] cell))))))
    {:body {} :notes []}
-   cols))
+   (:columns (:worksheet rdef))))
+
+(defn- merge-invocations
+  "Two columns riding one action merge their inputs into one invoke."
+  [invocations]
+  (reduce (fn [acc [action input]]
+            (if-some [i (some (fn [[j [a _]]] (when (= a action) j))
+                              (map-indexed vector acc))]
+              (update-in acc [i 1] #(if (or %1 %2) (merge %1 %2) nil) input)
+              (conj acc [action input])))
+          []
+          invocations))
+
+(defn- load-stored [eng rdef id]
+  (let [st (:storage eng)]
+    (some->> (store/with-tx st
+               (fn [tx] (store/load-row st tx (:kind rdef) id {})))
+             (inv/decode-row rdef))))
+
+(defn- outcome [line & kvs]
+  (into {:line line} (map vec (partition 2 kvs))))
+
+(defn- plan-line
+  "The rehearsal for one staged line: what WOULD happen, against the
+  target rows as they stand right now."
+  [eng rdef {:keys [line id version cells]}]
+  (if (nil? id)
+    (if-not (:create (:worksheet rdef))
+      (outcome line :outcome "refused"
+               :reason "this worksheet does not create rows — the id cell is empty")
+      (let [{:keys [body notes]} (create-body eng rdef cells)
+            ;; the create door's own rehearsal judges the body —
+            ;; schema and create guards, nothing fired
+            refused (try (inv/create! eng (:kind rdef) body
+                                      {:principal runner :dry-run true})
+                         nil
+                         (catch Exception e (problem-reason e)))
+            on-sets (filterv #(and (contains? cells (:field %))
+                                   (some? (get cells (:field %)))
+                                   (:on-set %))
+                             (:columns (:worksheet rdef)))]
+        (if refused
+          (outcome line :outcome "refused" :reason refused :notes notes)
+          (outcome line :outcome "planned"
+                   :actions (into ["create"]
+                                  (map (comp name :action :on-set)) on-sets)
+                   :notes notes))))
+    (let [row (load-stored eng rdef id)]
+      (cond
+        (nil? row)
+        (outcome line :id id :outcome "refused"
+                 :reason "no such row — was it deleted since the export?")
+
+        (and (some? version) (not= (long version) (long (:version row))))
+        (outcome line :id id :outcome "conflict"
+                 :reason (str "the row changed since the export (version "
+                              (:version row) " now; the sheet held " version
+                              ") — re-export and redo this edit, or revalidate "
+                              "if the change was this worksheet's own"))
+
+        :else
+        (let [enc (schema/encode (:schema rdef) (:data row))
+              {:keys [invocations notes]} (plan-cells eng rdef cells enc)]
+          (if (empty? invocations)
+            (outcome line :id id :outcome "unchanged" :notes notes)
+            (outcome line :id id :outcome "planned"
+                     :actions (mapv (comp name first)
+                                    (merge-invocations invocations))
+                     :notes notes)))))))
 
 (defn- apply-invocations!
   "Each planned action as an honest client would invoke it: the
-  row's CURRENT etag when the action is fenced (the worksheet's own
-  staleness gate already ran against the sheet's version column; the
-  fence guards the moments between this import's own writes), a
-  fresh key when non-idempotent. One refusal never poisons the row's
-  other edits, and every verdict is reported."
+  row's CURRENT etag when the action is fenced, a fresh key when
+  non-idempotent. One refusal never poisons the line's other edits."
   [eng rdef id invocations {:keys [principal correlation-id]}]
   (let [kind (:kind rdef)]
     (reduce
@@ -347,41 +486,266 @@
      {:applied [] :refused []}
      invocations)))
 
-(defn- merge-invocations
-  "Two columns riding one action merge their inputs into one invoke."
-  [invocations]
-  (reduce (fn [acc [action input]]
-            (if-some [i (some (fn [[j [a _]]] (when (= a action) j))
-                              (map-indexed vector acc))]
-              (update-in acc [i 1] #(if (or %1 %2) (merge %1 %2) nil) input)
-              (conj acc [action input])))
-          []
-          invocations))
+(defn- run-line!
+  "One staged line for real: creates create (then their :on-set cells
+  apply as ordinary edits on the fresh row — one uniform second
+  pass), edits replay, stale versions conflict, and the outcome says
+  exactly what happened."
+  [eng rdef {:keys [line id version cells]} opts]
+  (if (nil? id)
+    (cond
+      (not (:create (:worksheet rdef)))
+      (outcome line :outcome "refused"
+               :reason "this worksheet does not create rows — the id cell is empty")
 
-(defn- load-stored [eng rdef id]
-  (let [st (:storage eng)]
-    (some->> (store/with-tx st
-               (fn [tx] (store/load-row st tx (:kind rdef) id {})))
-             (inv/decode-row rdef))))
+      :else
+      (let [{:keys [body notes]} (create-body eng rdef cells)
+            created (try {:row (:row (inv/create! eng (:kind rdef) body opts))}
+                         (catch Exception e {:refused (problem-reason e)}))]
+        (if-some [reason (:refused created)]
+          (outcome line :outcome "refused" :reason reason :notes notes)
+          (let [row (:row created)
+                enc (schema/encode (:schema rdef) (:data row))
+                on-set-cols (filterv #(or (:on-set %) (:on-clear %))
+                                     (:columns (:worksheet rdef)))
+                plan (plan-cells eng (assoc-in rdef [:worksheet :columns]
+                                               on-set-cols)
+                                 cells enc)
+                {:keys [applied refused]}
+                (apply-invocations! eng rdef (:id row)
+                                    (merge-invocations (:invocations plan))
+                                    opts)]
+            (outcome line :outcome "created"
+                     :self (str "/api/" (:plural rdef) "/" (:id row))
+                     :actions (into ["create"] applied)
+                     :refusals refused
+                     :notes (into (vec notes) (:notes plan)))))))
+    (let [row (load-stored eng rdef id)]
+      (cond
+        (nil? row)
+        (outcome line :id id :outcome "refused"
+                 :reason "no such row — was it deleted since the export?")
 
-(defn- outcome [line & kvs]
-  (into {:line line} (map vec (partition 2 kvs))))
+        (and (some? version) (not= (long version) (long (:version row))))
+        (outcome line :id id :outcome "conflict"
+                 :reason (str "the row changed since the export (version "
+                              (:version row) " now; the sheet held " version
+                              ") — re-export and redo this edit"))
 
-(defn import!
-  "One uploaded workbook against the declared worksheet: match each
-  data row by its id cell, refuse stale versions as conflicts, plan
-  the cell diffs, and (unless dry-run) replay them through the kind's
-  own actions; an id-less row creates (when the worksheet declares
-  :create true), then its :on-set cells apply as ordinary edits on
-  the fresh row. Returns the per-row report — applied / created /
-  unchanged / conflict / refused (dry-run: planned), with notes for
-  everything ignored. opts: :principal (required), :dry-run,
-  :allowed? (action-name → bool, the router's grant projection)."
-  [eng rdef body {:keys [principal dry-run allowed?]
-                  :or {allowed? (constantly true)}}]
-  (let [ws (spec-of rdef)
-        kind (:kind rdef)
-        sheet (try (xlsx/read-sheet (read-capped body))
+        :else
+        (let [enc (schema/encode (:schema rdef) (:data row))
+              {:keys [invocations notes]} (plan-cells eng rdef cells enc)
+              invocations (merge-invocations invocations)]
+          (if (empty? invocations)
+            (outcome line :id id :outcome "unchanged" :notes notes)
+            (let [{:keys [applied refused]}
+                  (apply-invocations! eng rdef id invocations opts)]
+              (outcome line :id id
+                       :outcome (if (seq applied) "applied" "refused")
+                       :actions applied
+                       :refusals refused
+                       :notes notes))))))))
+
+;; ── the worksheet kind ──────────────────────────────────────────────
+
+(def ^:private system-only
+  (g/guard
+   {:name :worksheet-system-only
+    :explain "The report is the runner's record; people revalidate and apply."
+    :reads [:principal]
+    :hide true
+    :check (with-meta
+             (fn [_ _ ctx]
+               (if (= :system (:type (:principal ctx)))
+                 (t/allow)
+                 (t/deny)))
+             {:waymark10/form '(fn [row inp ctx]
+                                 (waymark10.server.worksheet/system-principal?
+                                  ctx))})}))
+
+(def ^:private record-input
+  [:map
+   [:report [:vector [:map-of :keyword :any]]]
+   [:tally [:map-of :keyword :int]]])
+
+(def ^:private record-report-handler
+  (with-meta
+    (fn [row inp ctx]
+      (update row :data assoc
+              :report (:report inp)
+              :tally (:tally inp)
+              :checked_at (:now ctx)))
+    {:waymark10/form '(fn [row inp ctx]
+                        (waymark10.server.worksheet/record-report
+                         row inp ctx))}))
+
+(def ^:private line-schema
+  [:map
+   [:line [:int {:min 1}]]
+   [:id {:optional true} [:maybe [:string {:max 64}]]]
+   [:version {:optional true} [:maybe [:int {:min 1}]]]
+   [:cells [:map-of :keyword :any]]])
+
+(defn worksheet-resource
+  "The engine's worksheet kind, its create door's :target enum baked
+  from the kinds that declare a worksheet."
+  [targets]
+  (r/resource
+   {:kind :worksheet
+    :plural "worksheets"
+    :states [:staged :applying :applied :discarded]
+    :initial :staged
+    :terminal #{:applied :discarded}
+    :nav :secondary
+    :summary "{data.target} worksheet · {state}"
+    :label-template "{data.target} worksheet"
+    :schema [:map
+             [:target (into [:enum] targets)]
+             [:filename {:optional true} [:maybe [:string {:max 200}]]]
+             ;; the staged edits — machine food, rendered by the
+             ;; report, not as a form
+             [:lines {:x-display {:hidden true}}
+              [:vector {:max 10000} line-schema]]
+             ;; the per-line truth: the plan while staged, the
+             ;; outcomes once applied
+             [:report {:optional true :x-display {:hidden true}}
+              [:maybe [:vector [:map-of :keyword :any]]]]
+             [:tally {:optional true :x-display {:raw true}}
+              [:maybe [:map-of :keyword :int]]]
+             [:checked_at {:optional true} [:maybe :waymark/instant]]
+             [:applied_at {:optional true} [:maybe :waymark/instant]]]
+    :filterable {:state #{:eq :in} :target #{:eq}}
+    :sortable {:fields [:checked_at] :default "-checked_at"}
+    :actions
+    {:revalidate
+     {:from #{:staged} :to :staged
+      :safety {:idempotent false :reversible true :confirm false}
+      :display {:label "Revalidate" :order 2
+                :description "Re-plan every line against the rows as they stand now."}}
+     :apply
+     {:from #{:staged} :to :applying
+      :safety {:idempotent false :reversible false :confirm true
+               :consequence "Every planned line replays through the target's own actions as you; conflicted and refused lines are skipped and reported."}
+      :display {:label "Apply" :style :primary :order 1}}
+     :discard
+     {:from #{:staged :applying} :to :discarded
+      :safety {:idempotent true :reversible false :confirm true
+               :consequence "The staged edits are abandoned; the row stays as the audited record."}
+      :display {:label "Discard" :style :danger :order 9}}
+     :record_report
+     {:from #{:staged} :to :staged
+      :input record-input
+      :guards [system-only]
+      :edit {:prefill [:report] :fence false
+             :unfenced-reason "A system-only record inside the post-commit pass — no read preceded it to fence against."}
+      :safety {:idempotent true :reversible false :confirm false
+               :one-way "The runner's rehearsal record; revalidate refreshes it."}
+      :handler record-report-handler
+      :display {:label "Recorded the plan"}}
+     :record_outcomes
+     {:from #{:applying} :to :applied
+      :input record-input
+      :guards [system-only]
+      :edit {:prefill [:report] :fence false
+             :unfenced-reason "A system-only record inside the post-commit pass — no read preceded it to fence against."}
+      :safety {:idempotent true :reversible false :confirm false
+               :one-way "What the apply did, line by line; the target rows' own audit trails carry the detail."}
+      :handler (with-meta
+                 (fn [row inp ctx]
+                   (update row :data assoc
+                           :report (:report inp)
+                           :tally (:tally inp)
+                           :applied_at (:now ctx)))
+                 {:waymark10/form '(fn [row inp ctx]
+                                     (waymark10.server.worksheet/record-outcomes
+                                      row inp ctx))})
+      :display {:label "Recorded the outcomes"}}}}))
+
+(defn kinds
+  "The engine's worksheet kind(s) for this application — empty when
+  no kind declares :worksheet (no round-trip, no extra kind)."
+  [resources]
+  (let [targets (into []
+                      (comp (filter :worksheet) (map (comp name :kind)))
+                      resources)]
+    (if (empty? targets)
+      []
+      [(worksheet-resource targets)])))
+
+;; ── the post-commit pass ────────────────────────────────────────────
+
+(defn- target-rdef [eng data]
+  (get (inv/resources eng) (keyword (:target data))))
+
+(defn- tally-of [report]
+  (into {}
+        (map (fn [[o n]] [(keyword o) n]))
+        (frequencies (map :outcome report))))
+
+(defn- record! [eng id action report]
+  (:row (inv/invoke! eng :worksheet id action
+                     {:report report :tally (tally-of report)}
+                     {:principal runner})))
+
+(defn- principal-of-transition [res]
+  (let [a (get-in res [:transition :actor])]
+    (t/principal {:id (:id a)
+                  :type (keyword (or (:type a) "human"))
+                  :display (:display a)})))
+
+(defn after-write!
+  "The worksheet pass on the engine's post-commit :maintain hook
+  (wired by the engine boot, the same seam as the mirror push pass):
+  a committed create or revalidate PLANS — every line rehearsed
+  against the target rows as they stand — and records the report
+  through the system door, so the response already carries it; a
+  committed apply RUNS the lines as the person who applied (their
+  actions, their audit) and records the outcomes, landing the row
+  applied. Returns res with :row refreshed to the recorded truth."
+  [eng kind action-name res]
+  (if-not (and (= :worksheet kind) (:transition res) (nil? (:replayed? res)))
+    res
+    (let [row (:row res)
+          data (:data row)
+          rdef (target-rdef eng data)
+          gone (fn []
+                 (mapv (fn [{:keys [line id]}]
+                         (cond-> (outcome line :outcome "refused"
+                                          :reason (str "kind " (:target data)
+                                                       " no longer declares a worksheet"))
+                           id (assoc :id id)))
+                       (:lines data)))]
+      (cond
+        (or (= :revalidate action-name)
+            (contains? (:create-action-names
+                        (get (inv/resources eng) :worksheet))
+                       action-name))
+        (assoc res :row
+               (record! eng (:id row) :record_report
+                        (if (and rdef (:worksheet rdef))
+                          (mapv #(plan-line eng rdef %) (:lines data))
+                          (gone))))
+
+        (= :apply action-name)
+        (let [principal (principal-of-transition res)
+              opts {:principal principal
+                    :correlation-id (get-in res [:transition :correlation-id])}]
+          (assoc res :row
+                 (record! eng (:id row) :record_outcomes
+                          (if (and rdef (:worksheet rdef))
+                            (mapv #(run-line! eng rdef % opts) (:lines data))
+                            (gone)))))
+
+        :else res))))
+
+;; ── staging from workbook bytes (the route's door) ──────────────────
+
+(defn stage!
+  "POST /api/:plural/-/worksheet: workbook bytes → an ordinary
+  create! of a worksheet row (staged); the post-commit pass records
+  the plan before the response renders. Returns the create! result."
+  [eng rdef body {:keys [principal filename]}]
+  (let [sheet (try (xlsx/read-sheet (read-capped body))
                    (catch clojure.lang.ExceptionInfo e
                      (if (:waymark10/problem (ex-data e))
                        (throw e)
@@ -390,132 +754,9 @@
                    (catch Exception _
                      (throw (p/malformed-body
                              "the body is not an xlsx workbook"))))
-        headers (first sheet)
-        col-idx (into {}
-                      (keep-indexed (fn [i h]
-                                      (when-some [n (header-name h)] [n i])))
-                      headers)
-        _ (when-not (contains? col-idx "id")
-            (throw (p/schema-invalid
-                    :worksheet
-                    {:id ["the header row names no id column — export first, edit that file"]})))
-        cols (:columns ws)
-        correlation-id (str (random-uuid))
-        opts {:principal principal :correlation-id correlation-id}
-        gate (fn [invocations]
-               (some (fn [[a _]] (when-not (allowed? a)
-                                   (str (name a) " is not available here")))
-                     invocations))
-        results
-        (into
-         []
-         (keep-indexed
-          (fn [i sheet-row]
-            (let [line (+ 2 i)]                  ; 1-based, after the header
-              (when (some some? sheet-row)       ; trailing blanks skip
-                (let [id-cell (coerce-cell {:type "string"}
-                                           (get sheet-row (col-idx "id")))
-                      version-cell (some->> (col-idx "version")
-                                            (get sheet-row)
-                                            (coerce-cell {:type "integer"}))]
-                  (cond
-                    ;; ── an id-less row is a birth ────────────────────
-                    (nil? id-cell)
-                    (cond
-                      (not (:create ws))
-                      (outcome line :outcome "refused"
-                               :reason "this worksheet does not create rows — the id cell is empty")
-
-                      (not (allowed? :create))
-                      (outcome line :outcome "refused"
-                               :reason "create is not available here")
-
-                      :else
-                      (let [{:keys [body notes]} (create-body eng rdef cols
-                                                              col-idx sheet-row)]
-                        (if dry-run
-                          (outcome line :outcome "planned" :actions ["create"]
-                                   :notes notes)
-                          (let [created
-                                (try {:row (:row (inv/create! eng kind body
-                                                              {:principal principal
-                                                               :correlation-id correlation-id}))}
-                                     (catch Exception e
-                                       {:refused (problem-reason e)}))]
-                            (if-some [reason (:refused created)]
-                              (outcome line :outcome "refused" :reason reason
-                                       :notes notes)
-                              ;; the fresh row takes the :on-set cells
-                              ;; (an imported row born already-ended) as
-                              ;; ordinary edits — one uniform second pass
-                              (let [row (:row created)
-                                    enc (schema/encode (:schema rdef) (:data row))
-                                    plan (plan-row eng rdef
-                                                   (filterv #(or (:on-set %) (:on-clear %)) cols)
-                                                   col-idx sheet-row enc)
-                                    {:keys [applied refused]}
-                                    (apply-invocations!
-                                     eng rdef (:id row)
-                                     (merge-invocations (:invocations plan)) opts)]
-                                (outcome line :outcome "created"
-                                         :self (str "/api/" (:plural rdef) "/" (:id row))
-                                         :actions (into ["create"] applied)
-                                         :refusals refused
-                                         :notes (into (vec notes) (:notes plan)))))))))
-
-                    ;; ── an id names a stored row ─────────────────────
-                    :else
-                    (let [row (load-stored eng rdef id-cell)]
-                      (cond
-                        (nil? row)
-                        (outcome line :id id-cell :outcome "refused"
-                                 :reason "no such row — was it deleted since the export?")
-
-                        (and (some? version-cell)
-                             (not= (long version-cell) (long (:version row))))
-                        (outcome line :id id-cell :outcome "conflict"
-                                 :reason (str "the row changed since the export "
-                                              "(version " (:version row)
-                                              " now; the sheet held " (long version-cell)
-                                              ") — re-export and redo this edit"))
-
-                        :else
-                        (let [enc (schema/encode (:schema rdef) (:data row))
-                              {:keys [invocations notes]}
-                              (plan-row eng rdef cols col-idx sheet-row enc)
-                              invocations (merge-invocations invocations)]
-                          (cond
-                            (empty? invocations)
-                            (outcome line :id id-cell :outcome "unchanged"
-                                     :notes notes)
-
-                            (gate invocations)
-                            (outcome line :id id-cell :outcome "refused"
-                                     :reason (gate invocations) :notes notes)
-
-                            dry-run
-                            (outcome line :id id-cell :outcome "planned"
-                                     :actions (mapv (comp name first) invocations)
-                                     :notes notes)
-
-                            :else
-                            (let [{:keys [applied refused]}
-                                  (apply-invocations! eng rdef (:id row)
-                                                      invocations opts)]
-                              (outcome line :id id-cell
-                                       :outcome (if (seq applied)
-                                                  "applied"
-                                                  "refused")
-                                       :actions applied
-                                       :refusals refused
-                                       :notes notes))))))))))))
-         (rest sheet))
-        tally (frequencies (map :outcome results))]
-    {:kind (str (name kind) "_worksheet_report")
-     :dry_run (boolean dry-run)
-     :summary (str (count results) " row(s): "
-                   (str/join ", " (map (fn [[o n]] (str n " " o))
-                                       (sort tally))))
-     :data {:rows results
-            :tally tally
-            :correlation_id correlation-id}}))
+        lines (stage-lines rdef sheet)]
+    (inv/create! eng :worksheet
+                 (cond-> {:target (name (:kind rdef))
+                          :lines lines}
+                   filename (assoc :filename filename))
+                 {:principal principal})))
