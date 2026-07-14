@@ -90,8 +90,13 @@
                          " wrote " (pr-str facts) ", which only their derivations may write.")
             :action-attempted action}))
 
-(defn malformed-body [detail]
-  (problem :malformed-body 400 "Malformed JSON body"
+(defn malformed-body
+  "The body didn't parse as what the route expects — the DETAIL names
+  the expected shape (JSON for the API routes, an xlsx workbook for
+  the worksheet import); the title stays shape-agnostic so a binary
+  route never claims a JSON problem."
+  [detail]
+  (problem :malformed-body 400 "Malformed body"
            {:detail detail}))
 
 ;; ── the wire projection ─────────────────────────────────────────────
