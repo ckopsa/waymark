@@ -39,6 +39,8 @@
              [:title [:string {:max 80}]]
              [:risky {:optional true} [:maybe :boolean]]
              [:pokes {:optional true} [:maybe :int]]]
+    :filterable {:title #{:eq :ne :contains}
+                 :pokes #{:range :set}}
     :actions
     {:poke {:from #{:open} :to :open
             :safety {:idempotent false :reversible true :confirm false}
@@ -299,6 +301,38 @@
     (create-plan! "2026-08-04" ["2026-08-04"])
     (let [env (envelope :plan {"start_date_gte" "2026-08-01"})]
       (is (= 1 (get-in env ["data" "total"]))))))
+
+(deftest new-cond-ops-over-the-twin
+  (inv/create! *eng* :task {:title "alpha"} opts)
+  (let [{:keys [row]} (inv/create! *eng* :task {:title "Beta ray"} opts)]
+    (inv/invoke! *eng* :task (:id row) :poke nil
+                 (assoc opts :idempotency-key "poke-beta")))
+  (inv/create! *eng* :task {:title "gamma_ray"} opts)
+  (testing "ne excludes; comma list negates as not-in"
+    (is (= 2 (get-in (envelope :task {"title_ne" "alpha"})
+                     ["data" "total"])))
+    (is (= 1 (get-in (envelope :task {"title_ne" "alpha,gamma_ray"})
+                     ["data" "total"]))))
+  (testing "contains is case-insensitive and wildcard-literal"
+    (is (= 2 (get-in (envelope :task {"title_contains" "RAY"})
+                     ["data" "total"])))
+    (is (= 1 (get-in (envelope :task {"title_contains" "a_r"})
+                     ["data" "total"]))
+        "an unescaped _ would also match \"Beta ray\"'s space"))
+  (testing "set answers presence both ways — nil pokes answer false"
+    (is (= 1 (get-in (envelope :task {"pokes_set" "true"})
+                     ["data" "total"])))
+    (is (= 2 (get-in (envelope :task {"pokes_set" "false"})
+                     ["data" "total"]))))
+  (testing "the bare < cond (the before op's storage meaning)"
+    (let [st (:storage *eng*)
+          rows (store/with-tx st
+                 #(store/search-rows st % :task
+                                     [{:target :data :field :pokes
+                                       :cast "bigint" :op :< :value "5"}]
+                                     {}))]
+      (is (= 1 (count rows))
+          "only the poked task carries pokes — NULL fails < too"))))
 
 ;; ── the log and the maintenance write hold their meanings ───────────
 

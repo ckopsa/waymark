@@ -14,6 +14,7 @@
   check-touches and check-compounds remain unported."
   (:require [clojure.set :as set]
             [clojure.string :as str]
+            [waymark10.declaration :as declaration]
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
@@ -411,6 +412,14 @@
 
 ;; ── the query surface ───────────────────────────────────────────────
 
+(defn- check-filterable [r]
+  (doseq [[f ops] (sort-by key (:filterable r))
+          op (sort ops)]
+    (when-not (contains? declaration/filter-ops op)
+      (err r :filterable (str "filterable field " f " declares op " op
+                              ", which is not a filter op; ops are "
+                              (vec (sort declaration/filter-ops)))))))
+
 (defn- check-faceted [r]
   (doseq [f (:faceted r)
           :when (not= f :state)]
@@ -666,5 +675,5 @@
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-summary-template check-waive-tokens
           check-place check-edit check-altitude check-long-text
-          check-faceted check-oneof check-unique check-links
+          check-filterable check-faceted check-oneof check-unique check-links
           check-derived check-renames check-unless check-require])})

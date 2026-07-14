@@ -8,8 +8,9 @@
   count, and facet counts sum to an independent recount.
 
   Suite-local kind :visit provokes what the fixtures don't declare:
-  int eq/in/range filters, a date :after filter, and two sortable
-  fields."
+  int eq/in/range/ne filters, date :after/:before filters, a
+  presence (:set) and substring (:contains) filter over a nullable
+  notes field, and two sortable fields."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -32,10 +33,13 @@
     :schema [:map
              [:guest [:string {:min 1 :max 60}]]
              [:arrives_on :waymark/date]
-             [:party [:int {:min 1 :max 20}]]]
+             [:party [:int {:min 1 :max 20}]]
+             [:notes {:optional true} [:maybe [:string {:max 200}]]]]
     :filterable {:state #{:eq :in}
-                 :arrives_on #{:eq :range :after}
-                 :party #{:eq :in :range}}
+                 :guest #{:contains}
+                 :arrives_on #{:eq :range :after :before}
+                 :party #{:eq :in :range :ne}
+                 :notes #{:ne :set :contains}}
     :sortable {:fields [:arrives_on :party] :default "arrives_on"}
     :actions
     {:finish {:from #{:booked} :to :done
@@ -99,11 +103,11 @@
    ["Minestrone" ["soup" "veggie"] false]])
 
 (def visit-specs
-  [["Ana" "2026-07-10" 2]
-   ["Bo" "2026-07-12" 4]
-   ["Cyd" "2026-07-14" 2]
-   ["Dee" "2026-07-16" 6]
-   ["Eli" "2026-07-18" 3]])
+  [["Ana" "2026-07-10" 2 "100% window seat"]
+   ["Bo" "2026-07-12" 4 "aisle"]
+   ["Cyd" "2026-07-14" 2 nil]
+   ["Dee" "2026-07-16" 6 nil]
+   ["Eli" "2026-07-18" 3 "window"]])
 
 (defn- seed! []
   (doseq [[name' themes accept?] meal-specs]
@@ -111,9 +115,10 @@
       (assert (= 201 (:status resp)) (:body resp))
       (when accept?
         (req :post (str "/api/meals/" (id-of resp) "/-/accept")))))
-  (doseq [[guest arrives party] visit-specs]
-    (let [resp (req :post "/api/visits" {:guest guest :arrives_on arrives
-                                         :party party})]
+  (doseq [[guest arrives party notes] visit-specs]
+    (let [resp (req :post "/api/visits"
+                    (cond-> {:guest guest :arrives_on arrives :party party}
+                      notes (assoc :notes notes)))]
       (assert (= 201 (:status resp)) (:body resp))))
   (doseq [[start conflicts] [["2026-06-01" nil] ["2026-06-08" 2]
                              ["2026-06-15" nil] ["2026-06-22" 0]]]
@@ -205,6 +210,42 @@
                                   "party=2&arrives_on_after=2026-07-10"))
                      [:data :total])))))
 
+(defn- total [resp] (get-in (json resp) [:data :total]))
+
+(deftest new-filter-ops-round-trip
+  (testing "ne excludes matches; a comma list negates as not-in"
+    (is (= 3 (total (get-q "/api/visits" "party_ne=2"))))
+    (is (= 2 (total (get-q "/api/visits" "party_ne=2,6")))))
+
+  (testing "a row without the field never answers ne (SQL NULL)"
+    (is (= 2 (total (get-q "/api/visits" "notes_ne=aisle")))
+        "Cyd and Dee carry no notes — NULL fails <> too"))
+
+  (testing "date :before is strictly less"
+    (let [b (json (get-q "/api/visits" "arrives_on_before=2026-07-14"))]
+      (is (= 2 (get-in b [:data :total])))
+      (is (every? #(neg? (compare (:arrives_on (item-data %)) "2026-07-14"))
+                  (get-in b [:data :items]))))
+    (is (= 1 (total (get-q "/api/visits"
+                           (str "arrives_on_after=2026-07-10"
+                                "&arrives_on_before=2026-07-14"))))
+        "after and before compose to an exclusive window"))
+
+  (testing "set answers presence both ways"
+    (is (= 3 (total (get-q "/api/visits" "notes_set=true"))))
+    (is (= 2 (total (get-q "/api/visits" "notes_set=false")))
+        "absent fields answer set=false — the one op NULL satisfies"))
+
+  (testing "contains is case-insensitive substring"
+    (is (= 1 (total (get-q "/api/visits" "guest_contains=AN"))))
+    (is (= 2 (total (get-q "/api/visits" "notes_contains=window")))))
+
+  (testing "contains treats LIKE wildcards as literals"
+    (is (= 1 (total (get-q "/api/visits" "notes_contains=100%25%20window")))
+        "a literal % in the value matches itself")
+    (is (= 0 (total (get-q "/api/visits" "notes_contains=1_0")))
+        "an unescaped _ would match any character and hit \"100\"")))
+
 ;; ── 3. sort ─────────────────────────────────────────────────────────
 
 (defn- shown [b field]
@@ -264,6 +305,9 @@
            ["sort=name" :sort]              ; plan-only spelling on visits
            ["start_date_gte=not-a-date" :start_date_gte]
            ["party=abc" :party]
+           ["party_ne=abc" :party_ne]
+           ["arrives_on_before=not-a-date" :arrives_on_before]
+           ["notes_set=maybe" :notes_set]
            ["state=nope" :state]
            ["page%5Bsize%5D=0" (keyword "page[size]")]
            ["page%5Bsize%5D=101" (keyword "page[size]")]
@@ -301,6 +345,16 @@
         (is (= {:type "string" :format "date"} (:arrives_on_gte vprops)))
         (is (= {:type "string" :format "date"} (:arrives_on_after vprops)))
         (is (= "integer" (get-in vprops [:party_gte :type])))))
+    (testing "the ne/before/set/contains params advertise their shapes"
+      (let [vprops (get-in (json (req :get "/api/visits"))
+                           [:actions :query :input :properties])]
+        (is (= {:type "integer" :x-in true} (:party_ne vprops))
+            "ne keeps the field's type and takes a comma list")
+        (is (= {:type "string" :format "date"} (:arrives_on_before vprops)))
+        (is (= {:type "boolean"} (:notes_set vprops)))
+        (is (= {:type "string"} (:guest_contains vprops)))
+        (is (nil? (:guest vprops))
+            "contains alone never opens the bare eq param")))
     (testing "facet counts are the real GROUP BY, and sum to a recount"
       (let [facets (get-in props [:themes :x-facets])
             expected (frequencies (mapcat second meal-specs))]
@@ -331,9 +385,33 @@
       ;; by waymark10.batch-a-fixtures' ba_ticket (a real prose field)
       ;; and ba_roster (a real vector field); this just confirms a
       ;; kind with neither still gets exactly its plain scalar fields
-      (is (every? #(= #{:guest :arrives_on :party} (set (keys (:fields %)))) items)))))
+      ;; (:notes only where seeded — an absent optional never renders)
+      (is (= (mapv (fn [[_ _ _ notes]]
+                     (cond-> #{:guest :arrives_on :party}
+                       notes (conj :notes)))
+                   visit-specs)
+             (mapv #(set (keys (:fields %))) items))))))
 
-;; ── 7. filtered self round-trips ────────────────────────────────────
+;; ── 7. the declared op set is closed ────────────────────────────────
+
+(deftest a-typo-d-filter-op-refuses-at-boot
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"not a filter op"
+       (r/resource
+        {:kind :typo_probe
+         :states [:booked :done]
+         :initial :booked
+         :terminal #{:done}
+         :summary "{data.guest} · {state}"
+         :schema [:map [:guest [:string {:min 1 :max 60}]]]
+         :filterable {:guest #{:eq :contians}}
+         :actions
+         {:finish {:from #{:booked} :to :done
+                   :safety {:idempotent true :reversible false
+                            :confirm false
+                            :one-way "A finished probe is history."}}}}))))
+
+;; ── 8. filtered self round-trips ────────────────────────────────────
 
 (deftest filtered-self-round-trips
   (let [b (json (get-q "/api/visits" "party=2&sort=-arrives_on"))

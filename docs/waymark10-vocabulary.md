@@ -107,7 +107,7 @@ refusal; a typo'd law key is the `:unknown-law-key` refusal.
 
 | Property | Means | Example |
 |---|---|---|
-| `:filter #{…}` | this field is queryable; ops from `#{:eq :in :range :after}` → `field=`, `field=a,b`, `field_gte=`/`field_lte=`, `field_after=` | `[:start_date {:filter #{:eq :range}} :waymark/date]` |
+| `:filter #{…}` | this field is queryable; ops from `#{:eq :in :ne :range :after :before :set :contains}` → `field=`, `field=a,b`, `field_ne=` (comma list negates as not-in), `field_gte=`/`field_lte=`, `field_after=`/`field_before=` (strict bounds), `field_set=true\|false` (presence), `field_contains=` (case-insensitive substring) | `[:start_date {:filter #{:eq :range}} :waymark/date]` |
 | `:sort` | sortable — `true`, `:default`, or `:default-desc` | `[:name {:sort :default} [:string {:min 1 :max 200}]]` |
 | `:derived spec` | the fact's law rides its own entry (spec: `{:over … :expr …}`, `{:count {:owns …/:related … :where …}}`, or a `defderived` value) | §3 above |
 | `:part-scope {:key …}` | the collection field the part-scoped actions (`:place`) bind items of | `[:days {:part-scope {:key :date}} [:vector …]]` |

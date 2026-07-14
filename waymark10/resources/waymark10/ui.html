@@ -915,15 +915,20 @@ function filterPrefill(selfHref, entry) {
    pick an operator that column actually supports, a value control
    matching its type/format/enum — then Apply. Sort moved to clickable
    column headers (itemTable's onSort); this is filtering only now. */
-const FILTER_OP_LABELS = {eq: "=", in: "in list", gte: "≥", lte: "≤",
-                          between: "between", after: "after"};
+const FILTER_OP_LABELS = {eq: "=", in: "in list", ne: "≠", gte: "≥", lte: "≤",
+                          between: "between", after: "after", before: "before",
+                          contains: "contains", set: "is set"};
 function opsFor(col) {
   const out = [];
   if (col.ops.eq) out.push("eq");
   if (col.ops.in) out.push("in");
+  if (col.ops.ne) out.push("ne");
   if (col.ops.gte && col.ops.lte) out.push("between");
   else { if (col.ops.gte) out.push("gte"); if (col.ops.lte) out.push("lte"); }
   if (col.ops.after) out.push("after");
+  if (col.ops.before) out.push("before");
+  if (col.ops.contains) out.push("contains");
+  if (col.ops.set) out.push("set");
   return out;
 }
 /* the top-level-collection flavor of apply/remove: mutate doc.self's
@@ -1003,11 +1008,18 @@ function showcaseFilters(query, params, apply, hints) {
       body = [input(f + "_gte", col, "min"), "–", input(f + "_lte", col, "max")];
     } else if (col.ops.after) {
       body = [input(f + "_after", col)];
-    } else {
+    } else if (col.ops.before) {
+      body = [input(f + "_before", col)];
+    } else if (col.ops.contains) {
+      body = [input(f + "_contains", col)];
+    } else if (col.ops.eq || col.ops.in) {
       body = [input(f, col)];
+    } else {
+      return null;  // ne/set-only: the popover's home, no standing control
     }
     return el("label", {class: "showcase-filter"}, lbl, body);
-  });
+  }).filter(Boolean);
+  if (!controls.length) return null;
   return el("div", {class: "showcase-filters"}, controls);
 }
 
@@ -1044,7 +1056,15 @@ function filterPopover(query, params, apply, hints) {
     if (!col || !op) return;
     if (op === "between")
       valueRow.append(mkValueInput(col.field + "_gte", col), " – ", mkValueInput(col.field + "_lte", col));
-    else if (op === "gte" || op === "lte" || op === "after")
+    else if (op === "set") {
+      const s = el("select", {name: col.field + "_set"});
+      s.append(el("option", {value: ""}, "—"),
+               el("option", {value: "true"}, "set"),
+               el("option", {value: "false"}, "not set"));
+      valueRow.append(s);
+    }
+    else if (op === "gte" || op === "lte" || op === "after" ||
+             op === "before" || op === "ne" || op === "contains")
       valueRow.append(mkValueInput(col.field + "_" + op, col));
     else
       valueRow.append(mkValueInput(col.field, col));
@@ -1079,11 +1099,12 @@ function filterPopover(query, params, apply, hints) {
 function filterChips(query, params, remove, hints) {
   const gc = gridColumns(query);
   const props = (query || {}).properties || {};
-  const SUFFIX_LABEL = {gte: "≥", lte: "≤", after: "after"};
+  const SUFFIX_LABEL = {gte: "≥", lte: "≤", after: "after", before: "before",
+                        ne: "≠", contains: "contains", set: "set"};
   const chips = [];
   for (const [name, value] of params) {
     if (name === "sort" || name.startsWith("page[")) continue;
-    const m = /^(.*)_(gte|lte|after)$/.exec(name);
+    const m = /^(.*)_(gte|lte|after|before|ne|contains|set)$/.exec(name);
     const field = m ? m[1] : name;
     // facets render their own chips (facetChips) and a showcased
     // field's standing control already displays its own value — skip
@@ -1718,8 +1739,9 @@ function kvTable(obj, schema) {
 /* ── grid columns: folding a query-input-schema-shaped object (either
    doc.actions.query.input for a top-level collection, or an embed
    link's own .columns — same shape, per router.clj's splice-embeds)
-   into one entry per LOGICAL column. field_gte/field_lte/field_after
-   fold back onto field; the sort enum becomes the sortable set. One
+   into one entry per LOGICAL column. The suffixed params
+   (field_gte/_lte/_after/_before/_ne/_set/_contains) fold back onto
+   field; the sort enum becomes the sortable set. One
    helper, every table (top-level and every embedded one) folds
    through it. */
 function gridColumns(schema) {
@@ -1729,11 +1751,15 @@ function gridColumns(schema) {
   const ensure = f => cols[f] || (cols[f] = {field: f, ops: {}});
   for (const [name, prop] of Object.entries(props)) {
     if (name === "sort" || name.startsWith("page[")) continue;
-    const m = /^(.*)_(gte|lte|after)$/.exec(name);
+    const m = /^(.*)_(gte|lte|after|before|ne|contains|set)$/.exec(name);
     if (m) {
       const c = ensure(m[1]);
       c.ops[m[2]] = true;
-      c.type = c.type || prop.type; c.format = c.format || prop.format;
+      // _set advertises boolean and _contains string whatever the
+      // field's own type — neither may claim the column's type
+      if (m[2] !== "set" && m[2] !== "contains") {
+        c.type = c.type || prop.type; c.format = c.format || prop.format;
+      }
     } else {
       const c = ensure(name);
       c.ops[prop["x-in"] ? "in" : "eq"] = true;

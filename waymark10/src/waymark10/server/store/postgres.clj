@@ -237,7 +237,16 @@
 (def ^:private safe-casts #{"date" "boolean" "bigint" "numeric" "text"
                             "timestamptz"})
 
-(def ^:private cond-ops {:= "=" :< "<" :<= "<=" :>= ">=" :> ">"})
+(def ^:private cond-ops {:= "=" :not= "<>" :< "<" :<= "<=" :>= ">=" :> ">"})
+
+(defn- escape-like
+  "A literal value made safe inside a LIKE pattern — the wildcards
+  and the escape character itself lose their powers."
+  ^String [^String s]
+  (-> s
+      (str/replace "\\" "\\\\")
+      (str/replace "%" "\\%")
+      (str/replace "_" "\\_")))
 
 (defn- cond-sql
   "One cond → [sql-fragment params]. Identifiers come from checked
@@ -245,7 +254,10 @@
   loudly, never spliced. Phase 7 adds :op :in-any (JSONB array
   membership, any-of — spelled through jsonb_exists_any because ?| is
   a JDBC placeholder collision) and the timestamptz cast for _after
-  filters."
+  filters; the ne/before/set/contains batch adds :not=/:not-in (NULL
+  fails both, SQL semantics), :set? (IS [NOT] NULL over the extracted
+  text), and :contains (ILIKE over the text, the value's wildcards
+  escaped)."
   [{:keys [target field cast op value values]}]
   (if (= :in-any op)
     ;; the ?| operator (JDBC-escaped ??|), not jsonb_exists_any: the
@@ -274,9 +286,15 @@
                    "date" "waymark10_date(?)"
                    "timestamptz" "waymark10_ts(?)"
                    (str "(?)::" cast)))]
-      (if (= :in op)
-        [(str lval " IN (" (str/join ", " (repeat (count values) rval)) ")")
-         (vec values)]
+      (case op
+        :in [(str lval " IN (" (str/join ", " (repeat (count values) rval)) ")")
+             (vec values)]
+        :not-in [(str lval " NOT IN ("
+                      (str/join ", " (repeat (count values) rval)) ")")
+                 (vec values)]
+        :set? [(str lval (if value " IS NOT NULL" " IS NULL")) []]
+        :contains [(str lval " ILIKE ? ESCAPE '\\'")
+                   [(str "%" (escape-like value) "%")]]
         [(str lval " " (or (get cond-ops op)
                            (throw (ex-info (str "unknown cond op " op) {:op op})))
               " " rval)
