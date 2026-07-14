@@ -1217,12 +1217,21 @@
   reuse with a different body refuses 409. Recorded deviation from
   waymark9: the 428 requirement on keyless creates stays waived —
   v10 never demanded it and every enrolled app creates bare; the
-  affordance-following client always sends one."
+  affordance-following client always sends one.
+
+  :mint? true is the ENGINE's own birth door (mirror discovery — a
+  system pass recording a row the external authority already has):
+  the body validates against the full :schema rather than the
+  author's :create-schema, and the author's create guards are not
+  consulted — they judge the create-schema's vocabulary, which a
+  mint doesn't speak. Never set from a request path."
   [engine kind body {:keys [principal acknowledged correlation-id id
-                            idempotency-key dry-run]
+                            idempotency-key dry-run mint?]
                      :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
-        model (or (:create-schema rdef) (:schema rdef))
+        model (if mint?
+                (:schema rdef)
+                (or (:create-schema rdef) (:schema rdef)))
         create-action (first (:create-action-names rdef))
         digest (body-digest body)]
     (if dry-run
@@ -1243,7 +1252,8 @@
                   (throw (p/schema-invalid :create errors)))
               ctx (make-ctx engine tx :invoke principal)
               {:keys [warned overridden]}
-              (create-guard-pass (:create-guards rdef) inp ctx acknowledged)]
+              (create-guard-pass (if mint? [] (:create-guards rdef))
+                                 inp ctx acknowledged)]
           (when (seq warned)
             (throw (p/warning-refused :create warned)))
           (let [now (:now ctx)

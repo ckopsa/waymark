@@ -63,6 +63,19 @@
     ratification); :volatile warns when a should-move field moves
     nowhere (the feed froze while still answering). All fingerprinted
     in the authority facet.
+  - CREATE PUSH (paydesk's assignment worksheet demanded it — the un-punt
+    of \"creates never push\"): a kind declaring {:create-push true}
+    (its adapter also a MirrorCreateAdapter) may be born locally — an
+    ordinary create! through the declared :create-schema /
+    :create-guards / :on-create — and the post-commit pass pushes the
+    exported document as a CREATE: the authority mints the external
+    id, and claim_external (a sync write) stamps identity + etag onto
+    the row. A failed create push lands conflicted with NO external
+    id; resolve_conflict keep=local re-pushes the create, keep=remote
+    refuses loudly (a locally-minted row has no remote truth to
+    keep). Discovery mints — born WITH an external id — never
+    create-push, and an unclaimed local birth is invisible to
+    pull-through and resync (nothing external names it yet).
   - EXTERNAL-KEYED REFS (paydesk's assignment demanded it): a
     :waymark/ref entry declaring {:kind … :external-key <field>}
     resolves at every sync write — the sibling field's external id
@@ -78,11 +91,11 @@
   them: the per-kind discovery cursor (a restarted dev server
   re-discovers, idempotently), mirror cursors/webhooks (pushes and
   pulls are per-row, never a change feed), per-field authority
-  (AuthoredMeta), pushing a locally-minted row out to the authority
-  (creates never push — only declared domain actions do), and
-  distinguishing unreachable-on-push from a true etag conflict (at
-  this scope every push failure is the conflicted state; the resolve
-  decides either way)."
+  (AuthoredMeta), and distinguishing unreachable-on-push from a true
+  etag conflict (at this scope every push failure is the conflicted
+  state; the resolve decides either way). Pushing a locally-minted
+  row out to the authority WAS the fifth punt until paydesk's assignment
+  worksheet demanded it — see CREATE PUSH above."
   (:require [clojure.set :as set]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
@@ -115,6 +128,17 @@
     state; resolve_conflict decides). Pull-only adapters throw
     unconditionally and are never called (no :push-on-write)."))
 
+(defprotocol MirrorCreateAdapter
+  "The optional second write, for kinds declared {:create-push true}:
+  the external system accepts a document it has never seen and mints
+  the identity — the one write push can't express (push is keyed by
+  an external id that a locally-minted row doesn't have yet)."
+  (push-create [a document]
+    "Create the document in the external system → [external-id etag].
+    Throw on unreachable or refused; the failure lands as the
+    conflicted state on a row that still has no external id, and
+    resolve_conflict keep=local retries the create."))
+
 ;; ── the woven declaration ───────────────────────────────────────────
 
 (def sync-states [:fresh :stale :unreachable :conflicted])
@@ -123,8 +147,8 @@
   "The engine's doors on the sync machine — the names a push-on-write
   kind's own domain actions may not shadow, and the writes the push
   pass never pushes (pushing a sync write would loop)."
-  #{:observe_external :mark_stale :mark_unreachable :mark_conflicted
-    :resolve_conflict})
+  #{:observe_external :claim_external :mark_stale :mark_unreachable
+    :mark_conflicted :resolve_conflict})
 
 (def system-observer
   (t/principal {:id "mirror-sync" :type :system :display "Mirror sync"}))
@@ -147,10 +171,17 @@
 (def ^:private bookkeeping-fields
   #{:external_id :external_etag :synced_at :conflict_reason})
 
-(def ^:private bookkeeping-schema
+(defn- bookkeeping-schema
   ;; external_id renders nowhere (machine plumbing — the row's own
-  ;; summary and refs say who it is) but stays filterable on the wire
-  [[:external_id {:x-display {:hidden true}} [:string {:min 1 :max 256}]]
+  ;; summary and refs say who it is) but stays filterable on the wire.
+  ;; A :create-push kind's rows may be BORN without one (the authority
+  ;; mints it; claim_external stamps it), so there alone it is
+  ;; optional — every other mirror keeps the hard birth invariant.
+  [create-push?]
+  [(if create-push?
+     [:external_id {:optional true :x-display {:hidden true}}
+      [:maybe [:string {:min 1 :max 256}]]]
+     [:external_id {:x-display {:hidden true}} [:string {:min 1 :max 256}]])
    [:external_etag {:optional true :x-display {:hidden true}}
     [:maybe [:string {:max 256}]]]
    [:synced_at {:optional true} [:maybe :waymark/instant]]
@@ -458,6 +489,22 @@
                           (waymark10.server.mirror/apply-external
                            row inp ctx))})))
 
+(def ^:private claim-external-handler
+  ;; the create push's landing: the authority accepted our document
+  ;; and minted the identity — stamp it, with the etag the mint
+  ;; answered, so the next pull-through recognizes its own document.
+  ;; The local data IS the document; nothing else moves.
+  (with-meta
+    (fn [row inp ctx]
+      (update row :data assoc
+              :external_id (:external_id inp)
+              :external_etag (:etag inp)
+              :synced_at (:now ctx)
+              :conflict_reason nil))
+    {:waymark10/form '(fn [row inp ctx]
+                        (waymark10.server.mirror/claim-external
+                         row inp ctx))}))
+
 (def ^:private mark-conflicted-handler
   ;; the local document stands untouched — only the reason lands, so
   ;; the gap renders while resolve_conflict waits for a person
@@ -474,7 +521,12 @@
   keep=local pushes ours and adopts the new etag. The adapter call
   runs inside the invoke — the same recorded impurity waymark9's
   reconcile carried; an unreachable adapter fails the invoke loudly
-  and the row stays conflicted."
+  and the row stays conflicted.
+
+  A row with NO external id is a local birth whose create push
+  failed: keep=local re-pushes the CREATE and claims the minted
+  identity; keep=remote refuses loudly — there is no remote document
+  to keep."
   [adapter data-schema sync-ctx]
   (let [ref-specs (external-ref-specs data-schema)
         declared (declared-fields data-schema)]
@@ -482,7 +534,22 @@
       (fn [row inp ctx]
         (let [xid (get-in row [:data :external_id])
               encoded (schema/encode data-schema (:data row))]
-          (if (= "remote" (:keep inp))
+          (cond
+            (nil? xid)
+            (if (= "remote" (:keep inp))
+              (throw (ex-info (str "this row was minted locally and its create "
+                                   "push failed — there is no remote document "
+                                   "to keep; keep=local re-pushes the create")
+                              {}))
+              (let [[new-xid etag] (push-create adapter
+                                                (select-keys encoded declared))]
+                (update row :data assoc
+                        :external_id (str new-xid)
+                        :external_etag etag
+                        :synced_at (:now ctx)
+                        :conflict_reason nil)))
+
+            (= "remote" (:keep inp))
             (let [[doc etag] (pull adapter xid)
                   merged (-> (merge encoded
                                     (apply-document sync-ctx doc (:now ctx))
@@ -491,6 +558,8 @@
                                      :conflict_reason nil})
                              (as-> m (resolve-external-refs ref-specs m ctx)))]
               (assoc row :data (schema/decode data-schema merged)))
+
+            :else
             (let [etag (push adapter xid (select-keys encoded declared))]
               (update row :data assoc
                       :external_etag etag
@@ -544,11 +613,44 @@
   state, if any, lives in data). A pull-only mirror declares no
   :actions either; a kind declared {:push-on-write true} may add
   domain actions (local writes the post-commit pass pushes — see
-  check-domain-actions! for their shape)."
-  [rmap {:keys [adapter ttl-seconds discover-every push-on-write document]}]
+  check-domain-actions! for their shape); a kind additionally
+  declared {:create-push true} (its adapter a MirrorCreateAdapter)
+  may declare :create-schema / :create-guards / :on-create — local
+  births the post-commit pass pushes as CREATES, the authority
+  minting the identity claim_external stamps back."
+  [rmap {:keys [adapter ttl-seconds discover-every push-on-write document
+                create-push]}]
   (when (nil? adapter)
     (throw (t/definition-error
             (str (some-> (:kind rmap) name) ": a mirror declares its :adapter"))))
+  (when (and create-push (not push-on-write))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :create-push rides :push-on-write — a kind whose creates "
+                 "reach the authority pushes its writes too"))))
+  (when (and create-push (not (satisfies? MirrorCreateAdapter adapter)))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :create-push needs a MirrorCreateAdapter — this adapter "
+                 "cannot mint an external row"))))
+  (when-not create-push
+    (when-some [k (some #(when (contains? rmap %) %)
+                        [:create-schema :create-guards :on-create])]
+      (throw (t/definition-error
+              (str (some-> (:kind rmap) name) ": " k " on a mirror whose rows "
+                   "are born from discovery alone — declare {:create-push true} "
+                   "(and :push-on-write) to mint rows locally")))))
+  (when (and create-push (nil? (:create-schema rmap)))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :create-push declares its :create-schema — the birth "
+                 "input is the author's law, never the woven bookkeeping"))))
+  (when (and create-push
+             (some bookkeeping-fields (schema/entry-keys (:create-schema rmap))))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :create-schema never carries sync bookkeeping — the "
+                 "authority mints external_id; claim_external stamps it"))))
   (when-not (contains? #{nil :whole :partial} document)
     (throw (t/definition-error
             (str (some-> (:kind rmap) name)
@@ -567,7 +669,8 @@
                  ":push-on-write true to add domain actions"))))
   (when push-on-write
     (check-domain-actions! (:kind rmap) (:actions rmap)))
-  (let [data-schema (into [:map] (concat bookkeeping-schema (rest (:schema rmap))))
+  (let [data-schema (into [:map] (concat (bookkeeping-schema (boolean create-push))
+                                         (rest (:schema rmap))))
         ;; refusals precede the window parse — a malformed date gets
         ;; the definition error, never a raw parse exception
         _ (check-external-refs! (:kind rmap) data-schema)
@@ -596,10 +699,27 @@
                         :ttl-seconds (or ttl-seconds 300)
                         :discover-every (or discover-every 300)
                         :document mode
-                        :push-on-write (boolean push-on-write)}
+                        :push-on-write (boolean push-on-write)
+                        :create-push (boolean create-push)}
                :actions
                (merge
                 (:actions rmap)
+                (when create-push
+                  {:claim_external
+                   ;; the create push's landing: identity + etag from
+                   ;; the authority's mint, onto the locally-born row
+                   {:from (set sync-states) :to :fresh
+                    :input [:map
+                            [:external_id [:string {:min 1 :max 256}]]
+                            [:etag [:string {:max 256}]]]
+                    :guards [system-only]
+                    :edit {:prefill [:external_id] :fence false
+                           :unfenced-reason
+                           "A system-only sync write inside the post-commit push pass — no read preceded it to fence against."}
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "Recording the identity the external system minted loses nothing here."}
+                    :handler claim-external-handler
+                    :display {:label "Claimed external identity"}}})
                 {:observe_external
                  {:from (set sync-states) :to :fresh
                   :input [:map
@@ -642,7 +762,19 @@
                             :order 1}}}))
         ;; discovery's mint check queries the promoted column
         (update :filterable (fn [f] (update (or f {}) :external_id
-                                            #(or % #{:eq})))))))
+                                            #(or % #{:eq}))))
+        (cond->
+          (and create-push (:on-create rmap))
+          (assoc :on-create
+                 (let [oc (:on-create rmap)]
+                   ;; discovery mints ({:external_id id} alone) skip
+                   ;; the app's birth hook — it speaks the
+                   ;; create-schema's vocabulary, and a mint carries
+                   ;; none of it
+                   (fn [row ctx]
+                     (if (get-in row [:data :external_id])
+                       row
+                       (oc row ctx)))))))))
 
 ;; ── pull-through on read ────────────────────────────────────────────
 
@@ -664,6 +796,10 @@
   [eng rdef row]
   (let [spec (:mirror rdef)]
     (if (or (= :conflicted (:state row))
+            ;; a local birth the authority hasn't minted yet: nothing
+            ;; external names it, so there is nothing to pull — the
+            ;; push pass (or resolve keep=local) owns its claim
+            (nil? (get-in row [:data :external_id]))
             (and (= :fresh (:state row))
                  (within-ttl? row ((:now-fn eng)) (:ttl-seconds spec))))
       row
@@ -703,41 +839,74 @@
 (defn push-after-write!
   "The write-back pass for one committed, non-replayed write: when the
   kind is a :push-on-write mirror and the action is one of ITS OWN
-  domain actions (never the engine's sync doors — that would loop —
-  and never a create: locally-minted rows reaching the authority is a
-  recorded punt), push the exported document. Success lands as
-  observe_external (etag + synced_at stamped); any failure lands as
-  mark_conflicted with the adapter's own words — the local document
-  stands, and resolve_conflict decides. A row already conflicted is
-  left alone (waymark9's rule). Returns res with :row refreshed to
-  the post-push truth."
+  domain actions (never the engine's sync doors — that would loop),
+  push the exported document. Success lands as observe_external
+  (etag + synced_at stamped); any failure lands as mark_conflicted
+  with the adapter's own words — the local document stands, and
+  resolve_conflict decides. A row already conflicted is left alone
+  (waymark9's rule). Returns res with :row refreshed to the post-push
+  truth.
+
+  On a :create-push kind the CREATE action pushes too — as a
+  push-create, the authority minting the identity claim_external
+  stamps back; a failed create push is the conflicted state on a row
+  that still has no external id (resolve keep=local retries the
+  create). Discovery mints are born WITH an external id and take the
+  neither branch — a mint records what the authority already has."
   [eng kind action-name res]
   (let [rdef (get (inv/resources eng) kind)
         spec (:mirror rdef)
-        domain? (and spec (:push-on-write spec)
+        committed? (and spec (:push-on-write spec)
+                        (:transition res) (nil? (:replayed? res))
+                        (not= :conflicted (:state (:row res))))
+        domain? (and committed?
                      (contains? (set (keys (:actions rdef))) action-name)
-                     (not (contains? sync-action-names action-name)))]
-    (if-not (and domain? (:transition res) (nil? (:replayed? res)))
-      res
-      (let [row (:row res)]
-        (if (= :conflicted (:state row))
-          res
-          (let [xid (get-in row [:data :external_id])
-                doc (export-document rdef row)
-                pushed (try (push (:adapter spec) xid doc)
-                            (catch Exception e e))]
-            (if (instance? Exception pushed)
-              (assoc res :row
-                     (:row (inv/invoke!
-                            eng kind (:id row) :mark_conflicted
-                            {:reason (or (ex-message ^Exception pushed)
-                                         "push failed")}
-                            {:principal system-observer})))
-              (assoc res :row
-                     (:row (inv/invoke!
-                            eng kind (:id row) :observe_external
-                            {:document doc :etag pushed}
-                            {:principal system-observer}))))))))))
+                     (not (contains? sync-action-names action-name)))
+        ;; a birth, or a domain write on a row the authority hasn't
+        ;; minted yet (claim raced or failed earlier) — either way the
+        ;; authority has never seen this row, so the push is a CREATE
+        birth? (and committed? (:create-push spec)
+                    (nil? (get-in res [:row :data :external_id]))
+                    (or domain?
+                        (contains? (set (:create-action-names rdef))
+                                   action-name)))
+        conflicted (fn [row e]
+                     (assoc res :row
+                            (:row (inv/invoke!
+                                   eng kind (:id row) :mark_conflicted
+                                   {:reason (or (ex-message ^Exception e)
+                                                "push failed")}
+                                   {:principal system-observer}))))]
+    (cond
+      birth?
+      (let [row (:row res)
+            doc (export-document rdef row)
+            minted (try (push-create (:adapter spec) doc)
+                        (catch Exception e e))]
+        (if (instance? Exception minted)
+          (conflicted row minted)
+          (let [[xid etag] minted]
+            (assoc res :row
+                   (:row (inv/invoke!
+                          eng kind (:id row) :claim_external
+                          {:external_id (str xid) :etag etag}
+                          {:principal system-observer}))))))
+
+      domain?
+      (let [row (:row res)
+            xid (get-in row [:data :external_id])
+            doc (export-document rdef row)
+            pushed (try (push (:adapter spec) xid doc)
+                        (catch Exception e e))]
+        (if (instance? Exception pushed)
+          (conflicted row pushed)
+          (assoc res :row
+                 (:row (inv/invoke!
+                        eng kind (:id row) :observe_external
+                        {:document doc :etag pushed}
+                        {:principal system-observer})))))
+
+      :else res)))
 
 (defn with-push
   "Enroll the push-on-write pass on an engine: weaves push-after-write!
@@ -874,7 +1043,11 @@
                       (remove #(some? (row-by-external-id eng kind %)))
                       ids)]
     (doseq [xid new-ids]
-      (inv/create! eng kind {:external_id xid} {:principal system-observer}))
+      ;; :mint? — the engine's own birth door: full-schema model, no
+      ;; app create guards (a mint speaks bookkeeping, not the
+      ;; create-schema's vocabulary)
+      (inv/create! eng kind {:external_id xid}
+                   {:principal system-observer :mint? true}))
     (when (seq new-ids)
       (let [pulled (try (pull-many adapter new-ids)
                         (catch Exception e
@@ -933,7 +1106,11 @@
         rows (store/with-tx st
                (fn [tx] (store/query-rows st tx kind {}
                                           {:limit backfill-limit})))
-        candidates (into [] (remove #(= :conflicted (:state %))) rows)]
+        ;; conflicted stays a person's decision; an unclaimed local
+        ;; birth has no external id to re-pull by
+        candidates (into [] (remove #(or (= :conflicted (:state %))
+                                         (nil? (get-in % [:data :external_id]))))
+                         rows)]
     (try
       (let [pulled (reduce
                     (fn [m batch]
