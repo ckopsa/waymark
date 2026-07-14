@@ -443,7 +443,22 @@
                            :summary (str "Page " n " of " last-page)})
         links (cond-> {}
                 (< number last-page) (assoc :next (page-link (inc number)))
-                (< 1 number) (assoc :prev (page-link (dec number))))
+                (< 1 number) (assoc :prev (page-link (dec number)))
+                ;; the offline round-trip, carrying THIS view's filters
+                ;; — the downloaded workbook holds exactly what the
+                ;; page's query shows (unpaged; the worksheet route
+                ;; ignores pagination)
+                (:worksheet rdef)
+                (assoc :worksheet
+                       (let [q (dissoc applied "page[size]" "page[number]")]
+                         {:href (str "/api/" plural "/-/worksheet"
+                                     (when (seq q)
+                                       (str "?" (str/join "&"
+                                                          (map (fn [[k v]]
+                                                                 (str (enc k) "=" (enc v)))
+                                                               q)))))
+                          :kind "worksheet"
+                          :summary "This view as an editable workbook — download, edit offline, upload the edits"})))
         acts (collection-actions rdef)
         ;; a scoped request's collection affordances: query stays (the
         ;; kind itself is granted or this envelope never rendered),

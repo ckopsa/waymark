@@ -79,6 +79,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.server.surface :as surface]
+            [waymark10.server.worksheet :as worksheet]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder)
@@ -1025,6 +1026,38 @@
         (throw (p/problem :not-found 404 "Not found"
                           {:detail "The UI asset is not on the classpath."}))))))
 
+;; ── the worksheet round-trip ────────────────────────────────────────
+
+(defn- worksheet-get
+  "GET /api/:plural/-/worksheet?<filters> — the filtered view as an
+  xlsx download, for kinds declaring :worksheet. The same query
+  grammar as the collection; pagination params are ignored (a
+  worksheet is the whole subset)."
+  [eng]
+  (fn [{{:keys [plural]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)]
+      (check-kind! req rdef)
+      (worksheet/export eng rdef (query-params req)))))
+
+(defn- worksheet-post
+  "POST /api/:plural/-/worksheet — the edited workbook back, raw
+  bytes in the body; dry_run=1 plans without applying. Every edit
+  replays through the kind's own actions under the request's
+  principal; a scoped grant's action projection gates each one."
+  [eng]
+  (fn [{{:keys [plural]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)
+          _ (check-kind! req rdef)
+          vis (visibility-of req)
+          report (worksheet/import!
+                  eng rdef (:body req)
+                  {:principal (principal-of req)
+                   :dry-run (= "1" (get (query-params req) "dry_run"))
+                   :allowed? (if vis
+                               (fn [aname] ((:action? vis) (:kind rdef) aname))
+                               (constantly true))})]
+      (json-response 200 report media-type nil))))
+
 ;; ── attachment bytes (phase 9a) ─────────────────────────────────────
 
 (defn- attachment-rdef [eng id]
@@ -1121,6 +1154,8 @@
                                         :get (bytes-get eng)}]
          ["/api/surfaces/:name/:id" {:get (surface-view eng)}]
          ["/api/:plural" {:get (collection eng) :post (create eng)}]
+         ["/api/:plural/-/worksheet" {:get (worksheet-get eng)
+                                      :post (worksheet-post eng)}]
          ["/api/:plural/-/:action" {:post (bulk-action eng)}]
          ["/api/:plural/:id" {:get (get-one eng)}]
          ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
