@@ -112,6 +112,7 @@ refusal; a typo'd law key is the `:unknown-law-key` refusal.
 | `:derived spec` | the fact's law rides its own entry (spec: `{:over … :expr …}`, `{:count {:owns …/:related … :where …}}`, or a `defderived` value) | §3 above |
 | `:part-scope {:key …}` | the collection field the part-scoped actions (`:place`) bind items of | `[:days {:part-scope {:key :date}} [:vector …]]` |
 | `:kind` | on a `:waymark/ref` entry: the target kind — the picker, the navigable link, and the assembly ref-check all read it | `[:plan_id {:kind :plan} :waymark/ref]` |
+| `:external-key` | on a **mirror kind's** `:waymark/ref` entry: the sibling field whose external id the sync write resolves to the target mirror row's id (nil until the target exists; discovery heals) | `[:employee_id {:kind :employee :external-key :employee_zenefits_id} :waymark/ref]` |
 | `:label` | the sibling field the engine maintains the ref target's label into | `[:meal_id {:kind :meal :label :meal_name} …]` |
 | `:predecessor {:order …}` | resolve at create to the newest sibling by that field (period chaining) | `[:previous_plan {:kind :plan :predecessor {:order :start_date}} …]` |
 | `:x-display` | advertisement: `{:label …}`, `{:widget "prose"}`, `{:hidden true}` | `[:notes {:x-display {:widget "prose"}} …]` |

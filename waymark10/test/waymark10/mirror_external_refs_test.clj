@@ -1,0 +1,151 @@
+(ns waymark10.mirror-external-refs-test
+  "External-keyed refs on mirror kinds: a :waymark/ref entry declaring
+  {:kind … :external-key <field>} resolves at every sync write — the
+  document's external id becomes the target mirror row's id — and
+  discovery heals edges that observed before their target existed
+  (resolve-refs!, a maintenance write). Driven by paydesk's assignment
+  kind (employee/fund refs over warehouse ids). Needs the test
+  database: WAYMARK10_TEST_DSN overrides."
+  (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.resource :as r]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.mirror :as mirror]
+            [waymark10.server.store :as store]
+            [waymark10.test.db :as db]
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
+
+;; ── the scriptable remotes (batch-E's ScriptedRemote shape) ─────────
+
+(defn- etag-of [doc] (wire/digest doc))
+
+(defrecord ScriptedRemote [state]
+  mirror/MirrorAdapter
+  (discover [_] (vec (sort (keys (:docs @state)))))
+  (pull [_ xid]
+    (if-some [doc (get-in @state [:docs xid])]
+      [doc (etag-of doc)]
+      (throw (ex-info (str xid " is gone from the remote") {}))))
+  (pull-many [_ xids]
+    (into {}
+          (keep (fn [xid]
+                  (when-some [doc (get-in @state [:docs xid])]
+                    [xid [doc (etag-of doc)]])))
+          xids))
+  (push [_ _ _] (throw (ex-info "pull-only" {}))))
+
+(defn- remote [] (->ScriptedRemote (atom {:docs {}})))
+(defn- seed! [rm xid doc] (swap! (:state rm) assoc-in [:docs xid] doc))
+
+;; ── the kinds: author (target) and book (edge with the keyed ref) ───
+
+(defn- author-kind [adapter]
+  (r/resource
+   (mirror/declaration
+    {:kind :author
+     :summary "{data.name}"
+     :label-template "{data.name}"
+     :schema [:map [:name {:optional true} [:maybe [:string {:max 120}]]]]}
+    {:adapter adapter :ttl-seconds 3600 :discover-every 3600})))
+
+(defn- book-kind [adapter]
+  (r/resource
+   (mirror/declaration
+    {:kind :book
+     :summary "{data.title}"
+     :schema [:map
+              [:title {:optional true} [:maybe [:string {:max 120}]]]
+              [:author_external_id {:optional true} [:maybe [:string {:max 64}]]]
+              [:author_id {:optional true :kind :author
+                           :external-key :author_external_id}
+               [:maybe :waymark/ref]]]}
+    {:adapter adapter :ttl-seconds 3600 :discover-every 3600})))
+
+(defn- row-of [eng kind xid]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (first (store/query-rows (:storage eng) tx kind
+                               {:external_id xid} {:limit 1})))))
+
+;; ── the machine ─────────────────────────────────────────────────────
+
+(deftest observe-resolves-and-discovery-heals
+  (let [authors (remote) books (remote)]
+    (db/with-test-engine
+      [(author-kind authors) (book-kind books)]
+      (fn [eng]
+        (testing "target first: the edge's observe resolves the ref"
+          (seed! authors "a1" {:name "Ursula"})
+          (seed! books "b1" {:title "Left Hand" :author_external_id "a1"})
+          (mirror/discover! eng :author)
+          (mirror/discover! eng :book)
+          (let [author-row (row-of eng :author "a1")
+                book-row (row-of eng :book "b1")]
+            (is (= (str (:id author-row))
+                   (get-in book-row [:data :author_id]))
+                "the ref holds the target's ROW id, not the external id")))
+
+        (testing "edge first: nil ref, then the target's discovery heals it"
+          (seed! books "b2" {:title "Dispossessed" :author_external_id "a2"})
+          (mirror/discover! eng :book)
+          (let [before (row-of eng :book "b2")]
+            (is (nil? (get-in before [:data :author_id]))
+                "no target row yet — the honest gap")
+            (seed! authors "a2" {:name "Ursula Too"})
+            (mirror/discover! eng :author)
+            (let [a2 (row-of eng :author "a2")
+                  b2 (row-of eng :book "b2")]
+              (is (= (str (:id a2)) (get-in b2 [:data :author_id]))
+                  "the target's arrival healed the edge (resolve-refs!)")
+              (is (= (:version before) (:version b2))
+                  "the heal is a maintenance write — version untouched, no transition"))))
+
+        (testing "an unset external id resolves to an unset ref"
+          (seed! books "b3" {:title "No Author"})
+          (mirror/discover! eng :book)
+          (is (nil? (get-in (row-of eng :book "b3") [:data :author_id]))))
+
+        (testing "a later heal pass never clobbers an already-set ref"
+          ;; regression: the backfill once wrote `false` over resolved
+          ;; refs when a second target discovery re-ran the pass
+          (let [b2-before (row-of eng :book "b2")]
+            (seed! authors "a3" {:name "Third Author"})
+            (mirror/discover! eng :author)
+            (is (= (get-in b2-before [:data :author_id])
+                   (get-in (row-of eng :book "b2") [:data :author_id]))
+                "b2's resolved ref survives the a3-triggered heal")))))))
+
+(deftest def-site-refusals
+  (testing ":external-key naming no declared field refuses"
+    (is (thrown-with-msg?
+         Exception #"names no declared field"
+         (r/resource
+          (mirror/declaration
+           {:kind :bad :summary "x"
+            :schema [:map
+                     [:thing_id {:optional true :kind :author
+                                 :external-key :nope}
+                      [:maybe :waymark/ref]]]}
+           {:adapter (remote) :ttl-seconds 60 :discover-every 60})))))
+  (testing ":external-key off a non-ref entry refuses"
+    (is (thrown-with-msg?
+         Exception #"rides a :waymark/ref entry"
+         (r/resource
+          (mirror/declaration
+           {:kind :bad :summary "x"
+            :schema [:map
+                     [:plain {:optional true :kind :author
+                              :external-key :plain}
+                      [:maybe [:string {:max 10}]]]]}
+           {:adapter (remote) :ttl-seconds 60 :discover-every 60})))))
+  (testing ":external-key without :kind refuses"
+    (is (thrown-with-msg?
+         Exception #"needs :kind"
+         (r/resource
+          (mirror/declaration
+           {:kind :bad :summary "x"
+            :schema [:map
+                     [:other {:optional true} [:maybe [:string {:max 10}]]]
+                     [:thing_id {:optional true :external-key :other}
+                      [:maybe :waymark/ref]]]}
+           {:adapter (remote) :ttl-seconds 60 :discover-every 60}))))))

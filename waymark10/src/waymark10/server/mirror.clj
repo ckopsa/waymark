@@ -42,6 +42,16 @@
   - Sync transitions are system-actor only and HIDDEN (a hide guard);
     resolve_conflict alone is a human door — reconciling is a
     person's decision, never a silent last-writer-wins.
+  - EXTERNAL-KEYED REFS (paydesk's assignment demanded it): a
+    :waymark/ref entry declaring {:kind … :external-key <field>}
+    resolves at every sync write — the sibling field's external id
+    looks up the target mirror row by external_id and the ROW id
+    lands in the ref, so pickers, navigable links, and labels work
+    across mirror kinds. Missing target ⇒ nil (renderable gap);
+    discovery heals (resolve-refs!, a maintenance write, no
+    transition). A push exports the resolved row ids with the rest of
+    the document — adapters ignore what the external system doesn't
+    own.
 
   Recorded punts, deliberately out of scope until a dogfood demands
   them: the per-kind discovery cursor (a restarted dev server
@@ -127,6 +137,70 @@
 (defn- declared-fields [data-schema]
   (remove bookkeeping-fields (schema/entry-keys data-schema)))
 
+;; ── external-keyed refs ─────────────────────────────────────────────
+;; A mirror's document speaks external ids; waymark refs hold row ids.
+;; An entry spelled [:employee_id {:kind :employee :external-key
+;; :employee_zenefits_id} :waymark/ref] closes the gap: the sync write
+;; resolves the sibling field's external id against the target kind's
+;; external_id (every mirror's promoted, :eq-filterable column) and
+;; lands the target's ROW id in the ref — so the picker, the navigable
+;; link, and the label machinery that already read :kind all work on a
+;; mirror kind. No target row yet ⇒ nil, a renderable gap; the target
+;; kind's next discovery pass heals it (discover! calls resolve-refs!
+;; on every kind pointing at what it just minted).
+
+(defn- schema-head [form]
+  (let [f (if (and (vector? form) (= :maybe (first form))) (second form) form)]
+    (if (vector? f) (first f) f)))
+
+(defn external-ref-specs
+  "field → {:kind … :external-key …} for every entry of the woven
+  schema declaring :external-key — the refs the sync path resolves."
+  [data-schema]
+  (into {}
+        (keep (fn [[f {:keys [properties]}]]
+                (when (:external-key properties)
+                  [f (select-keys properties [:kind :external-key])])))
+        (schema/entry-map data-schema)))
+
+(defn- check-external-refs!
+  "Every :external-key rides a :waymark/ref entry, names a declared
+  field, and carries the :kind the id resolves against — refused at
+  the def site, not discovered at the first nil ref."
+  [kind data-schema]
+  (let [entries (schema/entry-map data-schema)
+        fields (set (keys entries))]
+    (doseq [[f {:keys [properties schema]}] entries
+            :let [ek (:external-key properties)]
+            :when ek]
+      (let [err (fn [msg] (throw (t/definition-error
+                                  (str (some-> kind name) "/" (name f) ": " msg))))]
+        (when-not (= :waymark/ref (schema-head schema))
+          (err ":external-key rides a :waymark/ref entry — this one isn't"))
+        (when-not (:kind properties)
+          (err ":external-key needs :kind — the target kind the external id resolves against"))
+        (when-not (contains? fields ek)
+          (err (str ":external-key " ek " names no declared field")))))))
+
+(defn- resolve-external-refs
+  "The encoded document with each external-keyed ref recomputed from
+  its sibling external id through the ctx :find hook — one indexed
+  lookup per ref; unset or unmatched external ids land nil (the
+  honest gap). A ctx without :find (never the sync writes' case)
+  leaves the document untouched."
+  [specs merged ctx]
+  (if-some [find-rows (:find ctx)]
+    (reduce-kv
+     (fn [m field {:keys [kind external-key]}]
+       (let [xid (get m external-key)]
+         (assoc m field
+                (when (and (some? xid) (not= "" (str xid)))
+                  (some-> (first (find-rows kind {:external_id (str xid)}
+                                            {:limit 1}))
+                          :id str)))))
+     merged specs)
+    merged))
+
 (defn- observe-handler
   "The one sync write: the external document onto our data (matching
   declared fields only, bookkeeping excluded), etag and synced_at
@@ -134,15 +208,17 @@
   schema so the applied document decodes to schema types like any
   other load."
   [data-schema]
-  (let [declared (declared-fields data-schema)]
+  (let [declared (declared-fields data-schema)
+        ref-specs (external-ref-specs data-schema)]
     (with-meta
       (fn [row inp ctx]
         (let [applied (select-keys (:document inp) declared)
-              merged (merge (schema/encode data-schema (:data row))
-                            applied
-                            {:external_etag (:etag inp)
-                             :synced_at (str (:now ctx))
-                             :conflict_reason nil})]
+              merged (-> (merge (schema/encode data-schema (:data row))
+                                applied
+                                {:external_etag (:etag inp)
+                                 :synced_at (str (:now ctx))
+                                 :conflict_reason nil})
+                         (as-> m (resolve-external-refs ref-specs m ctx)))]
           (assoc row :data (schema/decode data-schema merged))))
       ;; the canonical identity of the generic sync handler: one form,
       ;; every mirror kind — the imperative residue is this namespace's
@@ -168,18 +244,20 @@
   reconcile carried; an unreachable adapter fails the invoke loudly
   and the row stays conflicted."
   [adapter data-schema]
-  (let [declared (declared-fields data-schema)]
+  (let [declared (declared-fields data-schema)
+        ref-specs (external-ref-specs data-schema)]
     (with-meta
       (fn [row inp ctx]
         (let [xid (get-in row [:data :external_id])
               encoded (schema/encode data-schema (:data row))]
           (if (= "remote" (:keep inp))
             (let [[doc etag] (pull adapter xid)
-                  merged (merge encoded
-                                (select-keys doc declared)
-                                {:external_etag etag
-                                 :synced_at (str (:now ctx))
-                                 :conflict_reason nil})]
+                  merged (-> (merge encoded
+                                    (select-keys doc declared)
+                                    {:external_etag etag
+                                     :synced_at (str (:now ctx))
+                                     :conflict_reason nil})
+                             (as-> m (resolve-external-refs ref-specs m ctx)))]
               (assoc row :data (schema/decode data-schema merged)))
             (let [etag (push adapter xid (select-keys encoded declared))]
               (update row :data assoc
@@ -252,6 +330,7 @@
   (when push-on-write
     (check-domain-actions! (:kind rmap) (:actions rmap)))
   (let [data-schema (into [:map] (concat bookkeeping-schema (rest (:schema rmap))))]
+    (check-external-refs! (:kind rmap) data-schema)
     (-> rmap
         (assoc :schema data-schema
                :states sync-states
@@ -421,6 +500,74 @@
       (first (store/query-rows (:storage eng) tx kind
                                {:external_id xid} {:limit 1})))))
 
+(def ^:private backfill-limit
+  "resolve-refs! reads the kind in ONE bounded fetch (query-rows
+  pages by LIMIT only — no offset — so a loop cannot advance). Far
+  above any enrolled mirror's row count; a kind at the bound gets a
+  loud warning, never a silent partial heal."
+  50000)
+
+(defn resolve-refs!
+  "The external-ref backfill for one mirror kind: every row whose
+  external-keyed ref is still unset while its external id IS set gets
+  one resolution attempt, landed as a maintenance write (update-data!
+  — no transition; resolving a ref is derivation, not an event, the
+  same posture as the derived-fact maintainer). One indexed lookup
+  per DISTINCT unresolved external id, not per row. Returns the
+  number of rows healed. discover! runs this for every kind pointing
+  at what it just minted — a target's arrival heals the edges that
+  observed before it existed; a backfill never CLEARS a ref (only the
+  sync writes recompute in full)."
+  [eng kind]
+  (let [rdef (get (inv/resources eng) kind)
+        specs (external-ref-specs (:schema rdef))
+        st (:storage eng)]
+    (if (empty? specs)
+      0
+      (store/with-tx st
+        (fn [tx]
+          (let [rows (store/query-rows st tx kind {} {:limit backfill-limit})
+                _ (when (= (count rows) backfill-limit)
+                    (warn! "resolve-refs! for " (name kind) " hit the "
+                           backfill-limit "-row bound — rows beyond it "
+                           "keep their unresolved refs until the next pass"))
+                ;; the distinct unresolved (target-kind, external-id)
+                ;; pairs across every row and spec
+                wanted (into #{}
+                             (for [row rows
+                                   [field {target :kind ek :external-key}] specs
+                                   :let [xid (get-in row [:data ek])]
+                                   :when (and (nil? (get-in row [:data field]))
+                                              (some? xid) (not= "" (str xid)))]
+                               [target (str xid)]))
+                resolved (into {}
+                               (keep (fn [[target xid]]
+                                       (when-some [t (first (store/query-rows
+                                                             st tx target
+                                                             {:external_id xid}
+                                                             {:limit 1}))]
+                                         [[target xid] (str (:id t))])))
+                               wanted)]
+            (reduce
+             (fn [healed row]
+               (let [data (:data row)
+                     data' (reduce-kv
+                            (fn [d field {target :kind ek :external-key}]
+                              (let [xid (get d ek)]
+                                (if (and (nil? (get d field)) (some? xid)
+                                         (not= "" (str xid)))
+                                  (if-some [rid (get resolved [target (str xid)])]
+                                    (assoc d field rid)
+                                    d)
+                                  d)))
+                            data specs)]
+                 (if (= data data')
+                   healed
+                   (do (store/update-data! st tx kind (:id row) data'
+                                           (:next-flip-at row))
+                       (inc (long healed))))))
+             0 rows)))))))
+
 (defn discover!
   "One discovery pass for one mirror kind: mint a row per unknown
   external id ({:external_id id} only — the fields arrive by pull),
@@ -454,6 +601,15 @@
           (inv/invoke! eng kind (:id row) :observe_external
                        {:document doc :etag etag}
                        {:principal system-observer}))))
+    ;; new targets heal the external-keyed refs pointing at them: a
+    ;; row observed before its target existed carries a nil ref until
+    ;; either its own next document change or this pass
+    (when (seq new-ids)
+      (doseq [[k other] (inv/resources eng)
+              :when (and (:mirror other)
+                         (some #(= kind (:kind %))
+                               (vals (external-ref-specs (:schema other)))))]
+        (resolve-refs! eng k)))
     (count new-ids)))
 
 (defn discover-all!
