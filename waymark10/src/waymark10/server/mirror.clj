@@ -814,7 +814,20 @@
           (let [[doc etag] pulled]
             (if (and (= etag (get-in row [:data :external_etag]))
                      (= :fresh (:state row)))
-              row
+              ;; observed, unchanged: still no transition (that would
+              ;; be audit noise) — but the CHECK is a fact, and
+              ;; without stamping it the TTL never resets: every read
+              ;; past the boundary re-pulls the tunnel forever. A
+              ;; maintenance write records freshness.
+              (let [now ((:now-fn eng))]
+                (store/with-tx (:storage eng)
+                  (fn [tx]
+                    (store/update-data!
+                     (:storage eng) tx (:kind rdef) (:id row)
+                     (assoc (schema/encode (:schema rdef) (:data row))
+                            :synced_at (str now))
+                     (:next-flip-at row))))
+                (assoc-in row [:data :synced_at] now))
               ;; the :immutable tripwire runs before the observe: a
               ;; changed document moving a set-once value is
               ;; conflict-shaped, not syncable
@@ -1244,7 +1257,17 @@
                        (-> acc (update :checked inc)
                            (update :rewritten inc)))
 
-                   :else (update acc :checked inc)))
+                   ;; observed, unchanged: stamp the check (a
+                   ;; maintenance write) so the TTL window resets —
+                   ;; the boot resync buys the whole kind a fresh hour
+                   :else
+                   (do (store/with-tx st
+                         (fn [tx]
+                           (store/update-data!
+                            st tx kind (:id row)
+                            (assoc (:data row) :synced_at (str now))
+                            (:next-flip-at row))))
+                       (update acc :checked inc))))
                (-> acc (update :checked inc) (update :gone inc)))))
          {:checked 0 :rewritten 0 :gone 0 :conflicted 0}
          candidates))

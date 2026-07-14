@@ -103,7 +103,17 @@
           (seed! journals "j1" {:name "J1 renamed"})
           (mirror/resync! eng :journal)
           (is (= "J1 renamed" (field eng :journal "j1" :name)))
-          (is (= "100" (field eng :journal "j1" :total_aum))))))))
+          (is (= "100" (field eng :journal "j1" :total_aum))))
+
+        (testing "an unchanged check still stamps synced_at (maintenance
+                  write) — otherwise the TTL never resets and every
+                  post-TTL read re-pulls forever"
+          (let [before (field eng :report "r2" :synced_at)]
+            (is (= {:checked 2 :rewritten 0 :gone 0 :conflicted 0}
+                   (mirror/resync! eng :report))
+                "nothing changed — no rewrites, no transitions")
+            (is (not= before (field eng :report "r2" :synced_at))
+                "…but the check itself is recorded as freshness")))))))
 
 ;; ── authority windows ───────────────────────────────────────────────
 
