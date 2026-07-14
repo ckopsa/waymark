@@ -90,7 +90,11 @@
    :summary "Deferred {data.action} on {data.kind} · {state}"
    :schema [:map
             [:action [:string {:min 1 :max 64}]]
-            [:kind [:string {:min 1 :max 64}]]
+            ;; showcased: the kind filter stands above the jobs table
+            ;; as a select of observed kinds (the facet counts ride
+            ;; the options) — the queue is usually read one kind at a
+            ;; time
+            [:kind {:x-display {:showcase true}} [:string {:min 1 :max 64}]]
             [:ids [:vector [:string {:min 1}]]]
             ;; the per-item action input, wire-shaped, verbatim
             [:input {:optional true} :any]
@@ -104,6 +108,7 @@
             [:report {:optional true} :any]]
    :filterable {:state #{:eq :in}
                 :kind #{:eq}}
+   :faceted [:kind]
    :create-guards [worker-only]
    :actions
    {:start {:from #{:queued} :to :running

@@ -247,6 +247,13 @@
   .filterpanel select, .filterpanel input { font-size: 12px; }
   .facet-count { font-family: var(--mono); font-size: 10.5px;
                  color: var(--muted); }
+  .showcase-filters { display: flex; flex-wrap: wrap; gap: 12px;
+                      align-items: center; }
+  .showcase-filter { display: inline-flex; align-items: center; gap: 6px;
+                     font-size: 11px; color: var(--muted); font-weight: 600;
+                     white-space: nowrap; }
+  .showcase-filter select, .showcase-filter input { font-size: 12px; }
+  .showcase-filter input { width: 110px; }
 
   /* ── the home dashboard ─────────────────────────────────────────── */
   .dash-grid { display: grid; gap: 12px; margin-bottom: 16px;
@@ -926,6 +933,59 @@ function hashFilterOps(path, params) {
   };
 }
 
+/* the declaration-showcased filters, standing above the table: a
+   schema entry advertising :x-display {:showcase true} (read off the
+   same kind-schema hints that label the columns) gets its filter
+   rendered as an always-visible control instead of waiting inside
+   the popover. Enum'd fields (declared enums and facet-spliced vocab
+   values) become a select — facet counts ride the options, and
+   filterChips/facetChips skip showcased fields so each filter has
+   one home. A showcased x-in field trades the chips' multi-toggle
+   for the select's single pick — the declaration chose at-hand over
+   exhaustive. Ranged fields get a min–max pair, :after a date input,
+   plain :eq a text input applying on change. Same unprefixed
+   params/apply contract as filterPopover below. */
+function showcaseFilters(query, params, apply, hints) {
+  const gc = gridColumns(query);
+  const props = (query || {}).properties || {};
+  const cols = Object.values(gc).filter(c =>
+    Object.keys(c.ops).length && xdisplay(hints, c.field).showcase);
+  if (!cols.length) return null;
+  const input = (name, col, ph) => {
+    const i = el("input", {
+      type: col.format === "date" ? "date"
+        : (col.type === "integer" || col.type === "number") ? "number" : "text",
+      step: "any", placeholder: ph || col.format || col.type || ""});
+    i.value = params.get(name) || "";
+    i.addEventListener("change", () => apply({[name]: i.value}));
+    return i;
+  };
+  const controls = cols.map(col => {
+    const f = col.field;
+    const lbl = xdisplay(hints, f).label || title(f);
+    let body;
+    if (col.enum && (col.ops.eq || col.ops.in)) {
+      const facets = props[f]?.["x-facets"] || {};
+      const s = el("select", {});
+      s.append(el("option", {value: ""}, "All"));
+      for (const v of col.enum)
+        s.append(el("option", {value: v},
+          pretty(v) + (v in facets ? ` · ${facets[v]}` : "")));
+      s.value = params.get(f) || "";
+      s.addEventListener("change", () => apply({[f]: s.value}));
+      body = [s];
+    } else if (col.ops.gte || col.ops.lte) {
+      body = [input(f + "_gte", col, "min"), "–", input(f + "_lte", col, "max")];
+    } else if (col.ops.after) {
+      body = [input(f + "_after", col)];
+    } else {
+      body = [input(f, col)];
+    }
+    return el("label", {class: "showcase-filter"}, lbl, body);
+  });
+  return el("div", {class: "showcase-filters"}, controls);
+}
+
 /* query: gridColumns-input-schema shape. params: the CURRENT active
    params, already unprefixed (an embedded table passes its own
    embed.<rel>.* slice, stripped of the prefix — see embeddedSections).
@@ -1000,9 +1060,11 @@ function filterChips(query, params, remove, hints) {
     if (name === "sort" || name.startsWith("page[")) continue;
     const m = /^(.*)_(gte|lte|after)$/.exec(name);
     const field = m ? m[1] : name;
-    // facets render their own chips (facetChips) — skip here so an
-    // active x-in facet doesn't get a redundant second chip
-    if (!(field in gc) || (!m && props[field]?.["x-facets"])) continue;
+    // facets render their own chips (facetChips) and a showcased
+    // field's standing control already displays its own value — skip
+    // both here so an active filter doesn't get a redundant second UI
+    if (!(field in gc) || (!m && props[field]?.["x-facets"]) ||
+        xdisplay(hints, field).showcase) continue;
     const lbl = xdisplay(hints, field).label || title(field);
     const opTxt = m ? SUFFIX_LABEL[m[2]] : "=";
     chips.push(el("span", {class: "chip on"},
@@ -1013,12 +1075,14 @@ function filterChips(query, params, remove, hints) {
 }
 
 /* facet chips: x-facets counts per faceted field, current filters lit —
-   a chip click toggles membership in the comma list (x-in). */
-function facetChips(query, selfHref) {
+   a chip click toggles membership in the comma list (x-in). A
+   showcased field's values live in its standing select (counts and
+   all), so it gets no chips row here. */
+function facetChips(query, selfHref, hints) {
   const {path, params} = parseHrefQuery(selfHref);
   const rows = [];
   for (const [field, prop] of Object.entries(query.input?.properties || {})) {
-    if (!prop["x-facets"]) continue;
+    if (!prop["x-facets"] || xdisplay(hints, field).showcase) continue;
     const active = (params.get(field) || "").split(",").filter(Boolean);
     const chips = Object.entries(prop["x-facets"]).map(([value, count]) => {
       const on = active.includes(value);
@@ -1132,13 +1196,15 @@ function renderCollection(view, doc, hints) {
   const gridQuery = query?.input;
   if (query) {
     const {apply, remove} = hashFilterOps(path, params);
-    const fp = filterPopover(gridQuery, params, apply, hints);
     const bar = el("div", {class: "filterbar"});
+    const sf = showcaseFilters(gridQuery, params, apply, hints);
+    if (sf) bar.append(sf);
+    const fp = filterPopover(gridQuery, params, apply, hints);
     if (fp) bar.append(fp);
     const fc = filterChips(gridQuery, params, remove, hints);
     if (fc) bar.append(fc);
     panel.append(bar);
-    panel.append(...facetChips(query, doc.self));
+    panel.append(...facetChips(query, doc.self, hints));
   }
 
   /* bulk affordances: a checkbox column plus one button per bulk action */

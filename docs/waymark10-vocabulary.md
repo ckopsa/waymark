@@ -115,7 +115,7 @@ refusal; a typo'd law key is the `:unknown-law-key` refusal.
 | `:external-key` | on a **mirror kind's** `:waymark/ref` entry: the sibling field whose external id the sync write resolves to the target mirror row's id (nil until the target exists; discovery heals) | `[:employee_id {:kind :employee :external-key :employee_zenefits_id} :waymark/ref]` |
 | `:label` | the sibling field the engine maintains the ref target's label into | `[:meal_id {:kind :meal :label :meal_name} …]` |
 | `:predecessor {:order …}` | resolve at create to the newest sibling by that field (period chaining) | `[:previous_plan {:kind :plan :predecessor {:order :start_date}} …]` |
-| `:x-display` | advertisement: `{:label …}`, `{:widget "prose"}`, `{:hidden true}` | `[:notes {:x-display {:widget "prose"}} …]` |
+| `:x-display` | advertisement: `{:label …}`, `{:widget "prose"}`, `{:hidden true}`, `{:showcase true}` — showcase renders a filterable field's filter as a standing control above the collection table (a select for enum'd/faceted fields, a min–max pair for `:range`, a date input for `:after`) instead of tucking it in the Filters popover | `[:kind {:x-display {:showcase true}} …]` |
 
 **Waymark schema types:** `:waymark/date` (LocalDate), `:waymark/instant`
 (a point the clock can compare), `:waymark/ref` (a reference; give it
