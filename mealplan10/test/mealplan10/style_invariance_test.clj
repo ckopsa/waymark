@@ -68,6 +68,7 @@
    :shape 2
    :upcasts {1 meal/fold-theme}
    :summary "{data.name} · {state}"
+   :nav :secondary
    :schema [:map
             [:name [:string {:min 1 :max 200}]]
             [:themes meal/theme-schema]
@@ -157,6 +158,7 @@
    :states [:inactive :active]
    :initial :inactive
    :summary "{data.name} · {state}"
+   :nav :secondary
    :schema [:map
             [:name [:string {:min 1 :max 100}]]
             [:themes [:vector {:min 1} [:string {:min 1 :max 50}]]]
@@ -514,6 +516,7 @@
    :initial :pending
    :terminal #{:done :cancelled}
    :summary "{data.task_type} · {data.meal_name} ({data.date}) · {state}"
+   :nav :secondary
    :schema [:map
             [:plan_id {:kind :plan} :waymark/ref]
             [:date {:x-display {:label "Dinner date"}} :waymark/date]
@@ -570,6 +573,7 @@
 (def old-event-app-map
   {:kind :event
    :summary "{data.title} · {data.date}"
+   :nav :secondary
    :schema [:map
             [:title {:optional true}
              [:maybe [:string {:max 120}]]]

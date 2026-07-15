@@ -48,6 +48,7 @@
    (mirror/declaration
     {:kind :event
      :summary "{data.title} · {data.date}"
+     :nav :secondary
      :schema [:map
               [:title {:optional true}
                [:maybe [:string {:max 120}]]]

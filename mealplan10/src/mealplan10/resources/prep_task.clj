@@ -46,6 +46,7 @@
    :initial :pending
    :terminal #{:done :cancelled}
    :summary "{data.task_type} · {data.meal_name} ({data.date}) · {state}"
+   :nav :secondary
    :schema [:map
             [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
             [:date {:x-display {:label "Dinner date"}} :waymark/date]
