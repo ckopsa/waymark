@@ -793,7 +793,9 @@
             ;; refuse exactly as ever
             (let [partial? (= :partial dry-run)
                   inp (if (:input defn)
-                        (let [decoded (schema/decode (:input defn) (or body {}))
+                        (let [decoded (schema/apply-defaults
+                                       (:input defn)
+                                       (schema/decode (:input defn) (or body {})))
                               errors (cond-> (schema/closed-errors
                                               (:input defn) decoded)
                                        partial?
@@ -1309,6 +1311,10 @@
             {:replayed? :idempotency :response hit}
             (throw (p/idempotency-key-reuse create-action)))
         (let [inp (schema/decode model (or body {}))
+              ;; declared defaults fill absent keys before validation —
+              ;; but never on a mint: a mirror records what the
+              ;; authority has, and absent means absent
+              inp (if mint? inp (schema/apply-defaults model inp))
               _ (when-some [errors (schema/closed-errors model inp)]
                   (throw (p/schema-invalid :create errors)))
               ctx (make-ctx engine tx :invoke principal

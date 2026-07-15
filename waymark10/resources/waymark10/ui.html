@@ -2369,13 +2369,17 @@ function buildForm(schema, prefill, kind) {
         el("input", {type: "hidden", name, value: String(c)})));
       continue;
     }
+    /* the declared default seeds an unanswered field — prefill wins */
+    const seed = (prefill || {})[name] !== undefined
+      ? (prefill || {})[name]
+      : (rawProp.default !== undefined ? rawProp.default : prop.default);
     let widget;
     if (xref(rawProp)) {
       widget = el("select", {name}, el("option", {value: ""}, "…"));
       /* prop.enum here is the guard-folded admitted set — honor it */
-      refOptions(widget, rawProp, (prefill || {})[name], prop.enum);
+      refOptions(widget, rawProp, seed, prop.enum);
     } else {
-      widget = fieldWidget(name, rawProp, (prefill || {})[name]);
+      widget = fieldWidget(name, rawProp, seed);
     }
     if (vocabProp(rawProp) && widget.tagName === "INPUT") {
       const listId = "vocab-" + (++vocabListSeq);

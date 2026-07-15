@@ -185,6 +185,40 @@
                      value)
           (me/humanize)))
 
+;; ── defaults (design §24) ───────────────────────────────────────────
+
+(declare entry-map)
+
+(defn apply-defaults
+  "Fill ABSENT keys of a decoded map with the entries' declared
+  :default values — an explicit null stays (the author said blank),
+  and a present value is never touched. Recurses into vector-of-map
+  items so an embedded item fills its own item defaults (a birthing
+  sighting's quantity). Applied at the write doors (create + action
+  input) BEFORE validation; stored documents leave the doors complete,
+  so reads never default."
+  [form value]
+  (if-not (map? value)
+    value
+    (reduce-kv
+     (fn [v k {:keys [properties schema]}]
+       (let [s (if (and (vector? schema) (= :maybe (first schema)))
+                 (second schema)
+                 schema)
+             item-form (when (and (vector? s) (= :vector (first s)))
+                         (last s))
+             v (if (and (contains? properties :default)
+                        (not (contains? v k)))
+                 (assoc v k (:default properties))
+                 v)]
+         (if (and (vector? item-form)
+                  (= :map (first item-form))
+                  (vector? (get v k)))
+           (assoc v k (mapv #(apply-defaults item-form %) (get v k)))
+           v)))
+     value
+     (entry-map form))))
+
 ;; ── introspection (what the checks read) ────────────────────────────
 
 (defn map-schema?
@@ -247,7 +281,11 @@
     (contains? props :open)
     (assoc :json-schema/x-vocab
            (into {} (filter (comp some? val))
-                 (select-keys props [:open :facet :placeholder])))))
+                 (select-keys props [:open :facet :placeholder])))
+    ;; the declared default rides as the standard JSON-Schema keyword —
+    ;; the form prefills it, the engine applies it to absent keys
+    (contains? props :default)
+    (assoc :json-schema/default (:default props))))
 
 (defn- annotate
   "Walk a schema form, promoting waymark entry properties to

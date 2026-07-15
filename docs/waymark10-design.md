@@ -3141,3 +3141,17 @@ a pick the target collection would 400: keys must be `:state` or an
 `:eq`/`:in`-filterable field, and state values must be declared states
 (`state` is every collection's standing filter, collections.clj).
 Proof: `waymark10/test/waymark10/pick_test.clj`.
+
+## `:default` — the declared field default
+
+v9's Data-model defaults, respelled as an entry property (v10 had no
+default grammar; every app hand-rolled :on-create). Applied at the
+write doors only — create and action input, before validation; absent
+fills, explicit null stays, item maps fill one level, mints take none.
+Projection = the standard JSON-Schema `default` keyword (the generic
+form prefills). Law stance: defaults are truth-class — the
+anticipated `create` facet lands as `{"defaults" {field value}}`
+(item defaults dotted), actions project `input_defaults`, both
+non-empty-only for hash stability. `check-defaults` refuses a default
+the entry schema rejects and any default on a derived field.
+Proof: `waymark10/test/waymark10/defaults_test.clj`.

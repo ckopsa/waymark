@@ -658,6 +658,38 @@
             lg (g/iter-leaves top)]
       (validate "create guard" lg))))
 
+(defn- check-defaults
+  "A declared :default must be a value its own entry schema accepts —
+  a default the door would refuse is a lie at the def site — and a
+  derived field takes no default (one fact, one writer). Walks the
+  data schema, the create schema, and every action input, one level
+  into vector-of-map items (the same depth apply-defaults fills)."
+  [r]
+  (let [validate
+        (fn validate [where form]
+          (doseq [[k {:keys [properties schema]}] (schema/entry-map form)
+                  :let [s (if (and (vector? schema) (= :maybe (first schema)))
+                            (second schema)
+                            schema)
+                        item (when (and (vector? s) (= :vector (first s)))
+                               (last s))]]
+            (when (contains? properties :default)
+              (when (contains? (:derived r) k)
+                (err r :defaults (str where "." (name k) ": a derived field "
+                                      "takes no default — one fact, one writer")))
+              (when-not (schema/validate schema (:default properties))
+                (err r :defaults (str where "." (name k) ": default "
+                                      (pr-str (:default properties))
+                                      " is not a value this field accepts"))))
+            (when (and (vector? item) (= :map (first item)))
+              (validate (str where "." (name k)) item))))]
+    (validate "data" (:schema r))
+    (when-some [cs (:create-schema r)] (validate "create" cs))
+    (doseq [a (machine/actions-seq r)
+            :when (:input a)]
+      (validate (str "action " (name (:name a)) " input") (:input a)))
+    nil))
+
 ;; check-when (conditional demand over input models) and check-authored
 ;; (authority-synced fields) are phase-2: their declarations are unported.
 
@@ -676,4 +708,5 @@
           check-handler-signatures check-summary-template check-waive-tokens
           check-place check-edit check-altitude check-long-text
           check-filterable check-faceted check-oneof check-unique check-links
-          check-derived check-renames check-unless check-require])})
+          check-derived check-renames check-unless check-require
+          check-defaults])})

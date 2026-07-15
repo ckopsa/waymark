@@ -233,3 +233,23 @@ nothing to do on a given run (an empty cascade, a conditional write).
 The writes themselves come from the owns cascade or the handler's
 ctx `:invoke` door; `:touches` is the advertisement, never the
 mechanism.
+
+## 10 · `:default` — the declared field default
+
+```clojure
+[:ratio {:optional true :default 1M} [:maybe [:decimal {:gt 0 :max 100}]]]
+[:quantity {:optional true :default 1} [:maybe [:int {:min 1}]]]
+```
+
+The doors (create + action input) fill ABSENT keys with the declared
+default before validation — an explicit null stays (the author said
+blank), a present value is never touched, vector-of-map items fill
+their own item defaults, and a mirror mint takes none (the authority's
+absence means absence). The projection carries the standard
+JSON-Schema `default` keyword, so the generic client's form prefills
+it. Defaults are LAW: a default changes what a blank write stores —
+the fingerprint's `create` facet (`{"defaults" {…}}`) and each
+action's `input_defaults` project them, non-empty-only, so the
+default-free world hashes as ever. The checks refuse a default the
+field would not accept and any default on a derived field (one fact,
+one writer).

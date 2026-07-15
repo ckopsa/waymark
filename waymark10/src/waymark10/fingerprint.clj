@@ -123,12 +123,41 @@
                      columns)
      "indexes" (vec (sort (keys indexes)))}))
 
+(defn- unwrap-maybe-form [s]
+  (if (and (vector? s) (= :maybe (first s))) (second s) s))
+
+(defn- schema-defaults
+  "The declared :default values of a schema form, flattened —
+  {\"field\" value}, item defaults as \"field.item_field\". Empty map
+  when the form declares none (the facet stays absent — hash
+  stability for the default-free world)."
+  [form]
+  (if (nil? form)
+    (sorted-map)
+    (into (sorted-map)
+          (mapcat (fn [[k {:keys [properties schema]}]]
+                    (let [s (unwrap-maybe-form schema)
+                          item (when (and (vector? s) (= :vector (first s)))
+                                 (last s))
+                          own (when (contains? properties :default)
+                                [[(name k) (:default properties)]])
+                          nested (when (and (vector? item)
+                                            (= :map (first item)))
+                                   (map (fn [[ik iv]]
+                                          [(str (name k) "." ik) iv])
+                                        (schema-defaults item)))]
+                      (concat own nested))))
+          (schema/entry-map form))))
+
 (defn- action-fp [a]
   (cond-> {"from"    (vec (sort (map name (:from a))))
            "to"      (name (:to a))
            "safety"  (safety-fp (:safety a))
            "guards"  (mapv guard-fp (:guards a []))
            "handler" (callable-hash (:handler a))}
+    ;; a default changes what a blank write stores — law, non-empty-only
+    (seq (schema-defaults (:input a)))
+    (assoc "input_defaults" (schema-defaults (:input a)))
     ;; blast radius is law (waymark9 touches=): projected only when
     ;; declared, so every touch-free action hashes byte-identical to
     ;; the pre-touches era
@@ -198,6 +227,13 @@
     (and (:schema rmap) (:plural rmap))
     (assoc "storage" (storage-fp rmap))
 
+    ;; the create facet (design §24, anticipated above): declared
+    ;; field defaults are law — a default changes what a blank write
+    ;; stores. Non-empty-only: the default-free world hashes as ever
+    (seq (schema-defaults (or (:create-schema rmap) (:schema rmap))))
+    (assoc "create" {"defaults" (schema-defaults
+                                 (or (:create-schema rmap) (:schema rmap)))})
+
     ;; recorded deviations are reviewable law (advertisement-class):
     ;; editing one shows in the diff and mints a revision. Projected
     ;; only when non-empty, so every deviation-free kind's hash is
@@ -218,7 +254,8 @@
                                  "safety" "tolerance"})
 (def ^:private truth-family #{"derived" "machine" "authored" "owns" "compound"
                               "touches" "batch" "bulk" "handler" "renames"
-                              "renamed_actions" "renamed_fields" "authority"})
+                              "renamed_actions" "renamed_fields" "authority"
+                              "create"})
 (def ^:private advertisement-family #{"display" "field_display" "summary"
                                       "label_template" "explain" "links"
                                       "profiles" "query" "data_schema"
