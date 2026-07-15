@@ -7,10 +7,11 @@
   hold it; who is admin stays auditable.
 
   Recorded deviations and named punts:
-  - One spelling per role is a create guard over ctx :find, not a
-    declared :unique — v10 storage enforces no unique index yet
-    (definitions carries the same punt), so the guard is the honest
-    spelling and two racing creates remain the recorded window.
+  - One spelling per role stays a create guard over ctx :find. Since
+    design §24 a declared :unique DOES reach storage (plan_day's
+    demand); adopting it here (and in definitions) is a named
+    follow-up — the guard keeps the nicer refusal sentence, the index
+    would close the racing-creates window.
   - waymark9 grants consulted _active_role_named on role-held grants;
     v10 grants name a principal audience, not a role — the registry's
     v10 consumer is the member's roles field (members.clj)."

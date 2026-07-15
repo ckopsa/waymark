@@ -3212,3 +3212,19 @@ domain kinds first and the system kinds under a quiet divider, and
 the dashboard splits its chip rows the same way. `:secondary` stays
 the app's word for "a domain kind behind the menu."
 Proof: the nav assertion in `waymark10/test/waymark10/dev_test.clj`.
+## `:unique` reaches storage — the declaration's index, the insert's honest 409
+
+Declared and shape-checked since batch G, enforced never (roles and
+definitions hand-rolled find-guards around the punt). The plan_day
+demand (one day per plan and date) fills it: `kind-projection` emits
+one `CREATE UNIQUE INDEX` per `:unique` group over the promoted
+generated columns (the checks already demand promotion, so the
+columns exist by construction); the migrate planner reconciles it
+like any declared index — virgin create, drift add, undeclared drop
+(the drop scan now anchors on `ix_/ux_<table>_`, so a table whose
+name starts with those letters never loses its pkey); and the index's
+23505 surfaces as `p/unique-conflict`, an honest 409 problem, from
+both write doors (a data edit can move a generated column into
+collision). roles/definitions keep their guards — the nicer refusal
+sentence — with adoption a named follow-up.
+Proof: `waymark10/test/waymark10/unique_index_test.clj`.

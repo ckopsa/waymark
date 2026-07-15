@@ -1152,6 +1152,11 @@
             (:waymark10/version-conflict d)
             (p/->response (p/version-conflict nil (select-keys d [:kind :id])))
 
+            ;; a declared :unique refused at the index (design §24) —
+            ;; the tx has already rolled back, same as version-conflict
+            (:waymark10/unique-violation d)
+            (p/->response (p/unique-conflict (:kind d) (:constraint d)))
+
             :else
             (do (binding [*out* *err*]
                   (println "waymark10 internal error:" (ex-message e))

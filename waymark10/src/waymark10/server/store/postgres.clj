@@ -312,6 +312,14 @@
 
 ;; ── the storage ─────────────────────────────────────────────────────
 
+(defn- unique-constraint-name
+  "The ux_… index name out of a 23505's server message — best-effort:
+  the 409 must stay honest when parsing fails."
+  [^org.postgresql.util.PSQLException e]
+  (some->> (.getMessage e)
+           (re-find #"\"(ux_[a-z0-9_]+)\"")
+           second))
+
 (defrecord PostgresStorage [^HikariDataSource ds tables]
   store/Storage
   (with-tx* [_ f]
@@ -334,32 +342,46 @@
 
   (insert-row! [_ tx kind row]
     (let [table (get @tables kind)]
-      (jdbc/execute-one!
-       tx
-       [(str "INSERT INTO " table
-             " (id, state, version, data, shape, owner, law_revision, next_flip_at)"
-             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        (:id row) (name (:state row)) (:version row 1)
-        (jsonb (:data row)) (:shape row 1) (:owner row)
-        (:law-revision row)
-        (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)])
+      (try
+        (jdbc/execute-one!
+         tx
+         [(str "INSERT INTO " table
+               " (id, state, version, data, shape, owner, law_revision, next_flip_at)"
+               " VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+          (:id row) (name (:state row)) (:version row 1)
+          (jsonb (:data row)) (:shape row 1) (:owner row)
+          (:law-revision row)
+          (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)])
+        (catch org.postgresql.util.PSQLException e
+          (if (= "23505" (.getSQLState e))
+            (throw (store/unique-violation kind (:id row)
+                                           (unique-constraint-name e)))
+            (throw e))))
       row))
 
   (save-row! [_ tx kind row expected-version]
     (let [table (get @tables kind)
-          res (jdbc/execute-one!
-               tx
-               [(str "UPDATE " table
-                     " SET state = ?, version = ?, data = ?, shape = ?,"
-                     " owner = ?, law_revision = ?, next_flip_at = ?,"
-                     " updated_at = now()"
-                     " WHERE id = ? AND version = ?"
-                     " RETURNING updated_at")
-                (name (:state row)) (:version row) (jsonb (:data row))
-                (:shape row 1) (:owner row) (:law-revision row)
-                (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)
-                (:id row) expected-version]
-               jdbc-opts)]
+          res (try
+                (jdbc/execute-one!
+                 tx
+                 [(str "UPDATE " table
+                       " SET state = ?, version = ?, data = ?, shape = ?,"
+                       " owner = ?, law_revision = ?, next_flip_at = ?,"
+                       " updated_at = now()"
+                       " WHERE id = ? AND version = ?"
+                       " RETURNING updated_at")
+                  (name (:state row)) (:version row) (jsonb (:data row))
+                  (:shape row 1) (:owner row) (:law-revision row)
+                  (some-> ^java.time.Instant (:next-flip-at row) Timestamp/from)
+                  (:id row) expected-version]
+                 jdbc-opts)
+                ;; a data edit can move a promoted generated column into
+                ;; a declared-unique collision — the same honest refusal
+                (catch org.postgresql.util.PSQLException e
+                  (if (= "23505" (.getSQLState e))
+                    (throw (store/unique-violation kind (:id row)
+                                                   (unique-constraint-name e)))
+                    (throw e))))]
       (when (nil? res)
         (throw (store/version-conflict kind (:id row) expected-version)))
       ;; the write's own stamp, so post-invoke envelopes never carry
