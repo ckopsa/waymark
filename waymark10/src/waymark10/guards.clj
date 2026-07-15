@@ -167,6 +167,22 @@
    ;; 2. the residual check, with the probe short-circuit: a check
    ;;    that grades input cannot decide without it
    (cond
+     ;; a require gate at CREATE (design §24, the phase-2 promise
+     ;; delivered): no row exists, so the bound spec's own law
+     ;; computes over the validated input — (var :f) reads the create
+     ;; body, exactly what the maintained fact would store. A spec
+     ;; beyond the pure grammar (an aggregate) has nothing to compute
+     ;; before the row exists and allows, as ever.
+     (clojure.core/and (:require g) (nil? row)
+                       (get-in g [:require/spec :expr]))
+     (if (nil? inp)
+       [(t/allow {:pending-input true}) g]
+       [(if (expr/evaluate (get-in g [:require/spec :expr])
+                           {:vars (assoc inp :now (:now ctx))})
+          (t/allow)
+          (t/deny))
+        g])
+
      (:when g)
      (if (clojure.core/and (= :probe (:mode ctx)) (nil? inp) (:needs-input g))
        [(t/allow {:pending-input true}) g]

@@ -3178,3 +3178,16 @@ template link refuses — an edge carries its own `:on` and a template
 spells its own params. The v9 pages' filtered embeds (on_recipe lines,
 accepted substitutions), reached.
 Proof: `waymark10/test/waymark10/link_where_test.clj`.
+
+## require-fact at create — the phase-2 promise, delivered
+
+`guards/require`'s docstring promised "the create path (row nil)
+computes from input in phase 2"; §24 delivers it: a require gate in
+`:create-guards` evaluates the bound derived spec's own law over the
+validated create input — `(var :f)` reads the create body, exactly
+what the maintained fact would store — so v9's
+`create_guards = (require("distinct"),)` spells the same in v10 and
+self-substitution is unrepresentable at birth. An aggregate spec has
+no law to compute before the row exists and allows, as ever (and the
+existing check still refuses non-bool gates outright).
+Proof: `waymark10/test/waymark10/require_create_test.clj`.
