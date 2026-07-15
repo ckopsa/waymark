@@ -473,6 +473,40 @@
       (check-aggregate-edge reg kind r fact "sum" c)))
   (check-fact-dag reg))
 
+;; ── link :where — the narrowed owns embed ───────────────────────────
+
+(defn- check-link-where
+  "An owns link's :where narrows its compiled href — it must be a
+  query the target collection answers: :state (declared states) or an
+  :eq/:in-filterable field, the same contract as :pick. A :where on
+  an edge or template link has no compiled home and refuses."
+  [reg]
+  (doseq [[kind r] (:kinds reg)
+          ld (:links r)
+          :when (contains? ld :where)]
+    (when-not (:owns ld)
+      (err kind :links (str "link " (:rel ld) ": :where narrows a compiled "
+                            ":owns href — an :edge carries its own :on and "
+                            "a template :href spells its own params")))
+    (when-not (map? (:where ld))
+      (err kind :links (str "link " (:rel ld) ": :where is a "
+                            "{field value(s)} query map")))
+    (when-some [target (get-in reg [:kinds (:owns ld)])]
+      (doseq [[f v] (:where ld)]
+        (if (= :state f)
+          (let [states (into #{} (map name) (:states target))]
+            (doseq [x (if (coll? v) v [v])
+                    :let [x (if (keyword? x) (name x) (str x))]]
+              (when-not (contains? states x)
+                (err kind :links (str "link " (:rel ld) ": :where state " x
+                                      " is not a state of "
+                                      (name (:owns ld)))))))
+          (when-not (some #{:eq :in} (get-in target [:filterable f]))
+            (err kind :links (str "link " (:rel ld) ": :where key " f
+                                  " is not an :eq/:in-filterable field of "
+                                  (name (:owns ld)))))))))
+  nil)
+
 ;; ── pick: the declared picker query ─────────────────────────────────
 
 (defn- check-pick
@@ -558,4 +592,4 @@
    (into []
          (mapcat #(% reg))
          [check-refs check-owns check-related check-derived-cycles
-          check-touches check-pick])})
+          check-touches check-pick check-link-where])})

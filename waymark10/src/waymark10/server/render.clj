@@ -477,11 +477,23 @@
                     "?" (str/join "&" params))
          :kind (name (or kind (str (name (:kind e)) "_collection")))}))))
 
-(defn- owns-link [rdef row resources {:keys [owns kind]}]
+(defn- owns-link [rdef row resources {:keys [owns kind where]}]
+  ;; a declared :where narrows the compiled href (state=on_recipe) —
+  ;; splice-embeds parses it through the collection grammar and LOCKS
+  ;; it exactly like the :via join key
   (when-some [e (some #(when (= owns (:kind %)) %) (:owns rdef))]
-    {:href (str "/api/" (plural-of resources (:kind e))
-                "?" (name (:via e)) "=" (enc-param (:id row)))
-     :kind (name (or kind (str (name (:kind e)) "_collection")))}))
+    (let [wire-val #(if (keyword? %) (name %) (encode-enum %))]
+      {:href (str "/api/" (plural-of resources (:kind e))
+                  "?" (name (:via e)) "=" (enc-param (:id row))
+                  (apply str
+                         (map (fn [[f v]]
+                                (str "&" (name f) "="
+                                     (enc-param
+                                      (if (coll? v)
+                                        (str/join "," (map wire-val v))
+                                        (wire-val v)))))
+                              (sort-by key where))))
+       :kind (name (or kind (str (name (:kind e)) "_collection")))})))
 
 (def ^:private href-placeholder #"\{(id|data\.[A-Za-z0-9_]+)\}")
 

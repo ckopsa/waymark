@@ -3164,3 +3164,17 @@ The registered exact-decimal type grows `:gt`/`:lt` beside `:min`/
 standard `exclusiveMinimum`/`exclusiveMaximum`; generation floors one
 whole step inside the open bound.
 Proof: `waymark10/test/waymark10/decimal_bounds_test.clj`.
+
+## Owns-link `:where` — the narrowed embed
+
+`{:rel "ingredients" :owns :meal_line :embed true :where {:state
+"on_recipe"}}` — the declared narrowing rides the compiled href
+(`state=on_recipe`), the splice reads it back through the collection
+grammar as a LOCKED param (an embed override naming it refuses, the
+same as the `:via` join key), and the assembly holds `:where` to the
+same contract as `:pick`: `:state` (declared states) or an
+`:eq`/`:in`-filterable field of the target. A `:where` on an edge or
+template link refuses — an edge carries its own `:on` and a template
+spells its own params. The v9 pages' filtered embeds (on_recipe lines,
+accepted substitutions), reached.
+Proof: `waymark10/test/waymark10/link_where_test.clj`.
