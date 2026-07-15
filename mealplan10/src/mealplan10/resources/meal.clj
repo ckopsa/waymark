@@ -20,9 +20,20 @@
   :themes (design §8) — v10's load boundary runs it lazily and stamps
   the shape at the next write.
 
+  The money layer (pantry-prices era): a meal's recipe lines are
+  meal_line rows (promoted — the cost question crosses kinds), and
+  the meal knows what it POTENTIALLY costs: est_cost_cents /
+  priced_ingredients / total_ingredients are engine-maintained
+  sums/counts over the owns edge, flipped in the same commit as any
+  line write. \"Cheapest bbq night\" is ?themes=bbq&sort=est_cost_cents.
+  reprice fans out to every on_recipe line through the owns cascade —
+  advertised as :touches, honestly non-idempotent (the outcome
+  depends on the price world outside the row).
+
   Recorded deviations ride the declaration itself (:deviations, DX
   phase 5) — fingerprint-carried, rendered by waymark10.dev/explain."
-  (:require [waymark10.dsl :refer [defaction defresource defhandler]]))
+  (:require [waymark10.dsl :refer [defaction defderived defresource
+                                   defhandler]]))
 
 (defn fold-theme
   "shape 1 → 2: the single-theme era's :theme becomes a one-tag
@@ -52,6 +63,19 @@
 ;; confirm, and "reverse" is just writing the field again
 (def overwrite
   {:idempotent true :reversible false :confirm false})
+
+;; ── the cost rollups (pantry-prices era) ────────────────────────────
+
+(defderived meal-est-cost
+  {:sum {:owns :meal_line :where {:state #{"on_recipe"}}
+         :of :est_cost_cents}})
+
+(defderived priced-ingredients
+  {:count {:owns :meal_line :where {:state #{"on_recipe"}
+                                    :priced #{true}}}})
+
+(defderived total-ingredients
+  {:count {:owns :meal_line :where {:state #{"on_recipe"}}}})
 
 ;; ── the on-list editors, def'd ──────────────────────────────────────
 
@@ -102,10 +126,26 @@
             [:prep_minutes {:optional true} [:maybe [:int {:min 0}]]]
             [:thaw_hours {:optional true} [:maybe [:int {:min 0}]]]
             [:servings {:optional true} [:maybe [:int {:min 1}]]]
+            [:est_cost_cents {:optional true :derived meal-est-cost
+                              :sort true
+                              :x-display {:widget "money"
+                                          :label "Est. cost"}}
+             [:maybe :int]]
+            [:priced_ingredients {:optional true :derived priced-ingredients}
+             [:maybe :int]]
+            [:total_ingredients {:optional true :derived total-ingredients}
+             [:maybe :int]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}}
    :display {:title "{data.name}"}
+   ;; the recipe lines: owned rows, the reprice cascade, the embedded
+   ;; on_recipe view with the honest count badge
+   :owns [{:kind :meal_line :via :meal_id :on {:reprice :reprice}}]
+   :links [{:rel :ingredients :owns :meal_line :embed true
+            :badge :total_ingredients
+            :where {:state "on_recipe"}
+            :summary "The recipe's ingredient lines and what they cost"}]
    :deviations
    ["accept_many stays a declared action — bulk has no flow-row spelling."
     "The on-list editors stay def'd actions — :fields would mint one all-optional writer, but apply-recipe writes conditionally and apply-themes dedupes: a different law under different names."
@@ -132,4 +172,11 @@
                            :consequence "Every selected suggestion joins the family meal list."}
                   :display {:label "Add selected to meal list" :style :primary}}
     :update_recipe update-recipe
-    :update_themes update-themes}})
+    :update_themes update-themes
+    :reprice {:from #{:on_list} :to :on_list
+              ;; the cascade does the fan-out; no handler. Honestly
+              ;; non-idempotent: the price world moves outside this row
+              :touches [{:kind :meal_line :action :reprice :may true}]
+              :safety {:idempotent false :reversible false :confirm false}
+              :display {:label "Reprice" :order 4
+                        :description "Refresh every line's estimate from today's price world"}}}})

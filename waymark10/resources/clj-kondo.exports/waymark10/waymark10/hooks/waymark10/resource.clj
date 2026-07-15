@@ -27,7 +27,7 @@
 
 (def flow-opt-keys
   #{:requires :args :input :confirm :undo :one-way :safety :display
-    :record :edit :place :handler :emits :waives :unless})
+    :record :edit :place :handler :emits :waives :unless :touches})
 
 (defn- entries [node]
   (when (and node (api/map-node? node))

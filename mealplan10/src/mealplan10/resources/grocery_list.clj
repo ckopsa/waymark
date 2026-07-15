@@ -30,8 +30,13 @@
   byte-identical across spellings, the old split spelling carrying
   the same revision.
 
-  Recorded punts: the with_plan profile and the href link render have
-  no v10 spelling — the link declaration is carried."
+  The money layer (pantry-prices era): items carry an optional
+  pantry ref and an AI-stamped estimate — the client authors the
+  cross-kind price judgment through add_item, the list owns only the
+  arithmetic (the three derived totals below), and the plan sums the
+  lists in the same commit.
+
+  Recorded punt: the with_plan profile has no v10 spelling."
   (:require [waymark10.dsl :refer [defderived defguardfn defresource
                                    defhandler guard require-fact]]
             [waymark10.types :as t]))
@@ -108,7 +113,14 @@
                                  (assoc :quantity (or (:quantity inp)
                                                       (:quantity it))
                                         :category (or (:category inp)
-                                                      (:category it)))
+                                                      (:category it))
+                                        ;; the AI's cross-kind price
+                                        ;; judgment: a re-add only
+                                        ;; overwrites what it states
+                                        :ingredient_id (or (:ingredient_id inp)
+                                                           (:ingredient_id it))
+                                        :est_cost_cents (or (:est_cost_cents inp)
+                                                            (:est_cost_cents it)))
                                  (update :meals
                                          #(vec (distinct (into (vec %)
                                                                (:meals inp))))))))
@@ -116,6 +128,8 @@
                                 :quantity (:quantity inp)
                                 :category (:category inp)
                                 :meals (vec (:meals inp))
+                                :ingredient_id (:ingredient_id inp)
+                                :est_cost_cents (:est_cost_cents inp)
                                 :have false}))))))
 
 (defhandler remove-item [row inp _ctx]
@@ -146,6 +160,23 @@
    :expr '(every [i (var :items)] (= (get i :have) true))
    :explain "Some items are still unchecked."})
 
+;; the money rollups (pantry-prices era): what the week will cost, as
+;; law over the embedded items. The (max … 0) wraps the nil-dodge —
+;; sum nils wholesale on a nil addend, max drops nils, and est ≥ 0 by
+;; schema, so an unpriced item counts 0 exactly as v9's where=is_set
+(defderived estimated-total-cents
+  {:over [:items]
+   :expr '(sum [i (var :items)] (max (get i :est_cost_cents) 0))
+   :explain "The priced items' estimates, summed."})
+
+(defderived priced-items
+  {:over [:items]
+   :expr '(count [i (var :items)] (is-set (get i :est_cost_cents)))})
+
+(defderived total-items
+  {:over [:items]
+   :expr '(count (var :items))})
+
 (defresource grocery-list
   {:kind :grocery_list
    :initial :draft
@@ -163,9 +194,31 @@
                 [:maybe [:string {:max 50}]]]
                [:meals {:optional true}
                 [:maybe [:vector [:string {:max 200}]]]]
+               ;; the pantry link and the AI-stamped estimate: the
+               ;; client authors the cross-kind price judgment; the
+               ;; list owns only the arithmetic
+               [:ingredient_id {:optional true :kind :ingredient}
+                [:maybe :waymark/ref]]
+               [:est_cost_cents {:optional true
+                                 :x-display {:widget "money"
+                                             :label "Est. cost"}}
+                [:maybe [:int {:min 0}]]]
                [:have {:optional true} [:maybe :boolean]]]]]
             [:all_items_checked {:optional true :derived all-items-checked}
              [:maybe :boolean]]
+            ;; promoted (:filter): the plan's sums run on these
+            [:estimated_total_cents {:optional true
+                                     :derived estimated-total-cents
+                                     :filter #{:eq :range}
+                                     :x-display {:widget "money"
+                                                 :label "Est. total"}}
+             [:maybe :int]]
+            [:priced_items {:optional true :derived priced-items
+                            :filter #{:eq :range}}
+             [:maybe :int]]
+            [:total_items {:optional true :derived total-items
+                           :filter #{:eq :range}}
+             [:maybe :int]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    ;; the create form: pick the plan; items arrive via add_item
@@ -174,7 +227,6 @@
                    [:notes {:optional true :x-display {:widget "prose"}}
                     [:maybe [:string {:max 2000}]]]]
    :on-create ensure-items
-   ;; carried declaration; envelope link render is v10's phase-3 punt
    :links [{:rel "plan" :kind :plan
             :summary "The meal plan this list shops for"}]
    :filterable {:state #{:eq :in}}
@@ -191,7 +243,14 @@
               [:quantity {:optional true} [:maybe [:string {:max 50}]]]
               [:category {:optional true} [:maybe [:string {:max 50}]]]
               [:meals {:optional true}
-               [:maybe [:vector [:string {:max 200}]]]]]
+               [:maybe [:vector [:string {:max 200}]]]]
+              [:ingredient_id {:optional true :kind :ingredient
+                               :pick {:state "active"}}
+               [:maybe :waymark/ref]]
+              [:est_cost_cents {:optional true
+                                :x-display {:widget "money"
+                                            :label "Est. cost"}}
+               [:maybe [:int {:min 0}]]]]
       :handler add-item
       :display {:label "Add item" :style :primary :order 1}}]
     [:draft :remove_item  :draft

@@ -707,7 +707,7 @@
   "A flow row's legal opts — public so the shipped clj-kondo hook's
   copy can be held equal by test (waymark10.declaration-test)."
   #{:requires :args :input :confirm :undo :one-way :safety :display
-    :record :edit :place :handler :emits :waives :unless})
+    :record :edit :place :handler :emits :waives :unless :touches})
 
 (defn- args->input
   "Flow :args rows → the action's input schema. Every argument is
@@ -821,7 +821,8 @@
       (:handler opts) (assoc :handler (:handler opts))
       (:emits opts) (assoc :emits (:emits opts))
       (:waives opts) (assoc :waives (:waives opts))
-      (:unless opts) (assoc :unless (:unless opts)))))
+      (:unless opts) (assoc :unless (:unless opts))
+      (:touches opts) (assoc :touches (:touches opts)))))
 
 (defn- desugar-flow
   "The :flow rows → today's :actions map, merged beside any directly
