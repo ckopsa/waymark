@@ -2276,7 +2276,8 @@ function fieldWidget(name, rawProp, value) {
    past the first page) the id keeps its seat raw rather than vanish. */
 async function refOptions(select, rawProp, current, admitted) {
   const prop = schemaProp(rawProp);
-  const kind = ((rawProp["x-ref"] || prop["x-ref"]) || {}).kind;
+  const xref = (rawProp["x-ref"] || prop["x-ref"]) || {};
+  const kind = xref.kind;
   const admit = admitted ? admitted.map(String) : null;
   const append = (id, label) =>
     select.append(el("option", {value: id, selected: id === current ? "" : null},
@@ -2285,7 +2286,11 @@ async function refOptions(select, rawProp, current, admitted) {
   try { w = await wellKnown(); } catch { (admit || []).forEach(id => append(id)); return; }
   const href = kind && collectionHref(w, kind);
   if (!href) { (admit || []).forEach(id => append(id)); return; }
-  const {ok, body} = await api(mergeParams(href, {"page[size]": "100"}));
+  /* the declared pick query filters the picker — a,b spells in-list */
+  const params = {"page[size]": "100"};
+  for (const [f, v] of Object.entries(xref.pick || {}))
+    params[f] = Array.isArray(v) ? v.join(",") : String(v);
+  const {ok, body} = await api(mergeParams(href, params));
   if (!ok) { (admit || []).forEach(id => append(id)); return; }
   const summaries = new Map();
   for (const item of (body.data || {}).items || [])

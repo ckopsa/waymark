@@ -473,6 +473,42 @@
       (check-aggregate-edge reg kind r fact "sum" c)))
   (check-fact-dag reg))
 
+;; ── pick: the declared picker query ─────────────────────────────────
+
+(defn- check-pick
+  "A ref's :pick is the picker's collection query — presentation, but
+  it must be a query the target actually answers: each key is :state
+  or an :eq/:in-filterable field of the target kind, and :state
+  values are declared states. A picker that fetches a 400 is worse
+  than an unfiltered one."
+  [reg]
+  (doseq [[kind r] (:kinds reg)
+          [where form] (surfaces r)
+          :let [entries (schema/entry-map form)]
+          f (schema/entry-keys form)
+          :let [{props :properties s :schema} (get entries f)
+                pick (:pick props)]
+          :when (and pick (= :waymark/ref (head s)))]
+    (let [target (get-in reg [:kinds (:kind props)])
+          site (str where "." (name f))]
+      (when-not (map? pick)
+        (err kind :pick (str site ": :pick is a {field value(s)} query map")))
+      (when target
+        (doseq [[pf pv] pick]
+          (if (= :state pf)
+            (let [states (into #{} (map name) (:states target))]
+              (doseq [v (if (coll? pv) pv [pv])
+                      :let [v (if (keyword? v) (name v) (str v))]]
+                (when-not (contains? states v)
+                  (err kind :pick (str site ": :pick state " v " is not a "
+                                       "state of " (name (:kind props)))))))
+            (let [ops (get-in target [:filterable pf])]
+              (when-not (some #{:eq :in} ops)
+                (err kind :pick (str site ": :pick key " pf " is not an "
+                                     ":eq/:in-filterable field of "
+                                     (name (:kind props)))))))))))
+  nil)
+
 ;; ── touches: the declared cross-write sets ──────────────────────────
 
 (defn- check-touches
@@ -522,4 +558,4 @@
    (into []
          (mapcat #(% reg))
          [check-refs check-owns check-related check-derived-cycles
-          check-touches])})
+          check-touches check-pick])})

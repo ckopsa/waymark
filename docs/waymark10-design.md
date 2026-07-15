@@ -3127,3 +3127,17 @@ unadvertised owns-cascade `:on` target); `touches-violations` in the
 conformance library reads the transition log by correlation id —
 every non-`:may` touch must have fired alongside its outer write.
 Proof: `waymark10/test/waymark10/touches_test.clj`.
+
+## `:pick` — the picker's declared query
+
+waymark9's `pick=Query(state="active")`, filled in (v10 anticipated
+this too: `:pick` already rode the published `x-ref` annotation —
+schema.clj projected it and nothing consumed it). The generic client's
+ref picker now fetches the target collection WITH the declared params
+(keyword values land as names; lists spell the wire's `a,b` in-list).
+Presentation, never fingerprinted — v9's pick filtered rendering only,
+and enforcement stays with guards. The assembly (`check-pick`) refuses
+a pick the target collection would 400: keys must be `:state` or an
+`:eq`/`:in`-filterable field, and state values must be declared states
+(`state` is every collection's standing filter, collections.clj).
+Proof: `waymark10/test/waymark10/pick_test.clj`.
