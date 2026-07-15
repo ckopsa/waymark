@@ -44,8 +44,10 @@
 
 (def kinds-in-order
   "Every kind but :event (the mirror re-discovers). Order is cosmetic
-  — refs are ids in JSONB, never FK constraints."
-  [:rotation :meal :ingredient :plan :grocery_list :prep_task
+  — refs are ids in JSONB, never FK constraints. :plan carries ONE
+  recorded transform (the days fan-out below); :plan_day has no v9
+  table — its rows are born from the plans' shed :days."
+  [:rotation :meal :ingredient :plan :plan_day :grocery_list :prep_task
    :product :substitution :meal_line])
 
 (defn- source-rows [source-db table]
@@ -54,17 +56,38 @@
                        table " ORDER BY id")]
                  {:builder-fn rs/as-unqualified-lower-maps}))
 
-(defn- decode-doc
-  "One v9 JSONB document as a v10-decoded map: parsed JSON (keyword
-  keys) through the kind's own wire decoder."
-  [rdef ^org.postgresql.util.PGobject data]
-  (schema/decode (:schema rdef) (wire/read-json (.getValue data))))
-
 (defn- violations-of
   "The residue check: every undeclared key and mistyped value, named.
   nil when the document is exactly the declared shape."
   [rdef doc]
   (schema/closed-errors (:schema rdef) doc))
+
+;; ── the one recorded transform: v9 plans shed :days ─────────────────
+;; The promoted plan_day kind holds the week now; a v9 plan document
+;; arriving with :days intact would be residue (the rule working), so
+;; the plan pass sheds them — and each shed day births a plan_day row,
+;; its STATE derived from the day's own facts (meal_id → planned,
+;; eating_out → eating_out, else undecided; the bool itself drops —
+;; state is the fact).
+
+(defn- day->plan-day
+  "One raw (wire-shaped) v9 day → a plan_day row spec."
+  [day-rdef plan-id owner raw-day]
+  {:id (str (random-uuid))
+   :state (cond
+            (some? (:meal_id raw-day)) :planned
+            (true? (:eating_out raw-day)) :eating_out
+            :else :undecided)
+   :version 1
+   :owner owner
+   :doc (schema/decode (:schema day-rdef)
+                       (-> raw-day
+                           (dissoc :eating_out)
+                           (assoc :plan_id plan-id)))})
+
+(def ^:private fanned-days
+  ;; the plan pass's shed days, handed to the :plan_day pass
+  (atom []))
 
 (defn- migrate-kind!
   "→ {:kind … :read n :violations [{:id … :errors …} …]}; inserts only
@@ -72,16 +95,31 @@
   [eng source-db kind apply?]
   (let [rdef (get (inv/resources eng) kind)
         table (:plural rdef)
-        rows (source-rows source-db table)
-        checked (mapv (fn [r]
-                        (let [doc (decode-doc rdef (:data r))]
-                          {:id (:id r)
-                           :state (keyword (:state r))
-                           :version (:version r)
-                           :owner (:owner r)
-                           :doc doc
-                           :errors (violations-of rdef doc)}))
-                      rows)
+        checked
+        (if (= :plan_day kind)
+          ;; no v9 table: the rows fanned out of the plans' shed days
+          (mapv #(assoc % :errors (violations-of rdef (:doc %)))
+                @fanned-days)
+          (mapv (fn [r]
+                  (let [raw (wire/read-json
+                             (.getValue ^org.postgresql.util.PGobject
+                                        (:data r)))
+                        doc (schema/decode (:schema rdef)
+                                           (cond-> raw
+                                             (= :plan kind) (dissoc :days)))]
+                    (when (= :plan kind)
+                      (let [day-rdef (get (inv/resources eng) :plan_day)]
+                        (swap! fanned-days into
+                               (map #(day->plan-day day-rdef (:id r)
+                                                    (:owner r) %)
+                                    (:days raw)))))
+                    {:id (:id r)
+                     :state (keyword (:state r))
+                     :version (:version r)
+                     :owner (:owner r)
+                     :doc doc
+                     :errors (violations-of rdef doc)}))
+                (source-rows source-db table)))
         violations (filterv :errors checked)]
     (when (and apply? (empty? violations))
       (doseq [{:keys [id state version owner doc]} checked]
@@ -115,7 +153,7 @@
                 :input-digest (wire/digest {})
                 :correlation-id "migrate-v9"
                 :summary (:summary row)}))))))
-    {:kind kind :read (count rows) :violations violations}))
+    {:kind kind :read (count checked) :violations violations}))
 
 (defn migrate!
   [& _]
