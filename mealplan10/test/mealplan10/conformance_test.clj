@@ -43,7 +43,8 @@
 (def ^:dynamic *h* nil)
 
 (def ^:private tables
-  ["meals" "rotations" "plans" "grocery_lists" "prep_tasks" "events"
+  ["meals" "meal_lines" "rotations" "plans" "grocery_lists" "prep_tasks"
+   "ingredients" "products" "substitutions" "events"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts"])
 
@@ -65,7 +66,8 @@
             (f)))
         (finally (pg/close! st))))))
 
-(def kinds [:meal :rotation :plan :grocery_list :prep_task :event])
+(def kinds [:meal :meal_line :rotation :plan :grocery_list :prep_task
+            :ingredient :product :substitution :event])
 
 ;; ── the enrollment ──────────────────────────────────────────────────
 
@@ -140,6 +142,48 @@
 
 (fac/example-input! :event :create
   (fn [_] {:external_id (str "walk-" (random-uuid))}))
+
+;; ── the pantry quartet: refs (and the distinct create gate) defeat
+;;    generation, so every create is an example; absorb and rematch
+;;    mint their own peers ────────────────────────────────────────────
+
+(defn- active-ingredient! [eng nm]
+  (let [i (mk! eng :ingredient {:name nm})]
+    (step! eng :ingredient (:id i) :accept)
+    (:id i)))
+
+(fac/example-input! :ingredient :create
+  (fn [_] {:name (str "Chicken thighs " (random-uuid))}))
+
+(fac/example-input! :ingredient :absorb
+  (fn [eng] {:duplicate_id (active-ingredient!
+                            eng (str "Chicken thigh " (random-uuid)))}))
+
+(fac/example-input! :product :create
+  (fn [eng]
+    {:ingredient_id (active-ingredient! eng (str "Thighs " (random-uuid)))
+     :store "costco"
+     :name "Kirkland Organic Chicken Thighs"
+     :package_grams 2720
+     :sightings [{:seen_on "2026-01-02" :price_cents 1899
+                  :source "receipt"}]}))
+
+(fac/example-input! :product :rematch
+  (fn [eng] {:ingredient_id (active-ingredient!
+                             eng (str "Rematched " (random-uuid)))}))
+
+(fac/example-input! :meal_line :create
+  (fn [eng]
+    {:meal_id (listed-meal! eng)
+     :ingredient_id (active-ingredient! eng (str "Line ing " (random-uuid)))
+     :grams 1400}))
+
+(fac/example-input! :substitution :create
+  (fn [eng]
+    {:from_ingredient_id (active-ingredient!
+                          eng (str "Butter " (random-uuid)))
+     :to_ingredient_id (active-ingredient!
+                        eng (str "Margarine " (random-uuid)))}))
 
 (fac/example-input! :event :observe_external
   {:document {:title "Piano recital" :date "2026-01-08" :kind "note"}
