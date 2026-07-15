@@ -185,9 +185,11 @@
    [:external_etag {:optional true :x-display {:hidden true}}
     [:maybe [:string {:max 256}]]]
    [:synced_at {:optional true} [:maybe :waymark/instant]]
-   ;; why the row sits conflicted — data, so the gap renders; cleared
+   ;; why the row sits conflicted — data, so the gap renders (prose:
+   ;; an adapter's error message is a paragraph, not a label); cleared
    ;; by the next successful sync write
-   [:conflict_reason {:optional true} [:maybe [:string {:max 280}]]]])
+   [:conflict_reason {:optional true :x-display {:widget "prose"}}
+    [:maybe [:string {:max 280}]]]])
 
 (defn- declared-fields [data-schema]
   (remove bookkeeping-fields (schema/entry-keys data-schema)))
@@ -742,7 +744,9 @@
                   :display {:label "Mark unreachable"}}
                  :mark_conflicted
                  {:from (set sync-states) :to :conflicted
-                  :input [:map [:reason [:string {:max 280}]]]
+                  ;; hidden: only the sync machinery fills this form
+                  :input [:map [:reason {:x-display {:hidden true}}
+                                [:string {:max 280}]]]
                   :guards [system-only]
                   :safety {:idempotent true :reversible false :confirm false
                            :one-way "Both truths persist — ours stored here, theirs external — until resolve_conflict decides."}
