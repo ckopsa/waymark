@@ -12,4 +12,7 @@
   :check {:main-opts ["-m" "waymark10.check" "mealplan10.main/check-resources"]}
   ;; make migrate10: print the schema plan; APPLY=1 executes,
   ;; DESTRUCTIVE=1 includes state renames
-  :migrate {:main-opts ["-e" "((requiring-resolve 'mealplan10.main/migrate!))"]}}}
+  :migrate {:main-opts ["-e" "((requiring-resolve 'mealplan10.main/migrate!))"]}
+  ;; the one-time v9 → v10 data migration (the cutover): SOURCE_DSN +
+  ;; MEALPLAN10_DSN; dry run by default, APPLY=1 executes
+  :migrate-v9 {:main-opts ["-e" "((requiring-resolve 'mealplan10.migrate-v9/migrate!))"]}}}

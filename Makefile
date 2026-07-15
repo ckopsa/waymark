@@ -3,7 +3,20 @@ PG_CONTAINER ?= waymark-test-pg
 PG_USER      ?= ckopsa
 PG_PORT      ?= 5433
 
-.PHONY: db db10 test10 check10 test-mealplan10 dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk
+# mealplan10 image + deploy (the home cluster's only node is ARM64;
+# cross-building needs qemu binfmt, one-time per boot:
+# docker run --privileged --rm tonistiigi/binfmt --install arm64)
+IMAGE      ?= docker.kopsa.info/mealplan10
+IMAGE_TAG  ?= $(shell git rev-parse --short HEAD)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
+PLATFORM   ?= linux/arm64
+
+# Cluster access for `make deploy10`, from the infra repo's secrets
+# unless set.
+INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
+NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
+NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
+
+.PHONY: db db10 test10 check10 test-mealplan10 dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk image10 deploy10
 
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
@@ -44,6 +57,15 @@ dev10: db10  ## serve mealplan10 on :8010 against mealplan10_dev (FakeEvents unl
 migrate10: db10  ## print mealplan10's schema plan against mealplan10_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
 	cd mealplan10 && MEALPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/mealplan10_dev?user=$(PG_USER)" \
 		clojure -M:migrate
+
+image10:  ## build and push the mealplan10 image for the home cluster
+	docker buildx build --platform $(PLATFORM) -t $(IMAGE):$(IMAGE_TAG) --push .
+	@echo "pushed $(IMAGE):$(IMAGE_TAG)"
+
+deploy10: image10  ## push image, then roll the mealplan10 nomad job onto it
+	@NOMAD_ADDR=$(NOMAD_ADDR) NOMAD_TOKEN=$(NOMAD_TOKEN) \
+		nomad var put -force nomad/jobs/mealplan10/deploy image_tag=$(IMAGE_TAG) >/dev/null
+	@echo "deploying $(IMAGE):$(IMAGE_TAG) — nomad restarts the server task on the new image"
 
 check-eveningplan10:  ## eveningplan10 declaration-time checks + usability warnings (no database)
 	cd eveningplan10 && clojure -M:check
