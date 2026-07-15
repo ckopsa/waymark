@@ -3191,3 +3191,16 @@ self-substitution is unrepresentable at birth. An aggregate spec has
 no law to compute before the row exists and allows, as ever (and the
 existing check still refuses non-bool gates outright).
 Proof: `waymark10/test/waymark10/require_create_test.clj`.
+
+## `:nav` reaches the wire — the catalog carries the tier
+
+`:nav :secondary` was validated and normalized but never projected;
+the generic client faked the split with a hardcoded engine-kind set
+(the recorded flat-catalog difference from 9's discovery). Found by
+the mealplan10 cross-check: v9's final cut left only plan and
+grocery_list in the primary nav, and v10 had no wire to say so. The
+well-known catalog now carries `"nav"` on every resource entry
+(`"primary"` when undeclared — the tier is always spoken, so a
+client never guesses), and the UI's nav bar, ⋯ overflow, and
+dashboard split on the declaration.
+Proof: the nav assertion in `waymark10/test/waymark10/dev_test.clj`.

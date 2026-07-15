@@ -1,12 +1,13 @@
 (ns waymark10.dev-test
   "The scratchpad answers in the domain's own words — a FULL engine
   (definitions boot included) over the memory store, no database."
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.dsl :as dsl]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (r/defresource chore
   {:kind :dev_chore
@@ -247,4 +248,10 @@
         resp ((dev/handler e) {:request-method :get
                                :uri "/api/.well-known/waymark"
                                :headers {}})]
-    (is (= 200 (:status resp)))))
+    (is (= 200 (:status resp)))
+    (testing "the declared nav tier rides the catalog (design §24)"
+      (let [b (wire/read-json (:body resp))]
+        (is (= "secondary" (get-in b [:resources :job :nav]))
+            "an engine kind advertises its tier")
+        (is (= "primary" (get-in b [:resources :dev_chore :nav]))
+            "an undeclared kind speaks the default — the tier is always on the wire")))))
