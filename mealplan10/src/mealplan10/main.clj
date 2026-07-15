@@ -22,10 +22,14 @@
   (:require [mealplan10.event-source :as es]
             [mealplan10.resources.event :as event]
             [mealplan10.resources.grocery-list :refer [grocery-list]]
+            [mealplan10.resources.ingredient :refer [ingredient]]
             [mealplan10.resources.meal :refer [meal]]
+            [mealplan10.resources.meal-line :refer [meal-line]]
             [mealplan10.resources.plan :refer [plan week-board]]
             [mealplan10.resources.prep-task :refer [prep-task]]
+            [mealplan10.resources.product :refer [product]]
             [mealplan10.resources.rotation :refer [rotation]]
+            [mealplan10.resources.substitution :refer [substitution]]
             [waymark10.server.engine :as engine]
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg])
@@ -42,16 +46,20 @@
     events))
 
 (defn resources
-  "All six kinds, the event kind bound to its adapter."
+  "All ten kinds, the event kind bound to its adapter. The pantry
+  quartet (ingredient/product/meal_line/substitution) is the
+  pantry-prices era, ported at parity."
   [adapter]
-  [meal rotation plan grocery-list prep-task (event/event-resource adapter)])
+  [meal meal-line rotation plan grocery-list prep-task
+   ingredient product substitution
+   (event/event-resource adapter)])
 
 (def surfaces
   "The declared decision screens (phase 9b): the week board."
   [week-board])
 
 (defn check-resources
-  "All six kinds over the offline adapter — what `make check10`
+  "All ten kinds over the offline adapter — what `make check10`
   (waymark10.check) assembles. Zero-arg so the gate needs no env."
   []
   (resources events))

@@ -126,6 +126,23 @@
 (defn- unwrap-maybe-form [s]
   (if (and (vector? s) (= :maybe (first s))) (second s) s))
 
+(defn- canonical-default
+  "A default value as canonical wire law: decimals cross as the
+  {\"dec\" …} node (exact, no floats), keywords as names, dates as
+  ISO strings — the same discipline every law tree already keeps."
+  [v]
+  (cond
+    (decimal? v) {"dec" (.toPlainString ^java.math.BigDecimal v)}
+    (keyword? v) (name v)
+    (instance? java.time.LocalDate v) (str v)
+    (instance? java.time.Instant v) (str v)
+    (sequential? v) (mapv canonical-default v)
+    (map? v) (into (sorted-map)
+                   (map (fn [[k x]] [(if (keyword? k) (name k) k)
+                                     (canonical-default x)]))
+                   v)
+    :else v))
+
 (defn- schema-defaults
   "The declared :default values of a schema form, flattened —
   {\"field\" value}, item defaults as \"field.item_field\". Empty map
@@ -140,7 +157,8 @@
                           item (when (and (vector? s) (= :vector (first s)))
                                  (last s))
                           own (when (contains? properties :default)
-                                [[(name k) (:default properties)]])
+                                [[(name k) (canonical-default
+                                            (:default properties))]])
                           nested (when (and (vector? item)
                                             (= :map (first item)))
                                    (map (fn [[ik iv]]
