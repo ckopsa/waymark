@@ -3068,3 +3068,47 @@ considering cards on the live stream.
 | intents: one card per door, collection self for create/bulk, partial mode mute | company must never cost the work | 2026-07-10 |
 | client confirm gate dry-runs before the `:confirm!` seam | rule 5 enforced, not remembered | 2026-07-10 |
 | blur = partial, Check/submit = full, timers disarmed across doors | one coherent blur behavior | 2026-07-10 |
+
+# 24. The pantry-prices parity batch — the dogfood demands, recorded
+
+mealplan9's final era (pantry prices, 2026-07-11..13) is the demanding
+declaration for this batch: porting it to mealplan10 at full parity —
+no experience regressions recorded as deviations — required growing
+the framework where v9 had spellings v10 lacked. Each act below is one
+commit, one test namespace, one vocabulary-doc row.
+
+## ctx `:invoke` — the handler's cross-write door
+
+waymark9's `Ctx.invoke`, ported. A handler (or `:on-create` hook) may
+write OTHER rows through the very transaction it runs in, each inner
+write walking the full per-item algorithm (idempotency, state, guards,
+tamper, log). The demanding declaration: `ingredient.absorb` must
+rematch the DUPLICATE's products (an input-carrying write on another
+row's children) and retire the duplicate — the owns cascade cannot say
+that (it carries no input and fans to the acting row's own children).
+
+- `make-ctx` carries `:invoke` ONLY in `:invoke` mode — probe and
+  dry-run ctxs hold no pen, and guard evaluation receives a ctx with
+  the door removed (guards judge; handlers write).
+- Inner results ride the outer result as `:inner-writes`;
+  `after-write!` drains them FIRST, so the outer response's rollups
+  tell the post-inner truth (absorb answers with the survivor's
+  repointed products already counted).
+- Inner transitions wear the outer correlation id; a natural replay of
+  the outer skips inner re-execution wholesale (the first execution's
+  writes are the record).
+- The owns cascade's pagination now survives SELF-LOOP child actions
+  (a cascaded child that stays in the `:from` filter): a seen set +
+  growing fetch window replaces the leave-the-filter assumption.
+
+Proof: `waymark10/test/waymark10/ctx_invoke_test.clj` (6 tests — the
+merge world: inner writes land, maintenance truth, correlation ids,
+natural replay, dry-run writes nothing, 201-child self-loop cascade).
+
+## Vocabulary / decisions log (§24)
+
+| Decision | Why | Date |
+| --- | --- | --- |
+| ctx `:invoke` (handlers + on-create only; guards and rehearsals never see it) | absorb's cascade writes another row's children with input — the owns cascade cannot say that | 2026-07-15 |
+| `:inner-writes` drain before the outer's own after-write! pass | the response's rollups tell the post-inner truth | 2026-07-15 |
+| cascade! seen-set + growing window | a self-loop cascade target must terminate past the 200-row page | 2026-07-15 |
