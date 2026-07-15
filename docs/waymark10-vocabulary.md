@@ -209,3 +209,26 @@ refuse against) print from the REPL — `(waymark10.dev/vocab)` — and live in
 `waymark10.resource/flow-opt-keys`. Flow rows are
 `[from action to opts?]`; per-origin rows of one action must agree on
 everything but `:confirm`.
+
+## 9 · `:touches` — the declared cross-write set
+
+An action that advances OTHER rows says so on its declaration:
+
+```clojure
+:absorb {:from #{:active} :to :active
+         :touches [{:kind :product :action :rematch :may true}
+                   {:kind :ingredient :action :retire}]
+         …}
+```
+
+Blast radius is law (fingerprinted, code-or-shape): the envelope
+renders the set on the action entry so an agent reads what a confirm
+will reach before it confirms, the assembly refuses a touch naming an
+unregistered kind or a missing action, an owns-cascade `:on` target
+the parent action does not advertise draws a coverage warning, and the
+conformance library (`touches-violations`) holds every logged run to
+the promise by correlation id — `:may true` tolerates a touch that had
+nothing to do on a given run (an empty cascade, a conditional write).
+The writes themselves come from the owns cascade or the handler's
+ctx `:invoke` door; `:touches` is the advertisement, never the
+mechanism.

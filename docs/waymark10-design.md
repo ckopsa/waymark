@@ -3112,3 +3112,18 @@ natural replay, dry-run writes nothing, 201-child self-loop cascade).
 | ctx `:invoke` (handlers + on-create only; guards and rehearsals never see it) | absorb's cascade writes another row's children with input — the owns cascade cannot say that | 2026-07-15 |
 | `:inner-writes` drain before the outer's own after-write! pass | the response's rollups tell the post-inner truth | 2026-07-15 |
 | cascade! seen-set + growing window | a self-loop cascade target must terminate past the 200-row page | 2026-07-15 |
+
+## `:touches` — blast radius as law
+
+waymark9's `touches=`, filled in (v10 anticipated it: the key already
+sat in `declaration/action-keys` and the fingerprint truth-family —
+only the consumers were missing). Declaration
+`[{:kind k :action a :may bool}]` on the action map; validated at
+normalize (keywords, no unknown keys); fingerprinted on the action
+facet non-empty-only (touch-free actions hash byte-identical to the
+pre-touches era); rendered on the envelope's action entry; assembly
+refuses lies (unknown kind/action) and warns on silence (an
+unadvertised owns-cascade `:on` target); `touches-violations` in the
+conformance library reads the transition log by correlation id —
+every non-`:may` touch must have fired alongside its outer write.
+Proof: `waymark10/test/waymark10/touches_test.clj`.

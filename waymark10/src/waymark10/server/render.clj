@@ -272,6 +272,15 @@
       (assoc :effort (demand/effort defn' input-js key-field))
       (seq display)
       (assoc :display display)
+      ;; the declared cross-write set (waymark9 touches=): what OTHER
+      ;; rows this action advances — an agent reads the blast radius
+      ;; before it confirms
+      (seq (:touches defn'))
+      (assoc :touches (mapv (fn [t]
+                              (cond-> {:kind (name (:kind t))
+                                       :action (name (:action t))}
+                                (:may t) (assoc :may true)))
+                            (:touches defn')))
       ;; the composition surface (phase 7): an :edit action with a
       ;; declared draft policy affords its draft sub-resource
       (get-in defn' [:edit :draft])

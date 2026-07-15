@@ -109,15 +109,33 @@
           display (if (and (string? (:consequence safety))
                            (nil? (:description display)))
                     (assoc display :description (:consequence safety))
-                    display)]
-      (assoc a
-             :from from
-             :to (:to a)
-             :safety safety
-             :guards guards
-             :display display
-             :waives (set (:waives a))
-             :emits (vec (:emits a))))))
+                    display)
+          ;; the declared cross-write set (waymark9 touches=): what
+          ;; OTHER rows this action advances — blast radius as law.
+          ;; :may true tolerates the touch not firing on a given run.
+          touches (when-some [ts (:touches a)]
+                    (when-not (sequential? ts)
+                      (err ":touches is a vector of {:kind … :action …} maps"))
+                    (mapv (fn [t]
+                            (when-not (and (map? t)
+                                           (keyword? (:kind t))
+                                           (keyword? (:action t)))
+                              (err ":touches entries declare :kind and :action as keywords"))
+                            (when-some [extra (seq (dissoc t :kind :action :may))]
+                              (err (str ":touches entry carries unknown key(s) "
+                                        (vec (map first extra)))))
+                            (cond-> {:kind (:kind t) :action (:action t)}
+                              (:may t) (assoc :may true)))
+                          ts))]
+      (cond-> (assoc a
+                     :from from
+                     :to (:to a)
+                     :safety safety
+                     :guards guards
+                     :display display
+                     :waives (set (:waives a))
+                     :emits (vec (:emits a)))
+        (seq touches) (assoc :touches touches)))))
 
 (defn- where-value-set
   "One where entry's values as a canonical set: a collection becomes

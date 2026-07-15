@@ -124,11 +124,20 @@
      "indexes" (vec (sort (keys indexes)))}))
 
 (defn- action-fp [a]
-  {"from"    (vec (sort (map name (:from a))))
-   "to"      (name (:to a))
-   "safety"  (safety-fp (:safety a))
-   "guards"  (mapv guard-fp (:guards a []))
-   "handler" (callable-hash (:handler a))})
+  (cond-> {"from"    (vec (sort (map name (:from a))))
+           "to"      (name (:to a))
+           "safety"  (safety-fp (:safety a))
+           "guards"  (mapv guard-fp (:guards a []))
+           "handler" (callable-hash (:handler a))}
+    ;; blast radius is law (waymark9 touches=): projected only when
+    ;; declared, so every touch-free action hashes byte-identical to
+    ;; the pre-touches era
+    (seq (:touches a))
+    (assoc "touches" (mapv (fn [t]
+                             (cond-> {"kind" (name (:kind t))
+                                      "action" (name (:action t))}
+                               (:may t) (assoc "may" true)))
+                           (:touches a)))))
 
 (defn- authority-fp
   "The mirror sync-law facet: the document contract, push-on-write,

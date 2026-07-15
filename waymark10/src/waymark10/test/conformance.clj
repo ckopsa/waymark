@@ -100,6 +100,43 @@
                    (assoc witness :violation :no-stored-law))))))
           ts)))
 
+(defn touches-violations
+  "The blast-radius promise (waymark9 touches=, design §24): every
+  logged transition whose action declares :touches must be
+  accompanied — same correlation id — by a transition of each
+  declared kind.action; :may true tolerates absence. Returns a
+  vector of violation maps, empty is conformance. A transition
+  without a correlation id has nothing to correlate and skips (the
+  suites that assert touches pass one explicitly)."
+  [eng]
+  (let [st (:storage eng)
+        rdefs (if-some [reg (:registry eng)] (:kinds @reg) (:resources eng))
+        ts (store/with-tx st
+             (fn [tx] (store/transitions st tx {} {:limit 100000})))
+        by-cid (group-by :correlation-id ts)]
+    (into []
+          (mapcat
+           (fn [t]
+             (when-some [touches (seq (get-in rdefs [(:kind t) :actions
+                                                     (:action t) :touches]))]
+               (when-some [cid (:correlation-id t)]
+                 (let [siblings (remove #(identical? % t) (get by-cid cid))]
+                   (keep (fn [tc]
+                           (when-not (or (:may tc)
+                                         (some #(and (= (keyword (:kind %))
+                                                        (:kind tc))
+                                                     (= (keyword (:action %))
+                                                        (:action tc)))
+                                               siblings))
+                             {:kind (:kind t)
+                              :resource-id (:resource-id t)
+                              :action (:action t)
+                              :correlation-id cid
+                              :violation :touch-did-not-fire
+                              :touch {:kind (:kind tc) :action (:action tc)}}))
+                         touches))))))
+          ts)))
+
 ;; ── the envelope obligations (phase 4b) ─────────────────────────────
 
 (def envelope-keys

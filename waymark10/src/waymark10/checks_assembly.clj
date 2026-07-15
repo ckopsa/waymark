@@ -473,17 +473,53 @@
       (check-aggregate-edge reg kind r fact "sum" c)))
   (check-fact-dag reg))
 
+;; ── touches: the declared cross-write sets ──────────────────────────
+
+(defn- check-touches
+  "Every :touches entry names a real kind and a real action of it
+  (errors — an advertisement of a write that cannot happen is a lie
+  at the def site). An owns-cascade :on target the parent action does
+  not advertise is a coverage WARNING: the cascade IS a touch, and
+  the envelope should say so."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] kinds
+            [aname a] (:actions r)
+            t (:touches a)]
+      (let [target (get kinds (:kind t))]
+        (when-not target
+          (err kind :touches (str "action " (name aname) " touches kind "
+                                  (:kind t) ", which is not registered")))
+        (when-not (get-in target [:actions (:action t)])
+          (err kind :touches (str "action " (name aname) " touches "
+                                  (name (:kind t)) "." (name (:action t))
+                                  ", not an action of that kind")))))
+    (into []
+          (for [[kind r] kinds
+                edge (:owns r)
+                [parent-action child-action] (:on edge)
+                :let [declared (get-in r [:actions parent-action :touches])]
+                :when (not-any? #(and (= (:kind %) (:kind edge))
+                                      (= (:action %) child-action))
+                                declared)]
+            (str "[touches] " (name kind) ": action " (name parent-action)
+                 " cascades " (name (:kind edge)) "." (name child-action)
+                 " but does not advertise it — declare :touches "
+                 "[{:kind " (:kind edge) " :action " child-action
+                 " :may true}]")))))
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
-;; punt: check-touches (declared cross-kind write sets) and
-;; check-compounds (compound inputs) — their declaration shapes are
-;; unported; each check arrives with its feature.
+;; punt: check-compounds (compound inputs) — its declaration shape is
+;; unported; the check arrives with the feature.
 
 (defn run-all
   "The assembly battery in waymark9 order: refs, owns, related,
-  derived-cycles. Throws the first error, returns {:warnings [str …]}."
+  derived-cycles, touches. Throws the first error, returns
+  {:warnings [str …]}."
   [reg]
   {:warnings
    (into []
          (mapcat #(% reg))
-         [check-refs check-owns check-related check-derived-cycles])})
+         [check-refs check-owns check-related check-derived-cycles
+          check-touches])})
