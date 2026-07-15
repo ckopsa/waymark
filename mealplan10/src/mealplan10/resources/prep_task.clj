@@ -74,6 +74,7 @@
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 1000}]]]]
    :links [{:rel "plan" :kind :plan
+            :href "/api/plans/{data.plan_id}"
             :summary "The meal plan this task serves"}]
    :filterable {:state #{:eq :in}}
    :display {:title "{data.task_type}: {data.meal_name}"}

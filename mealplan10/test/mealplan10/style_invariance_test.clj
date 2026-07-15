@@ -366,6 +366,7 @@
              {:over [:items]
               :expr '(count (var :items))}}
    :links [{:rel "plan" :kind :plan
+            :href "/api/plans/{data.plan_id}"
             :summary "The meal plan this list shops for"}]
    :part-scopes {:items {:path :items :key :name}}
    :filterable {:state #{:eq :in}
@@ -453,6 +454,7 @@
    :derived {:overdue {:over [:due_at :now]
                        :expr '(< (var :due_at) (var :now))}}
    :links [{:rel "plan" :kind :plan
+            :href "/api/plans/{data.plan_id}"
             :summary "The meal plan this task serves"}]
    :filterable {:state #{:eq :in}
                 :plan_id #{:eq}

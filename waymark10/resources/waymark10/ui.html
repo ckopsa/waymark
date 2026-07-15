@@ -2232,10 +2232,20 @@ function embedPager(link, setPage) {
    and link.columns is the target's own filter/sort vocabulary, so each
    embedded table gets its own Filters popover and sort-arrows, exactly
    like a top-level collection screen. */
-function embeddedSections(doc, hints) {
-  return Object.entries(doc.links || {})
+/* an embedded link's rows are the CHILD kind's — their ref fields,
+   labels, and grouping come from the child's own published schema,
+   never the parent's (a plan's schema knows nothing of a day's
+   meal_id). */
+function embedKindOf(link) {
+  const k = link.kind || "";
+  return k.endsWith("_collection") ? k.slice(0, -"_collection".length) : null;
+}
+async function embeddedSections(doc, hints) {
+  return Promise.all(Object.entries(doc.links || {})
     .filter(([, link]) => (link.embedded || []).length)
-    .map(([rel, link]) => {
+    .map(async ([rel, link]) => {
+      const child = embedKindOf(link);
+      if (child) hints = await kindSchema(child);
       const gridQuery = link.columns;
       const {scoped, apply, remove, onSort, setPage} = embedFilterOps(doc, rel);
       const bar = el("div", {class: "filterbar"});
@@ -2264,7 +2274,7 @@ function embeddedSections(doc, hints) {
           onSort: gridQuery ? onSort : null
         }),
         embedPager(link, setPage));
-    });
+    }));
 }
 
 /* ── resource screen ───────────────────────────────────────────────── */
@@ -2417,7 +2427,7 @@ async function renderResource(view, doc, hints) {
     el("details", {open:""},
       el("summary", {class:"muted"}, "Data"),
       kvTable(plainData, hints)));
-  for (const sec of embeddedSections(doc, hints)) dataPanel.append(sec);
+  for (const sec of await embeddedSections(doc, hints)) dataPanel.append(sec);
   /* the resource's own history: its transition log, replayed from the
      events stream (Last-Event-ID 0), collapsed by default */
   dataPanel.append(historySection(`${doc.self}/-/events`));

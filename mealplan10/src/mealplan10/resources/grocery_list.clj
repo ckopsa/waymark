@@ -228,6 +228,7 @@
                     [:maybe [:string {:max 2000}]]]]
    :on-create ensure-items
    :links [{:rel "plan" :kind :plan
+            :href "/api/plans/{data.plan_id}"
             :summary "The meal plan this list shops for"}]
    :filterable {:state #{:eq :in}}
    :display {:title "Grocery list"}

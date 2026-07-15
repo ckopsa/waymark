@@ -339,6 +339,7 @@
     "assign_meal/mark_eating_out/clear_day carry no :undo — multi-origin doors have no honest reverse (the inversion rule); clear_day is the acknowledged way back."
     "The one-of coverage group retired with the promotion: with the eating_out bool gone (state is the fact), the eating-out arm's primary may honestly be absent, so :clears could never fire — each edge's handler nulls what it leaves instead."]
    :links [{:rel "plan" :kind :plan
+            :href "/api/plans/{data.plan_id}"
             :summary "The week this day belongs to"}]
    :actions
    {:assign_meal assign-meal
