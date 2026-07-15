@@ -217,28 +217,8 @@
             [:previous_plan {:optional true :kind :plan
                              :predecessor {:order :start_date}}
              [:maybe :waymark/ref]]
-            [:days [:vector
-                    [:map
-                     [:date :waymark/date]
-                     [:theme {:optional true}
-                      [:maybe [:string {:min 1 :max 50}]]]
-                     [:meal_id {:optional true :kind :meal :label :meal_name}
-                      [:maybe :waymark/ref]]
-                     [:meal_name {:optional true} [:maybe [:string {:max 200}]]]
-                     [:side_dish_id {:optional true :kind :meal
-                                     :label :side_dish_name}
-                      [:maybe :waymark/ref]]
-                     [:side_dish_name {:optional true}
-                      [:maybe [:string {:max 200}]]]
-                     [:second_side_dish_id {:optional true :kind :meal
-                                            :label :second_side_dish_name}
-                      [:maybe :waymark/ref]]
-                     [:second_side_dish_name {:optional true}
-                      [:maybe [:string {:max 200}]]]
-                     [:eating_out {:optional true} [:maybe :boolean]]
-                     [:eating_out_where {:optional true
-                                         :x-display {:label "Where"}}
-                      [:maybe [:string {:max 120}]]]]]]
+            [:total_days {:optional true} [:maybe :int]]
+            [:undecided_days {:optional true} [:maybe :int]]
             [:all_days_covered {:optional true} [:maybe :boolean]]
             [:calendar_conflicts {:optional true} [:maybe :int]]
             [:has_conflicts {:optional true} [:maybe :boolean]]
@@ -262,10 +242,10 @@
    :derived
    {:end_date {:over [:start_date :weeks]
                :expr '(+ (var :start_date) (days (- (* 7 (var :weeks)) 1)))}
-    :all_days_covered {:over [:days]
-                       :expr '(every [d (var :days)]
-                                     (or (is-set (get d :meal_id))
-                                         (= (get d :eating_out) true)))
+    :total_days {:count {:owns :plan_day}}
+    :undecided_days {:count {:owns :plan_day :where {:state #{"undecided"}}}}
+    :all_days_covered {:over [:undecided_days]
+                       :expr '(= 0 (var :undecided_days))
                        :explain "Every day needs a meal or an eating-out mark before finalizing."}
     :calendar_conflicts {:count {:related :calendar
                                  :where {:kind #{"blocking"}
@@ -282,20 +262,16 @@
                         :on [[:start_date :<= :date]
                              [:end_date :>= :date]]}}
    :owns [{:kind :prep_task :via :plan_id :on {:abandon :cancel}}
-          {:kind :grocery_list :via :plan_id}]
+          {:kind :grocery_list :via :plan_id}
+          {:kind :plan_day :via :plan_id}]
    :links [{:rel "calendar" :edge :calendar :badge :calendar_conflicts
             :summary "What the family already has planned"}
            {:rel "groceries" :owns :grocery_list :embed true
             :badge :total_grocery_items
-            :summary "The week's grocery lists and what they'll cost"}]
-   :part-scopes {:days {:path :days :key :date}}
-   :one-of {:days/coverage
-            {:in [:days]
-             :arms {:meal [:meal_id :meal_name
-                           :side_dish_id :side_dish_name
-                           :second_side_dish_id :second_side_dish_name]
-                    :eating_out [:eating_out :eating_out_where]}
-             :clears true}}
+            :summary "The week's grocery lists and what they'll cost"}
+           {:rel "days" :owns :plan_day :embed true
+            :badge :total_days
+            :summary "The week's day decisions"}]
    :filterable {:state #{:eq :in}
                 :start_date #{:eq :range}
                 :end_date #{:eq :range}
@@ -304,65 +280,7 @@
    :sortable {:fields [:start_date] :default "-start_date"}
    :display {:title "Meal plan — week of {data.start_date}"}
    :actions
-   {:assign_meal {:from #{:draft} :to :draft
-                  :input plan/assign-input :place :days
-                  :guards [plan/date-in-plan plan/meal-fits-day]
-                  :safety {:idempotent true :reversible false :confirm false}
-                  :handler plan/assign-meal
-                  :display {:label "Assign meal" :style :primary :order 1}}
-    :assign_off_theme {:from #{:draft} :to :draft
-                       :input plan/assign-input :place :days
-                       :guards [plan/date-in-plan plan/meal-is-listed]
-                       :safety {:idempotent true :reversible false
-                                :confirm true
-                                :consequence "The day gets a meal that does not match its theme night."}
-                       :handler plan/assign-meal
-                       :display {:label "Assign off-theme" :order 5}}
-    :set_sunday_theme {:from #{:draft} :to :draft
-                       :input [:map
-                               [:date :waymark/date]
-                               [:theme [:string {:min 1 :max 50}]]]
-                       :place :days
-                       :guards [plan/date-in-plan plan/sunday-only
-                                plan/theme-in-rotation]
-                       :safety {:idempotent true :reversible false
-                                :confirm false}
-                       :handler plan/set-sunday-theme
-                       :display {:label "Pick Sunday theme" :order 2}}
-    :mark_eating_out {:from #{:draft} :to :draft
-                      :input [:map
-                              [:date :waymark/date]
-                              [:where {:optional true
-                                       :x-display {:label "Where"}}
-                               [:maybe [:string {:max 120}]]]]
-                      :place :days
-                      :guards [plan/date-in-plan]
-                      :safety {:idempotent true :reversible false
-                               :confirm false}
-                      :handler plan/mark-eating-out
-                      :display {:label "Eating out" :order 3}}
-    :clear_day {:from #{:draft} :to :draft
-                :input plan/day-input :place :days
-                :guards [plan/date-in-plan]
-                :safety {:idempotent true :reversible false :confirm false}
-                :handler plan/clear-day
-                :display {:label "Clear day" :order 4}}
-    :add_side_dish {:from #{:draft} :to :draft
-                    :input plan/side-dish-input :place :days
-                    :guards [plan/date-in-plan plan/day-has-meal
-                             plan/has-free-side-slot plan/meal-fits-day
-                             plan/meal-is-listed]
-                    :safety {:idempotent true :reversible true :confirm false}
-                    :handler plan/add-side-dish
-                    :display {:label "Add side dish" :order 6}}
-    :remove_side_dish {:from #{:draft} :to :draft
-                       :input plan/side-dish-input :place :days
-                       :guards [plan/date-in-plan]
-                       :safety {:idempotent true :reversible true
-                                :confirm false}
-                       :handler plan/remove-side-dish
-                       :display {:label "Remove side dish" :order 7}}
-    :finalize {:from #{:draft} :to :planned
+   {:finalize {:from #{:draft} :to :planned
                :guards [plan/all-days-covered-gate plan/calendar-clear]
                :safety {:idempotent true :reversible true :confirm false}
                :display {:label "Finalize plan" :style :primary :order 1}}

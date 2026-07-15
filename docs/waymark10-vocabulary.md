@@ -239,7 +239,11 @@ transaction and the full create algorithm, the born row riding the
 inner sink so its lifecycle/cascade/maintenance run post-commit; the
 touch names the target's create action
 (`{:kind :chore_run :action :create}`). `:touches` is the
-advertisement, never the mechanism.
+advertisement, never the mechanism. The door is open to `:on-create`
+hooks too (the plan_day fan-out demanded it), where it DEFERS: births
+queue and land right after the hook's own row inserts, so a child's
+ref label reads a real parent and the log orders parent before child;
+a birth cycle in the declarations refuses at depth 8.
 
 ## 10 · `:default` — the declared field default
 

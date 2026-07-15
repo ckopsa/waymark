@@ -12,21 +12,16 @@
     hang off this state.
   - active → done: the week runs its course.
 
-  The day-shaped actions share one part scope declared once;
-  date_in_plan / sunday_only / theme_in_rotation are pure
-  acceptance-set declarations (the enum and the enforcement are the
-  same set); references are :waymark/ref fields whose labels the
-  engine maintains (meal_name and the two side-dish names).
-
-  A day is covered by a meal OR by eating out, never both (design §5):
-  the one-of group's :clears means setting one arm clears the other —
-  the hand-written clearing that v2 repeated in three handlers is
-  gone, and \"is this day covered?\" is the all_days_covered derived
-  fact, not re-derived. The side slots ride the meal arm (fill
-  detection still keys off meal_id) purely so eating-out clears them
-  for free, same as meal_name. Two named side slots rather than an
-  open list (design tradeoff): scalar fields directly on the day item
-  sit at the one level the engine's label maintenance reaches.
+  The days are plan_day ROWS (mealplan10.resources.plan-day), born
+  WITH the plan through the ctx birth door (design §24) — promoted
+  from embedded data the moment each day earned its own machine:
+  state = the decision (undecided → planned / eating_out), coverage
+  = zero undecided children (the composed all_days_covered fact over
+  the undecided_days count), and every day-shaped action lives on the
+  day itself, its input finally free of the :date the part key used
+  to demand. The one-of coverage group retired with the promotion
+  (its reasoning is recorded on plan_day); one day per (plan, date)
+  is a declared :unique the index enforces.
 
   The family calendar is nobody's child — a recital doesn't belong to
   a meal plan, it OVERLAPS one (design 6.0 §1): the :calendar related
@@ -82,95 +77,6 @@
 ;; One acceptance set: the rendered enum, the per-part availability,
 ;; and the enforcement. There is no separate body to drift out of sync.
 
-(def date-in-plan
-  (guard {:name :date-in-plan
-          :judges [:date]
-          :accepts (fn [row] (mapv :date (get-in row [:data :days])))
-          :explain "{date} is not a day of this plan."}))
-
-(def day-has-meal
-  (guard {:name :day-has-meal
-          :judges [:date]
-          :accepts (fn [row]
-                     (into [] (keep #(when (some? (:meal_id %)) (:date %)))
-                           (get-in row [:data :days])))
-          :explain "Assign the main meal for {date} before adding a side dish."
-          :remedies [:plan/assign_meal]}))
-
-(def has-free-side-slot
-  (guard {:name :has-free-side-slot
-          :judges [:date]
-          :accepts (fn [row]
-                     (into []
-                           (keep #(when (or (nil? (:side_dish_id %))
-                                            (nil? (:second_side_dish_id %)))
-                                    (:date %)))
-                           (get-in row [:data :days])))
-          :explain "{date} already has 2 side dishes — remove one first."
-          :remedies [:plan/remove_side_dish]}))
-
-(def sunday-only
-  (guard {:name :sunday-only
-          :judges [:date]
-          :accepts (fn [row]
-                     (into []
-                           (keep #(when (= DayOfWeek/SUNDAY
-                                           (.getDayOfWeek ^LocalDate (:date %)))
-                                    (:date %)))
-                           (get-in row [:data :days])))
-          :explain "Only Sunday rotates; {date} has a fixed weeknight theme."}))
-
-(def theme-in-rotation
-  ;; the linked rotation's themes — resolved through ctx :read so the
-  ;; theme field offers real choices; nil (no constraint) when no
-  ;; rotation is linked, or when the probe carries no :read
-  (guard {:name :theme-in-rotation
-          :judges [:theme]
-          :reads [:rotation]
-          :accepts (fn [row ctx]
-                     (when-some [read (:read ctx)]
-                       (when-some [rid (get-in row [:data :rotation_id])]
-                         (when-some [rotation (read :rotation rid)]
-                           (vec (get-in rotation [:data :themes]))))))
-          :explain "'{theme}' is not in the Sunday rotation. Add it there first."
-          :remedies [:rotation/add_theme]}))
-
-;; the recorded 8.0 §5 residue: a verdict that READS (the input's ref,
-;; another kind's state) is not pure over (row, input, clock), so it
-;; stays code — :reads [:meal] names the dependency honestly
-(defguardfn meal-is-listed
-  {:judges [:meal_id] :reads [:meal]
-   :explain "That meal is not on the family meal list yet. Accept a suggestion (or ask the AI for one) first."
-   :remedies [:meal/accept]}
-  [_row inp ctx]
-  (if-some [read (:read ctx)]
-    (let [meal (read :meal (:meal_id inp))]
-      (if (and meal (= :on_list (:state meal)))
-        (t/allow)
-        (t/deny {:errors {:meal_id ["not an on-list meal"]}})))
-    (t/allow)))
-
-;; One relation, two consumers (design §5): each bound day's picker
-;; offers exactly the meals that serve its night (a rotating Sunday
-;; binds nothing), and the invoke enforces membership in the same
-;; tuple set.
-(def meal-fits-day
-  (relation
-   {:name :meal-fits-day
-    :judges [:meal_id :date]
-    :reads [:meal]
-    :accepts (fn [row ctx]
-               (when-some [find (:find ctx)]
-                 (let [meals (find :meal {:state :on_list} {:limit 500})]
-                   (set (for [d (get-in row [:data :days])
-                              :when (not= themes/rotating (:theme d))
-                              m meals
-                              :when (some #(= (:theme d) %)
-                                          (get-in m [:data :themes]))]
-                          [(:id m) (:date d)])))))
-    :explain "That meal doesn't serve {date}'s theme night. Pick the Sunday theme first if the day still rotates, or assign off-theme with confirmation."
-    :remedies [:plan/set_sunday_theme :plan/assign_off_theme]}))
-
 ;; The design story's judgment call (design 6.0 appendix §1–§2): a
 ;; recital on taco night is worth a warning, not a wall — the verdict
 ;; is a tree over the stored facts.
@@ -195,7 +101,7 @@
 (def all-days-covered-gate
   (require-fact :all_days_covered
                 {:explain "Every day needs a meal or an eating-out mark before finalizing."
-                 :remedies [:plan/assign_meal :plan/mark_eating_out]}))
+                 :remedies [:plan_day/assign_meal :plan_day/mark_eating_out]}))
 
 ;; the open-task rollup gate: the phase-6 count fact (the v10 spelling
 ;; of waymark9's Owns rollup + rollup_is — recorded: the {:rollups …}
@@ -208,55 +114,6 @@
                :remedies [:prep_task/complete :prep_task/cancel]}))
 
 ;; ── handlers ────────────────────────────────────────────────────────
-
-(defn- update-day [row date f]
-  (update-in row [:data :days]
-             (fn [days]
-               (mapv #(if (= (:date %) date) (f %) %) days))))
-
-(defhandler assign-meal [row inp _ctx]
-  ;; meal_name is the engine's to maintain (ref label, design §4);
-  ;; coverage (one-of) clears the eating-out arm — neither is handler
-  ;; work
-  (update-day row (:date inp) #(assoc % :meal_id (:meal_id inp))))
-
-(defhandler set-sunday-theme [row inp _ctx]
-  (update-day row (:date inp) #(assoc % :theme (:theme inp))))
-
-(defhandler mark-eating-out [row inp _ctx]
-  ;; coverage (one-of) clears the meal arm, side slots included — not
-  ;; this handler
-  (update-day row (:date inp) #(assoc % :eating_out true
-                                      :eating_out_where (:where inp))))
-
-(defhandler clear-day [row inp _ctx]
-  (update-day row (:date inp)
-              #(assoc % :meal_id nil :meal_name nil
-                      :side_dish_id nil :side_dish_name nil
-                      :second_side_dish_id nil :second_side_dish_name nil
-                      :eating_out nil :eating_out_where nil)))
-
-(defhandler add-side-dish [row inp _ctx]
-  ;; side names are the engine's to maintain (labeled refs) — same
-  ;; machinery as meal_name
-  (update-day row (:date inp)
-              (fn [d]
-                (cond
-                  ;; already a side of this day — idempotent no-op
-                  (or (= (:side_dish_id d) (:meal_id inp))
-                      (= (:second_side_dish_id d) (:meal_id inp))) d
-                  (nil? (:side_dish_id d)) (assoc d :side_dish_id (:meal_id inp))
-                  :else (assoc d :second_side_dish_id (:meal_id inp))))))
-
-(defhandler remove-side-dish [row inp _ctx]
-  (update-day row (:date inp)
-              (fn [d]
-                (cond
-                  (= (:side_dish_id d) (:meal_id inp))
-                  (assoc d :side_dish_id nil :side_dish_name nil)
-                  (= (:second_side_dish_id d) (:meal_id inp))
-                  (assoc d :second_side_dish_id nil :second_side_dish_name nil)
-                  :else d))))
 
 ;; ── create ──────────────────────────────────────────────────────────
 
@@ -312,8 +169,16 @@
         rotation (when rid ((:read ctx) :rotation rid))
         days (cond-> (build-days start weeks)
                rotation (pre-theme rotation))]
+    ;; the week is born WITH its days: each one a plan_day row through
+    ;; the ctx :create door (deferred during :on-create), landing right
+    ;; after this row's own insert — pre-themed, date-ordered, counted
+    ;; in the 201
+    (doseq [d days]
+      ((:create ctx) :plan_day {:plan_id (:id row)
+                                :date (:date d)
+                                :theme (:theme d)}))
     (update row :data assoc
-            :start_date start :weeks weeks :rotation_id rid :days days)))
+            :start_date start :weeks weeks :rotation_id rid)))
 
 ;; ── derived facts, def'd — each rides its own schema entry ──────────
 
@@ -324,11 +189,17 @@
 ;; the coverage rollup as a declared fact (design §2): one definition
 ;; — the finalize gate judges it and the refusal reason rides the
 ;; gate's declaration
+(defderived total-days
+  {:count {:owns :plan_day}})
+
+(defderived undecided-days
+  {:count {:owns :plan_day :where {:state #{"undecided"}}}})
+
 (defderived all-days-covered
-  {:over [:days]
-   :expr '(every [d (var :days)]
-                 (or (is-set (get d :meal_id))
-                     (= (get d :eating_out) true)))
+  ;; composed over the owned rows' states: covered = zero undecided —
+  ;; the day's MACHINE is the coverage now (state = the decision)
+  {:over [:undecided_days]
+   :expr '(= 0 (var :undecided_days))
    :explain "Every day needs a meal or an eating-out mark before finalizing."})
 
 ;; facts over the relation (design 6.0 §2): the conflict count badges
@@ -358,97 +229,6 @@
 
 ;; ── the actions ─────────────────────────────────────────────────────
 
-(def day-input [:map [:date :waymark/date]])
-
-(def assign-input
-  [:map
-   [:date :waymark/date]
-   [:meal_id {:kind :meal} :waymark/ref]])
-
-(def side-dish-input
-  ;; same picker as the main meal: a side must also be an on-list meal
-  ;; that serves the night's theme
-  [:map
-   [:date :waymark/date]
-   [:meal_id {:kind :meal} :waymark/ref]])
-
-;; named safety values: each spelled once, in full, and cited by name
-;; — never inferred
-(def routine
-  ;; honestly reversible: the paired action is the way back, and the
-  ;; :undo pointer on each citation names it for the engine to verify
-  {:idempotent true :reversible true :confirm false})
-(def overwrite
-  ;; an idempotent overwrite of a day's slot — nothing to confirm, and
-  ;; "reverse" is just writing the slot again (or clearing the day)
-  {:idempotent true :reversible false :confirm false})
-
-(defaction assign-meal-action
-  {:from #{:draft} :to :draft
-   :input assign-input :place :days
-   :guards [date-in-plan meal-fits-day]
-   :safety overwrite
-   :handler assign-meal
-   :display {:label "Assign meal" :style :primary :order 1}})
-
-(defaction assign-off-theme
-  ;; same input and handler as assign_meal; the law that differs is
-  ;; the judgment (listed, not theme-fitting) and the explicit confirm
-  {:from #{:draft} :to :draft
-   :input assign-input :place :days
-   :guards [date-in-plan meal-is-listed]
-   :safety {:idempotent true :reversible false :confirm true
-            :consequence "The day gets a meal that does not match its theme night."}
-   :handler assign-meal
-   :display {:label "Assign off-theme" :order 5}})
-
-;; the day-shaped action group: one part scope (:days), every input
-;; keyed by :date — merged into :actions beside the lifecycle
-(def day-actions
-  {:assign_meal assign-meal-action
-   :assign_off_theme assign-off-theme
-   :set_sunday_theme {:from #{:draft} :to :draft
-                      :input [:map
-                              [:date :waymark/date]
-                              [:theme [:string {:min 1 :max 50}]]]
-                      :place :days
-                      :guards [date-in-plan sunday-only theme-in-rotation]
-                      :safety overwrite
-                      :handler set-sunday-theme
-                      :display {:label "Pick Sunday theme" :order 2}}
-   :mark_eating_out {:from #{:draft} :to :draft
-                     :input [:map
-                             [:date :waymark/date]
-                             [:where {:optional true
-                                      :x-display {:label "Where"}}
-                              [:maybe [:string {:max 120}]]]]
-                     :place :days
-                     :guards [date-in-plan]
-                     :safety overwrite
-                     :handler mark-eating-out
-                     :display {:label "Eating out" :order 3}}
-   :clear_day {:from #{:draft} :to :draft
-               :input day-input :place :days
-               :guards [date-in-plan]
-               :safety overwrite
-               :handler clear-day
-               :display {:label "Clear day" :order 4}}
-   :add_side_dish {:from #{:draft} :to :draft
-                   :input side-dish-input :place :days
-                   :guards [date-in-plan day-has-meal has-free-side-slot
-                            meal-fits-day meal-is-listed]
-                   :safety routine :undo :remove_side_dish
-                   :handler add-side-dish
-                   :display {:label "Add side dish" :order 6}}
-   :remove_side_dish {:from #{:draft} :to :draft
-                      :input side-dish-input :place :days
-                      :guards [date-in-plan]
-                      :safety routine :undo :add_side_dish
-                      :handler remove-side-dish
-                      :display {:label "Remove side dish" :order 7}}})
-
-;; ── the declaration ─────────────────────────────────────────────────
-
 (defresource plan
   {:kind :plan
    :states [:draft :planned :active :done :abandoned]
@@ -474,31 +254,13 @@
             [:previous_plan {:optional true :kind :plan
                              :predecessor {:order :start_date}}
              [:maybe :waymark/ref]]
-            ;; per-day placement is declared here, once (design §3):
-            ;; the day-shaped actions all cite :place :days
-            [:days {:part-scope {:key :date}}
-             [:vector
-              [:map
-               [:date :waymark/date]
-               [:theme {:optional true}
-                [:maybe [:string {:min 1 :max 50}]]]
-               [:meal_id {:optional true :kind :meal :label :meal_name}
-                [:maybe :waymark/ref]]
-               [:meal_name {:optional true} [:maybe [:string {:max 200}]]]
-               [:side_dish_id {:optional true :kind :meal
-                               :label :side_dish_name}
-                [:maybe :waymark/ref]]
-               [:side_dish_name {:optional true}
-                [:maybe [:string {:max 200}]]]
-               [:second_side_dish_id {:optional true :kind :meal
-                                      :label :second_side_dish_name}
-                [:maybe :waymark/ref]]
-               [:second_side_dish_name {:optional true}
-                [:maybe [:string {:max 200}]]]
-               [:eating_out {:optional true} [:maybe :boolean]]
-               [:eating_out_where {:optional true
-                                   :x-display {:label "Where"}}
-                [:maybe [:string {:max 120}]]]]]]
+            ;; the week's days are plan_day ROWS (state = the
+            ;; decision); the counts below are their engine-maintained
+            ;; shadow on the parent
+            [:total_days {:optional true :derived total-days}
+             [:maybe :int]]
+            [:undecided_days {:optional true :derived undecided-days}
+             [:maybe :int]]
             [:all_days_covered {:optional true :derived all-days-covered}
              [:maybe :boolean]]
             [:calendar_conflicts {:optional true :derived calendar-conflicts
@@ -549,21 +311,20 @@
    ;; open prep tasks (cascade), the open-task count gates complete,
    ;; and the week's grocery lists roll their totals up here
    :owns [{:kind :prep_task :via :plan_id :on {:abandon :cancel}}
-          {:kind :grocery_list :via :plan_id}]
+          {:kind :grocery_list :via :plan_id}
+          ;; no :on — an abandoned plan's days stay readable exactly
+          ;; as abandon's sentence promises (they are the record)
+          {:kind :plan_day :via :plan_id}]
    ;; the edge-cited link (design 6.0 §1) — declared, checked, and
    ;; rendered with its badge
    :links [{:rel "calendar" :edge :calendar :badge :calendar_conflicts
             :summary "What the family already has planned"}
            {:rel "groceries" :owns :grocery_list :embed true
             :badge :total_grocery_items
-            :summary "The week's grocery lists and what they'll cost"}]
-   :one-of {:days/coverage
-            {:in [:days]
-             :arms {:meal [:meal_id :meal_name
-                           :side_dish_id :side_dish_name
-                           :second_side_dish_id :second_side_dish_name]
-                    :eating_out [:eating_out :eating_out_where]}
-             :clears true}}
+            :summary "The week's grocery lists and what they'll cost"}
+           {:rel "days" :owns :plan_day :embed true
+            :badge :total_days
+            :summary "The week's day decisions"}]
    :filterable {:state #{:eq :in}}
    :display {:title "Meal plan — week of {data.start_date}"}
    ;; the lifecycle as flow rows, each wearing its safety story —
@@ -592,8 +353,7 @@
         :display {:label "Week done" :style :primary :order 1}}]
       [:draft   :abandon  :abandoned discard]
       [:planned :abandon  :abandoned discard]
-      [:active  :abandon  :abandoned discard]])
-   :actions day-actions})
+      [:active  :abandon  :abandoned discard]])})
 
 ;; ── the week's decision surface (phase 9b, waymark9 mealplan9's
 ;;    WeekBoard) ──────────────────────────────────────────────────────
@@ -606,6 +366,7 @@
   /api/surfaces/week-board/{plan-id}."
   {:name :week-board
    :anchor :plan
-   :members [{:name :calendar :kind :event :related :calendar}]
+   :members [{:name :calendar :kind :event :related :calendar}
+            {:name :days :owns :plan_day}]
    :showcase [:finalize]
    :attention {:has_conflicts true}})
