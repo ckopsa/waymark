@@ -64,7 +64,7 @@
   action-keys already gives :actions, extended here so a typo'd link
   key (:rel misspelled, an :emebd) refuses at the def site instead of
   rendering nothing."
-  [:rel :owns :edge :href :kind :summary :badge :embed])
+  [:rel :owns :edge :href :kind :summary :badge :embed :where])
 
 (def ^:private link-schema
   (into [:map {:closed true}]

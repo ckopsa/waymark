@@ -473,17 +473,123 @@
       (check-aggregate-edge reg kind r fact "sum" c)))
   (check-fact-dag reg))
 
+;; ── link :where — the narrowed owns embed ───────────────────────────
+
+(defn- check-link-where
+  "An owns link's :where narrows its compiled href — it must be a
+  query the target collection answers: :state (declared states) or an
+  :eq/:in-filterable field, the same contract as :pick. A :where on
+  an edge or template link has no compiled home and refuses."
+  [reg]
+  (doseq [[kind r] (:kinds reg)
+          ld (:links r)
+          :when (contains? ld :where)]
+    (when-not (:owns ld)
+      (err kind :links (str "link " (:rel ld) ": :where narrows a compiled "
+                            ":owns href — an :edge carries its own :on and "
+                            "a template :href spells its own params")))
+    (when-not (map? (:where ld))
+      (err kind :links (str "link " (:rel ld) ": :where is a "
+                            "{field value(s)} query map")))
+    (when-some [target (get-in reg [:kinds (:owns ld)])]
+      (doseq [[f v] (:where ld)]
+        (if (= :state f)
+          (let [states (into #{} (map name) (:states target))]
+            (doseq [x (if (coll? v) v [v])
+                    :let [x (if (keyword? x) (name x) (str x))]]
+              (when-not (contains? states x)
+                (err kind :links (str "link " (:rel ld) ": :where state " x
+                                      " is not a state of "
+                                      (name (:owns ld)))))))
+          (when-not (some #{:eq :in} (get-in target [:filterable f]))
+            (err kind :links (str "link " (:rel ld) ": :where key " f
+                                  " is not an :eq/:in-filterable field of "
+                                  (name (:owns ld)))))))))
+  nil)
+
+;; ── pick: the declared picker query ─────────────────────────────────
+
+(defn- check-pick
+  "A ref's :pick is the picker's collection query — presentation, but
+  it must be a query the target actually answers: each key is :state
+  or an :eq/:in-filterable field of the target kind, and :state
+  values are declared states. A picker that fetches a 400 is worse
+  than an unfiltered one."
+  [reg]
+  (doseq [[kind r] (:kinds reg)
+          [where form] (surfaces r)
+          :let [entries (schema/entry-map form)]
+          f (schema/entry-keys form)
+          :let [{props :properties s :schema} (get entries f)
+                pick (:pick props)]
+          :when (and pick (= :waymark/ref (head s)))]
+    (let [target (get-in reg [:kinds (:kind props)])
+          site (str where "." (name f))]
+      (when-not (map? pick)
+        (err kind :pick (str site ": :pick is a {field value(s)} query map")))
+      (when target
+        (doseq [[pf pv] pick]
+          (if (= :state pf)
+            (let [states (into #{} (map name) (:states target))]
+              (doseq [v (if (coll? pv) pv [pv])
+                      :let [v (if (keyword? v) (name v) (str v))]]
+                (when-not (contains? states v)
+                  (err kind :pick (str site ": :pick state " v " is not a "
+                                       "state of " (name (:kind props)))))))
+            (let [ops (get-in target [:filterable pf])]
+              (when-not (some #{:eq :in} ops)
+                (err kind :pick (str site ": :pick key " pf " is not an "
+                                     ":eq/:in-filterable field of "
+                                     (name (:kind props)))))))))))
+  nil)
+
+;; ── touches: the declared cross-write sets ──────────────────────────
+
+(defn- check-touches
+  "Every :touches entry names a real kind and a real action of it
+  (errors — an advertisement of a write that cannot happen is a lie
+  at the def site). An owns-cascade :on target the parent action does
+  not advertise is a coverage WARNING: the cascade IS a touch, and
+  the envelope should say so."
+  [reg]
+  (let [kinds (:kinds reg)]
+    (doseq [[kind r] kinds
+            [aname a] (:actions r)
+            t (:touches a)]
+      (let [target (get kinds (:kind t))]
+        (when-not target
+          (err kind :touches (str "action " (name aname) " touches kind "
+                                  (:kind t) ", which is not registered")))
+        (when-not (get-in target [:actions (:action t)])
+          (err kind :touches (str "action " (name aname) " touches "
+                                  (name (:kind t)) "." (name (:action t))
+                                  ", not an action of that kind")))))
+    (into []
+          (for [[kind r] kinds
+                edge (:owns r)
+                [parent-action child-action] (:on edge)
+                :let [declared (get-in r [:actions parent-action :touches])]
+                :when (not-any? #(and (= (:kind %) (:kind edge))
+                                      (= (:action %) child-action))
+                                declared)]
+            (str "[touches] " (name kind) ": action " (name parent-action)
+                 " cascades " (name (:kind edge)) "." (name child-action)
+                 " but does not advertise it — declare :touches "
+                 "[{:kind " (:kind edge) " :action " child-action
+                 " :may true}]")))))
+
 ;; ── the battery ─────────────────────────────────────────────────────
 
-;; punt: check-touches (declared cross-kind write sets) and
-;; check-compounds (compound inputs) — their declaration shapes are
-;; unported; each check arrives with its feature.
+;; punt: check-compounds (compound inputs) — its declaration shape is
+;; unported; the check arrives with the feature.
 
 (defn run-all
   "The assembly battery in waymark9 order: refs, owns, related,
-  derived-cycles. Throws the first error, returns {:warnings [str …]}."
+  derived-cycles, touches. Throws the first error, returns
+  {:warnings [str …]}."
   [reg]
   {:warnings
    (into []
          (mapcat #(% reg))
-         [check-refs check-owns check-related check-derived-cycles])})
+         [check-refs check-owns check-related check-derived-cycles
+          check-touches check-pick check-link-where])})

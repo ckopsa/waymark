@@ -77,10 +77,24 @@
             [:prep_minutes {:optional true} [:maybe [:int {:min 0}]]]
             [:thaw_hours {:optional true} [:maybe [:int {:min 0}]]]
             [:servings {:optional true} [:maybe [:int {:min 1}]]]
+            [:est_cost_cents {:optional true
+                              :x-display {:widget "money"
+                                          :label "Est. cost"}}
+             [:maybe :int]]
+            [:priced_ingredients {:optional true} [:maybe :int]]
+            [:total_ingredients {:optional true} [:maybe :int]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
+   :derived {:est_cost_cents meal/meal-est-cost
+             :priced_ingredients meal/priced-ingredients
+             :total_ingredients meal/total-ingredients}
+   :owns [{:kind :meal_line :via :meal_id :on {:reprice :reprice}}]
+   :links [{:rel :ingredients :owns :meal_line :embed true
+            :badge :total_ingredients
+            :where {:state "on_recipe"}
+            :summary "The recipe's ingredient lines and what they cost"}]
    :filterable {:state #{:eq :in}}
-   :sortable {:fields [:name] :default "name"}
+   :sortable {:fields [:name :est_cost_cents] :default "name"}
    :display {:title "{data.name}"}
    :deviations
    ["accept_many stays a declared action — bulk has no flow-row spelling."
@@ -126,7 +140,12 @@
     :retire {:from #{:on_list} :to :retired
              :safety {:idempotent true :reversible false :confirm true
                       :consequence "The meal leaves the family list and can no longer be assigned to plan days."}
-             :display {:label "Retire" :style :danger :order 9}}}})
+             :display {:label "Retire" :style :danger :order 9}}
+    :reprice {:from #{:on_list} :to :on_list
+              :touches [{:kind :meal_line :action :reprice :may true}]
+              :safety {:idempotent false :reversible false :confirm false}
+              :display {:label "Reprice" :order 4
+                        :description "Refresh every line's estimate from today's price world"}}}})
 
 (deftest the-meal-fingerprint-survived-the-style-refactor
   (pin! :meal old-meal meal/meal))
@@ -222,6 +241,12 @@
             [:calendar_conflicts {:optional true} [:maybe :int]]
             [:has_conflicts {:optional true} [:maybe :boolean]]
             [:open_tasks {:optional true} [:maybe :int]]
+            [:est_grocery_cost_cents {:optional true
+                                      :x-display {:widget "money"
+                                                  :label "Est. grocery cost"}}
+             [:maybe :int]]
+            [:priced_grocery_items {:optional true} [:maybe :int]]
+            [:total_grocery_items {:optional true} [:maybe :int]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :create-schema [:map
@@ -246,13 +271,21 @@
     :has_conflicts {:over [:calendar_conflicts]
                     :expr '(< 0 (var :calendar_conflicts))}
     :open_tasks {:count {:owns :prep_task
-                         :where {:state #{"pending" "scheduled"}}}}}
+                         :where {:state #{"pending" "scheduled"}}}}
+    :est_grocery_cost_cents {:sum {:owns :grocery_list
+                                   :of :estimated_total_cents}}
+    :priced_grocery_items {:sum {:owns :grocery_list :of :priced_items}}
+    :total_grocery_items {:sum {:owns :grocery_list :of :total_items}}}
    :related {:calendar {:kind :event
                         :on [[:start_date :<= :date]
                              [:end_date :>= :date]]}}
-   :owns [{:kind :prep_task :via :plan_id :on {:abandon :cancel}}]
+   :owns [{:kind :prep_task :via :plan_id :on {:abandon :cancel}}
+          {:kind :grocery_list :via :plan_id}]
    :links [{:rel "calendar" :edge :calendar :badge :calendar_conflicts
-            :summary "What the family already has planned"}]
+            :summary "What the family already has planned"}
+           {:rel "groceries" :owns :grocery_list :embed true
+            :badge :total_grocery_items
+            :summary "The week's grocery lists and what they'll cost"}]
    :part-scopes {:days {:path :days :key :date}}
    :one-of {:days/coverage
             {:in [:days]
@@ -345,6 +378,7 @@
                         :one-way "Completing records a finished week; the plan remains readable as history."}
                :display {:label "Week done" :style :primary :order 1}}
     :abandon {:from #{:draft :planned :active} :to :abandoned
+              :touches [{:kind :prep_task :action :cancel :may true}]
               :safety {:idempotent true :reversible false :confirm true
                        :consequence "The plan is discarded for good; its open prep tasks are cancelled; its days and any grocery list stay readable as records."}
               :display {:label "Abandon plan" :style :danger :order 9}}}})
@@ -376,8 +410,20 @@
                        [:maybe [:string {:max 50}]]]
                       [:meals {:optional true}
                        [:maybe [:vector [:string {:max 200}]]]]
+                      [:ingredient_id {:optional true :kind :ingredient}
+                       [:maybe :waymark/ref]]
+                      [:est_cost_cents {:optional true
+                                        :x-display {:widget "money"
+                                                    :label "Est. cost"}}
+                       [:maybe [:int {:min 0}]]]
                       [:have {:optional true} [:maybe :boolean]]]]]
             [:all_items_checked {:optional true} [:maybe :boolean]]
+            [:estimated_total_cents {:optional true
+                                     :x-display {:widget "money"
+                                                 :label "Est. total"}}
+             [:maybe :int]]
+            [:priced_items {:optional true} [:maybe :int]]
+            [:total_items {:optional true} [:maybe :int]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :create-schema [:map
@@ -388,12 +434,25 @@
    :derived {:all_items_checked
              {:over [:items]
               :expr '(every [i (var :items)] (= (get i :have) true))
-              :explain "Some items are still unchecked."}}
+              :explain "Some items are still unchecked."}
+             :estimated_total_cents
+             {:over [:items]
+              :expr '(sum [i (var :items)] (max (get i :est_cost_cents) 0))
+              :explain "The priced items' estimates, summed."}
+             :priced_items
+             {:over [:items]
+              :expr '(count [i (var :items)] (is-set (get i :est_cost_cents)))}
+             :total_items
+             {:over [:items]
+              :expr '(count (var :items))}}
    :links [{:rel "plan" :kind :plan
             :summary "The meal plan this list shops for"}]
    :part-scopes {:items {:path :items :key :name}}
    :filterable {:state #{:eq :in}
-                :plan_id #{:eq}}
+                :plan_id #{:eq}
+                :estimated_total_cents #{:eq :range}
+                :priced_items #{:eq :range}
+                :total_items #{:eq :range}}
    :display {:title "Grocery list"}
    :actions
    {:add_item {:from #{:draft} :to :draft
@@ -402,7 +461,14 @@
                        [:quantity {:optional true} [:maybe [:string {:max 50}]]]
                        [:category {:optional true} [:maybe [:string {:max 50}]]]
                        [:meals {:optional true}
-                        [:maybe [:vector [:string {:max 200}]]]]]
+                        [:maybe [:vector [:string {:max 200}]]]]
+                       [:ingredient_id {:optional true :kind :ingredient
+                                        :pick {:state "active"}}
+                        [:maybe :waymark/ref]]
+                       [:est_cost_cents {:optional true
+                                         :x-display {:widget "money"
+                                                     :label "Est. cost"}}
+                        [:maybe [:int {:min 0}]]]]
                :safety {:idempotent true :reversible false :confirm false}
                :handler glist/add-item
                :display {:label "Add item" :style :primary :order 1}}
@@ -475,7 +541,7 @@
    :deviations
    ["No :undo pointers — every edge here is honestly one-way or confirmed, and nothing walks a task back."
     "task_type carries no field default — the AI states it with each task."
-    "The with_plan profile and the href link render have no v10 spelling; the link declaration is carried."]
+    "The with_plan profile has no v10 spelling."]
    :actions
    {:schedule {:from #{:pending} :to :scheduled
                :input [:map [:event_id {:kind :event} :waymark/ref]]
@@ -554,8 +620,14 @@
   ;; :deviations vector — a deliberate advertisement-class law change.
   ;; event carries no deviations, so its hash is byte-identical to the
   ;; pre-deviations era (the empty-vector ≡ absent property).
-  {:meal      "7d2d323c3dacae059888f55112d9a37d482fd833d1cc9660bbbecdbabae8f1eb"
-   :prep_task "2a88c7421751a8c5e7f45386667c60bd1717693651052dc4521dca749eb2e50d"
+  ;; meal and prep_task re-pinned again 2026-07-15 (pantry-prices
+  ;; parity): meal gained the cost rollups, the meal_line owns edge +
+  ;; reprice cascade (:touches advertised), and the embedded
+  ;; ingredients link; prep_task's stale href-render punt sentence
+  ;; left its :deviations (links render now) — deliberate revisions,
+  ;; both spellings moved together above.
+  {:meal      "ac2f3f372fdb779d61f1cc35cbf440c1bc6da00ef3e81aaf0fb20baa4ee375ec"
+   :prep_task "96806ff45abb99edcc6f97a3d48cc635e97f50185ebcbcfd4bbaa04c9c0e14e3"
    :event     "77fba0a5a46b83a3594170a75e5f0614a9980a5f57cf76f90e5ac3e699b32805"})
 
 (deftest the-canonical-residue-hashes-are-pinned-as-literals

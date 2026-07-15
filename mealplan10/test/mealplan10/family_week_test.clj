@@ -33,7 +33,8 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["meals" "rotations" "plans" "grocery_lists" "prep_tasks" "events"
+  ["meals" "meal_lines" "rotations" "plans" "grocery_lists" "prep_tasks"
+   "ingredients" "products" "substitutions" "events"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts"])
 

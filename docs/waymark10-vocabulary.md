@@ -118,6 +118,7 @@ refusal; a typo'd law key is the `:unknown-law-key` refusal.
 | `:expect` | on a **mirror kind's** entry: the field's declared dynamics — `:immutable` (a document moving a set-once value lands the row conflicted; resolve_conflict ratifies), `:volatile` (a pass where it moves nowhere warns — the feed may be stale), `{:churn n}` (at most n% of rows may change per pass; a breach is held like the mass-absence census; widen the bound to ratify a legitimate mass change) | `[:started_at {:expect :immutable} …]`, `[:department {:expect {:churn 10}} …]` |
 | `:label` | the sibling field the engine maintains the ref target's label into | `[:meal_id {:kind :meal :label :meal_name} …]` |
 | `:predecessor {:order …}` | resolve at create to the newest sibling by that field (period chaining) | `[:previous_plan {:kind :plan :predecessor {:order :start_date}} …]` |
+| `:pick` | the picker's collection query — the generic client fetches the ref's options WITH these params (presentation, never fingerprinted; enforcement stays with guards); keys are `:state` or an `:eq`/`:in`-filterable field of the target, values scalar or list (`a,b` in-list on the wire); the assembly refuses a pick the target collection would 400 | `[:ingredient_id {:kind :ingredient :pick {:state :active}} …]` |
 | `:x-display` | advertisement: `{:label …}`, `{:widget "prose"}`, `{:hidden true}`, `{:showcase true}` — showcase renders a filterable field's filter as a standing control above the collection table (a select for enum'd/faceted fields, a min–max pair for `:range`, a date input for `:after`) instead of tucking it in the Filters popover | `[:kind {:x-display {:showcase true}} …]` |
 
 **Waymark schema types:** `:waymark/date` (LocalDate), `:waymark/instant`
@@ -209,3 +210,46 @@ refuse against) print from the REPL — `(waymark10.dev/vocab)` — and live in
 `waymark10.resource/flow-opt-keys`. Flow rows are
 `[from action to opts?]`; per-origin rows of one action must agree on
 everything but `:confirm`.
+
+## 9 · `:touches` — the declared cross-write set
+
+An action that advances OTHER rows says so on its declaration:
+
+```clojure
+:absorb {:from #{:active} :to :active
+         :touches [{:kind :product :action :rematch :may true}
+                   {:kind :ingredient :action :retire}]
+         …}
+```
+
+Blast radius is law (fingerprinted, code-or-shape): the envelope
+renders the set on the action entry so an agent reads what a confirm
+will reach before it confirms, the assembly refuses a touch naming an
+unregistered kind or a missing action, an owns-cascade `:on` target
+the parent action does not advertise draws a coverage warning, and the
+conformance library (`touches-violations`) holds every logged run to
+the promise by correlation id — `:may true` tolerates a touch that had
+nothing to do on a given run (an empty cascade, a conditional write).
+The writes themselves come from the owns cascade or the handler's
+ctx `:invoke` door; `:touches` is the advertisement, never the
+mechanism.
+
+## 10 · `:default` — the declared field default
+
+```clojure
+[:ratio {:optional true :default 1M} [:maybe [:decimal {:gt 0 :max 100}]]]
+[:quantity {:optional true :default 1} [:maybe [:int {:min 1}]]]
+```
+
+The doors (create + action input) fill ABSENT keys with the declared
+default before validation — an explicit null stays (the author said
+blank), a present value is never touched, vector-of-map items fill
+their own item defaults, and a mirror mint takes none (the authority's
+absence means absence). The projection carries the standard
+JSON-Schema `default` keyword, so the generic client's form prefills
+it. Defaults are LAW: a default changes what a blank write stores —
+the fingerprint's `create` facet (`{"defaults" {…}}`) and each
+action's `input_defaults` project them, non-empty-only, so the
+default-free world hashes as ever. The checks refuse a default the
+field would not accept and any default on a derived field (one fact,
+one writer).

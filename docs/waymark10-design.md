@@ -3068,3 +3068,126 @@ considering cards on the live stream.
 | intents: one card per door, collection self for create/bulk, partial mode mute | company must never cost the work | 2026-07-10 |
 | client confirm gate dry-runs before the `:confirm!` seam | rule 5 enforced, not remembered | 2026-07-10 |
 | blur = partial, Check/submit = full, timers disarmed across doors | one coherent blur behavior | 2026-07-10 |
+
+# 24. The pantry-prices parity batch — the dogfood demands, recorded
+
+mealplan9's final era (pantry prices, 2026-07-11..13) is the demanding
+declaration for this batch: porting it to mealplan10 at full parity —
+no experience regressions recorded as deviations — required growing
+the framework where v9 had spellings v10 lacked. Each act below is one
+commit, one test namespace, one vocabulary-doc row.
+
+## ctx `:invoke` — the handler's cross-write door
+
+waymark9's `Ctx.invoke`, ported. A handler (or `:on-create` hook) may
+write OTHER rows through the very transaction it runs in, each inner
+write walking the full per-item algorithm (idempotency, state, guards,
+tamper, log). The demanding declaration: `ingredient.absorb` must
+rematch the DUPLICATE's products (an input-carrying write on another
+row's children) and retire the duplicate — the owns cascade cannot say
+that (it carries no input and fans to the acting row's own children).
+
+- `make-ctx` carries `:invoke` ONLY in `:invoke` mode — probe and
+  dry-run ctxs hold no pen, and guard evaluation receives a ctx with
+  the door removed (guards judge; handlers write).
+- Inner results ride the outer result as `:inner-writes`;
+  `after-write!` drains them FIRST, so the outer response's rollups
+  tell the post-inner truth (absorb answers with the survivor's
+  repointed products already counted).
+- Inner transitions wear the outer correlation id; a natural replay of
+  the outer skips inner re-execution wholesale (the first execution's
+  writes are the record).
+- The owns cascade's pagination now survives SELF-LOOP child actions
+  (a cascaded child that stays in the `:from` filter): a seen set +
+  growing fetch window replaces the leave-the-filter assumption.
+
+Proof: `waymark10/test/waymark10/ctx_invoke_test.clj` (6 tests — the
+merge world: inner writes land, maintenance truth, correlation ids,
+natural replay, dry-run writes nothing, 201-child self-loop cascade).
+
+## Vocabulary / decisions log (§24)
+
+| Decision | Why | Date |
+| --- | --- | --- |
+| ctx `:invoke` (handlers + on-create only; guards and rehearsals never see it) | absorb's cascade writes another row's children with input — the owns cascade cannot say that | 2026-07-15 |
+| `:inner-writes` drain before the outer's own after-write! pass | the response's rollups tell the post-inner truth | 2026-07-15 |
+| cascade! seen-set + growing window | a self-loop cascade target must terminate past the 200-row page | 2026-07-15 |
+
+## `:touches` — blast radius as law
+
+waymark9's `touches=`, filled in (v10 anticipated it: the key already
+sat in `declaration/action-keys` and the fingerprint truth-family —
+only the consumers were missing). Declaration
+`[{:kind k :action a :may bool}]` on the action map; validated at
+normalize (keywords, no unknown keys); fingerprinted on the action
+facet non-empty-only (touch-free actions hash byte-identical to the
+pre-touches era); rendered on the envelope's action entry; assembly
+refuses lies (unknown kind/action) and warns on silence (an
+unadvertised owns-cascade `:on` target); `touches-violations` in the
+conformance library reads the transition log by correlation id —
+every non-`:may` touch must have fired alongside its outer write.
+Proof: `waymark10/test/waymark10/touches_test.clj`.
+
+## `:pick` — the picker's declared query
+
+waymark9's `pick=Query(state="active")`, filled in (v10 anticipated
+this too: `:pick` already rode the published `x-ref` annotation —
+schema.clj projected it and nothing consumed it). The generic client's
+ref picker now fetches the target collection WITH the declared params
+(keyword values land as names; lists spell the wire's `a,b` in-list).
+Presentation, never fingerprinted — v9's pick filtered rendering only,
+and enforcement stays with guards. The assembly (`check-pick`) refuses
+a pick the target collection would 400: keys must be `:state` or an
+`:eq`/`:in`-filterable field, and state values must be declared states
+(`state` is every collection's standing filter, collections.clj).
+Proof: `waymark10/test/waymark10/pick_test.clj`.
+
+## `:default` — the declared field default
+
+v9's Data-model defaults, respelled as an entry property (v10 had no
+default grammar; every app hand-rolled :on-create). Applied at the
+write doors only — create and action input, before validation; absent
+fills, explicit null stays, item maps fill one level, mints take none.
+Projection = the standard JSON-Schema `default` keyword (the generic
+form prefills). Law stance: defaults are truth-class — the
+anticipated `create` facet lands as `{"defaults" {field value}}`
+(item defaults dotted), actions project `input_defaults`, both
+non-empty-only for hash stability. `check-defaults` refuses a default
+the entry schema rejects and any default on a derived field.
+Proof: `waymark10/test/waymark10/defaults_test.clj`.
+
+## `:decimal` exclusive bounds — `:gt` / `:lt`
+
+The registered exact-decimal type grows `:gt`/`:lt` beside `:min`/
+`:max`: a substitution ratio is `> 0`, not `≥` some arbitrary floor
+(the pre-parity approximation was `:min 0.01M`). Projection speaks the
+standard `exclusiveMinimum`/`exclusiveMaximum`; generation floors one
+whole step inside the open bound.
+Proof: `waymark10/test/waymark10/decimal_bounds_test.clj`.
+
+## Owns-link `:where` — the narrowed embed
+
+`{:rel "ingredients" :owns :meal_line :embed true :where {:state
+"on_recipe"}}` — the declared narrowing rides the compiled href
+(`state=on_recipe`), the splice reads it back through the collection
+grammar as a LOCKED param (an embed override naming it refuses, the
+same as the `:via` join key), and the assembly holds `:where` to the
+same contract as `:pick`: `:state` (declared states) or an
+`:eq`/`:in`-filterable field of the target. A `:where` on an edge or
+template link refuses — an edge carries its own `:on` and a template
+spells its own params. The v9 pages' filtered embeds (on_recipe lines,
+accepted substitutions), reached.
+Proof: `waymark10/test/waymark10/link_where_test.clj`.
+
+## require-fact at create — the phase-2 promise, delivered
+
+`guards/require`'s docstring promised "the create path (row nil)
+computes from input in phase 2"; §24 delivers it: a require gate in
+`:create-guards` evaluates the bound derived spec's own law over the
+validated create input — `(var :f)` reads the create body, exactly
+what the maintained fact would store — so v9's
+`create_guards = (require("distinct"),)` spells the same in v10 and
+self-substitution is unrepresentable at birth. An aggregate spec has
+no law to compute before the row exists and allows, as ever (and the
+existing check still refuses non-bool gates outright).
+Proof: `waymark10/test/waymark10/require_create_test.clj`.

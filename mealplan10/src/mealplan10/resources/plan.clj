@@ -344,6 +344,18 @@
   {:count {:owns :prep_task
            :where {:state #{"pending" "scheduled"}}}})
 
+;; the money rollups (pantry-prices era): the week's grocery cost,
+;; summed over the owned lists' own derived totals — child writes
+;; flip these in the same commit
+(defderived est-grocery-cost-cents
+  {:sum {:owns :grocery_list :of :estimated_total_cents}})
+
+(defderived priced-grocery-items
+  {:sum {:owns :grocery_list :of :priced_items}})
+
+(defderived total-grocery-items
+  {:sum {:owns :grocery_list :of :total_items}})
+
 ;; ── the actions ─────────────────────────────────────────────────────
 
 (def day-input [:map [:date :waymark/date]])
@@ -500,6 +512,17 @@
              [:maybe :boolean]]
             [:open_tasks {:optional true :derived open-tasks}
              [:maybe :int]]
+            [:est_grocery_cost_cents {:optional true
+                                      :derived est-grocery-cost-cents
+                                      :x-display {:widget "money"
+                                                  :label "Est. grocery cost"}}
+             [:maybe :int]]
+            [:priced_grocery_items {:optional true
+                                    :derived priced-grocery-items}
+             [:maybe :int]]
+            [:total_grocery_items {:optional true
+                                   :derived total-grocery-items}
+             [:maybe :int]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    ;; the create form: only the decisions a human actually makes —
@@ -522,14 +545,18 @@
    :related {:calendar {:kind :event
                         :on [[:start_date :<= :date]
                              [:end_date :>= :date]]}}
-   ;; one ownership edge, two consumers (design E4): abandoning the
-   ;; plan cancels its open prep tasks (cascade), and the open-task
-   ;; count above gates complete
-   :owns [{:kind :prep_task :via :plan_id :on {:abandon :cancel}}]
-   ;; the edge-cited link (design 6.0 §1) — declared and checked;
-   ;; envelope link rendering stays v10's phase-3 punt
+   ;; ownership edges (design E4): abandoning the plan cancels its
+   ;; open prep tasks (cascade), the open-task count gates complete,
+   ;; and the week's grocery lists roll their totals up here
+   :owns [{:kind :prep_task :via :plan_id :on {:abandon :cancel}}
+          {:kind :grocery_list :via :plan_id}]
+   ;; the edge-cited link (design 6.0 §1) — declared, checked, and
+   ;; rendered with its badge
    :links [{:rel "calendar" :edge :calendar :badge :calendar_conflicts
-            :summary "What the family already has planned"}]
+            :summary "What the family already has planned"}
+           {:rel "groceries" :owns :grocery_list :embed true
+            :badge :total_grocery_items
+            :summary "The week's grocery lists and what they'll cost"}]
    :one-of {:days/coverage
             {:in [:days]
              :arms {:meal [:meal_id :meal_name
@@ -545,6 +572,8 @@
    ;; agree on everything but :confirm, so agreement is citation)
    :flow
    (let [discard {:confirm "The plan is discarded for good; its open prep tasks are cancelled; its days and any grocery list stay readable as records."
+                  ;; the cascade IS a touch — advertised (design §24)
+                  :touches [{:kind :prep_task :action :cancel :may true}]
                   :display {:label "Abandon plan" :style :danger :order 9}}]
      [[:draft   :finalize :planned
        {:requires [all-days-covered-gate calendar-clear]

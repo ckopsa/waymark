@@ -28,6 +28,8 @@
            :rollups {:open_tickets {:where {:state #{"open"}}}}}]
    :actions
    {:abandon {:from #{:open} :to :abandoned
+              ;; the cascade IS a touch — the happy world advertises it
+              :touches [{:kind :ticket :action :cancel :may true}]
               :safety {:idempotent true :reversible false :confirm true
                        :consequence "The project and its tickets are discarded."}}}})
 

@@ -63,7 +63,6 @@
              [:maybe :waymark/ref]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 1000}]]]]
-   ;; carried declaration; envelope link render is v10's phase-3 punt
    :links [{:rel "plan" :kind :plan
             :summary "The meal plan this task serves"}]
    :filterable {:state #{:eq :in}}
@@ -71,7 +70,7 @@
    :deviations
    ["No :undo pointers — every edge here is honestly one-way or confirmed, and nothing walks a task back."
     "task_type carries no field default — the AI states it with each task."
-    "The with_plan profile and the href link render have no v10 spelling; the link declaration is carried."]
+    "The with_plan profile has no v10 spelling."]
    ;; the whole machine as rows — the rows name the states
    :flow
    [[:pending   :schedule :scheduled

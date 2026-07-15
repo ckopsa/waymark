@@ -96,13 +96,19 @@
   (m/-simple-schema
    {:type :decimal
     :compile
-    (fn [{:keys [min max]} _children _opts]
+    (fn [{:keys [min max gt lt]} _children _opts]
       {:pred (fn [x]
                (and (decimal? x)
                     (or (nil? min)
                         (>= (.compareTo ^java.math.BigDecimal x (bigdec min)) 0))
                     (or (nil? max)
-                        (<= (.compareTo ^java.math.BigDecimal x (bigdec max)) 0))))
+                        (<= (.compareTo ^java.math.BigDecimal x (bigdec max)) 0))
+                    ;; exclusive bounds (design §24): a ratio is > 0,
+                    ;; not ≥ some arbitrary floor
+                    (or (nil? gt)
+                        (pos? (.compareTo ^java.math.BigDecimal x (bigdec gt))))
+                    (or (nil? lt)
+                        (neg? (.compareTo ^java.math.BigDecimal x (bigdec lt))))))
        :type-properties
        {:error/message "must be an exact decimal number"
         :decode/wire (fn [x]
@@ -115,12 +121,15 @@
         :encode/wire identity
         ;; generation mirrors the small-positive posture of the other
         ;; waymark types: amounts the walker writes validate everywhere
-        :gen/schema [:int {:min (long (or min 0))
-                           :max (long (or max 100))}]
+        ;; (an exclusive bound floors/ceils one whole step inside)
+        :gen/schema [:int {:min (long (or min (some-> gt long inc) 0))
+                           :max (long (or max (some-> lt long) 100))}]
         :gen/fmap (fn [n] (bigdec n))
         :json-schema (cond-> {:type "number" :format "decimal"}
                        min (assoc :minimum min)
-                       max (assoc :maximum max))}})}))
+                       max (assoc :maximum max)
+                       gt (assoc :exclusiveMinimum gt)
+                       lt (assoc :exclusiveMaximum lt))}})}))
 
 (def registry
   (mr/composite-registry
@@ -185,6 +194,40 @@
                      value)
           (me/humanize)))
 
+;; ── defaults (design §24) ───────────────────────────────────────────
+
+(declare entry-map)
+
+(defn apply-defaults
+  "Fill ABSENT keys of a decoded map with the entries' declared
+  :default values — an explicit null stays (the author said blank),
+  and a present value is never touched. Recurses into vector-of-map
+  items so an embedded item fills its own item defaults (a birthing
+  sighting's quantity). Applied at the write doors (create + action
+  input) BEFORE validation; stored documents leave the doors complete,
+  so reads never default."
+  [form value]
+  (if-not (map? value)
+    value
+    (reduce-kv
+     (fn [v k {:keys [properties schema]}]
+       (let [s (if (and (vector? schema) (= :maybe (first schema)))
+                 (second schema)
+                 schema)
+             item-form (when (and (vector? s) (= :vector (first s)))
+                         (last s))
+             v (if (and (contains? properties :default)
+                        (not (contains? v k)))
+                 (assoc v k (:default properties))
+                 v)]
+         (if (and (vector? item-form)
+                  (= :map (first item-form))
+                  (vector? (get v k)))
+           (assoc v k (mapv #(apply-defaults item-form %) (get v k)))
+           v)))
+     value
+     (entry-map form))))
+
 ;; ── introspection (what the checks read) ────────────────────────────
 
 (defn map-schema?
@@ -232,11 +275,26 @@
     (:kind props)
     (assoc :json-schema/x-ref
            (into {} (filter (comp some? val))
-                 (select-keys props [:kind :label :pick :predecessor])))
+                 (-> (select-keys props [:kind :label :pick :predecessor])
+                     ;; :pick crosses the wire as the picker's literal
+                     ;; query params — keyword values land as their names
+                     (update :pick
+                             (fn [p]
+                               (when p
+                                 (into {}
+                                       (map (fn [[f v]]
+                                              [f (if (coll? v)
+                                                   (mapv #(if (keyword? %) (name %) %) v)
+                                                   (if (keyword? v) (name v) v))]))
+                                       p)))))))
     (contains? props :open)
     (assoc :json-schema/x-vocab
            (into {} (filter (comp some? val))
-                 (select-keys props [:open :facet :placeholder])))))
+                 (select-keys props [:open :facet :placeholder])))
+    ;; the declared default rides as the standard JSON-Schema keyword —
+    ;; the form prefills it, the engine applies it to absent keys
+    (contains? props :default)
+    (assoc :json-schema/default (:default props))))
 
 (defn- annotate
   "Walk a schema form, promoting waymark entry properties to

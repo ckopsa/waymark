@@ -109,15 +109,33 @@
           display (if (and (string? (:consequence safety))
                            (nil? (:description display)))
                     (assoc display :description (:consequence safety))
-                    display)]
-      (assoc a
-             :from from
-             :to (:to a)
-             :safety safety
-             :guards guards
-             :display display
-             :waives (set (:waives a))
-             :emits (vec (:emits a))))))
+                    display)
+          ;; the declared cross-write set (waymark9 touches=): what
+          ;; OTHER rows this action advances — blast radius as law.
+          ;; :may true tolerates the touch not firing on a given run.
+          touches (when-some [ts (:touches a)]
+                    (when-not (sequential? ts)
+                      (err ":touches is a vector of {:kind … :action …} maps"))
+                    (mapv (fn [t]
+                            (when-not (and (map? t)
+                                           (keyword? (:kind t))
+                                           (keyword? (:action t)))
+                              (err ":touches entries declare :kind and :action as keywords"))
+                            (when-some [extra (seq (dissoc t :kind :action :may))]
+                              (err (str ":touches entry carries unknown key(s) "
+                                        (vec (map first extra)))))
+                            (cond-> {:kind (:kind t) :action (:action t)}
+                              (:may t) (assoc :may true)))
+                          ts))]
+      (cond-> (assoc a
+                     :from from
+                     :to (:to a)
+                     :safety safety
+                     :guards guards
+                     :display display
+                     :waives (set (:waives a))
+                     :emits (vec (:emits a)))
+        (seq touches) (assoc :touches touches)))))
 
 (defn- where-value-set
   "One where entry's values as a canonical set: a collection becomes
@@ -689,7 +707,7 @@
   "A flow row's legal opts — public so the shipped clj-kondo hook's
   copy can be held equal by test (waymark10.declaration-test)."
   #{:requires :args :input :confirm :undo :one-way :safety :display
-    :record :edit :place :handler :emits :waives :unless})
+    :record :edit :place :handler :emits :waives :unless :touches})
 
 (defn- args->input
   "Flow :args rows → the action's input schema. Every argument is
@@ -803,7 +821,8 @@
       (:handler opts) (assoc :handler (:handler opts))
       (:emits opts) (assoc :emits (:emits opts))
       (:waives opts) (assoc :waives (:waives opts))
-      (:unless opts) (assoc :unless (:unless opts)))))
+      (:unless opts) (assoc :unless (:unless opts))
+      (:touches opts) (assoc :touches (:touches opts)))))
 
 (defn- desugar-flow
   "The :flow rows → today's :actions map, merged beside any directly

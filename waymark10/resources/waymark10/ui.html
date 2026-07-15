@@ -2276,7 +2276,8 @@ function fieldWidget(name, rawProp, value) {
    past the first page) the id keeps its seat raw rather than vanish. */
 async function refOptions(select, rawProp, current, admitted) {
   const prop = schemaProp(rawProp);
-  const kind = ((rawProp["x-ref"] || prop["x-ref"]) || {}).kind;
+  const xref = (rawProp["x-ref"] || prop["x-ref"]) || {};
+  const kind = xref.kind;
   const admit = admitted ? admitted.map(String) : null;
   const append = (id, label) =>
     select.append(el("option", {value: id, selected: id === current ? "" : null},
@@ -2285,7 +2286,11 @@ async function refOptions(select, rawProp, current, admitted) {
   try { w = await wellKnown(); } catch { (admit || []).forEach(id => append(id)); return; }
   const href = kind && collectionHref(w, kind);
   if (!href) { (admit || []).forEach(id => append(id)); return; }
-  const {ok, body} = await api(mergeParams(href, {"page[size]": "100"}));
+  /* the declared pick query filters the picker — a,b spells in-list */
+  const params = {"page[size]": "100"};
+  for (const [f, v] of Object.entries(xref.pick || {}))
+    params[f] = Array.isArray(v) ? v.join(",") : String(v);
+  const {ok, body} = await api(mergeParams(href, params));
   if (!ok) { (admit || []).forEach(id => append(id)); return; }
   const summaries = new Map();
   for (const item of (body.data || {}).items || [])
@@ -2364,13 +2369,17 @@ function buildForm(schema, prefill, kind) {
         el("input", {type: "hidden", name, value: String(c)})));
       continue;
     }
+    /* the declared default seeds an unanswered field — prefill wins */
+    const seed = (prefill || {})[name] !== undefined
+      ? (prefill || {})[name]
+      : (rawProp.default !== undefined ? rawProp.default : prop.default);
     let widget;
     if (xref(rawProp)) {
       widget = el("select", {name}, el("option", {value: ""}, "…"));
       /* prop.enum here is the guard-folded admitted set — honor it */
-      refOptions(widget, rawProp, (prefill || {})[name], prop.enum);
+      refOptions(widget, rawProp, seed, prop.enum);
     } else {
-      widget = fieldWidget(name, rawProp, (prefill || {})[name]);
+      widget = fieldWidget(name, rawProp, seed);
     }
     if (vocabProp(rawProp) && widget.tagName === "INPUT") {
       const listId = "vocab-" + (++vocabListSeq);

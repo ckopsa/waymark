@@ -187,35 +187,74 @@
   [rdef row]
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
 
-(defn- make-ctx [engine tx mode principal]
-  (t/ctx {:principal principal
-          :now ((:now-fn engine))
-          :services (:services engine)
-          :mode mode
-          ;; the cross-resource read hooks (phase 8): guards declared
-          ;; :reads [:kind] and on-create resolution read OTHER kinds
-          ;; through the write's own transaction — decoded rows, the
-          ;; same values the target's own laws compare
-          :read (fn [target-kind id]
-                  (when-some [trdef (get (resources engine) target-kind)]
-                    (some->> (store/load-row (:storage engine) tx
-                                             target-kind (str id) {})
-                             (decode-row trdef))))
-          :find (fn [target-kind where opts]
-                  (when-some [trdef (get (resources engine) target-kind)]
-                    (mapv #(decode-row trdef %)
-                          (store/query-rows (:storage engine) tx target-kind
-                                            (or where {})
-                                            (merge {:limit 100} opts)))))
-          :actor-of (fn [row transition]
-                      ;; the newest matching transition's actor id
-                      (some (fn [rec]
-                              (when (= (:action rec) transition)
-                                (get-in rec [:actor :id])))
-                            (store/transitions
-                             (:storage engine) tx
-                             {:kind (:kind row) :resource-id (:id row)}
-                             {:newest-first true})))}))
+(declare invoke-in-tx!)
+
+(defn- make-ctx
+  ([engine tx mode principal] (make-ctx engine tx mode principal nil))
+  ([engine tx mode principal {:keys [correlation-id]}]
+   (let [;; the cross-WRITE door (waymark9 Ctx.invoke): handlers and
+         ;; on-create hooks write OTHER rows through the same
+         ;; transaction and the full per-item algorithm. Only a real
+         ;; write mode carries it — a probe or dry-run ctx must not
+         ;; hand a guard a pen. Inner results collect on the sink;
+         ;; finish! rides them out as :inner-writes so after-write!
+         ;; runs their lifecycle/cascade/maintenance post-commit.
+         sink (when (= :invoke mode) (atom []))]
+     (t/ctx {:principal principal
+             :now ((:now-fn engine))
+             :services (:services engine)
+             :mode mode
+             :inner-sink sink
+             :invoke
+             (when sink
+               (fn ctx-invoke [target-kind id action-name body & [opts]]
+                 (let [trdef (or (get (resources engine) target-kind)
+                                 (throw (t/definition-error
+                                         (str "ctx invoke: unknown kind "
+                                              target-kind))))
+                       adefn (or (some-> (get-in trdef [:actions action-name])
+                                         (assoc :name action-name))
+                                 (throw (p/no-such-action target-kind
+                                                          action-name)))]
+                   ;; a bulk action is a collection affordance; its row
+                   ;; form does not exist here either
+                   (when (:bulk adefn)
+                     (throw (p/no-such-action target-kind action-name)))
+                   (let [res (invoke-in-tx!
+                              engine tx trdef target-kind (str id) adefn
+                              (body-digest body) body
+                              {:principal principal
+                               :correlation-id correlation-id
+                               :require-key? false
+                               :acknowledged (or (:acknowledged opts) #{})})]
+                     (swap! sink conj {:kind target-kind
+                                       :action action-name
+                                       :res res})
+                     res))))
+             ;; the cross-resource read hooks (phase 8): guards declared
+             ;; :reads [:kind] and on-create resolution read OTHER kinds
+             ;; through the write's own transaction — decoded rows, the
+             ;; same values the target's own laws compare
+             :read (fn [target-kind id]
+                     (when-some [trdef (get (resources engine) target-kind)]
+                       (some->> (store/load-row (:storage engine) tx
+                                                target-kind (str id) {})
+                                (decode-row trdef))))
+             :find (fn [target-kind where opts]
+                     (when-some [trdef (get (resources engine) target-kind)]
+                       (mapv #(decode-row trdef %)
+                             (store/query-rows (:storage engine) tx target-kind
+                                               (or where {})
+                                               (merge {:limit 100} opts)))))
+             :actor-of (fn [row transition]
+                         ;; the newest matching transition's actor id
+                         (some (fn [rec]
+                                 (when (= (:action rec) transition)
+                                   (get-in rec [:actor :id])))
+                               (store/transitions
+                                (:storage engine) tx
+                                {:kind (:kind row) :resource-id (:id row)}
+                                {:newest-first true})))}))))
 
 (defn- encode-row [rdef row]
   (update row :data #(schema/encode (:schema rdef) %)))
@@ -494,7 +533,11 @@
                                :version (:version advanced)
                                :summary (:summary advanced)}))
        "application/waymark+json"))
-    {:row (decode-row rdef saved) :transition record}))
+    ;; writes the handler made through ctx :invoke ride out with the
+    ;; result — after-write! owes each its post-commit pass
+    (let [inner (some-> (:inner-sink ctx) deref not-empty)]
+      (cond-> {:row (decode-row rdef saved) :transition record}
+        inner (assoc :inner-writes inner)))))
 
 ;; ── the lifecycle seam (phase 5) ────────────────────────────────────
 
@@ -533,6 +576,12 @@
   [engine kind action-name res]
   (if (and (:transition res) (nil? (:replayed? res)))
     (do
+      ;; inner writes (ctx :invoke) drain FIRST: their cascades and
+      ;; maintenance land before the outer row's own pass, so the
+      ;; response's rollups tell the post-inner truth (absorb's
+      ;; survivor answers with its repointed products already counted)
+      (doseq [iw (:inner-writes res)]
+        (after-write! engine (:kind iw) (:action iw) (:res iw)))
       (when-some [lc (:lifecycle engine)]
         (lc engine kind action-name res))
       (cascade! engine kind action-name res)
@@ -631,9 +680,13 @@
 (defn- cascade!
   "Fan a parent transition out to its owned children: for every owns
   edge whose :on map names this action, invoke the child action on
-  each owned child sitting in that action's :from states. Pages of 200
-  via the child's :via ref; the loop terminates because cascaded
-  children leave the state filter."
+  each owned child sitting in that action's :from states. Pages via
+  the child's :via ref with a growing fetch window + a seen set — a
+  SELF-LOOP child action (the cascaded child stays in the :from
+  filter, e.g. reprice) must still terminate, so already-cascaded ids
+  never count as due and the window widens past them. The default
+  created_at order is stable enough: the window growing past the
+  total row count bounds the loop either way."
   [engine kind action-name res]
   (doseq [edge (:owns (get (resources engine) kind))
           :let [child-action (get (:on edge) action-name)]
@@ -648,13 +701,16 @@
                                      (name action-name)))
           cid (get-in res [:transition :correlation-id])
           parent-id (get-in res [:row :id])]
-      (loop []
-        (let [children (store/with-tx (:storage engine)
+      (loop [seen #{}]
+        (let [limit (+ 200 (count seen))
+              children (store/with-tx (:storage engine)
                          (fn [tx]
                            (store/query-rows (:storage engine) tx child-kind
                                              {(:via edge) parent-id}
-                                             {:limit 200})))
-              due (filterv #(contains? eligible (:state %)) children)]
+                                             {:limit limit})))
+              due (filterv #(and (contains? eligible (:state %))
+                                 (not (contains? seen (:id %))))
+                           children)]
           (when (seq due)
             (doseq [child due]
               (invoke! engine child-kind (:id child) child-action nil
@@ -662,8 +718,8 @@
                         :correlation-id cid
                         :idempotency-key (when-not idempotent?
                                            (str (random-uuid)))}))
-            (when (= 200 (count children))
-              (recur))))))))
+            (when (= limit (count children))
+              (recur (into seen (map :id) due)))))))))
 
 (defn- invoke-in-tx!
   "Steps 2–15 inside the caller's transaction — the single-write body
@@ -699,11 +755,16 @@
             ;; stamp resolves this action's guards from that
             ;; revision's stored trees (the judgment overlay)
             defn (judgment/resolve-action rdef defn (:law-revision row))
-            ctx (make-ctx engine tx (if dry-run :dry-run :invoke) principal)]
+            ctx (make-ctx engine tx (if dry-run :dry-run :invoke) principal
+                          {:correlation-id correlation-id})
+            ;; guards judge; they never write — the pen stays with the
+            ;; handler (and :on-create), so guard evaluation gets a
+            ;; ctx without the cross-write door
+            guard-ctx (dissoc ctx :invoke :inner-sink)]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
           (or (natural-replay engine tx rdef row defn digest)
-              (when (probe-hidden-only? defn row ctx)
+              (when (probe-hidden-only? defn row guard-ctx)
                 (throw (p/not-found kind id)))
               (throw (p/wrong-state action-name (:state row) (:from defn)
                                     {:kind kind :id id
@@ -714,7 +775,7 @@
             ;; what a hide-flagged guard conceals must not leak through
             ;; the fence (412), input validation (422), or a natural
             ;; replay (200) — the wire answers 404 first
-            (when (probe-hidden-only? defn row ctx)
+            (when (probe-hidden-only? defn row guard-ctx)
               (throw (p/not-found kind id)))
             ;; 6. the fence
             (when (get-in defn [:safety :fence])
@@ -732,7 +793,9 @@
             ;; refuse exactly as ever
             (let [partial? (= :partial dry-run)
                   inp (if (:input defn)
-                        (let [decoded (schema/decode (:input defn) (or body {}))
+                        (let [decoded (schema/apply-defaults
+                                       (:input defn)
+                                       (schema/decode (:input defn) (or body {})))
                               errors (cond-> (schema/closed-errors
                                               (:input defn) decoded)
                                        partial?
@@ -752,10 +815,10 @@
                   ;; 9. the guard loop — partial judges only the
                   ;; leaves whose every judged field arrived
                   (if partial?
-                    (partial-verdict defn row inp ctx acknowledged rdef
+                    (partial-verdict defn row inp guard-ctx acknowledged rdef
                                      (set (keys (or body {}))))
                     (let [{:keys [warned overridden]}
-                          (run-guards defn row inp ctx acknowledged rdef)]
+                          (run-guards defn row inp guard-ctx acknowledged rdef)]
                       (cond
                         ;; 10. dry-run exits before any effect
                         dry-run {:valid? true :warnings (not-empty warned)}
@@ -1248,12 +1311,18 @@
             {:replayed? :idempotency :response hit}
             (throw (p/idempotency-key-reuse create-action)))
         (let [inp (schema/decode model (or body {}))
+              ;; declared defaults fill absent keys before validation —
+              ;; but never on a mint: a mirror records what the
+              ;; authority has, and absent means absent
+              inp (if mint? inp (schema/apply-defaults model inp))
               _ (when-some [errors (schema/closed-errors model inp)]
                   (throw (p/schema-invalid :create errors)))
-              ctx (make-ctx engine tx :invoke principal)
+              ctx (make-ctx engine tx :invoke principal
+                            {:correlation-id correlation-id})
               {:keys [warned overridden]}
               (create-guard-pass (if mint? [] (:create-guards rdef))
-                                 inp ctx acknowledged)]
+                                 inp (dissoc ctx :invoke :inner-sink)
+                                 acknowledged)]
           (when (seq warned)
             (throw (p/warning-refused :create warned)))
           (let [now (:now ctx)
@@ -1311,7 +1380,10 @@
                                        :version (:version row)
                                        :summary (:summary row)}))
                "application/waymark+json"))
-            {:row row :transition record})))))))))
+            ;; :on-create writes made through ctx :invoke ride out too
+            (let [inner (some-> (:inner-sink ctx) deref not-empty)]
+              (cond-> {:row row :transition record}
+                inner (assoc :inner-writes inner))))))))))))
 
 (defn engine
   "Phase-2 wiring: storage + resources, kinds ensured. Grows into
