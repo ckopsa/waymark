@@ -7,7 +7,7 @@
   collab relay's precedent), TTL-evicted. A restart forgets everyone;
   the next heartbeat re-teaches it.
 
-  REPORTING, two doors, both marked by :source on the wire:
+  REPORTING, three doors, each marked by :source on the wire:
   (a) implicit — a per-resource SSE subscription IS presence (the
       engine already knows the principal and the resource): the
       router's stream hook registers on subscribe and drops on
@@ -15,6 +15,10 @@
   (b) explicit — POST /api/-/presence {self} is a heartbeat for
       clients that only hold the firehose, the ported UI's case
       (source \"heartbeat\"). Three missed heartbeats evict.
+  (c) implicit — a GRANT-SCOPED principal's successful GET marks its
+      gaze on what it read (source \"read\"): under a leash means
+      watchable, so a raw-HTTP agent is followable with zero
+      cooperation. Unscoped reads stay invisible, as ever.
 
   THE STREAM: GET /api/-/presence (SSE) — a snapshot frame on
   connect, then join/move/leave frames {principal {id, display,
@@ -38,9 +42,10 @@
   remote frames and evictions all speak through the same mouth.
 
   Recorded boundaries, each a sentence:
-  - a principal mid-request (an invoke, a GET) is invisible — only
-    held streams and explicit heartbeats register, so firehose-only
-    agents appear exactly when they choose to say where they look.
+  - an UNSCOPED principal mid-request (an invoke, a GET) is invisible
+    — held streams and explicit heartbeats are its only doors, so a
+    human's casual curl paints no gaze; only the leashed (the read
+    door above) are seen by the act of reading itself.
   - a followed principal's move onto a concealed self reads as
     stillness to a scoped viewer (the frame is absent, not narrated
     as departure) — byte-level absence beats an honest-looking lie.
@@ -219,10 +224,24 @@
 
 ;; ── reporting (the two doors) ───────────────────────────────────────
 
+(defn- normalize-self
+  "Accept a full URL where an href was meant — a raw-HTTP agent's
+  natural spelling: the origin strips, the path (query and all)
+  stays. Anything else passes through untouched for check-self! to
+  judge."
+  [self]
+  (if (and (string? self) (re-find #"^https?://" self))
+    (let [path (str/replace-first self #"^https?://[^/]*" "")]
+      (if (str/blank? path) self path))
+    self))
+
+(defn- valid-self? [self]
+  (and (string? self)
+       (str/starts-with? self "/api/")
+       (<= (count self) self-max-chars)))
+
 (defn- check-self! [self]
-  (when-not (and (string? self)
-                 (str/starts-with? self "/api/")
-                 (<= (count self) self-max-chars))
+  (when-not (valid-self? self)
     (throw (p/schema-invalid
             :presence
             {:self [(str "must be an /api/… href of at most "
@@ -234,18 +253,54 @@
   or not (where it looks is its own to say). Three missed heartbeats
   evict."
   [reg principal self]
-  (check-self! self)
-  (when (= (:id principal) (:id t/anonymous))
-    (throw (p/problem :presence-anonymous 422 "Presence names its principal"
-                      {:detail "An anonymous heartbeat would mark nobody; present a principal."})))
-  (let [pid (:id principal)
-        e (entry-of reg principal self "heartbeat")]
-    (locking (:lock reg)
-      (swap! (:local reg) update pid
-             (fn [st] (-> (or st {:streams {}})
-                          (assoc :entry e :hb-at (:at-ms e)))))
-      (notify! reg {:event "report" :pid pid :entry e})
-      (publish! reg))
+  (let [self (normalize-self self)]
+    (check-self! self)
+    (when (= (:id principal) (:id t/anonymous))
+      (throw (p/problem :presence-anonymous 422 "Presence names its principal"
+                        {:detail "An anonymous heartbeat would mark nobody; present a principal."})))
+    (let [pid (:id principal)
+          e (entry-of reg principal self "heartbeat")]
+      (locking (:lock reg)
+        (swap! (:local reg) update pid
+               (fn [st] (-> (or st {:streams {}})
+                            (assoc :entry e :hb-at (:at-ms e)))))
+        (notify! reg {:event "report" :pid pid :entry e})
+        (publish! reg))
+      nil)))
+
+(def read-beat-ms
+  "Same-self implicit reads collapse to one report per this window —
+  the reference client's own throttle, server-side."
+  5000)
+
+(defn read!
+  "The third door: a grant-scoped principal's successful GET IS its
+  gaze — the read itself reports (source \"read\"), no second request.
+  Router-called and best-effort by construction: an anonymous
+  principal or a malformed self marks nothing, nothing here throws,
+  and a same-self re-read within read-beat-ms is silent — the read's
+  fate never rides on being seen."
+  [reg principal self]
+  (let [self (normalize-self self)]
+    (when (and (valid-self? self)
+               (not= (:id principal) (:id t/anonymous)))
+      (let [pid (:id principal)
+            now (System/currentTimeMillis)
+            [prev at] (get @(:read-at reg) pid [nil 0])]
+        ;; the throttle yields to absence: an evicted principal's next
+        ;; read always re-reports (a TTL shorter than the throttle —
+        ;; a test clock's ordering — must not leave re-reads unseen)
+        (when (or (not (contains? @(:local reg) pid))
+                  (not= prev self)
+                  (< (+ (long at) read-beat-ms) now))
+          (swap! (:read-at reg) assoc pid [self now])
+          (let [e (entry-of reg principal self "read")]
+            (locking (:lock reg)
+              (swap! (:local reg) update pid
+                     (fn [st] (-> (or st {:streams {}})
+                                  (assoc :entry e :hb-at (:at-ms e)))))
+              (notify! reg {:event "report" :pid pid :entry e})
+              (publish! reg))))))
     nil))
 
 (defn stream-open!
@@ -387,6 +442,8 @@
              :lock (Object.)
              :local (atom {})
              :remotes (atom {})
+             ;; the read door's throttle: pid → [self at-ms]
+             :read-at (atom {})
              :published (atom {})
              :subs (atom #{})
              :running (atom true)

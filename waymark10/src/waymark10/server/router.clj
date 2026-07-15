@@ -327,6 +327,22 @@
       :none
       (throw (p/schema-invalid :query {"rows" ["must be \"none\""]})))))
 
+(defn- mark-read!
+  "The implicit presence door (under a leash means watchable): a
+  grant-scoped principal's successful GET marks its gaze on what it
+  read — source \"read\", best-effort, never the read's fate. An
+  unscoped read stays invisible, as ever: a human's casual curl
+  paints no gaze."
+  [eng req self]
+  (when (visibility-of req)
+    (when-some [reg (some-> (:runtime eng) deref :presence)]
+      (try
+        (presence/read! reg (principal-of req) self)
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "waymark10 presence read-mark failed:"
+                     (ex-message e))))))))
+
 (defn- collection [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
@@ -336,6 +352,7 @@
           env (collections/envelope eng rdef (dissoc params "rows")
                                     (cond-> (render-opts eng req)
                                       rows (assoc :rows rows)))]
+      (mark-read! eng req (str "/api/" plural))
       (json-response 200 env media-type nil))))
 
 (defn- create [eng]
@@ -539,6 +556,7 @@
                 (render/envelope-summary rdef row opts)
                 (splice-embeds eng rdef (render/envelope rdef row opts) opts
                                (embed-overrides req)))]
+      (mark-read! eng req (str "/api/" plural "/" id))
       (json-response 200 env media-type
                      {"ETag" (get-in env ["meta" "etag"])}))))
 
@@ -995,14 +1013,17 @@
                    :method "POST"
                    :body {:self "the resource href you are reading"}
                    :note (str "how you are SEEN, not what you may do — "
-                              "ephemeral, never law. Beat this as you "
-                              "read (every ~10s while you linger; "
-                              "silence fades you out) and a human "
-                              "following you watches your attention "
-                              "move, not just your acts. The reference "
-                              "client (waymark10.client) beats it for "
-                              "you on every read; skipping it costs "
-                              "you nothing but company.")}
+                              "ephemeral, never law. Under your grant "
+                              "every successful GET already marks your "
+                              "gaze where you read: a human following "
+                              "you watches your attention move with no "
+                              "extra work on your part. Beat this "
+                              "endpoint only to say you LINGER — you "
+                              "are still working on something you are "
+                              "not re-reading (every ~10s keeps you "
+                              "present; silence fades you out in ~45s). "
+                              "The reference client (waymark10.client) "
+                              "beats it for you on every read.")}
         :discovery "/api/.well-known/waymark"}))))
 
 ;; ── the generic UI (phase 10) ───────────────────────────────────────
