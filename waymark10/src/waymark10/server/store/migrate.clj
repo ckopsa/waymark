@@ -212,6 +212,12 @@
                   steps)]
     (with-open [conn (jdbc/get-connection
                       ^com.zaxxer.hikari.HikariDataSource (:ds st))]
+      ;; a virgin database first: the helper functions the generated
+      ;; columns call and the engine's own tables — idempotent, the
+      ;; same prerequisites ensure-kind! runs at boot (design §24;
+      ;; found by the mealplan10 cutover's fresh production db)
+      (doseq [stmt pg/prerequisites]
+        (jdbc/execute! conn [stmt]))
       (doseq [s to-apply]
         (jdbc/execute! conn [(:sql s)])))
     {:applied (vec to-apply) :skipped (vec skipped)}))

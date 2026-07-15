@@ -135,6 +135,16 @@
 (def ^:private engine-ddl
   (mapcat table-ddl engine-projections))
 
+(def prerequisites
+  "Everything a kind's DDL presumes exists: the helper functions its
+  generated columns call and the engine's own tables. Idempotent
+  (CREATE OR REPLACE / IF NOT EXISTS) — ensure-kind! runs these at
+  boot, and migrate/apply! runs them before a plan, so a VIRGIN
+  production database migrates from the CLI alone (found by the
+  mealplan10 cutover: a fresh db has no waymark10_date and the first
+  promoted date column refused)."
+  (vec (concat helper-fns engine-ddl)))
+
 ;; ── the live snapshot (the migrate planner's other half) ────────────
 
 (def ^:private canonical-type
@@ -310,7 +320,7 @@
 
   (ensure-kind! [_ rmap]
     (with-open [conn (jdbc/get-connection ds)]
-      (doseq [stmt (concat helper-fns engine-ddl (kind-ddl rmap))]
+      (doseq [stmt (concat prerequisites (kind-ddl rmap))]
         (jdbc/execute! conn [stmt])))
     (swap! tables assoc (:kind rmap)
            (store/definition-checked-name (:plural rmap)))
