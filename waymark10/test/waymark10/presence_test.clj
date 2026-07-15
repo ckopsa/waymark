@@ -308,6 +308,101 @@
           (finally (engine/stop! eng server))))
       (finally (pg/close! st)))))
 
+;; ── the read door: a grant-scoped GET IS presence ───────────────────
+
+(deftest grant-scoped-reads-mark-presence
+  (fresh!)
+  (let [st (pg/storage dsn)]
+    (try
+      (let [eng (engine/engine {:storage st :resources [widget]
+                                :presence-heartbeat-ms 300
+                                :sse-heartbeat-ms 500
+                                :events-poll-ms 200})
+            server (engine/start! eng 0)
+            port (http/server-port server)
+            h (engine/handler eng)
+            reg (:presence @(:runtime eng))]
+        (try
+          (let [w1 (get-in (inv/create! eng :pres_widget {:name "granted"}
+                                        {:principal elena})
+                           [:row :id])
+                gid (get-in (inv/create!
+                             eng :grant
+                             {:audience "spy"
+                              :scope [{:kind "pres_widget"
+                                       :ids [w1] :actions []}]}
+                             {:principal elena})
+                            [:row :id])
+                _ (inv/invoke! eng :grant gid :accept nil {:principal spy})
+                get! (fn [path headers]
+                       (h {:request-method :get :uri path :headers headers}))
+                scoped {"x-waymark-principal" "spy"
+                        "x-waymark-actor-type" "agent"
+                        "x-waymark-grant" gid}
+                watcher (sse-lines port "/api/-/presence"
+                                   {"x-waymark-principal" "watcher"})]
+
+            (testing "a grant-scoped row GET marks gaze, source read"
+              (is (= 200 (:status (get! (str "/api/pres_widgets/" w1) scoped))))
+              (is (some? (await-line (:lines watcher)
+                                     #(and (str/includes? % "\"spy\"")
+                                           (str/includes? % "\"read\"")
+                                           (str/includes? % w1))
+                                     10000))
+                  "the read itself is the join frame — no second request"))
+
+            (testing "a grant-scoped collection GET marks the collection"
+              (is (= 200 (:status (get! "/api/pres_widgets" scoped))))
+              (is (some? (await-line (:lines watcher)
+                                     #(and (str/includes? % "\"spy\"")
+                                           (str/includes? % "\"/api/pres_widgets\""))
+                                     10000))
+                  "a different self within the throttle window still reports"))
+
+            (testing "an unscoped read stays invisible — no grant, no gaze"
+              (is (= 200 (:status (get! (str "/api/pres_widgets/" w1)
+                                        {"x-waymark-principal" "elena"}))))
+              (Thread/sleep 700)
+              (is (nil? (get @(:local reg) "elena"))
+                  "a human's casual GET paints nothing"))
+
+            (testing "a refused read marks nothing — probing paints no gaze"
+              (is (= 404 (:status (get! "/api/pres_widgets/nope" scoped))))
+              (is (not= "/api/pres_widgets/nope"
+                        (get-in @(:local reg) ["spy" :entry :self]))))
+
+            (testing "same-self re-reads throttle: the entry keeps its stamp"
+              (presence/read! reg marco "/api/pres_widgets/w9")
+              (let [at1 (get-in @(:local reg) ["marco" :entry :at-ms])]
+                (presence/read! reg marco "/api/pres_widgets/w9")
+                (is (= at1 (get-in @(:local reg) ["marco" :entry :at-ms])))))
+
+            (testing "the read door never throws: anonymous marks nothing"
+              (is (nil? (presence/read! reg t/anonymous "/api/pres_widgets/w9")))
+              (is (nil? (get @(:local reg) (:id t/anonymous)))))
+
+            (testing "a full URL where an href was meant: the origin
+                      strips, on both doors"
+              (is (= 204 (:status
+                          (h {:request-method :post
+                              :uri "/api/-/presence"
+                              :headers {"x-waymark-principal" "elena"}
+                              :body (wire/write-json
+                                     {:self (str "http://127.0.0.1:" port
+                                                 "/api/pres_widgets/" w1)})}))))
+              (is (= (str "/api/pres_widgets/" w1)
+                     (get-in @(:local reg) ["elena" :entry :self]))
+                  "the entry holds the path, not the URL")
+              (presence/read! reg marco
+                              (str "https://example.test/api/pres_widgets/" w1))
+              (is (= (str "/api/pres_widgets/" w1)
+                     (get-in @(:local reg) ["marco" :entry :self]))))
+
+            (.close ^InputStream (:body watcher))
+            (future-cancel (:reader watcher)))
+          (finally (engine/stop! eng server))))
+      (finally (pg/close! st)))))
+
 ;; ── engines without start! answer 503, the SSE discipline ──────────
 
 (deftest presence-without-start-is-503

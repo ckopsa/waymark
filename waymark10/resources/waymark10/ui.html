@@ -84,6 +84,8 @@
   #followchip button { border: none; background: none;
                        color: var(--verdigris-deep); padding: 0 0 0 6px;
                        font-weight: 700; cursor: pointer; }
+  #followchip a { color: var(--verdigris-deep); }
+  #followchip .gaze-faded { opacity: .7; font-weight: 400; }
   /* presence: who else is looking at THIS screen — ephemeral dots off
      the /-/presence stream, never law */
   [data-presence] { margin-top: 6px; }
@@ -1983,8 +1985,11 @@ async function renderResource(view, doc, hints) {
       (meta.updated_at ? ` · ${String(meta.updated_at).slice(0, 19).replace("T", " ")}` : "")),
     el("span", {class:"version", title: doc.self}, doc.self)));
   /* the viewing dots: who else is looking at this screen right now
-     (the presence stream repaints this slot as frames arrive) */
+     (painted from the known truth on mount — a presence that arrived
+     before this screen rendered still shows — then repainted as
+     frames arrive) */
   panel.append(el("div", {"data-presence": ""}));
+  setTimeout(paintPresence, 0);   /* after this panel mounts */
 
   /* the read surface up front: declared links (badges riding) and the
      surfaces this row anchors — scent before the scroll */
@@ -3266,12 +3271,22 @@ function fetchReplay(href, {idle = 500} = {}) {
    on both. (9's follow-me, restored: the recorded gap closes.) ─────── */
 let followId = localStorage.getItem("wm10.follow.id") || null;
 let followName = localStorage.getItem("wm10.follow.name") || null;
+/* the followed principal's last reported gaze: {self, at, live} —
+   live while presence holds them, kept (faded) after they leave so
+   silence reads as "last seen …", never as a broken chip */
+let followGaze = null;
 function follow(actor) {
   followId = actor.id;
   followName = actor.display || actor.id;
+  followGaze = null;
   localStorage.setItem("wm10.follow.id", followId);
   localStorage.setItem("wm10.follow.name", followName);
   followChip();
+  /* the balcony parks navigation — say so, or follow looks broken
+     (delayed one beat: the call site's own toast speaks first) */
+  if (hereHref() === "access")
+    setTimeout(() => toast(`following ${followName} — navigation parks on `
+      + `Access; leave this panel and your screen goes where they look`), 1500);
   /* meet them where they already are: if their gaze is on the board
      right now, jump immediately — following that only reacts to the
      NEXT event looks dead beside an idle agent (the balcony still
@@ -3280,13 +3295,17 @@ function follow(actor) {
   const id = followId;
   setTimeout(() => {
     const known = followId === id && PRESENCE.get(id);
-    if (known && known.self && known.self !== hereHref() &&
-        hereHref() !== "access" && !$("dialog[open]"))
-      location.hash = "#" + known.self;
+    if (known && known.self) {
+      followGaze = {self: known.self, at: known.at, live: true};
+      followChip();
+      if (known.self !== hereHref() && hereHref() !== "access" &&
+          !$("dialog[open]"))
+        location.hash = "#" + known.self;
+    }
   }, 0);
 }
 function unfollow() {
-  followId = followName = null;
+  followId = followName = followGaze = null;
   localStorage.removeItem("wm10.follow.id");
   localStorage.removeItem("wm10.follow.name");
   followChip();
@@ -3295,10 +3314,36 @@ function followChip() {
   const chip = $("#followchip");
   chip.style.display = followId ? "inline-block" : "none";
   chip.textContent = "";
-  if (followId)
-    chip.append(`following ${followName}`,
-      el("button", {title: "stop following", onclick: unfollow}, "✕"));
+  if (!followId) return;
+  chip.append(`following ${followName}`);
+  /* the gaze state, always shown — a quiet agent and a broken pipe
+     must not look identical */
+  if (followGaze && followGaze.self) {
+    const short = followGaze.self.replace(/^\/api\//, "");
+    const label = short.length > 30 ? short.slice(0, 29) + "…" : short;
+    chip.append(" · ", followGaze.live
+      ? el("a", {href: "#" + followGaze.self,
+          title: `${followName} is looking at ${followGaze.self} — click to go there`},
+          "👁 " + label)
+      : el("span", {class: "gaze-faded",
+          title: `${followName} last reported gaze on ${followGaze.self}; `
+               + `their presence has since faded (silence, not certainty)`},
+          `last seen ${label}`));
+  } else {
+    chip.append(" · ", el("span", {class: "gaze-faded",
+      title: "no gaze reported yet — grant-scoped reads mark presence "
+           + "automatically; an agent outside a grant must POST "
+           + "/api/-/presence to be seen"},
+      "no gaze yet"));
+  }
+  if (hereHref() === "access")
+    chip.append(" · ", el("span", {class: "gaze-faded",
+      title: "follow-navigation parks on the Access panel — leave it and "
+           + "this screen goes where they look"},
+      "⏸ parked"));
+  chip.append(el("button", {title: "stop following", onclick: unfollow}, "✕"));
 }
+window.addEventListener("hashchange", followChip);
 const bootParams = new URLSearchParams(location.search);
 if (bootParams.get("follow")) {
   follow({id: bootParams.get("follow"),
@@ -3565,6 +3610,14 @@ sse("/api/-/presence", ({event, data: f}) => {
   } else if (f.event === "leave") PRESENCE.delete(f.principal.id);
   else PRESENCE.set(f.principal.id, f);   // join | move
   paintPresence();
+  /* the chip's gaze state: live while presence holds the followed
+     principal, kept-but-faded once they leave */
+  if (followId) {
+    const p = PRESENCE.get(followId);
+    if (p && p.self) followGaze = {self: p.self, at: p.at, live: true};
+    else if (followGaze) followGaze.live = false;
+    followChip();
+  }
   /* follow-me: go where they LOOK — debounced, and never yank a human
      out of an open dialog (the transition-steering discipline) or off
      the Access panel (the balcony parks BOTH steering signals) */
