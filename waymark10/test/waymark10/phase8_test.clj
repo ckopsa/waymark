@@ -537,6 +537,11 @@
                   (is (= v (:version (reload eng :p8_feed_item id))))))
               (testing "a changed document lands as observe_external, system actor"
                 (seed! feed "uid-1@2026-07-14" "Recital (moved)" "2026-07-15")
+                ;; the unchanged check above STAMPED freshness (the
+                ;; TTL that never reset, 2026-07-13) — a same-instant
+                ;; read honestly serves stored truth, so the changed
+                ;; document is seen on the next read past the TTL
+                (reset! clock (Instant/parse "2026-07-10T15:30:00Z"))
                 (let [served (mirror/refresh! eng rdef
                                               (decoded eng :p8_feed_item id))]
                   (is (= "Recital (moved)" (get-in served [:data :title])))
