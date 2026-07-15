@@ -3155,3 +3155,12 @@ anticipated `create` facet lands as `{"defaults" {field value}}`
 non-empty-only for hash stability. `check-defaults` refuses a default
 the entry schema rejects and any default on a derived field.
 Proof: `waymark10/test/waymark10/defaults_test.clj`.
+
+## `:decimal` exclusive bounds — `:gt` / `:lt`
+
+The registered exact-decimal type grows `:gt`/`:lt` beside `:min`/
+`:max`: a substitution ratio is `> 0`, not `≥` some arbitrary floor
+(the pre-parity approximation was `:min 0.01M`). Projection speaks the
+standard `exclusiveMinimum`/`exclusiveMaximum`; generation floors one
+whole step inside the open bound.
+Proof: `waymark10/test/waymark10/decimal_bounds_test.clj`.

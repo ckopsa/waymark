@@ -96,13 +96,19 @@
   (m/-simple-schema
    {:type :decimal
     :compile
-    (fn [{:keys [min max]} _children _opts]
+    (fn [{:keys [min max gt lt]} _children _opts]
       {:pred (fn [x]
                (and (decimal? x)
                     (or (nil? min)
                         (>= (.compareTo ^java.math.BigDecimal x (bigdec min)) 0))
                     (or (nil? max)
-                        (<= (.compareTo ^java.math.BigDecimal x (bigdec max)) 0))))
+                        (<= (.compareTo ^java.math.BigDecimal x (bigdec max)) 0))
+                    ;; exclusive bounds (design §24): a ratio is > 0,
+                    ;; not ≥ some arbitrary floor
+                    (or (nil? gt)
+                        (pos? (.compareTo ^java.math.BigDecimal x (bigdec gt))))
+                    (or (nil? lt)
+                        (neg? (.compareTo ^java.math.BigDecimal x (bigdec lt))))))
        :type-properties
        {:error/message "must be an exact decimal number"
         :decode/wire (fn [x]
@@ -115,12 +121,15 @@
         :encode/wire identity
         ;; generation mirrors the small-positive posture of the other
         ;; waymark types: amounts the walker writes validate everywhere
-        :gen/schema [:int {:min (long (or min 0))
-                           :max (long (or max 100))}]
+        ;; (an exclusive bound floors/ceils one whole step inside)
+        :gen/schema [:int {:min (long (or min (some-> gt long inc) 0))
+                           :max (long (or max (some-> lt long) 100))}]
         :gen/fmap (fn [n] (bigdec n))
         :json-schema (cond-> {:type "number" :format "decimal"}
                        min (assoc :minimum min)
-                       max (assoc :maximum max))}})}))
+                       max (assoc :maximum max)
+                       gt (assoc :exclusiveMinimum gt)
+                       lt (assoc :exclusiveMaximum lt))}})}))
 
 (def registry
   (mr/composite-registry
