@@ -106,7 +106,7 @@
    :states [:active :paused :failed :revoked]
    :initial :active
    :terminal #{:revoked}               ; failed and paused both resume
-   :nav :secondary
+   :nav :system
    :summary "{data.url} · {state}"
    :schema [:map
             [:url [:string {:min 1 :max 250}]]

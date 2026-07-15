@@ -251,7 +251,7 @@
     (is (= 200 (:status resp)))
     (testing "the declared nav tier rides the catalog (design §24)"
       (let [b (wire/read-json (:body resp))]
-        (is (= "secondary" (get-in b [:resources :job :nav]))
-            "an engine kind advertises its tier")
+        (is (= "system" (get-in b [:resources :job :nav]))
+            "an engine kind advertises itself as the machinery's own")
         (is (= "primary" (get-in b [:resources :dev_chore :nav]))
             "an undeclared kind speaks the default — the tier is always on the wire")))))

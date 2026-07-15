@@ -111,7 +111,7 @@
    ;; invite), never by transition — the definitions :proposed precedent
    :allow-dead #{:invited}
    :terminal #{}                     ; suspension is reversible, deliberately
-   :nav :secondary
+   :nav :system
    :summary "{data.display} · {state}"
    :label-template "{data.display}"
    :schema [:map

@@ -86,7 +86,7 @@
    :states [:queued :running :completed :cancelled]
    :initial :queued
    :terminal #{:completed :cancelled}
-   :nav :secondary
+   :nav :system
    :summary "Deferred {data.action} on {data.kind} · {state}"
    :schema [:map
             [:action [:string {:min 1 :max 64}]]

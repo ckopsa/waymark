@@ -84,7 +84,7 @@
    :states [:pending :stored :deleted]
    :initial :pending
    :terminal #{:deleted}
-   :nav :secondary
+   :nav :system
    :summary "{data.name} · {data.media_type} · {state}"
    :label-template "{data.name}"
    :schema [:map

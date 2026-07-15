@@ -46,7 +46,7 @@
    :states [:active :retired]
    :initial :active
    :terminal #{}                       ; retirement is reversible, deliberately
-   :nav :secondary
+   :nav :system
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
    :schema [:map

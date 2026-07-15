@@ -3203,4 +3203,12 @@ well-known catalog now carries `"nav"` on every resource entry
 (`"primary"` when undeclared — the tier is always spoken, so a
 client never guesses), and the UI's nav bar, ⋯ overflow, and
 dashboard split on the declaration.
+
+Grown in the same act: a THIRD tier, `:nav :system` — the engine's
+own kinds (definitions, members, roles, grants, attachments,
+subscriptions, jobs, approval requests, worksheets) declare
+themselves the machinery's, so the ⋯ menu shows the app's tucked
+domain kinds first and the system kinds under a quiet divider, and
+the dashboard splits its chip rows the same way. `:secondary` stays
+the app's word for "a domain kind behind the menu."
 Proof: the nav assertion in `waymark10/test/waymark10/dev_test.clj`.

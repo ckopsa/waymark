@@ -1039,8 +1039,8 @@
     (when-not (contains? #{:immediate :never} (:adoption rmap :immediate))
       (throw (t/definition-error ":adoption is :immediate or :never")))
     (check-worksheet! rmap)
-    (when-not (contains? #{:primary :secondary} (:nav rmap :primary))
-      (throw (t/definition-error ":nav is :primary or :secondary")))
+    (when-not (contains? #{:primary :secondary :system} (:nav rmap :primary))
+      (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error
