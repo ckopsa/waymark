@@ -2998,21 +2998,30 @@ function pickWorksheet(href) {
   input.click();
 }
 /* the worksheet row's report: the plan while staged, the outcomes
-   once applied — one line per spreadsheet line */
+   once applied — one line per spreadsheet line, joined with that
+   line's staged cells so the data under judgment is on the page */
 function worksheetReport(doc) {
   const rows = doc.data?.report || [];
+  const lines = doc.data?.lines || [];
+  const cellsByLine = new Map(lines.map(l => [l.line, l.cells || {}]));
+  const cellKeys = [];
+  for (const l of lines)
+    for (const k of Object.keys(l.cells || {}))
+      if (!cellKeys.includes(k)) cellKeys.push(k);
   const tally = Object.entries(doc.data?.tally || {})
     .map(([o, n]) => `${n} ${o}`).join(" · ");
   const box = el("div", {});
   box.append(el("p", {class:"metaline"},
     tally || "no lines in this workbook"));
   if (!rows.length) return box;
-  const head = el("tr", {}, ...["line", "row", "outcome", "actions", "detail"]
+  const head = el("tr", {},
+    ...["line", "row", "outcome", "actions", ...cellKeys, "detail"]
     .map(h => el("th", {}, h)));
   const tbody = el("tbody", {});
   for (const r of rows) {
     const detail = [r.reason, ...(r.refusals || []), ...(r.notes || [])]
       .filter(Boolean).join(" · ");
+    const cells = cellsByLine.get(r.line) || {};
     tbody.append(el("tr", {},
       el("td", {class:"mono"}, String(r.line)),
       el("td", {class:"mono"},
@@ -3020,6 +3029,13 @@ function worksheetReport(doc) {
                : (r.id || "")),
       el("td", {}, r.outcome || ""),
       el("td", {class:"mono"}, (r.actions || []).join(", ")),
+      ...cellKeys.map(k => {
+        const v = cells[k], ref = (r.refs || {})[k];
+        return el("td", {class:"mono"},
+          ref ? el("a", {href: "#" + ref.self, title: String(v ?? "")},
+                   ref.display || String(v))
+              : v == null ? "" : String(v));
+      }),
       el("td", {class:"muted"}, detail)));
   }
   box.append(el("div", {style:"overflow:auto;max-height:60vh"},

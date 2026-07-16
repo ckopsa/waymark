@@ -62,6 +62,9 @@
 (defhandler unfinish-handler [row _inp _ctx]
   (assoc-in row [:data :done_at] nil))
 
+(defhandler reparent-handler [row inp _ctx]
+  (assoc-in row [:data :parent_id] (:parent_id inp)))
+
 (def ^:private writable #{:fresh :stale :unreachable})
 (def ^:private quiet {:idempotent true :reversible false :confirm false
                       :one-way "The prior value is on the audit trail."})
@@ -76,7 +79,8 @@
               [:score {:optional true} [:maybe :decimal]]
               [:done_at {:optional true} [:maybe :waymark/instant]]
               [:author {:optional true :x-display {:hidden true}}
-               [:maybe [:string {:max 120}]]]]
+               [:maybe [:string {:max 120}]]]
+              [:parent_id {:optional true} [:maybe [:string {:max 64}]]]]
      :filterable {:state #{:eq}}
      :create-schema [:map
                      [:title [:string {:min 1 :max 120}]]
@@ -87,7 +91,11 @@
                            {:field :done_at
                             :on-set {:action :finish :param :done_at}
                             :on-clear {:action :unfinish}}
-                           {:field :author}]
+                           {:field :author}
+                           ;; the ref column: the cell speaks another
+                           ;; note's EXTERNAL id, resolves to its row
+                           {:field :parent_id :action :reparent
+                            :ref :note}]
                  :create true}
      :actions
      {:retitle {:from writable :to :fresh
@@ -105,7 +113,11 @@
                :display {:label "Finish"}}
       :unfinish {:from writable :to :fresh
                  :safety quiet :handler unfinish-handler
-                 :display {:label "Unfinish"}}}}
+                 :display {:label "Unfinish"}}
+      :reparent {:from writable :to :fresh
+                 :input [:map [:parent_id [:maybe [:string {:max 64}]]]]
+                 :safety quiet :handler reparent-handler
+                 :display {:label "Reparent"}}}}
     {:adapter adapter :ttl-seconds 3600 :discover-every 3600
      :push-on-write true :create-push true})))
 
@@ -178,7 +190,8 @@
                     :author "feed"}})
       (mirror/discover! eng :note)
       (let [sheet (export-rows eng {})]
-        (is (= ["id" "version" "state" "title" "score" "done_at" "author"]
+        (is (= ["id" "version" "state" "title" "score" "done_at" "author"
+                "parent_id"]
                (first sheet)))
         (is (= 3 (count sheet)))
         (is (= #{"One" "Two"} (set (map #(col sheet % "title") [1 2]))))
@@ -306,6 +319,37 @@
             (is (= "local" (get-in minted [:data :author])))
             (is (= "2026-03-01T00:00:00Z"
                    (str (get-in minted [:data :done_at]))))))))))
+
+(deftest ref-cells-resolve-for-the-report
+  (with-worksheet-engine
+    (fn [eng rm]
+      (swap! (:state rm) assoc :docs
+             {"n1" {:title "One" :score nil :done_at nil :author "feed"}
+              "n2" {:title "Two" :score nil :done_at nil :author "feed"}})
+      (mirror/discover! eng :note)
+      (let [sheet (export-rows eng {})
+            n2-i (if (= "Two" (col sheet 1 "title")) 1 2)
+            ws (stage! eng (set-cell sheet n2-i "parent_id" "n1"))
+            entry (get (by-line ws) (inc n2-i))]
+        (testing "the plan resolves the ref cell to the row it names"
+          (is (= "planned" (:outcome entry)))
+          (is (= ["reparent"] (:actions entry)))
+          (let [{:keys [self display]} (get-in entry [:refs :parent_id])]
+            (is (= (str "/api/notes/" (:id (row-of eng "n1"))) self))
+            (is (re-find #"^One" (str display))
+                "the display is the target's own summary")))
+        (testing "a dangling external id resolves to nothing — the note says why"
+          (let [ws2 (stage! eng (set-cell sheet n2-i "parent_id" "ghost"))
+                e2 (get (by-line ws2) (inc n2-i))]
+            (is (nil? (get-in e2 [:refs :parent_id])))
+            (is (some #(re-find #"ghost" %) (:notes e2)))))
+        (testing "apply carries the resolution into the outcomes"
+          (let [applied (apply! eng (:id ws))
+                e (get (by-line applied) (inc n2-i))]
+            (is (= "applied" (:outcome e)))
+            (is (= (str (:id (row-of eng "n1")))
+                   (str (get-in (row-of eng "n2") [:data :parent_id]))))
+            (is (some? (get-in e [:refs :parent_id])))))))))
 
 (deftest the-json-door-is-the-same-door
   (with-worksheet-engine

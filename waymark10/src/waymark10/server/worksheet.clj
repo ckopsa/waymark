@@ -71,6 +71,7 @@
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
             [waymark10.server.xlsx :as xlsx]
+            [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.io ByteArrayOutputStream InputStream)
@@ -303,6 +304,40 @@
 (defn- ref-note [col cell]
   (str "no " (name (:ref col)) " carries external id " cell))
 
+(defn- ref-display
+  "One resolved ref cell as the report speaks it: the target row's
+  address and its own declared summary — a person or a fund, not an
+  external id. Nil when nothing carries the id (the plan's note
+  already names that)."
+  [eng target xid]
+  (when-some [raw (store/with-tx (:storage eng)
+                    (fn [tx]
+                      (first (store/query-rows (:storage eng) tx target
+                                               {:external_id (str xid)}
+                                               {:limit 1}))))]
+    (let [trdef (get (inv/resources eng) target)
+          row (inv/decode-row trdef raw)]
+      {:self (str "/api/" (:plural trdef) "/" (:id row))
+       :display (summary/render (:summary trdef) row)})))
+
+(defn- line-refs
+  "Every :ref cell the line carries, resolved for display:
+  {field {:self … :display …}}."
+  [eng rdef cells]
+  (into {}
+        (keep (fn [{:keys [field ref]}]
+                (when (and ref (some? (get cells field)))
+                  (when-some [d (ref-display eng ref (get cells field))]
+                    [field d]))))
+        (:columns (:worksheet rdef))))
+
+(defn- with-line-refs
+  "The line's resolved refs stamped on its report entry, so the
+  report renders links where the sheet spoke external ids."
+  [eng rdef cells entry]
+  (let [refs (line-refs eng rdef cells)]
+    (cond-> entry (seq refs) (assoc :refs refs))))
+
 (defn- problem-reason [e]
   (let [d (ex-data e)]
     (or (:detail d)
@@ -410,51 +445,53 @@
 
 (defn- plan-line
   "The rehearsal for one staged line: what WOULD happen, against the
-  target rows as they stand right now."
+  target rows as they stand right now — its :ref cells resolved so
+  the report reads as the rows they name."
   [eng rdef {:keys [line id version cells]}]
-  (if (nil? id)
-    (if-not (:create (:worksheet rdef))
-      (outcome line :outcome "refused"
-               :reason "this worksheet does not create rows — the id cell is empty")
-      (let [{:keys [body notes]} (create-body eng rdef cells)
-            ;; the create door's own rehearsal judges the body —
-            ;; schema and create guards, nothing fired
-            refused (try (inv/create! eng (:kind rdef) body
-                                      {:principal runner :dry-run true})
-                         nil
-                         (catch Exception e (problem-reason e)))
-            on-sets (filterv #(and (contains? cells (:field %))
-                                   (some? (get cells (:field %)))
-                                   (:on-set %))
-                             (:columns (:worksheet rdef)))]
-        (if refused
-          (outcome line :outcome "refused" :reason refused :notes notes)
-          (outcome line :outcome "planned"
-                   :actions (into ["create"]
-                                  (map (comp name :action :on-set)) on-sets)
-                   :notes notes))))
-    (let [row (load-stored eng rdef id)]
-      (cond
-        (nil? row)
-        (outcome line :id id :outcome "refused"
-                 :reason "no such row — was it deleted since the export?")
+  (with-line-refs eng rdef cells
+    (if (nil? id)
+      (if-not (:create (:worksheet rdef))
+        (outcome line :outcome "refused"
+                 :reason "this worksheet does not create rows — the id cell is empty")
+        (let [{:keys [body notes]} (create-body eng rdef cells)
+              ;; the create door's own rehearsal judges the body —
+              ;; schema and create guards, nothing fired
+              refused (try (inv/create! eng (:kind rdef) body
+                                        {:principal runner :dry-run true})
+                           nil
+                           (catch Exception e (problem-reason e)))
+              on-sets (filterv #(and (contains? cells (:field %))
+                                     (some? (get cells (:field %)))
+                                     (:on-set %))
+                               (:columns (:worksheet rdef)))]
+          (if refused
+            (outcome line :outcome "refused" :reason refused :notes notes)
+            (outcome line :outcome "planned"
+                     :actions (into ["create"]
+                                    (map (comp name :action :on-set)) on-sets)
+                     :notes notes))))
+      (let [row (load-stored eng rdef id)]
+        (cond
+          (nil? row)
+          (outcome line :id id :outcome "refused"
+                   :reason "no such row — was it deleted since the export?")
 
-        (and (some? version) (not= (long version) (long (:version row))))
-        (outcome line :id id :outcome "conflict"
-                 :reason (str "the row changed since the export (version "
-                              (:version row) " now; the sheet held " version
-                              ") — re-export and redo this edit, or revalidate "
-                              "if the change was this worksheet's own"))
+          (and (some? version) (not= (long version) (long (:version row))))
+          (outcome line :id id :outcome "conflict"
+                   :reason (str "the row changed since the export (version "
+                                (:version row) " now; the sheet held " version
+                                ") — re-export and redo this edit, or revalidate "
+                                "if the change was this worksheet's own"))
 
-        :else
-        (let [enc (schema/encode (:schema rdef) (:data row))
-              {:keys [invocations notes]} (plan-cells eng rdef cells enc)]
-          (if (empty? invocations)
-            (outcome line :id id :outcome "unchanged" :notes notes)
-            (outcome line :id id :outcome "planned"
-                     :actions (mapv (comp name first)
-                                    (merge-invocations invocations))
-                     :notes notes)))))))
+          :else
+          (let [enc (schema/encode (:schema rdef) (:data row))
+                {:keys [invocations notes]} (plan-cells eng rdef cells enc)]
+            (if (empty? invocations)
+              (outcome line :id id :outcome "unchanged" :notes notes)
+              (outcome line :id id :outcome "planned"
+                       :actions (mapv (comp name first)
+                                      (merge-invocations invocations))
+                       :notes notes))))))))
 
 (defn- apply-invocations!
   "Each planned action as an honest client would invoke it: the
@@ -490,61 +527,62 @@
   "One staged line for real: creates create (then their :on-set cells
   apply as ordinary edits on the fresh row — one uniform second
   pass), edits replay, stale versions conflict, and the outcome says
-  exactly what happened."
+  exactly what happened — its :ref cells resolved as in the plan."
   [eng rdef {:keys [line id version cells]} opts]
-  (if (nil? id)
-    (cond
-      (not (:create (:worksheet rdef)))
-      (outcome line :outcome "refused"
-               :reason "this worksheet does not create rows — the id cell is empty")
-
-      :else
-      (let [{:keys [body notes]} (create-body eng rdef cells)
-            created (try {:row (:row (inv/create! eng (:kind rdef) body opts))}
-                         (catch Exception e {:refused (problem-reason e)}))]
-        (if-some [reason (:refused created)]
-          (outcome line :outcome "refused" :reason reason :notes notes)
-          (let [row (:row created)
-                enc (schema/encode (:schema rdef) (:data row))
-                on-set-cols (filterv #(or (:on-set %) (:on-clear %))
-                                     (:columns (:worksheet rdef)))
-                plan (plan-cells eng (assoc-in rdef [:worksheet :columns]
-                                               on-set-cols)
-                                 cells enc)
-                {:keys [applied refused]}
-                (apply-invocations! eng rdef (:id row)
-                                    (merge-invocations (:invocations plan))
-                                    opts)]
-            (outcome line :outcome "created"
-                     :self (str "/api/" (:plural rdef) "/" (:id row))
-                     :actions (into ["create"] applied)
-                     :refusals refused
-                     :notes (into (vec notes) (:notes plan)))))))
-    (let [row (load-stored eng rdef id)]
+  (with-line-refs eng rdef cells
+    (if (nil? id)
       (cond
-        (nil? row)
-        (outcome line :id id :outcome "refused"
-                 :reason "no such row — was it deleted since the export?")
-
-        (and (some? version) (not= (long version) (long (:version row))))
-        (outcome line :id id :outcome "conflict"
-                 :reason (str "the row changed since the export (version "
-                              (:version row) " now; the sheet held " version
-                              ") — re-export and redo this edit"))
+        (not (:create (:worksheet rdef)))
+        (outcome line :outcome "refused"
+                 :reason "this worksheet does not create rows — the id cell is empty")
 
         :else
-        (let [enc (schema/encode (:schema rdef) (:data row))
-              {:keys [invocations notes]} (plan-cells eng rdef cells enc)
-              invocations (merge-invocations invocations)]
-          (if (empty? invocations)
-            (outcome line :id id :outcome "unchanged" :notes notes)
-            (let [{:keys [applied refused]}
-                  (apply-invocations! eng rdef id invocations opts)]
-              (outcome line :id id
-                       :outcome (if (seq applied) "applied" "refused")
-                       :actions applied
+        (let [{:keys [body notes]} (create-body eng rdef cells)
+              created (try {:row (:row (inv/create! eng (:kind rdef) body opts))}
+                           (catch Exception e {:refused (problem-reason e)}))]
+          (if-some [reason (:refused created)]
+            (outcome line :outcome "refused" :reason reason :notes notes)
+            (let [row (:row created)
+                  enc (schema/encode (:schema rdef) (:data row))
+                  on-set-cols (filterv #(or (:on-set %) (:on-clear %))
+                                       (:columns (:worksheet rdef)))
+                  plan (plan-cells eng (assoc-in rdef [:worksheet :columns]
+                                                 on-set-cols)
+                                   cells enc)
+                  {:keys [applied refused]}
+                  (apply-invocations! eng rdef (:id row)
+                                      (merge-invocations (:invocations plan))
+                                      opts)]
+              (outcome line :outcome "created"
+                       :self (str "/api/" (:plural rdef) "/" (:id row))
+                       :actions (into ["create"] applied)
                        :refusals refused
-                       :notes notes))))))))
+                       :notes (into (vec notes) (:notes plan)))))))
+      (let [row (load-stored eng rdef id)]
+        (cond
+          (nil? row)
+          (outcome line :id id :outcome "refused"
+                   :reason "no such row — was it deleted since the export?")
+
+          (and (some? version) (not= (long version) (long (:version row))))
+          (outcome line :id id :outcome "conflict"
+                   :reason (str "the row changed since the export (version "
+                                (:version row) " now; the sheet held " version
+                                ") — re-export and redo this edit"))
+
+          :else
+          (let [enc (schema/encode (:schema rdef) (:data row))
+                {:keys [invocations notes]} (plan-cells eng rdef cells enc)
+                invocations (merge-invocations invocations)]
+            (if (empty? invocations)
+              (outcome line :id id :outcome "unchanged" :notes notes)
+              (let [{:keys [applied refused]}
+                    (apply-invocations! eng rdef id invocations opts)]
+                (outcome line :id id
+                         :outcome (if (seq applied) "applied" "refused")
+                         :actions applied
+                         :refusals refused
+                         :notes notes)))))))))
 
 ;; ── the worksheet kind ──────────────────────────────────────────────
 
