@@ -16,6 +16,13 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
+# paydesk's dev warehouse mirror, over the standard `ssh -fN paydesk-db-dev`
+# tunnel (:5432); credential is the paydesk_app_dev Proton Pass item.
+# Unset (tunnel down / pass-cli unavailable) ⇒ paydesk falls back to its
+# in-memory fake mirrors.
+PAYDESK_WAREHOUSE_PORT ?= 5432
+PAYDESK_WAREHOUSE_DSN  ?= $(shell scripts/paydesk-warehouse-dsn.sh $(PAYDESK_WAREHOUSE_PORT) 2>/dev/null)
+
 .PHONY: db db10 test10 check10 test-mealplan10 dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk image10 deploy10
 
 db:  ## start dockerized Postgres
@@ -87,8 +94,9 @@ check-paydesk:  ## paydesk declaration-time checks + usability warnings (no data
 test-paydesk: db10  ## paydesk conformance suite
 	cd paydesk && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
 
-dev-paydesk: db10  ## serve paydesk on :8012 against paydesk_dev
-	cd paydesk && PAYDESK_DSN="jdbc:postgresql://localhost:$(PG_PORT)/paydesk_dev?user=$(PG_USER)" \
+dev-paydesk: db10  ## serve paydesk on :8012 against paydesk_dev; mirrors the dev warehouse over :5432 if PAYDESK_WAREHOUSE_DSN resolves (see PAYDESK_WAREHOUSE_PORT), else fake adapters
+	@cd paydesk && PAYDESK_DSN="jdbc:postgresql://localhost:$(PG_PORT)/paydesk_dev?user=$(PG_USER)" \
+		PAYDESK_WAREHOUSE_DSN="$(PAYDESK_WAREHOUSE_DSN)" \
 		WAYMARK10_AUTO_MIGRATE=1 clojure -M:dev
 
 migrate-paydesk: db10  ## print paydesk's schema plan against paydesk_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
