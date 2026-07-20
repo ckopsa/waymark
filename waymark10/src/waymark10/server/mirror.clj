@@ -931,9 +931,10 @@
   maintainer, so the pushed/conflicted :row is what the response
   serves). The engine is a map — build the handler / start! from the
   RETURNED engine. Recorded seam: engine.clj's boot does not auto-wire
-  this yet (a named punt — no enrolled app serves a push-on-write
-  mirror; mealplan's calendar is pull-only), so an embedding that
-  declares one calls (mirror/with-push eng) itself."
+  this yet (a named punt), so an embedding that declares one calls
+  (mirror/with-push eng) itself — paydesk (assignment, team) and
+  choreplan10 (prep_task) both do, from their mains and their
+  conformance fixtures alike."
   [eng]
   (let [prior (:maintain eng)]
     (assoc eng :maintain

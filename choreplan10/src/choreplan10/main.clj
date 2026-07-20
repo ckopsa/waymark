@@ -9,6 +9,10 @@
 
   Env knobs: CHOREPLAN10_DSN (default the local :5433
   choreplan10_dev), CHOREPLAN10_PORT (default 8013),
+  CHOREPLAN10_MEALPLAN_URL (the mealplan10 engine the prep_task
+  mirror syncs from — the in-memory fake feed when unset, offline
+  dev's default), CHOREPLAN10_MEALPLAN_ASSIGNEE /
+  _PRINCIPAL / _TOKEN (the feed's key and credentials),
   WAYMARK10_DEPLOY_MODE (promote, the default single-breath revise,
   or propose), WAYMARK10_AUTO_MIGRATE=1 (dev only — `make dev-chores`
   passes it explicitly; production boots REFUSE on schema drift and
@@ -17,23 +21,43 @@
   Schema evolution: `make migrate-chores` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
   additionally the state-rename UPDATEs."
-  (:require [choreplan10.resources.chore :refer [chore]]
+  (:require [choreplan10.mirror.mealplan :as mp]
+            [choreplan10.resources.chore :refer [chore]]
             [choreplan10.resources.chore-run :refer [chore-run]]
+            [choreplan10.resources.prep-task :refer [prep-task-resource]]
             [waymark10.server.engine :as engine]
+            [waymark10.server.mirror :as mirror]
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg])
   (:gen-class))
 
-(defn resources
-  "Both kinds — what `make check-chores` (waymark10.check) assembles
-  too."
+(defonce fake-feed
+  ;; the module-default fake boundary — tests script it, offline dev
+  ;; and the declaration gate run over it
+  (mp/fake-feed))
+
+(defn feed
+  "The mealplan10 boundary: real over CHOREPLAN10_MEALPLAN_URL, the
+  in-memory fake otherwise."
   []
-  [chore chore-run])
+  (if-some [url (System/getenv "CHOREPLAN10_MEALPLAN_URL")]
+    (mp/http-feed {:url url
+                   :assignee (System/getenv "CHOREPLAN10_MEALPLAN_ASSIGNEE")
+                   :principal (System/getenv "CHOREPLAN10_MEALPLAN_PRINCIPAL")
+                   :token (System/getenv "CHOREPLAN10_MEALPLAN_TOKEN")})
+    fake-feed))
+
+(defn resources
+  "All three kinds — what `make check-chores` (waymark10.check)
+  assembles too."
+  [feed]
+  [chore chore-run (prep-task-resource feed)])
 
 (defn check-resources
-  "Zero-arg so the declaration gate needs no env."
+  "Zero-arg so the declaration gate needs no env — every kind over
+  the offline fake."
   []
-  (resources))
+  (resources fake-feed))
 
 (defn- dsn []
   (or (System/getenv "CHOREPLAN10_DSN")
@@ -50,13 +74,17 @@
   "Boot and serve. Returns the engine."
   []
   (let [storage (pg/storage (dsn))
-        eng (engine/engine {:storage storage
-                            :resources (resources)
-                            :deploy-mode (deploy-mode)
-                            ;; dev-only, and only when asked: production
-                            ;; posture is refuse-on-drift
-                            :auto-migrate (= "1" (System/getenv
-                                                  "WAYMARK10_AUTO_MIGRATE"))})
+        ;; with-push: prep_task declares :push-on-write, and engine
+        ;; boot does not auto-wire the post-commit push pass (the
+        ;; recorded seam in mirror/with-push) — the embedding wraps
+        eng (mirror/with-push
+             (engine/engine {:storage storage
+                             :resources (resources (feed))
+                             :deploy-mode (deploy-mode)
+                             ;; dev-only, and only when asked: production
+                             ;; posture is refuse-on-drift
+                             :auto-migrate (= "1" (System/getenv
+                                                   "WAYMARK10_AUTO_MIGRATE"))}))
         port (or (some-> (System/getenv "CHOREPLAN10_PORT") parse-long) 8013)
         server (engine/start! eng port)]
     (reset! dev {:engine eng :server server :storage storage})
@@ -85,7 +113,7 @@
   [& _]
   (let [storage (pg/storage (dsn))]
     (try
-      (let [reg (engine/full-registry (resources))
+      (let [reg (engine/full-registry (resources (feed)))
             steps (migrate/plan storage (vals (:kinds reg)))]
         (if (empty? steps)
           (println "choreplan10: storage matches the declarations — empty plan.")

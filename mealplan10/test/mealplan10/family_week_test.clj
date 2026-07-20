@@ -250,11 +250,18 @@
         (let [thaw (created! "prep_tasks"
                              {:plan_id (id-of plan) :date "2026-07-18"
                               :meal_name "Traeger brisket" :task_type "thaw"
+                              :assignee "housekeeper"
                               :due_at "2026-07-17T14:00:00Z"})
               cook (created! "prep_tasks"
                              {:plan_id (id-of plan) :date "2026-07-18"
                               :meal_name "Traeger brisket" :task_type "cook"
                               :due_at "2026-07-18T13:00:00Z"})]
+          (testing "the assignee filter is the mirror feed's key: one
+                    query, only the housekeeper's step"
+            (let [items (get-in (json (req :get "/api/prep_tasks?assignee=housekeeper"))
+                                [:data :items])]
+              (is (= 1 (count items)))
+              (is (= (:self thaw) (:self (first items))))))
           (testing "the open tasks gate the week's close, by count"
             (let [p (refuse! self :complete nil 409)]
               (is (str/starts-with? (:detail p) "2 prep task(s) are still open"))

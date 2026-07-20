@@ -519,6 +519,8 @@
             [:date {:x-display {:label "Dinner date"}} :waymark/date]
             [:meal_name [:string {:min 1 :max 200}]]
             [:task_type [:enum "thaw" "prep" "cook"]]
+            [:assignee {:optional true}
+             [:maybe [:waymark/vocab {:open true}]]]
             [:due_at {:x-display {:label "When to start"}} :waymark/instant]
             [:overdue {:optional true} [:maybe :boolean]]
             [:duration_minutes {:optional true} [:maybe [:int {:min 0}]]]
@@ -534,6 +536,7 @@
    :filterable {:state #{:eq :in}
                 :plan_id #{:eq}
                 :task_type #{:eq :in}
+                :assignee #{:eq}
                 :due_at #{:after}
                 :overdue #{:eq}}
    :sortable {:fields [:due_at] :default "due_at"}
@@ -626,8 +629,12 @@
   ;; ingredients link; prep_task's stale href-render punt sentence
   ;; left its :deviations (links render now) — deliberate revisions,
   ;; both spellings moved together above.
+  ;; prep_task re-pinned 2026-07-20: the :assignee fact (open vocab,
+  ;; :eq-filterable) — who does the step; the filter is the key
+  ;; choreplan10's mirror feed discovers over. Both spellings moved
+  ;; together above.
   {:meal      "ac2f3f372fdb779d61f1cc35cbf440c1bc6da00ef3e81aaf0fb20baa4ee375ec"
-   :prep_task "96806ff45abb99edcc6f97a3d48cc635e97f50185ebcbcfd4bbaa04c9c0e14e3"
+   :prep_task "75d376221857be0cb7c5432d64d365a85e78378975f01664dabeb6b901b6b037"
    :event     "77fba0a5a46b83a3594170a75e5f0614a9980a5f57cf76f90e5ac3e699b32805"})
 
 (deftest the-canonical-residue-hashes-are-pinned-as-literals

@@ -4,6 +4,9 @@
 
   After a plan is finalized, the AI derives one task per meal step
   from the recipe's thaw_hours / prep_minutes and creates them here.
+  Like task_type, :assignee is stated with each task — the AI mints
+  thaw/prep for whoever preps (the housekeeper) and cook for the cook;
+  ?assignee= is the filter choreplan10's mirror feed discovers over.
   Putting a task on the family calendar is outward-facing, so schedule
   is confirm-gated with its consequence spelled out: the agent client
   hard-stops until a human approves, then creates the calendar event
@@ -48,6 +51,12 @@
             [:date {:x-display {:label "Dinner date"}} :waymark/date]
             [:meal_name [:string {:min 1 :max 200}]]
             [:task_type {:filter #{:eq :in}} (one-of :thaw :prep :cook)]
+            ;; who does the step — open vocab like chore's assignee (the
+            ;; household's usage IS the option list). :filter #{:eq} is
+            ;; load-bearing beyond the UI: choreplan10's prep_task mirror
+            ;; discovers over ?assignee=…, so this fact is the feed's key
+            [:assignee {:optional true :filter #{:eq}}
+             [:maybe [:waymark/vocab {:open true}]]]
             [:due_at {:filter #{:after} :sort :default
                       :x-display {:label "When to start"}}
              :waymark/instant]
