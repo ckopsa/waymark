@@ -497,7 +497,7 @@
 
 (def ^:private href-placeholder #"\{(id|data\.[A-Za-z0-9_]+)\}")
 
-(defn- template-link [row {:keys [href kind]}]
+(defn- template-link [row {:keys [href kind] :as ld}]
   (let [missing (volatile! false)
         out (str/replace href href-placeholder
                          (fn [[_ token]]
@@ -509,7 +509,11 @@
                                (do (vreset! missing true) "")))))]
     (when-not @missing
       (cond-> {:href out}
-        kind (assoc :kind (name kind))))))
+        kind (assoc :kind (name kind))
+        ;; a byte route: the client opens it in the browser, not
+        ;; through an in-app router (the redirect must reach the
+        ;; user agent)
+        (:download ld) (assoc :download true)))))
 
 ;; mirrors waymark10.server.collections/page-size-default and
 ;; page-size-max — duplicated, not required, because collections.clj

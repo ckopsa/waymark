@@ -1022,6 +1022,11 @@
     (check-worksheet! rmap)
     (when-not (contains? #{:primary :secondary} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary or :secondary")))
+    (when-some [d (:domain rmap)]
+      (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
+        (throw (t/definition-error
+                (str ":domain must be a snake_case keyword token, got "
+                     (pr-str d))))))
     ;; recorded deviations, each a sentence (the docstring bookkeeping
     ;; the prose used to carry by hand) — fingerprint-carried, so a
     ;; deviation is reviewable law, and deleting one shows in the diff
@@ -1091,6 +1096,21 @@
 (defmacro defresource
   [name rmap]
   `(def ~name (resource ~rmap)))
+
+(defn in-domain
+  "Stamp every declaration with the domain token — the domain module's
+  assembly fn wraps its kind list so the tag can't drift from the
+  namespace that owns it. A kind may also self-declare :domain; the
+  stamp only fills the blank, it never overrides. Domain placement is
+  advertisement (well-known carries it, the generic UI's global nav
+  reads it), not fingerprinted law — the :nav precedent."
+  [domain resources]
+  (when-not (and (keyword? domain)
+                 (re-matches #"[a-z][a-z0-9_]*" (name domain)))
+    (throw (t/definition-error
+            (str "in-domain: domain must be a snake_case keyword token, got "
+                 (pr-str domain)))))
+  (mapv #(update % :domain (fn [d] (or d domain))) resources))
 
 (defmacro defhandler
   "An imperative-residue handler whose identity is its canonical

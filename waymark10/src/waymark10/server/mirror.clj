@@ -952,11 +952,13 @@
                                {:external_id xid} {:limit 1})))))
 
 (def ^:private backfill-limit
-  "resolve-refs! reads the kind in ONE bounded fetch (query-rows
-  pages by LIMIT only — no offset — so a loop cannot advance). Far
-  above any enrolled mirror's row count; a kind at the bound gets a
-  loud warning, never a silent partial heal."
-  50000)
+  "resolve-refs! and resync! read the kind in ONE bounded fetch
+  (query-rows pages by LIMIT only — no offset — so a loop cannot
+  advance). Raised from 50k after a prod-scale mirror (paydesk
+  support_doc, 100,760 rows) exceeded it and took the silent partial
+  heal this bound promised never to allow; a kind at the bound gets
+  a loud warning."
+  250000)
 
 (defn resolve-refs!
   "The external-ref backfill for one mirror kind: every row whose
@@ -1066,7 +1068,13 @@
       (inv/create! eng kind {:external_id xid}
                    {:principal system-observer :mint? true}))
     (when (seq new-ids)
-      (let [pulled (try (pull-many adapter new-ids)
+      ;; chunked like resync!'s pass: one prod-scale discovery handed
+      ;; an adapter 100k ids in one call and its prepared statement
+      ;; blew the driver's parameter cap — a batch fill degrades to
+      ;; fill-on-first-read, but it shouldn't degrade wholesale
+      (let [pulled (try (reduce (fn [m batch]
+                                  (merge m (pull-many adapter (vec batch))))
+                                {} (partition-all 500 new-ids))
                         (catch Exception e
                           (warn! "batch pull-through for " (name kind)
                                  " failed (" (ex-message e) "); each mint's "

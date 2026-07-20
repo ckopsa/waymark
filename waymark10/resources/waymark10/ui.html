@@ -48,6 +48,34 @@
   header h1 a { color: var(--ink); }
   header nav { display: inline-flex; align-items: center; flex-wrap: wrap; }
   header nav a { margin-right: 12px; font-size: 13px; }
+  /* the active application as a breadcrumb in the bar */
+  header nav a.nav-domain { text-transform: uppercase; font-size: 11px;
+    letter-spacing: .06em; color: var(--muted); margin-right: 16px; }
+  /* the global-navigation drawer: a left push-over listing every
+     application and its kinds — the ☰ shows only when the wire
+     declares domains; a single-domain deployable never sees it */
+  .drawer-btn { display: none; border: none; background: none; cursor: pointer;
+    font-size: 17px; line-height: 1; color: var(--muted); padding: 4px 8px;
+    border-radius: var(--radius); }
+  .drawer-btn:hover { color: var(--ink); background: var(--chipbg); }
+  .drawer-btn.on { display: inline-block; }
+  .drawer-backdrop { display: none; position: fixed; inset: 0; z-index: 40;
+    background: rgba(32,38,31,.28); }
+  .drawer { position: fixed; top: 0; bottom: 0; left: 0; width: 250px;
+    z-index: 41; background: var(--panel); border-right: 1px solid var(--line);
+    box-shadow: var(--shadow); padding: 12px 18px 24px; overflow-y: auto;
+    transform: translateX(-105%); transition: transform .16s ease; }
+  body.drawer-open .drawer { transform: none; }
+  body.drawer-open .drawer-backdrop { display: block; }
+  .drawer .dr-home { display: block; font-weight: 700; margin-bottom: 2px; }
+  .drawer .dr-domain { display: block; margin: 14px 0 2px;
+    text-transform: uppercase; font-size: 11px; letter-spacing: .06em;
+    color: var(--muted); }
+  .drawer a.dr-domain:hover { color: var(--ink); }
+  .drawer .dr-kind { display: block; padding: 3px 0 3px 10px; }
+  .drawer .dr-second { display: block; padding: 2px 0 2px 10px;
+    font-size: 12px; color: var(--muted); }
+  .drawer .dr-second:hover { color: var(--verdigris-deep); }
   header .spacer { flex: 1; }
   #who { width: 120px; padding: 4px 8px; border: 1px solid var(--line);
          border-radius: var(--radius); background: var(--paper);
@@ -479,6 +507,9 @@
 </head>
 <body>
 <header>
+  <button id="drawerbtn" class="drawer-btn" type="button"
+          aria-haspopup="true" aria-expanded="false" aria-controls="drawer"
+          title="all applications and their kinds">☰</button>
   <h1><a href="#">Waymark</a></h1>
   <span id="apphost" class="muted"></span>
   <nav id="kinds"></nav>
@@ -493,6 +524,8 @@
           title="the live ledger — every transition as it lands">
     ◷ Activity<span id="ledgerpip"></span></button>
 </header>
+<div id="drawerback" class="drawer-backdrop"></div>
+<aside id="drawer" class="drawer" aria-label="global navigation"></aside>
 <main>
   <section id="view"></section>
 </main>
@@ -636,11 +669,24 @@ function wellKnown() {
       err => { wellKnownCache = null; throw err; });
   return wellKnownCache;
 }
-/* v10's well-known lists kinds flat (no engine/secondary tiers on the
-   wire — a recorded difference from 9's discovery); the engine's own
-   kinds fold behind the ⋯ by this client-side set. */
-const ENGINE_KINDS = new Set(["definition", "member", "role", "grant",
-                              "attachment", "subscription", "job"]);
+/* nav rides the wire: well-known stamps each resource with its nav
+   tier (primary/secondary) and, under a multi-domain deployable, its
+   domain — plus a top-level ordered domains list. The old client-side
+   ENGINE_KINDS set is retired; the engine's own kinds declare
+   :nav :secondary and fold behind the ⋯ from the wire alone. */
+function navTier(r) { return (r || {}).nav || "primary"; }
+function domainOf(w, href) {
+  for (const r of Object.values(w.resources || {}))
+    if (r.href === href && r.domain) return r.domain;
+  return null;
+}
+function domainHome(w, d) {
+  for (const r of Object.values(w.resources || {}))
+    if (r.domain === d && navTier(r) === "primary") return r.href;
+  for (const r of Object.values(w.resources || {}))
+    if (r.domain === d) return r.href;
+  return null;
+}
 function collectionHref(idx, kind) {
   return (((idx || {}).resources || {})[kind] || {}).href || null;
 }
@@ -740,20 +786,89 @@ function lawStamp(doc) {
 /* ── the nav: built from discovery on EVERY load — a deep link
    hard-refreshed must not arrive without its navigation. Domain kinds
    sit inline; the engine's own kinds tuck behind a quiet ⋯ menu. ───── */
+/* ── the global-navigation drawer (multi-domain deployables) ────────
+   A left push-over listing every application and its kinds. The bar
+   stays within-app (the active domain as a breadcrumb, its primary
+   kinds beside it); switching applications lives behind the ☰. */
+function drawerIsOpen() {
+  return document.body.classList.contains("drawer-open");
+}
+function setDrawer(open) {
+  document.body.classList.toggle("drawer-open", open);
+  $("#drawerbtn").setAttribute("aria-expanded", String(open));
+  if (open) ($("#drawer").querySelector("a") || $("#drawer")).focus();
+  else $("#drawerbtn").focus();
+}
+$("#drawerbtn").addEventListener("click", () => setDrawer(!drawerIsOpen()));
+$("#drawerback").addEventListener("click", () => setDrawer(false));
+$("#drawer").addEventListener("click", ev => {
+  if (ev.target.closest("a")) setDrawer(false);
+});
+document.addEventListener("keydown", ev => {
+  if (ev.key === "Escape" && drawerIsOpen()) {
+    ev.stopPropagation(); setDrawer(false);
+  }
+});
+
+function fillDrawer(w, current, active) {
+  const d = $("#drawer"); d.textContent = "";
+  const entries = Object.entries(w.resources || {});
+  d.append(el("a", {class: "dr-home", href: "#"}, "Waymark"));
+  for (const dom of (w.domains || [])) {
+    const home = domainHome(w, dom);
+    d.append(el(home ? "a" : "span",
+      Object.assign({class: "dr-domain",
+                     style: dom === active ? "color:var(--ink);font-weight:700" : ""},
+                    home ? {href: "#" + home} : {}),
+      title(dom)));
+    for (const [kind, r] of entries)
+      if (r.domain === dom)
+        d.append(el("a",
+          {class: navTier(r) === "primary" ? "dr-kind" : "dr-second",
+           href: "#" + r.href,
+           style: current === r.href ? "font-weight:700" : ""},
+          title(kind) + "s"));
+  }
+  const engine = entries.filter(([, r]) =>
+    navTier(r) === "secondary" && !r.domain);
+  if (engine.length) {
+    d.append(el("span", {class: "dr-domain"}, "Engine"));
+    for (const [kind, r] of engine)
+      d.append(el("a", {class: "dr-second", href: "#" + r.href},
+        title(kind) + "s"));
+  }
+}
+
 async function renderNav(current) {
   let w;
   try { w = await wellKnown(); } catch { return; }
   const nav = $("#kinds"); nav.textContent = "";
   const entries = Object.entries(w.resources || {});
-  for (const [kind, {href}] of entries)
-    if (!ENGINE_KINDS.has(kind))
-      nav.append(el("a", {href: "#" + href,
-        style: current === href ? "font-weight:700" : ""}, title(kind) + "s"));
+  const domains = w.domains || [];
+  const active = current ? domainOf(w, current) : null;
+  /* global navigation between applications: the drawer, behind ☰ —
+     present exactly when the wire declares domains */
+  $("#drawerbtn").classList.toggle("on", domains.length > 0);
+  if (domains.length) fillDrawer(w, current, active);
+  /* the active application as a breadcrumb back to its home */
+  if (active) {
+    const home = domainHome(w, active);
+    if (home) nav.append(el("a", {class: "nav-domain", href: "#" + home,
+      style: "color:var(--ink);font-weight:700"}, title(active)));
+  }
+  /* the active domain's primary kinds (a domainless primary always) */
+  for (const [kind, r] of entries)
+    if (navTier(r) === "primary" && (!r.domain || r.domain === active))
+      nav.append(el("a", {href: "#" + r.href,
+        style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
   if (w.resources && w.resources.member && w.resources.approval_request)
     nav.append(el("a", {href: "#access",
       style: current === "access" ? "font-weight:700" : ""}, "Access"));
-  const tucked = entries.filter(([kind]) => ENGINE_KINDS.has(kind));
+  /* secondary kinds fold behind ⋯ — domainless (the engine's own)
+     always, a domain's own only while that domain is active */
+  const tucked = entries.filter(([, r]) => navTier(r) === "secondary"
+    && (!r.domain || r.domain === active));
   if (tucked.length) nav.append(overflowMenu(tucked));
 }
 
@@ -762,7 +877,7 @@ function overflowMenu(engineEntries) {
   const menu = el("div", {class:"nav-menu", role:"menu"});
   const btn = el("button", {class:"nav-more", type:"button",
     "aria-haspopup":"true", "aria-expanded":"false",
-    title: "engine kinds — the machinery's own resources"}, "⋯");
+    title: "secondary kinds — the machinery's own, and the tucked-away"}, "⋯");
   const close = () => { menu.style.display = "none";
                         btn.setAttribute("aria-expanded", "false"); };
   const open = () => { menu.style.display = "block";
@@ -808,18 +923,41 @@ async function renderHome(view, seq) {
   clearLiveTimers();
   view.textContent = "";
   const entries = Object.entries(w.resources || {});
-  const domain = entries.filter(([kind]) => !ENGINE_KINDS.has(kind));
+  const primaries = entries.filter(([, r]) => navTier(r) === "primary");
+  const domains = w.domains || [];
 
   const strip = el("div");             // fills only if something is nonzero
-  const grid = el("div", {class:"dash-grid"});
-  view.append(strip, grid);
+  view.append(strip);
   const attention = [];
-
-  const settling = domain.map(([kind, {href}]) => {
-    const card = el("div", {class:"kind-card"});
-    grid.append(card);
-    return fillDashCard(card, kind, href);
-  });
+  const settling = [];
+  const gridOf = list => {
+    const grid = el("div", {class:"dash-grid"});
+    view.append(grid);
+    for (const [kind, {href}] of list) {
+      const card = el("div", {class:"kind-card"});
+      grid.append(card);
+      settling.push(fillDashCard(card, kind, href));
+    }
+  };
+  if (domains.length) {
+    /* one section per application: its primary kinds as cards, its
+       own secondary kinds (if any) as chips beneath */
+    for (const d of domains) {
+      const mine = primaries.filter(([, r]) => r.domain === d);
+      if (!mine.length) continue;
+      view.append(el("h3", {class:"sect"}, title(d)));
+      gridOf(mine);
+      const tucked = entries.filter(([, r]) =>
+        navTier(r) === "secondary" && r.domain === d);
+      if (tucked.length)
+        view.append(el("div", {class:"chips"}, tucked.map(([kind, {href}]) =>
+          el("a", {href: "#" + href, class: "link-chip"}, title(kind) + "s"))));
+    }
+    const loose = primaries.filter(([, r]) => !r.domain);
+    if (loose.length) gridOf(loose);
+  } else {
+    gridOf(primaries);
+  }
   /* the engine vitals: running/queued jobs surface as attention (a
      kind the engine did not enroll simply contributes nothing) */
   const jobHref = collectionHref(w, "job");
@@ -841,7 +979,8 @@ async function renderHome(view, seq) {
   if (attention.length) strip.append(el("div", {class:"attention"}, attention));
   else strip.remove();
 
-  const engine = entries.filter(([kind]) => ENGINE_KINDS.has(kind));
+  const engine = entries.filter(([, r]) =>
+    navTier(r) === "secondary" && !r.domain);
   if (engine.length) {
     view.append(el("h3", {class:"sect"}, "Engine kinds"),
       el("div", {class:"chips"}, engine.map(([kind, {href}]) =>
@@ -1174,7 +1313,8 @@ function itemTable(items, opts) {
   opts = opts || {};
   if (!items.length) return el("p", {class:"muted"}, "No rows.");
   const anyActions = !!opts.rowAction ||
-    items.some(i => i.actions && Object.keys(i.actions).length);
+    items.some(i => (i.actions && Object.keys(i.actions).length) ||
+                    Object.values(i.links || {}).some(l => l && l.download));
   const cols = fieldColumns(items, opts.query, opts.hints);
   const sortField = (opts.currentSort || "").replace(/^-/, "");
   const sortDesc = (opts.currentSort || "").startsWith("-");
@@ -1221,6 +1361,13 @@ function itemTable(items, opts) {
       for (const [name, entry] of Object.entries(item.actions || {}))
         cell.append(actionButton({name, entry, doc: item, small: true,
                                   onDone: () => render()}));
+      /* download links are row affordances too — byte routes ride
+         the row as real browser navigations (see linksStrip) */
+      for (const [rel, l] of Object.entries(item.links || {}))
+        if (l && l.download)
+          cell.append(el("a", {class:"chip link-chip", href: l.href,
+            target:"_blank", rel:"noopener", title: l.summary || rel,
+            onclick: e => e.stopPropagation()}, "⭳ " + title(rel)));
       row.append(cell);
     }
     tbody.append(row);
@@ -1354,8 +1501,14 @@ function linksStrip(doc) {
   if (!rels.length) return null;
   const row = el("div", {class:"chips", "data-links": ""});
   for (const [rel, l] of rels)
-    row.append(el("a", {class:"chip link-chip", href:"#"+l.href,
-                        title: l.summary || rel},
+    /* a download link is a byte route (redirect or file body): a
+       real browser navigation, never the in-app hash router — the
+       redirect must reach the user agent */
+    row.append(el("a", Object.assign(
+      {class:"chip link-chip", title: l.summary || rel},
+      l.download ? {href: l.href, target: "_blank", rel: "noopener"}
+                 : {href: "#"+l.href}),
+      l.download ? "⭳ " : null,
       title(rel), l.badge !== undefined && l.badge !== null
         ? el("b", {class:"badge", title:"count, per the server"},
             String(l.badge)) : null));

@@ -295,9 +295,22 @@
                 :resources (into (sorted-map)
                                  (map (fn [[k r]]
                                         [(name k)
-                                         {:href (str "/api/" (:plural r))
-                                          :actions (vec (scope-action-names r))}]))
+                                         (cond-> {:href (str "/api/" (:plural r))
+                                                  :actions (vec (scope-action-names r))
+                                                  ;; nav tier on the wire at last —
+                                                  ;; the generic UI's client-side
+                                                  ;; ENGINE_KINDS set retires
+                                                  :nav (name (:nav r :primary))}
+                                           (:domain r)
+                                           (assoc :domain (name (:domain r))))]))
                                  resources)}
+         ;; global navigation between the deployable's applications:
+         ;; every distinct declared domain, sorted — present only when
+         ;; some kind declares one, so single-domain wires are unchanged
+         (some (comp :domain val) resources)
+         (assoc :domains (->> resources
+                              (keep (comp :domain val))
+                              (map name) distinct sort vec))
          ;; the declared surfaces (phase 9b) — hidden from a scoped
          ;; request, whose surface routes 404 anyway
          (and (seq (:surfaces eng)) (nil? vis))

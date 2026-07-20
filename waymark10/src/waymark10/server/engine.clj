@@ -191,8 +191,13 @@
   "Serve the engine on port via http-kit and start its running
   surfaces — the events dispatcher (SSE's feed) and the clock
   sweeper — in the engine's :runtime atom. Returns the server; pass
-  BOTH engine and server to stop!."
-  [eng port]
+  BOTH engine and server to stop!.
+
+  opts: :wrap-handler — a ring middleware the embedding composes
+  around the engine's handler (an app-level route that needs the
+  engine alive, e.g. a byte-store redirect, mounts here without
+  forking the boot)."
+  [eng port & [{:keys [wrap-handler]}]]
   (when-some [rt (:runtime eng)]
     (let [dispatcher (events/dispatcher
                       eng {:poll-ms (:events-poll-ms eng 2000)})]
@@ -227,7 +232,8 @@
                                    eng {:interval-ms (:orphan-sweep-ms eng 30000)})
                   :purge-sweeper (attachments/start-purge-sweeper!
                                   eng {:interval-ms (:purge-sweep-ms eng 60000)})})))
-  (http/run-server (handler eng) {:port port :legacy-return-value? false}))
+  (http/run-server ((or wrap-handler identity) (handler eng))
+                   {:port port :legacy-return-value? false}))
 
 (defn stop!
   "Stop the server; the two-arity form also stops the engine's

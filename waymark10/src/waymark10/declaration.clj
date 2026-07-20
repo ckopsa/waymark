@@ -29,7 +29,7 @@
   key that skips this list refuses every boot — loudly, at the def
   site, which is the point."
   [;; identity & machine
-   :kind :states :initial :terminal :plural :nav :adoption
+   :kind :states :initial :terminal :plural :nav :domain :adoption
    ;; data
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
@@ -63,8 +63,10 @@
   "One :links entry's whole authored surface — the same closure
   action-keys already gives :actions, extended here so a typo'd link
   key (:rel misspelled, an :emebd) refuses at the def site instead of
-  rendering nothing."
-  [:rel :owns :edge :href :kind :summary :badge :embed :where])
+  rendering nothing. :download marks a byte route (a redirect or a
+  file body): clients navigate it in the BROWSER, never through an
+  in-app XHR router that would swallow the redirect."
+  [:rel :owns :edge :href :kind :summary :badge :embed :where :download])
 
 (def ^:private link-schema
   (into [:map {:closed true}]

@@ -12,7 +12,7 @@
   (:require [clj-kondo.hooks-api :as api]))
 
 (def top-level-keys
-  #{:kind :states :initial :terminal :plural :nav :adoption
+  #{:kind :states :initial :terminal :plural :nav :domain :adoption
     :schema :create-schema :fields :shape :upcasts
     :flow :actions :create-guards :create-action-names :allow-dead :renames
     :derived :one-of :unique :part-scopes

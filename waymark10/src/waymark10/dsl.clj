@@ -47,6 +47,10 @@
 ;; (the Mirror weave) rather than spelled as one literal map
 (defalias resource r/resource)
 
+;; a domain module's assembly fn stamps its kind list — global nav
+;; between applications under one deployable rides the wire from here
+(defalias in-domain r/in-domain)
+
 (defalias refuse d/refuse)
 (defalias warn d/warn)
 (defalias guard g/guard)
