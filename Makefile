@@ -23,7 +23,16 @@ NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_S
 PAYDESK_WAREHOUSE_PORT ?= 5432
 PAYDESK_WAREHOUSE_DSN  ?= $(shell scripts/paydesk-warehouse-dsn.sh $(PAYDESK_WAREHOUSE_PORT) 2>/dev/null)
 
-.PHONY: db db10 test10 check10 test-mealplan10 dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk image10 deploy10
+# paydesk-prod runs on the laptop: its own database is the local paydesk_prod
+# on :5433 (created host-side — the docker publish is shadowed by a
+# native Postgres on this port, so createdb must run against whatever
+# actually answers), and the mirror boundary is the PROD warehouse
+# (`ssh -fN paydesk-db-prod` → :15435, db_readwrite — read/write on
+# client_assignment per the push posture).
+PAYDESK_PROD_DSN           ?= jdbc:postgresql://localhost:$(PG_PORT)/paydesk_prod?user=$(PG_USER)
+PAYDESK_PROD_WAREHOUSE_DSN ?= $(shell scripts/paydesk-warehouse-dsn.sh 15435 db_readwrite devdb 2>/dev/null)
+
+.PHONY: db db10 test10 check10 test-mealplan10 migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk image10 deploy10
 
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
@@ -102,3 +111,16 @@ dev-paydesk: db10  ## serve paydesk on :8012 against paydesk_dev; mirrors the de
 migrate-paydesk: db10  ## print paydesk's schema plan against paydesk_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
 	cd paydesk && PAYDESK_DSN="jdbc:postgresql://localhost:$(PG_PORT)/paydesk_dev?user=$(PG_USER)" \
 		clojure -M:migrate
+
+db-paydesk-prod:  ## the paydesk_prod database on the host-reachable :5433
+	@psql -h localhost -p $(PG_PORT) -U $(PG_USER) -d postgres -tc \
+		"SELECT 1 FROM pg_database WHERE datname='paydesk_prod'" | grep -q 1 || \
+		createdb -h localhost -p $(PG_PORT) -U $(PG_USER) paydesk_prod
+
+migrate-paydesk-prod: db-paydesk-prod  ## print paydesk's schema plan against the local paydesk_prod; APPLY=1 executes
+	@cd paydesk && PAYDESK_DSN="$(PAYDESK_PROD_DSN)" clojure -M:migrate
+
+paydesk-prod: db-paydesk-prod  ## serve paydesk on :8013 against local paydesk_prod + the PROD warehouse (needs `ssh -fN paydesk-db-prod`); refuses on schema drift — migrate-paydesk-prod first
+	@cd paydesk && PAYDESK_DSN="$(PAYDESK_PROD_DSN)" \
+		PAYDESK_WAREHOUSE_DSN="$(PAYDESK_PROD_WAREHOUSE_DSN)" \
+		PAYDESK_PORT=8013 clojure -M:dev
