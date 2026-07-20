@@ -24,7 +24,7 @@
    :initial :due
    :terminal #{:done :skipped}
    :summary "{data.chore_name} · {data.due_date} · {state}"
-   :filterable {:state #{:eq :in} :chore_id #{:eq}}
+   :filterable {:state #{:eq :in} :chore_id #{:eq} :overdue #{:eq}}
    :sortable {:fields [:due_date] :default "due_date"}
 
    :fields
@@ -33,7 +33,17 @@
 
     :while-open [[:assignee [:waymark/vocab {:open true}]]
                  [:notes (prose "How it went")]]
-    :open       #{:due}}
+    :open       #{:due}
+    ;; engine-maintained: the ranked worklist's one law — hard-due
+    ;; first — needs "past due" as an indexed fact on BOTH kinds
+    ;; (prep_task already derives its own)
+    :facts      [[:overdue :boolean]]}
+
+   ;; due DATE, not instant: overdue starts the morning after, the
+   ;; prep_task law's date-typed variant
+   :derived
+   {:overdue {:over [:due_date :now]
+              :expr '(< (var :due_date) (date-of (var :now)))}}
 
    :actions
    {:complete

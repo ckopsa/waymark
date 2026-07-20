@@ -241,6 +241,34 @@
         (is (= [:lines {:optional true} [:maybe :int]]
                (last (:schema n))))))))
 
+;; ── the :facts group: engine-maintained entries (chore_run's
+;;    clock-flipped overdue demanded it) ──────────────────────────────
+
+(deftest facts-are-engine-maintained-entries
+  (let [n (r/normalize-resource
+           (-> sugared
+               (assoc-in [:fields :facts] [[:overdue :boolean]])
+               (assoc :derived
+                      {:overdue {:over [:ship_on :now]
+                                 :expr '(< (var :ship_on)
+                                           (date-of (var :now)))}})))]
+    (testing "the entry lands optional and nullable"
+      (is (some #{[:overdue {:optional true} [:maybe :boolean]]}
+                (rest (:schema n)))))
+    (testing "no generated editor writes it"
+      (doseq [[_ a] (:actions n)
+              :when (:edit a)
+              f (get-in a [:edit :prefill])]
+        (is (not= :overdue f))))
+    (testing "the create schema never asks for it"
+      (is (not-any? #(= :overdue (first %)) (rest (:create-schema n))))))
+  (testing "a fact without its :derived law refuses — one fact, one
+            writer, and the writer here is the engine"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no :derived law"
+                          (r/normalize-resource
+                           (assoc-in sugared [:fields :facts]
+                                     [[:overdue :boolean]]))))))
+
 ;; ── delta 2: measured-by rejects the mismatched amount ──────────────
 
 (defn- with-order-engine [f]

@@ -468,7 +468,8 @@
   (throw (t/definition-error
           (str (some-> kind name) " " where " — " msg))))
 
-(def ^:private fields-group-keys #{:at-create :while-open :support :when :open})
+(def ^:private fields-group-keys
+  #{:at-create :while-open :support :when :open :facts})
 
 (defn- parse-field-rows [kind where rows]
   (when-not (and (vector? rows) (every? vector? rows))
@@ -586,9 +587,15 @@
   - :when {value rows} fields are optional everywhere plus a
     conditional-required create gate keyed on the one :at-create
     one-of field that offers every :when value.
+  - :facts rows are ENGINE-maintained entries (chore_run's clock-
+    flipped overdue demanded the group): optional, nullable, written
+    by no generated editor and absent from the create schema; each
+    names a top-level :derived law — one fact, one writer, and the
+    writer here is the engine.
   - a top-level :derived COUNT fact with no declared entry gets its
     [:maybe :int] entry appended (a count fact is an :int by law);
-    any other derived fact still declares its own entry.
+    any other derived fact still declares its own entry (a :facts
+    row).
   Editors write through waymark10.resource/apply-field-edits; a
   measured-by field lands measured-guard on its group's editors."
   [rmap]
@@ -602,7 +609,8 @@
         (when-some [unknown (seq (sort (remove fields-group-keys (keys fields))))]
           (sugar-err kind ":fields"
                      (str "unknown group(s) " (vec unknown) "; groups are "
-                          ":at-create, :while-open, :support, :when, :open")))
+                          ":at-create, :while-open, :support, :when, :open, "
+                          ":facts")))
         (doseq [k [:schema :create-schema]]
           (when (contains? rmap k)
             (sugar-err kind ":fields"
@@ -619,6 +627,15 @@
                                            (:while-open fields []))
               support (parse-field-rows kind ":fields :support"
                                         (:support fields []))
+              facts (parse-field-rows kind ":fields :facts"
+                                      (:facts fields []))
+              _ (doseq [{:keys [field]} facts]
+                  (when-not (contains? (:derived rmap) field)
+                    (sugar-err kind ":fields :facts"
+                               (str "fact " field " has no :derived law — "
+                                    ":facts rows are engine-maintained (one "
+                                    "fact, one writer, and the writer here "
+                                    "is the engine)"))))
               when-map (:when fields {})
               _ (when-not (and (map? when-map) (every? keyword? (keys when-map)))
                   (sugar-err kind ":fields :when"
@@ -642,6 +659,7 @@
                      (filterv (set o) states))
               non-terminal (filterv (complement terminal) states)
               declared (set (map :field (concat at-create while-open support
+                                                facts
                                                 (mapcat val when-rows))))
               count-entries
               (into []
@@ -654,7 +672,7 @@
                                                 "field entry — :fields appends "
                                                 ":int entries for count facts "
                                                 "only; declare this one's "
-                                                "shape yourself"))))))
+                                                "shape as a :facts row"))))))
                     (sort-by key (:derived rmap)))
               schema (-> [:map]
                          (into (map #(data-entry % true)) at-create)
@@ -662,6 +680,7 @@
                          (into (map #(data-entry % false)) support)
                          (into (comp (mapcat val) (map #(data-entry % false)))
                                when-rows)
+                         (into (map #(data-entry % false)) facts)
                          (into count-entries))
               create-schema (-> [:map]
                                 (into (map #(data-entry % true)) at-create)

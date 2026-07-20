@@ -192,6 +192,7 @@ properties. The five group keys, each a sentence:
 | `:open` | the still-authoring states (default `#{initial}`); must be declared, non-terminal states |
 | `:support` | bookkeeping fields whose generated editor (`update_support`/`…_in_<state>`) exists in every non-terminal state |
 | `:when` | `{discriminating-value [[field word] …]}` — fields optional everywhere plus a generated create gate: required exactly when the discriminator holds that value |
+| `:facts` | ENGINE-maintained entries (optional, nullable, no generated editor, absent from the create schema) — each row names a top-level `:derived` law, e.g. `:facts [[:overdue :boolean]]` beside `:derived {:overdue {:over [:due_date :now] :expr '(< (var :due_date) (date-of (var :now)))}}` (chore_run's clock-flipped overdue demanded the group) |
 
 The `:when` discriminator is found, not named: exactly one `:at-create`
 `one-of` field must offer every `:when` key, or the declaration refuses
@@ -200,7 +201,7 @@ the union of the group's prose draft policies, mint the idempotent
 overwrite safety, and refuse at the def site if they'd collide with a
 declared action name. A top-level `:derived` **count** fact with no
 declared entry gets its `[:maybe :int]` entry appended; every other
-derived fact still declares its own shape.
+derived fact declares its own shape as a `:facts` row.
 
 ## 8 · Declaration and action key sets
 
