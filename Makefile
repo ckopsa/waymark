@@ -32,7 +32,7 @@ PAYDESK_WAREHOUSE_DSN  ?= $(shell scripts/paydesk-warehouse-dsn.sh $(PAYDESK_WAR
 PAYDESK_PROD_DSN           ?= jdbc:postgresql://localhost:$(PG_PORT)/paydesk_prod?user=$(PG_USER)
 PAYDESK_PROD_WAREHOUSE_DSN ?= $(shell scripts/paydesk-warehouse-dsn.sh 15435 db_readwrite devdb 2>/dev/null)
 
-.PHONY: db db10 test10 check10 test-mealplan10 migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk image10 deploy10
+.PHONY: db db10 test10 check10 test-mealplan10 migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk test-chores dev-chores migrate-chores check-chores image-chores deploy-chores image10 deploy10
 
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
@@ -56,6 +56,9 @@ db10: db  ## waymark10 databases on the shared :5433 container
 	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
 		"SELECT 1 FROM pg_database WHERE datname='paydesk_dev'" | grep -q 1 || \
 		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE paydesk_dev"
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
+		"SELECT 1 FROM pg_database WHERE datname='choreplan10_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE choreplan10_dev"
 
 test10: db10  ## waymark10 (Clojure) framework tests
 	cd waymark10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
@@ -124,3 +127,28 @@ paydesk-prod: db-paydesk-prod  ## serve paydesk on :8013 against local paydesk_p
 	@cd paydesk && PAYDESK_DSN="$(PAYDESK_PROD_DSN)" \
 		PAYDESK_WAREHOUSE_DSN="$(PAYDESK_PROD_WAREHOUSE_DSN)" \
 		PAYDESK_PORT=8013 clojure -M:dev
+
+check-chores:  ## choreplan10 declaration-time checks + usability warnings (no database)
+	cd choreplan10 && clojure -M:check
+
+test-chores: db10  ## choreplan10 conformance suite
+	cd choreplan10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
+
+dev-chores: db10  ## serve choreplan10 on :8013 against choreplan10_dev
+	cd choreplan10 && CHOREPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/choreplan10_dev?user=$(PG_USER)" \
+		WAYMARK10_AUTO_MIGRATE=1 clojure -M:dev
+
+migrate-chores: db10  ## print choreplan10's schema plan against choreplan10_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
+	cd choreplan10 && CHOREPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/choreplan10_dev?user=$(PG_USER)" \
+		clojure -M:migrate
+
+CHORES_IMAGE ?= docker.kopsa.info/choreplan10
+
+image-chores:  ## build and push the choreplan10 image for the home cluster
+	docker buildx build --platform $(PLATFORM) -f Dockerfile.choreplan10 -t $(CHORES_IMAGE):$(IMAGE_TAG) --push .
+	@echo "pushed $(CHORES_IMAGE):$(IMAGE_TAG)"
+
+deploy-chores: image-chores  ## push image, then roll the choreplan10 nomad job onto it
+	@NOMAD_ADDR=$(NOMAD_ADDR) NOMAD_TOKEN=$(NOMAD_TOKEN) \
+		nomad var put -force nomad/jobs/choreplan10/deploy image_tag=$(IMAGE_TAG) >/dev/null
+	@echo "deploying $(CHORES_IMAGE):$(IMAGE_TAG) — nomad restarts the server task on the new image"
