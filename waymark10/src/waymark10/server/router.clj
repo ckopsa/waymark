@@ -1041,6 +1041,14 @@
 
 ;; ── the generic UI (phase 10) ───────────────────────────────────────
 
+(defn- mobile-ua?
+  "A phone-shaped User-Agent. `Mobi` is the token every mobile
+  browser ships (Android Chrome, iOS Safari, Firefox Mobile);
+  iPad/Android keep tablets in the net."
+  [req]
+  (boolean (re-find #"(?i)mobi|android|iphone|ipad"
+                    (get-in req [:headers "user-agent"] ""))))
+
 (defn- ui-page
   "GET /api/-/ui (and /api/-/ui-lite): the envelope-driven generic UI
   — one self-contained page (vanilla JS, no external hosts) that
@@ -1049,14 +1057,29 @@
   asset, served to anyone — a scoped request's DATA stays projected
   by the API it drives. ui.html is the full client (the waymark9
   generic UI, ported to wire 10); ui_lite.html preserves the original
-  phase-10 page."
+  phase-10 page.
+
+  A mobile User-Agent gets the SAME page stamped <html data-ui=
+  \"mobile\"> — one client, two shells; the page's own CSS/JS key the
+  mobile chrome (bottom tab nav, card rows, sheet dialogs) off the
+  stamp. ?ui=mobile|desktop overrides the sniff, and the page's ⋯
+  menu links the switch."
   [_eng asset]
-  (let [page (some-> (io/resource asset) slurp)]
-    (fn [_req]
+  (let [page   (some-> (io/resource asset) slurp)
+        mobile (some-> page
+                       (str/replace-first
+                        "<html lang=\"en\">"
+                        "<html lang=\"en\" data-ui=\"mobile\">"))]
+    (fn [req]
       (if page
         {:status 200
          :headers {"Content-Type" "text/html; charset=utf-8"}
-         :body page}
+         :body (if (case (get (query-params req) "ui")
+                     "mobile"  true
+                     "desktop" false
+                     (mobile-ua? req))
+                 mobile
+                 page)}
         (throw (p/problem :not-found 404 "Not found"
                           {:detail "The UI asset is not on the classpath."}))))))
 

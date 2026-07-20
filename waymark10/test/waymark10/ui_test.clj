@@ -39,6 +39,28 @@
     (is (str/starts-with? (get-in resp [:headers "Content-Type"]) "text/html"))
     (is (str/includes? (:body resp) "waymark"))))
 
+(def ^:private iphone-ua
+  (str "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+       "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 "
+       "Mobile/15E148 Safari/604.1"))
+
+(deftest ui-serves-the-mobile-shell
+  ;; one client, two shells: a phone's User-Agent gets the SAME page
+  ;; stamped <html data-ui="mobile">; ?ui= overrides the sniff both ways
+  (let [page (fn [req] (:body (*h* (merge {:request-method :get
+                                           :uri "/api/-/ui"
+                                           :headers {}}
+                                          req))))
+        stamped? #(str/includes? % "<html lang=\"en\" data-ui=\"mobile\">")]
+    (is (not (stamped? (page {})))
+        "no UA, no stamp — the desktop shell is the default")
+    (is (stamped? (page {:headers {"user-agent" iphone-ua}})))
+    (is (stamped? (page {:query-string "ui=mobile"}))
+        "?ui=mobile beats the missing UA")
+    (is (not (stamped? (page {:headers {"user-agent" iphone-ua}
+                              :query-string "ui=desktop"})))
+        "?ui=desktop beats the phone UA")))
+
 (deftest ui-lite-serves
   ;; the original phase-10 page, preserved beside the ported client
   (let [resp (*h* {:request-method :get :uri "/api/-/ui-lite" :headers {}})]
