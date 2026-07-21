@@ -15,6 +15,7 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.test.conformance :as conf]
             [waymark10.test.db :as db]
             [waymark10.types :as t]))
 
@@ -55,11 +56,13 @@
 
 (def ^:private guards-have-no-pen
   ;; the tripwire: merge_from refuses outright if its guard ever
-  ;; receives the cross-write door — guards judge, handlers write
+  ;; receives a cross-write door — guards judge, handlers write
   (g/guard {:name :guards-have-no-pen
             :explain "A guard holding the pen is a definition bug."
             :check (fn [_row _inp ctx]
-                     (if (:invoke ctx) (t/deny) (t/allow)))}))
+                     (if (or (:invoke ctx) (:create ctx))
+                       (t/deny)
+                       (t/allow)))}))
 
 (defhandler merge-from [row inp ctx]
   (let [invoke! (:invoke ctx)
@@ -76,6 +79,12 @@
 (defhandler merge-nothing [row _inp ctx]
   ;; the door answers a bad id with the same problem the wire would
   ((:invoke ctx) :ci_doc "no-such-doc" :move {:folder_id (:id row)})
+  row)
+
+(defhandler file-new [row inp ctx]
+  ;; the birth door (the chore queue shape): the folder mints a doc
+  ;; into itself — the born row rides the inner sink out
+  ((:create ctx) :ci_doc {:title (:title inp) :folder_id (:id row)})
   row)
 
 (def ^:private folder
@@ -105,6 +114,15 @@
               {:from #{:open} :to :open
                :safety {:idempotent true :reversible false :confirm false}
                :handler merge-nothing}
+              :file_new
+              {:from #{:open} :to :open
+               :input [:map [:title [:string {:min 1 :max 40}]]]
+               ;; the touch names the target's CREATE door — the
+               ;; assembly accepts it, conformance correlates it
+               :touches [{:kind :ci_doc :action :create}]
+               :guards [guards-have-no-pen]
+               :safety {:idempotent true :reversible false :confirm false}
+               :handler file-new}
               :retire
               {:from #{:open} :to :retired
                :safety {:idempotent true :reversible false :confirm false
@@ -241,6 +259,51 @@
                (frequencies (map #(:version (reload eng :ci_doc %))
                                  doc-ids)))
             "every doc touched exactly once — full coverage, no loop")))))
+
+;; ── 6a. the BIRTH door: a handler mints a row of another kind ───────
+
+(defn- docs-titled [eng folder-id title]
+  (store/with-tx (:storage eng)
+    (fn [tx]
+      (filterv #(= title (get-in % [:data :title]))
+               (store/query-rows (:storage eng) tx :ci_doc
+                                 {:folder_id folder-id} {:limit 100})))))
+
+(deftest ctx-create-births-through-the-same-call
+  (fresh!)
+  (with-eng [folder doc]
+    (fn [eng]
+      (let [[a _ _] (seed! eng)]
+        (inv/invoke! eng :ci_folder a :file_new {:title "born"}
+                     {:principal elena :correlation-id "file-cid-1"})
+        (let [born (docs-titled eng a "born")]
+          (testing "the doc exists, filed under the folder that minted it"
+            (is (= 1 (count born)))
+            (is (= :filed (:state (first born)))))
+          (testing "maintenance ran for the inner birth: the folder's
+                    count tells the post-birth truth"
+            (is (= 2 (get-in (reload eng :ci_folder a) [:data :doc_count]))))
+          (testing "the birth transition wears the outer correlation id
+                    — the touches promise correlates"
+            (is (= "file-cid-1"
+                   (:correlation-id
+                    (last (transitions-of eng :ci_doc (:id (first born)))))))
+            (is (empty? (conf/touches-violations eng)))))))))
+
+;; ── 6b. a natural replay of the outer skips the birth ───────────────
+
+(deftest natural-replay-births-nothing-twice
+  (fresh!)
+  (with-eng [folder doc]
+    (fn [eng]
+      (let [[a _ _] (seed! eng)]
+        (inv/invoke! eng :ci_folder a :file_new {:title "once"}
+                     {:principal elena})
+        (let [replay (inv/invoke! eng :ci_folder a :file_new {:title "once"}
+                                  {:principal elena})]
+          (is (= :natural (:replayed? replay)))
+          (is (= 1 (count (docs-titled eng a "once")))
+              "no second doc — the handler never re-ran"))))))
 
 ;; ── 6. the door refuses what the wire refuses ───────────────────────
 

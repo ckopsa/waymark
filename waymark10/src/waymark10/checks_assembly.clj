@@ -560,10 +560,15 @@
         (when-not target
           (err kind :touches (str "action " (name aname) " touches kind "
                                   (:kind t) ", which is not registered")))
-        (when-not (get-in target [:actions (:action t)])
+        ;; a touch may name the target's CREATE door too (ctx :create,
+        ;; chore's queue verb) — create names live beside :actions
+        (when-not (or (get-in target [:actions (:action t)])
+                      (contains? (or (:create-action-names target) #{:create})
+                                 (:action t)))
           (err kind :touches (str "action " (name aname) " touches "
                                   (name (:kind t)) "." (name (:action t))
-                                  ", not an action of that kind")))))
+                                  ", not an action (or the create door) "
+                                  "of that kind")))))
     (into []
           (for [[kind r] kinds
                 edge (:owns r)

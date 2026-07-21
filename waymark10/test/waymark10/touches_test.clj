@@ -99,8 +99,15 @@
     (let [bad (r/resource (parent-map
                            :archive-touches [{:kind :tt_child :action :shred}]))]
       (is (thrown-with-msg?
-           clojure.lang.ExceptionInfo #"not an action of"
+           clojure.lang.ExceptionInfo #"not an action \(or the create door\)"
            (ca/run-all {:kinds {:tt_parent bad :tt_child child}})))))
+  (testing "touching the target's CREATE door passes — the ctx :create
+            birth is advertisable (chore's queue verb)"
+    (let [births (r/resource (parent-map
+                              :archive-touches [{:kind :tt_child
+                                                 :action :create}]))]
+      (is (map? (ca/run-all {:kinds {:tt_parent births
+                                     :tt_child child}})))))
   (testing "an unadvertised cascade is a coverage warning"
     (let [silent (r/resource (parent-map))
           {:keys [warnings]} (ca/run-all {:kinds {:tt_parent silent

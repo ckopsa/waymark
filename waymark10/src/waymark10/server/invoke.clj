@@ -187,7 +187,7 @@
   [rdef row]
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
 
-(declare invoke-in-tx!)
+(declare invoke-in-tx! create-in-tx!)
 
 (defn- make-ctx
   ([engine tx mode principal] (make-ctx engine tx mode principal nil))
@@ -231,6 +231,38 @@
                                        :action action-name
                                        :res res})
                      res))))
+             ;; the cross-BIRTH door (chore's queue verb demanded it):
+             ;; handlers birth rows of OTHER kinds through the same
+             ;; transaction and the full create algorithm — the born
+             ;; row rides the inner sink, so its lifecycle, cascades
+             ;; and maintenance run post-commit exactly like a ctx
+             ;; :invoke write's. Advertise the birth with :touches
+             ;; {:kind … :action <its create name>}.
+             :create
+             (when sink
+               (fn ctx-create [target-kind body & [opts]]
+                 (let [trdef (or (get (resources engine) target-kind)
+                                 (throw (t/definition-error
+                                         (str "ctx create: unknown kind "
+                                              target-kind))))
+                       create-action (first (:create-action-names trdef))
+                       ;; a handler holds DECODED values (a LocalDate,
+                       ;; not its string); the door wire-shapes them
+                       ;; against the target's create model so the
+                       ;; digest and the create algorithm see exactly
+                       ;; what the wire would have carried
+                       body (schema/encode
+                             (or (:create-schema trdef) (:schema trdef))
+                             (or body {}))
+                       res (create-in-tx!
+                            engine tx target-kind body
+                            {:principal principal
+                             :correlation-id correlation-id
+                             :acknowledged (or (:acknowledged opts) #{})})]
+                   (swap! sink conj {:kind target-kind
+                                     :action create-action
+                                     :res res})
+                   res)))
              ;; the cross-resource read hooks (phase 8): guards declared
              ;; :reads [:kind] and on-create resolution read OTHER kinds
              ;; through the write's own transaction — decoded rows, the
@@ -760,7 +792,7 @@
             ;; guards judge; they never write — the pen stays with the
             ;; handler (and :on-create), so guard evaluation gets a
             ;; ctx without the cross-write door
-            guard-ctx (dissoc ctx :invoke :inner-sink)]
+            guard-ctx (dissoc ctx :invoke :create :inner-sink)]
         (if-not (contains? (:from defn) (:state row))
           ;; 5. out of state: replay, conceal, or narrate
           (or (natural-replay engine tx rdef row defn digest)
@@ -1288,102 +1320,121 @@
   author's :create-schema, and the author's create guards are not
   consulted — they judge the create-schema's vocabulary, which a
   mint doesn't speak. Never set from a request path."
-  [engine kind body {:keys [principal acknowledged correlation-id id
-                            idempotency-key dry-run mint?]
-                     :or {acknowledged #{}}}]
+  [engine kind body {:keys [principal acknowledged dry-run mint?]
+                     :or {acknowledged #{}}
+                     :as opts}]
   (let [rdef (rdef-of engine kind)
         model (if mint?
                 (:schema rdef)
                 (or (:create-schema rdef) (:schema rdef)))
-        create-action (first (:create-action-names rdef))
-        digest (body-digest body)]
+        create-action (first (:create-action-names rdef))]
     (if dry-run
       (create-dry-run! engine rdef model body principal acknowledged dry-run)
       (after-write!
        engine kind create-action
        (store/with-tx (:storage engine)
         (fn [tx]
-        (if-some [hit (when idempotency-key
-                        (store/idempotency-lookup (:storage engine) tx
-                                                  idempotency-key kind))]
-          (if (and (= (:action hit) create-action)
-                   (= (:request-digest hit) digest))
-            {:replayed? :idempotency :response hit}
-            (throw (p/idempotency-key-reuse create-action)))
-        (let [inp (schema/decode model (or body {}))
-              ;; declared defaults fill absent keys before validation —
-              ;; but never on a mint: a mirror records what the
-              ;; authority has, and absent means absent
-              inp (if mint? inp (schema/apply-defaults model inp))
-              _ (when-some [errors (schema/closed-errors model inp)]
-                  (throw (p/schema-invalid :create errors)))
-              ctx (make-ctx engine tx :invoke principal
-                            {:correlation-id correlation-id})
-              {:keys [warned overridden]}
-              (create-guard-pass (if mint? [] (:create-guards rdef))
-                                 inp (dissoc ctx :invoke :inner-sink)
-                                 acknowledged)]
-          (when (seq warned)
-            (throw (p/warning-refused :create warned)))
-          (let [now (:now ctx)
-                row {:id (or id (str (random-uuid)))
-                     :state (:initial rdef)
-                     :version 1
-                     :data inp
-                     :shape (:shape rdef 1)
-                     :owner (:id principal)
-                     :law-revision (create-law-revision engine rdef kind)}
-                ;; predecessor refs resolve first (design E7, batch E —
-                ;; the one batch-E invoke seam, documented): a
-                ;; :waymark/ref entry declaring {:predecessor {…}}
-                ;; fills from the newest existing sibling when the
-                ;; body left it blank, BEFORE :on-create so the hook
-                ;; may read the resolved sibling (waymark9 invoke.py's
-                ;; step order). All machinery lives in
-                ;; waymark10.server.predecessor; this line only runs
-                ;; it at the create algorithm's honest slot.
-                row (predecessor/resolve! (:storage engine) tx
-                                          (resources engine) rdef row)
-                row (if-some [oc (:on-create rdef)] (oc row ctx) row)
-                ;; ref labels + one-of at birth too: before nil, every
-                ;; set ref is newly set
-                row (update row :data
-                            #(labels-and-groups engine tx rdef % nil))
-                row (derived/materialize rdef row now)
-                row (assoc row :summary (summary-of rdef row))
-                _ (store/insert-row! (:storage engine) tx kind
-                                     (encode-row rdef (dissoc row :summary)))
-                record (store/append-transition!
-                        (:storage engine) tx
-                        {:kind kind
-                         :resource-id (:id row)
-                         :action create-action
-                         :from-state nil
-                         :to-state (:state row)
-                         :actor {:type (name (:type principal))
-                                 :id (:id principal)
-                                 :display (:display principal)}
-                         :law-revision (:law-revision row)
-                         :input-digest digest
-                         :acknowledged (not-empty (vec overridden))
-                         :correlation-id correlation-id
-                         :summary (:summary row)})]
-            (when idempotency-key
-              (store/idempotency-store!
-               (:storage engine) tx idempotency-key kind create-action digest
-               201 (if-some [render-fn (:render-fn engine)]
-                     ;; row is already decoded; the same envelope the
-                     ;; live 201 answers with
-                     (render-fn rdef (dissoc row :summary))
-                     (wire/write-json {:id (:id row)
-                                       :state (name (:state row))
-                                       :version (:version row)
-                                       :summary (:summary row)}))
-               "application/waymark+json"))
-            ;; :on-create writes made through ctx :invoke ride out too
-            (let [inner (some-> (:inner-sink ctx) deref not-empty)]
-              (cond-> {:row row :transition record}
-                inner (assoc :inner-writes inner))))))))))))
+          (create-in-tx! engine tx kind body
+                         (assoc opts :acknowledged acknowledged))))))))
+
+(defn- create-in-tx!
+  "The create algorithm inside an EXISTING transaction — create!'s
+  body, extracted so the ctx :create door can birth rows of other
+  kinds mid-write (chore's queue verb demanded it). Returns
+  {:row … :transition …} (or the idempotent replay); the caller owes
+  the result its after-write! pass — create! runs it directly, an
+  inner birth rides the sink out and after-write! drains it."
+  [engine tx kind body {:keys [principal acknowledged correlation-id id
+                               idempotency-key mint?]
+                        :or {acknowledged #{}}}]
+  (let [rdef (rdef-of engine kind)
+        model (if mint?
+                (:schema rdef)
+                (or (:create-schema rdef) (:schema rdef)))
+        create-action (first (:create-action-names rdef))
+        digest (body-digest body)]
+    (if-some [hit (when idempotency-key
+                    (store/idempotency-lookup (:storage engine) tx
+                                              idempotency-key kind))]
+      (if (and (= (:action hit) create-action)
+               (= (:request-digest hit) digest))
+        {:replayed? :idempotency :response hit}
+        (throw (p/idempotency-key-reuse create-action)))
+      (let [inp (schema/decode model (or body {}))
+            ;; declared defaults fill absent keys before validation —
+            ;; but never on a mint: a mirror records what the
+            ;; authority has, and absent means absent
+            inp (if mint? inp (schema/apply-defaults model inp))
+            _ (when-some [errors (schema/closed-errors model inp)]
+                (throw (p/schema-invalid :create errors)))
+            ctx (make-ctx engine tx :invoke principal
+                          {:correlation-id correlation-id})
+            {:keys [warned overridden]}
+            (create-guard-pass (if mint? [] (:create-guards rdef))
+                               inp (dissoc ctx :invoke :create :inner-sink)
+                               acknowledged)]
+        (when (seq warned)
+          (throw (p/warning-refused :create warned)))
+        (let [now (:now ctx)
+              row {:id (or id (str (random-uuid)))
+                   :state (:initial rdef)
+                   :version 1
+                   :data inp
+                   :shape (:shape rdef 1)
+                   :owner (:id principal)
+                   :law-revision (create-law-revision engine rdef kind)}
+              ;; predecessor refs resolve first (design E7, batch E —
+              ;; the one batch-E invoke seam, documented): a
+              ;; :waymark/ref entry declaring {:predecessor {…}}
+              ;; fills from the newest existing sibling when the
+              ;; body left it blank, BEFORE :on-create so the hook
+              ;; may read the resolved sibling (waymark9 invoke.py's
+              ;; step order). All machinery lives in
+              ;; waymark10.server.predecessor; this line only runs
+              ;; it at the create algorithm's honest slot.
+              row (predecessor/resolve! (:storage engine) tx
+                                        (resources engine) rdef row)
+              row (if-some [oc (:on-create rdef)] (oc row ctx) row)
+              ;; ref labels + one-of at birth too: before nil, every
+              ;; set ref is newly set
+              row (update row :data
+                          #(labels-and-groups engine tx rdef % nil))
+              row (derived/materialize rdef row now)
+              row (assoc row :summary (summary-of rdef row))
+              _ (store/insert-row! (:storage engine) tx kind
+                                   (encode-row rdef (dissoc row :summary)))
+              record (store/append-transition!
+                      (:storage engine) tx
+                      {:kind kind
+                       :resource-id (:id row)
+                       :action create-action
+                       :from-state nil
+                       :to-state (:state row)
+                       :actor {:type (name (:type principal))
+                               :id (:id principal)
+                               :display (:display principal)}
+                       :law-revision (:law-revision row)
+                       :input-digest digest
+                       :acknowledged (not-empty (vec overridden))
+                       :correlation-id correlation-id
+                       :summary (:summary row)})]
+          (when idempotency-key
+            (store/idempotency-store!
+             (:storage engine) tx idempotency-key kind create-action digest
+             201 (if-some [render-fn (:render-fn engine)]
+                   ;; row is already decoded; the same envelope the
+                   ;; live 201 answers with
+                   (render-fn rdef (dissoc row :summary))
+                   (wire/write-json {:id (:id row)
+                                     :state (name (:state row))
+                                     :version (:version row)
+                                     :summary (:summary row)}))
+             "application/waymark+json"))
+          ;; :on-create writes made through ctx :invoke/:create ride
+          ;; out too
+          (let [inner (some-> (:inner-sink ctx) deref not-empty)]
+            (cond-> {:row row :transition record}
+              inner (assoc :inner-writes inner))))))))
 
 (defn engine
   "Phase-2 wiring: storage + resources, kinds ensured. Grows into

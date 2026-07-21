@@ -231,9 +231,14 @@ the parent action does not advertise draws a coverage warning, and the
 conformance library (`touches-violations`) holds every logged run to
 the promise by correlation id — `:may true` tolerates a touch that had
 nothing to do on a given run (an empty cascade, a conditional write).
-The writes themselves come from the owns cascade or the handler's
-ctx `:invoke` door; `:touches` is the advertisement, never the
-mechanism.
+The writes themselves come from the owns cascade, the handler's
+ctx `:invoke` door, or the ctx `:create` door (chore's queue verb
+demanded it): a handler births a row of ANOTHER kind through the same
+transaction and the full create algorithm, the born row riding the
+inner sink so its lifecycle/cascade/maintenance run post-commit; the
+touch names the target's create action
+(`{:kind :chore_run :action :create}`). `:touches` is the
+advertisement, never the mechanism.
 
 ## 10 · `:default` — the declared field default
 

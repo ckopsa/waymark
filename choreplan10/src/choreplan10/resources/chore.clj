@@ -21,6 +21,25 @@
   (update row :data merge
           (select-keys inp [:name :area :assignee :cadence :notes])))
 
+;; queueing work IS minting a run — the verb lives on the chore (the
+;; household manager's screen), and the ctx :create door births the
+;; chore_run through the same transaction; :touches advertises the
+;; birth. Queueing twice mints twice — regret is one Skip on the run.
+(defhandler queue-run [row inp ctx]
+  ((:create ctx) :chore_run {:chore_id (:id row)
+                             :due_date (:due_date inp)})
+  row)
+
+(defaction queue
+  {:from #{:active} :to :active
+   :input [:map [:due_date {:x-display {:label "Due by"}} :waymark/date]]
+   :touches [{:kind :chore_run :action :create}]
+   :safety {:idempotent false :reversible false :confirm false
+            :one-way "A queued run the household thinks better of is one Skip away — the record stays honest."}
+   :handler queue-run
+   :display {:label "Queue a run" :style :primary :order 1
+             :description "Put this chore on the worklist: mint a run due by a date"}})
+
 ;; a named safety value: an idempotent in-place overwrite — nothing to
 ;; confirm, and "reverse" is just writing the field again
 (def ^:private overwrite
@@ -61,7 +80,8 @@
    :links [{:rel "runs" :owns :chore_run
             :summary "This chore's runs" :embed true}]
    :actions
-   {:update-details update-details
+   {:queue queue
+    :update-details update-details
 
     :pause
     {:from #{:active} :to :paused
