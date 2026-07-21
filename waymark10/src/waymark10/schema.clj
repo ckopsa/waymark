@@ -275,7 +275,7 @@
     (:kind props)
     (assoc :json-schema/x-ref
            (into {} (filter (comp some? val))
-                 (-> (select-keys props [:kind :label :pick :predecessor])
+                 (-> (select-keys props [:kind :label :carry :pick :predecessor])
                      ;; :pick crosses the wire as the picker's literal
                      ;; query params — keyword values land as their names
                      (update :pick

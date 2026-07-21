@@ -210,13 +210,23 @@
   ({:kind …}, exactly what plan.days.meal_id spells) — the picker,
   the navigable reference, and the assembly ref-check all read the
   one declaration. An optional {:label :fund_name} names the field
-  the engine maintains the target's label into."
-  [kind & [{:keys [label]}]]
+  the engine maintains the target's label into; an optional
+  {:carry {:notes :chore_notes}} names further target data fields
+  the engine copies alongside (the label doctrine — generated, never
+  hand-copied — for facts the referring row wants at a glance; same
+  freshness scope: stamped at the write that sets the ref)."
+  [kind & [{:keys [label carry]}]]
   (when-not (keyword? kind)
     (werr "ref names its target kind as a keyword: (ref :fund)"))
+  (when (and carry
+             (not (and (map? carry) (seq carry)
+                       (every? keyword? (keys carry))
+                       (every? keyword? (vals carry)))))
+    (werr "ref :carry is a non-empty {source-field target-field} map of keywords"))
   (word [:waymark/ref]
         {:waymark10/props (cond-> {:kind kind}
-                            label (assoc :label label))}))
+                            label (assoc :label label)
+                            carry (assoc :carry carry))}))
 
 (defn measured-by
   "A discriminated amount: the field's unit of measure is a sibling

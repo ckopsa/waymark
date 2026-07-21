@@ -69,7 +69,8 @@
 (deftest queueing-work-is-minting-a-run
   (let [chore (json (req :post "/api/chores"
                          {:name "Dishes" :cadence "daily"
-                          :assignee "housekeeper"}))
+                          :assignee "housekeeper"
+                          :notes "run the disposal; air-dry the pans"}))
         _ (is (some? (:self chore)))
         queue! (fn [due]
                  (req :post (str (:self chore) "/-/queue")
@@ -79,14 +80,18 @@
     (testing "the verb rides the chore's envelope"
       (is (contains? (:actions (json (req :get (:self chore)))) :queue)))
 
-    (testing "one POST, one run — born with its label garnish"
+    (testing "one POST, one run — born with its label AND carry garnish"
       (let [resp (queue! "2026-07-22")
             _ (is (= 200 (:status resp)) (:body resp))
             runs (get-in (json (req :get "/api/chore_runs?state=due"))
                          [:data :items])]
         (is (= 1 (count runs)))
         (is (str/starts-with? (:summary (first runs)) "Dishes · 2026-07-22")
-            "the ref label landed at birth — no join, the summary reads")))
+            "the ref label landed at birth — no join, the summary reads")
+        (is (= "run the disposal; air-dry the pans"
+               (get-in (json (req :get (:self (first runs))))
+                       [:data :chore_notes]))
+            "the chore's instructions ride the run — at a glance, no hop")))
 
     (testing "queueing twice mints twice — regret is a Skip, not a dedupe"
       (queue! "2026-07-23")

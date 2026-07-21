@@ -28,7 +28,12 @@
    :sortable {:fields [:due_date] :default "due_date"}
 
    :fields
-   {:at-create  [[:chore_id (ref-to :chore {:label :chore_name})]
+   {:at-create  [[:chore_id (ref-to :chore {:label :chore_name
+                                            ;; the chore's standing
+                                            ;; instructions ride the run
+                                            ;; — at a glance, no hop to
+                                            ;; the chore
+                                            :carry {:notes :chore_notes}})]
                  [:due_date :waymark/date]]
 
     :while-open [[:assignee [:waymark/vocab {:open true}]]

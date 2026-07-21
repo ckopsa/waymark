@@ -312,45 +312,64 @@
           item)))))
 
 (defn- labeled-ref-specs
-  "field → {:kind … :label …} for every :waymark/ref entry of one
-  :map form that declares both — the refs whose labels the engine
-  maintains."
+  "field → {:kind … :label … :carry …} for every :waymark/ref entry
+  of one :map form that declares a :label (the maintained label
+  garnish) or a :carry ({source target} — further target data fields
+  copied alongside, the label doctrine for facts the referring row
+  wants at a glance)."
   [form]
   (into {}
         (keep (fn [[f {:keys [properties schema]}]]
                 (when (and (= :waymark/ref (schema-head* schema))
                            (:kind properties)
-                           (:label properties))
-                  [f (select-keys properties [:kind :label])])))
+                           (or (:label properties) (:carry properties)))
+                  [f (select-keys properties [:kind :label :carry])])))
         (schema/entry-map form)))
 
-(defn- label-value
-  "The target's declared label: its :label-template, defaulting to
-  \"{data.name}\" when the target schema declares :name; nil when the
-  target is gone or unlabelable (dangling refs are the guards'
-  problem, loudly — never the label pass's)."
+(defn- target-of
+  "The referenced row, decoded and kind-stamped; nil when the target
+  is gone (dangling refs are the guards' problem, loudly — never the
+  garnish pass's)."
   [engine tx target-kind id]
   (when-some [trdef (get (resources engine) target-kind)]
-    (when-some [raw (store/load-row (:storage engine) tx target-kind
-                                    (str id) {})]
-      (when-some [template
-                  (or (:label-template trdef)
-                      (when (contains? (set (schema/entry-keys (:schema trdef)))
-                                       :name)
-                        "{data.name}"))]
-        (summary/render template
-                        (assoc (decode-row trdef raw) :kind target-kind))))))
+    (some->> (store/load-row (:storage engine) tx target-kind (str id) {})
+             (decode-row trdef)
+             (#(assoc % :kind target-kind)))))
+
+(defn- label-of
+  "The target's declared label: its :label-template, defaulting to
+  \"{data.name}\" when the target schema declares :name; nil when the
+  target is unlabelable."
+  [engine target]
+  (let [trdef (get (resources engine) (:kind target))]
+    (when-some [template
+                (or (:label-template trdef)
+                    (when (contains? (set (schema/entry-keys (:schema trdef)))
+                                     :name)
+                      "{data.name}"))]
+      (summary/render template target))))
 
 (defn- label-pass [engine tx specs m before]
   (reduce-kv
-   (fn [m f {:keys [kind label]}]
+   (fn [m f {:keys [kind label carry]}]
      (let [new-id (get m f)]
        (cond
          (= new-id (get before f)) m
-         (nil? new-id) (assoc m label nil)
-         :else (if-some [lv (label-value engine tx kind new-id)]
-                 (assoc m label lv)
-                 m))))
+
+         (nil? new-id)
+         (reduce (fn [m dst] (assoc m dst nil))
+                 m
+                 (cond-> (vec (vals carry)) label (conj label)))
+
+         :else
+         (if-some [target (target-of engine tx kind new-id)]
+           (reduce-kv (fn [m src dst]
+                        (assoc m dst (get-in target [:data src])))
+                      (if-some [lv (when label (label-of engine target))]
+                        (assoc m label lv)
+                        m)
+                      carry)
+           m))))
    m
    specs))
 

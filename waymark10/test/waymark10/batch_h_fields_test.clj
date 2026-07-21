@@ -39,6 +39,12 @@
   (is (= {:kind :fund} (r/word-props (ref :fund))))
   (is (= {:kind :fund :label :fund_name}
          (r/word-props (ref :fund {:label :fund_name}))))
+  (is (= {:kind :chore :label :chore_name :carry {:notes :chore_notes}}
+         (r/word-props (ref :chore {:label :chore_name
+                                    :carry {:notes :chore_notes}})))
+      ":carry rides the ref word's props like :label does")
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"source-field target-field"
+                        (ref :chore {:carry {:notes "chore_notes"}})))
   (is (= {:x-display {:widget "money" :currency "usd"}}
          (r/word-props (money :usd))))
   (is (= {:x-display {:widget "prose" :label "Why"}}
