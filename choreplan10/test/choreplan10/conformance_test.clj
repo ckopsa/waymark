@@ -42,7 +42,7 @@
 (def ^:dynamic *h* nil)
 
 (def ^:private tables
-  ["chores" "chore_runs" "prep_tasks"
+  ["chores" "chore_runs" "days" "prep_tasks"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 
@@ -70,7 +70,7 @@
             (f)))
         (finally (pg/close! st))))))
 
-(def kinds [:chore :chore_run :prep_task])
+(def kinds [:chore :chore_run :day :prep_task])
 
 ;; ── the enrollment ──────────────────────────────────────────────────
 
@@ -85,6 +85,9 @@
   (fn [eng]
     (let [chore (mk! eng :chore {:name "Dishes" :cadence "daily"})]
       {:chore_id (:id chore) :due_date "2026-01-06"})))
+
+(fac/example-input! :day :create
+  (fn [_] {:date "2026-01-06"}))
 
 ;; the mirror pair (paydesk's mirrors register the same shape): an
 ;; external-identity create, and a wire-shaped observe_external

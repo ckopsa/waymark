@@ -5,7 +5,12 @@
   joins or owns — the surface composes what the law relates, it
   smuggles no new joins), the anchor actions it showcases, and the
   attention flags (anchor data fields whose nominated value flags the
-  row for the client's dashboard). Served at GET
+  row for the client's dashboard). A member may carry :where
+  {field #{string-values}} — its standing filter (:state or a data
+  field of the TARGET, equality over the set), so a board shows the
+  actionable rows, not the archive (choreplan10's day board demanded
+  it: runs due by the day that are still due, not every run ever
+  done). Served at GET
   /api/surfaces/{name}/{anchor-id}: the anchor's FULL envelope, each
   member's rows as envelope-minus-data summaries, and the attention
   map evaluated against the stored facts. Engines declare surfaces at
@@ -43,41 +48,70 @@
 
 (def ^:private name-re #"[a-z][a-z0-9]*(?:-[a-z0-9]+)*")
 
+(defn- check-where
+  "A member's standing filter: every field is :state or a data field
+  of the TARGET kind, every value set non-empty strings (the derived
+  count :where convention — states and stored facts compare as their
+  wire text)."
+  [sname mname target-rdef where]
+  (let [fields (set (schema/entry-keys (:schema target-rdef)))]
+    (doseq [[f vs] where]
+      (when-not (or (= :state f) (contains? fields f))
+        (throw (err sname (str "member " (name mname) " :where field " f
+                               " is not :state or a data field of "
+                               (name (:kind target-rdef))))))
+      (when-not (and (set? vs) (seq vs) (every? string? vs))
+        (throw (err sname (str "member " (name mname) " :where " f
+                               " wants a non-empty set of strings")))))))
+
 (defn- resolve-member
   "One member declaration → its resolved edge: {:name … :target kind,
-  :related edge-map | :owns edge-map}."
-  [sname anchor-rdef m]
-  (let [mname (:name m)]
-    (when-not (keyword? mname)
-      (throw (err sname (str "member " (pr-str m) " declares no :name"))))
-    (cond
-      (:related m)
-      (let [edge (or (get (:related anchor-rdef) (:related m))
-                     (throw (err sname
-                                 (str "member " (name mname) " cites related "
-                                      "edge " (:related m) ", which "
-                                      (name (:kind anchor-rdef))
-                                      " does not declare — the surface "
-                                      "composes what the law relates"))))]
-        (when (and (:kind m) (not= (:kind m) (:kind edge)))
-          (throw (err sname (str "member " (name mname) " declares :kind "
-                                 (:kind m) " but the cited edge targets "
-                                 (:kind edge)))))
-        {:name mname :target (:kind edge) :related edge})
+  :related edge-map | :owns edge-map, :where standing-filter?}."
+  [sname kinds anchor-rdef m]
+  (let [mname (:name m)
+        resolved
+        (do
+          (when-not (keyword? mname)
+            (throw (err sname (str "member " (pr-str m) " declares no :name"))))
+          (cond
+            (:related m)
+            (let [edge (or (get (:related anchor-rdef) (:related m))
+                           (throw (err sname
+                                       (str "member " (name mname)
+                                            " cites related "
+                                            "edge " (:related m) ", which "
+                                            (name (:kind anchor-rdef))
+                                            " does not declare — the surface "
+                                            "composes what the law relates"))))]
+              (when (and (:kind m) (not= (:kind m) (:kind edge)))
+                (throw (err sname (str "member " (name mname) " declares :kind "
+                                       (:kind m) " but the cited edge targets "
+                                       (:kind edge)))))
+              {:name mname :target (:kind edge) :related edge})
 
-      (:owns m)
-      (let [edge (or (some #(when (= (:owns m) (:kind %)) %)
-                           (:owns anchor-rdef))
-                     (throw (err sname
-                                 (str "member " (name mname) " cites owns "
-                                      "edge " (:owns m) ", which "
-                                      (name (:kind anchor-rdef))
-                                      " does not declare"))))]
-        {:name mname :target (:kind edge) :owns edge})
+            (:owns m)
+            (let [edge (or (some #(when (= (:owns m) (:kind %)) %)
+                                 (:owns anchor-rdef))
+                           (throw (err sname
+                                       (str "member " (name mname)
+                                            " cites owns "
+                                            "edge " (:owns m) ", which "
+                                            (name (:kind anchor-rdef))
+                                            " does not declare"))))]
+              {:name mname :target (:kind edge) :owns edge})
 
-      :else
-      (throw (err sname (str "member " (name mname) " names no edge — "
-                             "declare :related or :owns"))))))
+            :else
+            (throw (err sname (str "member " (name mname) " names no edge — "
+                                   "declare :related or :owns")))))]
+    (if-some [where (not-empty (:where m))]
+      (let [target-rdef (or (get kinds (:target resolved))
+                            (throw (err sname
+                                        (str "member " (name mname)
+                                             " targets unregistered kind "
+                                             (:target resolved)))))]
+        (check-where sname mname target-rdef where)
+        (assoc resolved :where where))
+      resolved)))
 
 (defn assemble
   "Validate every declared surface against the assembled registry and
@@ -98,7 +132,7 @@
                                (throw (err sname (str "anchor kind " anchor
                                                       " is not registered on "
                                                       "this engine"))))
-               resolved (mapv #(resolve-member sname anchor-rdef %)
+               resolved (mapv #(resolve-member sname kinds anchor-rdef %)
                               members)
                _ (when-not (apply distinct? ::none (map :name resolved))
                    (throw (err sname "member names must be distinct")))
@@ -134,10 +168,22 @@
 
 (def ^:private flip-op {:= := :< :> :<= :>= :>= :<= :> :<})
 
+(defn- where-conds
+  "The member's standing filter as store conds — :state and stored
+  facts compare as their wire text, equality over the declared set."
+  [member]
+  (mapv (fn [[f vs]]
+          (if (= :state f)
+            {:target :state :op :in :values (vec (sort vs))}
+            {:target :data :field (name f) :cast "text"
+             :op :in :values (vec (sort vs))}))
+        (:where member)))
+
 (defn- member-rows
   "The member's target rows for one anchor row: the FK dereference for
   owns, join conditions bound to the anchor's stored values for
-  related. A nil join value relates to nothing."
+  related, the declared :where riding along. A nil join value relates
+  to nothing."
   [eng anchor-row member]
   (let [st (:storage eng)
         target (:target member)
@@ -164,7 +210,8 @@
       []
       (mapv #(inv/decode-row target-rdef %)
             (store/with-tx st
-              (fn [tx] (store/search-rows st tx target conds
+              (fn [tx] (store/search-rows st tx target
+                                          (into conds (where-conds member))
                                           {:limit 200})))))))
 
 ;; ── the envelope ────────────────────────────────────────────────────

@@ -24,6 +24,7 @@
   (:require [choreplan10.mirror.mealplan :as mp]
             [choreplan10.resources.chore :refer [chore]]
             [choreplan10.resources.chore-run :refer [chore-run]]
+            [choreplan10.resources.day :refer [day day-board]]
             [choreplan10.resources.prep-task :refer [prep-task-resource]]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
@@ -48,10 +49,15 @@
     fake-feed))
 
 (defn resources
-  "All three kinds — what `make check-chores` (waymark10.check)
+  "All four kinds — what `make check-chores` (waymark10.check)
   assembles too."
   [feed]
-  [chore chore-run (prep-task-resource feed)])
+  [chore chore-run day (prep-task-resource feed)])
+
+(def surfaces
+  "The declared decision screens (phase 9b): the housekeeper's day
+  board."
+  [day-board])
 
 (defn check-resources
   "Zero-arg so the declaration gate needs no env — every kind over
@@ -80,6 +86,7 @@
         eng (mirror/with-push
              (engine/engine {:storage storage
                              :resources (resources (feed))
+                             :surfaces surfaces
                              :deploy-mode (deploy-mode)
                              ;; dev-only, and only when asked: production
                              ;; posture is refuse-on-drift

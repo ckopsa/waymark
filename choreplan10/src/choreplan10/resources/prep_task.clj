@@ -49,7 +49,11 @@
      :schema [:map
               [:meal_name {:optional true}
                [:maybe [:string {:max 200}]]]
-              [:date {:optional true} [:maybe :waymark/date]]
+              ;; :filter also promotes the column the day board's
+              ;; range join reads — a related edge joins promoted
+              ;; fields only
+              [:date {:optional true :filter #{:eq :range}}
+               [:maybe :waymark/date]]
               [:task_type {:optional true :filter #{:eq :in}}
                [:maybe [:enum "thaw" "prep" "cook"]]]
               [:assignee {:optional true}
