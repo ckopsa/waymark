@@ -2411,7 +2411,7 @@ async function renderResource(view, doc, hints) {
 
 /* ── the surface screen: the composed decision view (wire 10 shape:
    {name, anchor: the full envelope, members, showcase, attention}) ── */
-function renderSurface(view, doc) {
+async function renderSurface(view, doc) {
   const anchor = doc.anchor || {};
   const panel = el("div", {class:"panel"});
   panel.append(el("div", {class:"crumbs"},
@@ -2460,13 +2460,18 @@ function renderSurface(view, doc) {
         el("span", {class:"statechip"}, anchor.state), " ",
         el("a", {href:"#"+anchor.self, class:"prose"}, anchor.summary))));
   view.append(panel);
-  /* members arrive pre-embedded, in the declared order */
+  /* members arrive pre-embedded, in the declared order — each table
+     gets its target kind's schema hints (from the items' own :kind),
+     so refs render as live-labeled links here exactly as they do on
+     the kind's own screens */
   for (const [mname, m] of Object.entries(doc.members || {})) {
     const items = m.items || [];
+    const hints = items.length && items[0].kind
+      ? await kindSchema(items[0].kind) : {};
     view.append(el("div", {},
       el("h3", {class:"sect"}, title(mname)),
       el("div", {class:"panel", style:"padding:10px 14px"},
-        items.length ? itemTable(items, {})
+        items.length ? itemTable(items, {hints})
                      : el("p", {class:"muted"}, "Nothing here."))));
   }
   const dataPanel = el("div", {class:"panel"});
