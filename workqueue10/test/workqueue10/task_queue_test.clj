@@ -202,7 +202,16 @@
         "priority is the default sort; the unranked tail rides behind")
     (is (= "open" (source-status *meals* "pt-thaw"))
         "prioritize is the hub's own fact — the authority heard a
-        :noop, never a change"))
+        :noop, never a change")
+    (testing "…and a rank can be let go: the task rejoins the
+              unranked tail"
+      (let [dishes-self (:self (task-by-title "Dishes"))
+            cleared (act! dishes-self :deprioritize)]
+        (is (= "fresh" (:state cleared)))
+        (is (nil? (get-in cleared [:data :priority])))
+        (is (= "thaw: Traeger brisket · open"
+               (:summary (first (items-of "?status=open"))))
+            "the ranked task leads; Dishes fell back to the tail"))))
 
   (testing "Done routes to whichever engine owns the row"
     (let [done (act! (:self (task-by-title "Dishes")) :complete)]

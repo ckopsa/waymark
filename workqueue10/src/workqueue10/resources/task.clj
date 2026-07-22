@@ -77,6 +77,9 @@
 (defhandler set-priority [row inp _ctx]
   (assoc-in row [:data :priority] (:priority inp)))
 
+(defhandler clear-priority [row _inp _ctx]
+  (assoc-in row [:data :priority] nil))
+
 (defn task-resource
   [adapter]
   (resource
@@ -179,7 +182,19 @@
        :safety {:idempotent true :reversible false :confirm false
                 :one-way "Nothing is lost — a new rank overwrites this one; prioritize again to change it."}
        :handler set-priority
-       :display {:label "Prioritize" :order 2}}}}
+       :display {:label "Prioritize" :order 2}}
+
+      ;; the way back OUT of the ranking: hub-local like prioritize
+      ;; (the push is the shared plan's :noop — a freshness check),
+      ;; and its own door rather than a nullable prioritize input,
+      ;; because an emptied form field that silently CLEARS a rank
+      ;; is a footgun, and a "Clear priority" chip is an affordance
+      :deprioritize
+      {:from writable :to :fresh
+       :safety {:idempotent true :reversible false :confirm false
+                :one-way "The rank is let go — the task rejoins the unranked tail; prioritize ranks it again."}
+       :handler clear-priority
+       :display {:label "Clear priority" :order 3}}}}
     {:adapter adapter
      :ttl-seconds ttl-seconds
      :discover-every discover-every
