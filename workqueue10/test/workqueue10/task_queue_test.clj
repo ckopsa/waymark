@@ -263,4 +263,23 @@
         (is (= "bag the clippings this time" (get-in mow [:data :detail]))
             "the authority's change landed")
         (is (= 3 (get-in mow [:data :priority]))
-            "the pull kept its hands off the hub's own fact")))))
+            "the pull kept its hands off the hub's own fact"))))
+
+  (testing "a row the source DELETED drops — the :on-gone policy: out
+            of the open queue, kept as record, never a ghost"
+    (let [mow-self (:self (task-by-title "Mow the lawn"))
+          open-before (count (items-of "?status=open"))]
+      (conf/remove! *chores* "cr-mow")
+      (mirror/resync! *eng* :task)
+      (let [mow (json (req :get mow-self))]
+        (is (= "fresh" (:state mow))
+            "a deletion observed is freshness, not an outage")
+        (is (= "dropped" (get-in mow [:data :status])))
+        (is (= 3 (get-in mow [:data :priority]))
+            "the record stands — only the declared patch moved"))
+      (is (= (dec open-before) (count (items-of "?status=open")))
+          "the ghost left the worklist")
+      (testing "…and completing it refuses with the guard's sentence"
+        (let [p (refuse! mow-self :complete nil 409)]
+          (is (= "A task the source dropped does not complete — the authority already let it go."
+                 (:detail p))))))))

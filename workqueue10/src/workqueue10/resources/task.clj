@@ -130,4 +130,13 @@
      :ttl-seconds ttl-seconds
      :discover-every discover-every
      :push-on-write true
-     :document :partial})))
+     :document :partial
+     ;; a row the feed stopped carrying (the list ANSWERED, the row
+     ;; was absent) is a deletion observed: it drops — out of the
+     ;; open queue, kept as record. HA has no cancelled state, so
+     ;; deletion IS how a todo is dropped; a down source never
+     ;; triggers this (ambiguous absence keeps stored truth).
+     :on-gone {:set {:status "dropped"}}
+     ;; the cadenced whole-kind heal: gone rows and translation
+     ;; changes land within the window, not at the next boot
+     :resync-every 900})))

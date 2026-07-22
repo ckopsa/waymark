@@ -120,7 +120,11 @@
     values). Throw on unreachable or gone.")
   (pull-many [a external-ids]
     "→ {external-id [document etag]} for the ids the feed still
-    carries — the batched twin of pull. Throw on unreachable.")
+    carries — the batched twin of pull. An adapter that can TELL a
+    gone row from a down feed may answer {external-id :gone} for the
+    former; plain absence stays ambiguous (stored truth serves
+    either way, but only :gone triggers a declared :on-gone policy).
+    Throw on unreachable.")
   (push [a external-id document]
     "Write the local document to the external system → the new etag.
     Throw on unreachable or on an external change under our feet —
@@ -147,8 +151,8 @@
   "The engine's doors on the sync machine — the names a push-on-write
   kind's own domain actions may not shadow, and the writes the push
   pass never pushes (pushing a sync write would loop)."
-  #{:observe_external :claim_external :mark_stale :mark_unreachable
-    :mark_conflicted :resolve_conflict})
+  #{:observe_external :observe_gone :claim_external :mark_stale
+    :mark_unreachable :mark_conflicted :resolve_conflict})
 
 (def system-observer
   (t/principal {:id "mirror-sync" :type :system :display "Mirror sync"}))
@@ -491,6 +495,24 @@
                           (waymark10.server.mirror/apply-external
                            row inp ctx))})))
 
+(defn- observe-gone-handler
+  "The gone-policy's one write: the feed ANSWERED and the row was not
+  in it — an observation, not an outage — so the declared :set patch
+  lands (wire-shaped values, decoded like any load), freshness is
+  stamped, and any conflict note clears. The etag stays: should the
+  id ever return, the next pull's differing etag re-observes it."
+  [data-schema patch]
+  (with-meta
+    (fn [row _inp ctx]
+      (let [merged (merge (schema/encode data-schema (:data row))
+                          patch
+                          {:synced_at (str (:now ctx))
+                           :conflict_reason nil})]
+        (assoc row :data (schema/decode data-schema merged))))
+    {:waymark10/form '(fn [row inp ctx]
+                        (waymark10.server.mirror/observe-gone
+                         row inp ctx))}))
+
 (def ^:private claim-external-handler
   ;; the create push's landing: the authority accepted our document
   ;; and minted the identity — stamp it, with the etag the mint
@@ -621,10 +643,25 @@
   births the post-commit pass pushes as CREATES, the authority
   minting the identity claim_external stamps back."
   [rmap {:keys [adapter ttl-seconds discover-every push-on-write document
-                create-push]}]
+                create-push on-gone resync-every]}]
   (when (nil? adapter)
     (throw (t/definition-error
             (str (some-> (:kind rmap) name) ": a mirror declares its :adapter"))))
+  (when (and (some? on-gone) (not= :keep on-gone)
+             (not (and (map? on-gone) (= [:set] (vec (keys on-gone)))
+                       (map? (:set on-gone)) (seq (:set on-gone)))))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :on-gone is :keep (the default — a gone row keeps "
+                 "serving its stored truth) or {:set {field wire-value}} "
+                 "(the patch a feed-answered-but-row-absent observation "
+                 "lands), got " (pr-str on-gone)))))
+  (when (and (some? resync-every) (not (pos-int? resync-every)))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :resync-every is a positive number of seconds — the "
+                 "whole-kind heal's cadence (omitted, resync runs at boot "
+                 "alone), got " (pr-str resync-every)))))
   (when (and create-push (not push-on-write))
     (throw (t/definition-error
             (str (some-> (:kind rmap) name)
@@ -679,6 +716,23 @@
         _ (check-authority-windows! (:kind rmap) data-schema)
         _ (check-expectations! (:kind rmap) data-schema)
         mode (or document :whole)
+        gone-patch (when (map? on-gone)
+                     (:set on-gone))
+        _ (doseq [f (keys gone-patch)]
+            (let [err (fn [msg]
+                        (throw (t/definition-error
+                                (str (some-> (:kind rmap) name) "/" (name f)
+                                     ": " msg))))]
+              (when (contains? bookkeeping-fields f)
+                (err ":on-gone never patches sync bookkeeping — the engine's"))
+              (when-not (contains? (set (schema/entry-keys data-schema)) f)
+                (err ":on-gone patches no declared field by this name"))
+              (when (or (contains? (external-ref-specs data-schema) f)
+                        (contains? (:derived rmap) f)
+                        (some (fn [[ef {:keys [properties]}]]
+                                (and (= ef f) (:derived properties)))
+                              (schema/entry-map data-schema)))
+                (err ":on-gone never patches an engine-maintained field — its own machinery writes it"))))
         sync-ctx {:declared (vec (declared-fields data-schema))
                   ;; engine-maintained fields: external-keyed refs and
                   ;; derived facts (colocated or top-level) — their own
@@ -697,15 +751,28 @@
                :states sync-states
                :initial :fresh
                :terminal #{}
-               :mirror {:adapter adapter
-                        :ttl-seconds (or ttl-seconds 300)
-                        :discover-every (or discover-every 300)
-                        :document mode
-                        :push-on-write (boolean push-on-write)
-                        :create-push (boolean create-push)}
+               :mirror (cond-> {:adapter adapter
+                                :ttl-seconds (or ttl-seconds 300)
+                                :discover-every (or discover-every 300)
+                                :document mode
+                                :push-on-write (boolean push-on-write)
+                                :create-push (boolean create-push)
+                                :on-gone (if gone-patch {:set gone-patch} :keep)}
+                         resync-every (assoc :resync-every resync-every))
                :actions
                (merge
                 (:actions rmap)
+                (when gone-patch
+                  {:observe_gone
+                   ;; the gone-policy's landing: the feed answered and
+                   ;; the row was absent — a deletion observed, never
+                   ;; an outage (that is mark_unreachable's)
+                   {:from #{:fresh :stale :unreachable} :to :fresh
+                    :guards [system-only]
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "Recording that the feed no longer carries this row loses nothing here — the stored record stands, patched as declared."}
+                    :handler (observe-gone-handler data-schema gone-patch)
+                    :display {:label "Observed gone from feed"}}})
                 (when create-push
                   {:claim_external
                    ;; the create push's landing: identity + etag from
@@ -809,12 +876,45 @@
       row
       (let [xid (get-in row [:data :external_id])
             pulled (try (pull (:adapter spec) xid)
-                        (catch Exception _ ::unreachable))]
-        (if (= ::unreachable pulled)
+                        (catch Exception e
+                          ;; a 404 from a feed that ANSWERED is a gone
+                          ;; row, not an outage — but only a declared
+                          ;; :on-gone policy gives that meaning; :keep
+                          ;; preserves the old posture (unreachable
+                          ;; once, stored truth serves)
+                          (if (and (map? (:on-gone spec))
+                                   (= 404 (:status (ex-data e))))
+                            ::gone
+                            ::unreachable)))]
+        (cond
+          (= ::unreachable pulled)
           (if (= :unreachable (:state row))
             row
             (:row (inv/invoke! eng (:kind rdef) (:id row) :mark_unreachable
                                nil {:principal system-observer})))
+
+          (= ::gone pulled)
+          (let [patch (get-in spec [:on-gone :set])
+                encoded (schema/encode (:schema rdef) (:data row))
+                changed? (boolean (some (fn [[f v]]
+                                          (not= (get encoded f) v))
+                                        patch))]
+            (if (or changed? (not= :fresh (:state row)))
+              (:row (inv/invoke! eng (:kind rdef) (:id row) :observe_gone
+                                 nil {:principal system-observer}))
+              ;; already patched and fresh: the check is a fact, the
+              ;; stamp resets the TTL — audit stays quiet (the
+              ;; observed-unchanged discipline)
+              (let [now ((:now-fn eng))]
+                (store/with-tx (:storage eng)
+                  (fn [tx]
+                    (store/update-data!
+                     (:storage eng) tx (:kind rdef) (:id row)
+                     (assoc encoded :synced_at (str now))
+                     (:next-flip-at row))))
+                (assoc-in row [:data :synced_at] now))))
+
+          :else
           (let [[doc etag] pulled]
             (if (and (= etag (get-in row [:data :external_etag]))
                      (= :fresh (:state row)))
@@ -1081,8 +1181,13 @@
                                  " failed (" (ex-message e) "); each mint's "
                                  "own first read fills it instead")
                           {}))]
-        (doseq [[xid [doc etag]] pulled
-                :let [row (row-by-external-id eng kind xid)]
+        (doseq [[xid entry] pulled
+                ;; a :gone sentinel can't reach a fresh mint (discover
+                ;; just named the id) — but the contract allows it, so
+                ;; the fill skips rather than destructures
+                :when (vector? entry)
+                :let [[doc etag] entry
+                      row (row-by-external-id eng kind xid)]
                 :when row]
           (inv/invoke! eng kind (:id row) :observe_external
                        {:document doc :etag etag}
@@ -1152,9 +1257,14 @@
             ;; bounds', and the stagnation alarm's shared evidence
             pairs (into []
                         (keep (fn [row]
-                                (when-some [[doc _] (get pulled
-                                                         (get-in row [:data :external_id]))]
-                                  [row doc])))
+                                (let [e (get pulled
+                                             (get-in row [:data :external_id]))]
+                                  ;; :gone entries carry no document —
+                                  ;; the census and churn statistics
+                                  ;; speak only for rows the feed
+                                  ;; answered about
+                                  (when (vector? e)
+                                    [row (first e)]))))
                         candidates)
             npairs (count pairs)
             stats (into {}
@@ -1222,9 +1332,28 @@
                    "resync ran hot on the heels of the last)")))
         (reduce
          (fn [acc row]
-           (let [xid (get-in row [:data :external_id])]
-             (if-some [[doc etag] (get pulled xid)]
-               (let [changed? (or (not= etag (get-in row [:data :external_etag]))
+           (let [xid (get-in row [:data :external_id])
+                 entry (get pulled xid)]
+             (cond
+               ;; the adapter SAID gone (the feed answered, the row was
+               ;; absent — distinct from mere absence, which stays
+               ;; ambiguous): the declared policy lands, quietly when
+               ;; already applied
+               (= :gone entry)
+               (let [patch (when (map? (get-in rdef [:mirror :on-gone]))
+                             (get-in rdef [:mirror :on-gone :set]))
+                     encoded (schema/encode (:schema rdef) (:data row))
+                     changed? (boolean (some (fn [[f v]]
+                                               (not= (get encoded f) v))
+                                             patch))]
+                 (when (and patch (or changed? (not= :fresh (:state row))))
+                   (inv/invoke! eng kind (:id row) :observe_gone
+                                nil {:principal system-observer}))
+                 (-> acc (update :checked inc) (update :gone inc)))
+
+               (vector? entry)
+               (let [[doc etag] entry
+                     changed? (or (not= etag (get-in row [:data :external_etag]))
                                   (not= :fresh (:state row)))
                      releasable (into []
                                       (filter #(not= (get doc %)
@@ -1281,6 +1410,11 @@
                             (assoc (:data row) :synced_at (str now))
                             (:next-flip-at row))))
                        (update acc :checked inc))))
+
+               ;; plain absence from the batch: ambiguous (a gone row
+               ;; and a down feed look identical here) — stored truth
+               ;; keeps serving, counted, never patched
+               :else
                (-> acc (update :checked inc) (update :gone inc)))))
          {:checked 0 :rewritten 0 :gone 0 :conflicted 0}
          candidates))
@@ -1310,6 +1444,7 @@
   [eng]
   (let [stop (CountDownLatch. 1)
         last-run (atom {})
+        last-resync (atom {})
         tick (fn []
                (doseq [kind (mirror-kinds eng)
                        :let [every-s (get-in (get (inv/resources eng) kind)
@@ -1321,13 +1456,29 @@
                  (try (discover! eng kind)
                       (catch Exception e
                         (warn! "discovery pass for " (name kind) " failed: "
-                               (ex-message e))))))
+                               (ex-message e)))))
+               ;; kinds declaring :resync-every also heal on a cadence
+               ;; — gone rows and document-shape changes stop waiting
+               ;; for the next boot (resync! already never gates)
+               (doseq [kind (mirror-kinds eng)
+                       :let [every-s (get-in (get (inv/resources eng) kind)
+                                             [:mirror :resync-every])
+                             now (System/currentTimeMillis)
+                             last (get @last-resync kind 0)]
+                       :when (and every-s
+                                  (<= (* 1000 (long every-s)) (- now last)))]
+                 (swap! last-resync assoc kind now)
+                 (resync! eng kind)))
         t (Thread. ^Runnable
                    (fn []
                      ;; the boot heal precedes the first discovery:
                      ;; a restart re-pulls what it already holds, then
-                     ;; discovers what it doesn't
+                     ;; discovers what it doesn't (and counts as every
+                     ;; kind's first cadenced resync)
                      (resync-all! eng)
+                     (let [now (System/currentTimeMillis)]
+                       (doseq [k (mirror-kinds eng)]
+                         (swap! last-resync assoc k now)))
                      (tick)
                      (loop []
                        (when-not (.await stop 5000 TimeUnit/MILLISECONDS)

@@ -159,15 +159,19 @@
       (into {}
             (keep (fn [[entity uid]]
                     ;; an absent LIST drops its ids from the batch
-                    ;; (unreachable — stored truth serves); an absent
-                    ;; UID in a present list is a gone row — also
-                    ;; dropped, per the pull-many contract
-                    (when-some [item (first (filter #(= uid (:uid %))
-                                                    (get by-entity entity)))]
-                      (let [doc (decorate this entity
-                                          (item->task (list-name names entity)
-                                                      item zone))]
-                        [(str entity "/" uid) [doc (content-etag doc)]]))))
+                    ;; (ambiguous — stored truth serves); an absent
+                    ;; UID in a PRESENT list is a deletion observed:
+                    ;; :gone, the honest sentinel the :on-gone policy
+                    ;; reads
+                    (let [items (get by-entity entity ::absent)]
+                      (when-not (= ::absent items)
+                        (if-some [item (first (filter #(= uid (:uid %))
+                                                      items))]
+                          (let [doc (decorate this entity
+                                              (item->task (list-name names entity)
+                                                          item zone))]
+                            [(str entity "/" uid) [doc (content-etag doc)]])
+                          [(str entity "/" uid) :gone])))))
             pairs)))
   (source-push [this id document]
     (let [[doc _] (conf/source-pull this id)]

@@ -145,8 +145,14 @@
                                     (ex-message e) "); its rows keep "
                                     "their stored truth")
                              nil)))]
-         (reduce-kv (fn [m id [doc etag]]
-                      (assoc m (xid tag id) [(assoc doc :source tag) etag]))
+         (reduce-kv (fn [m id entry]
+                      (assoc m (xid tag id)
+                             ;; :gone rides through untouched — the
+                             ;; source's honest deletion sentinel
+                             (if (vector? entry)
+                               (let [[doc etag] entry]
+                                 [(assoc doc :source tag) etag])
+                               entry)))
                     acc pulled)))
      {}
      (group-by first (map split-xid xids))))
@@ -184,9 +190,15 @@
     (let [{:keys [down]} @state]
       (when down (throw (ex-info "source unreachable" {})))
       (into {}
-            (keep (fn [id]
-                    (try [(str id) (source-pull this id)]
-                         (catch clojure.lang.ExceptionInfo _ nil))))
+            (map (fn [id]
+                   (try [(str id) (source-pull this id)]
+                        (catch clojure.lang.ExceptionInfo e
+                          ;; a removed! (or never-seeded) id is a gone
+                          ;; row — the sentinel the real boundaries
+                          ;; answer; the fakes hold the same law
+                          (if (= 404 (:status (ex-data e)))
+                            [(str id) :gone]
+                            (throw e))))))
             ids)))
   (source-push [_ id document]
     (let [{:keys [down push-fail docs]} @state]

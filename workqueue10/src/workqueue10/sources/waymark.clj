@@ -104,15 +104,15 @@
        (rev-etag (or etag (get-in env [:meta :etag])))]))
   (source-pull-many [this ids]
     (into {}
-          (keep (fn [id]
-                  (try [(str id) (conf/source-pull this id)]
-                       (catch clojure.lang.ExceptionInfo e
-                         ;; a gone row drops from the batch (the feed
-                         ;; no longer carries it); anything else is
-                         ;; the boundary's problem — rethrow
-                         (when-not (= 404 (:status (ex-data e)))
-                           (throw e))
-                         nil))))
+          (map (fn [id]
+                 (try [(str id) (conf/source-pull this id)]
+                      (catch clojure.lang.ExceptionInfo e
+                        ;; a 404 from an engine that ANSWERED is a
+                        ;; gone row — the honest sentinel; anything
+                        ;; else is the boundary's problem — rethrow
+                        (if (= 404 (:status (ex-data e)))
+                          [(str id) :gone]
+                          (throw e))))))
           ids))
   (source-push [this id document]
     ;; If-Match presents the RAW upstream etag (the fence is the

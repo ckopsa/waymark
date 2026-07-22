@@ -215,6 +215,12 @@
     (cond-> {}
       (= :partial (:document spec)) (assoc "document" "partial")
       (:push-on-write spec) (assoc "push_on_write" true)
+      ;; the gone-policy is law (what a feed-dropped row MEANS);
+      ;; :keep — the default — stays out, hash-identical to before
+      (map? (:on-gone spec))
+      (assoc "on_gone" {"set" (into (sorted-map)
+                                    (map (fn [[f v]] [(name f) v]))
+                                    (get-in spec [:on-gone :set]))})
       (seq fields) (assoc "fields" fields))))
 
 (defn fingerprint-of
