@@ -32,7 +32,7 @@ PAYDESK_WAREHOUSE_DSN  ?= $(shell scripts/paydesk-warehouse-dsn.sh $(PAYDESK_WAR
 PAYDESK_PROD_DSN           ?= jdbc:postgresql://localhost:$(PG_PORT)/paydesk_prod?user=$(PG_USER)
 PAYDESK_PROD_WAREHOUSE_DSN ?= $(shell scripts/paydesk-warehouse-dsn.sh 15435 db_readwrite devdb 2>/dev/null)
 
-.PHONY: db db10 test10 check10 test-mealplan10 migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk test-chores dev-chores migrate-chores check-chores image-chores deploy-chores image10 deploy10
+.PHONY: db db10 test10 check10 test-mealplan10 migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk test-chores dev-chores migrate-chores check-chores image-chores deploy-chores test-queue dev-queue migrate-queue check-queue image-queue deploy-queue image10 deploy10
 
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
@@ -59,6 +59,9 @@ db10: db  ## waymark10 databases on the shared :5433 container
 	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
 		"SELECT 1 FROM pg_database WHERE datname='choreplan10_dev'" | grep -q 1 || \
 		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE choreplan10_dev"
+	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
+		"SELECT 1 FROM pg_database WHERE datname='workqueue10_dev'" | grep -q 1 || \
+		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE workqueue10_dev"
 
 test10: db10  ## waymark10 (Clojure) framework tests
 	cd waymark10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
@@ -152,3 +155,28 @@ deploy-chores: image-chores  ## push image, then roll the choreplan10 nomad job 
 	@NOMAD_ADDR=$(NOMAD_ADDR) NOMAD_TOKEN=$(NOMAD_TOKEN) \
 		nomad var put -force nomad/jobs/choreplan10/deploy image_tag=$(IMAGE_TAG) >/dev/null
 	@echo "deploying $(CHORES_IMAGE):$(IMAGE_TAG) — nomad restarts the server task on the new image"
+
+check-queue:  ## workqueue10 declaration-time checks + usability warnings (no database)
+	cd workqueue10 && clojure -M:check
+
+test-queue: db10  ## workqueue10 conformance + family-queue story
+	cd workqueue10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
+
+dev-queue: db10  ## serve workqueue10 on :8014 against workqueue10_dev (fake sources unless WORKQUEUE10_CHOREPLAN_URL / _MEALPLAN_URL are set)
+	cd workqueue10 && WORKQUEUE10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/workqueue10_dev?user=$(PG_USER)" \
+		WAYMARK10_AUTO_MIGRATE=1 clojure -M:dev
+
+migrate-queue: db10  ## print workqueue10's schema plan against workqueue10_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
+	cd workqueue10 && WORKQUEUE10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/workqueue10_dev?user=$(PG_USER)" \
+		clojure -M:migrate
+
+QUEUE_IMAGE ?= docker.kopsa.info/workqueue10
+
+image-queue:  ## build and push the workqueue10 image for the home cluster
+	docker buildx build --platform $(PLATFORM) -f Dockerfile.workqueue10 -t $(QUEUE_IMAGE):$(IMAGE_TAG) --push .
+	@echo "pushed $(QUEUE_IMAGE):$(IMAGE_TAG)"
+
+deploy-queue: image-queue  ## push image, then roll the workqueue10 nomad job onto it
+	@NOMAD_ADDR=$(NOMAD_ADDR) NOMAD_TOKEN=$(NOMAD_TOKEN) \
+		nomad var put -force nomad/jobs/workqueue10/deploy image_tag=$(IMAGE_TAG) >/dev/null
+	@echo "deploying $(QUEUE_IMAGE):$(IMAGE_TAG) — nomad restarts the server task on the new image"

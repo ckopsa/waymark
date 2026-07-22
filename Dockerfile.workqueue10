@@ -1,0 +1,27 @@
+# Serves the workqueue10 app: a waymark10 engine on http-kit.
+# Build:  make image-queue   (buildx arm64 → docker.kopsa.info/workqueue10:<tag>)
+FROM clojure:temurin-21-tools-deps-bookworm-slim
+
+WORKDIR /app
+
+# Dependency layer: both deps.edn files first, so a source-only change
+# never re-downloads the world. -P prepares the full :dev classpath.
+COPY waymark10/deps.edn waymark10/deps.edn
+COPY workqueue10/deps.edn workqueue10/deps.edn
+RUN cd workqueue10 && clojure -P -M:dev
+
+# Sources: the framework and the app, run from source (a home-cluster
+# app; JVM boot beats maintaining a build pipeline).
+COPY waymark10/ waymark10/
+COPY workqueue10/ workqueue10/
+
+WORKDIR /app/workqueue10
+EXPOSE 8014
+
+# WORKQUEUE10_DSN / _PORT / _CHOREPLAN_URL / _MEALPLAN_URL arrive from
+# the Nomad job — a queue with no source URLs serves the fakes, which
+# is a dev posture, not a deployment. Production posture:
+# WAYMARK10_AUTO_MIGRATE stays unset — boot REFUSES on schema drift
+# and names the plan; the deploy gate runs `clojure -M:migrate`
+# (APPLY=1) before rolling.
+CMD ["clojure", "-M:dev"]

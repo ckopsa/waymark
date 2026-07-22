@@ -1,0 +1,15 @@
+{:paths ["src"]
+ :deps  {org.clojure/clojure  {:mvn/version "1.12.1"}
+         waymark10/waymark10  {:local/root "../waymark10"}}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
+                       lambdaisland/kaocha    {:mvn/version "1.91.1392"}}
+         :main-opts   ["-m" "kaocha.runner"]}
+  :dev  {:main-opts ["-m" "workqueue10.main"]}
+  ;; make check-queue: the declaration-time gate — warnings on
+  ;; stdout, exit 1 on a definition error; no database, no env
+  :check {:main-opts ["-m" "waymark10.check" "workqueue10.main/check-resources"]}
+  ;; make migrate-queue: print the schema plan; APPLY=1 executes,
+  ;; DESTRUCTIVE=1 includes state renames
+  :migrate {:main-opts ["-e" "((requiring-resolve 'workqueue10.main/migrate!))"]}}}
