@@ -79,6 +79,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.server.surface :as surface]
+            [waymark10.server.ui-assembly :as ui-assembly]
             [waymark10.server.worksheet :as worksheet]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
@@ -1055,18 +1056,21 @@
   renders whatever the wire declares: kinds from well-known,
   collections from the query grammar, envelopes as forms. A static
   asset, served to anyone — a scoped request's DATA stays projected
-  by the API it drives. ui.html is the full client (the waymark9
-  generic UI, ported to wire 10); ui_lite.html preserves the original
-  phase-10 page.
+  by the API it drives. The full client (the waymark9 generic UI,
+  ported to wire 10) assembles from resources/waymark10/ui/;
+  ui_lite.html preserves the original phase-10 page.
 
   A mobile User-Agent gets the SAME page stamped <html data-ui=
   \"mobile\"> — one client, two shells; the page's own CSS/JS key the
   mobile chrome (bottom tab nav, card rows, sheet dialogs) off the
   stamp. ?ui=mobile|desktop overrides the sniff, and the page's ⋯
-  menu links the switch."
-  [_eng asset]
-  (let [page   (some-> (io/resource asset) slurp)
-        mobile (some-> page
+  menu links the switch.
+
+  Takes the page as a STRING (or nil → 404) — the full client arrives
+  pre-assembled from fragments by ui-assembly/assemble; ui_lite.html
+  is still slurped whole at the call site."
+  [_eng page]
+  (let [mobile (some-> page
                        (str/replace-first
                         "<html lang=\"en\">"
                         "<html lang=\"en\" data-ui=\"mobile\">"))]
@@ -1211,8 +1215,9 @@
          ["/api/-/intents/answer" {:post (intents-answer eng)}]
          ["/api/-/collab-ticket" {:post (collab-ticket-mint eng)}]
          ["/api/-/welcome" {:get (welcome-doc eng)}]
-         ["/api/-/ui" {:get (ui-page eng "waymark10/ui.html")}]
-         ["/api/-/ui-lite" {:get (ui-page eng "waymark10/ui_lite.html")}]
+         ["/api/-/ui" {:get (ui-page eng (ui-assembly/assemble))}]
+         ["/api/-/ui-lite" {:get (ui-page eng (some-> (io/resource "waymark10/ui_lite.html")
+                                                      slurp))}]
          ["/api/attachments/:id/bytes" {:put (bytes-put eng)
                                         :get (bytes-get eng)}]
          ["/api/surfaces/:name/:id" {:get (surface-view eng)}]

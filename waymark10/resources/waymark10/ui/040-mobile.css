@@ -1,0 +1,96 @@
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+  @media (max-width: 900px) { main { margin: 12px auto; padding: 0 10px; } }
+  @media (max-width: 600px) {
+    header { padding: 8px 10px; gap: 10px; }
+    .panel { padding: 12px; }
+    h2 { font-size: 17px; }
+    .summary { font-size: 16px; }
+    table.kv td.k { width: 40%; }
+    select, input, textarea, button { font-size: 16px; padding: 8px 12px; }
+    dialog { width: 94vw; }
+    .actions button { flex: 1 1 auto; }
+  }
+  @media (pointer: coarse) { button { padding: 9px 14px; } }
+
+  /* ── the mobile shell ──────────────────────────────────────────────
+     Served when the request's User-Agent is a phone: the server
+     stamps <html data-ui="mobile"> (?ui=mobile|desktop overrides,
+     the ⋯ menu links the switch). Same client, same wire — only the
+     chrome changes: the kinds nav becomes a bottom tab bar,
+     collection rows become cards, dialogs become bottom sheets.
+     This block sits AFTER the width media queries on purpose: on a
+     phone both apply, and the shell's word wins. */
+  html[data-ui="mobile"] { --tabbar-h: 54px; }
+  html[data-ui="mobile"] body {
+    padding-bottom: calc(var(--tabbar-h) + 44px); }
+  html[data-ui="mobile"] #who { width: 90px; }
+  /* the kinds nav rides a fixed bottom tab bar — thumb reach first */
+  html[data-ui="mobile"] header nav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 16;
+    height: var(--tabbar-h); display: flex; align-items: stretch;
+    flex-wrap: nowrap; overflow-x: auto;
+    background: var(--panel); border-top: 1px solid var(--line);
+    padding: 0 4px env(safe-area-inset-bottom, 0px); }
+  html[data-ui="mobile"] header nav a {
+    display: inline-flex; align-items: center; margin: 0;
+    padding: 0 12px; white-space: nowrap; }
+  html[data-ui="mobile"] .nav-more-wrap {
+    display: inline-flex; align-items: center; }
+  html[data-ui="mobile"] .nav-menu {          /* opens upward now */
+    position: fixed; top: auto; left: auto; right: 6px;
+    bottom: calc(var(--tabbar-h) + 4px); }
+  /* the fixed strips stack above the tab bar */
+  html[data-ui="mobile"] #ticker { bottom: var(--tabbar-h); }
+  html[data-ui="mobile"] #toast {
+    bottom: calc(var(--tabbar-h) + 52px); }
+  html[data-ui="mobile"] #ledger { bottom: var(--tabbar-h); }
+  /* collection rows become cards: State + Summary lead, the fields
+     stack as label:value lines, actions close the card. Cards are
+     OPT-IN (table.items.cards — itemTable and the parts tables set
+     it): a nested table (valueCell's nestedTable) and the worksheet
+     report keep their table shape, scrolling in place. */
+  html[data-ui="mobile"] table.cards,
+  html[data-ui="mobile"] table.cards > tbody { display: block; }
+  html[data-ui="mobile"] table.cards > thead { display: none; }
+  html[data-ui="mobile"] table.cards > tbody > tr {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 3px 8px;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel); box-shadow: var(--shadow);
+    padding: 10px 12px; margin: 8px 0; }
+  html[data-ui="mobile"] table.cards > tbody > tr:hover > td {
+    background: none; }
+  html[data-ui="mobile"] table.cards > tbody > tr > td {
+    display: block; border: none; padding: 0; }
+  html[data-ui="mobile"] table.cards td.c-check { order: 1; }
+  html[data-ui="mobile"] table.cards td.c-summary {
+    order: 2; flex: 1 1 auto; font-size: 14.5px; }
+  html[data-ui="mobile"] table.cards td.c-summary a.rowlink {
+    max-width: 100%; white-space: normal; }
+  html[data-ui="mobile"] table.cards td.c-state { order: 3; }
+  html[data-ui="mobile"] table.cards td.c-field {
+    order: 4; width: 100%; display: flex; gap: 8px;
+    align-items: baseline; }
+  html[data-ui="mobile"] table.cards td.c-field::before {
+    content: attr(data-label); color: var(--muted); font-size: 11px;
+    min-width: 84px; flex: 0 0 auto; }
+  html[data-ui="mobile"] table.cards td.c-updated { order: 5; }
+  html[data-ui="mobile"] table.cards td.rowactions,
+  html[data-ui="mobile"] table.cards td.partactions {
+    order: 6; margin-left: auto; }
+  /* the kv panel stacks: label above value */
+  html[data-ui="mobile"] table.kv td { display: block; }
+  html[data-ui="mobile"] table.kv td.k {
+    width: auto; border-bottom: none; padding-bottom: 0; }
+  /* dialogs become bottom sheets, the foot pinned above the keyboard */
+  html[data-ui="mobile"] dialog {
+    width: 100vw; max-width: 100vw; margin: auto 0 0;
+    border: none; border-top: 1px solid var(--line);
+    border-radius: 10px 10px 0 0; max-height: 94dvh; }
+  html[data-ui="mobile"] .dlgfoot {
+    position: sticky; bottom: 0; background: var(--panel);
+    border-top: 1px solid var(--line); }
+  /* the filter popover pins to the viewport, not the button */
+  html[data-ui="mobile"] .filterpanel {
+    position: fixed; left: 10px; right: 10px; min-width: 0; }

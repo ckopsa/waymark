@@ -1,0 +1,40 @@
+</style>
+</head>
+<body>
+<header>
+  <button id="drawerbtn" class="drawer-btn" type="button"
+          aria-haspopup="true" aria-expanded="false" aria-controls="drawer"
+          title="all applications and their kinds">☰</button>
+  <h1><a href="#">Waymark</a></h1>
+  <span id="apphost" class="muted"></span>
+  <nav id="kinds"></nav>
+  <span id="lawstamp"></span>
+  <span id="grantchip"></span>
+  <span id="followchip"></span>
+  <div class="spacer"></div>
+  <input id="who" placeholder="principal"
+         title="dev principal (x-waymark-principal)">
+  <button id="ledgertoggle" style="font-size:12px;padding:4px 10px"
+          aria-expanded="false" aria-controls="ledger"
+          title="the live ledger — every transition as it lands">
+    ◷ Activity<span id="ledgerpip"></span></button>
+</header>
+<div id="drawerback" class="drawer-backdrop"></div>
+<aside id="drawer" class="drawer" aria-label="global navigation"></aside>
+<main>
+  <section id="view"></section>
+</main>
+<aside id="ledger" role="complementary" aria-label="Activity" tabindex="-1">
+  <div class="ledger-head">
+    <b>Activity</b>
+    <span class="ledger-scope"
+          title="the whole workspace's stream, every kind">everything</span>
+    <button class="ledger-close" id="ledgerclose" type="button"
+            aria-label="close activity">✕</button>
+  </div>
+  <div class="feed" id="feed"></div>
+</aside>
+<div id="toast"></div>
+<div id="ticker"></div>
+
+<script>
