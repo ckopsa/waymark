@@ -282,4 +282,50 @@
       (testing "…and completing it refuses with the guard's sentence"
         (let [p (refuse! mow-self :complete nil 409)]
           (is (= "A task the source dropped does not complete — the authority already let it go."
-                 (:detail p))))))))
+                 (:detail p)))))))
+
+  (testing "CAPTURE: a task born at the queue, pushed to the authority
+            that will own it — the uid claimed back"
+    (let [resp (req :post "/api/tasks" {:title "Buy sandpaper"}
+                    {"idempotency-key" (str (random-uuid))})
+          env (json resp)]
+      (is (contains? #{200 201} (:status resp)) (:body resp))
+      (is (= "fresh" (:state env)))
+      (is (= "todo" (get-in env [:data :source]))
+          "unsaid, the birth defaults to the capture authority")
+      (is (= "open" (get-in env [:data :status])))
+      (let [xid (get-in env [:data :external_id])
+            local-id (second (str/split (str xid) #":" 2))]
+        (is (str/starts-with? (str xid) "todo:cap-")
+            "the authority minted, claim_external stamped")
+        (is (= "open" (source-status *todos* local-id))
+            "the todo exists at the authority — capture is real")
+        (testing "…and the captured task completes like any other"
+          (act! (:self env) :complete)
+          (is (= "done" (source-status *todos* local-id)))))))
+
+  (testing "a refused birth lands conflicted with NO external id;
+            keep=local retries the create once the source recovers"
+    (conf/fail-pushes! *todos* "the list is mid-migration")
+    (let [resp (req :post "/api/tasks" {:title "Oil the door hinge"}
+                    {"idempotency-key" (str (random-uuid))})
+          env (json resp)]
+      (is (= "conflicted" (:state env)))
+      (is (nil? (get-in env [:data :external_id])))
+      (is (= "the list is mid-migration"
+             (get-in env [:data :conflict_reason])))
+      (conf/fail-pushes! *todos* false)
+      (let [resolved (act! (:self env) :resolve_conflict {:keep "local"})]
+        (is (= "fresh" (:state resolved)))
+        (is (some? (get-in resolved [:data :external_id])))
+        (is (= "open" (source-status *todos*
+                       (second (str/split
+                                (get-in resolved [:data :external_id])
+                                #":" 2))))))))
+
+  (testing "the waymark engines take no births — the schema refuses at
+            the door, before any push"
+    (let [resp (req :post "/api/tasks" {:title "Ghost chore" :source "chore"}
+                    {"idempotency-key" (str (random-uuid))})]
+      (is (= 422 (:status resp))
+          "a chore is born of its own engine's law, never captured"))))

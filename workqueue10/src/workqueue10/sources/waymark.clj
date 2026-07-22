@@ -128,7 +128,14 @@
               (send! this :post
                      (str "/api/" kind-path "/" (enc id) "/-/complete")
                      {"if-match" etag})]
-          (rev-etag (or etag (get-in env [:meta :etag]))))))))
+          (rev-etag (or etag (get-in env [:meta :etag])))))))
+  (source-create [_ _document]
+    ;; chore runs and prep tasks are born of their own engines' law
+    ;; (a chore's cadence, a plan's finalize) — the queue captures
+    ;; nothing into them
+    (throw (ex-info (str kind-path " accepts no births from the queue — "
+                         "its own engine owns the making of its rows")
+                    {}))))
 
 (defn http-source
   "The real boundary over a running waymark engine.

@@ -60,7 +60,13 @@
     carries — gone rows drop from the batch. Throw on unreachable.")
   (source-push [s id document]
     "Run the push-plan against the authority's current truth → the
-    new etag. Throw on unreachable or a refused move."))
+    new etag. Throw on unreachable or a refused move.")
+  (source-create [s document]
+    "Accept a document the authority has never seen and mint the
+    identity → [source-local-id etag]. Throw on unreachable or when
+    this authority takes no births from the queue — the failure
+    lands conflicted with no external id, and resolve_conflict
+    keep=local retries (the framework's create-push law)."))
 
 ;; ── the shared translation at the heart of push ─────────────────────
 
@@ -158,7 +164,19 @@
      (group-by first (map split-xid xids))))
   (push [_ x document]
     (let [[tag id] (split-xid x)]
-      (source-push (source-for sources tag) id document))))
+      (source-push (source-for sources tag) id document)))
+
+  mirror/MirrorCreateAdapter
+  (push-create [_ document]
+    ;; a birth names its authority in :source (the create-schema's
+    ;; law); the tagged source mints the identity and the confluence
+    ;; namespaces it — the same routing every other verb rides
+    (let [tag (:source document)
+          _ (when (str/blank? (str tag))
+              (throw (ex-info "a captured task names its :source — no authority, no birth" {})))
+          [id etag] (source-create (source-for sources tag)
+                                   (dissoc document :source))]
+      [(xid tag id) etag])))
 
 (defn confluence
   "sources: {tag TaskSource} — e.g. {\"chore\" … \"meal\" …}. The tag
@@ -223,7 +241,24 @@
                        (assoc-in [:docs id] doc')
                        (update :discoverable
                                #(vec (distinct (conj (vec %) id)))))))
-          (content-etag doc'))))))
+          (content-etag doc')))))
+  (source-create [_ document]
+    (let [{:keys [down push-fail]} @state]
+      (when down (throw (ex-info "source unreachable" {})))
+      (when push-fail
+        (throw (ex-info (if (string? push-fail)
+                          push-fail
+                          "the source refused the birth")
+                        {})))
+      (let [id (str "cap-" (inc (count (:docs @state))))
+            doc (-> document (dissoc :source) (assoc :status "open"))]
+        (swap! state
+               (fn [s]
+                 (-> s
+                     (assoc-in [:docs id] doc)
+                     (update :discoverable
+                             #(vec (distinct (conj (vec %) id)))))))
+        [id (content-etag doc)]))))
 
 (defn fake-source
   "One authority in memory: scriptable via seed! / remove! / down! /

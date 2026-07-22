@@ -101,6 +101,21 @@
                [:maybe [:string {:max 500}]]]]
      :filterable {:state #{:eq :in}}
      :display {:title "{data.title}"}
+     ;; CAPTURE: a task born HERE, pushed to the authority that will
+     ;; own it (create-push — the paydesk worksheet's door). The birth
+     ;; input is deliberately small: what you'd say out loud. :source
+     ;; names the authority; only "todo" takes births (the waymark
+     ;; engines' rows are born of their own law), and unsaid it
+     ;; defaults there — capture should cost one field.
+     :create-schema [:map
+                     [:title [:string {:min 1 :max 200}]]
+                     [:source {:optional true} [:maybe [:enum "todo"]]]
+                     [:due_at {:optional true} [:maybe :waymark/instant]]
+                     [:detail {:optional true} [:maybe [:string {:max 1000}]]]]
+     :on-create (fn [row _ctx]
+                  (-> row
+                      (update-in [:data :source] #(or % "todo"))
+                      (update-in [:data :status] #(or % "open"))))
      ;; the way BACK to the resource that needs work: an :external
      ;; href — a real browser hop to the owning engine's UI, anchored
      ;; on the row. A source that stamps no href (a fake, a future
@@ -130,6 +145,7 @@
      :ttl-seconds ttl-seconds
      :discover-every discover-every
      :push-on-write true
+     :create-push true
      :document :partial
      ;; a row the feed stopped carrying (the list ANSWERED, the row
      ;; was absent) is a deletion observed: it drops — out of the

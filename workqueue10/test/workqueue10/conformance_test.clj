@@ -74,12 +74,12 @@
 
 ;; ── the enrollment ──────────────────────────────────────────────────
 
-;; the mirror pair (choreplan10's prep_task registers the same shape):
-;; an external-identity create — TAGGED, the confluence routes by
-;; prefix — and a wire-shaped observe_external document
+;; a :create-push mirror's create speaks the CREATE-SCHEMA (the birth
+;; input is the author's law): the walker's captures push through
+;; main's fake todo source, which mints the identity claim_external
+;; stamps back — so walked rows are real mirror rows end to end
 (fac/example-input! :task :create
-  (fn [_] {:external_id (str "chore:walk-" (random-uuid))
-           :status "open"}))
+  (fn [_] {:title (str "walked capture " (random-uuid))}))
 
 (fac/example-input! :task :observe_external
   {:document {:title "Dishes"

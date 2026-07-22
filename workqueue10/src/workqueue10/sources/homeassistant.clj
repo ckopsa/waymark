@@ -134,7 +134,7 @@
          :source_ui_href (str ui-base "/todo?entity_id=" entity)))
 
 (defrecord HomeAssistantSource [^HttpClient client api-base ui-base token
-                                lists names zone]
+                                lists names zone capture-list]
   conf/TaskSource
   (source-discover [this]
     (into []
@@ -182,7 +182,46 @@
           (service-call! this "todo/update_item"
                          {:entity_id entity :item uid :status "completed"}
                          false)
-          (content-etag (assoc doc :status "done")))))))
+          (content-etag (assoc doc :status "done"))))))
+  (source-create [this document]
+    ;; THE UID-DIFF BIRTH: add_item declares no response (the service
+    ;; registry's word), so the minted uid is recovered by
+    ;; differencing the list around the add. Ambiguity (concurrent
+    ;; HA-side adds of the same summary in the same window) throws —
+    ;; and that is safe, not racy: a failed create push lands
+    ;; conflicted with no external id, and resolve_conflict
+    ;; keep=local retries.
+    (let [entity capture-list
+          _ (when (str/blank? (str entity))
+              (throw (ex-info "no capture list configured — set the source's :capture-list" {})))
+          before-items (get (items-by-entity this [entity]) entity ::absent)
+          _ (when (= ::absent before-items)
+              (throw (ex-info (str entity " is unavailable in home assistant") {})))
+          before (into #{} (map :uid) before-items)
+          body (cond-> {:entity_id entity :item (:title document)}
+                 (:due_at document) (assoc :due_datetime (:due_at document))
+                 (not (str/blank? (str (:detail document))))
+                 (assoc :description (:detail document)))
+          _ (service-call! this "todo/add_item" body false)
+          after-items (get (items-by-entity this [entity]) entity)
+          new-items (remove #(contains? before (:uid %)) after-items)
+          item (case (count new-items)
+                 0 (throw (ex-info "add_item answered but no new item appeared" {}))
+                 1 (first new-items)
+                 ;; several landed in the window: the summary picks ours,
+                 ;; or nobody does and a person resolves
+                 (let [mine (filter #(= (:title document) (:summary %))
+                                    new-items)]
+                   (if (= 1 (count mine))
+                     (first mine)
+                     (throw (ex-info (str (count new-items)
+                                          " items landed at once and the "
+                                          "summary picks none apart — "
+                                          "resolve keep=local retries")
+                                     {})))))
+          doc (decorate this entity
+                        (item->task (list-name names entity) item zone))]
+      [(str entity "/" (:uid item)) (content-etag doc)])))
 
 (defn http-source
   "The real boundary over a running home assistant.
@@ -193,8 +232,9 @@
   (the todo entity ids to mirror, comma-separated string or seq),
   :names (entity id → friendly name, optional — entity id shown
   otherwise), :zone (the household zone naive due datetimes parse
-  in — default America/Denver)."
-  [{:keys [url ui-url token lists names zone]}]
+  in — default America/Denver), :capture-list (the entity captured
+  tasks are born into — unset, the queue takes no births)."
+  [{:keys [url ui-url token lists names zone capture-list]}]
   (->HomeAssistantSource
    (-> (HttpClient/newBuilder)
        (.connectTimeout (Duration/ofSeconds 10))
@@ -206,4 +246,5 @@
      (vec (remove str/blank? (map str/trim (str/split lists #","))))
      (vec lists))
    (or names {})
-   (or zone "America/Denver")))
+   (or zone "America/Denver")
+   capture-list))

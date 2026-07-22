@@ -70,7 +70,8 @@
                 :ui-url (System/getenv "WORKQUEUE10_HA_UI_URL")
                 :token (System/getenv "WORKQUEUE10_HA_TOKEN")
                 :lists (System/getenv "WORKQUEUE10_HA_LISTS")
-                :zone (System/getenv "WORKQUEUE10_HA_ZONE")})
+                :zone (System/getenv "WORKQUEUE10_HA_ZONE")
+                :capture-list (System/getenv "WORKQUEUE10_HA_CAPTURE")})
               fake-todos)}))
 
 (defn resources
