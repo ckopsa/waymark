@@ -35,6 +35,7 @@
     asserted."
   (:require [waymark10.dsl :refer [defguard defguardfn defhandler refuse
                                    resource]]
+            [waymark10.guards :as g]
             [waymark10.server.mirror :as mirror]
             [waymark10.types :as t])
   (:import (java.time LocalDate ZoneOffset)))
@@ -176,6 +177,10 @@
 
       :prioritize
       {:from writable :to :fresh
+       ;; ranking is the RANKER role's (the registry + member rows
+       ;; decide WHO at runtime; this binding alone is law) — anyone
+       ;; may complete, only rankers reorder the family's queue
+       :guards [(g/role :ranker)]
        :input [:map [:priority {:x-display {:label "Rank (lower ranks sooner)"}}
                      [:int {:min 0}]]]
        :edit {:prefill [:priority]}
@@ -191,6 +196,7 @@
       ;; is a footgun, and a "Clear priority" chip is an affordance
       :deprioritize
       {:from writable :to :fresh
+       :guards [(g/role :ranker)]
        :safety {:idempotent true :reversible false :confirm false
                 :one-way "The rank is let go — the task rejoins the unranked tail; prioritize ranks it again."}
        :handler clear-priority

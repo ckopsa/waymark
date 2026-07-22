@@ -30,7 +30,7 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["tasks"
+  ["tasks" "members" "roles"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 
@@ -190,6 +190,28 @@
             origin link omits, never renders broken"
     (let [mow (json (req :get (:self (task-by-title "Mow the lawn"))))]
       (is (nil? (get-in mow [:links :origin])))))
+
+  (testing "ranking is the RANKER role's: the binding is law, the
+            holders are runtime data — mint the role, assign colton,
+            and jack (auto-provisioned, role-less) is refused while
+            complete stays his"
+    (let [role-resp (req :post "/api/roles" {:name "ranker"}
+                         {"idempotency-key" (str (random-uuid))})]
+      (is (contains? #{200 201} (:status role-resp)) (:body role-resp)))
+    ;; an auto-provisioned member row's ID is the principal's own id
+    (let [member (json (req :get "/api/members/colton"))]
+      (is (some? (:self member)) "colton auto-provisioned on his first request")
+      (act-fenced! (:self member) :assign_roles {:roles ["ranker"]}))
+    (let [jack-headers {"x-waymark-principal" "jack"}
+          any-open (:self (task-by-title "Dishes"))
+          read (req :get any-open nil jack-headers)
+          resp (req :post (str any-open "/-/prioritize") {:priority 1}
+                    (assoc jack-headers
+                           "if-match" (get-in read [:headers "ETag"])))]
+      (is (= 200 (:status read))
+          "jack still reads the queue — only ranking is withheld")
+      (is (= 409 (:status resp)))
+      (is (= "Requires role 'ranker'." (:detail (json resp))))))
 
   (testing "cross-domain ranking: a meal task and a chore, prioritized
             AGAINST each other in one ordered list"
