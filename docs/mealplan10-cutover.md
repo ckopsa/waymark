@@ -53,6 +53,11 @@ untouched mealplan9 database + the `mealplan9` branch.
    a non-empty target, verifies source→target counts per kind, and
    backfills aggregates + the clock index. Events are not copied —
    discovery re-mints the calendar from the ICS feed on first boot.
+   One recorded transform rides the copy: v9 plans shed their embedded
+   `:days`, and each day births a `plan_day` row whose STATE derives
+   from the day's own facts (meal assigned → planned, eating out →
+   eating_out, else undecided) — the promoted day machine arrives
+   populated, and the plan's day counts backfill with the rest.
 9. **Start the v10 job**; browse the staging hostname: the current
    plan, its days, the grocery list totals, a meal's cost line — the
    same numbers v9 was serving.

@@ -89,6 +89,7 @@
   {:kind :rotation
    :initial :inactive
    :summary "{data.name} · {state}"
+   :nav :secondary
    :schema [:map
             [:name [:string {:min 1 :max 100}]]
             [:themes [:vector {:min 1} [:string {:min 1 :max 50}]]]

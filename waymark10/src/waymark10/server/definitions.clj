@@ -246,7 +246,7 @@
    ;; proposed is entered at creation (a held propose-mode boot);
    ;; piloted and withdrawn are reachable only through it
    :allow-dead #{:proposed :piloted :withdrawn}
-   :nav :secondary
+   :nav :system
    :summary "Law of {data.target_kind} · revision {data.revision} · {state}"
    :schema [:map
             [:target_kind [:string {:min 1 :max 64}]]

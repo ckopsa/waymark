@@ -33,7 +33,7 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["meals" "meal_lines" "rotations" "plans" "grocery_lists" "prep_tasks"
+  ["meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists" "prep_tasks"
    "ingredients" "products" "substitutions" "events"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts"])
@@ -90,20 +90,27 @@
 
 (defn- id-of [env] (last (str/split (:self env) #"/")))
 
+(defn- etag-of [self]
+  (get-in (req :get self) [:headers "ETag"]))
+
 (defn- act!
-  "POST an action, assert 200, return the parsed envelope."
+  "POST an action the way an honest client would — current ETag along
+  (fenced doors demand it; unfenced ones ignore it) — assert 200,
+  return the parsed envelope."
   ([self action] (act! self action nil {}))
   ([self action body] (act! self action body {}))
   ([self action body headers]
-   (let [resp (req :post (str self "/-/" (name action)) body headers)]
+   (let [resp (req :post (str self "/-/" (name action)) body
+                   (merge {"if-match" (etag-of self)} headers))]
      (is (= 200 (:status resp))
          (str self " " (name action) ": " (:status resp) " " (:body resp)))
      (json resp))))
 
 (defn- refuse!
-  "POST an action, assert the status, return the parsed problem."
+  "POST an action (ETag along), assert the status, return the problem."
   [self action body status]
-  (let [resp (req :post (str self "/-/" (name action)) body)]
+  (let [resp (req :post (str self "/-/" (name action)) body
+                  {"if-match" (etag-of self)})]
     (is (= status (:status resp))
         (str self " " (name action) " answered " (:status resp)
              ", wanted " status ": " (:body resp)))
@@ -117,8 +124,12 @@
 (defn- suggest-meal! [body]
   (created! "meals" body))
 
-(defn- day-of [env date]
-  (first (filter #(= date (:date %)) (get-in env [:data :days]))))
+(defn- day-env
+  "One plan_day's full envelope, by its plan and date."
+  [plan-env date]
+  (let [b (json (req :get (str "/api/plan_days?plan_id=" (id-of plan-env)
+                               "&date=" date)))]
+    (json (req :get (:self (first (get-in b [:data :items])))))))
 
 ;; ── the week ────────────────────────────────────────────────────────
 ;; 2026-07-14 is a Tuesday; the week runs Tue 14 … Mon 20.
@@ -167,55 +178,64 @@
             self (:self plan)]
         (is (= "2026-07-20" (get-in plan [:data :end_date]))
             "the far boundary materialized at birth")
-        (is (= ["mexican" "american" "asian" "pizza" "bbq"
-                "breakfast for dinner" "italian"]
-               (mapv :theme (get-in plan [:data :days])))
-            "weekdays fixed, Sunday pre-themed from the rotation")
+        (is (= 7 (get-in plan [:data :total_days]))
+            "born WITH its days — the 201 already counts them")
+        (is (= 7 (get-in plan [:data :undecided_days])))
+        (let [days (json (req :get (str "/api/plan_days?plan_id="
+                                        (id-of plan) "&page%5Bsize%5D=10")))]
+          (is (= ["mexican" "american" "asian" "pizza" "bbq"
+                  "breakfast for dinner" "italian"]
+                 (mapv #(get-in % [:fields :theme])
+                       (get-in days [:data :items])))
+              "weekdays fixed, Sunday pre-themed from the rotation, date-ordered"))
         (is (= (id-of rotation) (get-in plan [:data :rotation_id]))
             "a blank rotation_id resolved to the active rotation")
 
-        (testing "a wrong-theme assign is refused with the relation's sentence"
-          (let [p (refuse! self :assign_meal
-                           {:date "2026-07-15" :meal_id (id-of tacos)} 409)]
+        (testing "a wrong-theme assign is refused with the guard's sentence"
+          (let [wed (day-env plan "2026-07-15")
+                p (refuse! (:self wed) :assign_meal
+                           {:meal_id (id-of tacos)} 409)]
             (is (str/starts-with? (:detail p)
-                                  "That meal doesn't serve 2026-07-15"))
-            (is (= ["plan.set_sunday_theme" "plan.assign_off_theme"]
+                                  "That meal doesn't serve this day"))
+            (is (= ["plan_day.set_sunday_theme" "plan_day.assign_off_theme"]
                    (:remedies p)))))
 
-        (testing "assigning meals writes the engine-maintained labels"
-          (let [env (act! self :assign_meal {:date "2026-07-14"
-                                             :meal_id (id-of tacos)})]
-            (is (= "Carnitas tacos" (:meal_name (day-of env "2026-07-14")))))
-          (act! self :assign_meal {:date "2026-07-15" :meal_id (id-of burgers)})
-          (act! self :assign_meal {:date "2026-07-16" :meal_id (id-of stir-fry)})
-          (act! self :assign_meal {:date "2026-07-18" :meal_id (id-of brisket)})
-          (act! self :assign_meal {:date "2026-07-19" :meal_id (id-of pancakes)})
-          (act! self :assign_meal {:date "2026-07-20" :meal_id (id-of spaghetti)}))
+        (testing "assigning covers the day: state = the decision, the
+                  label the engine's"
+          (let [tue (day-env plan "2026-07-14")
+                env (act! (:self tue) :assign_meal {:meal_id (id-of tacos)})]
+            (is (= "planned" (:state env)))
+            (is (= "Carnitas tacos" (get-in env [:data :meal_name]))))
+          (doseq [[date m] [["2026-07-15" burgers] ["2026-07-16" stir-fry]
+                            ["2026-07-18" brisket] ["2026-07-19" pancakes]
+                            ["2026-07-20" spaghetti]]]
+            (act! (:self (day-env plan date)) :assign_meal
+                  {:meal_id (id-of m)})))
 
-        (testing "a side dish rides the meal arm, labeled the same way"
-          (let [env (act! self :add_side_dish {:date "2026-07-14"
-                                               :meal_id (id-of elote)})]
-            (is (= "Elote corn" (:side_dish_name (day-of env "2026-07-14"))))))
+        (testing "a side dish joins the planned day, labeled the same way"
+          (let [tue (day-env plan "2026-07-14")
+                env (act! (:self tue) :add_side_dish {:side_id (id-of elote)})]
+            (is (= "Elote corn" (get-in env [:data :side_dish_name])))))
 
-        (testing "eating out covers Friday and clears nothing else"
-          (let [env (act! self :mark_eating_out {:date "2026-07-17"
-                                                 :where "Blaze Pizza"})
-                friday (day-of env "2026-07-17")]
-            (is (true? (:eating_out friday)))
-            (is (= "Blaze Pizza" (:eating_out_where friday)))
+        (testing "eating out covers Friday — the state IS the fact"
+          (let [fri (day-env plan "2026-07-17")
+                env (act! (:self fri) :mark_eating_out {:where "Blaze Pizza"})]
+            (is (= "eating_out" (:state env)))
+            (is (= "Blaze Pizza" (get-in env [:data :eating_out_where]))))
+          (let [env (get! self)]
+            (is (= 0 (get-in env [:data :undecided_days])))
             (is (true? (get-in env [:data :all_days_covered]))
-                "the coverage fact flipped with the last day")))
+                "the composed fact flipped with the last day's state")))
 
-        (testing "assigning over an eating-out day clears the other arm"
-          (let [env (act! self :assign_meal {:date "2026-07-17"
-                                             :meal_id (id-of pizza)})
-                friday (day-of env "2026-07-17")]
-            (is (nil? (:eating_out friday)))
-            (is (nil? (:eating_out_where friday)))
-            (is (= "Sheet-pan pizza" (:meal_name friday))))
-          ;; …and Priya changes her mind back: Friday is a night out
-          (act! self :mark_eating_out {:date "2026-07-17"
-                                       :where "Blaze Pizza"}))
+        (testing "assigning over an eating-out day: the edge nulls what
+                  it leaves"
+          (let [fri (day-env plan "2026-07-17")
+                env (act! (:self fri) :assign_meal {:meal_id (id-of pizza)})]
+            (is (= "planned" (:state env)))
+            (is (nil? (get-in env [:data :eating_out_where])))
+            (is (= "Sheet-pan pizza" (get-in env [:data :meal_name])))
+            ;; …and Priya changes her mind back: Friday is a night out
+            (act! (:self env) :mark_eating_out {:where "Blaze Pizza"})))
 
         ;; ── the recital lands on the calendar ─────────────────────────
         (testing "a blocking event discovered on the feed flips the plan"

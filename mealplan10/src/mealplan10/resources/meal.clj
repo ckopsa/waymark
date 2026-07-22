@@ -115,6 +115,9 @@
    :shape 2
    :upcasts {1 fold-theme}
    :summary "{data.name} · {state}"
+   ;; the nav carries the DECISIONS (plan, grocery list); everything
+   ;; else lives behind the ⋯ menu — v9's final cut, carried
+   :nav :secondary
    :schema [:map
             [:name {:sort :default} [:string {:min 1 :max 200}]]
             ;; one declaration (design §6): membership filtering and

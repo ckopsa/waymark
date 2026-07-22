@@ -239,7 +239,11 @@ transaction and the full create algorithm, the born row riding the
 inner sink so its lifecycle/cascade/maintenance run post-commit; the
 touch names the target's create action
 (`{:kind :chore_run :action :create}`). `:touches` is the
-advertisement, never the mechanism.
+advertisement, never the mechanism. The door is open to `:on-create`
+hooks too (the plan_day fan-out demanded it), where it DEFERS: births
+queue and land right after the hook's own row inserts, so a child's
+ref label reads a real parent and the log orders parent before child;
+a birth cycle in the declarations refuses at depth 8.
 
 ## 10 · `:default` — the declared field default
 
@@ -260,3 +264,16 @@ action's `input_defaults` project them, non-empty-only, so the
 default-free world hashes as ever. The checks refuse a default the
 field would not accept and any default on a derived field (one fact,
 one writer).
+
+## 11 · `:unique` — declared uniqueness, enforced
+
+```clojure
+:unique [[:plan_id :date]]   ; one plan_day per plan and date
+```
+
+Each group emits a UNIQUE index over its promoted generated columns
+(every named field must be `:filter`able or `:sort`able — the check
+that always held). A colliding write refuses as a 409 problem
+(`unique-conflict`), never a 500. Uniqueness is the row's identity,
+not its state: a released/removed row still holds its slot — design
+for that (or scope the group) deliberately.

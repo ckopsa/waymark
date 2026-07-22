@@ -1362,10 +1362,17 @@
   kinds mid-write (chore's queue verb demanded it). Returns
   {:row … :transition …} (or the idempotent replay); the caller owes
   the result its after-write! pass — create! runs it directly, an
-  inner birth rides the sink out and after-write! drains it."
+  inner birth rides the sink out and after-write! drains it.
+
+  During :on-create the ctx :create door DEFERS (the plan_day
+  fan-out's demand): births queue and land right after this row's own
+  insert and transition, so a child's ref-label pass reads a real
+  parent and the log orders parent before child. Each birth runs the
+  child's full create algorithm — its own :on-create may birth
+  grandchildren; a declaration cycle refuses at depth 8."
   [engine tx kind body {:keys [principal acknowledged correlation-id id
-                               idempotency-key mint?]
-                        :or {acknowledged #{}}}]
+                               idempotency-key mint? depth]
+                        :or {acknowledged #{} depth 0}}]
   (let [rdef (rdef-of engine kind)
         model (if mint?
                 (:schema rdef)
@@ -1413,7 +1420,24 @@
               ;; it at the create algorithm's honest slot.
               row (predecessor/resolve! (:storage engine) tx
                                         (resources engine) rdef row)
-              row (if-some [oc (:on-create rdef)] (oc row ctx) row)
+              ;; the hook's birth door defers: this row is not yet
+              ;; inserted, so a child born NOW would precede its
+              ;; parent in storage and the log — queue, drain below
+              births (atom [])
+              octx (assoc ctx :create
+                          (fn [target-kind body & [opts]]
+                            (when-not (get (resources engine) target-kind)
+                              (throw (t/definition-error
+                                      (str "ctx create: unknown kind "
+                                           target-kind))))
+                            (when (>= depth 8)
+                              (throw (t/definition-error
+                                      (str "ctx create: birth depth 8 — a "
+                                           "cycle in the declarations"))))
+                            (swap! births conj {:kind target-kind
+                                                :body body :opts opts})
+                            nil))
+              row (if-some [oc (:on-create rdef)] (oc row octx) row)
               ;; ref labels + one-of at birth too: before nil, every
               ;; set ref is newly set
               row (update row :data
@@ -1436,7 +1460,28 @@
                        :input-digest digest
                        :acknowledged (not-empty (vec overridden))
                        :correlation-id correlation-id
-                       :summary (:summary row)})]
+                       :summary (:summary row)})
+              ;; drain the :on-create births: full create algorithm,
+              ;; same transaction, each riding the inner sink so
+              ;; after-write! owes it the post-commit passes and the
+              ;; parent's response counts its children honestly
+              _ (doseq [{:keys [kind body opts]} @births]
+                  (let [trdef (rdef-of engine kind)
+                        tmodel (or (:create-schema trdef) (:schema trdef))
+                        res (create-in-tx!
+                             engine tx kind
+                             ;; the hook lives in DECODED space (its
+                             ;; dates are LocalDates); the create
+                             ;; algorithm speaks wire
+                             (schema/encode tmodel (or body {}))
+                             {:principal principal
+                              :correlation-id correlation-id
+                              :acknowledged (or (:acknowledged opts) #{})
+                              :depth (inc depth)})]
+                    (swap! (:inner-sink ctx) conj
+                           {:kind kind
+                            :action (first (:create-action-names trdef))
+                            :res res})))]
           (when idempotency-key
             (store/idempotency-store!
              (:storage engine) tx idempotency-key kind create-action digest

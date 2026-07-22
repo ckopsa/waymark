@@ -16,7 +16,8 @@
   BOTH the DDL the backend emits (store.postgres) and the storage
   facet the fingerprint records (waymark10.fingerprint). Never two
   descriptions of one table."
-  (:require [waymark10.schema :as schema]
+  (:require [clojure.string :as str]
+            [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
 (defprotocol Storage
@@ -144,6 +145,17 @@
                 " moved past v" expected)
            {:waymark10/version-conflict true :kind kind :id id
             :expected-version expected}))
+
+(defn unique-violation
+  "A declared :unique group refused this write at the index (design
+  §24) — the honest 409's carrier, mirroring version-conflict."
+  [kind id constraint]
+  (ex-info (str "unique conflict: " (name kind)
+                (when id (str " " id))
+                " — a row with these values already exists"
+                (when constraint (str " (" constraint ")")))
+           {:waymark10/unique-violation true :kind kind :id id
+            :constraint constraint}))
 
 (defn definition-checked-name
   "Identifiers spliced into SQL come only from checked declarations;
@@ -276,7 +288,21 @@
        (str "ix_" table "_flip")
        (str "CREATE INDEX IF NOT EXISTS ix_" table "_flip ON " table
             " (next_flip_at) WHERE next_flip_at IS NOT NULL")}
-      (gin-indexes rmap table))}))
+      (gin-indexes rmap table)
+      ;; declared uniqueness reaches storage (design §24): one UNIQUE
+      ;; index per :unique group over the promoted generated columns —
+      ;; check-unique already demands every field be promoted, so the
+      ;; columns exist by construction
+      (into {}
+            (map (fn [group]
+                   (let [fields (mapv definition-checked-name
+                                      (if (keyword? group) [group] group))
+                         nm (str "ux_" table "_" (str/join "_" fields))]
+                     [nm (str "CREATE UNIQUE INDEX IF NOT EXISTS " nm
+                              " ON " table " ("
+                              (str/join ", " (map #(str "f_" %) fields))
+                              ")")])))
+            (:unique rmap)))}))
 
 (defn projection-snapshot
   "A projection reduced to the comparable shape the live snapshot

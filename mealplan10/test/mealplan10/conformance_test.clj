@@ -43,7 +43,7 @@
 (def ^:dynamic *h* nil)
 
 (def ^:private tables
-  ["meals" "meal_lines" "rotations" "plans" "grocery_lists" "prep_tasks"
+  ["meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists" "prep_tasks"
    "ingredients" "products" "substitutions" "events"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts"])
@@ -66,8 +66,8 @@
             (f)))
         (finally (pg/close! st))))))
 
-(def kinds [:meal :meal_line :rotation :plan :grocery_list :prep_task
-            :ingredient :product :substitution :event])
+(def kinds [:meal :meal_line :rotation :plan :plan_day :grocery_list
+            :prep_task :ingredient :product :substitution :event])
 
 ;; ── the enrollment ──────────────────────────────────────────────────
 
@@ -93,9 +93,35 @@
 
 ;; its meal_id carries no acceptance set (the off-theme door exists to
 ;; escape the theme narrowing), so generation cannot guide it —
-;; waymark9 registered the identical example
-(fac/example-input! :plan :assign_off_theme
-  (fn [eng] {:date plan-start :meal_id (listed-meal! eng)}))
+;; waymark9 registered the identical example, one kind lower now
+(fac/example-input! :plan_day :assign_off_theme
+  (fn [eng] {:meal_id (listed-meal! eng)}))
+
+;; no :create example: a plan births its WHOLE week (the unique
+;; (plan_id, date) index holds every in-range slot), so the walker
+;; stages days through the factory below — the same posture as plan
+;; and grocery_list, whose creates also happen inside their factories.
+(fac/state-factory! :plan_day
+  (fn [eng target]
+    (let [rot (mk! eng :rotation {})
+          _ (step! eng :rotation (:id rot) :activate)
+          _ (listed-meal! eng)
+          plan (mk! eng :plan {:start_date plan-start :weeks 1
+                               :rotation_id (:id rot)})
+          [d1 d2] (store/with-tx (:storage eng)
+                    (fn [tx] (store/query-rows (:storage eng) tx :plan_day
+                                               {:plan_id (:id plan)}
+                                               {:limit 3})))]
+      (case target
+        :undecided (inv/decode-row (get (inv/resources eng) :plan_day) d1)
+        ;; assign is a fenced edit now — the factory speaks the etag
+        :planned (:row (inv/invoke! eng :plan_day (:id d1) :assign_off_theme
+                                    {:meal_id (listed-meal! eng)}
+                                    {:principal (fac/walker-principal)
+                                     :if-match (inv/etag :plan_day (:id d1)
+                                                         (:version d1))}))
+        :eating_out (:row (step! eng :plan_day (:id d2) :mark_eating_out
+                                 {:where "out"}))))))
 
 (fac/state-factory! :plan
   (fn [eng target]
@@ -108,8 +134,11 @@
       (case target
         :draft plan
         :abandoned (:row (step! eng :plan pid :abandon))
-        (do (doseq [d (get-in plan [:data :days])]
-              (step! eng :plan pid :mark_eating_out {:date (str (:date d))}))
+        (do (doseq [d (store/with-tx (:storage eng)
+                        (fn [tx] (store/query-rows (:storage eng) tx
+                                                   :plan_day {:plan_id pid}
+                                                   {:limit 20})))]
+              (step! eng :plan_day (:id d) :mark_eating_out nil))
             (let [res (step! eng :plan pid :finalize)]
               (case target
                 :planned (:row res)

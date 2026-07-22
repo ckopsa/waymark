@@ -3191,3 +3191,40 @@ self-substitution is unrepresentable at birth. An aggregate spec has
 no law to compute before the row exists and allows, as ever (and the
 existing check still refuses non-bool gates outright).
 Proof: `waymark10/test/waymark10/require_create_test.clj`.
+
+## `:nav` reaches the wire — the catalog carries the tier
+
+`:nav :secondary` was validated and normalized but never projected;
+the generic client faked the split with a hardcoded engine-kind set
+(the recorded flat-catalog difference from 9's discovery). Found by
+the mealplan10 cross-check: v9's final cut left only plan and
+grocery_list in the primary nav, and v10 had no wire to say so. The
+well-known catalog now carries `"nav"` on every resource entry
+(`"primary"` when undeclared — the tier is always spoken, so a
+client never guesses), and the UI's nav bar, ⋯ overflow, and
+dashboard split on the declaration.
+
+Grown in the same act: a THIRD tier, `:nav :system` — the engine's
+own kinds (definitions, members, roles, grants, attachments,
+subscriptions, jobs, approval requests, worksheets) declare
+themselves the machinery's, so the ⋯ menu shows the app's tucked
+domain kinds first and the system kinds under a quiet divider, and
+the dashboard splits its chip rows the same way. `:secondary` stays
+the app's word for "a domain kind behind the menu."
+Proof: the nav assertion in `waymark10/test/waymark10/dev_test.clj`.
+## `:unique` reaches storage — the declaration's index, the insert's honest 409
+
+Declared and shape-checked since batch G, enforced never (roles and
+definitions hand-rolled find-guards around the punt). The plan_day
+demand (one day per plan and date) fills it: `kind-projection` emits
+one `CREATE UNIQUE INDEX` per `:unique` group over the promoted
+generated columns (the checks already demand promotion, so the
+columns exist by construction); the migrate planner reconciles it
+like any declared index — virgin create, drift add, undeclared drop
+(the drop scan now anchors on `ix_/ux_<table>_`, so a table whose
+name starts with those letters never loses its pkey); and the index's
+23505 surfaces as `p/unique-conflict`, an honest 409 problem, from
+both write doors (a data edit can move a generated column into
+collision). roles/definitions keep their guards — the nicer refusal
+sentence — with adoption a named follow-up.
+Proof: `waymark10/test/waymark10/unique_index_test.clj`.

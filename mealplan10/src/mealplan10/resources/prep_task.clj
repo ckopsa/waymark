@@ -46,6 +46,7 @@
    :initial :pending
    :terminal #{:done :cancelled}
    :summary "{data.task_type} · {data.meal_name} ({data.date}) · {state}"
+   :nav :secondary
    :schema [:map
             [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
             [:date {:x-display {:label "Dinner date"}} :waymark/date]
@@ -73,6 +74,7 @@
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 1000}]]]]
    :links [{:rel "plan" :kind :plan
+            :href "/api/plans/{data.plan_id}"
             :summary "The meal plan this task serves"}]
    :filterable {:state #{:eq :in}}
    :display {:title "{data.task_type}: {data.meal_name}"}

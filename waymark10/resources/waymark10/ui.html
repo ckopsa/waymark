@@ -93,6 +93,10 @@
               display: none; }
   .nav-menu a { display: block; padding: 5px 14px; margin: 0;
                 font-size: 13px; color: var(--ink); white-space: nowrap; }
+  .nav-menu-sect { margin: 6px 0 2px; padding: 4px 14px 2px;
+                   border-top: 1px solid var(--line); color: var(--muted);
+                   font-size: 10px; text-transform: uppercase;
+                   letter-spacing: 0.08em; }
   .nav-menu a:hover { background: var(--chipbg); text-decoration: none; }
   .nav-menu .law-mark { color: var(--law); }
   /* the law stamp: which revision of the law produced this screen */
@@ -760,10 +764,12 @@ function wellKnown() {
   return wellKnownCache;
 }
 /* nav rides the wire: well-known stamps each resource with its nav
-   tier (primary/secondary) and, under a multi-domain deployable, its
-   domain — plus a top-level ordered domains list. The old client-side
-   ENGINE_KINDS set is retired; the engine's own kinds declare
-   :nav :secondary and fold behind the ⋯ from the wire alone. */
+   tier (secondary = a domain kind behind the ⋯ menu, system = the
+   engine's own machinery, grouped apart in the same menu) and, under
+   a multi-domain deployable, its domain — plus a top-level ordered
+   domains list. The old client-side ENGINE_KINDS set is retired; the
+   engine's own kinds declare :nav :system and fold behind the ⋯ from
+   the wire alone. */
 function navTier(r) { return (r || {}).nav || "primary"; }
 function domainOf(w, href) {
   for (const r of Object.values(w.resources || {}))
@@ -958,19 +964,21 @@ async function renderNav(current) {
   if (w.resources && w.resources.member && w.resources.approval_request)
     nav.append(el("a", {href: "#access",
       style: current === "access" ? "font-weight:700" : ""}, "Access"));
-  /* secondary kinds fold behind ⋯ — domainless (the engine's own)
-     always, a domain's own only while that domain is active */
-  const tucked = entries.filter(([, r]) => navTier(r) === "secondary"
+  /* secondary and system kinds fold behind ⋯ — domainless (the
+     engine's own) always, a domain's own only while that domain is
+     active */
+  const tucked = entries.filter(([, r]) =>
+    (navTier(r) === "secondary" || navTier(r) === "system")
     && (!r.domain || r.domain === active));
   if (tucked.length) nav.append(overflowMenu(tucked));
 }
 
-function overflowMenu(engineEntries) {
+function overflowMenu(tuckedEntries) {
   const wrap = el("span", {class:"nav-more-wrap"});
   const menu = el("div", {class:"nav-menu", role:"menu"});
   const btn = el("button", {class:"nav-more", type:"button",
     "aria-haspopup":"true", "aria-expanded":"false",
-    title: "secondary kinds — the machinery's own, and the tucked-away"}, "⋯");
+    title: "more kinds — and the machinery's own resources"}, "⋯");
   const close = () => { menu.style.display = "none";
                         btn.setAttribute("aria-expanded", "false"); };
   const open = () => { menu.style.display = "block";
@@ -984,10 +992,18 @@ function overflowMenu(engineEntries) {
   });
   document.addEventListener("pointerdown", ev => {
     if (!wrap.contains(ev.target)) close(); });
-  for (const [kind, {href}] of engineEntries)
-    menu.append(el("a", {href: "#" + href, role:"menuitem", onclick: close},
+  /* domain kinds first, then the engine's own machinery under a
+     quiet divider — two tiers, one menu */
+  const item = ([kind, {href}]) =>
+    el("a", {href: "#" + href, role:"menuitem", onclick: close},
       ...(kind === "definition" ? [el("span", {class:"law-mark"}, "⚖ ")] : []),
-      title(kind) + "s"));
+      title(kind) + "s");
+  const domain = tuckedEntries.filter(([, r]) => navTier(r) === "secondary");
+  const system = tuckedEntries.filter(([, r]) => navTier(r) === "system");
+  domain.forEach(e => menu.append(item(e)));
+  if (domain.length && system.length)
+    menu.append(el("div", {class:"nav-menu-sect", role:"separator"}, "system"));
+  system.forEach(e => menu.append(item(e)));
   /* the shell switch: a full reload with ?ui= beats the UA sniff,
      the hash (this screen) rides along */
   menu.append(el("a", {role: "menuitem",
@@ -1078,13 +1094,16 @@ async function renderHome(view, seq) {
   if (attention.length) strip.append(el("div", {class:"attention"}, attention));
   else strip.remove();
 
-  const engine = entries.filter(([, r]) =>
-    navTier(r) === "secondary" && !r.domain);
-  if (engine.length) {
-    view.append(el("h3", {class:"sect"}, "Engine kinds"),
-      el("div", {class:"chips"}, engine.map(([kind, {href}]) =>
+  const chipRow = (label, list) => {
+    if (!list.length) return;
+    view.append(el("h3", {class:"sect"}, label),
+      el("div", {class:"chips"}, list.map(([kind, {href}]) =>
         el("a", {href: "#" + href, class: "link-chip"}, title(kind) + "s"))));
-  }
+  };
+  chipRow("More kinds",
+          entries.filter(([, r]) => navTier(r) === "secondary" && !r.domain));
+  chipRow("System",
+          entries.filter(([, r]) => navTier(r) === "system"));
   const surfaces = Object.entries(w.surfaces || {});
   if (surfaces.length) {
     view.append(el("h3", {class:"sect"}, "Declared surfaces"),
@@ -2213,10 +2232,20 @@ function embedPager(link, setPage) {
    and link.columns is the target's own filter/sort vocabulary, so each
    embedded table gets its own Filters popover and sort-arrows, exactly
    like a top-level collection screen. */
-function embeddedSections(doc, hints) {
-  return Object.entries(doc.links || {})
+/* an embedded link's rows are the CHILD kind's — their ref fields,
+   labels, and grouping come from the child's own published schema,
+   never the parent's (a plan's schema knows nothing of a day's
+   meal_id). */
+function embedKindOf(link) {
+  const k = link.kind || "";
+  return k.endsWith("_collection") ? k.slice(0, -"_collection".length) : null;
+}
+async function embeddedSections(doc, hints) {
+  return Promise.all(Object.entries(doc.links || {})
     .filter(([, link]) => (link.embedded || []).length)
-    .map(([rel, link]) => {
+    .map(async ([rel, link]) => {
+      const child = embedKindOf(link);
+      if (child) hints = await kindSchema(child);
       const gridQuery = link.columns;
       const {scoped, apply, remove, onSort, setPage} = embedFilterOps(doc, rel);
       const bar = el("div", {class: "filterbar"});
@@ -2245,7 +2274,7 @@ function embeddedSections(doc, hints) {
           onSort: gridQuery ? onSort : null
         }),
         embedPager(link, setPage));
-    });
+    }));
 }
 
 /* ── resource screen ───────────────────────────────────────────────── */
@@ -2398,7 +2427,7 @@ async function renderResource(view, doc, hints) {
     el("details", {open:""},
       el("summary", {class:"muted"}, "Data"),
       kvTable(plainData, hints)));
-  for (const sec of embeddedSections(doc, hints)) dataPanel.append(sec);
+  for (const sec of await embeddedSections(doc, hints)) dataPanel.append(sec);
   /* the resource's own history: its transition log, replayed from the
      events stream (Last-Event-ID 0), collapsed by default */
   dataPanel.append(historySection(`${doc.self}/-/events`));

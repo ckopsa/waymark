@@ -128,7 +128,14 @@
              (str ix-name " is a declared index with no live twin.")))
      (when drop-derived?
        (for [[ix-name _] (sort-by key live-ix)
-             :when (and (str/starts-with? ix-name "ix_")
+             ;; only names this table's OWN derived patterns could have
+             ;; minted — anchored on the table name, so a table that
+             ;; happens to start with ix/ux never loses its pkey
+             :when (and (or (str/starts-with? ix-name (str "ix_" table "_"))
+                            ;; declared-unique indexes are derived from
+                            ;; the declaration exactly like ix_ ones —
+                            ;; an undeclared :unique reconciles away
+                            (str/starts-with? ix-name (str "ux_" table "_")))
                         (not (contains? indexes ix-name)))]
          (step :drop-index table
                (str "DROP INDEX IF EXISTS " ix-name)

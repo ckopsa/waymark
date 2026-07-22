@@ -634,7 +634,7 @@
     :states [:staged :applying :applied :discarded]
     :initial :staged
     :terminal #{:applied :discarded}
-    :nav :secondary
+    :nav :system
     :summary "{data.target} worksheet · {state}"
     :label-template "{data.target} worksheet"
     :schema [:map

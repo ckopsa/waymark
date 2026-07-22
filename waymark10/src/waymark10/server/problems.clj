@@ -47,6 +47,15 @@
             :action-attempted action
             :resource resource}))
 
+(defn unique-conflict
+  "A declared :unique group already holds a row with these values —
+  the index's refusal as an honest 409 (design §24)."
+  [kind constraint]
+  (problem :unique-conflict 409 "Already exists"
+           {:detail (str "A " (if kind (name kind) "row")
+                         " with these values already exists"
+                         (when constraint (str " (" constraint ")")) ".")}))
+
 (defn schema-invalid [action errors]
   (problem :schema-invalid 422 "Input failed validation"
            {:action-attempted action :errors errors}))

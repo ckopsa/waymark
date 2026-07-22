@@ -209,7 +209,7 @@
    :states [:offered :accepted :revoked :expired]
    :initial :offered
    :terminal #{:revoked :expired}
-   :nav :secondary
+   :nav :system
    :summary "Grant to {data.audience} · {state}"
    :schema [:map
             [:audience [:string {:min 1 :max 128}]]
@@ -396,7 +396,7 @@
    :states [:offered :approved :denied]
    :initial :offered
    :terminal #{:approved :denied}
-   :nav :secondary
+   :nav :system
    :summary "Access request by {data.requested_by} · {state} · until {data.expires_at}"
    ;; grant_id is OPTIONAL: an anchorless ask is the bootstrap path —
    ;; its approval mints the grant and stamps the id here
