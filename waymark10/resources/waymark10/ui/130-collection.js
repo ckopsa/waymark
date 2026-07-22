@@ -300,7 +300,7 @@ function itemTable(items, opts) {
   if (!items.length) return el("p", {class:"muted"}, "No rows.");
   const anyActions = !!opts.rowAction ||
     items.some(i => (i.actions && Object.keys(i.actions).length) ||
-                    Object.values(i.links || {}).some(l => l && l.download));
+                    Object.values(i.links || {}).some(l => l && (l.download || l.external)));
   const cols = fieldColumns(items, opts.query, opts.hints);
   const sortField = (opts.currentSort || "").replace(/^-/, "");
   const sortDesc = (opts.currentSort || "").startsWith("-");
@@ -347,13 +347,15 @@ function itemTable(items, opts) {
       for (const [name, entry] of Object.entries(item.actions || {}))
         cell.append(actionButton({name, entry, doc: item, small: true,
                                   onDone: () => render()}));
-      /* download links are row affordances too — byte routes ride
-         the row as real browser navigations (see linksStrip) */
+      /* download and external links are row affordances too — byte
+         routes and cross-engine hops both ride the row as real
+         browser navigations (see linksStrip) */
       for (const [rel, l] of Object.entries(item.links || {}))
-        if (l && l.download)
+        if (l && (l.download || l.external))
           cell.append(el("a", {class:"chip link-chip", href: l.href,
             target:"_blank", rel:"noopener", title: l.summary || rel,
-            onclick: e => e.stopPropagation()}, "⭳ " + title(rel)));
+            onclick: e => e.stopPropagation()},
+            (l.download ? "⭳ " : "↗ ") + title(rel)));
       row.append(cell);
     }
     tbody.append(row);
