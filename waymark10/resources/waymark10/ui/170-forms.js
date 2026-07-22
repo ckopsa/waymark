@@ -33,6 +33,16 @@ function schemaProp(prop) {
   }
   return sub;
 }
+/* the wire speaks RFC 3339 instants; datetime-local speaks the viewer's
+   wall clock with no zone — translate at the boundary, both directions */
+function instantToLocal(v) {
+  if (v === undefined || v === null || v === "") return "";
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = n => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate()) +
+         "T" + p(d.getHours()) + ":" + p(d.getMinutes());
+}
 function fieldWidget(name, rawProp, value) {
   const prop = schemaProp(rawProp);
   const xd = rawProp["x-display"] || prop["x-display"] || {};
@@ -56,6 +66,9 @@ function fieldWidget(name, rawProp, value) {
                         step: prop.type === "integer" ? "1" : "any"});
   if (prop.format === "date")
     return el("input", {type: "date", name, value: value ?? ""});
+  if (prop.format === "date-time")
+    return el("input", {type: "datetime-local", name,
+                        value: instantToLocal(value)});
   if (prop.type === "array") {
     const items = prop.items || {};
     if ((items.type === "string" || items.type === undefined) && !items.properties)
@@ -231,6 +244,10 @@ function collectValues(form, schema) {
     if (node.dataset.array === "json") {
       try { values[name] = JSON.parse(raw); }
       catch (_e) { values[name] = raw; }    /* the server's 422 narrates */
+      continue;
+    }
+    if (node.type === "datetime-local") {
+      values[name] = new Date(raw).toISOString();
       continue;
     }
     if (prop.type === "integer") values[name] = parseInt(raw, 10);
