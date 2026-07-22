@@ -60,6 +60,19 @@
 
 (def ^:private page-size 100)
 
+(def translation-rev
+  "The adapter's translation version, folded into every etag this
+  source REPORTS (never the raw If-Match it presents upstream). The
+  mirror's etag guard skips re-applying an unchanged document — but
+  the document is upstream row × OUR translation, and the authority's
+  etag can't see our code. Bump this when any row->task / with-origin
+  output changes shape, and every stored row re-observes on its next
+  pull instead of serving the old translation forever."
+  "t2")
+
+(defn- rev-etag [etag]
+  (when etag (str etag "|" translation-rev)))
+
 (defn with-origin
   "The canonical doc + where it came from: :source_href (the row's
   API envelope — a client's route) and :source_ui_href (the source
@@ -88,7 +101,7 @@
     (let [{:keys [env etag]} (send! this :get
                                     (str "/api/" kind-path "/" (enc id)))]
       [(with-origin base (:self env) (row->task env))
-       (or etag (get-in env [:meta :etag]))]))
+       (rev-etag (or etag (get-in env [:meta :etag])))]))
   (source-pull-many [this ids]
     (into {}
           (keep (fn [id]
@@ -102,17 +115,20 @@
                          nil))))
           ids))
   (source-push [this id document]
+    ;; If-Match presents the RAW upstream etag (the fence is the
+    ;; authority's); only what we report back to the mirror rides the
+    ;; translation revision
     (let [{:keys [env etag]} (send! this :get
                                     (str "/api/" kind-path "/" (enc id)))
           etag (or etag (get-in env [:meta :etag]))]
       (case (conf/push-plan document (:status (row->task env)))
-        :noop etag
+        :noop (rev-etag etag)
         :complete
         (let [{:keys [env etag]}
               (send! this :post
                      (str "/api/" kind-path "/" (enc id) "/-/complete")
                      {"if-match" etag})]
-          (or etag (get-in env [:meta :etag])))))))
+          (rev-etag (or etag (get-in env [:meta :etag]))))))))
 
 (defn http-source
   "The real boundary over a running waymark engine.
