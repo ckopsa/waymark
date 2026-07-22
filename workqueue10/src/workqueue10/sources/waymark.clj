@@ -60,6 +60,18 @@
 
 (def ^:private page-size 100)
 
+(defn with-origin
+  "The canonical doc + where it came from: :source_href (the row's
+  API envelope — a client's route) and :source_ui_href (the source
+  engine's ui.html anchored on that row — the URL hash IS the
+  resource href, so a person's tap lands in context). The client
+  holds the base URL and the envelope holds :self; the translators
+  stay pure."
+  [base self task]
+  (assoc task
+         :source_href (str base self)
+         :source_ui_href (str base "/api/-/ui#" self)))
+
 (defrecord WaymarkSource [^HttpClient client base kind-path discover-query
                           row->task headers]
   conf/TaskSource
@@ -75,7 +87,8 @@
   (source-pull [this id]
     (let [{:keys [env etag]} (send! this :get
                                     (str "/api/" kind-path "/" (enc id)))]
-      [(row->task env) (or etag (get-in env [:meta :etag]))]))
+      [(with-origin base (:self env) (row->task env))
+       (or etag (get-in env [:meta :etag]))]))
   (source-pull-many [this ids]
     (into {}
           (keep (fn [id]

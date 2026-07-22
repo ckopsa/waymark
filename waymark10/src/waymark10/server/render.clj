@@ -513,7 +513,10 @@
         ;; a byte route: the client opens it in the browser, not
         ;; through an in-app router (the redirect must reach the
         ;; user agent)
-        (:download ld) (assoc :download true)))))
+        (:download ld) (assoc :download true)
+        ;; a hop that leaves this engine: same browser navigation,
+        ;; honest name — never advertised as bytes
+        (:external ld) (assoc :external true)))))
 
 ;; mirrors waymark10.server.collections/page-size-default and
 ;; page-size-max — duplicated, not required, because collections.clj

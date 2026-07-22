@@ -65,8 +65,13 @@
   key (:rel misspelled, an :emebd) refuses at the def site instead of
   rendering nothing. :download marks a byte route (a redirect or a
   file body): clients navigate it in the BROWSER, never through an
-  in-app XHR router that would swallow the redirect."
-  [:rel :owns :edge :href :kind :summary :badge :embed :where :download])
+  in-app XHR router that would swallow the redirect. :external marks
+  an :href that leaves this engine entirely (another engine's row, a
+  foreign system): the same real-browser navigation as :download,
+  under an honest name — a client must never read an origin hop as
+  bytes to save."
+  [:rel :owns :edge :href :kind :summary :badge :embed :where :download
+   :external])
 
 (def ^:private link-schema
   (into [:map {:closed true}]

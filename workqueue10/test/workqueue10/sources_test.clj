@@ -7,6 +7,7 @@
             [workqueue10.confluence :as conf]
             [workqueue10.sources.choreplan :as chores]
             [workqueue10.sources.mealplan :as meals]
+            [workqueue10.sources.waymark :as wm]
             [waymark10.server.mirror :as mirror]))
 
 ;; ── the translations ────────────────────────────────────────────────
@@ -54,6 +55,19 @@
       (is (= "thaw: Traeger brisket" (:title t)))
       (is (= "2026-07-21T16:00:00Z" (:due_at t)))
       (is (= "move 2500g brisket to the fridge" (:detail t))))))
+
+(deftest origin-hrefs
+  (testing "the source client stamps the way back: the API row and
+            the engine's ui.html anchored on it (the URL hash IS the
+            resource href)"
+    (let [t (wm/with-origin "https://rod.kopsa.info"
+              "/api/chore_runs/abc-123"
+              {:title "Dishes" :status "open"})]
+      (is (= "https://rod.kopsa.info/api/chore_runs/abc-123"
+             (:source_href t)))
+      (is (= "https://rod.kopsa.info/api/-/ui#/api/chore_runs/abc-123"
+             (:source_ui_href t)))
+      (is (= "Dishes" (:title t)) "the translation rides through untouched"))))
 
 ;; ── the shared push-plan ────────────────────────────────────────────
 

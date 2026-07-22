@@ -89,9 +89,25 @@
                           :x-display {:label "Priority (lower ranks sooner)"}}
                [:maybe [:int {:min 0}]]]
               [:detail {:optional true :x-display {:widget "prose"}}
-               [:maybe [:string {:max 1000}]]]]
+               [:maybe [:string {:max 1000}]]]
+              ;; where the row drinks from, as URLs the source client
+              ;; stamps: the API envelope (a client's route) and the
+              ;; source engine's ui.html anchor (a person's tap — the
+              ;; :origin link below). Hidden: the LINK is the
+              ;; affordance, a raw URL in the fields is noise.
+              [:source_href {:optional true :x-display {:hidden true}}
+               [:maybe [:string {:max 500}]]]
+              [:source_ui_href {:optional true :x-display {:hidden true}}
+               [:maybe [:string {:max 500}]]]]
      :filterable {:state #{:eq :in}}
      :display {:title "{data.title}"}
+     ;; the way BACK to the resource that needs work: an :external
+     ;; href — a real browser hop to the owning engine's UI, anchored
+     ;; on the row. A source that stamps no href (a fake, a future
+     ;; authority with no web face) relates to nothing — the link
+     ;; simply omits, the framework's own rule.
+     :links [{:rel "origin" :href "{data.source_ui_href}" :external true
+              :summary "The row this task mirrors, at the engine that owns it"}]
      :actions
      {:complete
       {:from writable :to :fresh

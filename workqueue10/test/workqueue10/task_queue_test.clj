@@ -134,7 +134,9 @@
   (conf/seed! *chores* "cr-dishes"
               {:title "Dishes" :assignee "colton"
                :due_at "2026-07-22T00:00:00Z" :status "open"
-               :detail "load and run before bed"})
+               :detail "load and run before bed"
+               :source_href "https://rod.kopsa.info/api/chore_runs/cr-dishes"
+               :source_ui_href "https://rod.kopsa.info/api/-/ui#/api/chore_runs/cr-dishes"})
   (conf/seed! *chores* "cr-mow"
               {:title "Mow the lawn" :assignee "colton"
                :due_at "2026-07-20T00:00:00Z" :status "open"})
@@ -167,7 +169,19 @@
       (is (= "chore" (get-in dishes [:data :source])))
       (is (= "open" (get-in dishes [:data :status])))
       (is (= "2026-07-22T00:00:00Z" (get-in dishes [:data :due_at])))
-      (is (= "load and run before bed" (get-in dishes [:data :detail])))))
+      (is (= "load and run before bed" (get-in dishes [:data :detail])))
+      (testing "…and the way back: the origin link, an external hop to
+                the engine that owns the row"
+        (is (= {:href "https://rod.kopsa.info/api/-/ui#/api/chore_runs/cr-dishes"
+                :external true
+                :summary "The row this task mirrors, at the engine that owns it"}
+               (select-keys (get-in dishes [:links :origin])
+                            [:href :external :summary]))))))
+
+  (testing "a source that stamps no href relates to nothing — the
+            origin link omits, never renders broken"
+    (let [mow (json (req :get (:self (task-by-title "Mow the lawn"))))]
+      (is (nil? (get-in mow [:links :origin])))))
 
   (testing "cross-domain ranking: a meal task and a chore, prioritized
             AGAINST each other in one ordered list"

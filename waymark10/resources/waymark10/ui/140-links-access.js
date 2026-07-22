@@ -5,14 +5,16 @@ function linksStrip(doc) {
   if (!rels.length) return null;
   const row = el("div", {class:"chips", "data-links": ""});
   for (const [rel, l] of rels)
-    /* a download link is a byte route (redirect or file body): a
-       real browser navigation, never the in-app hash router — the
-       redirect must reach the user agent */
+    /* a download link is a byte route (redirect or file body), an
+       external link leaves this engine entirely: both are a real
+       browser navigation, never the in-app hash router — the
+       redirect (or the other engine) must reach the user agent */
     row.append(el("a", Object.assign(
       {class:"chip link-chip", title: l.summary || rel},
-      l.download ? {href: l.href, target: "_blank", rel: "noopener"}
-                 : {href: "#"+l.href}),
-      l.download ? "⭳ " : null,
+      (l.download || l.external)
+        ? {href: l.href, target: "_blank", rel: "noopener"}
+        : {href: "#"+l.href}),
+      l.download ? "⭳ " : l.external ? "↗ " : null,
       title(rel), l.badge !== undefined && l.badge !== null
         ? el("b", {class:"badge", title:"count, per the server"},
             String(l.badge)) : null));
