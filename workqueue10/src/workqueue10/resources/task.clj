@@ -67,7 +67,7 @@
               ;; the confluence's routing tag — which authority this
               ;; row drinks from; the enum is the tag set main wires
               [:source {:optional true :filter #{:eq :in}}
-               [:maybe [:enum "chore" "meal"]]]
+               [:maybe [:enum "chore" "meal" "todo"]]]
               [:assignee {:optional true :filter #{:eq}}
                [:maybe [:waymark/vocab {:open true}]]]
               [:due_at {:optional true :filter #{:after} :sort true

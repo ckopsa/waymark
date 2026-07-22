@@ -10,12 +10,16 @@
 
   Env knobs: WORKQUEUE10_DSN (default the local :5433
   workqueue10_dev), WORKQUEUE10_PORT (default 8014),
-  WORKQUEUE10_CHOREPLAN_URL / WORKQUEUE10_MEALPLAN_URL (the source
-  engines the confluence drinks from — each falls back to its
-  in-memory fake source when unset, offline dev's default),
-  WORKQUEUE10_PRINCIPAL (the x-waymark-principal pushes act as —
-  default \"workqueue10\"), WORKQUEUE10_CHOREPLAN_TOKEN /
-  _MEALPLAN_TOKEN (optional bearers), WAYMARK10_DEPLOY_MODE,
+  WORKQUEUE10_CHOREPLAN_URL / WORKQUEUE10_MEALPLAN_URL /
+  WORKQUEUE10_HA_URL (the sources the confluence drinks from — each
+  falls back to its in-memory fake source when unset, offline dev's
+  default), WORKQUEUE10_PRINCIPAL (the x-waymark-principal pushes
+  act as — default \"workqueue10\"), WORKQUEUE10_CHOREPLAN_TOKEN /
+  _MEALPLAN_TOKEN (optional bearers), WORKQUEUE10_HA_TOKEN /
+  _HA_UI_URL / _HA_LISTS / _HA_ZONE (the home assistant boundary:
+  long-lived token, the browser-facing base for origin links, the
+  comma-separated todo entity ids, the zone naive due datetimes
+  parse in), WAYMARK10_DEPLOY_MODE,
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan).
 
@@ -25,6 +29,7 @@
   (:require [workqueue10.confluence :as conf]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.sources.choreplan :as chores]
+            [workqueue10.sources.homeassistant :as ha]
             [workqueue10.sources.mealplan :as meals]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
@@ -38,6 +43,9 @@
   (conf/fake-source))
 
 (defonce fake-meals
+  (conf/fake-source))
+
+(defonce fake-todos
   (conf/fake-source))
 
 (defn sources
@@ -55,7 +63,15 @@
               (meals/http-source
                {:url url :principal principal
                 :token (System/getenv "WORKQUEUE10_MEALPLAN_TOKEN")})
-              fake-meals)}))
+              fake-meals)
+     "todo" (if-some [url (System/getenv "WORKQUEUE10_HA_URL")]
+              (ha/http-source
+               {:url url
+                :ui-url (System/getenv "WORKQUEUE10_HA_UI_URL")
+                :token (System/getenv "WORKQUEUE10_HA_TOKEN")
+                :lists (System/getenv "WORKQUEUE10_HA_LISTS")
+                :zone (System/getenv "WORKQUEUE10_HA_ZONE")})
+              fake-todos)}))
 
 (defn resources
   "The one kind — what `make check-queue` (waymark10.check) assembles
@@ -67,7 +83,7 @@
   "Zero-arg so the declaration gate needs no env — the kind over the
   offline fakes."
   []
-  (resources {"chore" fake-chores "meal" fake-meals}))
+  (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos}))
 
 (defn- dsn []
   (or (System/getenv "WORKQUEUE10_DSN")

@@ -6,6 +6,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [workqueue10.confluence :as conf]
             [workqueue10.sources.choreplan :as chores]
+            [workqueue10.sources.homeassistant :as ha]
             [workqueue10.sources.mealplan :as meals]
             [workqueue10.sources.waymark :as wm]
             [waymark10.server.mirror :as mirror]))
@@ -55,6 +56,37 @@
       (is (= "thaw: Traeger brisket" (:title t)))
       (is (= "2026-07-21T16:00:00Z" (:due_at t)))
       (is (= "move 2500g brisket to the fridge" (:detail t))))))
+
+(deftest home-assistant-translation
+  (testing "status, per HA's two states — deletion is gone, never a status"
+    (is (= "open" (:status (ha/item->task "Woodworking"
+                                          {:summary "x" :status "needs_action"}
+                                          "America/Denver"))))
+    (is (= "done" (:status (ha/item->task "Woodworking"
+                                          {:summary "x" :status "completed"}
+                                          "America/Denver")))))
+
+  (testing "the list's context rides detail; description joins it"
+    (is (= "Woodworking"
+           (:detail (ha/item->task "Woodworking"
+                                   {:summary "x" :status "needs_action"}
+                                   "America/Denver"))))
+    (is (= "Woodworking — glue first"
+           (:detail (ha/item->task "Woodworking"
+                                   {:summary "x" :status "needs_action"
+                                    :description "glue first"}
+                                   "America/Denver")))))
+
+  (testing "due dates: date-only widens to the closing midnight (the
+            chore-source law); datetimes keep their offset; naive
+            local times parse in the household's zone"
+    (is (= "2026-07-26T00:00:00Z"
+           (ha/due->instant "2026-07-25" "America/Denver")))
+    (is (= "2026-07-23T01:00:00Z"
+           (ha/due->instant "2026-07-22T19:00:00-06:00" "America/Denver")))
+    (is (= "2026-07-23T01:00:00Z"
+           (ha/due->instant "2026-07-22T19:00:00" "America/Denver")))
+    (is (nil? (ha/due->instant nil "America/Denver")))))
 
 (deftest origin-hrefs
   (testing "the source client stamps the way back: the API row and

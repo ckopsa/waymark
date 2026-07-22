@@ -38,6 +38,7 @@
 (def ^:dynamic *h* nil)
 (def ^:dynamic *chores* nil)
 (def ^:dynamic *meals* nil)
+(def ^:dynamic *todos* nil)
 (def ^:dynamic *clock* nil)
 
 (use-fixtures :once
@@ -45,6 +46,7 @@
     (let [st (pg/storage db/dsn)
           chores (conf/fake-source)
           meals (conf/fake-source)
+          todos (conf/fake-source)
           clock (atom (Instant/parse "2026-07-21T08:00:00Z"))]
       (try
         (store/with-tx st
@@ -57,12 +59,14 @@
         (let [eng (mirror/with-push
                    (engine/engine {:storage st
                                    :resources (main/resources
-                                               {"chore" chores "meal" meals})
+                                               {"chore" chores "meal" meals
+                                                "todo" todos})
                                    :now-fn (fn [] @clock)}))]
           (binding [*eng* eng
                     *h* (engine/handler eng)
                     *chores* chores
                     *meals* meals
+                    *todos* todos
                     *clock* clock]
             (f)))
         (finally (pg/close! st))))))
@@ -150,15 +154,19 @@
   (conf/seed! *meals* "pt-slaw"
               {:title "prep: Coleslaw" :assignee "housekeeper"
                :due_at "2026-07-21T23:00:00Z" :status "dropped"})
+  (conf/seed! *todos* "todo.woodworking/uid-chisels"
+              {:title "Sharpen chisels" :status "open"
+               :detail "Woodworking"})
 
-  (testing "one discovery pass mints BOTH engines' rows into the one kind"
-    (is (= 5 (mirror/discover! *eng* :task)))
-    (is (= 5 (count (items-of "")))))
+  (testing "one discovery pass mints EVERY source's rows into the one kind"
+    (is (= 6 (mirror/discover! *eng* :task)))
+    (is (= 6 (count (items-of "")))))
 
   (testing "one queue, one filter grammar — across domains"
     (is (= 2 (count (items-of "?source=chore"))))
     (is (= 3 (count (items-of "?source=meal"))))
-    (is (= 4 (count (items-of "?status=open"))))
+    (is (= 1 (count (items-of "?source=todo"))))
+    (is (= 5 (count (items-of "?status=open"))))
     (is (= 3 (count (items-of "?assignee=colton"))))
     (is (= 1 (count (items-of "?overdue=true")))
         "only the lawn survived the weekend unmowed"))
@@ -202,7 +210,9 @@
       (is (= "done" (get-in done [:data :status])))
       (is (= "done" (source-status *chores* "cr-dishes"))))
     (act! (:self (task-by-title "thaw: Traeger brisket")) :complete)
-    (is (= "done" (source-status *meals* "pt-thaw"))))
+    (is (= "done" (source-status *meals* "pt-thaw")))
+    (act! (:self (task-by-title "Sharpen chisels")) :complete)
+    (is (= "done" (source-status *todos* "todo.woodworking/uid-chisels"))))
 
   (testing "a task the source dropped refuses with the guard's sentence"
     (let [p (refuse! (:self (task-by-title "prep: Coleslaw"))
