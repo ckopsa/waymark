@@ -323,6 +323,29 @@
                                 (get-in resolved [:data :external_id])
                                 #":" 2))))))))
 
+  (testing "two due affordances, one canonical fact: a day widens to
+            its closing midnight; a clock time rides verbatim; both
+            at once refuses"
+    (let [env (json (req :post "/api/tasks"
+                         {:title "Water the garden" :due_date "2026-07-23"}
+                         {"idempotency-key" (str (random-uuid))}))]
+      (is (= "2026-07-24T00:00:00Z" (get-in env [:data :due_at]))
+          "the day became its closing midnight")
+      (is (not (contains? (:data env) :due_date))
+          "the birth-door field never persists"))
+    (let [env (json (req :post "/api/tasks"
+                         {:title "Call before the office closes"
+                          :due_at "2026-07-23T22:30:00Z"}
+                         {"idempotency-key" (str (random-uuid))}))]
+      (is (= "2026-07-23T22:30:00Z" (get-in env [:data :due_at]))))
+    (let [resp (req :post "/api/tasks"
+                    {:title "Confused" :due_date "2026-07-23"
+                     :due_at "2026-07-23T22:30:00Z"}
+                    {"idempotency-key" (str (random-uuid))})]
+      (is (= 409 (:status resp)))
+      (is (= "Name one due — the day OR the clock time, not both; a day widens to its closing midnight."
+             (:detail (json resp))))))
+
   (testing "the waymark engines take no births — the schema refuses at
             the door, before any push"
     (let [resp (req :post "/api/tasks" {:title "Ghost chore" :source "chore"}

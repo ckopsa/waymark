@@ -33,8 +33,11 @@
     has nothing to say, and answers the fresh etag — the round-trip
     doubles as a freshness check, so :to :fresh is earned, not
     asserted."
-  (:require [waymark10.dsl :refer [defguard defhandler refuse resource]]
-            [waymark10.server.mirror :as mirror]))
+  (:require [waymark10.dsl :refer [defguard defguardfn defhandler refuse
+                                   resource]]
+            [waymark10.server.mirror :as mirror]
+            [waymark10.types :as t])
+  (:import (java.time LocalDate ZoneOffset)))
 
 ;; a household queue: due times matter within minutes, not seconds
 (def ttl-seconds 300)
@@ -47,6 +50,26 @@
 (defguard not-dropped
   (refuse "A task the source dropped does not complete — the authority already let it go.")
   '(not= (var :status) "dropped"))
+
+;; a create guard judges the birth INPUT (the row is nil at the
+;; door), so it's a guard FN, not an expr over row facts
+(defguardfn one-due
+  {:judges [:due_date :due_at]
+   :explain "Name one due — the day OR the clock time, not both; a day widens to its closing midnight."}
+  [_row inp _ctx]
+  (if (and (:due_date inp) (:due_at inp))
+    (t/deny)
+    (t/allow)))
+
+(defn- day-end
+  "A day-granular due → the canonical instant: the day's closing
+  midnight UTC — the chore-source law, so overdue flips the morning
+  after regardless of which door the due came through."
+  [d]
+  (-> (LocalDate/parse (str d))
+      (.plusDays 1)
+      (.atStartOfDay ZoneOffset/UTC)
+      (.toInstant)))
 
 (defhandler mark-done [row _inp _ctx]
   (assoc-in row [:data :status] "done"))
@@ -107,15 +130,31 @@
      ;; names the authority; only "todo" takes births (the waymark
      ;; engines' rows are born of their own law), and unsaid it
      ;; defaults there — capture should cost one field.
+     ;; TWO DUE AFFORDANCES, ONE CANONICAL FACT: the birth door
+     ;; offers a day (:due_date — "sometime Tuesday") and a clock
+     ;; time (:due_at); both populate the one :due_at instant the
+     ;; law, the sort, and every source compare — a day widens to
+     ;; its closing midnight at birth and the input field never
+     ;; persists. Naming both refuses (one-due): the door stays
+     ;; honest instead of silently preferring.
      :create-schema [:map
                      [:title [:string {:min 1 :max 200}]]
                      [:source {:optional true} [:maybe [:enum "todo"]]]
-                     [:due_at {:optional true} [:maybe :waymark/instant]]
+                     [:due_at {:optional true
+                               :x-display {:label "Due by (clock time)"}}
+                      [:maybe :waymark/instant]]
+                     [:due_date {:optional true
+                                 :x-display {:label "Due day (all day — becomes its closing midnight)"}}
+                      [:maybe :waymark/date]]
                      [:detail {:optional true} [:maybe [:string {:max 1000}]]]]
+     :create-guards [one-due]
      :on-create (fn [row _ctx]
-                  (-> row
-                      (update-in [:data :source] #(or % "todo"))
-                      (update-in [:data :status] #(or % "open"))))
+                  (let [d (get-in row [:data :due_date])]
+                    (-> row
+                        (update :data dissoc :due_date)
+                        (update-in [:data :due_at] #(or % (some-> d day-end)))
+                        (update-in [:data :source] #(or % "todo"))
+                        (update-in [:data :status] #(or % "open")))))
      ;; the way BACK to the resource that needs work: an :external
      ;; href — a real browser hop to the owning engine's UI, anchored
      ;; on the row. A source that stamps no href (a fake, a future
