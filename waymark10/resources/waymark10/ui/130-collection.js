@@ -313,8 +313,34 @@ function itemTable(items, opts) {
       onclick: () => opts.onSort(active && !sortDesc ? "-" + f : f)},
       lbl, el("span", {class: "sort-arrow"}, active ? (sortDesc ? " ↓" : " ↑") : " ↕"));
   };
+  /* select-all: the header checkbox drives every row box on this page
+     through their own change events (so opts.selected stays the one
+     truth); partial selections read back as indeterminate */
+  let allBox = null, rowBoxes = null, syncAll = null;
+  if (opts.selectable) {
+    rowBoxes = [];
+    allBox = el("input", {type: "checkbox", "data-bulk-check-all": "",
+      title: "Select all rows on this page",
+      onclick: e => e.stopPropagation()});
+    syncAll = () => {
+      const on = rowBoxes.filter(b => b.checked).length;
+      allBox.checked = on > 0 && on === rowBoxes.length;
+      allBox.indeterminate = on > 0 && on < rowBoxes.length;
+    };
+    allBox.addEventListener("change", () => {
+      /* capture the intent first: each row's change handler calls
+         syncAll, which rewrites allBox.checked mid-loop */
+      const want = allBox.checked;
+      for (const b of rowBoxes)
+        if (b.checked !== want) {
+          b.checked = want;
+          b.dispatchEvent(new Event("change"));
+        }
+      syncAll();
+    });
+  }
   const head = el("tr", {},
-    opts.selectable ? el("th", {}, "") : null,
+    opts.selectable ? el("th", {class:"c-check"}, allBox) : null,
     el("th", {}, "State"),
     el("th", {}, "Summary"),
     ...cols.map(colHead),
@@ -337,8 +363,11 @@ function itemTable(items, opts) {
     if (opts.selectable) {
       const box = row.querySelector("[data-bulk-check]");
       const id = item.self.split("/").pop();
-      box.addEventListener("change", () =>
-        box.checked ? opts.selected.add(id) : opts.selected.delete(id));
+      box.addEventListener("change", () => {
+        box.checked ? opts.selected.add(id) : opts.selected.delete(id);
+        syncAll();
+      });
+      rowBoxes.push(box);
     }
     if (anyActions) {
       const cell = el("td", {class:"rowactions partactions"});
