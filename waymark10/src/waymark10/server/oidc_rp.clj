@@ -239,8 +239,12 @@
      :headers {"Location"
                (str (logout-endpoint oidc) "?"
                     (query-str {"client_id" (:client-id rp)
+                                ;; land on login, not the root — the
+                                ;; URI IdP clients already register
+                                ;; (and a fresh login is the honest
+                                ;; post-logout state anyway)
                                 "post_logout_redirect_uri"
-                                (str (:app-url rp) "/")}))
+                                (str (:app-url rp) "/auth/login")}))
                "Set-Cookie" (clear-cookie rp (:cookie-name rp) "/")}
      :body ""}))
 

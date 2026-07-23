@@ -227,6 +227,9 @@
     (is (= 302 (:status resp)))
     (is (str/starts-with? (location resp)
                           (str issuer "/protocol/openid-connect/logout?")))
+    (testing "post-logout lands on login — the URI clients register"
+      (is (= "http://app.test/auth/login"
+             (get (loc-params resp) "post_logout_redirect_uri"))))
     (is (= "" (get (cookie-of resp) "waymark_session")))))
 
 ;; ── the ui redirect nicety ──────────────────────────────────────────
