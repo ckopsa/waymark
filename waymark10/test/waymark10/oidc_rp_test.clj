@@ -255,6 +255,41 @@
                                         {:headers {"accept" "text/html"
                                                    "cookie" (str "waymark_session=" session)}})))))))))
 
+;; ── the require-auth gate ───────────────────────────────────────────
+
+(deftest require-auth-closes-the-surface
+  (let [a (app {:require-auth? true})
+        session (jwt/sign {:sub "alice" :roles ["ops"]
+                           :exp (+ (now-secs) 600)}
+                          session-secret {:alg :hs256})]
+    (testing "an anonymous API request gets the honest 401"
+      (let [resp (a (get-req "/api/payouts"))]
+        (is (= 401 (:status resp)))
+        (is (= "Bearer realm=\"waymark\""
+               (get-in resp [:headers "WWW-Authenticate"])))))
+    (testing "an anonymous POST gets the 401 too — not a redirect"
+      (is (= 401 (:status (a {:request-method :post :uri "/api/teams"
+                              :headers {}})))))
+    (testing "an anonymous browser goes to login instead"
+      (let [resp (a (get-req "/api/payouts"
+                             {:headers {"accept" "text/html"}}))]
+        (is (= 302 (:status resp)))
+        (is (str/starts-with? (location resp) "/auth/login?return-to="))))
+    (testing "dev headers are NOT a credential"
+      (is (= 401 (:status (a (get-req "/api/teams"
+                                      {:headers {"x-waymark-principal" "root"}}))))))
+    (testing "a valid session passes"
+      (is (= 200 (:status (a (get-req "/api/payouts"
+                                      {:headers {"cookie" (str "waymark_session=" session)}}))))))
+    (testing "a garbage session does not"
+      (is (= 401 (:status (a (get-req "/api/payouts"
+                                      {:headers {"cookie" "waymark_session=x"}}))))))
+    (testing "a Bearer header passes the GATE (wrap-identity judges it)"
+      (is (= 200 (:status (a (get-req "/api/payouts"
+                                      {:headers {"authorization" "Bearer anything"}}))))))
+    (testing "the /auth doors stay open to the anonymous"
+      (is (= 302 (:status (a (get-req "/auth/login"))))))))
+
 (deftest no-rp-config-is-the-identity-wrap
   (let [a ((rp/wrap {:oidc (oidc/config {:issuer issuer :audience audience
                                          :jwks jwks})})

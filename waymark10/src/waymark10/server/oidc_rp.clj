@@ -289,10 +289,41 @@
        (nil? (get-in req [:headers "authorization"]))
        (nil? (resolve-session oidc req))))
 
+(defn- login-bounce [req]
+  {:status 302
+   :headers {"Location" (str "/auth/login?return-to="
+                             (url-encode (:uri req)))}
+   :body ""})
+
+(defn- credentialed?
+  "Does a credential ride this request at all? A Bearer header counts
+  by PRESENCE — wrap-identity verifies it and refuses a bad one with
+  the honest 401; the gate's job is only to reject the request that
+  brought nothing. Dev headers deliberately do NOT count: a header
+  anyone can type is not a credential."
+  [oidc req]
+  (or (some? (get-in req [:headers "authorization"]))
+      (some? (resolve-session oidc req))))
+
+(defn- refuse-anonymous
+  "The require-auth gate's no: browsers (an HTML GET) go to login,
+  everything else gets the honest 401."
+  [req]
+  (if (and (= :get (:request-method req))
+           (some-> (get-in req [:headers "accept"])
+                   (str/includes? "text/html")))
+    (login-bounce req)
+    (assoc-in (problem 401 "Unauthenticated"
+                       "This engine requires a credential — Authorization: Bearer, or the session cookie /auth/login mints.")
+              [:headers "WWW-Authenticate"]
+              "Bearer realm=\"waymark\"")))
+
 (defn wrap
   "The ring wrap engine/start! composes: the three /auth doors in
   front, everything else through to the engine. No :rp config = the
-  identity wrap, untouched."
+  identity wrap, untouched. :rp {:require-auth? true} closes the
+  whole surface to anonymous requests — only the /auth doors stay
+  open (compose the health probe OUTSIDE this wrap)."
   [eng]
   (let [oidc (:oidc eng)
         rp (:rp oidc)]
@@ -300,15 +331,15 @@
       (if (nil? rp)
         handler
         (fn [req]
-          (if (= :get (:request-method req))
-            (case (:uri req)
-              "/auth/login" (login oidc req)
-              "/auth/callback" (callback oidc req)
-              "/auth/logout" (logout oidc req)
-              (if (ui-redirect? oidc req)
-                {:status 302
-                 :headers {"Location" (str "/auth/login?return-to="
-                                           (url-encode (:uri req)))}
-                 :body ""}
-                (handler req)))
-            (handler req)))))))
+          (let [get? (= :get (:request-method req))]
+            (cond
+              (and get? (= (:uri req) "/auth/login")) (login oidc req)
+              (and get? (= (:uri req) "/auth/callback")) (callback oidc req)
+              (and get? (= (:uri req) "/auth/logout")) (logout oidc req)
+
+              (and (:require-auth? rp) (not (credentialed? oidc req)))
+              (refuse-anonymous req)
+
+              (and get? (ui-redirect? oidc req)) (login-bounce req)
+
+              :else (handler req))))))))
