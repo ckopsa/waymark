@@ -11,8 +11,11 @@
             :audience \"mealplan\"
             :jwks-uri \"https://idp/…/certs\"   ; fetched + cached
             :jwks {…}                            ; static map (tests)
-            :roles-claim :roles                  ; configurable
+            :roles-claim :roles                  ; keyword or path vector
             :type-claim :actor_type}}            ; default :human
+
+  A claim option given as a vector walks nested claims — Keycloak's
+  realm roles live at [:realm_access :roles].
 
   Absent config = the dev-header resolver unchanged; WITH config the
   dev headers remain the no-Bearer fallback — waymark9's line: the
@@ -47,16 +50,25 @@
 (defn config
   "Validate the engine's :oidc opts at boot and add the JWKS cache —
   a static :jwks parses once here. Definition errors, not
-  request-time surprises."
-  [{:keys [issuer audience jwks-uri jwks] :as opts}]
+  request-time surprises. An :rp sub-map (the browser flow,
+  waymark10.server.oidc-rp) validates here too: the same boot is the
+  same gate."
+  [{:keys [issuer audience jwks-uri jwks rp] :as opts}]
   (doseq [[k v] {:issuer issuer :audience audience}]
     (when (or (nil? v) (str/blank? (str v)))
       (throw (t/definition-error (str ":oidc config declares no " k)))))
   (when (and (nil? jwks-uri) (nil? jwks))
     (throw (t/definition-error ":oidc config needs :jwks-uri (fetched) or :jwks (static)")))
-  (merge {:roles-claim :roles :type-claim :actor_type}
-         opts
-         {:cache (atom (some-> jwks key-map))}))
+  (when rp
+    (doseq [k [:client-id :client-secret :app-url :session-secret]]
+      (when (str/blank? (str (get rp k)))
+        (throw (t/definition-error (str ":oidc :rp config declares no " k))))))
+  (cond-> (merge {:roles-claim :roles :type-claim :actor_type}
+                 opts
+                 {:cache (atom (some-> jwks key-map))})
+    rp (assoc :rp (merge {:cookie-name "waymark_session"
+                          :session-ttl-s 28800}
+                         rp))))
 
 (defn- refuse
   "One 401 problem, WWW-Authenticate riding the response headers."
@@ -124,17 +136,32 @@
                              (str "The token failed validation (" (name cause) ")."))
                            "The bearer token could not be read."))))))))
 
+(defn- claim-at
+  "A claim option is a keyword or a path vector into nested claims —
+  Keycloak's realm roles live at [:realm_access :roles]."
+  [claims path]
+  (if (sequential? path) (get-in claims path) (get claims path)))
+
 (defn- principal-of [oidc claims]
   (let [sub (:sub claims)
         _ (when (str/blank? (str sub))
             (throw (refuse "The token carries no sub claim.")))
-        roles (get claims (:roles-claim oidc))
-        at (some-> (get claims (:type-claim oidc)) str str/lower-case keyword)]
+        roles (claim-at claims (:roles-claim oidc))
+        at (some-> (claim-at claims (:type-claim oidc)) str str/lower-case keyword)]
     (t/principal {:id (str sub)
                   ;; system stays engine-internal: an IdP cannot mint it
                   :type (if (contains? #{:human :agent} at) at :human)
                   :roles (set (when (sequential? roles) (map str roles)))
                   :display (or (:name claims) (:email claims) (str sub))})))
+
+(defn verify
+  "A raw token → its verified claims and the Principal they name —
+  the RP callback's verification (waymark10.server.oidc-rp), the
+  IDENTICAL path the bearer resolver walks. Throws the same 401
+  problems."
+  [oidc token]
+  (let [claims (claims-of oidc token)]
+    {:claims claims :principal (principal-of oidc claims)}))
 
 (defn resolve-principal
   "The bearer resolver: nil when no Authorization: Bearer rides the

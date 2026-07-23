@@ -73,6 +73,7 @@
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
+            [waymark10.server.oidc-rp :as oidc-rp]
             [waymark10.server.openapi :as openapi]
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
@@ -1177,15 +1178,16 @@
 
 (defn- wrap-identity
   "The identity boundary (phase 9a), judgment-style: the principal
-  (bearer token via the engine's :oidc config, else dev headers), the
-  members suspension gate, and the grant visibility all resolve ONCE
-  and ride the request — every handler reads the same resolved
-  identity, never the raw headers. Sits inside the problem boundary
-  so its refusals (401 bad token, 403 suspended) project like any
-  problem."
+  (bearer token via the engine's :oidc config, else the RP session
+  cookie, else dev headers), the members suspension gate, and the
+  grant visibility all resolve ONCE and ride the request — every
+  handler reads the same resolved identity, never the raw headers.
+  Sits inside the problem boundary so its refusals (401 bad token,
+  403 suspended) project like any problem."
   [handler eng]
   (fn [req]
     (let [principal (or (oidc/resolve-principal (:oidc eng) (:headers req))
+                        (oidc-rp/resolve-session (:oidc eng) req)
                         (dev-principal (:headers req)))
           ;; batch B (flagged): a presented invite token rides into the
           ;; gate — first authenticated sight binds an invited member
