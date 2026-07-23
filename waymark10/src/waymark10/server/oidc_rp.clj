@@ -186,13 +186,17 @@
       (wire/read-json (if (string? body) body (slurp body))))))
 
 (defn- mint-session
-  "The session cookie's JWT: the principal's OWN claims, capped at
-  min(access-token exp, now + ttl) — the session never outlives the
-  credential that justified it."
-  [rp principal token-exp]
+  "The session cookie's JWT: the principal's OWN claims, living
+  :session-ttl-s — NOT the access token's minutes-long exp. The
+  session is the app's own credential, minted after identity was
+  verified once; capping it at the IdP token's lifetime would bounce
+  every browser through the IdP every few minutes and, worse, let a
+  mid-flight session silently expire between form load and submit.
+  The trade (recorded): a session can outlive the IdP's own session;
+  the ttl bounds it and /auth/logout ends both."
+  [rp principal]
   (let [now (now-secs)
-        cap (+ now (:session-ttl-s rp))
-        exp (if token-exp (min (long token-exp) cap) cap)]
+        exp (+ now (:session-ttl-s rp))]
     {:exp exp
      :token (jwt/sign {:sub (:id principal)
                        :roles (vec (:roles principal))
@@ -217,8 +221,8 @@
       :else
       (if-some [tokens (exchange-code oidc code (:verifier stash))]
         (try
-          (let [{:keys [claims principal]} (oidc/verify oidc (:access_token tokens))
-                {:keys [exp token]} (mint-session rp principal (:exp claims))]
+          (let [{:keys [principal]} (oidc/verify oidc (:access_token tokens))
+                {:keys [exp token]} (mint-session rp principal)]
             {:status 302
              :headers {"Location" (:return-to stash)
                        "Set-Cookie" [(set-cookie rp (:cookie-name rp) token

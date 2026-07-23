@@ -72,6 +72,21 @@ $who.addEventListener("change", () => {
   render();
 });
 function principalId() { return $who.value.trim(); }
+
+/* a REAL signed-in identity (bearer or session cookie, resolved by the
+   engine and echoed on well-known) retires the dev box: the header
+   shows who the engine says you are, with the door out. When the dev
+   box holds a value, it stays the visible identity — the box's whole
+   point is switching principals in dev. */
+function reflectIdentity(principal) {
+  if (!principal || principalId()) return;
+  $who.style.display = "none";
+  if ($("#signedin")) return;
+  $who.after(el("span", {id: "signedin",
+                         title: `roles: ${(principal.roles || []).join(", ") || "none"}`},
+    principal.display || principal.id, " ",
+    el("a", {href: "/auth/logout", title: "sign out"}, "sign out")));
+}
 function principalHeaders() {
   const h = {};
   const who = principalId();

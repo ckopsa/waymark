@@ -288,6 +288,7 @@
 (defn- well-known [eng]
   (fn [req]
     (let [vis (visibility-of req)
+          principal (principal-of req)
           resources (cond->> (inv/resources eng)
                       vis (filter (fn [[k _]] ((:kind? vis) k))))]
       (json-response
@@ -316,7 +317,15 @@
          ;; the declared surfaces (phase 9b) — hidden from a scoped
          ;; request, whose surface routes 404 anyway
          (and (seq (:surfaces eng)) (nil? vis))
-         (assoc :surfaces (surface/well-known-entry (:surfaces eng))))))))
+         (assoc :surfaces (surface/well-known-entry (:surfaces eng)))
+
+         ;; who the engine resolved this request to — the UI's
+         ;; signed-in identity; absent when anonymous
+         (not= t/anonymous principal)
+         (assoc :principal {:id (:id principal)
+                            :display (or (:display principal) (:id principal))
+                            :type (name (:type principal :human))
+                            :roles (vec (sort (:roles principal)))}))))))
 
 (defn- kind-schema [eng]
   (fn [{{:keys [kind]} :path-params :as req}]

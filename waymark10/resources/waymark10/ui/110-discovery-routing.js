@@ -3,7 +3,9 @@ let wellKnownCache = null;   // caches the PROMISE: concurrent callers share
 function wellKnown() {
   if (!wellKnownCache)
     wellKnownCache = api("/api/.well-known/waymark").then(
-      r => { if (!r.ok) throw new Error("no discovery"); return r.body; },
+      r => { if (!r.ok) throw new Error("no discovery");
+             reflectIdentity(r.body.principal);
+             return r.body; },
       err => { wellKnownCache = null; throw err; });
   return wellKnownCache;
 }
