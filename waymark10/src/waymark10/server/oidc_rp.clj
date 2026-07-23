@@ -275,13 +275,15 @@
 (defn- ui-redirect?
   "An anonymous HTML GET on the ui: a browser that should be sent to
   login, not shown a 401 problem. API requests keep honest 401s —
-  the Accept header is the tell."
-  [rp req]
-  (and (:login-redirect? rp)
+  the Accept header is the tell. The session is RESOLVED, not merely
+  present: a stale or tampered cookie must bounce to login, not
+  slip past the door because it exists."
+  [oidc req]
+  (and (:login-redirect? (:rp oidc))
        (str/starts-with? (:uri req) "/api/-/ui")
        (some-> (get-in req [:headers "accept"]) (str/includes? "text/html"))
        (nil? (get-in req [:headers "authorization"]))
-       (nil? (get (cookies req) (:cookie-name rp)))))
+       (nil? (resolve-session oidc req))))
 
 (defn wrap
   "The ring wrap engine/start! composes: the three /auth doors in
@@ -299,7 +301,7 @@
               "/auth/login" (login oidc req)
               "/auth/callback" (callback oidc req)
               "/auth/logout" (logout oidc req)
-              (if (ui-redirect? rp req)
+              (if (ui-redirect? oidc req)
                 {:status 302
                  :headers {"Location" (str "/auth/login?return-to="
                                            (url-encode (:uri req)))}

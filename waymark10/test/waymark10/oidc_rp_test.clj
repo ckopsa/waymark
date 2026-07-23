@@ -243,10 +243,17 @@
     (testing "an API client keeps its honest answer"
       (is (= 200 (:status (a (get-req "/api/-/ui"
                                       {:headers {"accept" "application/json"}}))))))
-    (testing "a browser already holding a session passes through"
-      (is (= 200 (:status (a (get-req "/api/-/ui"
+    (testing "a garbage session cookie still bounces — presence is not validity"
+      (is (= 302 (:status (a (get-req "/api/-/ui"
                                       {:headers {"accept" "text/html"
-                                                 "cookie" "waymark_session=x"}}))))))))
+                                                 "cookie" "waymark_session=x"}}))))))
+    (testing "a browser holding a REAL session passes through"
+      (let [session (jwt/sign {:sub "alice" :roles ["ops"]
+                               :exp (+ (now-secs) 600)}
+                              session-secret {:alg :hs256})]
+        (is (= 200 (:status (a (get-req "/api/-/ui"
+                                        {:headers {"accept" "text/html"
+                                                   "cookie" (str "waymark_session=" session)}})))))))))
 
 (deftest no-rp-config-is-the-identity-wrap
   (let [a ((rp/wrap {:oidc (oidc/config {:issuer issuer :audience audience
