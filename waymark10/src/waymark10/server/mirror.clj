@@ -1490,10 +1490,13 @@
   and race-salvaged anyway. A dead process stops heartbeating and a
   peer claims at TTL; a stopped one hands the lease back.
 
-  The boot heal precedes the first discovery and belongs to
-  whichever process actually holds the lease when it runs: a restart
-  re-pulls what it already holds, then discovers what it doesn't
-  (and counts as every kind's first cadenced resync)."
+  The boot pass belongs to whichever process actually holds the
+  lease when it runs, and walks PER KIND in priority order: heal,
+  then discover, then the next kind — a restart re-pulls what it
+  already holds and fills what it doesn't, core kinds whole before
+  a reference table's heal even starts (the all-heals-first shape
+  never survived node churn long enough to mint anything). Each
+  kind's boot heal counts as its first cadenced resync."
   [eng]
   (let [stop (CountDownLatch. 1)
         st (:storage eng)
@@ -1515,6 +1518,12 @@
                                     (ex-message e))
                              false))))
         heal (fn []
+               ;; per KIND, heal THEN discover, in priority order — a
+               ;; kind's fill must not wait for every other kind's heal
+               ;; (observed: node churn kept restarting the all-heals
+               ;; walk and the core kind's first fill never ran; the
+               ;; taker now mints payout minutes in, and a
+               ;; restart's re-walk costs only the set diff)
                (doseq [kind (mirror-kinds eng) :while @held?]
                  (when-some [{:keys [checked rewritten gone]}
                              (resync! eng kind)]
@@ -1522,7 +1531,13 @@
                           rewritten " rewritten"
                           (when (pos? (long gone))
                             (str ", " gone " gone-from-feed")))
-                   (swap! last-resync assoc kind (System/currentTimeMillis)))))
+                   (swap! last-resync assoc kind (System/currentTimeMillis)))
+                 (when @held?
+                   (swap! last-run assoc kind (System/currentTimeMillis))
+                   (try (discover! eng kind)
+                        (catch Exception e
+                          (warn! "discovery pass for " (name kind)
+                                 " failed: " (ex-message e)))))))
         tick (fn []
                (doseq [kind (mirror-kinds eng)
                        :while @held?
