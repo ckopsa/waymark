@@ -1,5 +1,21 @@
 # meals.kopsa.info: the mealplan9 → mealplan10 cutover
 
+> **DONE 2026-07-23 — but not by this runbook's window.** The data
+> check before the window found the truth had already moved: the
+> family had been living in meals10 since the 2026-07-15 seed
+> (v9's last human write was 2026-07-13; every v9 count was matched
+> or exceeded in v10, and v9's final writes were all present there).
+> Running the migration would have DESTROYED a week of family data
+> in the name of copying stale data over it. So no migration ran:
+> fresh dumps of both databases were taken (forced `mealplan-backup`
+> run, 02:17 UTC), then the traefik router simply swapped —
+> `meals.kopsa.info` now routes to the `mealplan10` job (alias
+> `meals10` kept, `/` redirects to `/api/-/ui`), and the v9 job runs
+> unrouted as the rollback anchor until 2026-07-30 (decommission
+> tracked in the infra repo's beads). Lesson for the next cutover: a
+> staging app the family can reach WILL become the system of record;
+> re-verify which side is the truth before any window opens.
+
 The runbook for moving the family app from Python waymark9 to Clojure
 waymark10. Everything here is rehearsed except the two prod-only
 steps (the backup and the real dry run); the rollback path is the
