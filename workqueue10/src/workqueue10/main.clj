@@ -37,6 +37,7 @@
             [workqueue10.sources.choreplan :as chores]
             [workqueue10.sources.homeassistant :as ha]
             [workqueue10.sources.mealplan :as meals]
+            [waymark10.dsl :refer [in-domain]]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
@@ -111,9 +112,9 @@
   confluence's tag → TaskSource map; adapter: the family calendar's
   event boundary."
   [srcs adapter]
-  (-> [(task-resource (conf/confluence srcs))]
-      (conj chore chore-run day)
-      (into (mealplan/resources adapter))))
+  (-> (in-domain :queue [(task-resource (conf/confluence srcs))])
+      (into (in-domain :chores [chore chore-run day]))
+      (into (in-domain :meals (mealplan/resources adapter)))))
 
 (def surfaces
   "Both decision screens, one engine: the housekeeper's day board and
