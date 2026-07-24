@@ -118,6 +118,16 @@
   select, input, textarea, button {
     font: 13.5px/1.4 var(--sans); color: inherit; border: 1px solid var(--line);
     border-radius: var(--radius); padding: 6px 9px; background: var(--panel); }
+  /* the ref combobox (forms.js comboUpgrade): filter input + dropdown */
+  .combo { position: relative; display: inline-block; min-width: 260px; }
+  .combo input { width: 100%; box-sizing: border-box; }
+  .combo-list { position: absolute; z-index: 30; left: 0; right: 0; top: 100%;
+    max-height: 240px; overflow-y: auto; background: var(--panel);
+    border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: 0 4px 14px rgba(0,0,0,.10); }
+  .combo-item { padding: 6px 9px; cursor: pointer; font-size: 13px; }
+  .combo-item:hover { background: var(--chipbg); }
+  .combo-more { padding: 6px 9px; font-size: 12px; color: var(--muted); }
   textarea.mono { font-family: var(--mono); font-size: 12px; }
   button { cursor: pointer; }
   button:hover { border-color: var(--muted); }

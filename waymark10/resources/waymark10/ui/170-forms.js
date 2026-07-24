@@ -107,13 +107,88 @@ async function refOptions(select, rawProp, current, admitted) {
   const params = {"page[size]": "100"};
   for (const [f, v] of Object.entries(xref.pick || {}))
     params[f] = Array.isArray(v) ? v.join(",") : String(v);
-  const {ok, body} = await api(mergeParams(href, params));
+  /* the whole collection, not the first page: next links are followed
+     until the edge (a kind past the sanity cap offers its first
+     thousand — a picker that big wants a filter, not a scroll) */
+  let {ok, body} = await api(mergeParams(href, params));
   if (!ok) { (admit || []).forEach(id => append(id)); return; }
   const summaries = new Map();
-  for (const item of (body.data || {}).items || [])
-    summaries.set(item.self.split("/").pop(), item.summary);
-  for (const id of admit || [...summaries.keys()])
-    append(id, summaries.get(id));
+  for (let pages = 0; pages < 10; pages++) {
+    for (const item of (body.data || {}).items || [])
+      summaries.set(item.self.split("/").pop(), item.summary);
+    const next = body.links?.next?.href;
+    if (!next) break;
+    ({ok, body} = await api(next));
+    if (!ok) break;
+  }
+  const entries = (admit || [...summaries.keys()])
+    .map(id => [id, summaries.get(id) || id]);
+  entries.forEach(([id, label]) => append(id, label));
+  /* past a scrollable handful, a select is a haystack: upgrade to a
+     combobox — the select stays as the hidden value carrier (its
+     [name] is what collectValues reads), a filter input fronts it */
+  if (entries.length > 20) comboUpgrade(select, entries, current);
+}
+/* type-to-filter over an already-loaded ref picker: filtering is
+   client-side (refOptions fetched the whole collection), selection
+   writes through to the hidden select so submit paths never change */
+function comboUpgrade(select, entries, current) {
+  select.style.display = "none";
+  const label0 = current != null
+    ? (entries.find(([id]) => id === String(current)) || [])[1] : "";
+  const input = el("input", {type: "text", value: label0 || "",
+    placeholder: "type to search " + entries.length + " options…",
+    autocomplete: "off"});
+  const list = el("div", {class: "combo-list", hidden: ""});
+  const wrap = el("div", {class: "combo"}, input, list);
+  select.after(wrap);
+  const CAP = 50;
+  let visible = [];
+  const show = q => {
+    const needle = (q || "").trim().toLowerCase();
+    visible = needle
+      ? entries.filter(([, l]) => (l || "").toLowerCase().includes(needle))
+      : entries;
+    list.replaceChildren(
+      ...visible.slice(0, CAP).map(([id, l]) =>
+        el("div", {class: "combo-item", "data-id": id}, l)),
+      ...(visible.length > CAP
+        ? [el("div", {class: "combo-more"},
+              "… " + (visible.length - CAP) + " more — keep typing")]
+        : []),
+      ...(visible.length ? [] :
+        [el("div", {class: "combo-more"}, "no match")]));
+    list.hidden = false;
+  };
+  const pick = (id, l) => {
+    select.value = id;
+    select.dispatchEvent(new Event("change", {bubbles: true}));
+    input.value = l;
+    list.hidden = true;
+  };
+  input.addEventListener("focus", () => show(input.value === label0 ? "" : input.value));
+  input.addEventListener("input", () => {
+    /* an edited label is no longer a choice — until picked again */
+    if (select.value && input.value !==
+        (entries.find(([id]) => id === select.value) || [])[1])
+      { select.value = ""; }
+    show(input.value);
+  });
+  input.addEventListener("keydown", e => {
+    if (e.key === "Enter" && visible.length)
+      { e.preventDefault(); pick(visible[0][0], visible[0][1]); }
+    if (e.key === "Escape") list.hidden = true;
+  });
+  input.addEventListener("blur", () => setTimeout(() => {
+    list.hidden = true;
+    /* a blur with no picked value clears a half-typed label */
+    if (!select.value) input.value = "";
+  }, 150));
+  list.addEventListener("mousedown", e => {
+    const item = e.target.closest(".combo-item");
+    if (item) { e.preventDefault();
+      pick(item.dataset.id, item.textContent); }
+  });
 }
 /* keystroke validation: the JSON schema judges as you type */
 function clientMessages(raw, rawProp, required) {
