@@ -363,12 +363,15 @@
 
 (defn- credentialed?
   "Does a credential ride this request at all? A Bearer header counts
-  by PRESENCE — wrap-identity verifies it and refuses a bad one with
-  the honest 401; the gate's job is only to reject the request that
-  brought nothing. Dev headers deliberately do NOT count: a header
+  by SHAPE — `Bearer <token>` — not mere presence: wrap-identity only
+  judges headers the bearer resolver matches, so a malformed or empty
+  Authorization would otherwise fall through to anonymous and slip
+  the gate entirely. Shaped-but-invalid still gets its honest 401
+  from verification. Dev headers deliberately do NOT count: a header
   anyone can type is not a credential."
   [oidc req]
-  (or (some? (get-in req [:headers "authorization"]))
+  (or (some? (some->> (get-in req [:headers "authorization"])
+                      (re-matches #"(?i)bearer\s+\S+")))
       (some? (resolve-session oidc req))))
 
 (defn- refuse-anonymous

@@ -284,9 +284,16 @@
     (testing "a garbage session does not"
       (is (= 401 (:status (a (get-req "/api/payouts"
                                       {:headers {"cookie" "waymark_session=x"}}))))))
-    (testing "a Bearer header passes the GATE (wrap-identity judges it)"
+    (testing "a Bearer-SHAPED header passes the GATE (wrap-identity judges it)"
       (is (= 200 (:status (a (get-req "/api/payouts"
                                       {:headers {"authorization" "Bearer anything"}}))))))
+    (testing "a malformed Authorization is NOT a credential — the
+              resolver would never judge it, so anonymous would slip
+              the gate wearing an empty header"
+      (is (= 401 (:status (a (get-req "/api/payouts"
+                                      {:headers {"authorization" "Bearer "}})))))
+      (is (= 401 (:status (a (get-req "/api/payouts"
+                                      {:headers {"authorization" "Basic dXNlcjpwdw=="}}))))))
     (testing "the /auth doors stay open to the anonymous"
       (is (= 302 (:status (a (get-req "/auth/login"))))))))
 
