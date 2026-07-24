@@ -57,3 +57,15 @@
                    :principal principal
                    :token token
                    :token-fn token-fn}))
+
+(defn engine-source
+  "The stage-1 fold: chore_run lives in THIS engine — the confluence
+  drinks in-process. config: :engine-ref, :ui-base, :principal (see
+  sources.waymark/engine-source)."
+  [{:keys [engine-ref ui-base principal]}]
+  (wm/engine-source {:engine-ref engine-ref
+                     :ui-base ui-base
+                     :kind-path "chore_runs"
+                     :discover-query "state=due"
+                     :row->task run->task
+                     :principal principal}))

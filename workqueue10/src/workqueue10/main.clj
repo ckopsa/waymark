@@ -28,7 +28,8 @@
   Schema evolution: `make migrate-queue` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
   additionally the state-rename UPDATEs."
-  (:require [workqueue10.confluence :as conf]
+  (:require [choreplan10.main :as choreplan]
+            [workqueue10.confluence :as conf]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.sources.choreplan :as chores]
             [workqueue10.sources.homeassistant :as ha]
@@ -52,10 +53,21 @@
 (defonce fake-todos
   (conf/fake-source))
 
+(defonce engine-ref
+  ;; the stage-1 fold's late binding: in-process sources need the
+  ;; engine that hosts them, and the engine's registry needs the
+  ;; sources — start! delivers this between engine and serve
+  (atom nil))
+
+(defn- ui-base []
+  (or (System/getenv "WAYMARK10_OIDC_APP_URL") "http://localhost:8014"))
+
 (defn sources
-  "The confluence's tag → TaskSource map. Each tag goes real when its
-  URL is set, fake otherwise — a laptop can drink from a live
-  choreplan while mealplan stays scripted."
+  "The confluence's tag → TaskSource map. The chore kinds live in
+  THIS engine since the stage-1 fold (waymark-bwu.1) — their source
+  is in-process unless WORKQUEUE10_CHOREPLAN_URL points at a separate
+  engine (the pre-fold posture, kept for the transition). The rest go
+  real when their URL is set, fake otherwise."
   []
   (let [principal (System/getenv "WORKQUEUE10_PRINCIPAL")]
     {"chore" (if-some [url (System/getenv "WORKQUEUE10_CHOREPLAN_URL")]
@@ -66,7 +78,9 @@
                  ;; mints against the source's audience scope, fresh
                  ;; every hour (waymark-mvl); a static _TOKEN wins
                  :token-fn (oidc/outbound-token-fn "waymark-choreplan10")})
-               fake-chores)
+               (chores/engine-source
+                {:engine-ref engine-ref :ui-base (ui-base)
+                 :principal principal}))
      "meal" (if-some [url (System/getenv "WORKQUEUE10_MEALPLAN_URL")]
               (meals/http-source
                {:url url :principal principal
@@ -84,16 +98,21 @@
               fake-todos)}))
 
 (defn resources
-  "The one kind — what `make check-queue` (waymark10.check) assembles
-  too. srcs: the confluence's tag → TaskSource map."
-  [srcs]
-  [(task-resource (conf/confluence srcs))])
+  "The queue's kind plus the folded chore registry (waymark-bwu.1):
+  chore, chore_run, day, and the prep_task mirror — choreplan10's
+  declarations, hosted by THIS engine; one domestic economics. srcs:
+  the confluence's tag → TaskSource map; feed: the prep_task mirror's
+  mealplan boundary (retires with stage 2, when meals fold in too)."
+  [srcs feed]
+  (into [(task-resource (conf/confluence srcs))]
+        (choreplan/resources feed)))
 
 (defn check-resources
-  "Zero-arg so the declaration gate needs no env — the kind over the
-  offline fakes."
+  "Zero-arg so the declaration gate needs no env — every kind over
+  the offline fakes."
   []
-  (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos}))
+  (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos}
+             choreplan/fake-feed))
 
 (defn- dsn []
   (or (System/getenv "WORKQUEUE10_DSN")
@@ -115,7 +134,9 @@
         ;; seam in mirror/with-push) — the embedding wraps
         eng (mirror/with-push
              (engine/engine {:storage storage
-                             :resources (resources (sources))
+                             :resources (resources (sources)
+                                                   (choreplan/feed))
+                             :surfaces choreplan/surfaces
                              :deploy-mode (deploy-mode)
                              ;; dev-only, and only when asked: production
                              ;; posture is refuse-on-drift
@@ -125,6 +146,9 @@
                              ;; (WAYMARK10_OIDC_*); absent env = the
                              ;; dev-header resolver, unchanged
                              :oidc (oidc/from-env)}))
+        ;; the in-process sources' late binding: delivered BEFORE
+        ;; start! wakes the discovery runner
+        _ (reset! engine-ref eng)
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         server (engine/start! eng port
                               {:wrap-handler (oidc-rp/wrap-handler eng)})]
@@ -154,7 +178,8 @@
   [& _]
   (let [storage (pg/storage (dsn))]
     (try
-      (let [reg (engine/full-registry (resources (sources)))
+      (let [reg (engine/full-registry (resources (sources)
+                                                 (choreplan/feed)))
             steps (migrate/plan storage (vals (:kinds reg)))]
         (if (empty? steps)
           (println "workqueue10: storage matches the declarations — empty plan.")

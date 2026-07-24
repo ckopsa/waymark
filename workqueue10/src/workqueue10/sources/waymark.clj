@@ -16,6 +16,7 @@
   throw that lands the queue row conflicted."
   (:require [clojure.string :as str]
             [workqueue10.confluence :as conf]
+            [waymark10.server.engine :as engine]
             [waymark10.wire :as wire])
   (:import (java.net URI URLEncoder)
            (java.net.http HttpClient HttpRequest
@@ -32,37 +33,88 @@
 (defn- self->id [self]
   (last (str/split (str self) #"/")))
 
-(defn- request ^HttpRequest [{:keys [base headers token-fn]} method path extra]
-  (let [b (-> (HttpRequest/newBuilder (URI/create (str base path)))
-              (.timeout (Duration/ofSeconds 20)))]
-    ;; the bearer is asked for PER REQUEST — a token-fn that refreshes
-    ;; (oidc/client-credentials-fn) never goes stale in a header map
-    (doseq [[^String k ^String v] (merge headers
-                                         (when token-fn
-                                           {"authorization"
-                                            (str "Bearer " (token-fn))})
-                                         extra)]
-      (.header b k v))
-    (.build (case method
-              :get (.GET b)
-              :post (.POST b (HttpRequest$BodyPublishers/noBody))))))
+(defn- parse-body
+  "The response body → its envelope, defensively: on a refusal status
+  the body may be a proxy's PLAIN-TEXT error page ('Bad Gateway'), and
+  a parse crash there would erase the status the caller needs
+  (waymark-t6s — the raw exception killed the resync loop). A 2xx
+  that will not parse still throws: a healthy engine always speaks
+  JSON, so garbage is unreachable, never an empty feed."
+  [status ^String body]
+  (try (some-> body not-empty wire/read-json)
+       (catch Exception e
+         (when (< status 400)
+           (throw (ex-info (str "the source answered " status
+                                " with an unreadable body")
+                           {} e)))
+         nil)))
+
+(defn- http-transport
+  "The over-the-wire transport: (fn [method path extra]) →
+  {:status :etag :env}. The bearer is asked for PER REQUEST — a
+  token-fn that refreshes (oidc/client-credentials-fn) never goes
+  stale in a header map. A connection failure throws raw —
+  unreachable, as the protocol asks."
+  [{:keys [url headers token-fn]}]
+  (let [client (-> (HttpClient/newBuilder)
+                   (.connectTimeout (Duration/ofSeconds 10))
+                   (.build))
+        base (str/replace (str url) #"/+$" "")]
+    (fn [method path extra]
+      (let [b (-> (HttpRequest/newBuilder (URI/create (str base path)))
+                  (.timeout (Duration/ofSeconds 20)))
+            _ (doseq [[^String k ^String v]
+                      (merge headers
+                             (when token-fn
+                               {"authorization" (str "Bearer " (token-fn))})
+                             extra)]
+                (.header b k v))
+            req (.build (case method
+                          :get (.GET b)
+                          :post (.POST b (HttpRequest$BodyPublishers/noBody))))
+            resp (.send client req (HttpResponse$BodyHandlers/ofString))
+            status (.statusCode resp)]
+        {:status status
+         :etag (.orElse (.firstValue (.headers resp) "etag") nil)
+         :env (parse-body status (.body resp))}))))
+
+(defn- engine-transport
+  "The in-process transport: the SAME envelope semantics, served by
+  the engine's own ring handler — no socket, no bearer. Identity is
+  the dev-header principal, legitimate again because the request
+  never crosses the network edge (the require-auth gate lives in the
+  http server's wrap, not in the handler). :engine-ref is an IDeref
+  delivering the engine after boot; a call before delivery throws —
+  unreachable, same as a source that is not up yet."
+  [{:keys [engine-ref principal]}]
+  (let [handler (delay (engine/handler @engine-ref))]
+    (fn [method path extra]
+      (when (nil? @engine-ref)
+        (throw (ex-info "the engine is not booted yet" {})))
+      (let [[uri q] (str/split (str path) #"\?" 2)
+            resp (@handler
+                  {:request-method method :uri uri :query-string q
+                   :headers (merge {"x-waymark-principal"
+                                    (or principal "workqueue10")
+                                    "accept" "application/json"}
+                                   extra)})
+            status (:status resp)]
+        {:status status
+         :etag (or (get-in resp [:headers "ETag"])
+                   (get-in resp [:headers "etag"]))
+         :env (parse-body status (str (:body resp)))}))))
 
 (defn- send!
-  "One request → {:etag … :env …}; non-2xx throws with the status in
-  ex-data (pull-many reads it to tell a gone row from a down feed);
-  a connection failure throws raw — unreachable, as the protocol
-  asks."
-  [{:keys [^HttpClient client] :as src} method path & [extra-headers]]
-  (let [resp (.send client (request src method path extra-headers)
-                    (HttpResponse$BodyHandlers/ofString))
-        status (.statusCode resp)
-        env (some-> ^String (.body resp) not-empty wire/read-json)]
+  "One request through the transport → {:etag … :env …}; non-2xx
+  throws with the status in ex-data (pull-many reads it to tell a
+  gone row from a down feed)."
+  [{:keys [transport]} method path & [extra-headers]]
+  (let [{:keys [status etag env]} (transport method path extra-headers)]
     (when (>= status 400)
       (throw (ex-info (str "the source answered " status " for "
                            (name method) " " path)
                       {:status status :problem env})))
-    {:etag (.orElse (.firstValue (.headers resp) "etag") nil)
-     :env env}))
+    {:etag etag :env env}))
 
 (def ^:private page-size 100)
 
@@ -91,8 +143,8 @@
          :source_href (str base self)
          :source_ui_href (str base "/api/-/ui#" self)))
 
-(defrecord WaymarkSource [^HttpClient client base kind-path discover-query
-                          row->task headers token-fn]
+(defrecord WaymarkSource [transport base kind-path discover-query
+                          row->task]
   conf/TaskSource
   (source-discover [this]
     (loop [n 1 acc []]
@@ -157,13 +209,31 @@
   [{:keys [url kind-path discover-query row->task principal token
            token-fn]}]
   (->WaymarkSource
-   (-> (HttpClient/newBuilder)
-       (.connectTimeout (Duration/ofSeconds 10))
-       (.build))
+   (http-transport
+    {:url url
+     :headers {"x-waymark-principal" (or principal "workqueue10")
+               "accept" "application/json"}
+     :token-fn (or (some-> (not-empty (str (or token ""))) constantly)
+                   token-fn)})
    (str/replace (str url) #"/+$" "")
    kind-path
    discover-query
-   row->task
-   {"x-waymark-principal" (or principal "workqueue10")
-    "accept" "application/json"}
-   (or (some-> (not-empty (str (or token ""))) constantly) token-fn)))
+   row->task))
+
+(defn engine-source
+  "The stage-1 fold's boundary (waymark-bwu.1): the source's kind
+  lives in THIS engine, so the confluence drinks in-process — same
+  discover/pull/push law, no HTTP, no bearer.
+
+  config: :engine-ref (an IDeref delivering the engine after boot),
+  :ui-base (the browser-facing base origin links anchor on — the
+  app's own external URL), :kind-path :discover-query :row->task
+  :principal as http-source."
+  [{:keys [engine-ref ui-base kind-path discover-query row->task
+           principal]}]
+  (->WaymarkSource
+   (engine-transport {:engine-ref engine-ref :principal principal})
+   (str/replace (str ui-base) #"/+$" "")
+   kind-path
+   discover-query
+   row->task))

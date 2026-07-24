@@ -1,6 +1,10 @@
 {:paths ["src"]
- :deps  {org.clojure/clojure  {:mvn/version "1.12.1"}
-         waymark10/waymark10  {:local/root "../waymark10"}}
+ :deps  {org.clojure/clojure      {:mvn/version "1.12.1"}
+         waymark10/waymark10      {:local/root "../waymark10"}
+         ;; the stage-1 fold (waymark-bwu.1): the chore kinds join this
+         ;; engine; the namespaces stay in choreplan10/ until the
+         ;; consolidation's cleanup stage relocates them
+         choreplan10/choreplan10  {:local/root "../choreplan10"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
