@@ -31,7 +31,13 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["tasks" "members" "roles"
+  ;; the WHOLE folded registry's tables (waymark-bwu) — other suites
+  ;; share this database and leave differently-shaped residue under
+  ;; the same names; a fixture that drops less boots into drift
+  ["tasks" "chores" "chore_runs" "days"
+   "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
+   "prep_tasks" "ingredients" "products" "substitutions" "events"
+   "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 
