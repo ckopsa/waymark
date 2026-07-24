@@ -21,7 +21,9 @@
   comma-separated todo entity ids, the zone naive due datetimes
   parse in), WAYMARK10_DEPLOY_MODE,
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
-  schema drift and name the plan).
+  schema drift and name the plan), WAYMARK10_OIDC_* (the family
+  IdP — waymark10.server.oidc/from-env names them; absent = the
+  dev-header resolver, unchanged).
 
   Schema evolution: `make migrate-queue` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
@@ -33,6 +35,8 @@
             [workqueue10.sources.mealplan :as meals]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
+            [waymark10.server.oidc :as oidc]
+            [waymark10.server.oidc-rp :as oidc-rp]
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg])
   (:gen-class))
@@ -111,9 +115,14 @@
                              ;; dev-only, and only when asked: production
                              ;; posture is refuse-on-drift
                              :auto-migrate (= "1" (System/getenv
-                                                   "WAYMARK10_AUTO_MIGRATE"))}))
+                                                   "WAYMARK10_AUTO_MIGRATE"))
+                             ;; the family IdP, when deployed says so
+                             ;; (WAYMARK10_OIDC_*); absent env = the
+                             ;; dev-header resolver, unchanged
+                             :oidc (oidc/from-env)}))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
-        server (engine/start! eng port)]
+        server (engine/start! eng port
+                              {:wrap-handler (oidc-rp/wrap-handler eng)})]
     (reset! dev {:engine eng :server server :storage storage})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))

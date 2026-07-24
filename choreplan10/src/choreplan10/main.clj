@@ -16,7 +16,9 @@
   WAYMARK10_DEPLOY_MODE (promote, the default single-breath revise,
   or propose), WAYMARK10_AUTO_MIGRATE=1 (dev only — `make dev-chores`
   passes it explicitly; production boots REFUSE on schema drift and
-  name the plan).
+  name the plan), WAYMARK10_OIDC_* (the family IdP —
+  waymark10.server.oidc/from-env names them; absent = the dev-header
+  resolver, unchanged).
 
   Schema evolution: `make migrate-chores` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
@@ -28,6 +30,8 @@
             [choreplan10.resources.prep-task :refer [prep-task-resource]]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
+            [waymark10.server.oidc :as oidc]
+            [waymark10.server.oidc-rp :as oidc-rp]
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg])
   (:gen-class))
@@ -91,9 +95,14 @@
                              ;; dev-only, and only when asked: production
                              ;; posture is refuse-on-drift
                              :auto-migrate (= "1" (System/getenv
-                                                   "WAYMARK10_AUTO_MIGRATE"))}))
+                                                   "WAYMARK10_AUTO_MIGRATE"))
+                             ;; the family IdP, when deployed says so
+                             ;; (WAYMARK10_OIDC_*); absent env = the
+                             ;; dev-header resolver, unchanged
+                             :oidc (oidc/from-env)}))
         port (or (some-> (System/getenv "CHOREPLAN10_PORT") parse-long) 8013)
-        server (engine/start! eng port)]
+        server (engine/start! eng port
+                              {:wrap-handler (oidc-rp/wrap-handler eng)})]
     (reset! dev {:engine eng :server server :storage storage})
     (println (str "choreplan10: http://localhost:" port
                   "/api/.well-known/waymark"))
