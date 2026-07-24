@@ -7,31 +7,31 @@
 # agent credential rides any config; a session that wants access mints
 # one and lets it die.
 #
-#   scripts/agent-token.sh rod            # a token only rod accepts
-#   scripts/agent-token.sh meals work     # one token, two engines
-#   scripts/agent-token.sh choreplan10    # app names work too
+#   scripts/agent-token.sh work           # the one domestic engine
 #
-#   curl -H "Authorization: Bearer $(scripts/agent-token.sh rod)" \
-#     https://rod.kopsa.info/api/.well-known/waymark
+#   curl -H "Authorization: Bearer $(scripts/agent-token.sh work)" \
+#     https://work.kopsa.info/api/.well-known/waymark
 #
+# Since the consolidation (waymark-bwu, 2026-07-24) there is ONE
+# engine: rod/meals are 301s into work.kopsa.info, so every name
+# mints the same scope — the aliases survive for muscle memory.
 # The client secret lives in the infra repo's secrets.local.json
 # (waymark10_agent_client_secret) — INFRA_SECRETS overrides the path.
-# A token minted with NO scope carries no engine audience and every
+# A token minted with NO scope carries no engine audience and the
 # engine refuses it: naming the scope is the point.
 set -euo pipefail
 
 INFRA_SECRETS="${INFRA_SECRETS:-$HOME/dev/home-infrastructure/terraform/secrets.local.json}"
 ISSUER="https://keycloak.kopsa.info/realms/domestic-realm"
 
-[ $# -ge 1 ] || { echo "usage: $(basename "$0") <engine>... (rod|meals|work or app names)" >&2; exit 2; }
+[ $# -ge 1 ] || { echo "usage: $(basename "$0") work   (rod|meals accepted as aliases)" >&2; exit 2; }
 
 scope=""
 for target in "$@"; do
   case "$target" in
-    rod|choreplan10)    scope="$scope waymark-choreplan10" ;;
-    meals|mealplan10)   scope="$scope waymark-mealplan10" ;;
-    work|workqueue10)   scope="$scope waymark-workqueue10" ;;
-    *) echo "unknown engine: $target (want rod|meals|work)" >&2; exit 2 ;;
+    work|workqueue10|rod|choreplan10|meals|mealplan10)
+      scope="waymark-workqueue10" ;;
+    *) echo "unknown engine: $target (want work; rod|meals alias to it)" >&2; exit 2 ;;
   esac
 done
 

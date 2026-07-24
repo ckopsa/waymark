@@ -80,14 +80,11 @@ migrate10: db10  ## print mealplan10's schema plan against mealplan10_dev; APPLY
 	cd mealplan10 && MEALPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/mealplan10_dev?user=$(PG_USER)" \
 		clojure -M:migrate
 
-image10:  ## build and push the mealplan10 image for the home cluster
-	docker buildx build --platform $(PLATFORM) -t $(IMAGE):$(IMAGE_TAG) --push .
-	@echo "pushed $(IMAGE):$(IMAGE_TAG)"
+image10:  ## RETIRED (waymark-bwu.2): mealplan10 folded into workqueue10 — use deploy-queue
+	@echo "mealplan10 folded into workqueue10 (waymark-bwu.2, 2026-07-24) — use 'make deploy-queue'." >&2; exit 1
 
-deploy10: image10  ## push image, then roll the mealplan10 nomad job onto it
-	@NOMAD_ADDR=$(NOMAD_ADDR) NOMAD_TOKEN=$(NOMAD_TOKEN) \
-		nomad var put -force nomad/jobs/mealplan10/deploy image_tag=$(IMAGE_TAG) >/dev/null
-	@echo "deploying $(IMAGE):$(IMAGE_TAG) — nomad restarts the server task on the new image"
+deploy10:  ## RETIRED (waymark-bwu.2): mealplan10 folded into workqueue10 — use deploy-queue
+	@echo "mealplan10 folded into workqueue10 (waymark-bwu.2, 2026-07-24) — use 'make deploy-queue'." >&2; exit 1
 
 check-eveningplan10:  ## eveningplan10 declaration-time checks + usability warnings (no database)
 	cd eveningplan10 && clojure -M:check
@@ -147,14 +144,11 @@ migrate-chores: db10  ## print choreplan10's schema plan against choreplan10_dev
 
 CHORES_IMAGE ?= docker.kopsa.info/choreplan10
 
-image-chores:  ## build and push the choreplan10 image for the home cluster
-	docker buildx build --platform $(PLATFORM) -f Dockerfile.choreplan10 -t $(CHORES_IMAGE):$(IMAGE_TAG) --push .
-	@echo "pushed $(CHORES_IMAGE):$(IMAGE_TAG)"
+image-chores:  ## RETIRED (waymark-bwu.1): choreplan10 folded into workqueue10 — use deploy-queue
+	@echo "choreplan10 folded into workqueue10 (waymark-bwu.1, 2026-07-24) — use 'make deploy-queue'." >&2; exit 1
 
-deploy-chores: image-chores  ## push image, then roll the choreplan10 nomad job onto it
-	@NOMAD_ADDR=$(NOMAD_ADDR) NOMAD_TOKEN=$(NOMAD_TOKEN) \
-		nomad var put -force nomad/jobs/choreplan10/deploy image_tag=$(IMAGE_TAG) >/dev/null
-	@echo "deploying $(CHORES_IMAGE):$(IMAGE_TAG) — nomad restarts the server task on the new image"
+deploy-chores:  ## RETIRED (waymark-bwu.1): choreplan10 folded into workqueue10 — use deploy-queue
+	@echo "choreplan10 folded into workqueue10 (waymark-bwu.1, 2026-07-24) — use 'make deploy-queue'." >&2; exit 1
 
 check-queue:  ## workqueue10 declaration-time checks + usability warnings (no database)
 	cd workqueue10 && clojure -M:check
