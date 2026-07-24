@@ -152,7 +152,11 @@
     (is (true? (jobs/claim! *eng* job-id "dead-worker" 0)))
     (inv/invoke! *eng* :job job-id :start nil
                  {:principal jobs/worker-actor})
-    (Thread/sleep 50)
+    ;; a 0-ttl lease expires at the DATABASE's now; the sweep judges
+    ;; by the JVM's. A dockerized test db runs a few hundred ms ahead
+    ;; of the host (0.26s observed), and 50ms lost that race roughly
+    ;; every other run — sleep past any sane skew
+    (Thread/sleep 1000)
     job-id))
 
 (deftest orphan-sweep-requeues
