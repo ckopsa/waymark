@@ -343,3 +343,23 @@
               (and get? (ui-redirect? oidc req)) (login-bounce req)
 
               :else (handler req))))))))
+
+(defn wrap-handler
+  "The engine/start! :wrap-handler an app composes in one move: wrap's
+  /auth doors and require-auth gate, with the orchestrator's health
+  probe OUTSIDE the gate — a liveness check carries no credential and
+  must not need one, so GET /healthz answers 200 to the anonymous
+  before the gate can refuse it. The probe tells liveness only: the
+  process is up and serving — never authenticated state. No :oidc
+  :rp config = the probe alone in front of the untouched handler."
+  [eng & [{:keys [health-path] :or {health-path "/healthz"}}]]
+  (let [auth (wrap eng)]
+    (fn [handler]
+      (let [inner (auth handler)]
+        (fn [req]
+          (if (and (= :get (:request-method req))
+                   (= health-path (:uri req)))
+            {:status 200
+             :headers {"Content-Type" "text/plain"}
+             :body "ok"}
+            (inner req)))))))

@@ -70,6 +70,55 @@
                           :session-ttl-s 28800}
                          rp))))
 
+(defn from-env
+  "The :oidc engine opts off the process environment — nil when no
+  WAYMARK10_OIDC_ISSUER rides it, so an app writes
+  `:oidc (oidc/from-env)` unconditionally and pays nothing undeployed.
+  The defaults are the Keycloak realm shapes: the JWKS under the
+  issuer's /protocol/openid-connect/certs, realm roles at
+  [:realm_access :roles], the audience the client's own id.
+
+    WAYMARK10_OIDC_ISSUER           the realm URL; presence enables
+    WAYMARK10_OIDC_AUDIENCE         default: the client id
+    WAYMARK10_OIDC_JWKS_URI         default: under the issuer
+    WAYMARK10_OIDC_CLIENT_ID        presence adds the :rp browser flow
+    WAYMARK10_OIDC_CLIENT_SECRET
+    WAYMARK10_OIDC_APP_URL          the app's external base URL
+    WAYMARK10_OIDC_SESSION_SECRET   the session cookie's HS256 key
+    WAYMARK10_OIDC_FRONTEND_ISSUER  browser-facing issuer, when split
+    WAYMARK10_OIDC_TOKEN_ENDPOINT   back-channel override, when split
+    WAYMARK10_OIDC_SESSION_TTL_S    default 28800
+    WAYMARK10_OIDC_REQUIRE_AUTH     \"1\" closes the surface to anonymous
+    WAYMARK10_OIDC_LOGIN_REDIRECT   default on; \"0\" keeps honest 401s
+
+  Reading stops here; validation stays config's — a missing
+  client-secret is the same boot-time definition error either way.
+  The one-arg form takes any (fn [name] value) — tests pass a map."
+  ([] (from-env #(System/getenv ^String %)))
+  ([env]
+   (when-some [issuer (env "WAYMARK10_OIDC_ISSUER")]
+     (let [client-id (env "WAYMARK10_OIDC_CLIENT_ID")]
+       (cond-> {:issuer issuer
+                :audience (or (env "WAYMARK10_OIDC_AUDIENCE") client-id)
+                :jwks-uri (or (env "WAYMARK10_OIDC_JWKS_URI")
+                              (str issuer "/protocol/openid-connect/certs"))
+                :roles-claim [:realm_access :roles]}
+         client-id
+         (assoc :rp
+                (cond-> {:client-id client-id
+                         :client-secret (env "WAYMARK10_OIDC_CLIENT_SECRET")
+                         :app-url (env "WAYMARK10_OIDC_APP_URL")
+                         :session-secret (env "WAYMARK10_OIDC_SESSION_SECRET")
+                         :require-auth? (= "1" (env "WAYMARK10_OIDC_REQUIRE_AUTH"))
+                         :login-redirect? (not= "0" (env "WAYMARK10_OIDC_LOGIN_REDIRECT"))}
+                  (env "WAYMARK10_OIDC_FRONTEND_ISSUER")
+                  (assoc :frontend-issuer (env "WAYMARK10_OIDC_FRONTEND_ISSUER"))
+                  (env "WAYMARK10_OIDC_TOKEN_ENDPOINT")
+                  (assoc :token-endpoint (env "WAYMARK10_OIDC_TOKEN_ENDPOINT"))
+                  (env "WAYMARK10_OIDC_SESSION_TTL_S")
+                  (assoc :session-ttl-s
+                         (parse-long (env "WAYMARK10_OIDC_SESSION_TTL_S"))))))))))
+
 (defn- refuse
   "One 401 problem, WWW-Authenticate riding the response headers."
   [detail]

@@ -295,3 +295,58 @@
                                          :jwks jwks})})
            (fn [_req] {:status 200 :headers {} :body "through"}))]
     (is (= 200 (:status (a (get-req "/auth/login")))))))
+
+;; ── wrap-handler: the probe outside the gate ────────────────────────
+
+(deftest health-probe-answers-outside-the-gate
+  (let [a ((rp/wrap-handler {:oidc (oidc-config {:require-auth? true})})
+           (fn [_req] {:status 200 :headers {} :body "through"}))]
+    (testing "the anonymous probe answers 200 — liveness needs no credential"
+      (is (= 200 (:status (a (get-req "/healthz"))))))
+    (testing "the gate still closes everything else"
+      (is (= 401 (:status (a (get-req "/api/payouts"))))))
+    (testing "a POST to the probe's path is not the probe"
+      (is (= 401 (:status (a {:request-method :post :uri "/healthz"
+                              :headers {}})))))))
+
+(deftest health-probe-rides-the-no-oidc-app-too
+  (let [a ((rp/wrap-handler {})
+           (fn [_req] {:status 200 :headers {} :body "through"}))]
+    (is (= 200 (:status (a (get-req "/healthz")))))
+    (testing "everything else passes through untouched"
+      (is (= 200 (:status (a (get-req "/api/anything"))))))))
+
+;; ── from-env: the deployed spelling of the same config ──────────────
+
+(deftest from-env-reads-the-keycloak-shapes
+  (testing "no issuer = no config — the undeployed app pays nothing"
+    (is (nil? (oidc/from-env {}))))
+  (testing "issuer alone is bearer-only, defaults filled"
+    (let [o (oidc/from-env {"WAYMARK10_OIDC_ISSUER" "https://idp/realms/home"
+                            "WAYMARK10_OIDC_AUDIENCE" "mealplan10"})]
+      (is (= "https://idp/realms/home/protocol/openid-connect/certs"
+             (:jwks-uri o)))
+      (is (= [:realm_access :roles] (:roles-claim o)))
+      (is (nil? (:rp o)))))
+  (testing "a client id adds the :rp browser flow"
+    (let [o (oidc/from-env
+             {"WAYMARK10_OIDC_ISSUER" "https://idp/realms/home"
+              "WAYMARK10_OIDC_CLIENT_ID" "mealplan10"
+              "WAYMARK10_OIDC_CLIENT_SECRET" "shh"
+              "WAYMARK10_OIDC_APP_URL" "https://meals.test"
+              "WAYMARK10_OIDC_SESSION_SECRET" "s3cret"
+              "WAYMARK10_OIDC_REQUIRE_AUTH" "1"})]
+      (testing "the audience defaults to the client's own id"
+        (is (= "mealplan10" (:audience o))))
+      (is (= {:client-id "mealplan10" :client-secret "shh"
+              :app-url "https://meals.test" :session-secret "s3cret"
+              :require-auth? true :login-redirect? true}
+             (:rp o)))
+      (testing "and the whole shape survives config's validation"
+        (is (map? (oidc/config (assoc o :jwks jwks)))))))
+  (testing "LOGIN_REDIRECT=0 keeps the honest 401s"
+    (is (false? (get-in (oidc/from-env
+                         {"WAYMARK10_OIDC_ISSUER" "https://idp/realms/home"
+                          "WAYMARK10_OIDC_CLIENT_ID" "x"
+                          "WAYMARK10_OIDC_LOGIN_REDIRECT" "0"})
+                        [:rp :login-redirect?])))))
