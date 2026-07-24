@@ -132,11 +132,12 @@
                 (Thread/sleep 1500)
                 (is (= 0 (count (rows-of eng :metric)))
                     "the peer holds the lease; this daemon must not work")
-                (testing "a released lease hands the work over within a beat"
+                (testing "a released lease hands the work over within a
+                          heartbeat + a beat"
                   (store/with-tx st
                     (fn [tx] (store/release-job-lease!
                               st tx "mirror-discovery" "the-peer")))
-                  (let [deadline (+ (System/currentTimeMillis) 15000)]
+                  (let [deadline (+ (System/currentTimeMillis) 30000)]
                     (loop []
                       (when (and (zero? (count (rows-of eng :metric)))
                                  (< (System/currentTimeMillis) deadline))

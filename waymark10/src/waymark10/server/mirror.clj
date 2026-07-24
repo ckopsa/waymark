@@ -1470,6 +1470,7 @@
 
 (def ^:private discovery-lease-id "mirror-discovery")
 (def ^:private discovery-lease-ttl-s 120)
+(def ^:private discovery-heartbeat-ms 10000)
 
 (defn start-discovery!
   "The discovery daemon: one pass per kind on its declared
@@ -1477,35 +1478,54 @@
   last-run stamp), kinds in mirror-kinds' declared-priority order.
   Engine start! owns the lifecycle; tests call discover! directly.
 
-  ONE process works at a time: every 5s beat claims-or-renews the
-  mirror-discovery job lease (the jobs machinery's own table) and a
-  process that cannot claim it idles — two replicas each walking
-  every pass doubled the feed's load and raced their mints. Takeover
-  is the lease's own story: a dead holder stops renewing and a peer
-  claims at expiry, then runs the boot heal ITSELF before ticking —
-  the heal belongs to whichever process actually works.
+  ONE process works at a time, held by the mirror-discovery job
+  lease (the jobs machinery's own table). Possession is a HEARTBEAT
+  — a dedicated thread renews every 10s, independent of the worker,
+  because a single pass (a 201k-document heal) outlives any sane TTL
+  and a renewal tied to the work loop expired mid-heal and seated
+  two workers (observed on the first deploy of this lease; the
+  boundary is only honest if renewal never waits on work). The
+  worker checks possession BETWEEN kinds: losing the lease mid-pass
+  overlaps two workers for at most one kind, and mints are diffed
+  and race-salvaged anyway. A dead process stops heartbeating and a
+  peer claims at TTL; a stopped one hands the lease back.
 
-  The boot heal precedes the first discovery: a restart re-pulls
-  what it already holds, then discovers what it doesn't (and counts
-  as every kind's first cadenced resync)."
+  The boot heal precedes the first discovery and belongs to
+  whichever process actually holds the lease when it runs: a restart
+  re-pulls what it already holds, then discovers what it doesn't
+  (and counts as every kind's first cadenced resync)."
   [eng]
   (let [stop (CountDownLatch. 1)
         st (:storage eng)
         holder (str "discovery-" (java.util.UUID/randomUUID))
+        held? (atom false)
         last-run (atom {})
         last-resync (atom {})
         healed? (atom false)
-        lease? (fn []
-                 (try
-                   (store/with-tx st
-                     (fn [tx]
-                       (store/claim-job-lease! st tx discovery-lease-id
-                                               holder discovery-lease-ttl-s)))
-                   (catch Exception e
-                     (warn! "discovery lease claim failed: " (ex-message e))
-                     false)))
+        lease! (fn []
+                 (reset! held?
+                         (try
+                           (store/with-tx st
+                             (fn [tx]
+                               (store/claim-job-lease!
+                                st tx discovery-lease-id holder
+                                discovery-lease-ttl-s)))
+                           (catch Exception e
+                             (warn! "discovery lease claim failed: "
+                                    (ex-message e))
+                             false))))
+        heal (fn []
+               (doseq [kind (mirror-kinds eng) :while @held?]
+                 (when-some [{:keys [checked rewritten gone]}
+                             (resync! eng kind)]
+                   (warn! "resync for " (name kind) ": " checked " checked, "
+                          rewritten " rewritten"
+                          (when (pos? (long gone))
+                            (str ", " gone " gone-from-feed")))
+                   (swap! last-resync assoc kind (System/currentTimeMillis)))))
         tick (fn []
                (doseq [kind (mirror-kinds eng)
+                       :while @held?
                        :let [every-s (get-in (get (inv/resources eng) kind)
                                              [:mirror :discover-every])
                              now (System/currentTimeMillis)
@@ -1520,6 +1540,7 @@
                ;; — gone rows and document-shape changes stop waiting
                ;; for the next boot (resync! already never gates)
                (doseq [kind (mirror-kinds eng)
+                       :while @held?
                        :let [every-s (get-in (get (inv/resources eng) kind)
                                              [:mirror :resync-every])
                              now (System/currentTimeMillis)
@@ -1528,27 +1549,32 @@
                                   (<= (* 1000 (long every-s)) (- now last)))]
                  (swap! last-resync assoc kind now)
                  (resync! eng kind)))
-        work (fn []
-               (when (compare-and-set! healed? false true)
-                 (resync-all! eng)
-                 (let [now (System/currentTimeMillis)]
-                   (doseq [k (mirror-kinds eng)]
-                     (swap! last-resync assoc k now))))
-               (tick))
+        hb (Thread. ^Runnable
+                    (fn []
+                      (loop []
+                        (lease!)
+                        (when-not (.await stop discovery-heartbeat-ms
+                                          TimeUnit/MILLISECONDS)
+                          (recur))))
+                    "waymark10-mirror-lease")
         t (Thread. ^Runnable
                    (fn []
                      (loop []
-                       (when (lease?) (work))
+                       (when @held?
+                         (when (compare-and-set! healed? false true)
+                           (heal))
+                         (tick))
                        (when-not (.await stop 5000 TimeUnit/MILLISECONDS)
                          (recur))))
                    "waymark10-mirror-discovery")]
+    (doto ^Thread hb (.setDaemon true) (.start))
     (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop :storage st :holder holder}))
+    {:thread t :heartbeat hb :stop stop :storage st :holder holder}))
 
 (defn stop-discovery! [{:keys [^CountDownLatch stop storage holder]}]
   (some-> stop .countDown)
   ;; hand the lease back rather than letting it age out — the peer
-  ;; takes over within a beat instead of a TTL
+  ;; takes over within a heartbeat instead of a TTL
   (when (and storage holder)
     (try
       (store/with-tx storage
