@@ -212,6 +212,23 @@
       (when (and candidate (= :invited (:state candidate)))
         candidate))))
 
+(defn bind-agent!
+  "The /auth/agent door's bind (waymark10.server.oidc-rp): an agent
+  holding ONLY the invite link has no principal yet, so the invited
+  row binds to ITS OWN id — the row's identity becomes the principal
+  the engine-minted session names, and gate! thereafter finds it by
+  id like any member. Returns the now-active row; nil when the token
+  names nothing invited — a spent link binds nobody twice, and the
+  door's 404 says nothing more."
+  [eng token]
+  (when-some [candidate (invited-by-token eng token)]
+    (try
+      (inv/invoke! eng :member (:id candidate) :bind
+                   {:subject (:id candidate)}
+                   {:principal registrar})
+      (load-member eng (:id candidate))
+      (catch Exception _ nil))))
+
 (defn- bind!
   "First sight of a presented invite token: the matching INVITED row
   binds to this principal through the concealed :bind transition

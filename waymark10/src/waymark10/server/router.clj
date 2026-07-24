@@ -984,9 +984,10 @@
           max-ttl (long (:grant-max-ttl-seconds services 86400))]
       (json-response
        200
-       {:waymark "10"
-        :welcome (get-in member [:data :display])
-        :bind {:header "X-Waymark-Invite"
+       (cond->
+        {:waymark "10"
+         :welcome (get-in member [:data :display])
+         :bind {:header "X-Waymark-Invite"
                :token token
                :note (str "send this header on your FIRST request — it "
                           "binds this invitation to your principal id; "
@@ -1048,7 +1049,21 @@
                               "present; silence fades you out in ~45s). "
                               "The reference client (waymark10.client) "
                               "beats it for you on every read.")}
-        :discovery "/api/.well-known/waymark"}))))
+         :discovery "/api/.well-known/waymark"}
+
+         ;; the credential-less door (oidc-rp's /auth/agent): present
+         ;; exactly when the RP flow guards this engine — an agent
+         ;; holding ONLY this link can still get in
+         (get-in eng [:oidc :rp])
+         (assoc :session
+                {:href (str "/auth/agent?invite=" token)
+                 :method "POST"
+                 :note (str "no credential of your own? POST here — the "
+                            "invite binds and answers with a session "
+                            "token to send back as a Cookie header on "
+                            "every request; one use, the same link. "
+                            "Prefer this over the bind header when you "
+                            "hold nothing else.")}))))))
 
 ;; ── the generic UI (phase 10) ───────────────────────────────────────
 

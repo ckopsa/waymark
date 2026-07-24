@@ -30,6 +30,11 @@
         (oidc/verify), session cookie minted
     GET /auth/logout                     session cleared, 302 → the
         IdP's RP-initiated logout
+    POST /auth/agent?invite=TOKEN        the agent door: a valid
+        invite binds its member row to its own id and answers with
+        an engine-minted session — the link is the whole key, once
+    POST /auth/agent/renew               a LIVE session (the cookie)
+        answers with a fresh one; lapsed = a new invitation
 
   The session cookie is an HS256 JWT of the principal's own claims —
   sub, roles, actor type, display — never the IdP's tokens: nothing
@@ -40,6 +45,7 @@
   (:require [buddy.sign.jwt :as jwt]
             [clojure.string :as str]
             [org.httpkit.client :as http]
+            [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
@@ -274,6 +280,66 @@
                           :display (or display (str sub))})))
         (catch Exception _ nil)))))
 
+;; ── /auth/agent: the invite link is the whole key ───────────────────
+
+(defn- session-response
+  "The door's answer: the session token, how to wear it (the SAME
+  cookie the browser flow mints — resolve-session already reads it,
+  so an agent with curl and this header is a full citizen), and the
+  way to stay alive."
+  [rp principal]
+  (let [{:keys [exp token]} (mint-session rp principal)]
+    {:status 200
+     :headers {"Content-Type" "application/json"}
+     :body (wire/write-json
+            {:waymark "10"
+             :agent {:id (:id principal) :display (:display principal)}
+             :session {:token token
+                       :expires_at exp
+                       :use {:header "Cookie"
+                             :value (str (:cookie-name rp) "=" token)
+                             :note (str "send this Cookie header on every "
+                                        "request — it is your credential")}}
+             :renew {:href "/auth/agent/renew" :method "POST"
+                     :note (str "POST with the LIVE session cookie for a "
+                                "fresh token; a lapsed session needs a "
+                                "fresh invitation from the human")}})}))
+
+(defn- body-invite
+  "The invite token off a JSON body — nil on absence or garbage; the
+  query param is the primary spelling."
+  [req]
+  (try (some-> (:body req) slurp not-empty wire/read-json :invite)
+       (catch Exception _ nil)))
+
+(defn- agent-session
+  "POST /auth/agent?invite=TOKEN — the signed-URL onboarding closed
+  end to end (waymark-b4y's distinct-identity form, no pre-shared
+  secret): an agent holding ONLY the link binds its invited member
+  row and walks away with an engine-minted session; the link goes
+  dark behind it. An unknown or spent token answers the welcome
+  document's own 404 and says nothing."
+  [eng oidc req]
+  (let [rp (:rp oidc)
+        token (or (get (query-params req) "invite") (body-invite req))]
+    (if-some [row (members/bind-agent! eng token)]
+      (session-response rp {:id (:id row)
+                            :type :agent
+                            :roles (set (get-in row [:data :roles]))
+                            :display (or (get-in row [:data :display])
+                                         (:id row))})
+      (problem 404 "Not found" "No standing invitation."))))
+
+(defn- agent-renew
+  "POST /auth/agent/renew — possession of a LIVE session renews it
+  (the sliding capability); anything else is the honest 401, and a
+  fresh invitation is the human's to hand out."
+  [oidc req]
+  (if-some [principal (resolve-session oidc req)]
+    (session-response (:rp oidc) principal)
+    (problem 401 "Unauthenticated"
+             "No live session rides this request — renewal is for the living.")))
+
 ;; ── the wrap engine/start! composes ─────────────────────────────────
 
 (defn- ui-redirect?
@@ -331,11 +397,24 @@
       (if (nil? rp)
         handler
         (fn [req]
-          (let [get? (= :get (:request-method req))]
+          (let [get? (= :get (:request-method req))
+                post? (= :post (:request-method req))]
             (cond
               (and get? (= (:uri req) "/auth/login")) (login oidc req)
               (and get? (= (:uri req) "/auth/callback")) (callback oidc req)
               (and get? (= (:uri req) "/auth/logout")) (logout oidc req)
+
+              ;; the agent doors: an invite link is the whole key, and
+              ;; a live session renews itself
+              (and post? (= (:uri req) "/auth/agent"))
+              (agent-session eng oidc req)
+              (and post? (= (:uri req) "/auth/agent/renew"))
+              (agent-renew oidc req)
+
+              ;; the welcome document is token-gated BY DESIGN (the
+              ;; invite is the secret; router.clj welcome-doc) — the
+              ;; gate must not close what the link exists to open
+              (and get? (= (:uri req) "/api/-/welcome")) (handler req)
 
               (and (:require-auth? rp) (not (credentialed? oidc req)))
               (refuse-anonymous req)
