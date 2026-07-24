@@ -104,9 +104,19 @@
       (is (string? (get-in body [:session :token])))
       (is (str/starts-with? cookie "waymark_session=")))
 
-    (testing "the session cookie opens the gated surface"
-      (is (= 200 (:status (req* *gated* :get "/api/meals"
-                                {:headers {"cookie" cookie}})))))
+    (testing "the session is an IDENTITY, not sight (waymark-rci):
+              the domain answers 404, the asking door answers 200 —
+              an agent's access is off by default and negotiated"
+      (is (= 404 (:status (req* *gated* :get "/api/meals"
+                                {:headers {"cookie" cookie}}))))
+      (is (= 200 (:status (req* *gated* :get "/api/approval_requests"
+                                {:headers {"cookie" cookie}}))))
+      (is (contains? (set (:kinds (json (req* *gated* :get
+                                              "/api/.well-known/waymark"
+                                              {:headers {"cookie" cookie}}))))
+                     "meal")
+          "the vocabulary stays whole — an agent must be able to
+           NAME what it asks for"))
 
     (testing "the link went dark — door and welcome both"
       (is (= 404 (:status (req* *gated* :post "/auth/agent"
@@ -124,3 +134,72 @@
   (testing "garbage never binds"
     (is (= 404 (:status (req* *gated* :post "/auth/agent"
                               {:query "invite=nope"}))))))
+
+;; ── the whole negotiation: hidden < hashed < read ───────────────────
+
+(def ^:private token2 "door-tok-9932")
+
+(deftest sight-is-always-negotiated
+  ;; the world: one meal (a human's, unscoped), one invited agent
+  (let [meal (json (req* *raw* :post "/api/meals"
+                         {:body {:name "Traeger brisket" :themes ["bbq"]}
+                          :headers {"x-waymark-principal" "colton"}}))
+        _ (is (some? (:self meal)))
+        _ (req* *raw* :post "/api/members"
+                {:body {:display "scoped-agent" :actor_type "agent"
+                        :bind_token token2}
+                 :headers admin})
+        cookie (-> (req* *gated* :post "/auth/agent"
+                         {:query (str "invite=" token2)})
+                   json (get-in [:session :use :value]))
+        as-agent (fn [method uri & [opts]]
+                   (req* *gated* method uri
+                         (update opts :headers merge {"cookie" cookie})))]
+
+    (testing "default: the meal kind does not exist for the agent"
+      (is (= 404 (:status (as-agent :get "/api/meals"))))
+      (is (= 404 (:status (as-agent :get (:self meal))))))
+
+    ;; the ask: correlate meals by name, never read them
+    (let [ask (json (as-agent :post "/api/approval_requests"
+                              {:body {:task "correlate meals without reading names"
+                                      :scope [{:kind "meal" :actions []
+                                               :hashed ["name"]}]}}))
+          _ (is (some? (:self ask)) (pr-str ask))
+          ;; the human approves (four-eyes: never the requester)
+          approved (req* *raw* :post (str (:self ask) "/-/approve")
+                         {:headers admin})
+          _ (is (= 200 (:status approved)) (:body approved))
+          grant-id (get-in (json (req* *raw* :get (:self ask)
+                                       {:headers admin}))
+                           [:data :grant_id])
+          _ (is (some? grant-id))
+          granted (fn [method uri & [opts]]
+                    (as-agent method uri
+                              (update opts :headers merge
+                                      {"x-waymark-grant" grant-id})))]
+
+      (testing "under the grant: the row exists, the name is a token"
+        (let [row (json (granted :get (:self meal)))]
+          (is (str/starts-with? (get-in row [:data :name]) "#")
+              (pr-str (:data row)))
+          (is (= ["bbq"] (get-in row [:data :themes]))
+              "un-named fields stay plainly visible")
+          (is (str/includes? (:summary row) "#")
+              "the summary wears the token, never the value")))
+
+      (testing "the token is stable — correlation is the point"
+        (is (= (get-in (json (granted :get (:self meal))) [:data :name])
+               (get-in (json (granted :get (:self meal))) [:data :name]))))
+
+      (testing "the oracle is closed: filters and sorts on the hashed
+                field answer the unknown-parameter 422"
+        (is (= 422 (:status (granted :get "/api/meals"
+                                     {:query "name=Traeger%20brisket"}))))
+        (is (= 422 (:status (granted :get "/api/meals"
+                                     {:query "sort=name"}))))
+        (is (= 200 (:status (granted :get "/api/meals")))
+            "the kind's own default sort softens to id order"))
+
+      (testing "dropping the grant header drops the sight again"
+        (is (= 404 (:status (as-agent :get (:self meal)))))))))

@@ -346,12 +346,15 @@
                       agent-headers)]
         (is (= 409 (:status resp)))
         (is (str/includes? (:detail (json resp)) "someone else"))))
-    (testing "only the audience accepts"
+    (testing "only the audience accepts — a FOREIGN grant conceals
+              whole under the agent default (waymark-rci): not the
+              guard's 409 but the honest 404 of a row that does not
+              exist for this principal"
       (let [gid2 (offer-grant! {:audience "agent-8"
                                 :scope [{:kind "plan" :actions ["finalize"]}]})
             resp (req :post (str "/api/grants/" gid2 "/-/accept") nil
                       agent-headers)]
-        (is (= 409 (:status resp)))))))
+        (is (= 404 (:status resp)))))))
 
 ;; ── 6. attachments: bytes round-trip and the cap ────────────────────
 

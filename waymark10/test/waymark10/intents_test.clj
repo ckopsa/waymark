@@ -251,8 +251,23 @@
                                         {:principal priya})
                            [:row :id])
                 self1 (str "/api/int_widgets/" w1)
+                ;; the agent default (waymark-rci): sous rehearses
+                ;; UNDER A GRANT — an ungranted agent's dry-run is a
+                ;; probe of concealed law and answers 404 now
+                sous-grant (get-in (inv/create!
+                                    eng :grant
+                                    {:audience "sous"
+                                     :scope [{:kind "int_widget"
+                                              :actions ["spin" "create"
+                                                        "spin_many"
+                                                        "finalize"]}]}
+                                    {:principal priya})
+                                   [:row :id])
+                _ (inv/invoke! eng :grant sous-grant :accept {}
+                               {:principal sous})
                 sous-headers {"x-waymark-principal" "sous"
-                              "x-waymark-actor-type" "agent"}
+                              "x-waymark-actor-type" "agent"
+                              "x-waymark-grant" (str sous-grant)}
                 watcher (sse-lines port "/api/-/intents"
                                    {"x-waymark-principal" "watcher"})]
 

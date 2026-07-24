@@ -33,6 +33,7 @@
   (:require [clojure.string :as str]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
@@ -448,6 +449,21 @@
         kname (name (:kind rdef))
         {:keys [conds sort page filters applied]} (parse-query rdef params)
         vis (:visibility ctx-opts)
+        ;; the collection oracle, closed (waymark-rci): REQUESTED
+        ;; filters and sorts naming non-plain fields answer the
+        ;; unknown-param 422; the kind's own default sort softly
+        ;; falls back to id order instead — the client asked nothing
+        _ (grants/check-query! vis rdef conds
+                               (when (contains? params "sort")
+                                 (:field sort)))
+        sort (if (and vis (:field sort)
+                      (not (#{:id :state} (:field sort)))
+                      (not (grants/plain-field? vis (:kind rdef)
+                                                (:field sort))))
+               ;; natural order — never the promoted column a scoped
+               ;; reader may not see plain
+               (assoc sort :field nil)
+               sort)
         conds (if-some [ids (when vis ((:ids-of vis) (:kind rdef)))]
                 (conj conds {:target :id :op :in :values (vec ids)})
                 conds)

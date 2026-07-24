@@ -562,6 +562,31 @@
      (into #{} (remove #(field? (:kind rdef) %))
            (schema/entry-keys (:schema rdef))))))
 
+(defn- hashed-fields
+  "The declared data fields this visibility admits ONLY as tokens
+  (waymark-rci's third disposition) — nil when unscoped or none."
+  [rdef visibility]
+  (when-some [hashed? (:hashed? visibility)]
+    (not-empty
+     (into #{} (filter #(hashed? (:kind rdef) %))
+           (schema/entry-keys (:schema rdef))))))
+
+(defn- hash-view
+  "The row with hashed fields' raw values replaced by their tokens —
+  the one view summaries, links, displays and parts read after the
+  guards have probed the FULL row, so nothing downstream can leak
+  what the disposition concealed."
+  [rdef row visibility hashed]
+  (cond-> row
+    (seq hashed)
+    (update :data
+            #(reduce (fn [d f]
+                       (if (contains? d f)
+                         (assoc d f ((:hash visibility)
+                                     (:kind rdef) f (get d f)))
+                         d))
+                     % hashed))))
+
 (defn- unwrap-maybe
   [s] (if (and (vector? s) (= :maybe (first s))) (second s) s))
 
@@ -700,10 +725,22 @@
                    (fn [[aname _]] ((:action? visibility) (:kind rdef) aname)))
         actions (cond->> actions granted? (into {} (filter granted?)))
         unavailable (cond->> unavailable granted? (into {} (filter granted?)))
+        ;; the hashed view (waymark-rci): tokens replace raw values in
+        ;; everything that leaves the building; guards above judged
+        ;; the full row. Encoding runs over the ORIGINAL data — a
+        ;; token is not a date — and the tokens land after.
+        hashed (hashed-fields rdef visibility)
+        hrow (hash-view rdef row visibility hashed)
         ;; the redacted view (batch B): absent from data and from the
         ;; link pass; guards above judged the full row
         enc-data (cond-> (schema/encode (:schema rdef) (:data row))
-                   (seq redacted) (as-> d (apply dissoc d redacted)))
+                   (seq redacted) (as-> d (apply dissoc d redacted))
+                   (seq hashed)
+                   (as-> d (reduce (fn [m f]
+                                     (if (contains? m f)
+                                       (assoc m f (get-in hrow [:data f]))
+                                       m))
+                                   d hashed)))
         ;; the grid projection: a bounded, purpose-built column set,
         ;; distinct from :data — envelope-summary dissocs "data" but
         ;; not "fields", so a summary/embedded item keeps just enough
@@ -711,16 +748,22 @@
         ;; whole document (prose text, sub-item vectors) on every row
         ;; of a paginated page
         fields (select-keys enc-data (grid-fields rdef))
-        public-row (redact-row row redacted)
+        public-row (redact-row hrow redacted)
+        ;; a hashed parts path collapses to one opaque token — the
+        ;; parts group drops rather than iterate a string
+        pfield? (if (seq hashed)
+                  (fn [k f] (and (or (nil? field?) (field? k f))
+                                 (not (contains? hashed (keyword (name f))))))
+                  field?)
         ;; parts render over the SURVIVING actions — a concealed placed
         ;; action never re-renders per item
-        parts (parts-of rdef row ctx by-name actions enc-data field? arg?)]
+        parts (parts-of rdef hrow ctx by-name actions enc-data pfield? arg?)]
     (p/wire-value
      (cond-> {:waymark "10"
               :kind (name (:kind rdef))
               :self self
               :state (name state)
-              :summary (project-summary rdef row redacted)
+              :summary (project-summary rdef hrow redacted)
               :data enc-data
               :fields fields
               :actions actions
@@ -731,7 +774,7 @@
                       (:updated-at row) (assoc :updated-at (str (:updated-at row)))
                       (:law-revision row) (assoc :law-revision (:law-revision row)))}
        (seq parts) (assoc :parts parts)
-       (:display rdef) (assoc :display (project-display rdef row redacted))))))
+       (:display rdef) (assoc :display (project-display rdef hrow redacted))))))
 
 (defn envelope-stub
   "The rows=none item (batch A): no probe runs — actions and
@@ -742,13 +785,15 @@
   every depth)."
   [rdef row {:keys [resources visibility]}]
   (let [redacted (redacted-fields rdef visibility)
-        public-row (redact-row row redacted)]
+        hashed (hashed-fields rdef visibility)
+        hrow (hash-view rdef row visibility hashed)
+        public-row (redact-row hrow redacted)]
     (p/wire-value
      {:waymark "10"
       :kind (name (:kind rdef))
       :self (str "/api/" (:plural rdef) "/" (:id row))
       :state (name (:state row))
-      :summary (project-summary rdef row redacted)
+      :summary (project-summary rdef hrow redacted)
       :actions nil
       :unavailable nil
       :links (render-links rdef public-row resources)

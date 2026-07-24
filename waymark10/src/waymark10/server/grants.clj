@@ -135,7 +135,8 @@
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [waymark10.wire :as wire]))
 
 (set! *warn-on-reflection* true)
 
@@ -155,6 +156,13 @@
      [:maybe [:vector [:string {:min 1 :max 64}]]]]
     [:actions [:vector [:string {:min 1 :max 64}]]]
     [:fields {:optional true} [:maybe field-spec-schema]]
+    ;; the third disposition (waymark-rci): a field named here renders
+    ;; as a stable opaque token — correlate and reference, never read.
+    ;; hidden = not admitted at all; hashed = admitted-as-token; read =
+    ;; admitted plain. Hashing DOMINATES its kind's sibling entries —
+    ;; a restriction is never absorbed the way openness absorbs.
+    [:hashed {:optional true}
+     [:maybe [:vector [:string {:min 1 :max 64}]]]]
     [:args {:optional true}
      [:maybe [:vector
               [:map
@@ -583,12 +591,31 @@
                  :actions (into #{} (comp (mapcat :actions) (map str)) entries)
                  :fields (when-not (some #(nil? (:fields %)) entries)
                            (mapv (comp mode-spec :fields) entries))
+                 ;; hashing dominates: any entry naming a field hashed
+                 ;; hashes it kind-wide — a privacy restriction is
+                 ;; never absorbed the way openness absorbs
+                 :hashed (into #{} (comp (mapcat :hashed) (map str)) entries)
                  :args (args-of entries)}]))
         (group-by :kind (get-in row [:data :scope]))))
 
 (def dead
   "The scoped-to-nothing surface a dead or unknown grant confers."
   {})
+
+(defn- field-hash
+  "The hashed disposition's token: stable per (kind, field, value) so
+  an agent can correlate and reference, never read. Salted by the
+  engine (:services :field-hash-salt — set a real secret in
+  production; the default constant leaves low-entropy values open to
+  dictionary guessing and is only dev's convenience)."
+  [eng kind field value]
+  (str "#" (subs (wire/sha256-hex
+                  (str (or (get-in eng [:services :field-hash-salt])
+                           "waymark10-field-hash")
+                       " " (name kind)
+                       " " (name field)
+                       " " (pr-str value)))
+                 0 16)))
 
 (defn- required-arg-names
   "The declared action's required input fields, as strings; nil when
@@ -651,7 +678,7 @@
   diagnostics."
   [eng grant-id principal]
   (let [pid (:id principal)
-        row (load-decoded eng :grant grant-id)
+        row (when grant-id (load-decoded eng :grant grant-id))
         own? (boolean (and row (= (get-in row [:data :audience]) pid)))
         named? (and (some? pid) (not= pid (:id t/anonymous)))
         surface (if (and own? (active? row ((:now-fn eng))))
@@ -682,17 +709,35 @@
      :action? (fn [kind action]
                 (let [k (name kind) a (name action)]
                   (or (contains? (get-in surface [k :actions] #{}) a)
-                      ;; the one own-surface affordance: filing an ask
+                      ;; the own-surface affordances: filing an ask,
+                      ;; its verdict doors (row-gated to OWN asks —
+                      ;; a self-judging requester meets the four-eyes
+                      ;; guard's honest 409, never a mute 404), and
+                      ;; ACCEPTING an offered grant — since the agent
+                      ;; default (waymark-rci) no unscoped moment
+                      ;; exists in which to accept, and an offer its
+                      ;; audience cannot take is dead law; the guards
+                      ;; still judge every invoke
                       (and (own-kind? k)
-                           (= k "approval_request")
-                           (= a "create")))))
+                           (or (and (= k "approval_request")
+                                    (contains? #{"create" "approve" "deny"} a))
+                               (and (= k "grant")
+                                    (contains? #{"accept" "revoke"} a)))))))
      :field? (fn [kind field]
                (let [k (name kind)]
                  (if-some [e (get surface k)]
-                   (admits? (:fields e) (name field))
+                   ;; hashed is a disposition of ADMISSION: the field
+                   ;; is seen — as a token (waymark-rci)
+                   (or (admits? (:fields e) (name field))
+                       (contains? (:hashed e) (name field)))
                    ;; the own surface renders whole — its rows are the
                    ;; principal's own record
                    (own-kind? k))))
+     :hashed? (fn [kind field]
+                (contains? (get-in surface [(name kind) :hashed] #{})
+                           (name field)))
+     :hash (fn [kind field value]
+             (field-hash eng kind field value))
      :arg? (fn [kind action arg]
              (let [k (name kind)]
                (if-some [e (get surface k)]
@@ -708,7 +753,57 @@
                                 "grant" {:audience pid}
                                 "approval_request" {:requested_by pid}))))))}))
 
+(defn bootstrap-visibility
+  "The agent default (waymark-rci): a named agent that presents NO
+  grant runs scoped to the own-grant surface — the asking door and
+  nothing else; sight is always negotiated, never assumed. The same
+  closures a dead grant confers, plus :vocabulary-open? — well-known
+  keeps the FULL kind/action vocabulary for this one posture, because
+  an agent that cannot name a kind cannot compose its ask (names are
+  schema, not data; rows stay concealed). A granted request keeps
+  today's narrowed well-known: the agent that wants the vocabulary
+  back simply drops its grant header for that one read."
+  [eng principal]
+  (assoc (visibility eng nil principal) :vocabulary-open? true))
+
 ;; ── enforcement helpers (the router's consults) ─────────────────────
+
+(defn plain-field?
+  "Does this visibility admit the field in PLAIN sight — visible and
+  not hashed? The predicate filters and sorts must pass: a hashed
+  token neither matches raw values nor orders honestly."
+  [vis kind f]
+  (and ((:field? vis) kind f)
+       (not ((:hashed? vis) kind f))))
+
+(defn check-query!
+  "The collection oracle, closed (waymark-rci): a REQUESTED filter or
+  sort naming a field this visibility does not admit plain — hidden
+  and hashed alike — answers the SAME 422 an unknown parameter draws,
+  so a probing client cannot tell 'denied to you' from 'never
+  existed'. This also closes the pre-existing hole for hidden fields:
+  a filtered count was a value oracle. The kind's own DEFAULT sort is
+  the caller's to soften (fall back, never refuse — the client asked
+  for nothing). nil visibility checks nothing; :id and :state stay
+  machine, not data."
+  [vis rdef conds requested-sort]
+  (when vis
+    (let [kind (:kind rdef)
+          bad (into []
+                    (comp (keep :target)
+                          (remove #{:id :state})
+                          (remove #(plain-field? vis kind %))
+                          (map name))
+                    conds)
+          bad (cond-> bad
+                (and requested-sort
+                     (not (#{:id :state} requested-sort))
+                     (not (plain-field? vis kind requested-sort)))
+                (conj (str "sort=" (name requested-sort))))]
+      (when (seq bad)
+        (throw (p/problem :invalid-params 422 "Unknown parameters"
+                          {:detail (str "Unknown parameter(s): "
+                                        (str/join ", " (distinct bad)))}))))))
 
 (defn check-args!
   "Batch B's arg enforcement: a denied argument arriving in a body —
@@ -733,13 +828,26 @@
   required alike. nil visibility returns the schema untouched."
   [vis kind js]
   (if-some [field? (:field? vis)]
-    (let [dropped (into #{} (remove #(field? kind %)) (keys (:properties js)))]
-      (if (empty? dropped)
-        js
-        (let [names (into #{} (map name) dropped)]
-          (-> js
-              (update :properties #(apply dissoc % dropped))
-              (update :required
-                      (fn [r]
-                        (some->> r (filterv #(not (contains? names (name %)))))))))))
+    (let [dropped (into #{} (remove #(field? kind %)) (keys (:properties js)))
+          hashed? (:hashed? vis)
+          hashed (when hashed?
+                   (into #{} (filter #(hashed? kind %)) (keys (:properties js))))
+          js (if (empty? dropped)
+               js
+               (let [names (into #{} (map name) dropped)]
+                 (-> js
+                     (update :properties #(apply dissoc % dropped))
+                     (update :required
+                             (fn [r]
+                               (some->> r (filterv #(not (contains? names (name %))))))))))]
+      ;; a hashed field keeps its place but the published type tells
+      ;; the truth: an opaque string token, never the declared shape
+      (cond-> js
+        (seq hashed)
+        (update :properties
+                #(reduce (fn [props f]
+                           (if (contains? props f)
+                             (assoc props f {:type "string" :x-hashed true})
+                             props))
+                         % hashed))))
     js))

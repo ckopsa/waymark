@@ -289,8 +289,13 @@
   (fn [req]
     (let [vis (visibility-of req)
           principal (principal-of req)
+          ;; the bootstrap posture keeps the FULL vocabulary
+          ;; (waymark-rci): kind and action NAMES are schema, not
+          ;; data, and an agent that cannot name a kind cannot
+          ;; compose its ask; rows stay concealed regardless
           resources (cond->> (inv/resources eng)
-                      vis (filter (fn [[k _]] ((:kind? vis) k))))]
+                      (and vis (not (:vocabulary-open? vis)))
+                      (filter (fn [[k _]] ((:kind? vis) k))))]
       (json-response
        200
        (cond-> {:waymark "10"
@@ -1011,7 +1016,8 @@
                      :scope [{:kind "a kind name from the vocabulary"
                               :actions ["exact action-name strings from the vocabulary"]
                               :ids "optional — specific rows"
-                              :fields "optional — {mode allow|deny, names […]}"}]
+                              :fields "optional — {mode allow|deny, names […]}"
+                              :hashed ["optional — fields you need to CORRELATE but not read: each renders as a stable opaque token; ask for the least sight your task needs (hidden < hashed < read)"]}]
                      :expires_at "RFC3339 instant, optional"}
               :vocabulary
               {:href "/api/.well-known/waymark"
@@ -1217,8 +1223,15 @@
           ;; gate — first authenticated sight binds an invited member
           principal (members/gate! eng principal
                                    (get-in req [:headers "x-waymark-invite"]))
-          vis (when-some [gid (get-in req [:headers "x-waymark-grant"])]
-                (grants/visibility eng gid principal))]
+          vis (if-some [gid (get-in req [:headers "x-waymark-grant"])]
+                (grants/visibility eng gid principal)
+                ;; the agent default (waymark-rci): a named agent
+                ;; NEVER runs unscoped — no grant presented means the
+                ;; bootstrap surface (the asking door and the
+                ;; vocabulary to ask with), not full sight. Humans
+                ;; and system actors are unchanged.
+                (when (= :agent (:type principal))
+                  (grants/bootstrap-visibility eng principal)))]
       (handler (cond-> (assoc req :waymark10/principal principal)
                  vis (assoc :waymark10/visibility vis))))))
 

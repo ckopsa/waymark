@@ -380,8 +380,12 @@
               env (json resp)]
           (is (= 200 (:status resp)))
           (is (= "own-agent" (get-in env [:data :audience])))
-          (is (= {} (:actions env)) "GET-only: no grant action is granted")
-          (is (= {} (:unavailable env))))
+          (is (= {} (:actions env)) "no grant action is LIVE here")
+          (is (= #{:accept :revoke} (set (keys (:unavailable env))))
+              "the own-surface affordances narrate honestly: accept
+               out of state on an accepted grant, revoke refused by
+               no-self-dealing — visible refusals, never mute 404s
+               (waymark-rci — no unscoped moment exists for either)"))
         (is (= 404 (:status (req :get (str "/api/grants/" g2) nil own-scoped)))))
       (testing "the collection narrows by the visibility cond, total honest"
         (let [b (json (req :get "/api/grants" nil own-scoped))]

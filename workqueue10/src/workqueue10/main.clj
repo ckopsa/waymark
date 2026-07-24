@@ -159,7 +159,13 @@
                              ;; the family IdP, when deployed says so
                              ;; (WAYMARK10_OIDC_*); absent env = the
                              ;; dev-header resolver, unchanged
-                             :oidc (oidc/from-env)}))
+                             :oidc (oidc/from-env)
+                             ;; the hashed disposition's salt
+                             ;; (waymark-rci) — a real secret in
+                             ;; production; absent = the dev constant
+                             :services {:field-hash-salt
+                                        (System/getenv
+                                         "WAYMARK10_FIELD_HASH_SALT")}}))
         ;; the in-process sources' late binding: delivered BEFORE
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
