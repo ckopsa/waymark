@@ -61,12 +61,17 @@
     {"chore" (if-some [url (System/getenv "WORKQUEUE10_CHOREPLAN_URL")]
                (chores/http-source
                 {:url url :principal principal
-                 :token (System/getenv "WORKQUEUE10_CHOREPLAN_TOKEN")})
+                 :token (System/getenv "WORKQUEUE10_CHOREPLAN_TOKEN")
+                 ;; production's bearer: this engine's OWN client
+                 ;; mints against the source's audience scope, fresh
+                 ;; every hour (waymark-mvl); a static _TOKEN wins
+                 :token-fn (oidc/outbound-token-fn "waymark-choreplan10")})
                fake-chores)
      "meal" (if-some [url (System/getenv "WORKQUEUE10_MEALPLAN_URL")]
               (meals/http-source
                {:url url :principal principal
-                :token (System/getenv "WORKQUEUE10_MEALPLAN_TOKEN")})
+                :token (System/getenv "WORKQUEUE10_MEALPLAN_TOKEN")
+                :token-fn (oidc/outbound-token-fn "waymark-mealplan10")})
               fake-meals)
      "todo" (if-some [url (System/getenv "WORKQUEUE10_HA_URL")]
               (ha/http-source

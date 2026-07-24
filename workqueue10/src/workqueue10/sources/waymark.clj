@@ -32,10 +32,16 @@
 (defn- self->id [self]
   (last (str/split (str self) #"/")))
 
-(defn- request ^HttpRequest [{:keys [base headers]} method path extra]
+(defn- request ^HttpRequest [{:keys [base headers token-fn]} method path extra]
   (let [b (-> (HttpRequest/newBuilder (URI/create (str base path)))
               (.timeout (Duration/ofSeconds 20)))]
-    (doseq [[^String k ^String v] (merge headers extra)]
+    ;; the bearer is asked for PER REQUEST — a token-fn that refreshes
+    ;; (oidc/client-credentials-fn) never goes stale in a header map
+    (doseq [[^String k ^String v] (merge headers
+                                         (when token-fn
+                                           {"authorization"
+                                            (str "Bearer " (token-fn))})
+                                         extra)]
       (.header b k v))
     (.build (case method
               :get (.GET b)
@@ -86,7 +92,7 @@
          :source_ui_href (str base "/api/-/ui#" self)))
 
 (defrecord WaymarkSource [^HttpClient client base kind-path discover-query
-                          row->task headers]
+                          row->task headers token-fn]
   conf/TaskSource
   (source-discover [this]
     (loop [n 1 acc []]
@@ -144,8 +150,12 @@
   e.g. \"chore_runs\"), :discover-query (the filter naming the work
   worth queueing, e.g. \"state=due\"), :row->task (envelope →
   canonical doc), :principal (the x-waymark-principal the pushes act
-  as — default \"workqueue10\"), :token (optional bearer)."
-  [{:keys [url kind-path discover-query row->task principal token]}]
+  as — default \"workqueue10\"), :token (a STATIC bearer — tests and
+  operator overrides; wins over :token-fn), :token-fn (a zero-arg
+  refreshing bearer source, oidc/outbound-token-fn — production's
+  spelling, waymark-mvl)."
+  [{:keys [url kind-path discover-query row->task principal token
+           token-fn]}]
   (->WaymarkSource
    (-> (HttpClient/newBuilder)
        (.connectTimeout (Duration/ofSeconds 10))
@@ -154,6 +164,6 @@
    kind-path
    discover-query
    row->task
-   (cond-> {"x-waymark-principal" (or principal "workqueue10")
-            "accept" "application/json"}
-     token (assoc "authorization" (str "Bearer " token)))))
+   {"x-waymark-principal" (or principal "workqueue10")
+    "accept" "application/json"}
+   (or (some-> (not-empty (str (or token ""))) constantly) token-fn)))

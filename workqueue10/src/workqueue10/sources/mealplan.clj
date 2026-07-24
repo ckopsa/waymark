@@ -36,11 +36,13 @@
 
 (defn http-source
   "The real boundary over a running mealplan10 engine.
-  config: :url, :principal, :token (see sources.waymark/http-source)."
-  [{:keys [url principal token]}]
+  config: :url, :principal, :token, :token-fn (see
+  sources.waymark/http-source)."
+  [{:keys [url principal token token-fn]}]
   (wm/http-source {:url url
                    :kind-path "prep_tasks"
                    :discover-query "state=pending,scheduled"
                    :row->task prep->task
                    :principal principal
-                   :token token}))
+                   :token token
+                   :token-fn token-fn}))

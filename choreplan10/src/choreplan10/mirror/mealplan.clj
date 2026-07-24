@@ -92,10 +92,16 @@
 (defn- self->id [self]
   (last (str/split (str self) #"/")))
 
-(defn- request ^HttpRequest [{:keys [base headers]} method path extra]
+(defn- request ^HttpRequest [{:keys [base headers token-fn]} method path extra]
   (let [b (-> (HttpRequest/newBuilder (URI/create (str base path)))
               (.timeout (Duration/ofSeconds 20)))]
-    (doseq [[^String k ^String v] (merge headers extra)]
+    ;; the bearer is asked for PER REQUEST — a token-fn that refreshes
+    ;; (oidc/client-credentials-fn) never goes stale in a header map
+    (doseq [[^String k ^String v] (merge headers
+                                         (when token-fn
+                                           {"authorization"
+                                            (str "Bearer " (token-fn))})
+                                         extra)]
       (.header b k v))
     (.build (case method
               :get (.GET b)
@@ -120,7 +126,7 @@
 
 (def ^:private page-size 100)
 
-(defrecord MealplanFeed [^HttpClient client base assignee headers]
+(defrecord MealplanFeed [^HttpClient client base assignee headers token-fn]
   mirror/MirrorAdapter
   (discover [this]
     (loop [n 1 acc []]
@@ -164,17 +170,20 @@
   config: :url (the engine root, e.g. https://meals10.kopsa.info),
   :assignee (the feed's key — default \"housekeeper\"), :principal
   (the x-waymark-principal the pushes act as — default
-  \"choreplan10\"), :token (optional bearer)."
-  [{:keys [url assignee principal token]}]
+  \"choreplan10\"), :token (a STATIC bearer — tests and operator
+  overrides; wins over :token-fn), :token-fn (a zero-arg refreshing
+  bearer source, oidc/outbound-token-fn — production's spelling,
+  waymark-mvl)."
+  [{:keys [url assignee principal token token-fn]}]
   (->MealplanFeed
    (-> (HttpClient/newBuilder)
        (.connectTimeout (Duration/ofSeconds 10))
        (.build))
    (str/replace (or url "http://localhost:8010") #"/+$" "")
    (or assignee "housekeeper")
-   (cond-> {"x-waymark-principal" (or principal "choreplan10")
-            "accept" "application/json"}
-     token (assoc "authorization" (str "Bearer " token)))))
+   {"x-waymark-principal" (or principal "choreplan10")
+    "accept" "application/json"}
+   (or (some-> (not-empty (str (or token ""))) constantly) token-fn)))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 

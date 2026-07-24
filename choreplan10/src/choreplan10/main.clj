@@ -49,7 +49,11 @@
     (mp/http-feed {:url url
                    :assignee (System/getenv "CHOREPLAN10_MEALPLAN_ASSIGNEE")
                    :principal (System/getenv "CHOREPLAN10_MEALPLAN_PRINCIPAL")
-                   :token (System/getenv "CHOREPLAN10_MEALPLAN_TOKEN")})
+                   :token (System/getenv "CHOREPLAN10_MEALPLAN_TOKEN")
+                   ;; production's bearer: this engine's OWN client
+                   ;; mints against mealplan's audience scope, fresh
+                   ;; every hour (waymark-mvl); a static _TOKEN wins
+                   :token-fn (oidc/outbound-token-fn "waymark-mealplan10")})
     fake-feed))
 
 (defn resources

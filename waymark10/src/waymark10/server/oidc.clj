@@ -119,6 +119,62 @@
                   (assoc :session-ttl-s
                          (parse-long (env "WAYMARK10_OIDC_SESSION_TTL_S"))))))))))
 
+(defn client-credentials-fn
+  "The engine's own outbound credential: a zero-arg token source over
+  the IdP's client_credentials grant — minted on first call, re-minted
+  when the cached token nears its exp (30s skew), so no static bearer
+  ever rides config and rotation stops being a concept (waymark-mvl).
+  :scope names the TARGET engine's audience scope (the waymark-<app>
+  client scopes); a mint that names no scope opens nothing. A refusal
+  or unreachable IdP throws — to a mirror that is one unreachable
+  feed, never a silently-empty one. Two racing callers may both mint;
+  both tokens are valid and the cache keeps the later — recorded, not
+  fenced."
+  [{:keys [issuer client-id client-secret scope token-endpoint]}]
+  (let [endpoint (or token-endpoint
+                     (str issuer "/protocol/openid-connect/token"))
+        cache (atom nil)]
+    (fn []
+      (let [now (quot (System/currentTimeMillis) 1000)
+            {:keys [token exp]} @cache]
+        (if (and token (< (+ now 30) exp))
+          token
+          (let [{:keys [status body error]}
+                @(http/post endpoint
+                            {:timeout 10000
+                             :form-params
+                             {"grant_type" "client_credentials"
+                              "client_id" client-id
+                              "client_secret" client-secret
+                              "scope" scope}})]
+            (when (or error (not= 200 status))
+              (throw (ex-info (str "the IdP refused the client-credentials mint ("
+                                   (or (some-> error ex-message) status) ")")
+                              {:status status})))
+            (let [{:keys [access_token expires_in]}
+                  (wire/read-json (if (string? body) body (slurp body)))]
+              (reset! cache {:token access_token
+                             :exp (+ now (or expires_in 60))})
+              access_token)))))))
+
+(defn outbound-token-fn
+  "client-credentials-fn off the SAME env the RP flow reads
+  (from-env): the engine's own client doubles as its outbound
+  identity — per-engine callers, no shared house token. nil without
+  deployed OIDC env, so an app wires it unconditionally and dev/test
+  stay on static tokens or none."
+  ([scope] (outbound-token-fn scope #(System/getenv ^String %)))
+  ([scope env]
+   (when-some [{:keys [issuer rp]} (from-env env)]
+     (when rp
+       (client-credentials-fn {:issuer issuer
+                               :client-id (:client-id rp)
+                               :client-secret (:client-secret rp)
+                               :scope scope
+                               ;; the same back-channel override the
+                               ;; RP's code exchange honors
+                               :token-endpoint (:token-endpoint rp)})))))
+
 (defn- refuse
   "One 401 problem, WWW-Authenticate riding the response headers."
   [detail]
