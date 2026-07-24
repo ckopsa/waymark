@@ -1356,6 +1356,42 @@
           (create-in-tx! engine tx kind body
                          (assoc opts :acknowledged acknowledged))))))))
 
+(declare create-in-tx!)
+
+(defn create-mints!
+  "The engine's BULK birth door — create! with :mint? true over MANY
+  bodies, chunk-transacted: one commit per chunk of 200 instead of
+  one per row, which at a five-figure first fill is the difference
+  between hours and minutes. Row semantics are create!'s exactly
+  (create-in-tx! per body, each result's after-write! pass after the
+  chunk commits, in order). A chunk that refuses wholesale — the
+  usual cause is a unique race with a peer replica's simultaneous
+  mint — falls back to row-at-a-time for ITS bodies, so one
+  contested id never undoes its neighbors' pass; a row that still
+  refuses is skipped (the next discovery pass retries). → the number
+  minted."
+  [engine kind bodies opts]
+  (let [opts (assoc opts :mint? true)
+        rdef (rdef-of engine kind)
+        create-action (first (:create-action-names rdef))]
+    (reduce
+     (fn [n chunk]
+       (+ (long n)
+          (try
+            (let [results (store/with-tx (:storage engine)
+                            (fn [tx]
+                              (mapv #(create-in-tx! engine tx kind % opts)
+                                    chunk)))]
+              (run! #(after-write! engine kind create-action %) results)
+              (count results))
+            (catch Exception _
+              (reduce (fn [m body]
+                        (try (create! engine kind body opts)
+                             (inc (long m))
+                             (catch Exception _ m)))
+                      0 chunk)))))
+     0 (partition-all 200 bodies))))
+
 (defn- create-in-tx!
   "The create algorithm inside an EXISTING transaction — create!'s
   body, extracted so the ctx :create door can birth rows of other

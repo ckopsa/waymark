@@ -39,6 +39,11 @@
   (query-rows [st tx kind where opts]
     "Rows matching a {field value} equality map (phase-2 grammar;
     collections widen it in phase 7). opts: {:limit n :order-by kw}.")
+  (external-ids [st tx kind]
+    "Every stored row's external_id (nil-free, unordered) — the
+    discovery diff's ONE set-based read. A per-id probe loop here
+    was most of a six-figure kind's pass wall-clock; the whole
+    point of this method is that it never becomes N queries.")
   (append-transition! [st tx record]
     "Append to the log and notify the outbox channel in the same
     transaction. Returns the record with its assigned :id.")

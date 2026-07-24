@@ -249,6 +249,11 @@
             (take (:limit opts 100))
             (sort-by keyfn #(compare %1 %2) (filter match? rows)))))
 
+  (external-ids [_ _tx kind]
+    (into []
+          (keep #(some-> (get-in % [:data :external_id]) str))
+          (vals (get-in @state [:tables kind]))))
+
   (append-transition! [_ _tx record]
     (let [id (:next-transition-id (swap! state update :next-transition-id
                                          (fnil inc 0)))

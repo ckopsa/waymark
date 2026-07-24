@@ -643,10 +643,18 @@
   births the post-commit pass pushes as CREATES, the authority
   minting the identity claim_external stamps back."
   [rmap {:keys [adapter ttl-seconds discover-every push-on-write document
-                create-push on-gone resync-every]}]
+                create-push on-gone resync-every priority]}]
   (when (nil? adapter)
     (throw (t/definition-error
             (str (some-> (:kind rmap) name) ": a mirror declares its :adapter"))))
+  (when (and (some? priority) (not (int? priority)))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :priority is an int — lower fills first (the daemon "
+                 "walks kinds in priority order, name-tiebroken; omitted "
+                 "= 50). The product's core kind should not wait behind "
+                 "a six-figure reference table for alphabetical reasons. "
+                 "Got " (pr-str priority)))))
   (when (and (some? on-gone) (not= :keep on-gone)
              (not (and (map? on-gone) (= [:set] (vec (keys on-gone)))
                        (map? (:set on-gone)) (seq (:set on-gone)))))
@@ -757,6 +765,7 @@
                                 :document mode
                                 :push-on-write (boolean push-on-write)
                                 :create-push (boolean create-push)
+                                :priority (or priority 50)
                                 :on-gone (if gone-patch {:set gone-patch} :keep)}
                          resync-every (assoc :resync-every resync-every))
                :actions
@@ -1149,7 +1158,19 @@
   external id ({:external_id id} only — the fields arrive by pull),
   then eagerly fill the new mints through pull-many. Returns the
   number of minted rows; an unreachable adapter mints nothing (the
-  next pass retries)."
+  next pass retries).
+
+  The unknown-id diff is ONE set-based read (store/external-ids) —
+  a per-id probe loop here cost a six-figure kind most of its pass
+  even when nothing was new, and made every restart's re-walk pay
+  the whole bill again. Mints ride the bulk birth door
+  (inv/create-mints!, chunk-transacted). The eager fill's
+  observe_external stays one invoke per row — the full action path
+  (guards, idempotency, the log) is the point, and it only runs for
+  genuinely new rows; recorded, not optimized. Incremental
+  discovery (a since-watermark instead of full enumeration) stays a
+  recorded punt: no enrolled kind has a monotonic external key, and
+  with the diff set-based, enumeration is one indexed read."
   [eng kind]
   (let [rdef (get (inv/resources eng) kind)
         spec (:mirror rdef)
@@ -1159,15 +1180,16 @@
                    (warn! "discovery for " (name kind) " failed ("
                           (ex-message e) "); retrying next interval")
                    nil))
-        new-ids (into []
-                      (remove #(some? (row-by-external-id eng kind %)))
-                      ids)]
-    (doseq [xid new-ids]
-      ;; :mint? — the engine's own birth door: full-schema model, no
-      ;; app create guards (a mint speaks bookkeeping, not the
-      ;; create-schema's vocabulary)
-      (inv/create! eng kind {:external_id xid}
-                   {:principal system-observer :mint? true}))
+        known (store/with-tx (:storage eng)
+                (fn [tx]
+                  (into #{} (store/external-ids (:storage eng) tx kind))))
+        new-ids (into [] (remove known) ids)]
+    ;; :mint? — the engine's own birth door: full-schema model, no
+    ;; app create guards (a mint speaks bookkeeping, not the
+    ;; create-schema's vocabulary)
+    (inv/create-mints! eng kind
+                       (mapv (fn [xid] {:external_id xid}) new-ids)
+                       {:principal system-observer})
     (when (seq new-ids)
       ;; chunked like resync!'s pass: one prod-scale discovery handed
       ;; an adapter 100k ids in one call and its prepared statement
@@ -1212,9 +1234,19 @@
           0
           (inv/resources eng)))
 
-(defn mirror-kinds [eng]
-  (into [] (keep (fn [[k rdef]] (when (:mirror rdef) k)))
-        (inv/resources eng)))
+(defn mirror-kinds
+  "Every enrolled mirror kind, in FILL order: declared :priority
+  ascending, name the tiebreak — the order the discovery and resync
+  daemons walk, so a first boot fills the product's core kinds
+  before its reference tables (the alphabet starved payout
+  behind a 201k-document support_doc walk; never again by default)."
+  [eng]
+  (->> (inv/resources eng)
+       (keep (fn [[k rdef]]
+               (when (:mirror rdef)
+                 [(get-in rdef [:mirror :priority] 50) (name k) k])))
+       sort
+       (mapv peek)))
 
 ;; ── resync: the whole-kind heal ─────────────────────────────────────
 
@@ -1436,15 +1468,42 @@
              rewritten " rewritten"
              (when (pos? (long gone)) (str ", " gone " gone-from-feed"))))))
 
+(def ^:private discovery-lease-id "mirror-discovery")
+(def ^:private discovery-lease-ttl-s 120)
+
 (defn start-discovery!
   "The discovery daemon: one pass per kind on its declared
   :discover-every cadence (checked every 5s against a per-kind
-  last-run stamp). Engine start! owns the lifecycle; tests call
-  discover! directly."
+  last-run stamp), kinds in mirror-kinds' declared-priority order.
+  Engine start! owns the lifecycle; tests call discover! directly.
+
+  ONE process works at a time: every 5s beat claims-or-renews the
+  mirror-discovery job lease (the jobs machinery's own table) and a
+  process that cannot claim it idles — two replicas each walking
+  every pass doubled the feed's load and raced their mints. Takeover
+  is the lease's own story: a dead holder stops renewing and a peer
+  claims at expiry, then runs the boot heal ITSELF before ticking —
+  the heal belongs to whichever process actually works.
+
+  The boot heal precedes the first discovery: a restart re-pulls
+  what it already holds, then discovers what it doesn't (and counts
+  as every kind's first cadenced resync)."
   [eng]
   (let [stop (CountDownLatch. 1)
+        st (:storage eng)
+        holder (str "discovery-" (java.util.UUID/randomUUID))
         last-run (atom {})
         last-resync (atom {})
+        healed? (atom false)
+        lease? (fn []
+                 (try
+                   (store/with-tx st
+                     (fn [tx]
+                       (store/claim-job-lease! st tx discovery-lease-id
+                                               holder discovery-lease-ttl-s)))
+                   (catch Exception e
+                     (warn! "discovery lease claim failed: " (ex-message e))
+                     false)))
         tick (fn []
                (doseq [kind (mirror-kinds eng)
                        :let [every-s (get-in (get (inv/resources eng) kind)
@@ -1469,25 +1528,31 @@
                                   (<= (* 1000 (long every-s)) (- now last)))]
                  (swap! last-resync assoc kind now)
                  (resync! eng kind)))
+        work (fn []
+               (when (compare-and-set! healed? false true)
+                 (resync-all! eng)
+                 (let [now (System/currentTimeMillis)]
+                   (doseq [k (mirror-kinds eng)]
+                     (swap! last-resync assoc k now))))
+               (tick))
         t (Thread. ^Runnable
                    (fn []
-                     ;; the boot heal precedes the first discovery:
-                     ;; a restart re-pulls what it already holds, then
-                     ;; discovers what it doesn't (and counts as every
-                     ;; kind's first cadenced resync)
-                     (resync-all! eng)
-                     (let [now (System/currentTimeMillis)]
-                       (doseq [k (mirror-kinds eng)]
-                         (swap! last-resync assoc k now)))
-                     (tick)
                      (loop []
+                       (when (lease?) (work))
                        (when-not (.await stop 5000 TimeUnit/MILLISECONDS)
-                         (tick)
                          (recur))))
                    "waymark10-mirror-discovery")]
     (doto ^Thread t (.setDaemon true) (.start))
-    {:thread t :stop stop}))
+    {:thread t :stop stop :storage st :holder holder}))
 
-(defn stop-discovery! [{:keys [^CountDownLatch stop]}]
+(defn stop-discovery! [{:keys [^CountDownLatch stop storage holder]}]
   (some-> stop .countDown)
+  ;; hand the lease back rather than letting it age out — the peer
+  ;; takes over within a beat instead of a TTL
+  (when (and storage holder)
+    (try
+      (store/with-tx storage
+        (fn [tx]
+          (store/release-job-lease! storage tx discovery-lease-id holder)))
+      (catch Exception _ nil)))
   nil)

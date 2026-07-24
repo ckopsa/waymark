@@ -406,6 +406,15 @@
                    " LIMIT " (long (:limit opts 100)))]
       (mapv row->map (jdbc/execute! tx (into [sql] params) jdbc-opts))))
 
+  (external-ids [_ tx kind]
+    (let [table (get @tables kind)]
+      (into []
+            (keep :xid)
+            (jdbc/execute! tx [(str "SELECT data->>'external_id' AS xid FROM "
+                                    table
+                                    " WHERE data->>'external_id' IS NOT NULL")]
+                           jdbc-opts))))
+
   (append-transition! [_ tx record]
     (let [res (jdbc/execute-one!
                tx
