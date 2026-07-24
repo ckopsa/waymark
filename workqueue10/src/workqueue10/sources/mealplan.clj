@@ -46,3 +46,15 @@
                    :principal principal
                    :token token
                    :token-fn token-fn}))
+
+(defn engine-source
+  "The stage-2 fold: prep_task lives in THIS engine — the confluence
+  drinks in-process. config: :engine-ref, :ui-base, :principal (see
+  sources.waymark/engine-source)."
+  [{:keys [engine-ref ui-base principal]}]
+  (wm/engine-source {:engine-ref engine-ref
+                     :ui-base ui-base
+                     :kind-path "prep_tasks"
+                     :discover-query "state=pending,scheduled"
+                     :row->task prep->task
+                     :principal principal}))

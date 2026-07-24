@@ -458,6 +458,7 @@
             :summary "The meal plan this task serves"}]
    :filterable {:state #{:eq :in}
                 :plan_id #{:eq}
+                :date #{:eq :range}
                 :task_type #{:eq :in}
                 :assignee #{:eq}
                 :due_at #{:after}
@@ -558,7 +559,10 @@
   ;; choreplan10's mirror feed discovers over. Both spellings moved
   ;; together above.
   {:meal      "ac2f3f372fdb779d61f1cc35cbf440c1bc6da00ef3e81aaf0fb20baa4ee375ec"
-   :prep_task "75d376221857be0cb7c5432d64d365a85e78378975f01664dabeb6b901b6b037"
+   ;; re-pinned 2026-07-24: :date gained :filter #{:eq :range} — the
+   ;; day board's related join (one engine since waymark-bwu.2) needs
+   ;; the promoted column; an intentional law change, not style drift
+   :prep_task "5c1327a83e776803fa294dd8beb871e0c766a59d840628fa31aa7a8eae8d9463"
    :event     "77fba0a5a46b83a3594170a75e5f0614a9980a5f57cf76f90e5ac3e699b32805"})
 
 (deftest the-canonical-residue-hashes-are-pinned-as-literals

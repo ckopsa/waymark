@@ -139,10 +139,13 @@
                  "Bathrooms · 2026-07-21 · Due"}
                (member-summaries :runs))))
 
-      (testing "prep: the planner's still-open steps dated by the day
-                — the cancelled and the future stay off the sheet"
-        (is (= #{"prep · Traeger brisket (2026-07-21) · pending"}
-               (member-summaries :prep))))
+      (testing "prep: EMPTY in the standalone posture — since the
+                meals fold (waymark-bwu.2) the board filters native
+                prep_task states, which the mirror's rows (sync
+                states, status-as-data) honestly never carry; the
+                unified engine's day-board-native-test owns the real
+                prep story now"
+        (is (= #{} (member-summaries :prep))))
 
       (testing "the well-known document advertises the board"
         (is (= "/api/surfaces/day-board/{anchor-id}"

@@ -14,9 +14,9 @@
   degrades per-source, never queue-wide.
 
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
-  (:require [choreplan10.main :as choreplan]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [mealplan10.main]
             [next.jdbc :as jdbc]
             [workqueue10.confluence :as conf]
             [workqueue10.main :as main]
@@ -62,7 +62,7 @@
                                    :resources (main/resources
                                                {"chore" chores "meal" meals
                                                 "todo" todos}
-                                               choreplan/fake-feed)
+                                               mealplan10.main/events)
                                    :now-fn (fn [] @clock)}))]
           (binding [*eng* eng
                     *h* (engine/handler eng)

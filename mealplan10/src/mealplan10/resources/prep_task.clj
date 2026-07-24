@@ -49,7 +49,12 @@
    :nav :secondary
    :schema [:map
             [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
-            [:date {:x-display {:label "Dinner date"}} :waymark/date]
+            ;; :filter is load-bearing beyond the UI: the day board
+            ;; (choreplan10's day kind, one engine since waymark-bwu.2)
+            ;; joins prep tasks by this date — a related join needs a
+            ;; promoted column
+            [:date {:filter #{:eq :range} :x-display {:label "Dinner date"}}
+             :waymark/date]
             [:meal_name [:string {:min 1 :max 200}]]
             [:task_type {:filter #{:eq :in}} (one-of :thaw :prep :cook)]
             ;; who does the step — open vocab like chore's assignee (the

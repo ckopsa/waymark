@@ -7,7 +7,7 @@
   The related edges are range joins, deliberately: a day relates to
   every run due ON OR BEFORE it and every prep task dated on or
   before it — the day board's members then filter to the still-
-  actionable (state due, status pending/scheduled), so the board
+  actionable (states due, pending/scheduled), so the board
   reads as \"everything that should be done by today and isn't\":
   the overdue backlog and today's work in one screen, the archive
   nowhere in sight.
@@ -52,6 +52,10 @@
    :anchor :day
    :members [{:name :runs :kind :chore_run :related :runs
               :where {:state #{"due"}}}
+             ;; :state, not :status, since the meals fold (waymark-
+             ;; bwu.2): prep_task is mealplan's NATIVE kind in the one
+             ;; engine — pending/scheduled are its real states, no
+             ;; longer a mirror's domain-state-as-data
              {:name :prep :kind :prep_task :related :prep
-              :where {:status #{"pending" "scheduled"}}}]
+              :where {:state #{"pending" "scheduled"}}}]
    :showcase [:close]})

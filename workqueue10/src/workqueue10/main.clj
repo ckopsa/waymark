@@ -28,7 +28,10 @@
   Schema evolution: `make migrate-queue` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
   additionally the state-rename UPDATEs."
-  (:require [choreplan10.main :as choreplan]
+  (:require [choreplan10.resources.chore :refer [chore]]
+            [choreplan10.resources.chore-run :refer [chore-run]]
+            [choreplan10.resources.day :refer [day day-board]]
+            [mealplan10.main :as mealplan]
             [workqueue10.confluence :as conf]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.sources.choreplan :as chores]
@@ -86,7 +89,9 @@
                {:url url :principal principal
                 :token (System/getenv "WORKQUEUE10_MEALPLAN_TOKEN")
                 :token-fn (oidc/outbound-token-fn "waymark-mealplan10")})
-              fake-meals)
+              (meals/engine-source
+               {:engine-ref engine-ref :ui-base (ui-base)
+                :principal principal}))
      "todo" (if-some [url (System/getenv "WORKQUEUE10_HA_URL")]
               (ha/http-source
                {:url url
@@ -98,21 +103,29 @@
               fake-todos)}))
 
 (defn resources
-  "The queue's kind plus the folded chore registry (waymark-bwu.1):
-  chore, chore_run, day, and the prep_task mirror — choreplan10's
-  declarations, hosted by THIS engine; one domestic economics. srcs:
-  the confluence's tag → TaskSource map; feed: the prep_task mirror's
-  mealplan boundary (retires with stage 2, when meals fold in too)."
-  [srcs feed]
-  (into [(task-resource (conf/confluence srcs))]
-        (choreplan/resources feed)))
+  "One domestic economics (waymark-bwu): the queue's kind, the folded
+  chore registry (chore, chore_run, day — bwu.1), and the folded meal
+  registry (mealplan10's eleven kinds — bwu.2). prep_task is
+  mealplan's NATIVE kind now; choreplan's HTTP mirror of it retired
+  with stage 2 — the day board joins the real rows. srcs: the
+  confluence's tag → TaskSource map; adapter: the family calendar's
+  event boundary."
+  [srcs adapter]
+  (-> [(task-resource (conf/confluence srcs))]
+      (conj chore chore-run day)
+      (into (mealplan/resources adapter))))
+
+(def surfaces
+  "Both decision screens, one engine: the housekeeper's day board and
+  the planner's week board."
+  (into [day-board] mealplan/surfaces))
 
 (defn check-resources
   "Zero-arg so the declaration gate needs no env — every kind over
   the offline fakes."
   []
   (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos}
-             choreplan/fake-feed))
+             mealplan/events))
 
 (defn- dsn []
   (or (System/getenv "WORKQUEUE10_DSN")
@@ -135,8 +148,8 @@
         eng (mirror/with-push
              (engine/engine {:storage storage
                              :resources (resources (sources)
-                                                   (choreplan/feed))
-                             :surfaces choreplan/surfaces
+                                                   (mealplan/events-adapter))
+                             :surfaces surfaces
                              :deploy-mode (deploy-mode)
                              ;; dev-only, and only when asked: production
                              ;; posture is refuse-on-drift
@@ -179,7 +192,7 @@
   (let [storage (pg/storage (dsn))]
     (try
       (let [reg (engine/full-registry (resources (sources)
-                                                 (choreplan/feed)))
+                                                 (mealplan/events-adapter)))
             steps (migrate/plan storage (vals (:kinds reg)))]
         (if (empty? steps)
           (println "workqueue10: storage matches the declarations — empty plan.")

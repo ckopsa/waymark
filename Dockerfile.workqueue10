@@ -10,6 +10,7 @@ WORKDIR /app
 # chore kinds live in this engine now.
 COPY waymark10/deps.edn waymark10/deps.edn
 COPY choreplan10/deps.edn choreplan10/deps.edn
+COPY mealplan10/deps.edn mealplan10/deps.edn
 COPY workqueue10/deps.edn workqueue10/deps.edn
 RUN cd workqueue10 && clojure -P -M:dev
 
@@ -17,6 +18,7 @@ RUN cd workqueue10 && clojure -P -M:dev
 # app; JVM boot beats maintaining a build pipeline).
 COPY waymark10/ waymark10/
 COPY choreplan10/ choreplan10/
+COPY mealplan10/ mealplan10/
 COPY workqueue10/ workqueue10/
 
 WORKDIR /app/workqueue10
