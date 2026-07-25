@@ -29,8 +29,16 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone}) {
     const d = await api(entry.draft.href);
     if (d.ok) draftView = d.body;
   }
+  /* the declared :edit {:prefill} — the fields the row already
+     answers. Not for a bulk write: one row's values must never seed a
+     many-row form. A drafted action keeps its wider doc projection. */
+  const declared = (!bulkIds && Array.isArray(entry.prefill))
+    ? prefillFromDoc(doc, {properties: Object.fromEntries(
+        entry.prefill.map((f) => [f, true]))})
+    : {};
   const initialValues = Object.assign({},
-    entry.draft ? prefillFromDoc(doc, input) : {},
+    entry.draft && !bulkIds ? prefillFromDoc(doc, input) : {},
+    declared,
     prefill || {},
     (draftView || {}).prefill || {},
     (draftView || {}).values || {});

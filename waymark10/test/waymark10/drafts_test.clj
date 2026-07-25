@@ -23,6 +23,9 @@
 (r/defhandler memo-revise [row inp _ctx]
   (assoc-in row [:data :body] (:body inp)))
 
+(r/defhandler memo-rename [row inp _ctx]
+  (assoc-in row [:data :title] (:title inp)))
+
 (def memo
   (r/resource
    {:kind :memo
@@ -41,6 +44,13 @@
               :edit {:prefill [:body] :draft {:shared false}}
               :safety {:idempotent true :reversible true :confirm false}
               :handler memo-revise}
+     ;; an :edit with a prefill and NO draft policy — the shape whose
+     ;; declared prefill reached nothing but the draft view
+     :rename {:from #{:open} :to :open
+              :input [:map [:title [:string {:min 1 :max 40}]]]
+              :edit {:prefill [:title]}
+              :safety {:idempotent true :reversible true :confirm false}
+              :handler memo-rename}
      :archive {:from #{:open} :to :archived
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "An archived memo rests."}}}}))
@@ -85,6 +95,20 @@
   (let [id (id-of (req :post "/api/meals" {:name name' :themes ["bbq"]}))
         env (json (req :post (str "/api/meals/" id "/-/accept")))]
     [id env]))
+
+;; ── 0. the envelope advertises the declared prefill ─────────────────
+
+(deftest edit-actions-advertise-their-prefill
+  (let [mid (id-of (req :post "/api/memos" {:title "packing list"}))
+        menv (json (req :get (str "/api/memos/" mid)))]
+    (testing "an :edit with no draft policy still names its prefill —
+              the form has to know what the row already answers"
+      (is (= ["title"] (get-in menv [:actions :rename :prefill]))))
+    (testing "a drafted :edit names it too, beside the draft advert"
+      (is (= ["body"] (get-in menv [:actions :revise :prefill])))
+      (is (some? (get-in menv [:actions :revise :draft]))))
+    (testing "an action that declares no :edit advertises no prefill"
+      (is (nil? (get-in menv [:actions :archive :prefill]))))))
 
 ;; ── 1. the envelope affords the draft ───────────────────────────────
 

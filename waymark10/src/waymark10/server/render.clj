@@ -281,6 +281,14 @@
                                        :action (name (:action t))}
                                 (:may t) (assoc :may true)))
                             (:touches defn')))
+      ;; the declared prefill: which input fields the row already
+      ;; answers. The draft view carried this and nothing else did, so
+      ;; an :edit without a draft policy opened blank and an overwrite
+      ;; nulled whatever went un-retyped. checks.clj holds every named
+      ;; field to being BOTH an input field and a data field, so the
+      ;; client's projection from data is sound by construction.
+      (seq (get-in defn' [:edit :prefill]))
+      (assoc :prefill (mapv name (get-in defn' [:edit :prefill])))
       ;; the composition surface (phase 7): an :edit action with a
       ;; declared draft policy affords its draft sub-resource
       (get-in defn' [:edit :draft])
