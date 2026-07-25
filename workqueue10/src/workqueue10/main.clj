@@ -28,7 +28,10 @@
   Schema evolution: `make migrate-queue` prints the plan (migrate!,
   the :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1
   additionally the state-rename UPDATEs."
-  (:require [choreplan10.resources.chore :refer [chore]]
+  (:require [calendar10.oauth :as gcal-oauth]
+            [calendar10.resources.event :as calendar]
+            [calendar10.source :as gcal]
+            [choreplan10.resources.chore :refer [chore]]
             [choreplan10.resources.chore-run :refer [chore-run]]
             [choreplan10.resources.day :refer [day day-board]]
             [mealplan10.main :as mealplan]
@@ -103,18 +106,42 @@
                 :capture-list (System/getenv "WORKQUEUE10_HA_CAPTURE")})
               fake-todos)}))
 
+(defonce fake-calendar
+  ;; module-default fake boundary — tests script it, offline dev and
+  ;; the declaration gate run over it
+  (gcal/fake-calendar))
+
+(defn calendar-adapter
+  "The real Google Calendar when CALENDAR10_GOOGLE_* names a
+  credential, the scriptable fake otherwise — the same
+  real-when-configured rule every other boundary here follows."
+  []
+  (or (gcal/from-env (gcal-oauth/from-env)) fake-calendar))
+
 (defn resources
-  "One domestic economics (waymark-bwu): the queue's kind, the folded
-  chore registry (chore, chore_run, day — bwu.1), and the folded meal
-  registry (mealplan10's eleven kinds — bwu.2). prep_task is
+  "One domestic economics (waymark-bwu), across three domains: the
+  queue's kind, the folded chore registry (chore, chore_run, day —
+  bwu.1), the folded meal registry (bwu.2), and the calendar
+  (waymark-6k5.2).
+
+  The calendar's event kind comes from calendar10, NOT from
+  mealplan/resources: it stopped being a meals concern when it became
+  writable and got a domain of its own. mealplan/meal-resources is
+  the ten kinds that are genuinely the meal plan's. prep_task is
   mealplan's NATIVE kind now; choreplan's HTTP mirror of it retired
-  with stage 2 — the day board joins the real rows. srcs: the
-  confluence's tag → TaskSource map; adapter: the family calendar's
-  event boundary."
+  with bwu stage 2 — the day board joins the real rows.
+
+  srcs: the confluence's tag → TaskSource map; adapter: the family
+  calendar's event boundary (a MirrorAdapter AND MirrorCreateAdapter
+  — this one is written to, not merely read)."
   [srcs adapter]
   (-> (in-domain :queue [(task-resource (conf/confluence srcs))])
       (into (in-domain :chores [chore chore-run day]))
-      (into (in-domain :meals (mealplan/resources adapter)))))
+      (into (in-domain :meals (mealplan/meal-resources)))
+      ;; the kind self-declares :domain :calendar; in-domain would
+      ;; stamp the same token, and saying it here keeps the three
+      ;; domains legible in one place
+      (into (in-domain :calendar (calendar/resources adapter)))))
 
 (def surfaces
   "Both decision screens, one engine: the housekeeper's day board and
@@ -126,7 +153,7 @@
   the offline fakes."
   []
   (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos}
-             mealplan/events))
+             fake-calendar))
 
 (defn- dsn []
   (or (System/getenv "WORKQUEUE10_DSN")
@@ -149,7 +176,7 @@
         eng (mirror/with-push
              (engine/engine {:storage storage
                              :resources (resources (sources)
-                                                   (mealplan/events-adapter))
+                                                   (calendar-adapter))
                              :surfaces surfaces
                              :deploy-mode (deploy-mode)
                              ;; dev-only, and only when asked: production
@@ -199,7 +226,7 @@
   (let [storage (pg/storage (dsn))]
     (try
       (let [reg (engine/full-registry (resources (sources)
-                                                 (mealplan/events-adapter)))
+                                                 (calendar-adapter)))
             steps (migrate/plan storage (vals (:kinds reg)))]
         (if (empty? steps)
           (println "workqueue10: storage matches the declarations — empty plan.")

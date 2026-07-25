@@ -16,6 +16,7 @@
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [calendar10.source :as gcal]
             [mealplan10.main]
             [next.jdbc :as jdbc]
             [workqueue10.confluence :as conf]
@@ -68,7 +69,7 @@
                                    :resources (main/resources
                                                {"chore" chores "meal" meals
                                                 "todo" todos}
-                                               mealplan10.main/events)
+                                               (gcal/fake-calendar))
                                    :now-fn (fn [] @clock)}))]
           (binding [*eng* eng
                     *h* (engine/handler eng)

@@ -372,16 +372,29 @@
                              "occurrences — editing it would move every "
                              "occurrence, which this adapter refuses")
                         {:status 409})))
-      (let [updated (api-call! this "PATCH"
-                               (str "/calendars/" (path-encode cal-id)
-                                    "/events/" (path-encode id))
-                               {:body (doc->event (writable! document))
-                                ;; the etag we just read: a family
-                                ;; member editing between our read and
-                                ;; our write fails the push instead of
-                                ;; losing their edit
-                                :if-match (:etag current)})]
-        (:etag updated))))
+      ;; THE CANCEL TRANSLATION: a document carrying :cancelled is the
+      ;; kind's way of saying "the authority should not have this any
+      ;; more", and the authority's verb for that is DELETE, not a
+      ;; field. Same shape as confluence/push-plan turning a document
+      ;; into "complete". The etag we answer is the last one the event
+      ;; had — there is no post-deletion version to report, and the
+      ;; row is a local tombstone from here on.
+      (if (:cancelled document)
+        (do (api-call! this "DELETE"
+                       (str "/calendars/" (path-encode cal-id)
+                            "/events/" (path-encode id))
+                       {:if-match (:etag current)})
+            (:etag current))
+        (let [updated (api-call! this "PATCH"
+                                 (str "/calendars/" (path-encode cal-id)
+                                      "/events/" (path-encode id))
+                                 {:body (doc->event (writable! document))
+                                  ;; the etag we just read: a family
+                                  ;; member editing between our read and
+                                  ;; our write fails the push instead of
+                                  ;; losing their edit
+                                  :if-match (:etag current)})]
+          (:etag updated)))))
 
   mirror/MirrorCreateAdapter
   (push-create [this document]
@@ -499,17 +512,25 @@
                         {})))
       (let [entry (get events x)]
         (when (or (nil? entry) (:cancelled entry))
-          (throw (ex-info (str x " is not on the calendar") {:status 404}))))
-      (writable! document)
-      (let [s (swap! state
-                     (fn [s]
-                       (let [rev (inc (:rev s))]
-                         (-> s
-                             (assoc :rev rev)
-                             (assoc-in [:events x]
-                                       {:doc document
-                                        :etag (str "\"fake-" rev "\"")})))))]
-        (get-in s [:events x :etag]))))
+          (throw (ex-info (str x " is not on the calendar") {:status 404})))
+        (if (:cancelled document)
+          ;; the cancel translation, same as the real adapter's: a
+          ;; :cancelled document DELETES rather than patches, and the
+          ;; last known etag is the honest answer — there is no
+          ;; post-deletion version
+          (do (swap! state assoc-in [:events x :cancelled] true)
+              (:etag entry))
+          (do
+            (writable! document)
+            (let [s (swap! state
+                           (fn [s]
+                             (let [rev (inc (:rev s))]
+                               (-> s
+                                   (assoc :rev rev)
+                                   (assoc-in [:events x]
+                                             {:doc document
+                                              :etag (str "\"fake-" rev "\"")})))))]
+              (get-in s [:events x :etag])))))))
 
   mirror/MirrorCreateAdapter
   (push-create [_ document]

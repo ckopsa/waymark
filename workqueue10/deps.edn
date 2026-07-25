@@ -5,7 +5,11 @@
          ;; engine; the namespaces stay in their app dirs until the
          ;; consolidation's cleanup stage relocates them
          choreplan10/choreplan10  {:local/root "../choreplan10"}
-         mealplan10/mealplan10    {:local/root "../mealplan10"}}
+         mealplan10/mealplan10    {:local/root "../mealplan10"}
+         ;; the calendar domain (waymark-6k5): its own module because
+         ;; the calendar belongs to neither the meal plan nor the
+         ;; queue — they both merely cite it
+         calendar10/calendar10    {:local/root "../calendar10"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}

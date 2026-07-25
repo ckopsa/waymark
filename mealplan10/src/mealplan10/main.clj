@@ -50,14 +50,33 @@
     (es/google-calendar-events url)
     events))
 
-(defn resources
-  "All eleven kinds, the event kind bound to its adapter. The pantry
-  quartet (ingredient/product/meal_line/substitution) is the
-  pantry-prices era, ported at parity."
-  [adapter]
+(defn meal-resources
+  "The ten kinds that are actually the MEAL plan's — everything except
+  the calendar. The pantry quartet
+  (ingredient/product/meal_line/substitution) is the pantry-prices
+  era, ported at parity.
+
+  Split out for waymark-6k5.2: the calendar became its own domain
+  (calendar10), so the engine that hosts both takes its event kind
+  from there and its meal kinds from here. The plan's :related edge
+  still cites :event — it joins on the promoted :date, which both
+  spellings carry, so the overlap predicate does not care which
+  registry supplied the kind."
+  []
   [meal meal-line rotation plan plan-day grocery-list prep-task
-   ingredient product substitution
-   (event/event-resource adapter)])
+   ingredient product substitution])
+
+(defn resources
+  "All eleven kinds — the meal plan's ten plus the LOCAL event kind,
+  for mealplan10 standing alone.
+
+  This is the pre-6k5 spelling, kept while the app still runs on its
+  own: the iCal mirror and its FakeEvents twin. workqueue10 does NOT
+  use it (see meal-resources) — production's event kind is
+  calendar10's read-write one. Both retire together when
+  waymark-6k5.3 removes the iCal transport."
+  [adapter]
+  (conj (meal-resources) (event/event-resource adapter)))
 
 (def surfaces
   "The declared decision screens (phase 9b): the week board."

@@ -9,7 +9,7 @@
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [mealplan10.main :as mealplan]
+            [calendar10.source :as gcal]
             [next.jdbc :as jdbc]
             [workqueue10.confluence :as conf]
             [workqueue10.main :as main]
@@ -47,7 +47,7 @@
                                  {"chore" (conf/fake-source)
                                   "meal" (conf/fake-source)
                                   "todo" (conf/fake-source)}
-                                 mealplan/events)
+                                 (gcal/fake-calendar))
                      :surfaces main/surfaces}))]
           (binding [*h* (engine/handler eng)]
             (f)))
