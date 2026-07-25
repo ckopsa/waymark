@@ -209,6 +209,18 @@
 ;; mirror kind. No target row yet ⇒ nil, a renderable gap; the target
 ;; kind's next discovery pass heals it (discover! calls resolve-refs!
 ;; on every kind pointing at what it just minted).
+;;
+;; :match names the TARGET FIELD the sibling matches, :external_id
+;; unsaid. Naming another field points the ref at a NATIVE kind — a
+;; feed that says "colton" resolving against member's :handle — which
+;; carries no external_id and could not be a ref target before. The
+;; matched field must be :eq-filterable on the target (checked at
+;; assembly, where every kind is known): the resolution is one indexed
+;; read per distinct id, on the promoted column or not at all.
+;;
+;; A native target also mints nothing, so nothing triggers the heal a
+;; mirror target gets for free. Every kind holding a native-matched
+;; ref re-resolves on its own discovery beat instead — see discover!.
 
 (defn- schema-head [form]
   (let [f (if (and (vector? form) (= :maybe (first form))) (second form) form)]
@@ -225,16 +237,23 @@
       (and (vector? f) (= :vector (first f))
            (= :waymark/ref (schema-head (last f)))) :many)))
 
+(def default-match
+  "The target field an external id resolves against when the ref names
+  none: every mirror's promoted external_id."
+  :external_id)
+
 (defn external-ref-specs
-  "field → {:kind … :external-key … :shape :one|:many} for every
-  entry of the woven schema declaring :external-key — the refs the
-  sync path resolves."
+  "field → {:kind … :external-key … :match … :shape :one|:many} for
+  every entry of the woven schema declaring :external-key — the refs
+  the sync path resolves. :match defaults to external_id, so a ref
+  that names no target field reads exactly as it did."
   [data-schema]
   (into {}
         (keep (fn [[f {:keys [properties schema]}]]
                 (when (:external-key properties)
-                  [f (assoc (select-keys properties [:kind :external-key])
-                            :shape (ref-shape schema))])))
+                  [f (-> (select-keys properties [:kind :external-key])
+                         (assoc :match (:match properties default-match)
+                                :shape (ref-shape schema)))])))
         (schema/entry-map data-schema)))
 
 (defn- check-external-refs!
@@ -254,7 +273,14 @@
         (when-not (:kind properties)
           (err ":external-key needs :kind — the target kind the external id resolves against"))
         (when-not (contains? fields ek)
-          (err (str ":external-key " ek " names no declared field")))))))
+          (err (str ":external-key " ek " names no declared field")))
+        ;; the target's field, not ours — only its SHAPE is knowable
+        ;; here; that the target declares it :eq-filterable is the
+        ;; assembly check, where every kind is known
+        (when-some [m (:match properties)]
+          (when-not (keyword? m)
+            (err (str ":match " (pr-str m) " is not a keyword — it names "
+                      "a field on the target kind"))))))))
 
 ;; ── authority windows and the document contract ─────────────────────
 ;; The document contract is law: :document :whole (the default) reads
@@ -455,19 +481,19 @@
   writes' case) leaves the document untouched."
   [specs merged ctx]
   (if-some [find-rows (:find ctx)]
-    (let [lookup (fn [kind xid]
+    (let [lookup (fn [kind match xid]
                    (when (and (some? xid) (not= "" (str xid)))
-                     (some-> (first (find-rows kind {:external_id (str xid)}
+                     (some-> (first (find-rows kind {match (str xid)}
                                                {:limit 1}))
                              :id str)))]
       (reduce-kv
-       (fn [m field {:keys [kind external-key shape]}]
+       (fn [m field {:keys [kind external-key match shape]}]
          (let [xv (get m external-key)]
            (assoc m field
                   (if (= :many shape)
                     (when (sequential? xv)
-                      (into [] (keep #(lookup kind %)) xv))
-                    (lookup kind xv)))))
+                      (into [] (keep #(lookup kind match %)) xv))
+                    (lookup kind match xv)))))
        merged specs))
     merged))
 
@@ -1101,28 +1127,28 @@
                 wanted (into #{}
                              (for [row rows
                                    [field {target :kind ek :external-key
-                                           shape :shape}] specs
+                                           match :match shape :shape}] specs
                                    xid (if (= :many shape)
                                          (let [xv (get-in row [:data ek])]
                                            (when (sequential? xv) xv))
                                          (when (nil? (get-in row [:data field]))
                                            [(get-in row [:data ek])]))
                                    :when (and (some? xid) (not= "" (str xid)))]
-                               [target (str xid)]))
+                               [target match (str xid)]))
                 resolved (into {}
-                               (keep (fn [[target xid]]
+                               (keep (fn [[target match xid :as want]]
                                        (when-some [t (first (store/query-rows
                                                              st tx target
-                                                             {:external_id xid}
+                                                             {match xid}
                                                              {:limit 1}))]
-                                         [[target xid] (str (:id t))])))
+                                         [want (str (:id t))])))
                                wanted)]
             (reduce
              (fn [healed row]
                (let [data (:data row)
                      data' (reduce-kv
                             (fn [d field {target :kind ek :external-key
-                                          shape :shape}]
+                                          match :match shape :shape}]
                               (if (= :many shape)
                                 ;; grow-only: write the recomputed
                                 ;; resolvable projection when it has
@@ -1133,7 +1159,7 @@
                                       cur (get d field)
                                       new (when (sequential? xv)
                                             (into []
-                                                  (keep #(get resolved [target (str %)]))
+                                                  (keep #(get resolved [target match (str %)]))
                                                   xv))]
                                   (if (> (count new) (count cur))
                                     (assoc d field new)
@@ -1141,7 +1167,7 @@
                                 (let [xid (get d ek)]
                                   (if (and (nil? (get d field)) (some? xid)
                                            (not= "" (str xid)))
-                                    (if-some [rid (get resolved [target (str xid)])]
+                                    (if-some [rid (get resolved [target match (str xid)])]
                                       (assoc d field rid)
                                       d)
                                     d))))
@@ -1223,6 +1249,15 @@
                          (some #(= kind (:kind %))
                                (vals (external-ref-specs (:schema other)))))]
         (resolve-refs! eng k)))
+    ;; a NATIVE target mints nothing, so the pass above never fires for
+    ;; it: a member provisioned on first sight, or an invite bound an
+    ;; hour ago, leaves every task that observed before it holding a
+    ;; nil ref forever. This kind re-resolves its own native-matched
+    ;; refs on its own beat instead — the heal is the same bounded
+    ;; read, paid only by kinds that declared such a ref.
+    (when (some #(not= default-match (:match %))
+                (vals (external-ref-specs (:schema rdef))))
+      (resolve-refs! eng kind))
     (count new-ids)))
 
 (defn discover-all!

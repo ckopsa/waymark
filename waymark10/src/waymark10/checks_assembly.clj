@@ -131,6 +131,49 @@
                warning)))
           (sort-by key (:kinds reg)))))
 
+;; ── check-external-refs ─────────────────────────────────────────────
+
+(def ^:private default-external-match
+  "mirror/default-match, restated: requiring that namespace here would
+  close a cycle (mirror → invoke → … → registry → this battery)."
+  :external_id)
+
+(defn- check-external-refs
+  "An external-keyed ref resolves its sibling's external id against ONE
+  field of the TARGET kind (mirror.clj's :match, :external_id unsaid).
+  The def-site check judges what one declaration can see; the target is
+  knowable only here: the matched field must exist and be
+  :eq-filterable, because resolution is one indexed read per distinct
+  id — on the promoted column or not at all. An unsaid :match against a
+  native kind is the silent form of the same error: no external_id
+  exists there, so every resolution answers nil forever."
+  [reg]
+  (doseq [[kind r] (sort-by key (:kinds reg))
+          [f {props :properties}] (schema/entry-map (:schema r))
+          :when (:external-key props)
+          ;; check-refs already refused a ref naming an unregistered kind
+          :let [target (:kind props)
+                tdef (get-in reg [:kinds target])]
+          :when tdef]
+    (let [match (:match props default-external-match)
+          where (str "data." (name f) ": ")]
+      (if (= default-external-match match)
+        (when-not (:mirror tdef)
+          (err kind :refs
+               (str where "the ref matches " target "'s external_id, but "
+                    (name target) " is a native kind and carries none — "
+                    "name the field it should match with :match")))
+        (do
+          (when-not (contains? (schema/entry-map (:schema tdef)) match)
+            (err kind :refs
+                 (str where ":match " match " is not a field of "
+                      (name target) "'s data schema")))
+          (when-not (contains? (set (get (:filterable tdef) match)) :eq)
+            (err kind :refs
+                 (str where ":match " match " must be :eq-filterable on "
+                      (name target) " — every resolution is an indexed "
+                      "read on the promoted column"))))))))
+
 ;; ── check-owns ──────────────────────────────────────────────────────
 
 (defn- check-owns
@@ -589,12 +632,12 @@
 ;; unported; the check arrives with the feature.
 
 (defn run-all
-  "The assembly battery in waymark9 order: refs, owns, related,
-  derived-cycles, touches. Throws the first error, returns
-  {:warnings [str …]}."
+  "The assembly battery in waymark9 order: refs (and the external-keyed
+  refs' targets, v10's own), owns, related, derived-cycles, touches.
+  Throws the first error, returns {:warnings [str …]}."
   [reg]
   {:warnings
    (into []
          (mapcat #(% reg))
-         [check-refs check-owns check-related check-derived-cycles
-          check-touches check-pick check-link-where])})
+         [check-refs check-external-refs check-owns check-related
+          check-derived-cycles check-touches check-pick check-link-where])})

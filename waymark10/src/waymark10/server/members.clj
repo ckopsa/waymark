@@ -46,6 +46,10 @@
   - token uniqueness is unenforced under race (two invites sharing a
     token bind whichever the query returns first) — the role-create
     guard's sibling, recorded not fixed.
+  - :handle uniqueness is unenforced too, and its consequence is
+    quieter: two members sharing a handle send every ref that matches
+    it to whichever row the query returns first. The same sibling,
+    recorded the same way.
   - membership mode is per engine ({:members :invited-only} in the
     engine map); per-kind modes are unscoped.
   - waymark9's unbind (reset the binding, keep membership) is
@@ -102,6 +106,9 @@
 (defhandler set-subject [row inp _ctx]
   (assoc-in row [:data :subject] (:subject inp)))
 
+(defhandler set-handle [row inp _ctx]
+  (assoc-in row [:data :handle] (:handle inp)))
+
 (defresource member
   {:kind :member
    :plural "members"
@@ -116,6 +123,13 @@
    :label-template "{data.display}"
    :schema [:map
             [:display [:string {:min 1 :max 80}]]
+            ;; the short name the household's OTHER systems already say.
+            ;; :display is the human label an identity provider hands
+            ;; over ("Colton Kopsa"); a chore feed says "colton". A
+            ;; mirror's external-keyed ref matches THIS field, so a
+            ;; synced assignee lands on a person instead of a string.
+            [:handle {:optional true}
+             [:maybe [:string {:min 1 :max 40}]]]
             [:actor_type [:enum "human" "agent"]]
             [:roles {:optional true}
              [:vector [:string {:min 1 :max 40}]]]
@@ -130,7 +144,10 @@
              [:maybe [:string {:max 128}]]]]
    :filterable {:state #{:eq :in}
                 :actor_type #{:eq}
-                :subject #{:eq}}
+                :subject #{:eq}
+                ;; promoted because refs resolve against it — one
+                ;; indexed read per distinct assignee, per sync pass
+                :handle #{:eq}}
    :sortable {:fields [:display] :default "display"}
    :create-guards [roles-registered]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
@@ -160,6 +177,18 @@
                    :safety {:idempotent true :reversible true :confirm false}
                    :handler set-roles
                    :display {:label "Assign roles" :order 2}}
+    ;; the handle is unset at every birth — an auto-provisioned member
+    ;; is named by its identity provider, which has never heard of the
+    ;; chore board. Without this door a synced assignee could only ever
+    ;; resolve for members born of an invite, so the door exists.
+    :set_handle {:from #{:active} :to :active
+                 :input [:map [:handle {:x-display {:label "Handle (what other systems call them)"}}
+                               [:string {:min 1 :max 40}]]]
+                 :record true
+                 :edit {:prefill [:handle]}
+                 :safety {:idempotent true :reversible true :confirm false}
+                 :handler set-handle
+                 :display {:label "Set handle" :order 3}}
     :suspend {:from #{:active} :to :suspended
               :safety {:idempotent true :reversible true :confirm true
                        :consequence "Every request this member makes is refused until reinstated; their held roles stop acting."}

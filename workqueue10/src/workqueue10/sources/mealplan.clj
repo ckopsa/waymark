@@ -25,7 +25,7 @@
   [env]
   (let [d (:data env)]
     {:title (str (:task_type d) ": " (:meal_name d))
-     :assignee (:assignee d)
+     :assignee_name (:assignee d)
      :due_at (:due_at d)
      :status (case (:state env)
                "pending" "open"

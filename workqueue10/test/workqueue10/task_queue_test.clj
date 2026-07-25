@@ -144,23 +144,23 @@
   ;; Tuesday morning: both engines carry open work. The fakes hold
   ;; CANONICAL docs — they play the boundary post-translation.
   (conf/seed! *chores* "cr-dishes"
-              {:title "Dishes" :assignee "colton"
+              {:title "Dishes" :assignee_name "colton"
                :due_at "2026-07-22T00:00:00Z" :status "open"
                :detail "load and run before bed"
                :source_href "https://rod.kopsa.info/api/chore_runs/cr-dishes"
                :source_ui_href "https://rod.kopsa.info/api/-/ui#/api/chore_runs/cr-dishes"})
   (conf/seed! *chores* "cr-mow"
-              {:title "Mow the lawn" :assignee "colton"
+              {:title "Mow the lawn" :assignee_name "colton"
                :due_at "2026-07-20T00:00:00Z" :status "open"})
   (conf/seed! *meals* "pt-thaw"
-              {:title "thaw: Traeger brisket" :assignee "housekeeper"
+              {:title "thaw: Traeger brisket" :assignee_name "housekeeper"
                :due_at "2026-07-21T16:00:00Z" :status "open"
                :detail "move 2500g brisket to the fridge"})
   (conf/seed! *meals* "pt-brine"
-              {:title "prep: Chicken brine" :assignee "colton"
+              {:title "prep: Chicken brine" :assignee_name "colton"
                :due_at "2026-07-21T19:00:00Z" :status "open"})
   (conf/seed! *meals* "pt-slaw"
-              {:title "prep: Coleslaw" :assignee "housekeeper"
+              {:title "prep: Coleslaw" :assignee_name "housekeeper"
                :due_at "2026-07-21T23:00:00Z" :status "dropped"})
   (conf/seed! *todos* "todo.woodworking/uid-chisels"
               {:title "Sharpen chisels" :status "open"
@@ -175,9 +175,31 @@
     (is (= 3 (count (items-of "?source=meal"))))
     (is (= 1 (count (items-of "?source=todo"))))
     (is (= 5 (count (items-of "?status=open"))))
-    (is (= 3 (count (items-of "?assignee=colton"))))
+    (is (= 3 (count (items-of "?assignee_name=colton"))))
     (is (= 1 (count (items-of "?overdue=true")))
         "only the lawn survived the weekend unmowed"))
+
+  (testing "an assignee is a PERSON, not a string: the source's name
+            resolves to the member whose handle it matches"
+    (let [self (:self (task-by-title "Dishes"))]
+      (is (nil? (get-in (json (req :get self)) [:data :assignee]))
+          "nobody claims the handle 'colton' yet — the honest gap,
+           beside the source's intact word")
+      ;; the member the dev-header principal was auto-provisioned as:
+      ;; born of an identity provider that never heard of the chore
+      ;; board, so the handle is a deliberate act
+      (act-fenced! "/api/members/colton" :set_handle {:handle "colton"})
+      ;; a native target mints nothing — the queue's own beat heals it
+      (mirror/discover! *eng* :task)
+      (let [dishes (json (req :get self))
+            ref (get-in dishes [:data :assignee])]
+        (is (= "colton" (get-in dishes [:data :assignee_name]))
+            "the source's word is kept whatever the match does")
+        (is (some? ref) "…and it now names a member")
+        (is (= 200 (:status (req :get (str "/api/members/" ref))))
+            "the ref holds a member ROW id — it dereferences")
+        (is (= 3 (count (items-of (str "?assignee=" ref))))
+            "the queue filters by person now, not by spelling"))))
 
   (testing "the mirrored facts landed standalone, source stamped"
     (let [dishes (json (req :get (:self (task-by-title "Dishes"))))]
@@ -280,7 +302,7 @@
             still discovers"
     (conf/down! *chores* true)
     (conf/seed! *meals* "pt-rest"
-                {:title "cook: Rest the brisket" :assignee "colton"
+                {:title "cook: Rest the brisket" :assignee_name "colton"
                  :due_at "2026-07-22T01:00:00Z" :status "open"})
     (is (= 1 (mirror/discover! *eng* :task))
         "the meal row minted; the chore feed just skipped a pass")
@@ -292,7 +314,7 @@
       (act-fenced! mow-self :prioritize {:priority 3})
       ;; the authority revises its side of the row (new etag)…
       (conf/seed! *chores* "cr-mow"
-                  {:title "Mow the lawn" :assignee "colton"
+                  {:title "Mow the lawn" :assignee_name "colton"
                    :due_at "2026-07-20T00:00:00Z" :status "open"
                    :detail "bag the clippings this time"})
       ;; …and the next read past the TTL pulls it through

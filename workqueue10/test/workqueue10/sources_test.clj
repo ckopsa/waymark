@@ -36,7 +36,9 @@
                      :due_date "2026-07-21"
                      :chore_notes "load and run before bed"}})]
       (is (= "Dishes" (:title t)))
-      (is (= "colton" (:assignee t)))
+      (is (= "colton" (:assignee_name t))
+          "a source speaks NAMES; :assignee is the ref the engine
+           resolves from this text")
       (is (= "load and run before bed" (:detail t))))))
 
 (deftest prep-task-translation

@@ -10,8 +10,8 @@
   splits the prefix and routes to the tagged TaskSource.
 
   EACH SOURCE SPEAKS CANONICAL. A TaskSource's pull answers the
-  queue's own document shape (title / assignee / due_at / status /
-  detail — status normalized to open|done|dropped), the same
+  queue's own document shape (title / assignee_name / due_at / status
+  / detail — status normalized to open|done|dropped), the same
   adapter-owns-the-translation move choreplan10's MealplanFeed makes
   with row->document. The confluence adds :source (the tag) on the
   way through — the routing layer owns the routing fact.

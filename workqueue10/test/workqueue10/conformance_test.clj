@@ -84,7 +84,7 @@
 (fac/example-input! :task :observe_external
   {:document {:title "Dishes"
               :source "chore"
-              :assignee "colton"
+              :assignee_name "colton"
               :due_at "2026-01-07T00:00:00Z"
               :status "open"
               :detail "load and run before bed"}

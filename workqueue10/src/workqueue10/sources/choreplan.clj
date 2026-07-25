@@ -37,7 +37,7 @@
   [env]
   (let [d (:data env)]
     {:title (:chore_name d)
-     :assignee (:assignee d)
+     :assignee_name (:assignee d)
      :due_at (some-> (:due_date d) day-end)
      :status (case (:state env)
                "due" "open"

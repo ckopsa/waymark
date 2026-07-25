@@ -95,8 +95,23 @@
               ;; row drinks from; the enum is the tag set main wires
               [:source {:optional true :filter #{:eq :in}}
                [:maybe [:enum "chore" "meal" "todo"]]]
-              [:assignee {:optional true :filter #{:eq}}
+              ;; WHO, as a person and not a string. The sources speak
+              ;; names ("colton", "housekeeper") — that text lands in
+              ;; :assignee_name, and :assignee is its resolvable
+              ;; projection: the member whose :handle the name matches.
+              ;; A name with no member (the housekeeper has no account)
+              ;; leaves the ref nil beside the intact text — the gap
+              ;; renders, and the member's arrival heals it on the next
+              ;; discovery beat.
+              [:assignee_name {:optional true :filter #{:eq}
+                               :x-display {:label "Assigned (as named)"}}
                [:maybe [:waymark/vocab {:open true}]]]
+              [:assignee {:optional true :filter #{:eq}
+                          :kind :member
+                          :external-key :assignee_name
+                          :match :handle
+                          :x-display {:label "Assigned to"}}
+               [:maybe :waymark/ref]]
               [:due_at {:optional true :filter #{:after} :sort true
                         :x-display {:label "Due by"}}
                [:maybe :waymark/instant]]

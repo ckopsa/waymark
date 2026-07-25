@@ -4,9 +4,16 @@
   document's external id becomes the target mirror row's id — and
   discovery heals edges that observed before their target existed
   (resolve-refs!, a maintenance write). Driven by paydesk's assignment
-  kind (employee/fund refs over warehouse ids). Needs the test
-  database: WAYMARK10_TEST_DSN overrides."
+  kind (employee/fund refs over warehouse ids).
+
+  :match widens the target: the id resolves against a named field of
+  the target kind rather than a mirror's external_id, so a feed's word
+  (\"zoe\") can land on a NATIVE row (a crew member's :handle) — the
+  workqueue10 assignee shape. A native target mints nothing, so the
+  edge kind heals on its own discovery beat. Needs the test database:
+  WAYMARK10_TEST_DSN overrides."
   (:require [clojure.test :refer [deftest is testing]]
+            [waymark10.checks-assembly :as ca]
             [waymark10.resource :as r]
             [waymark10.server.invoke :as inv]
             [waymark10.server.mirror :as mirror]
@@ -73,6 +80,40 @@
               [:coauthor_ids {:optional true :kind :author
                               :external-key :coauthor_external_ids}
                [:maybe [:vector :waymark/ref]]]]}
+    {:adapter adapter :ttl-seconds 3600 :discover-every 3600})))
+
+;; ── a NATIVE target: :match points the ref off the mirror world ─────
+;; A crew member is nobody's mirror row — it has no external_id at all.
+;; The shift feed says "zoe"; the ref matches that against the crew's
+;; own :handle, so a synced assignment lands on a person.
+
+(defn- crew-kind []
+  (r/resource
+   {:kind :crew
+    :plural "crews"
+    :states [:active]
+    :initial :active
+    ;; a crew member just IS — no lifecycle, so the one state is a
+    ;; declared dead end rather than an unfinished machine
+    :allow-dead #{:active}
+    :summary "{data.display}"
+    :label-template "{data.display}"
+    :schema [:map
+             [:display [:string {:min 1 :max 40}]]
+             [:handle {:optional true} [:maybe [:string {:min 1 :max 40}]]]]
+    :filterable {:state #{:eq :in} :handle #{:eq}}}))
+
+(defn- shift-kind [adapter]
+  (r/resource
+   (mirror/declaration
+    {:kind :shift
+     :summary "{data.name}"
+     :schema [:map
+              [:name {:optional true} [:maybe [:string {:max 120}]]]
+              [:crew_handle {:optional true} [:maybe [:string {:max 64}]]]
+              [:crew_id {:optional true :kind :crew
+                         :external-key :crew_handle :match :handle}
+               [:maybe :waymark/ref]]]}
     {:adapter adapter :ttl-seconds 3600 :discover-every 3600})))
 
 (defn- row-of [eng kind xid]
@@ -200,6 +241,99 @@
         (testing "an unreachable adapter warns and returns nil"
           (swap! (:state authors) assoc :down true)
           (is (nil? (mirror/resync! eng :author))))))))
+
+(deftest match-resolves-against-a-native-kind
+  (let [shifts (remote)]
+    (db/with-test-engine
+      [(crew-kind) (shift-kind shifts)]
+      (fn [eng]
+        (let [crew! (fn [display handle]
+                      (-> (inv/create! eng :crew
+                                       {:display display :handle handle}
+                                       {:principal mirror/system-observer})
+                          (get-in [:row :id])))]
+          (testing "the ref matches the target's own field, not an external_id"
+            (let [zoe (crew! "Zoe Kopsa" "zoe")]
+              (seed! shifts "s1" {:name "Saturday" :crew_handle "zoe"})
+              (mirror/discover! eng :shift)
+              (is (= (str zoe) (get-in (row-of eng :shift "s1") [:data :crew_id]))
+                  "a native kind carries no external_id — :handle is what matched")))
+
+          (testing "a handle no member claims leaves the ref nil beside
+                    the intact text"
+            (seed! shifts "s2" {:name "Sunday" :crew_handle "housekeeper"})
+            (mirror/discover! eng :shift)
+            (let [s2 (row-of eng :shift "s2")]
+              (is (nil? (get-in s2 [:data :crew_id])) "the honest gap")
+              (is (= "housekeeper" (get-in s2 [:data :crew_handle]))
+                  "the source's word is never lost to a failed match")))
+
+          (testing "the target's later arrival heals on the EDGE's own beat
+                    — a native kind mints nothing to trigger the old pass"
+            (let [before (row-of eng :shift "s2")
+                  hk (crew! "The Housekeeper" "housekeeper")]
+              (mirror/discover! eng :shift)
+              (let [s2 (row-of eng :shift "s2")]
+                (is (= (str hk) (get-in s2 [:data :crew_id])))
+                (is (= (:version before) (:version s2))
+                    "a maintenance write — no transition"))))
+
+          (testing "an unset external key resolves to an unset ref"
+            (seed! shifts "s3" {:name "Unassigned"})
+            (mirror/discover! eng :shift)
+            (is (nil? (get-in (row-of eng :shift "s3") [:data :crew_id])))))))))
+
+(deftest assembly-judges-the-match-target
+  (let [crew (crew-kind)
+        shift (shift-kind (remote))
+        reg-of (fn [& rs] {:kinds (into {} (map (juxt :kind identity)) rs)})]
+    (testing "a well-formed :match passes the battery"
+      (is (map? (ca/run-all (reg-of crew shift)))))
+
+    (testing "an unsaid :match at a NATIVE target refuses — there is no
+              external_id there, so every resolution would answer nil"
+      (let [naive (r/resource
+                   (mirror/declaration
+                    {:kind :shift :summary "{data.name}"
+                     :schema [:map
+                              [:crew_handle {:optional true} [:maybe [:string {:max 64}]]]
+                              [:crew_id {:optional true :kind :crew
+                                         :external-key :crew_handle}
+                               [:maybe :waymark/ref]]]}
+                    {:adapter (remote) :ttl-seconds 60 :discover-every 60}))]
+        (is (thrown-with-msg?
+             Exception #"native kind and carries none"
+             (ca/run-all (reg-of crew naive))))))
+
+    (testing ":match naming a field the target does not declare refuses"
+      (let [typo (r/resource
+                  (mirror/declaration
+                   {:kind :shift :summary "{data.name}"
+                    :schema [:map
+                             [:crew_handle {:optional true} [:maybe [:string {:max 64}]]]
+                             [:crew_id {:optional true :kind :crew
+                                        :external-key :crew_handle
+                                        :match :nickname}
+                              [:maybe :waymark/ref]]]}
+                   {:adapter (remote) :ttl-seconds 60 :discover-every 60}))]
+        (is (thrown-with-msg?
+             Exception #":match :nickname is not a field"
+             (ca/run-all (reg-of crew typo))))))
+
+    (testing ":match on an unpromoted field refuses — resolution is an
+              indexed read or nothing"
+      (let [unpromoted (r/resource
+                        {:kind :crew :plural "crews"
+                         :states [:active] :initial :active
+                         :allow-dead #{:active}
+                         :summary "{data.display}"
+                         :schema [:map
+                                  [:display [:string {:min 1 :max 40}]]
+                                  [:handle {:optional true} [:maybe [:string {:max 40}]]]]
+                         :filterable {:state #{:eq :in}}})]
+        (is (thrown-with-msg?
+             Exception #"must be :eq-filterable"
+             (ca/run-all (reg-of unpromoted shift))))))))
 
 (deftest def-site-refusals
   (testing ":external-key naming no declared field refuses"
