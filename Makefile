@@ -32,7 +32,7 @@ PAYDESK_WAREHOUSE_DSN  ?= $(shell scripts/paydesk-warehouse-dsn.sh $(PAYDESK_WAR
 PAYDESK_PROD_DSN           ?= jdbc:postgresql://localhost:$(PG_PORT)/paydesk_prod?user=$(PG_USER)
 PAYDESK_PROD_WAREHOUSE_DSN ?= $(shell scripts/paydesk-warehouse-dsn.sh 15435 db_readwrite devdb 2>/dev/null)
 
-.PHONY: db db10 test10 check10 test-mealplan10 migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk test-chores dev-chores migrate-chores check-chores image-chores deploy-chores test-queue dev-queue migrate-queue check-queue image-queue deploy-queue image10 deploy10
+.PHONY: db db10 test10 check10 test-mealplan10 paydesk-guard migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk test-chores dev-chores migrate-chores check-chores image-chores deploy-chores test-queue dev-queue migrate-queue check-queue image-queue deploy-queue image10 deploy10
 
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
@@ -100,18 +100,25 @@ migrate-eveningplan10: db10  ## print eveningplan10's schema plan against evenin
 	cd eveningplan10 && EVENINGPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/eveningplan10_dev?user=$(PG_USER)" \
 		clojure -M:migrate
 
-check-paydesk:  ## paydesk declaration-time checks + usability warnings (no database)
+# paydesk is not on main — the payouts app lives on the plan-day
+# branch. Its targets still work there, so they are guarded rather
+# than retired: on main they say where paydesk went instead of failing
+# with a bare "cd: paydesk: No such file or directory".
+paydesk-guard:
+	@test -d paydesk || { echo "paydesk/ is not in this working tree — the payouts app lives on the 'plan-day' branch (git switch plan-day)." >&2; exit 1; }
+
+check-paydesk: paydesk-guard  ## paydesk declaration-time checks + usability warnings (no database)
 	cd paydesk && clojure -M:check
 
-test-paydesk: db10  ## paydesk conformance suite
+test-paydesk: paydesk-guard db10  ## paydesk conformance suite
 	cd paydesk && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
 
-dev-paydesk: db10  ## serve paydesk on :8012 against paydesk_dev; mirrors the dev warehouse over :5432 if PAYDESK_WAREHOUSE_DSN resolves (see PAYDESK_WAREHOUSE_PORT), else fake adapters
+dev-paydesk: paydesk-guard db10  ## serve paydesk on :8012 against paydesk_dev; mirrors the dev warehouse over :5432 if PAYDESK_WAREHOUSE_DSN resolves (see PAYDESK_WAREHOUSE_PORT), else fake adapters
 	@cd paydesk && PAYDESK_DSN="jdbc:postgresql://localhost:$(PG_PORT)/paydesk_dev?user=$(PG_USER)" \
 		PAYDESK_WAREHOUSE_DSN="$(PAYDESK_WAREHOUSE_DSN)" \
 		WAYMARK10_AUTO_MIGRATE=1 clojure -M:dev
 
-migrate-paydesk: db10  ## print paydesk's schema plan against paydesk_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
+migrate-paydesk: paydesk-guard db10  ## print paydesk's schema plan against paydesk_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
 	cd paydesk && PAYDESK_DSN="jdbc:postgresql://localhost:$(PG_PORT)/paydesk_dev?user=$(PG_USER)" \
 		clojure -M:migrate
 
@@ -120,10 +127,10 @@ db-paydesk-prod:  ## the paydesk_prod database on the host-reachable :5433
 		"SELECT 1 FROM pg_database WHERE datname='paydesk_prod'" | grep -q 1 || \
 		createdb -h localhost -p $(PG_PORT) -U $(PG_USER) paydesk_prod
 
-migrate-paydesk-prod: db-paydesk-prod  ## print paydesk's schema plan against the local paydesk_prod; APPLY=1 executes
+migrate-paydesk-prod: paydesk-guard db-paydesk-prod  ## print paydesk's schema plan against the local paydesk_prod; APPLY=1 executes
 	@cd paydesk && PAYDESK_DSN="$(PAYDESK_PROD_DSN)" clojure -M:migrate
 
-paydesk-prod: db-paydesk-prod  ## serve paydesk on :8013 against local paydesk_prod + the PROD warehouse (needs `ssh -fN paydesk-db-prod`); refuses on schema drift — migrate-paydesk-prod first
+paydesk-prod: paydesk-guard db-paydesk-prod  ## serve paydesk on :8013 against local paydesk_prod + the PROD warehouse (needs `ssh -fN paydesk-db-prod`); refuses on schema drift — migrate-paydesk-prod first
 	@cd paydesk && PAYDESK_DSN="$(PAYDESK_PROD_DSN)" \
 		PAYDESK_WAREHOUSE_DSN="$(PAYDESK_PROD_WAREHOUSE_DSN)" \
 		PAYDESK_PORT=8013 clojure -M:dev

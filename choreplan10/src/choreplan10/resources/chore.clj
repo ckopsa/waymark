@@ -55,6 +55,11 @@
            [:notes {:optional true :x-display {:widget "prose"}}
             [:maybe [:string {:max 2000}]]]]
    :edit {:prefill [:name :area :assignee :cadence :notes]}
+   ;; the overwrite writes the WHOLE detail set and is declared
+   ;; non-reversible, so the log has to carry what was written — an
+   ;; audit of the blank-form era (waymark-wnh) found 13 of these
+   ;; transitions and not one recoverable value behind them.
+   :record true
    :safety overwrite
    :handler apply-details
    :display {:label "Update details" :order 2}})
