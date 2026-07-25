@@ -32,7 +32,7 @@ PAYDESK_WAREHOUSE_DSN  ?= $(shell scripts/paydesk-warehouse-dsn.sh $(PAYDESK_WAR
 PAYDESK_PROD_DSN           ?= jdbc:postgresql://localhost:$(PG_PORT)/paydesk_prod?user=$(PG_USER)
 PAYDESK_PROD_WAREHOUSE_DSN ?= $(shell scripts/paydesk-warehouse-dsn.sh 15435 db_readwrite devdb 2>/dev/null)
 
-.PHONY: db db10 test10 check10 test-mealplan10 paydesk-guard migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk test-chores dev-chores migrate-chores check-chores image-chores deploy-chores test-queue dev-queue migrate-queue check-queue image-queue deploy-queue image10 deploy10
+.PHONY: test-calendar probe-calendar db db10 test10 check10 test-mealplan10 paydesk-guard migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk test-chores dev-chores migrate-chores check-chores image-chores deploy-chores test-queue dev-queue migrate-queue check-queue image-queue deploy-queue image10 deploy10
 
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
@@ -170,6 +170,12 @@ dev-queue: db10  ## serve workqueue10 on :8014 against workqueue10_dev (fake sou
 migrate-queue: db10  ## print workqueue10's schema plan against workqueue10_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
 	cd workqueue10 && WORKQUEUE10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/workqueue10_dev?user=$(PG_USER)" \
 		clojure -M:migrate
+
+test-calendar:  ## calendar10 transport tests — pure translation + a loopback Google (no database, no network)
+	cd calendar10 && clojure -M:test
+
+probe-calendar:  ## prove the calendar transport against the REAL family calendar; WRITE=1 also round-trips a scratch event
+	cd calendar10 && clojure -M:probe
 
 QUEUE_IMAGE ?= docker.kopsa.info/workqueue10
 

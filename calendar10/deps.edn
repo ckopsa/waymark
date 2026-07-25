@@ -1,0 +1,12 @@
+{:paths ["src"]
+ :deps  {org.clojure/clojure  {:mvn/version "1.12.1"}
+         waymark10/waymark10  {:local/root "../waymark10"}}
+ :aliases
+ {:test {:extra-paths ["test"]
+         :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}
+                       lambdaisland/kaocha    {:mvn/version "1.91.1392"}}
+         :main-opts   ["-m" "kaocha.runner"]}
+  ;; make probe-calendar: the transport's end-to-end proof against the
+  ;; REAL family calendar — read-only by default, WRITE=1 round-trips
+  ;; a scratch event (create → patch → delete)
+  :probe {:main-opts ["-m" "calendar10.probe"]}}}
