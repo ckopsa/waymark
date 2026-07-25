@@ -1,14 +1,22 @@
 (ns mealplan10.batch-e-recurrence-test
-  "Batch E at the dogfood level: a weekly recital seeded on the
-  FakeEvents calendar (through the real expander) discovers into one
-  event row PER OCCURRENCE, and plan conflicts flip on exactly the
-  weeks an occurrence lands — the EXDATE'd week stays clear. The same
-  plans prove the previous_plan wiring: each new week links the one
-  before it, over the wire. Needs the batch-E database:
-  WAYMARK10_TEST_DSN=…waymark10_ext_test."
+  "The dogfood level: a weekly recital discovers into one event row
+  PER OCCURRENCE, and plan conflicts flip on exactly the weeks an
+  occurrence lands — the cancelled week stays clear. The same plans
+  prove the previous_plan wiring: each new week links the one before
+  it, over the wire.
+
+  The occurrences are seeded EXPLICITLY now (waymark-6k5.3). They used
+  to come from a local RRULE expander walking an iCal feed; the
+  calendar speaks Google Calendar API v3 today and asks the authority
+  to expand recurrence, so what arrives is already one instance per
+  date — each with its own id — and a week the family cancelled is
+  simply not in the feed. Seeding two dated occurrences and no third
+  IS the new shape of this story, not a simplification of it.
+
+  Needs WAYMARK10_TEST_DSN."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [mealplan10.event-source :as es]
+            [calendar10.source :as es]
             [mealplan10.main :as main]
             [next.jdbc :as jdbc]
             [waymark10.server.engine :as engine]
@@ -33,7 +41,7 @@
 (use-fixtures :once
   (fn [f]
     (let [st (pg/storage db/dsn)
-          feed (es/fake-events)
+          feed (es/fake-calendar)
           clock (atom (Instant/parse "2026-07-08T12:00:00Z"))]
       (try
         (store/with-tx st
@@ -72,16 +80,16 @@
 ;; ── the recital recurs; the plans feel the right weeks ──────────────
 
 (deftest recurring-recital-and-chained-plans
-  ;; Wednesdays 7-15, 7-22, 7-29 — except the 22nd is EXDATE'd
-  ;; (the recital hall is closed that week)
-  (let [ids (es/seed-recurring! *feed* "uid-recital"
-                                {:title "Piano recital"
-                                 :kind "blocking"
-                                 :dtstart "2026-07-15"
-                                 :rrule "FREQ=WEEKLY;COUNT=3"
-                                 :exdates ["2026-07-22"]
-                                 :from "2026-07-01" :to "2026-10-01"})]
-    (is (= ["uid-recital@2026-07-15" "uid-recital@2026-07-29"] ids))
+  ;; Wednesdays 7-15, 7-22, 7-29 — except the 22nd, which the family
+  ;; cancelled (the recital hall is closed). The feed carries the two
+  ;; surviving instances under Google's per-occurrence ids; the
+  ;; cancelled week is absent, exactly as events.list reports it.
+  (let [ids (mapv #(es/seed! *feed* (str "family:recital_" (first %))
+                             {:title "Piano recital" :kind "blocking"
+                              :all_day true :date (second %)
+                              :end_date (second %)})
+                  [["20260715" "2026-07-15"] ["20260729" "2026-07-29"]])]
+    (is (= ["family:recital_20260715" "family:recital_20260729"] ids))
 
     (testing "discovery mints one event row per occurrence"
       (is (= 2 (mirror/discover! *eng* :event)))

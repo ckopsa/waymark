@@ -19,7 +19,7 @@
   plan abandons and its task cascades to cancelled."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [mealplan10.event-source :as es]
+            [calendar10.source :as es]
             [mealplan10.main :as main]
             [next.jdbc :as jdbc]
             [waymark10.server.engine :as engine]
@@ -46,7 +46,7 @@
 (use-fixtures :once
   (fn [f]
     (let [st (pg/storage db/dsn)
-          feed (es/fake-events)
+          feed (es/fake-calendar)
           clock (atom (Instant/parse "2026-07-08T12:00:00Z"))]
       (try
         (store/with-tx st
@@ -239,7 +239,7 @@
 
         ;; ── the recital lands on the calendar ─────────────────────────
         (testing "a blocking event discovered on the feed flips the plan"
-          (es/seed! *feed* "uid-recital@2026-07-16"
+          (es/seed! *feed* "family:recital-2026-07-16"
                     {:title "Piano recital" :date "2026-07-16"
                      :kind "blocking"})
           (is (= 1 (mirror/discover! *eng* :event)))
@@ -290,10 +290,10 @@
           (testing "the thaw step goes on the family calendar"
             ;; the agent creates the calendar event externally; the
             ;; feed discovers it, and the task records the ref
-            (es/seed! *feed* "uid-thaw@2026-07-17"
+            (es/seed! *feed* "family:thaw-2026-07-17"
                       {:title "Thaw the brisket" :date "2026-07-17"})
             (mirror/discover! *eng* :event)
-            (let [events (json (req :get "/api/events?external_id=uid-thaw%402026-07-17"))
+            (let [events (json (req :get "/api/events?external_id=family%3Athaw-2026-07-17"))
                   event-self (get-in events [:data :items 0 :self])]
               (is (some? event-self) (pr-str events))
               (is (= "scheduled"

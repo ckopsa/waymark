@@ -5,10 +5,10 @@
       make dev10          # serve on :8010 against mealplan10_dev
       clojure -M:dev      # the same, from mealplan10/
 
-  Agent/tool surface at /api/.well-known/waymark. The calendar adapter
-  is real by default when MEALPLAN_GCAL_ICS_URL is set (the private
-  Google Calendar feed URL — a bearer secret: env var only, never
-  source); otherwise the in-memory FakeEvents twin serves offline dev.
+  Agent/tool surface at /api/.well-known/waymark. The calendar here is
+  always calendar10's scriptable fake: the iCal feed retired with
+  waymark-6k5.3, and the real Google Calendar is wired by workqueue10,
+  the engine that actually serves the family.
 
   Env knobs: MEALPLAN10_DSN (default the local :5433 mealplan10_dev),
   MEALPLAN10_PORT (default 8010), WAYMARK10_DEPLOY_MODE (promote, the
@@ -21,8 +21,8 @@
   Schema evolution: `make migrate10` prints the plan (migrate!, the
   :migrate alias); APPLY=1 executes it, DESTRUCTIVE=1 additionally
   the state-rename UPDATEs."
-  (:require [mealplan10.event-source :as es]
-            [mealplan10.resources.event :as event]
+  (:require [calendar10.resources.event :as event]
+            [calendar10.source :as gcal]
             [mealplan10.resources.grocery-list :refer [grocery-list]]
             [mealplan10.resources.ingredient :refer [ingredient]]
             [mealplan10.resources.meal :refer [meal]]
@@ -41,14 +41,15 @@
   (:gen-class))
 
 (defonce events
-  ;; the module-default FakeEvents singleton — tests script it,
-  ;; offline dev pulls from it
-  (es/fake-events))
+  ;; the module-default fake calendar — tests script it, offline dev
+  ;; pulls from it. mealplan10 standing alone never talks to the real
+  ;; Google Calendar: the engine that does is workqueue10, which wires
+  ;; calendar10.source/from-env against the deployed credential
+  ;; (waymark-6k5.3). Here the calendar exists so the plan's overlap
+  ;; predicate has something to cite.
+  (gcal/fake-calendar))
 
-(defn events-adapter []
-  (if-some [url (System/getenv "MEALPLAN_GCAL_ICS_URL")]
-    (es/google-calendar-events url)
-    events))
+(defn events-adapter [] events)
 
 (defn meal-resources
   "The ten kinds that are actually the MEAL plan's — everything except
@@ -70,11 +71,10 @@
   "All eleven kinds — the meal plan's ten plus the LOCAL event kind,
   for mealplan10 standing alone.
 
-  This is the pre-6k5 spelling, kept while the app still runs on its
-  own: the iCal mirror and its FakeEvents twin. workqueue10 does NOT
-  use it (see meal-resources) — production's event kind is
-  calendar10's read-write one. Both retire together when
-  waymark-6k5.3 removes the iCal transport."
+  The event kind is calendar10's — the same one workqueue10 serves —
+  over this module's fake calendar. workqueue10 does not call this
+  (see meal-resources); it composes calendar10's kind itself, under
+  the :calendar domain, against the real adapter."
   [adapter]
   (conj (meal-resources) (event/event-resource adapter)))
 

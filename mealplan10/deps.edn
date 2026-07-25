@@ -1,6 +1,11 @@
 {:paths ["src"]
  :deps  {org.clojure/clojure  {:mvn/version "1.12.1"}
-         waymark10/waymark10  {:local/root "../waymark10"}}
+         waymark10/waymark10  {:local/root "../waymark10"}
+         ;; the calendar is its own domain since waymark-6k5.2, and the
+         ;; plan cites :event through a date-containment predicate — so
+         ;; the meal plan depends on the calendar module rather than
+         ;; keeping a second, read-only spelling of the same kind
+         calendar10/calendar10 {:local/root "../calendar10"}}
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps  {org.clojure/test.check {:mvn/version "1.1.1"}

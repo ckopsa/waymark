@@ -9,7 +9,7 @@
   sentence, finally true. Needs the waymark10_test database."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [mealplan10.event-source :as es]
+            [calendar10.source :as es]
             [mealplan10.main :as main]
             [next.jdbc :as jdbc]
             [waymark10.server.engine :as engine]
@@ -39,7 +39,7 @@
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table
                                       " CASCADE")]))))
         (let [eng (engine/engine {:storage st
-                                  :resources (main/resources (es/fake-events))
+                                  :resources (main/resources (es/fake-calendar))
                                   :now-fn (fn [] @clock)})]
           (binding [*h* (engine/handler eng)
                     *clock* clock]

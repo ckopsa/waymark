@@ -25,14 +25,12 @@
     complete gate is the hoisted var, not a second g/require;
   - :on-create is not fingerprinted, but the shared object keeps the
     full normalized-map equality honest;
-  - the event kind is Mirror-declared, so the pin wraps the SAME
+  - prep_task is Mirror-declared, so the pin wraps the SAME
     mirror/declaration weave (and the same adapter instance) around
     both spellings; the weave mints a fresh observe_external handler
     fn per call — identical canonical-form hash, distinct object —
-    so event pins by hash (plus map equality modulo that handler)."
+    so prep_task pins by hash (plus map equality modulo that handler)."
   (:require [clojure.test :refer [deftest is]]
-            [mealplan10.event-source :as es]
-            [mealplan10.resources.event :as event]
             [mealplan10.resources.grocery-list :as glist]
             [mealplan10.resources.meal :as meal]
             [mealplan10.resources.plan :as plan]
@@ -488,85 +486,24 @@
 (deftest the-prep-task-fingerprint-survived-the-style-refactor
   (pin! :prep_task old-prep-task ptask/prep-task))
 
-;; ── event (Mirror-declared: the pin wraps the same weave, and the
-;;    same adapter instance, around both spellings) ───────────────────
-
-(def old-event-app-map
-  {:kind :event
-   :summary "{data.title} · {data.date}"
-   :nav :secondary
-   :schema [:map
-            [:title {:optional true}
-             [:maybe [:string {:max 120}]]]
-            [:date {:optional true} [:maybe :waymark/date]]
-            [:kind {:optional true}
-             [:maybe [:enum "blocking" "note"]]]]
-   :filterable {:date #{:eq :range}
-                :kind #{:eq :in}
-                :state #{:eq :in}}
-   :sortable {:fields [:date] :default "date"}
-   :display {:title "{data.title} — {data.date}"}})
-
-(deftest the-event-fingerprint-survived-the-style-refactor
-  (let [adapter (es/fake-events)
-        old (mirror/declaration old-event-app-map
-                                {:adapter adapter
-                                 :ttl-seconds event/ttl-seconds
-                                 :discover-every event/discover-every})
-        new (event/event-resource adapter)
-        ;; the weave mints fresh observe_external / resolve_conflict
-        ;; handler fns per call: same canonical-form hashes, distinct
-        ;; objects — so map equality holds modulo those two handlers,
-        ;; and the hash pin is exact
-        drop-reminted (fn [m]
-                        (-> m
-                            (update-in [:actions :observe_external]
-                                       dissoc :handler)
-                            (update-in [:actions :resolve_conflict]
-                                       dissoc :handler)))]
-    (is (= (drop-reminted (r/normalize-resource old))
-           (drop-reminted (into {} new)))
-        "event: one normalized map, two spellings (modulo the re-minted sync handler object)")
-    (is (= (hash-of-map old) (hash-of-resource new))
-        "event: byte-identical fingerprint hashes")))
-
-;; ── the batch-H pin: hashes as literals, where a literal is honest ──
-;; The pins above prove old-split ≡ current spelling in-process; this
-;; one nails the hash VALUES, captured before the batch-H respelling
-;; (:flow rows, :undo pointers, typed field words), so no future
-;; rewrite can drag both sides of an equality along with it. Only the
-;; kinds whose imperative residue all carries a canonical printed
-;; form (defhandler / the weave's minted forms) can be pinned this
-;; way: a bare :accepts/:check fn hashes by printed object identity
-;; (callable-hash's recorded stopgap), which bakes compilation order
-;; into the hash — rotation, plan, and grocery_list therefore hold
-;; their proof in the shared-object pins above, not in a literal.
+;; The event kind's style-invariance pair retired with waymark-6k5.3.
+;; It compared mealplan10's batch-H split spelling against the wrapper
+;; spelling of a READ-ONLY iCal mirror; that kind no longer exists here
+;; — the calendar became its own writable domain (calendar10), and its
+;; law is pinned by calendar10's own suite. Testing another module's
+;; fingerprint from this one would be pinning a law this app does not
+;; own.
 
 (def the-canonical-hashes
-  ;; meal and prep_task re-pinned 2026-07-12 (DX phase 5): recorded
-  ;; deviations moved from docstring prose into the fingerprint-carried
-  ;; :deviations vector — a deliberate advertisement-class law change.
-  ;; event carries no deviations, so its hash is byte-identical to the
-  ;; pre-deviations era (the empty-vector ≡ absent property).
-  ;; meal and prep_task re-pinned again 2026-07-15 (pantry-prices
-  ;; parity): meal gained the cost rollups, the meal_line owns edge +
-  ;; reprice cascade (:touches advertised), and the embedded
-  ;; ingredients link; prep_task's stale href-render punt sentence
-  ;; left its :deviations (links render now) — deliberate revisions,
-  ;; both spellings moved together above.
-  ;; prep_task re-pinned 2026-07-20: the :assignee fact (open vocab,
-  ;; :eq-filterable) — who does the step; the filter is the key
-  ;; choreplan10's mirror feed discovers over. Both spellings moved
-  ;; together above.
+  ;; The canonical residue: what the fingerprint reduces each kind to,
+  ;; pinned as a literal so an accidental law change cannot ride in on
+  ;; a refactor. Re-pin deliberately, with a note saying why.
   {:meal      "ac2f3f372fdb779d61f1cc35cbf440c1bc6da00ef3e81aaf0fb20baa4ee375ec"
    ;; re-pinned 2026-07-24: :date gained :filter #{:eq :range} — the
    ;; day board's related join (one engine since waymark-bwu.2) needs
    ;; the promoted column; an intentional law change, not style drift
-   :prep_task "5c1327a83e776803fa294dd8beb871e0c766a59d840628fa31aa7a8eae8d9463"
-   :event     "77fba0a5a46b83a3594170a75e5f0614a9980a5f57cf76f90e5ac3e699b32805"})
+   :prep_task "5c1327a83e776803fa294dd8beb871e0c766a59d840628fa31aa7a8eae8d9463"})
 
 (deftest the-canonical-residue-hashes-are-pinned-as-literals
   (is (= (:meal the-canonical-hashes) (hash-of-resource meal/meal)))
-  (is (= (:prep_task the-canonical-hashes) (hash-of-resource ptask/prep-task)))
-  (is (= (:event the-canonical-hashes)
-         (hash-of-resource (event/event-resource (es/fake-events))))))
+  (is (= (:prep_task the-canonical-hashes) (hash-of-resource ptask/prep-task))))

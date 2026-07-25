@@ -15,7 +15,7 @@
   plan_id is a :waymark/ref; the schedule input names what it actually
   is (the NEW event's id, not an edit of the stored one), which is why
   it declares no :edit. The calendar is a kind in this engine
-  (mealplan10.resources.event), so the linkage is a real ref.
+  (calendar10.resources.event), so the linkage is a real ref.
 
   overdue is the deliverable-tracker fact in miniature (design §2,
   §3): the clock flips it — no write, no poll — and ?overdue=true is

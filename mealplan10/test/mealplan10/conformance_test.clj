@@ -23,7 +23,7 @@
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [mealplan10.event-source :as es]
+            [calendar10.source :as es]
             [mealplan10.main :as main]
             [next.jdbc :as jdbc]
             [waymark10.machine :as machine]
@@ -51,7 +51,7 @@
 (use-fixtures :once
   (fn [f]
     (let [st (pg/storage db/dsn)
-          feed (es/fake-events)]
+          feed (es/fake-calendar)]
       (try
         (store/with-tx st
           (fn [tx]
@@ -170,7 +170,13 @@
        :task_type "prep" :due_at "2026-01-06T12:00:00Z"})))
 
 (fac/example-input! :event :create
-  (fn [_] {:external_id (str "walk-" (random-uuid))}))
+  ;; the calendar's birth door changed with waymark-6k5.2: an event is
+  ;; no longer minted by discovery alone, it is SCHEDULED — a
+  ;; create-push through the declared :create-schema, whose guards want
+  ;; a title and a when. The old example handed the engine an
+  ;; :external_id, which the create door now refuses outright
+  ;; (bookkeeping is claim_external's to stamp, never the author's).
+  (fn [_] {:title "Conformance walk" :all_day true :date "2026-01-06"}))
 
 ;; ── the pantry quartet: refs (and the distinct create gate) defeat
 ;;    generation, so every create is an example; absorb and rematch

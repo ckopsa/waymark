@@ -20,7 +20,7 @@
   overrides."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [mealplan10.event-source :as es]
+            [calendar10.source :as es]
             [mealplan10.main :as main]
             [next.jdbc :as jdbc]
             [waymark10.server.engine :as engine]
@@ -46,7 +46,7 @@
 (use-fixtures :once
   (fn [f]
     (let [st (pg/storage db/dsn)
-          feed (es/fake-events)
+          feed (es/fake-calendar)
           clock (atom (Instant/parse "2026-07-08T12:00:00Z"))]
       (try
         (store/with-tx st
