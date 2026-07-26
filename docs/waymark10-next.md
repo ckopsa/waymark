@@ -29,6 +29,15 @@ of them requires a new dependency; four require no new storage at all.
 | [traversal](spec-traversal.md) | one hop over a declared ref | M |
 | [addressed notice](spec-addressed-notice.md) | the queue reaches a person | M |
 
+## And one integration
+
+[Google Tasks as a TaskSource](spec-google-tasks.md) (M) is a different animal —
+no framework invention, mostly translation — but it is listed here because it is
+the first authority to offer a **real incremental feed** (`updatedMin`, no
+`syncToken`), which makes it the natural pilot for `waymark-8si`. The OAuth half
+is already built and is not calendar-specific: `calendar10/oauth.clj` is a
+general refresh-token grant.
+
 ## Ranking, and the reasoning
 
 **Build first: the law sweep.** It is the only capability here that no other
