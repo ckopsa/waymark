@@ -10,7 +10,10 @@
   Suite-local kind :visit provokes what the fixtures don't declare:
   int eq/in/range/ne filters, date :after/:before filters, a
   presence (:set) and substring (:contains) filter over a nullable
-  notes field, and two sortable fields."
+  notes field, two sortable fields, and a filterable REF (the meal
+  served) — whose query param must advertise its target, so a filter
+  by reference is a pick from the target's rows and not an id typed
+  from memory."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -34,7 +37,9 @@
              [:guest [:string {:min 1 :max 60}]]
              [:arrives_on :waymark/date]
              [:party [:int {:min 1 :max 20}]]
-             [:notes {:optional true} [:maybe [:string {:max 200}]]]]
+             [:notes {:optional true} [:maybe [:string {:max 200}]]]
+             [:meal_id {:optional true :filter #{:eq} :kind :meal}
+              [:maybe :waymark/ref]]]
     :filterable {:state #{:eq :in}
                  :guest #{:contains}
                  :arrives_on #{:eq :range :after :before}
@@ -109,16 +114,22 @@
    ["Dee" "2026-07-16" 6 nil]
    ["Eli" "2026-07-18" 3 "window"]])
 
+;; the seeded meals by name — the ref filter needs a real target id
+(def ^:private meal-ids (atom {}))
+
 (defn- seed! []
   (doseq [[name' themes accept?] meal-specs]
     (let [resp (req :post "/api/meals" {:name name' :themes themes})]
       (assert (= 201 (:status resp)) (:body resp))
+      (swap! meal-ids assoc name' (id-of resp))
       (when accept?
         (req :post (str "/api/meals/" (id-of resp) "/-/accept")))))
   (doseq [[guest arrives party notes] visit-specs]
     (let [resp (req :post "/api/visits"
                     (cond-> {:guest guest :arrives_on arrives :party party}
-                      notes (assoc :notes notes)))]
+                      notes (assoc :notes notes)
+                      ;; one visit dines on a declared meal
+                      (= "Ana" guest) (assoc :meal_id (@meal-ids "Brisket"))))]
       (assert (= 201 (:status resp)) (:body resp))))
   (doseq [[start conflicts] [["2026-06-01" nil] ["2026-06-08" 2]
                              ["2026-06-15" nil] ["2026-06-22" 0]]]
@@ -370,6 +381,21 @@
             facets (get-in fb [:actions :query :input :properties :themes :x-facets])]
         (is (= {:bbq 1 :family 2 :mexican 1} facets))))))
 
+(deftest ref-filters-advertise-their-target
+  (let [vprops (get-in (json (req :get "/api/visits"))
+                       [:actions :query :input :properties])]
+    (testing "a ref's filter param carries the ref's own declaration —
+              the client offers the target's rows by label, the way
+              the form's picker does, instead of asking for an id"
+      (is (= {:type "string" :format "waymark-ref" :x-ref {:kind "meal"}}
+             (:meal_id vprops))))
+    (testing "…and the param it advertises is the one that filters"
+      (let [b (json (get-q "/api/visits"
+                           (str "meal_id=" (@meal-ids "Brisket"))))]
+        (is (= 1 (get-in b [:data :total])))
+        (is (= "Ana" (get-in (first (get-in b [:data :items]))
+                             [:fields :guest])))))))
+
 (deftest fields-on-collection-items
   (let [items (get-in (json (get-q "/api/visits" "sort=arrives_on"))
                       [:data :items])]
@@ -385,10 +411,12 @@
       ;; by waymark10.batch-a-fixtures' ba_ticket (a real prose field)
       ;; and ba_roster (a real vector field); this just confirms a
       ;; kind with neither still gets exactly its plain scalar fields
-      ;; (:notes only where seeded — an absent optional never renders)
-      (is (= (mapv (fn [[_ _ _ notes]]
+      ;; (:notes only where seeded, :meal_id only on Ana's visit — an
+      ;; absent optional never renders, ref or not)
+      (is (= (mapv (fn [[guest _ _ notes]]
                      (cond-> #{:guest :arrives_on :party}
-                       notes (conj :notes)))
+                       notes (conj :notes)
+                       (= "Ana" guest) (conj :meal_id)))
                    visit-specs)
              (mapv #(set (keys (:fields %))) items))))))
 

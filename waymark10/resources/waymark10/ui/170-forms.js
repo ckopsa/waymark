@@ -168,10 +168,13 @@ function comboUpgrade(select, entries, current) {
   };
   input.addEventListener("focus", () => show(input.value === label0 ? "" : input.value));
   input.addEventListener("input", () => {
-    /* an edited label is no longer a choice — until picked again */
+    /* an edited label is no longer a choice — until picked again.
+       The clearing is a change like any other: a listening filter
+       must hear "no one selected", not keep the last pick. */
     if (select.value && input.value !==
         (entries.find(([id]) => id === select.value) || [])[1])
-      { select.value = ""; }
+      { select.value = "";
+        select.dispatchEvent(new Event("change", {bubbles: true})); }
     show(input.value);
   });
   input.addEventListener("keydown", e => {

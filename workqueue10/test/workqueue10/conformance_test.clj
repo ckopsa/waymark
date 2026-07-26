@@ -42,7 +42,15 @@
 (def ^:dynamic *h* nil)
 
 (def ^:private tables
-  ["tasks"
+  ;; the WHOLE folded registry's tables (task_queue_test's rule, and
+  ;; the reason it exists): this engine boots every kind main/resources
+  ;; declares, chore and meal included, so a fixture that drops only
+  ;; "tasks" boots into whatever shape another suite left behind —
+  ;; a promoted column added to a folded kind refuses at boot
+  ["tasks" "chores" "chore_runs" "days"
+   "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
+   "prep_tasks" "ingredients" "products" "substitutions" "events"
+   "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 

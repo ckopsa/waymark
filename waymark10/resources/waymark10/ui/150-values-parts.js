@@ -76,11 +76,15 @@ function gridColumns(schema) {
       // field's own type — neither may claim the column's type
       if (m[2] !== "set" && m[2] !== "contains") {
         c.type = c.type || prop.type; c.format = c.format || prop.format;
+        c.xref = c.xref || prop["x-ref"];
       }
     } else {
       const c = ensure(name);
       c.ops[prop["x-in"] ? "in" : "eq"] = true;
       c.type = prop.type; c.format = prop.format; c.enum = prop.enum;
+      // the ref declaration rides the param (collections.clj) — the
+      // value control is a picker over the target, not an id field
+      c.xref = prop["x-ref"] || c.xref;
     }
   }
   // a sortable field need not be filterable (meal's `name`, e.g.) — it
@@ -122,22 +126,44 @@ function fieldColumns(items, query, hints) {
   return groupFields(ordered.filter(f => !fieldHidden(hints, f)), hints);
 }
 
+/* one referenced row's own summary, read live (wire 10 has no lookup
+   route class; the summary ride is a plain depth=summary read). null
+   when the kind has no collection, the read fails, or the row is
+   gone — every caller keeps the raw token in that case rather than
+   render an empty seat. */
+async function rowSummary(kind, id) {
+  try {
+    const col = kind && collectionHref(await wellKnown(), kind);
+    if (!col) return null;
+    const {ok, body} = await api(`${col}/${id}?depth=summary`);
+    return (ok && body.summary) || null;
+  } catch { return null; }
+}
+/* the placeholder a ref wears until its summary lands */
+const refToken = (kind, id) => `${pretty(kind || "")} · ${String(id).slice(0, 8)}`;
+
 /* A cross-resource reference: a link to the referenced resource,
    labeled lazily by its own summary. Raw ids are machine plumbing —
-   humans get the thing, not the token. (wire 10 has no lookup route
-   class; the summary ride is a plain depth=summary read.) */
+   humans get the thing, not the token. */
 function resourceRef(kind, id, text) {
   const a = el("a", {href: "#", class:"mono", title: String(id)},
-    text || `${pretty(kind || "")} · ${String(id).slice(0, 8)}`);
+    text || refToken(kind, id));
   wellKnown().then(w => {
     const col = kind && collectionHref(w, kind);
-    if (!col) return;
-    a.href = "#" + col + "/" + id;
-    if (!text) api(`${col}/${id}?depth=summary`).then(({ok, body}) => {
-      if (ok && body.summary) { a.textContent = body.summary; a.className = ""; }
-    }).catch(() => {});
+    if (col) a.href = "#" + col + "/" + id;
   }).catch(() => {});
+  if (!text) rowSummary(kind, id).then(s => {
+    if (s) { a.textContent = s; a.className = ""; }
+  });
   return a;
+}
+
+/* the same live label as plain text, for the places a link would
+   misfire — a filter chip, whose one click target is its ✕. */
+function refLabel(kind, id) {
+  const s = el("span", {title: String(id)}, refToken(kind, id));
+  rowSummary(kind, id).then(t => { if (t) s.textContent = t; });
+  return s;
 }
 
 /* ── the parts namespace: placed actions re-rendered per data item —

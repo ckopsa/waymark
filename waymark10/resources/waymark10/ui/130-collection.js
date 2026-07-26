@@ -39,6 +39,19 @@ function opsFor(col) {
   if (col.ops.set) out.push("set");
   return out;
 }
+/* the value control for a ref-typed filter param: the SAME picker the
+   forms offer (refOptions — the target's rows labeled by summary, a
+   type-to-search combobox past a scrollable handful), so filtering by
+   a person means picking the person, never pasting their id. The
+   fetch is async and the select fills in under the popover; the blank
+   option is the clear. */
+function refFilterSelect(name, col, current) {
+  const s = el("select", {name});
+  s.append(el("option", {value: ""}, "—"));
+  refOptions(s, {"x-ref": col.xref}, current == null ? "" : String(current));
+  return s;
+}
+
 /* the top-level-collection flavor of apply/remove: mutate doc.self's
    own hash directly via go(). An embedded table needs a different
    flavor (embed.<rel>.* prefixed params on the PARENT's hash — see
@@ -92,7 +105,13 @@ function showcaseFilters(query, params, apply, hints) {
     const lbl = fieldLabel(hints, f);
     let body;
     const facets = props[f]?.["x-facets"];
-    if ((col.enum || facets || col.type === "boolean") &&
+    if (col.xref && (col.ops.eq || col.ops.in)) {
+      /* a showcased ref stands as its own picker — same rows, same
+         labels as the popover's and the form's */
+      const s = refFilterSelect(f, col, params.get(f) || "");
+      s.addEventListener("change", () => apply({[f]: s.value}));
+      body = [s];
+    } else if ((col.enum || facets || col.type === "boolean") &&
         (col.ops.eq || col.ops.in)) {
       /* options: the declared enum, a boolean's two values, or the
          observed facet values (an open vocab has no declared enum —
@@ -143,6 +162,7 @@ function filterPopover(query, params, apply, hints) {
   const cols = Object.values(gc).filter(c => Object.keys(c.ops).length);
   if (!cols.length) return null;
   const mkValueInput = (name, col) => {
+    if (col.xref) return refFilterSelect(name, col, params.get(name) || "");
     if (col.enum) {
       const s = el("select", {name});
       s.append(el("option", {value: ""}, "—"));
@@ -189,7 +209,11 @@ function filterPopover(query, params, apply, hints) {
   const panel = el("div", {class: "filterpanel", style: "display:none"});
   const doApply = () => {
     const updates = {};
-    for (const inp of valueRow.querySelectorAll("input,select")) updates[inp.name] = inp.value;
+    for (const inp of valueRow.querySelectorAll("input,select"))
+      // a combobox fronts its picker with a NAMELESS search input (the
+      // hidden select still carries the value) — reading it would set
+      // a param the collection never declared
+      if (inp.name) updates[inp.name] = inp.value;
     panel.style.display = "none";
     apply(updates);
   };
@@ -221,8 +245,12 @@ function filterChips(query, params, remove, hints) {
         xdisplay(hints, field).showcase) continue;
     const lbl = fieldLabel(hints, field);
     const opTxt = m ? SUFFIX_LABEL[m[2]] : "=";
+    // a ref chip says WHO, not which id — the same live summary the
+    // field's own cell renders, as text (the chip's click is its ✕)
+    const shown = gc[field].xref && !String(value).includes(",")
+      ? refLabel(gc[field].xref.kind, value) : String(value);
     chips.push(el("span", {class: "chip on"},
-      `${lbl} ${opTxt} ${value}`,
+      `${lbl} ${opTxt} `, shown,
       el("span", {style: "cursor:pointer;margin-left:4px", onclick: () => remove(name)}, "✕")));
   }
   return chips.length ? el("div", {class: "chips"}, chips) : null;

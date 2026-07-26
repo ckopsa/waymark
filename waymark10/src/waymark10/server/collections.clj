@@ -11,7 +11,9 @@
   as envelope-minus-data summaries, the REAL filtered total, the
   create/query/bulk affordances (the query input schema is generated
   from the filterable/sortable declarations, with x-facets counts on
-  :faceted fields), and next/prev links (omitted at the edges).
+  :faceted fields and x-ref on ref fields — a filter by reference is
+  a pick from the target's rows, not an id typed from memory), and
+  next/prev links (omitted at the edges).
 
   Recorded choices and punts:
   - unknown or malformed query parameters are one 422 naming every
@@ -268,6 +270,7 @@
   [rdef]
   (let [state-prop {:type "string" :enum (mapv name (:states rdef))
                     :x-in true}
+        entries (schema/entry-map (:schema rdef))
         props
         (reduce
          (fn [props [f ops]]
@@ -276,9 +279,16 @@
                (assoc props "state" state-prop)
                (let [{:keys [array?]} (field-info rdef f)
                      js (schema/json-schema (schema/field-schema (:schema rdef) f))
-                     base (if (= "array" (:type js))
-                            (or (:items js) {:type "string"})
-                            (select-keys js [:type :format :enum]))]
+                     ;; a ref FILTERS the way it edits: the param carries
+                     ;; the field's own x-ref, so the filter offers the
+                     ;; target's rows by label instead of asking a human
+                     ;; to type an id (the picker's declaration, read
+                     ;; twice — form and filter)
+                     xref (schema/ref-props (get-in entries [f :properties]))
+                     base (cond-> (if (= "array" (:type js))
+                                    (or (:items js) {:type "string"})
+                                    (select-keys js [:type :format :enum]))
+                            xref (assoc :x-ref xref))]
                  (cond-> props
                    (or (:eq ops) (:in ops) array?)
                    (assoc fname (cond-> base

@@ -69,7 +69,10 @@
 (deftest queueing-work-is-minting-a-run
   (let [chore (json (req :post "/api/chores"
                          {:name "Dishes" :cadence "daily"
-                          :assignee "housekeeper"
+                          ;; a person, not a word: the request's own
+                          ;; principal, auto-provisioned as a member
+                          ;; under its id (choreplan10.assignee-test)
+                          :assignee "colton"
                           :notes "run the disposal; air-dry the pans"}))
         _ (is (some? (:self chore)))
         queue! (fn [due]

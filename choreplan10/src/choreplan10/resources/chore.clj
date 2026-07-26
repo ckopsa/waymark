@@ -7,9 +7,19 @@
   the run has its own due/done/skipped lifecycle, so it earns its own
   rows the same way eveningplan10's sessions do).
 
-  :area and :assignee are open vocab, not enums — the household's own
-  usage IS the option list (rooms and family members arrive by being
-  typed once, then facet/filter for free, the meal-themes pattern).
+  :area is open vocab, not an enum — the household's own usage IS the
+  option list (rooms arrive by being typed once, then facet/filter
+  for free, the meal-themes pattern).
+
+  :assignee is NOT that: who usually owns a chore is a PERSON, and
+  people are a resource here (waymark10.server.members, on every
+  engine). Held as vocab it was the member's id spelled as a word,
+  which is how a uuid ended up on the details page, in the picker,
+  and in the filter chip. As a ref the three read the member's own
+  label instead — the detail cell links it, the update form offers
+  the members by name, and the filter picks a person (waymark-5y3
+  taught the collection query schema to advertise x-ref for exactly
+  this). One declaration, all three surfaces.
 
   update is one :edit declaration — prefill, the If-Match fence, and
   the shared draft are a single concept (mealplan10's update_recipe
@@ -50,7 +60,9 @@
    :input [:map
            [:name [:string {:min 1 :max 120}]]
            [:area {:optional true} [:maybe [:waymark/vocab {:open true}]]]
-           [:assignee {:optional true} [:maybe [:waymark/vocab {:open true}]]]
+           [:assignee {:optional true :kind :member
+                       :x-display {:label "Assigned to"}}
+            [:maybe :waymark/ref]]
            [:cadence (one-of :daily :weekly :monthly :as_needed)]
            [:notes {:optional true :x-display {:widget "prose"}}
             [:maybe [:string {:max 2000}]]]]
@@ -76,7 +88,14 @@
             ;; one declaration (design §6): membership filtering and
             ;; observed-value facets derive from the vocab itself
             [:area {:optional true} [:maybe [:waymark/vocab {:open true}]]]
-            [:assignee {:optional true} [:maybe [:waymark/vocab {:open true}]]]
+            ;; the household's people are the :member collection, so
+            ;; the same one-declaration rule points at THEM: the ref
+            ;; is the picker, the navigable link, and — :filter #{:eq}
+            ;; — the "whose chores?" question, all labeled by the
+            ;; member's own :label-template
+            [:assignee {:optional true :filter #{:eq} :kind :member
+                        :x-display {:label "Assigned to"}}
+             [:maybe :waymark/ref]]
             [:cadence {:filter #{:eq}} (one-of :daily :weekly :monthly :as_needed)]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]

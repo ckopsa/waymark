@@ -263,6 +263,30 @@
 
 ;; ── the JSON-Schema projection ──────────────────────────────────────
 
+(defn ref-props
+  "The x-ref advertisement of one schema entry's properties — the
+  target kind and the picker's own hints — or nil when the entry
+  names no target. Public because two surfaces publish it from one
+  spelling: the JSON-Schema projection below (the field's own
+  entry) and the collection query schema (the filter param that
+  filters BY that field), so a ref filters through the same labeled
+  picker the form offers."
+  [props]
+  (when (:kind props)
+    (into {} (filter (comp some? val))
+          (-> (select-keys props [:kind :label :carry :pick :predecessor])
+              ;; :pick crosses the wire as the picker's literal
+              ;; query params — keyword values land as their names
+              (update :pick
+                      (fn [p]
+                        (when p
+                          (into {}
+                                (map (fn [[f v]]
+                                       [f (if (coll? v)
+                                            (mapv #(if (keyword? %) (name %) %) v)
+                                            (if (keyword? v) (name v) v))]))
+                                p))))))))
+
 (defn- entry-x-props
   "Waymark declaration properties ride the JSON Schema as x-* keys —
   presentation and engine hints the generic client reads and agents
@@ -273,20 +297,7 @@
     (:x-display props)
     (assoc :json-schema/x-display (:x-display props))
     (:kind props)
-    (assoc :json-schema/x-ref
-           (into {} (filter (comp some? val))
-                 (-> (select-keys props [:kind :label :carry :pick :predecessor])
-                     ;; :pick crosses the wire as the picker's literal
-                     ;; query params — keyword values land as their names
-                     (update :pick
-                             (fn [p]
-                               (when p
-                                 (into {}
-                                       (map (fn [[f v]]
-                                              [f (if (coll? v)
-                                                   (mapv #(if (keyword? %) (name %) %) v)
-                                                   (if (keyword? v) (name v) v))]))
-                                       p)))))))
+    (assoc :json-schema/x-ref (ref-props props))
     (contains? props :open)
     (assoc :json-schema/x-vocab
            (into {} (filter (comp some? val))
