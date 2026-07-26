@@ -1,10 +1,10 @@
 (ns workqueue10.conformance-test
-  "The one kind enrolled in the waymark10 conformance library: the
-  machine walks itself, and every framework promise — envelope shape,
-  affordance completeness, unavailable honesty, token prose, input
-  schemas, collection shape, replay history — is checked over the
-  real ring handler. Mirrors choreplan10.conformance-test's shape;
-  the registrations are the only domain-specific part:
+  "The queue's two kinds enrolled in the waymark10 conformance
+  library: the machine walks itself, and every framework promise —
+  envelope shape, affordance completeness, unavailable honesty, token
+  prose, input schemas, collection shape, replay history — is checked
+  over the real ring handler. Mirrors choreplan10.conformance-test's
+  shape; the registrations are the only domain-specific part:
 
   - task is a Mirror, so it registers the same pair choreplan's
     prep_task and paydesk's mirrors do: an external-identity create and a
@@ -12,6 +12,8 @@
     non-JSON). The create's external id carries a SOURCE TAG
     (\"chore:walk-…\") — every row of this kind is born through the
     confluence, and an untagged id would refuse at the routing seam.
+  - task_list is the pull-only Mirror beside it (the list a task
+    belongs to, as a row): the same pair, no local writes at all.
   - its :complete pushes through main's module fake sources, whose
     push treats a never-seeded doc as an open task — the walker's
     rows push clean (the FakeFeed auto-vivify spirit).
@@ -47,7 +49,7 @@
   ;; declares, chore and meal included, so a fixture that drops only
   ;; "tasks" boots into whatever shape another suite left behind —
   ;; a promoted column added to a folded kind refuses at boot
-  ["tasks" "chores" "chore_runs" "days"
+  ["tasks" "task_lists" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "members" "roles" "grants" "approval_requests"
@@ -78,7 +80,7 @@
             (f)))
         (finally (pg/close! st))))))
 
-(def kinds [:task])
+(def kinds [:task :task_list])
 
 ;; ── the enrollment ──────────────────────────────────────────────────
 
@@ -95,7 +97,20 @@
               :assignee_name "colton"
               :due_at "2026-01-07T00:00:00Z"
               :status "open"
-              :detail "load and run before bed"}
+              :detail "load and run before bed"
+              :list_key "todo:todo.woodworking"}
+   :etag "conformance-etag-1"})
+
+;; :task_list is the PULL-ONLY half of the pair (no local writes, no
+;; birth door — the queue mirrors the household's lists and never
+;; writes them), so it registers the plain mirror shape: an
+;; external-identity create carrying the confluence's source tag, and
+;; a wire-shaped document
+(fac/example-input! :task_list :create
+  (fn [_] {:external_id (str "gtasks:walk-" (random-uuid))}))
+
+(fac/example-input! :task_list :observe_external
+  {:document {:title "Woodworking" :source "gtasks"}
    :etag "conformance-etag-1"})
 
 ;; ── request sugar (the conformance-http pattern) ────────────────────

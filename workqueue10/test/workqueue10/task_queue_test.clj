@@ -35,7 +35,7 @@
   ;; the WHOLE folded registry's tables (waymark-bwu) — other suites
   ;; share this database and leave differently-shaped residue under
   ;; the same names; a fixture that drops less boots into drift
-  ["tasks" "chores" "chore_runs" "days"
+  ["tasks" "task_lists" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "members" "roles" "grants" "approval_requests"
@@ -163,9 +163,13 @@
   (conf/seed! *meals* "pt-slaw"
               {:title "prep: Coleslaw" :assignee_name "housekeeper"
                :due_at "2026-07-21T23:00:00Z" :status "dropped"})
+  ;; the todo names the LIST it lives in — source-local, the way its
+  ;; authority spells it; the confluence namespaces it into the
+  ;; :task_list row's external id. It used to arrive as the string
+  ;; "Woodworking" glued onto the head of :detail.
   (conf/seed! *todos* "todo.woodworking/uid-chisels"
               {:title "Sharpen chisels" :status "open"
-               :detail "Woodworking"})
+               :list_key "todo.woodworking"})
 
   (testing "one discovery pass mints EVERY source's rows into the one kind"
     (is (= 6 (mirror/discover! *eng* :task)))
@@ -201,6 +205,41 @@
             "the ref holds a member ROW id — it dereferences")
         (is (= 3 (count (items-of (str "?assignee=" ref))))
             "the queue filters by person now, not by spelling"))))
+
+  (testing "the list a task belongs to is a ROW, not a prefix: the
+            authority's own key lands beside a ref that resolves to
+            the mirrored list — and the list's own discovery pass
+            heals every task that observed before it existed"
+    (let [self (:self (task-by-title "Sharpen chisels"))]
+      (is (= "todo:todo.woodworking"
+             (get-in (json (req :get self)) [:data :list_key]))
+          "the confluence namespaced the source's own list key")
+      (is (nil? (get-in (json (req :get self)) [:data :task_list]))
+          "no list row exists yet — the honest gap, beside the intact key")
+
+      (conf/seed-list! *todos* "todo.woodworking" {:title "Woodworking"})
+      (is (= 1 (mirror/discover! *eng* :task_list)))
+
+      (let [chisels (json (req :get self))
+            ref (get-in chisels [:data :task_list])]
+        (is (some? ref) "…and the mint healed the edge pointing at it")
+        (let [list-row (json (req :get (str "/api/task_lists/" ref)))]
+          (is (= "Woodworking" (get-in list-row [:data :title]))
+              "the ref holds a task_list ROW id — it dereferences")
+          (is (= "todo" (get-in list-row [:data :source]))
+              "…and the list carries the same routing tag its tasks do")
+          (is (= "Woodworking · todo" (:summary list-row))
+              "the summary every surface renders in place of the token"))
+        (is (= 1 (count (items-of (str "?task_list=" ref))))
+            "the queue filters by LIST now, not by a prose prefix")
+        (is (nil? (get-in chisels [:data :detail]))
+            "…and :detail went back to being the household's own
+             description, which this todo never had")))
+
+    (testing "a source with no list concept leaves both unset"
+      (let [dishes (json (req :get (:self (task-by-title "Dishes"))))]
+        (is (nil? (get-in dishes [:data :list_key])))
+        (is (nil? (get-in dishes [:data :task_list]))))))
 
   (testing "the mirrored facts landed standalone, source stamped"
     (let [dishes (json (req :get (:self (task-by-title "Dishes"))))]

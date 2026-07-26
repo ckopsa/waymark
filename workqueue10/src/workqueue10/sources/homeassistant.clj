@@ -17,6 +17,27 @@
   gone from a present list is a gone row ({:status 404}); a whole
   list absent is unreachability, not deletion.
 
+  THE LIST IS A ROW, NOT A PREFIX. This source used to string-join
+  the list's friendly name onto the head of :detail, so \"which
+  context did this come from?\" was answerable only by reading prose,
+  and unanswerable by a filter. It is a TaskListSource now: every
+  configured entity is mirrored into :task_list, and each item's
+  document carries :list_key — its own entity id, which the
+  confluence namespaces into that list row's external id. :detail
+  went back to being what the household typed and nothing else, which
+  means every stored todo's content etag moved and every row
+  re-observes exactly once. One concept, one spelling.
+
+  LIST DISCOVERY READS THE CONFIGURATION, NOT THE WIRE. The entity
+  ids are the operator's (:lists) and the friendly names are too
+  (:names, with a name derived from the entity id when unsaid) — the
+  same pair :detail was already printing — so there is nothing to ask
+  home assistant and nothing to fail. Recorded as a punt rather than
+  a decision: /api/states/<entity> publishes HA's own friendly_name,
+  which would let the household rename a list in one place instead of
+  two. It is a round trip and a second failure mode for a title, and
+  the retrofit's job was to move the name, not to re-source it.
+
   ETAGS are content hashes of the canonical doc (HA mints no
   per-item versions), which also makes them translation-honest for
   free: any change to this namespace's mapping changes every etag,
@@ -57,17 +78,20 @@
                                        (ZoneId/of (str zone))))))))))
 
 (defn item->task
-  "One HA todo item → the canonical task doc. The list's friendly
-  name rides :detail so a mixed queue says which context the todo
-  came from; HA has no dropped state — a dropped todo is a deleted
-  one, which reads as gone, not as a status."
-  [list-name item zone]
+  "One HA todo item → the canonical task doc. :detail is the
+  household's own description and nothing else — which list the todo
+  came from is :list_key's job now (decorate stamps it), not a
+  sentence fragment glued to the front of the notes. Nothing to say
+  is nil rather than an empty string. HA has no dropped state — a
+  dropped todo is a deleted one, which reads as gone, not as a
+  status."
+  [item zone]
   {:title (:summary item)
    :status (case (:status item)
              "needs_action" "open"
              "completed" "done")
    :due_at (due->instant (or (:due item) (:due_datetime item)) zone)
-   :detail (str/join " — " (remove str/blank? [list-name (:description item)]))})
+   :detail (not-empty (str/trim (str (:description item))))})
 
 ;; ── the wire ────────────────────────────────────────────────────────
 
@@ -84,8 +108,10 @@
   (wire/sha256-hex (pr-str (into (sorted-map) doc))))
 
 (defn list-name
-  "The context :detail carries: the configured friendly name, else
-  one derived from the entity id (\"todo.my_tasks\" → \"My tasks\")."
+  "What the list is called: the configured friendly name, else one
+  derived from the entity id (\"todo.my_tasks\" → \"My tasks\"). It
+  titles the :task_list row now; it used to prefix every task's
+  :detail."
   [names entity]
   (or (get names entity)
       (-> (str entity)
@@ -124,14 +150,26 @@
           (map (fn [[k v]] [(name k) (:items v)]))
           (:service_response resp))))
 
-(defn- decorate
+(defn decorate
   "The canonical doc + where it came from: HA has no per-item URL, so
   both hrefs anchor on the LIST — the API state row for clients, the
-  todo panel for a person's tap."
+  todo panel for a person's tap. :list_key is that same list as a
+  FACT rather than a URL fragment; the confluence namespaces it into
+  the :task_list row's external id."
   [{:keys [api-base ui-base]} entity doc]
   (assoc doc
          :source_href (str api-base "/api/states/" entity)
-         :source_ui_href (str ui-base "/todo?entity_id=" entity)))
+         :source_ui_href (str ui-base "/todo?entity_id=" entity)
+         :list_key entity))
+
+(defn list-doc
+  "One configured todo entity → the canonical LIST doc. Both hrefs
+  are the ones a task from this list already carries — the list is
+  where HA anchors either way."
+  [{:keys [api-base ui-base names]} entity]
+  {:title (list-name names entity)
+   :source_href (str api-base "/api/states/" entity)
+   :source_ui_href (str ui-base "/todo?entity_id=" entity)})
 
 (defrecord HomeAssistantSource [^HttpClient client api-base ui-base token
                                 lists names zone capture-list]
@@ -149,8 +187,7 @@
       (when (nil? items)
         (throw (ex-info (str entity " is unavailable in home assistant") {})))
       (if-some [item (first (filter #(= uid (:uid %)) items))]
-        (let [doc (decorate this entity
-                            (item->task (list-name names entity) item zone))]
+        (let [doc (decorate this entity (item->task item zone))]
           [doc (content-etag doc)])
         (throw (ex-info (str "no todo " uid " in " entity) {:status 404})))))
   (source-pull-many [this ids]
@@ -168,8 +205,7 @@
                         (if-some [item (first (filter #(= uid (:uid %))
                                                       items))]
                           (let [doc (decorate this entity
-                                              (item->task (list-name names entity)
-                                                          item zone))]
+                                              (item->task item zone))]
                             [(str entity "/" uid) [doc (content-etag doc)]])
                           [(str entity "/" uid) :gone])))))
             pairs)))
@@ -219,9 +255,23 @@
                                           "summary picks none apart — "
                                           "resolve keep=local retries")
                                      {})))))
-          doc (decorate this entity
-                        (item->task (list-name names entity) item zone))]
-      [(str entity "/" (:uid item)) (content-etag doc)])))
+          doc (decorate this entity (item->task item zone))]
+      [(str entity "/" (:uid item)) (content-etag doc)]))
+
+  conf/TaskListSource
+  ;; the configured entities ARE the inventory: no round trip, so no
+  ;; failure mode — see the namespace docstring's punt about reading
+  ;; HA's own friendly_name instead
+  (list-discover [_] (vec lists))
+  (list-pull [this entity]
+    (let [doc (list-doc this entity)]
+      [doc (content-etag doc)]))
+  (list-pull-many [this entities]
+    (into {}
+          (map (fn [entity]
+                 (let [doc (list-doc this entity)]
+                   [(str entity) [doc (content-etag doc)]])))
+          entities)))
 
 (defn http-source
   "The real boundary over a running home assistant.

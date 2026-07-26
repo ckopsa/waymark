@@ -59,6 +59,16 @@ From the Tasks v1 reference:
 | `deleted: true` | gone (`{:status 404}`) |
 | `webViewLink` | `:source_ui_href` — a real hop to the Google UI |
 | list + id | identity `"gtasks:<tasklist>/<taskid>"` |
+| the list | `:list_key` → the `:task_list` ref (see below) |
+
+**Amended after the build (waymark, 2026-07-26).** The list a task lives in
+became a first-class row rather than a routing prefix: a `:task_list` mirror
+kind, one row per list from *any* authority (`gtasks:<listid>`,
+`todo:<entity>`), and a `:list_key` / `:task_list` pair on `task` — the raw
+external key beside the ref that resolves it, the same shape
+`:assignee_name` / `:assignee` already had. `GoogleTasksSource` implements a
+second protocol (`TaskListSource`) for it; Home Assistant does too, and stopped
+prefixing the list's friendly name into `:detail`.
 
 `due` being date-only is a gift, not a limitation: it is exactly the shape
 `chore_run` and the HA lists already have, so the queue's ranking law needs no
@@ -103,6 +113,27 @@ Only a local "done" travels, per the shared push-plan. `PATCH` the task with
 `conflicted`, exactly as the other sources do. This requires the **read-write**
 scope — `https://www.googleapis.com/auth/tasks`, not `tasks.readonly`.
 
+**If-Match is honoured, and the reference does not say so.** The `tasks.patch`
+page documents no etag, no If-Match, and no 412, so this was written as an
+assumption and then probed live (2026-07-26, against a throwaway list):
+
+| request | answer |
+|---|---|
+| `PATCH` with no `If-Match` | 200, etag changes |
+| `PATCH` with a STALE etag | **412** |
+| `PATCH` with the FRESH etag | 200 |
+| `PATCH` with a GARBAGE etag | **412** |
+
+The last row is the one that settles it: a stale-etag 412 alone could be
+coincidence, but garbage refusing too proves the header is parsed and enforced
+rather than ignored. Optimistic concurrency is real here, so push does not
+degrade to last-write-wins and the `conflicted` landing above is honest.
+
+Also confirmed in the same pass: tasks carry `etag` and `webViewLink`; the
+`@default` list id resolves whether or not the `@` is percent-encoded; and
+`due` comes back as `2026-08-01T00:00:00.000Z` — an RFC 3339 instant with the
+time zeroed and milliseconds present, never a bare date.
+
 ## Prerequisites
 
 1. **A refresh token with the Tasks scope.** The stored one was minted for
@@ -112,9 +143,14 @@ scope — `https://www.googleapis.com/auth/tasks`, not `tasks.readonly`.
    and it is the only thing here that cannot be done from a keyboard alone.
 2. A nomad var for the new refresh token, and the `WORKQUEUE10_GTASKS_*` env
    trio matching the existing source conventions.
-3. A configured list set (`WORKQUEUE10_GTASKS_LISTS`), mirroring HA's
+3. ~~A configured list set (`WORKQUEUE10_GTASKS_LISTS`), mirroring HA's
    `WORKQUEUE10_HA_LISTS` posture — the queue mirrors chosen lists, never
-   "everything the account can see."
+   "everything the account can see."~~ **Reversed on contact with the
+   household (2026-07-26):** there are ten lists and all ten are wanted, so
+   unset `WORKQUEUE10_GTASKS_LISTS` now means *every list the account has*,
+   read from `users/@me/lists` at the head of each discovery pass. Naming
+   lists still narrows, and a narrowed source never calls that route. The env
+   var is optional, not required.
 
 ## Recorded punts
 

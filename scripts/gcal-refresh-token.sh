@@ -1,22 +1,42 @@
 #!/usr/bin/env bash
-# The family calendar's refresh token (waymark-6k5.1): a one-time
-# consent flow that mints the ONE long-lived credential calendar10
-# stores. Access tokens are derived from it at runtime and never
-# stored (calendar10.oauth); this is the only secret that rests.
+# The household's Google refresh token (waymark-6k5.1, widened by
+# waymark-78x): a one-time consent flow that mints the ONE long-lived
+# credential the Google-backed sources store. Access tokens are derived
+# from it at runtime and never stored (calendar10.oauth, which is a
+# general refresh-token grant despite its namespace); this is the only
+# secret that rests.
 #
-#   scripts/gcal-refresh-token.sh CLIENT_ID CLIENT_SECRET
+#   scripts/gcal-refresh-token.sh [CLIENT_ID CLIENT_SECRET] [SCOPE …]
+#
+# Omit the client pair and the stored one is used (secrets.local.json,
+# or $INFRA_SECRETS) — the common case, and the one that cannot be
+# fat-fingered into Google's 401 invalid_client.
+#
+# With no SCOPE the calendar alone is requested, which is what this
+# script meant before it learned the argument. Naming several mints ONE
+# token covering all of them — Google's consent screen asks once, and a
+# single credential is a single rotation point:
+#
+#   scripts/gcal-refresh-token.sh \
+#     https://www.googleapis.com/auth/calendar \
+#     https://www.googleapis.com/auth/tasks
 #
 # Before running, create the OAuth client once in Google Cloud Console:
-#   APIs & Services → Enable "Google Calendar API"
+#   APIs & Services → Enable the API for EVERY scope you request
+#                     ("Google Calendar API", "Tasks API", …)
 #   → Credentials → Create credentials → OAuth client ID
 #   → Application type: "Desktop app"
 # Desktop clients are the right shape here: the loopback redirect below
 # is what they authorize, and there is no browser-facing origin to
 # register. Copy the client id and secret it hands back.
 #
-# The scope is read/write on purpose — a read-only scope is what the
-# retired iCal feed already had, and the whole point of this stage is a
-# calendar we can push to.
+# Enabling the API is a SEPARATE act from requesting its scope, and
+# skipping it fails late: consent succeeds, the token mints, and the
+# first real call answers 403 "… API has not been used in project …".
+#
+# The scopes are read/write on purpose — a read-only scope is what the
+# retired iCal feed already had, and the whole point is a calendar we
+# can push to (and, since waymark-78x, tasks we can complete).
 #
 # Nothing is written to disk. The token is printed once; put it where
 # the other house secrets live (the exact command is printed at the
@@ -24,18 +44,47 @@
 # six months unused, or the account's password changes.
 set -euo pipefail
 
-SCOPE="https://www.googleapis.com/auth/calendar"
 PORT="${PORT:-8765}"
 REDIRECT="http://127.0.0.1:${PORT}"
 SECRETS="${INFRA_SECRETS:-$HOME/dev/home-infrastructure/terraform/secrets.local.json}"
 
-[ $# -eq 2 ] || {
-  echo "usage: $(basename "$0") CLIENT_ID CLIENT_SECRET" >&2
+usage() {
+  echo "usage: $(basename "$0") [CLIENT_ID CLIENT_SECRET] [SCOPE …]" >&2
   echo "       (create a 'Desktop app' OAuth client in Google Cloud Console)" >&2
+  echo "       omit the client pair to use the one in $SECRETS" >&2
+  echo "       default scope: the calendar alone" >&2
   exit 2
 }
-client_id="$1"
-client_secret="$2"
+
+# The client pair: explicit arguments win, the stored pair is the
+# fallback. A leading https:// disambiguates "these are scopes, not a
+# client" — a client id is never a URL. Typing the pair by hand is how
+# you get Google's 401 invalid_client, which names nothing useful and
+# reads like a scope problem.
+if [ $# -ge 2 ] && [[ "$1" != https://* ]]; then
+  client_id="$1"
+  client_secret="$2"
+  shift 2
+elif [ $# -eq 1 ] && [[ "$1" != https://* ]]; then
+  echo "a client id with no secret — pass both, or neither" >&2
+  usage
+else
+  [ -r "$SECRETS" ] || { echo "no client given and $SECRETS is unreadable" >&2; usage; }
+  client_id="$(jq -r '.calendar10_google_client_id // empty' "$SECRETS")"
+  client_secret="$(jq -r '.calendar10_google_client_secret // empty' "$SECRETS")"
+  [ -n "$client_id" ] && [ -n "$client_secret" ] || {
+    echo "$SECRETS holds no calendar10_google_client_id/_secret pair" >&2
+    usage
+  }
+  echo "using the stored OAuth client (…${client_id: -28})"
+fi
+# space-separated is Google's spelling for "one token, several scopes";
+# urlencode below turns the spaces into %20
+SCOPE="${*:-https://www.googleapis.com/auth/calendar}"
+
+echo "requesting scope(s):"
+for s in $SCOPE; do echo "  $s"; done
+echo
 
 urlencode() {
   local s="$1" out="" c
@@ -121,13 +170,19 @@ echo
 echo "  $refresh_token"
 echo
 echo "Store it with the other house secrets — it is a standing bearer for"
-echo "the family calendar, so it belongs in secrets.local.json and the"
+echo "every scope above, so it belongs in secrets.local.json and the"
 echo "nomad var, never in the repo:"
 echo
 echo "  jq '.calendar10_google_client_id = \"$client_id\""
 echo "    | .calendar10_google_client_secret = \"$client_secret\""
 echo "    | .calendar10_google_refresh_token = \"$refresh_token\"' \\"
 echo "    $SECRETS > /tmp/s.json && mv /tmp/s.json $SECRETS"
+echo
+echo "The key names still say calendar10 because that is what terraform"
+echo "declares (nomad_variables.tf) and what the job templates. A token"
+echo "covering more than the calendar is a MISNOMER, not a second"
+echo "secret: point the other sources' env at these same keys rather"
+echo "than storing the same bearer twice."
 echo
 echo "Then prove the transport end to end:"
 echo

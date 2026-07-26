@@ -1,7 +1,9 @@
 (ns workqueue10.main
   "The family work queue: every task-like row from the household's
-  engines — choreplan10 chore runs, mealplan10 prep tasks — in ONE
-  kind, prioritized against each other, for humans and agents alike.
+  engines — choreplan10 chore runs, mealplan10 prep tasks, home
+  assistant todos, google tasks — in ONE kind, prioritized against
+  each other, for humans and agents alike, beside the named lists the
+  pocket authorities keep them in (:task_list).
 
       make dev-queue    # serve on :8014 against workqueue10_dev
       clojure -M:dev    # the same, from workqueue10/
@@ -19,7 +21,11 @@
   _HA_UI_URL / _HA_LISTS / _HA_ZONE (the home assistant boundary:
   long-lived token, the browser-facing base for origin links, the
   comma-separated todo entity ids, the zone naive due datetimes
-  parse in), WAYMARK10_DEPLOY_MODE,
+  parse in), WORKQUEUE10_GTASKS_CLIENT_ID / _CLIENT_SECRET /
+  _REFRESH_TOKEN / _LISTS (the google tasks boundary: an OAuth
+  refresh token carrying the tasks scope — the calendar's token does
+  NOT — and the comma-separated task list ids to mirror, EVERY list
+  the account has when unsaid), WAYMARK10_DEPLOY_MODE,
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan), WAYMARK10_OIDC_* (the family
   IdP — waymark10.server.oidc/from-env names them; absent = the
@@ -37,7 +43,9 @@
             [mealplan10.main :as mealplan]
             [workqueue10.confluence :as conf]
             [workqueue10.resources.task :refer [task-resource]]
+            [workqueue10.resources.task-list :refer [task-list-resource]]
             [workqueue10.sources.choreplan :as chores]
+            [workqueue10.sources.gtasks :as gtasks]
             [workqueue10.sources.homeassistant :as ha]
             [workqueue10.sources.mealplan :as meals]
             [waymark10.dsl :refer [in-domain]]
@@ -59,6 +67,12 @@
 
 (defonce fake-todos
   (conf/fake-source))
+
+(defonce fake-gtasks
+  ;; google tasks gets its OWN twin rather than conf/fake-source: the
+  ;; source is the queue's first cursor-bearing feed, and a fake that
+  ;; stands behind the transport runs that cursor for real
+  (gtasks/fake-source))
 
 (defonce engine-ref
   ;; the stage-1 fold's late binding: in-process sources need the
@@ -104,7 +118,12 @@
                 :lists (System/getenv "WORKQUEUE10_HA_LISTS")
                 :zone (System/getenv "WORKQUEUE10_HA_ZONE")
                 :capture-list (System/getenv "WORKQUEUE10_HA_CAPTURE")})
-              fake-todos)}))
+              fake-todos)
+     ;; the google half of pocket capture — real only when a refresh
+     ;; token is configured, and that token must carry the TASKS
+     ;; scope; the calendar's does not, so an unset trio is the
+     ;; ordinary state until the household re-consents
+     "gtasks" (or (gtasks/from-env) fake-gtasks)}))
 
 (defonce fake-calendar
   ;; module-default fake boundary — tests script it, offline dev and
@@ -131,11 +150,21 @@
   mealplan's NATIVE kind now; choreplan's HTTP mirror of it retired
   with bwu stage 2 — the day board joins the real rows.
 
+  The queue's domain carries TWO kinds: the work itself, and the
+  named lists some authorities keep it in. :task_list rides a second
+  confluence over the SAME source map, narrowed by conf/list-sources
+  to the sources that satisfy TaskListSource — google's task lists
+  and home assistant's todo entities today, whatever declares the
+  protocol tomorrow. The sources with no list concept (a chore run's,
+  a prep task's) are simply absent from it.
+
   srcs: the confluence's tag → TaskSource map; adapter: the family
   calendar's event boundary (a MirrorAdapter AND MirrorCreateAdapter
   — this one is written to, not merely read)."
   [srcs adapter]
-  (-> (in-domain :queue [(task-resource (conf/confluence srcs))])
+  (-> (in-domain :queue [(task-resource (conf/confluence srcs))
+                         (task-list-resource
+                          (conf/list-confluence (conf/list-sources srcs)))])
       (into (in-domain :chores [chore chore-run day]))
       (into (in-domain :meals (mealplan/meal-resources)))
       ;; the kind self-declares :domain :calendar; in-domain would
@@ -152,7 +181,8 @@
   "Zero-arg so the declaration gate needs no env — every kind over
   the offline fakes."
   []
-  (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos}
+  (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos
+              "gtasks" fake-gtasks}
              fake-calendar))
 
 (defn- dsn []

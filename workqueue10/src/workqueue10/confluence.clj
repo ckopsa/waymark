@@ -35,10 +35,27 @@
   cosmetic: a resync! pass counts a down source's rows :gone in its
   stats — stored truth keeps serving, nothing is deleted.
 
+  A SECOND CONFLUENCE, over the same sources, carries the LISTS. Two
+  of the authorities the queue drinks from keep their work in named
+  lists — google's task lists, home assistant's todo entities — and a
+  list is a row, not a prefix: it has a title a person reads, an
+  identity a task can point at, and an authority that owns it. The
+  list feed is its own MirrorAdapter (list-confluence) over its own
+  protocol (TaskListSource), for one reason: waymark10's Mirror binds
+  one kind to one adapter, and :task_list is a kind. It is NOT a
+  second method on TaskSource, because a source that has no lists —
+  a chore run, a prep task, a captured todo in the generic fake —
+  should not have to answer a question its authority never asks.
+  list-sources reads which of the confluence's sources speak lists
+  from the protocols they satisfy, so adding the third one is
+  declaring it, not editing a map.
+
   fake-source is the scriptable in-memory twin (the FakeFeed
   precedent): canonical docs, the SAME push-plan the real boundaries
   run, and an unseeded id reads as an open task the authority simply
-  hasn't shown us — so conformance-walked rows push clean."
+  hasn't shown us — so conformance-walked rows push clean. It speaks
+  lists too (seed-list!), so the queue's end-to-end story can watch a
+  task's list ref resolve without standing up a real authority."
   (:require [clojure.string :as str]
             [waymark10.server.mirror :as mirror]
             [waymark10.wire :as wire]))
@@ -67,6 +84,36 @@
     this authority takes no births from the queue — the failure
     lands conflicted with no external id, and resolve_conflict
     keep=local retries (the framework's create-push law)."))
+
+(defprotocol TaskListSource
+  "The lists ONE authority keeps, already speaking canonical — the
+  optional second half of a source, for the authorities that group
+  their work by name. A source implements this or it doesn't; the
+  ones that don't are simply absent from the list feed (list-sources
+  reads the protocol, not a configuration), which is the whole reason
+  these three verbs are not on TaskSource.
+
+  A list document is small on purpose: a :title, and whatever hrefs
+  point back at the authority. The routing tag arrives the way it
+  does for tasks — stamped by the confluence, never by the source."
+  (list-discover [s]
+    "→ seq of source-local list ids the queue should mirror. Throw on
+    unreachable.")
+  (list-pull [s id]
+    "→ [canonical-list-doc etag]. Throw on unreachable or gone (gone
+    carries {:status 404} in ex-data).")
+  (list-pull-many [s ids]
+    "→ {id [canonical-list-doc etag]} for the lists the authority
+    still keeps; a list it can prove is gone answers :gone. Throw on
+    unreachable."))
+
+(defn list-sources
+  "The confluence's sources, narrowed to the ones that keep lists —
+  the map list-confluence rides. Reading the protocol rather than a
+  hand-kept tag set means a source grows a list feed by implementing
+  one thing, and the wiring in main follows for free."
+  [sources]
+  (into {} (filter (fn [[_ s]] (satisfies? TaskListSource s))) sources))
 
 ;; ── the shared translation at the heart of push ─────────────────────
 
@@ -115,53 +162,79 @@
       (throw (ex-info (str "no source registered for tag " (pr-str tag))
                       {:tags (vec (keys sources))}))))
 
-;; ── the composite adapter ───────────────────────────────────────────
+;; ── the composite adapters ──────────────────────────────────────────
+;;
+;; Two feeds, one routing law. The fan-out below is shared because the
+;; partial-tolerance posture is: a source that throws costs its own
+;; rows a pass and nothing else, on either feed.
+
+(defn- fan-discover
+  "Every tagged source's ids, namespaced. A source that throws
+  discovers nothing THIS pass; its known rows go per-row unreachable
+  through pull — honest partial staleness, never a dead feed."
+  [sources what discover-one]
+  (into []
+        (mapcat (fn [[tag src]]
+                  (try (mapv #(xid tag %) (discover-one src))
+                       (catch Exception e
+                         (warn! what " discover for " tag " failed ("
+                                (ex-message e) "); skipping this pass")
+                         nil))))
+        sources))
+
+(defn- fan-pull-many
+  "The batched read, split by tag and re-prefixed on the way back. A
+  down source's ids drop from the batch (they fill on first read, or
+  when it returns); a :gone sentinel rides through untouched — the
+  source's honest deletion signal, which only a declared :on-gone
+  policy gives meaning to."
+  [sources what pull-many-one stamp xids]
+  (reduce-kv
+   (fn [acc tag pairs]
+     (let [src (get sources tag)
+           ids (mapv second pairs)
+           pulled (when src
+                    (try (pull-many-one src ids)
+                         (catch Exception e
+                           (warn! what " pull-many for " tag " failed ("
+                                  (ex-message e) "); its rows keep "
+                                  "their stored truth")
+                           nil)))]
+       (reduce-kv (fn [m id entry]
+                    (assoc m (xid tag id)
+                           (if (vector? entry)
+                             (let [[doc etag] entry] [(stamp tag doc) etag])
+                             entry)))
+                  acc pulled)))
+   {}
+   (group-by first (map split-xid xids))))
+
+(defn- stamp-task
+  "The two routing facts a source cannot know about itself: which
+  authority this row drinks from, and — when the source keeps lists —
+  the confluence's spelling of the list the task lives in.
+
+  A source names its list the way its own authority does (\"MTIzNA\",
+  \"todo.woodworking\"); the SAME tag that namespaces the row's
+  identity namespaces the key, so a task's :list_key is exactly the
+  matching :task_list row's external_id and the ref resolves on the
+  default match. One concept, one spelling, both feeds."
+  [tag doc]
+  (cond-> (assoc doc :source tag)
+    (not (str/blank? (str (:list_key doc))))
+    (assoc :list_key (xid tag (:list_key doc)))))
+
+(defn- stamp-list [tag doc] (assoc doc :source tag))
 
 (defrecord ConfluenceFeed [sources]
   mirror/MirrorAdapter
-  (discover [_]
-    (into []
-          (mapcat (fn [[tag src]]
-                    (try (mapv #(xid tag %) (source-discover src))
-                         (catch Exception e
-                           ;; a down source discovers nothing THIS
-                           ;; pass; its known rows go per-row
-                           ;; unreachable through pull — honest
-                           ;; partial staleness, never a dead feed
-                           (warn! "discover for " tag " failed ("
-                                  (ex-message e) "); skipping this pass")
-                           nil))))
-          sources))
+  (discover [_] (fan-discover sources "task" source-discover))
   (pull [_ x]
     (let [[tag id] (split-xid x)
           [doc etag] (source-pull (source-for sources tag) id)]
-      [(assoc doc :source tag) etag]))
+      [(stamp-task tag doc) etag]))
   (pull-many [_ xids]
-    (reduce-kv
-     (fn [acc tag pairs]
-       (let [src (get sources tag)
-             ids (mapv second pairs)
-             pulled (when src
-                      (try (source-pull-many src ids)
-                           (catch Exception e
-                             ;; the down source's ids drop from the
-                             ;; batch — they fill on first read, or
-                             ;; when it returns
-                             (warn! "pull-many for " tag " failed ("
-                                    (ex-message e) "); its rows keep "
-                                    "their stored truth")
-                             nil)))]
-         (reduce-kv (fn [m id entry]
-                      (assoc m (xid tag id)
-                             ;; :gone rides through untouched — the
-                             ;; source's honest deletion sentinel
-                             (if (vector? entry)
-                               (let [[doc etag] entry]
-                                 [(assoc doc :source tag) etag])
-                               entry)))
-                    acc pulled)))
-     {}
-     (group-by first (map split-xid xids))))
+    (fan-pull-many sources "task" source-pull-many stamp-task xids))
   (push [_ x document]
     (let [[tag id] (split-xid x)]
       (source-push (source-for sources tag) id document)))
@@ -184,6 +257,37 @@
   in resources/task.clj."
   [sources]
   (->ConfluenceFeed sources))
+
+(defrecord ListConfluence [sources]
+  mirror/MirrorAdapter
+  (discover [_] (fan-discover sources "task_list" list-discover))
+  (pull [_ x]
+    (let [[tag id] (split-xid x)
+          [doc etag] (list-pull (source-for sources tag) id)]
+      [(stamp-list tag doc) etag]))
+  (pull-many [_ xids]
+    (fan-pull-many sources "task_list" list-pull-many stamp-list xids))
+  (push [_ x _document]
+    ;; :task_list is pull-only and this throw is unreachable through
+    ;; the sync machine (the framework never pushes a kind that does
+    ;; not declare :push-on-write). It is a sentence rather than a
+    ;; stub because the one door that COULD reach it — a person
+    ;; resolving a conflict keep=local — deserves to be told why it
+    ;; cannot: the queue mirrors the household's lists, it does not
+    ;; rename them.
+    (throw (ex-info (str "the queue does not write task lists — " (str x)
+                         " is mirrored from its authority, and renaming "
+                         "or deleting it happens there")
+                    {}))))
+
+(defn list-confluence
+  "sources: {tag TaskListSource} — the list-keeping subset of the
+  confluence's own sources (list-sources narrows it). One adapter for
+  the :task_list kind, routing on exactly the same tags the task feed
+  routes on, so \"gtasks:MTIzNA\" names a list and
+  \"gtasks:MTIzNA/t-1\" names a task in it."
+  [sources]
+  (->ListConfluence sources))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 
@@ -258,13 +362,39 @@
                      (assoc-in [:docs id] doc)
                      (update :discoverable
                              #(vec (distinct (conj (vec %) id)))))))
-        [id (content-etag doc)]))))
+        [id (content-etag doc)])))
+
+  TaskListSource
+  ;; the fake keeps lists too, so the queue's story can watch a task's
+  ;; :task_list ref resolve without a real authority. Seeded lists are
+  ;; the whole truth here: an unseeded id is gone, and a down source
+  ;; refuses every verb exactly as it does on the task feed.
+  (list-discover [_]
+    (let [{:keys [down lists]} @state]
+      (when down (throw (ex-info "source unreachable" {})))
+      (vec (sort (keys lists)))))
+  (list-pull [_ id]
+    (let [{:keys [down lists]} @state]
+      (when down (throw (ex-info "source unreachable" {})))
+      (if-some [doc (get lists id)]
+        [doc (content-etag doc)]
+        (throw (ex-info (str "no list " id) {:status 404})))))
+  (list-pull-many [_ ids]
+    (let [{:keys [down lists]} @state]
+      (when down (throw (ex-info "source unreachable" {})))
+      (into {}
+            (map (fn [id]
+                   [(str id) (if-some [doc (get lists (str id))]
+                               [doc (content-etag doc)]
+                               :gone)]))
+            ids))))
 
 (defn fake-source
-  "One authority in memory: scriptable via seed! / remove! / down! /
-  fail-pushes!. Seed CANONICAL docs — the confluence stamps :source."
+  "One authority in memory: scriptable via seed! / seed-list! /
+  remove! / down! / fail-pushes!. Seed CANONICAL docs — the
+  confluence stamps :source (and namespaces a task's :list_key)."
   []
-  (->FakeSource (atom {:docs {} :discoverable [] :removed #{}
+  (->FakeSource (atom {:docs {} :discoverable [] :removed #{} :lists {}
                        :down false :push-fail false})))
 
 (defn seed!
@@ -278,6 +408,13 @@
                        (update :removed disj id))
              discoverable? (update :discoverable
                                    #(vec (distinct (conj (vec %) id))))))))
+
+(defn seed-list!
+  "Put a canonical LIST doc in the fake source's list feed, under the
+  source-local id a seeded task's :list_key names — the pair the
+  :task_list ref is made of."
+  [fake id doc]
+  (swap! (:state fake) assoc-in [:lists (str id)] doc))
 
 (defn remove!
   "Simulate the authority no longer carrying the task: the next pull

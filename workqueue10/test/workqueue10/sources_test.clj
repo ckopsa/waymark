@@ -3,7 +3,8 @@
   shared push-plan table, namespaced identity, and the confluence's
   routing — no database, no HTTP, the fakes where an adapter is
   needed."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [workqueue10.confluence :as conf]
             [workqueue10.sources.choreplan :as chores]
             [workqueue10.sources.homeassistant :as ha]
@@ -61,23 +62,35 @@
 
 (deftest home-assistant-translation
   (testing "status, per HA's two states — deletion is gone, never a status"
-    (is (= "open" (:status (ha/item->task "Woodworking"
-                                          {:summary "x" :status "needs_action"}
+    (is (= "open" (:status (ha/item->task {:summary "x" :status "needs_action"}
                                           "America/Denver"))))
-    (is (= "done" (:status (ha/item->task "Woodworking"
-                                          {:summary "x" :status "completed"}
+    (is (= "done" (:status (ha/item->task {:summary "x" :status "completed"}
                                           "America/Denver")))))
 
-  (testing "the list's context rides detail; description joins it"
-    (is (= "Woodworking"
-           (:detail (ha/item->task "Woodworking"
-                                   {:summary "x" :status "needs_action"}
-                                   "America/Denver"))))
-    (is (= "Woodworking — glue first"
-           (:detail (ha/item->task "Woodworking"
-                                   {:summary "x" :status "needs_action"
+  (testing ":detail is the household's own description and NOTHING
+            else — the list used to be string-joined onto its head,
+            which made a filterable fact into prose (it is :list_key
+            and the :task_list ref now)"
+    (is (nil? (:detail (ha/item->task {:summary "x" :status "needs_action"}
+                                      "America/Denver")))
+        "nothing to say is nil, not an empty string")
+    (is (= "glue first"
+           (:detail (ha/item->task {:summary "x" :status "needs_action"
                                     :description "glue first"}
-                                   "America/Denver")))))
+                                   "America/Denver"))))
+    (is (not (str/includes? (str (:detail (ha/item->task
+                                           {:summary "x"
+                                            :status "needs_action"
+                                            :description "glue first"}
+                                           "America/Denver")))
+                            "—"))
+        "no list prefix survives anywhere in the prose"))
+
+  (testing "the list is still NAMED — it just names a row now"
+    (is (= "Woodworking" (ha/list-name {"todo.woodworking" "Woodworking"}
+                                       "todo.woodworking")))
+    (is (= "My tasks" (ha/list-name {} "todo.my_tasks"))
+        "an unconfigured entity derives its own friendly name"))
 
   (testing "due dates: date-only widens to the closing midnight (the
             chore-source law); datetimes keep their offset; naive
@@ -89,6 +102,57 @@
     (is (= "2026-07-23T01:00:00Z"
            (ha/due->instant "2026-07-22T19:00:00" "America/Denver")))
     (is (nil? (ha/due->instant nil "America/Denver")))))
+
+;; HA has no fake transport (its reads are one POST per service call,
+;; and the queue's story exercises the routing through the generic
+;; fake source), so the two translations that USED to be one string
+;; join are asserted directly — decorate and list-doc are public here
+;; for exactly that reason, where google's equivalents stay private
+;; behind a fake that runs the real source end to end.
+(deftest home-assistant-stamps-the-list-it-came-from
+  (let [src {:api-base "http://ha.lan:8123" :ui-base "https://ha.kopsa.info"
+             :names {"todo.woodworking" "Woodworking"}}]
+    (testing "a task's :list_key is its own entity, source-local — the
+              confluence namespaces it into the list row's external id"
+      (let [doc (ha/decorate src "todo.woodworking"
+                             (ha/item->task {:summary "Sharpen chisels"
+                                             :status "needs_action"
+                                             :description "glue first"}
+                                            "America/Denver"))]
+        (is (= "todo.woodworking" (:list_key doc)))
+        (is (= "glue first" (:detail doc))
+            "…and the list is no longer smuggled into the prose")))
+
+    (testing "the list row: the friendly name titles it, and both hrefs
+              are the ones a task from it already carried — HA anchors
+              on the list either way"
+      (let [doc (ha/list-doc src "todo.woodworking")]
+        (is (= "Woodworking" (:title doc)))
+        (is (= "http://ha.lan:8123/api/states/todo.woodworking"
+               (:source_href doc)))
+        (is (= "https://ha.kopsa.info/todo?entity_id=todo.woodworking"
+               (:source_ui_href doc)))))))
+
+(deftest home-assistant-lists-are-the-configured-entities
+  (let [src (ha/http-source
+             {:url "http://ha.lan:8123/" :ui-url "https://ha.kopsa.info"
+              :token "t" :lists "todo.woodworking, todo.shopping_list"
+              :names {"todo.woodworking" "Woodworking"}})]
+    (testing "list discovery reads the CONFIGURATION, not the wire —
+              there is no round trip here, so there is nothing to fail
+              (the recorded punt: HA's own friendly_name lives at
+              /api/states and would cost one)"
+      (is (= ["todo.woodworking" "todo.shopping_list"]
+             (conf/list-discover src))))
+
+    (testing "an unconfigured entity derives its own friendly name"
+      (is (= "Shopping list"
+             (:title (first (conf/list-pull src "todo.shopping_list"))))))
+
+    (testing "the batch agrees with the singular read, etag and all"
+      (is (= (conf/list-pull src "todo.woodworking")
+             (get (conf/list-pull-many src ["todo.woodworking"])
+                  "todo.woodworking"))))))
 
 (deftest origin-hrefs
   (testing "the source client stamps the way back: the API row and
@@ -172,3 +236,81 @@
     (testing "an unregistered tag refuses loudly"
       (is (thrown-with-msg? Exception #"no source registered"
                             (mirror/pull feed "laundry:x-1"))))))
+
+;; ── the list feed ───────────────────────────────────────────────────
+
+(deftest a-task-carries-its-list-namespaced
+  (testing "a source names its list the way its own authority does;
+            the confluence namespaces it with the SAME tag it
+            namespaces the row with, so :list_key IS the matching
+            :task_list row's external id — which is why the ref needs
+            no :match"
+    (let [todos (conf/fake-source)
+          feed (conf/confluence {"todo" todos})]
+      (conf/seed! todos "todo.woodworking/uid-1"
+                  {:title "Sharpen chisels" :status "open"
+                   :list_key "todo.woodworking"})
+      (let [[doc _] (mirror/pull feed "todo:todo.woodworking/uid-1")]
+        (is (= "todo:todo.woodworking" (:list_key doc))))
+      (let [pulled (mirror/pull-many feed ["todo:todo.woodworking/uid-1"])]
+        (is (= "todo:todo.woodworking"
+               (:list_key (first (get pulled "todo:todo.woodworking/uid-1"))))
+            "the batch stamps it the same way the singular read does"))))
+
+  (testing "a source with no list concept leaves it unset — the gap
+            renders, and nothing invents a prefix"
+    (let [chores (conf/fake-source)
+          feed (conf/confluence {"chore" chores})]
+      (conf/seed! chores "cr-1" {:title "Dishes" :status "open"})
+      (is (nil? (:list_key (first (mirror/pull feed "chore:cr-1"))))))))
+
+(deftest the-list-confluence-routes-the-same-tags
+  (let [todos (conf/fake-source)
+        gtasks (conf/fake-source)
+        chores (conf/fake-source)
+        srcs {"todo" todos "gtasks" gtasks "chore" chores}
+        feed (conf/list-confluence (conf/list-sources srcs))]
+    (conf/seed-list! todos "todo.woodworking" {:title "Woodworking"})
+    (conf/seed-list! gtasks "MTIzNA" {:title "Errands"})
+
+    (testing "discover namespaces every list-keeping source's ids"
+      (is (= #{"todo:todo.woodworking" "gtasks:MTIzNA"}
+             (set (mirror/discover feed)))))
+
+    (testing "pull routes by prefix and stamps :source, exactly as the
+              task feed does"
+      (let [[doc _etag] (mirror/pull feed "todo:todo.woodworking")]
+        (is (= "todo" (:source doc)))
+        (is (= "Woodworking" (:title doc)))))
+
+    (testing "pull-many fans out and answers :gone for a list the
+              authority no longer keeps"
+      (let [pulled (mirror/pull-many feed ["todo:todo.woodworking"
+                                           "gtasks:MTIzNA"
+                                           "gtasks:vanished"])]
+        (is (= "Errands" (:title (first (get pulled "gtasks:MTIzNA")))))
+        (is (= :gone (get pulled "gtasks:vanished")))))
+
+    (testing "a down source degrades per-source here too"
+      (conf/down! gtasks true)
+      (is (= ["todo:todo.woodworking"] (vec (mirror/discover feed))))
+      (conf/down! gtasks false))
+
+    (testing "the queue does not WRITE lists — the one door that could
+              reach the push says why"
+      (is (thrown-with-msg? Exception #"does not write task lists"
+                            (mirror/push feed "todo:todo.woodworking"
+                                         {:title "Renamed"}))))))
+
+(deftest list-sources-reads-the-protocol-not-a-configuration
+  (testing "a source joins the list feed by implementing TaskListSource
+            — the wiring in main follows for free"
+    (let [speaks (conf/fake-source)
+          silent (reify conf/TaskSource
+                   (source-discover [_] [])
+                   (source-pull [_ _] nil)
+                   (source-pull-many [_ _] {})
+                   (source-push [_ _ _] nil)
+                   (source-create [_ _] nil))]
+      (is (= #{"todo"} (set (keys (conf/list-sources {"todo" speaks
+                                                      "chore" silent}))))))))

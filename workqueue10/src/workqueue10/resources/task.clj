@@ -94,7 +94,7 @@
               ;; the confluence's routing tag — which authority this
               ;; row drinks from; the enum is the tag set main wires
               [:source {:optional true :filter #{:eq :in}}
-               [:maybe [:enum "chore" "meal" "todo"]]]
+               [:maybe [:enum "chore" "meal" "todo" "gtasks"]]]
               ;; WHO, as a person and not a string. The sources speak
               ;; names ("colton", "housekeeper") — that text lands in
               ;; :assignee_name, and :assignee is its resolvable
@@ -111,6 +111,29 @@
                           :external-key :assignee_name
                           :match :handle
                           :x-display {:label "Assigned to"}}
+               [:maybe :waymark/ref]]
+              ;; WHICH LIST, as a row and not a prefix. Both
+              ;; list-keeping authorities name the list a task lives
+              ;; in — google inside the task's own identity, home
+              ;; assistant as the entity the item hangs off — and
+              ;; neither fact could be filtered, labeled or linked
+              ;; while it was a string (HA spent years smuggling it
+              ;; into :detail). :list_key is the authority's own key,
+              ;; namespaced by the confluence, and :task_list is its
+              ;; resolvable projection — the mirrored list row whose
+              ;; external_id it matches. This is the assignee pattern
+              ;; one field over, with the ONE difference that the
+              ;; target is a mirror kind, so the default :match
+              ;; (external_id) applies and no :match is spelled.
+              ;; A source with no list concept (a chore run, a prep
+              ;; task) leaves both unset — the gap renders.
+              [:list_key {:optional true
+                          :x-display {:label "List key (the authority's own)"}}
+               [:maybe [:string {:max 256}]]]
+              [:task_list {:optional true :filter #{:eq}
+                           :kind :task_list
+                           :external-key :list_key
+                           :x-display {:label "List"}}
                [:maybe :waymark/ref]]
               [:due_at {:optional true :filter #{:after} :sort true
                         :x-display {:label "Due by"}}
