@@ -92,9 +92,13 @@
             ;; the same one-declaration rule points at THEM: the ref
             ;; is the picker, the navigable link, and — :filter #{:eq}
             ;; — the "whose chores?" question, all labeled by the
-            ;; member's own :label-template
+            ;; member's own :label-template. :showcase stands that
+            ;; question above the table instead of inside the Filters
+            ;; popover: "whose chores?" is the FIRST thing a household
+            ;; asks of this collection, and a standing picker answers
+            ;; it in one click (the prep_task :status precedent).
             [:assignee {:optional true :filter #{:eq} :kind :member
-                        :x-display {:label "Assigned to"}}
+                        :x-display {:label "Assigned to" :showcase true}}
              [:maybe :waymark/ref]]
             [:cadence {:filter #{:eq}} (one-of :daily :weekly :monthly :as_needed)]
             [:notes {:optional true :x-display {:widget "prose"}}

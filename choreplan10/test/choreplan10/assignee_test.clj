@@ -73,7 +73,10 @@
                                  :input :properties :assignee])]
         (is (= {:kind "member"} (:x-ref entry)))
         (is (= {:kind "member"} (:x-ref input))
-            "the update door offers the picker, not a text box")))
+            "the update door offers the picker, not a text box")
+        (is (= {:label "Assigned to" :showcase true} (:x-display entry))
+            "…and 'whose chores?' stands above the table, not inside
+             the Filters popover")))
 
     (testing "and so does the filter param — filtering by assignee is
               picking a person"
