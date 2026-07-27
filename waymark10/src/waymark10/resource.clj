@@ -1018,6 +1018,21 @@
         (when-some [oc (:on-clear col)]
           (check-invoke (:field col) (:action oc) (:param oc) ":on-clear"))))))
 
+(defn- normalize-default-filters
+  "A default filter's value is a WIRE value: it lands in the query
+  string, in the collection's self href and in the chip a person
+  clicks, always as text. So a keyword spelling ({:state :offered})
+  normalizes to its name here, the way a where= membership already
+  does — two spellings, one law. A kind declaring none stays without
+  the key."
+  [rmap]
+  (if-some [defs (:default-filters rmap)]
+    (assoc rmap :default-filters
+           (into {}
+                 (map (fn [[f v]] [f (if (keyword? v) (name v) (str v))]))
+                 defs))
+    rmap))
+
 (defn normalize-resource
   [rmap]
   ;; flow first: a :flow declaration may derive :states, which the
@@ -1082,6 +1097,7 @@
         (update :shape #(or % 1))
         (update :allow-dead set)
         (update :deviations #(vec (or % [])))
+        normalize-default-filters
         ;; the continuity map (migrate): retired tokens → their current
         ;; spellings; boot refuses rows in states neither declared nor
         ;; mapped, and replay-history reads the log through the chain

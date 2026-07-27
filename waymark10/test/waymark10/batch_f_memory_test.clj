@@ -41,6 +41,10 @@
              [:pokes {:optional true} [:maybe :int]]]
     :filterable {:title #{:eq :ne :contains}
                  :pokes #{:range :set}}
+    ;; the engine's own clock sorts here too — the twin has no promoted
+    ;; columns at all, so a timestamp sort must find the row's own
+    ;; :created-at/:updated-at and not a data field of that name
+    :sortable {:fields [:title :created_at :updated_at]}
     :actions
     {:poke {:from #{:open} :to :open
             :safety {:idempotent false :reversible true :confirm false}
@@ -301,6 +305,22 @@
     (create-plan! "2026-08-04" ["2026-08-04"])
     (let [env (envelope :plan {"start_date_gte" "2026-08-01"})]
       (is (= 1 (get-in env ["data" "total"]))))))
+
+(deftest sortable-timestamps-over-the-twin
+  (doseq [t ["alpha" "beta" "gamma"]]
+    (inv/create! *eng* :task {:title t} opts))
+  (let [titles (fn [sort]
+                 (mapv #(re-find #"^\S+" (get % "summary"))
+                       (get-in (envelope :task {"sort" sort}) ["data" "items"])))]
+    (testing "created_at names no data field and still orders both ways"
+      (is (= ["alpha" "beta" "gamma"] (titles "created_at")))
+      (is (= ["gamma" "beta" "alpha"] (titles "-created_at"))))
+    (testing "updated_at follows the write, not the birth"
+      (let [beta (->> (get-in (envelope :task {"title" "beta"}) ["data" "items"])
+                      first (#(get % "self")) (re-find #"[^/]+$"))]
+        (inv/invoke! *eng* :task beta :poke nil
+                     (assoc opts :idempotency-key "poke-for-order"))
+        (is (= ["alpha" "gamma" "beta"] (titles "updated_at")))))))
 
 (deftest new-cond-ops-over-the-twin
   (inv/create! *eng* :task {:title "alpha"} opts)

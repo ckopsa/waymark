@@ -520,7 +520,12 @@
                  params (cond-> (merge href-params rel-overrides)
                           (and limit (not (contains? rel-overrides "page[size]")))
                           (assoc "page[size]" (str limit)))
-                 {:keys [conds sort page]} (collections/parse-query trdef params)
+                 ;; the target kind's :default-filters stay out (the
+                 ;; spec's named punt): this embed's href is the
+                 ;; parent's own link, and a filter the href does not
+                 ;; carry would hide rows behind a URL that denies it
+                 {:keys [conds sort page]} (collections/parse-query
+                                            trdef params {:defaults? false})
                  _ (when (and max-limit (> (:size page) max-limit))
                      (throw (p/schema-invalid
                              :query {(str "embed." rel ".page[size]")
@@ -535,7 +540,9 @@
                  ;; so it lands even if the storage read below fails
                  env (assoc-in env ["links" rel "columns"]
                                (p/wire-value
-                                (update (collections/query-input-schema trdef)
+                                (update (collections/drop-filter-defaults
+                                         trdef
+                                         (collections/query-input-schema trdef))
                                         :properties
                                         #(apply dissoc % locked-keys))))]
              (try

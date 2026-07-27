@@ -16,7 +16,7 @@
     :schema :create-schema :fields :shape :upcasts
     :flow :actions :create-guards :create-action-names :allow-dead :renames
     :derived :one-of :unique :part-scopes
-    :filterable :sortable :faceted :worksheet
+    :filterable :sortable :faceted :worksheet :default-filters
     :owns :links :related
     :display :label-template :summary :deviations
     :on-create :mirror})

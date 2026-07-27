@@ -429,6 +429,16 @@
    :filterable {:state #{:eq :in}
                 :grant_id #{:eq}
                 :requested_by #{:eq}}
+   ;; the approval page opens on the decision queue: newest ask first,
+   ;; and only the ones still waiting on a person. Every judged ask
+   ;; stays on record forever, so recency alone would bury the three
+   ;; rows that need a verdict under a year of verdicts already given.
+   ;; The filter is allowed to hide rows here only because it cannot
+   ;; hide QUIETLY — it rides the self href, the summary's "filtered:"
+   ;; echo and a removable chip, so a requester looking for their own
+   ;; denied ask is one chip click, or one empty state=, away.
+   :sortable {:fields [:created_at] :default "-created_at"}
+   :default-filters {:state "offered"}
    ;; the grant this ask anchors or (once approved) minted; a nil
    ;; grant_id omits the link — an unjudged bootstrap ask points at
    ;; nothing yet

@@ -97,8 +97,9 @@
     grammar, widened with :op :in-any — vocab-array membership via
     JSONB containment). opts {:order-by field-kw :desc bool :limit n
     :offset n}; ordering runs over the promoted generated column
-    (f_<field>), :state over its column, nil over created_at — id
-    tiebreak always, so pages never overlap.")
+    (f_<field>), :state over its column, a sortable-timestamp over the
+    engine column of that name, nil over created_at — id tiebreak
+    always, so pages never overlap.")
   (facet-counts [st tx kind field conds array?]
     "Observed value → count for one faceted field under the same conds
     the rows match — a real GROUP BY. array? true unrolls a JSON array
@@ -196,6 +197,18 @@
    {:name "updated_at" :type "timestamptz"
     :ddl "updated_at timestamptz NOT NULL DEFAULT now()"}])
 
+(def sortable-timestamps
+  "The two engine columns a :sortable declaration may name besides its
+  own schema fields. They are not schema entries — they have no
+  promoted f_ column, no JSON-Schema type and no filter grammar — so
+  every reader of a sortable field asks this set first: the projection
+  skips promoting them, the stores order by the table column itself,
+  and the declaration gate refuses a schema field that would shadow
+  one. Recorded punt: on a MIRROR kind created_at is when the local
+  row was minted, not when the authority created the thing; the
+  mirror kinds that care already carry their own timestamp field."
+  #{:created_at :updated_at})
+
 (defn generated-column-type
   "SQL type for a promoted filterable/sortable field, from its schema
   form; nil when the field has no single-value promotion (vocab
@@ -271,26 +284,55 @@
   a generated column per promoted field (filterable ∪ sortable, phase
   7's rule — sort orders by the generated column, so sortable fields
   promote too; :state has its own column; vocab arrays have no
-  single-value promotion), and the standard indexes — plus a GIN
+  single-value promotion; the sortable-timestamps promote nothing,
+  being engine columns already), and the standard indexes — plus a GIN
   index per vocab-array filterable field (batch F).
+
+  ix_<table>_created and ix_<table>_updated land on the kinds whose
+  :sortable NAMES that timestamp, and nowhere else — a recorded
+  deviation from docs/spec-collection-defaults.md, which asked for
+  both as standard per-kind indexes. Standard would have moved every
+  kind's storage facet, and with it every kind's fingerprint: one
+  feature, a new law revision for every kind in every app at the next
+  boot. Whether the unsorted page's own created_at ordering deserves
+  an index everywhere is a real and separate question — measure it,
+  then decide. Neither index carries the id tiebreak search-rows
+  appends, so a large page still sorts within ties; a composite index
+  is the measured follow-up, not a guess.
   → {:table … :columns [{:name :type :generated? :ddl} …]
      :indexes {name create-sql}}"
   [rmap]
   (let [table (definition-checked-name (:plural rmap))
+        sortable (set (get-in rmap [:sortable :fields]))
         promoted (keep (fn [field]
-                         (when-not (= field :state)
+                         (when-not (or (= field :state)
+                                       (contains? sortable-timestamps field))
                            (promoted-column rmap field)))
-                       (sort (into (set (keys (:filterable rmap)))
-                                   (get-in rmap [:sortable :fields]))))]
+                       (sort (into (set (keys (:filterable rmap))) sortable)))
+        ix (fn [suffix col]
+             [(str "ix_" table "_" suffix)
+              (str "CREATE INDEX IF NOT EXISTS ix_" table "_" suffix
+                   " ON " table " (" col ")")])]
     {:table table
      :columns (into engine-columns promoted)
      :indexes
      (merge
-      {(str "ix_" table "_state")
-       (str "CREATE INDEX IF NOT EXISTS ix_" table "_state ON " table " (state)")
-       (str "ix_" table "_law")
-       (str "CREATE INDEX IF NOT EXISTS ix_" table "_law ON " table " (law_revision)")
-       (str "ix_" table "_flip")
+      (into {} [(ix "state" "state")
+                (ix "law" "law_revision")])
+      ;; a timestamp index lands only where a declaration NAMES that
+      ;; timestamp in :sortable — the non-empty-only rule the create
+      ;; and deviations facets already follow, so a kind that never
+      ;; asked to sort by the clock hashes exactly as it always did.
+      ;; Making them standard would have re-fingerprinted every kind
+      ;; in every app and minted a revision apiece at the next boot,
+      ;; which is a law change no feature should smuggle. Indexing
+      ;; the default created_at ordering for every kind is a real and
+      ;; separate question: measure it, then decide.
+      (when (contains? sortable :created_at)
+        (into {} [(ix "created" "created_at")]))
+      (when (contains? sortable :updated_at)
+        (into {} [(ix "updated" "updated_at")]))
+      {(str "ix_" table "_flip")
        (str "CREATE INDEX IF NOT EXISTS ix_" table "_flip ON " table
             " (next_flip_at) WHERE next_flip_at IS NOT NULL")}
       (gin-indexes rmap table)

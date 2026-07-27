@@ -166,7 +166,12 @@
                          (str (get-in grant [:links :member :href]))))))))
 
     (testing "5 · the agent acts inside the leash; outside is 404"
-      (let [asks (json (req h :get "/api/approval_requests" {:headers (agent-headers)}))
+      ;; state= is NAMED, not assumed: approval_requests opens on the
+      ;; asks still waiting (:default-filters), so an unfiltered read
+      ;; here would hand back none of the approved ones and the lookup
+      ;; below would find nothing. A caller that wants a state says so.
+      (let [asks (json (req h :get "/api/approval_requests?state=approved"
+                            {:headers (agent-headers)}))
             approved (first (filter #(= "approved" (:state %))
                                     (get-in asks [:data :items])))
             gid (get-in (json (req h :get (:self approved)

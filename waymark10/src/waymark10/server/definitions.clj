@@ -179,7 +179,11 @@
              (if (or (map? v) (sequential? v) (set? v))
                [(str pname " pins one value — a population is an equality map")]
                (try
-                 (let [{:keys [conds]} (coll/parse-query trdef {pname (str v)})]
+                 ;; the grammar only, never the view: a restamp
+                 ;; population is exactly what it pins, so the target
+                 ;; kind's :default-filters must not widen it
+                 (let [{:keys [conds]} (coll/parse-query trdef {pname (str v)}
+                                                         {:defaults? false})]
                    (if (= := (:op (first conds)))
                      []
                      [(str pname " does not pin a stored field to one value "

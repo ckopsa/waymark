@@ -41,8 +41,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.store :as store])
   (:import (java.net URLEncoder)
-           (java.nio.charset StandardCharsets)
-           (java.time Instant LocalDate OffsetDateTime)))
+           (java.nio.charset StandardCharsets)))
 
 (set! *warn-on-reflection* true)
 
@@ -51,20 +50,9 @@
 
 ;; ── field typing ────────────────────────────────────────────────────
 
-(defn- head-of
-  "The leaf type of a schema form, unwrapping :maybe/:vector and
-  property maps."
-  [s]
-  (cond
-    (keyword? s) s
-    (vector? s) (if (#{:maybe :vector} (first s))
-                  (head-of (last s))
-                  (first s))
-    :else nil))
-
 (defn- field-info [rdef f]
   (let [s (schema/field-schema (:schema rdef) f)]
-    {:head (head-of s)
+    {:head (schema/leaf-head s)
      :array? (boolean (and (vector? s) (= :vector (first s))))}))
 
 (defn- cast-of [head]
@@ -75,28 +63,6 @@
     :boolean "boolean"
     (:double :decimal) "numeric"
     "text"))
-
-(defn- check-instant [^String raw]
-  (when-not (or (try (OffsetDateTime/parse raw) true (catch Exception _ false))
-                (try (Instant/parse raw) true (catch Exception _ false)))
-    "must be an RFC 3339 date-time"))
-
-(defn- check-value
-  "Decode-check one filter value against the field's schema head —
-  values cross to storage as strings and cast server-side, so this
-  only refuses what the cast would choke on. → nil when fine, else
-  the per-field error sentence."
-  [head ^String raw]
-  (case head
-    :waymark/date (when-not (try (LocalDate/parse raw) true
-                                 (catch Exception _ false))
-                    "must be an ISO date (YYYY-MM-DD)")
-    :waymark/instant (check-instant raw)
-    :int (when (nil? (parse-long raw)) "must be an integer")
-    (:double :decimal) (when (nil? (parse-double raw)) "must be a number")
-    :boolean (when-not (contains? #{"true" "false"} raw)
-               "must be true or false")
-    nil))
 
 ;; ── the filter grammar ──────────────────────────────────────────────
 
@@ -168,89 +134,131 @@
           :set (assoc base :op :set? :value (= "true" v) :cast "text")
           :contains (assoc base :op :contains :value v :cast "text"))))))
 
+(defn default-filter-params
+  "The declared :default-filters as wire params — {param value} for
+  every default whose FIELD the caller named no filter on. Explicit
+  beats default always: what suppresses the substitution is the
+  caller MENTIONING the field, not the value they gave it, so
+  ?state= (empty) clears the default instead of re-substituting it,
+  and a filter on another field leaves it standing. g is the kind's
+  grammar, which is what maps a param name (state, party_gte) back to
+  the field it filters."
+  [rdef g params]
+  (let [named (into #{} (keep (fn [[pname _]] (:field (get g pname)))) params)]
+    (into {}
+          (keep (fn [[f v]] (when-not (contains? named f) [(name f) (str v)])))
+          (:default-filters rdef))))
+
 (defn parse-query
   "Query params ({string string}) → {:conds […] :sort {:field :desc}
   :page {:size :number} :filters sorted-map :applied sorted-map}, or
-  one 422 problem naming every unknown/malformed parameter."
-  [rdef params]
-  (let [g (grammar rdef)
-        sortable (mapv name (get-in rdef [:sortable :fields]))
-        default-sort (get-in rdef [:sortable :default])
-        acc
-        (reduce-kv
-         (fn [acc pname raw]
-           (cond
-             (= "sort" pname)
-             (let [desc? (str/starts-with? raw "-")
-                   base (if desc? (subs raw 1) raw)]
-               (if (some #(= base %) sortable)
-                 (assoc acc :sort {:field (keyword base) :desc desc?})
-                 (update acc :errors assoc pname
-                         [(if (seq sortable)
-                            (str "must be one of "
-                                 (vec (mapcat (fn [f] [f (str "-" f)]) sortable)))
-                            "this kind declares no sortable fields")])))
+  one 422 problem naming every unknown/malformed parameter.
 
-             (= "page[size]" pname)
-             (let [n (parse-long raw)]
-               (if (and n (<= 1 n page-size-max))
-                 (assoc-in acc [:page :size] n)
-                 (update acc :errors assoc pname
-                         [(str "must be an integer 1.." page-size-max)])))
+  A declared :default-filters value lands as if the caller had sent
+  it — in the conds, in :filters (so the envelope's summary echoes it)
+  and in :applied (so the self href a person copies is the view they
+  saw); the conds it contributes carry :default? true, the one mark
+  that separates the kind's own choice from the client's. Opts
+  {:defaults? false} turns that off for the two callers that parse a
+  query without serving a view: the embedded-collection splice (whose
+  href is the parent's, and cannot carry a default the parent never
+  advertised — the spec's named punt) and the pilot population
+  grammar (where one param must compile to exactly one cond).
 
-             (= "page[number]" pname)
-             (let [n (parse-long raw)]
-               (if (and n (<= 1 n))
-                 (assoc-in acc [:page :number] n)
-                 (update acc :errors assoc pname ["must be a positive integer"])))
+  An explicitly empty value on a filter param (?state=) filters
+  nothing rather than answering 422 — it is how a client says 'this
+  field, deliberately unfiltered', which is the only way to clear a
+  default. A blank sort= is still a 422: sort hides no rows, so there
+  is nothing to clear."
+  ([rdef params] (parse-query rdef params nil))
+  ([rdef params {:keys [defaults?] :or {defaults? true}}]
+   (let [g (grammar rdef)
+         sortable (mapv name (get-in rdef [:sortable :fields]))
+         default-sort (get-in rdef [:sortable :default])
+         defaults (if defaults? (default-filter-params rdef g params) {})
+         params (merge params defaults)
+         acc
+         (reduce-kv
+          (fn [acc pname raw]
+            (cond
+              (= "sort" pname)
+              (let [desc? (str/starts-with? raw "-")
+                    base (if desc? (subs raw 1) raw)]
+                (if (some #(= base %) sortable)
+                  (assoc acc :sort {:field (keyword base) :desc desc?})
+                  (update acc :errors assoc pname
+                          [(if (seq sortable)
+                             (str "must be one of "
+                                  (vec (mapcat (fn [f] [f (str "-" f)]) sortable)))
+                             "this kind declares no sortable fields")])))
 
-             :else
-             (if-some [e (get g pname)]
-               (let [values (if (and (:in? e) (str/includes? raw ","))
-                              (into [] (comp (map str/trim) (remove str/blank?))
-                                    (str/split raw #","))
-                              [raw])
-                     errs (into []
-                                (comp
-                                 (keep (fn [v]
-                                         (cond
-                                           (:state? e)
-                                           (when-not (contains? (:states e) v)
-                                             (str (pr-str v) " is not a state; one of "
-                                                  (vec (sort (:states e)))))
-                                           (= :set (:mode e))
-                                           (when-not (contains? #{"true" "false"} v)
-                                             "must be true or false")
-                                           ;; substring search takes any text,
-                                           ;; whatever the field's own type
-                                           (= :contains (:mode e)) nil
-                                           (and (#{:after :before} (:mode e))
-                                                (not= :waymark/date (:head e)))
-                                           (check-instant v)
-                                           :else (check-value (:head e) v))))
-                                 (distinct))
-                                values)]
-                 (cond
-                   (empty? values)
-                   (update acc :errors assoc pname ["must carry at least one value"])
+              (= "page[size]" pname)
+              (let [n (parse-long raw)]
+                (if (and n (<= 1 n page-size-max))
+                  (assoc-in acc [:page :size] n)
+                  (update acc :errors assoc pname
+                          [(str "must be an integer 1.." page-size-max)])))
 
-                   (seq errs) (update acc :errors assoc pname errs)
+              (= "page[number]" pname)
+              (let [n (parse-long raw)]
+                (if (and n (<= 1 n))
+                  (assoc-in acc [:page :number] n)
+                  (update acc :errors assoc pname ["must be a positive integer"])))
 
-                   :else (-> acc
-                             (update :conds conj (cond-of e values))
-                             (update :filters assoc pname raw))))
-               (update acc :errors assoc pname ["unknown query parameter"]))))
-         {:conds [] :errors {} :filters (sorted-map) :sort nil
-          :page {:size page-size-default :number 1}}
-         params)]
-    (when (seq (:errors acc))
-      (throw (p/schema-invalid :query (:errors acc))))
-    (-> acc
-        (dissoc :errors)
-        (assoc :applied (into (sorted-map) params))
-        (update :sort #(or % (when default-sort
-                               {:field (keyword (str/replace-first default-sort "-" ""))
-                                :desc (str/starts-with? default-sort "-")}))))))
+              :else
+              (if-some [e (get g pname)]
+                (if (str/blank? raw)
+                  acc                  ; the explicit clear: no cond, no echo
+                  (let [values (if (and (:in? e) (str/includes? raw ","))
+                                 (into [] (comp (map str/trim) (remove str/blank?))
+                                       (str/split raw #","))
+                                 [raw])
+                        errs (into []
+                                   (comp
+                                    (keep (fn [v]
+                                            (cond
+                                              (:state? e)
+                                              (when-not (contains? (:states e) v)
+                                                (str (pr-str v) " is not a state; one of "
+                                                     (vec (sort (:states e)))))
+                                              (= :set (:mode e))
+                                              (when-not (contains? #{"true" "false"} v)
+                                                "must be true or false")
+                                              ;; substring search takes any text,
+                                              ;; whatever the field's own type
+                                              (= :contains (:mode e)) nil
+                                              (and (#{:after :before} (:mode e))
+                                                   (not= :waymark/date (:head e)))
+                                              (schema/filter-value-problem
+                                               :waymark/instant v)
+                                              :else (schema/filter-value-problem
+                                                     (:head e) v))))
+                                    (distinct))
+                                   values)]
+                    (cond
+                      (empty? values)
+                      (update acc :errors assoc pname ["must carry at least one value"])
+
+                      (seq errs) (update acc :errors assoc pname errs)
+
+                      :else (-> acc
+                                (update :conds conj
+                                        (cond-> (cond-of e values)
+                                          (contains? defaults pname)
+                                          (assoc :default? true)))
+                                (update :filters assoc pname raw)))))
+                (update acc :errors assoc pname ["unknown query parameter"]))))
+          {:conds [] :errors {} :filters (sorted-map) :sort nil
+           :page {:size page-size-default :number 1}}
+          params)]
+     (when (seq (:errors acc))
+       (throw (p/schema-invalid :query (:errors acc))))
+     (-> acc
+         (dissoc :errors)
+         (assoc :applied (into (sorted-map) params))
+         (update :sort #(or % (when default-sort
+                                {:field (keyword (str/replace-first default-sort "-" ""))
+                                 :desc (str/starts-with? default-sort "-")})))))))
 
 ;; ── the query affordance's input schema ─────────────────────────────
 
@@ -266,7 +274,14 @@
 
 (defn query-input-schema
   "The collection query action's advertised input, generated from the
-  filterable/sortable declarations. Keys are wire param names."
+  filterable/sortable declarations. Keys are wire param names.
+
+  A :default-filters entry rides its param's :default exactly as the
+  sort default already rides sort's — the advertisement is half of
+  what keeps a hiding filter from being invisible (the other halves
+  are the self href and the rendered chip), and it is what tells a
+  client that clearing this field means sending it empty rather than
+  dropping it."
   [rdef]
   (let [state-prop {:type "string" :enum (mapv name (:states rdef))
                     :x-in true}
@@ -322,7 +337,14 @@
                                                             (str "-" (name f))])
                                                    sortable))}
                          (get-in rdef [:sortable :default])
-                         (assoc :default (get-in rdef [:sortable :default])))))]
+                         (assoc :default (get-in rdef [:sortable :default])))))
+        props (reduce-kv (fn [props f v]
+                           (let [pname (name f)]
+                             (cond-> props
+                               (contains? props pname)
+                               (assoc-in [pname :default] (str v)))))
+                         props
+                         (:default-filters rdef))]
     {:type "object"
      :properties (assoc props
                         "page[size]" {:type "integer" :minimum 1
@@ -330,6 +352,22 @@
                                       :default page-size-default}
                         "page[number]" {:type "integer" :minimum 1 :default 1})
      :additionalProperties false}))
+
+(defn drop-filter-defaults
+  "The advertised query schema with its default-filter advertisement
+  removed — what an EMBED publishes as its columns. The embedded
+  splice parses with {:defaults? false}, so advertising a default it
+  will not apply would be a client-visible lie; sort's default and the
+  page defaults stay, because those DO apply there."
+  [rdef qs]
+  (update qs :properties
+          (fn [props]
+            (reduce (fn [props f]
+                      (cond-> props
+                        (contains? props (name f))
+                        (update (name f) dissoc :default)))
+                    props
+                    (keys (:default-filters rdef))))))
 
 ;; ── the collection affordances ──────────────────────────────────────
 
@@ -462,8 +500,11 @@
         ;; the collection oracle, closed (waymark-rci): REQUESTED
         ;; filters and sorts naming non-plain fields answer the
         ;; unknown-param 422; the kind's own default sort softly
-        ;; falls back to id order instead — the client asked nothing
-        _ (grants/check-query! vis rdef conds
+        ;; falls back to id order instead — the client asked nothing.
+        ;; A default FILTER is the kind's own choice the same way, so
+        ;; its cond is exempt too: the oracle exists to refuse a
+        ;; client's probe, and the declaration is not a probe.
+        _ (grants/check-query! vis rdef (remove :default? conds)
                                (when (contains? params "sort")
                                  (:field sort)))
         sort (if (and vis (:field sort)

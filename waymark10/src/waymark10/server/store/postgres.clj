@@ -539,10 +539,14 @@
   (search-rows [_ tx kind conds {:keys [order-by desc limit offset]}]
     (let [table (get @tables kind)
           parts (map cond-sql conds)
-          order (case order-by
-                  nil "created_at"
-                  :state "state"
-                  (str "f_" (store/definition-checked-name order-by)))
+          order (cond
+                  (nil? order-by) "created_at"
+                  (= :state order-by) "state"
+                  ;; the engine's own timestamps are columns already —
+                  ;; they promote nothing, so there is no f_ twin
+                  (contains? store/sortable-timestamps order-by)
+                  (store/definition-checked-name order-by)
+                  :else (str "f_" (store/definition-checked-name order-by)))
           sql (str "SELECT * FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts))))

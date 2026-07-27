@@ -52,22 +52,36 @@ function refFilterSelect(name, col, current) {
   return s;
 }
 
+/* params the collection declares a DEFAULT for (the query schema
+   carries it exactly as it carries sort's): clearing one means sending
+   it EMPTY, because dropping it re-substitutes the default on the next
+   request — the chip's ✕ would put the chip straight back. */
+function defaultedParams(query) {
+  const props = (query || {}).properties || {};
+  return new Set(Object.entries(props)
+    .filter(([name, p]) => name !== "sort" && !name.startsWith("page[") &&
+                           p && p.default !== undefined)
+    .map(([name]) => name));
+}
+
 /* the top-level-collection flavor of apply/remove: mutate doc.self's
    own hash directly via go(). An embedded table needs a different
    flavor (embed.<rel>.* prefixed params on the PARENT's hash — see
    embeddedSections), so this stays a named, swappable pair rather
    than baked into filterPopover/filterChips themselves. */
-function hashFilterOps(path, params) {
+function hashFilterOps(path, params, defaulted) {
+  defaulted = defaulted || new Set();
   const nav = p => { p.delete("page[number]"); go(path + (p.toString() ? "?" + p : "")); };
+  const clear = (p, k) => defaulted.has(k) ? p.set(k, "") : p.delete(k);
   return {
     apply: updates => {
       const p = new URLSearchParams(params);
-      for (const [k, v] of Object.entries(updates)) if (v) p.set(k, v); else p.delete(k);
+      for (const [k, v] of Object.entries(updates)) if (v) p.set(k, v); else clear(p, k);
       nav(p);
     },
     remove: name => {
       const p = new URLSearchParams(params);
-      p.delete(name);
+      clear(p, name);
       nav(p);
     }
   };
@@ -236,6 +250,10 @@ function filterChips(query, params, remove, hints) {
   const chips = [];
   for (const [name, value] of params) {
     if (name === "sort" || name.startsWith("page[")) continue;
+    // an explicitly empty value is a filter CLEARED (the only way to
+    // turn a declared default off) — it filters nothing, so it wears
+    // no chip
+    if (value === "") continue;
     const m = /^(.*)_(gte|lte|after|before|ne|contains|set)$/.exec(name);
     const field = m ? m[1] : name;
     // facets render their own chips (facetChips) and a showcased
@@ -262,6 +280,7 @@ function filterChips(query, params, remove, hints) {
    all), so it gets no chips row here. */
 function facetChips(query, selfHref, hints) {
   const {path, params} = parseHrefQuery(selfHref);
+  const defaulted = defaultedParams(query.input);
   const rows = [];
   for (const [field, prop] of Object.entries(query.input?.properties || {})) {
     if (!prop["x-facets"] || xdisplay(hints, field).showcase) continue;
@@ -272,7 +291,9 @@ function facetChips(query, selfHref, hints) {
         onclick: () => {
           const next = on ? active.filter(v => v !== value) : [...active, value];
           const p = new URLSearchParams(params);
-          if (next.length) p.set(field, next.join(",")); else p.delete(field);
+          if (next.length) p.set(field, next.join(","));
+          else if (defaulted.has(field)) p.set(field, "");  // clear, don't re-default
+          else p.delete(field);
           p.delete("page[number]");
           go(path + (p.toString() ? "?" + p : ""));
         }}, `${value} · ${count}`);
@@ -435,15 +456,27 @@ function renderCollection(view, doc, hints) {
   const {path, params} = parseHrefQuery(doc.self);
   const query = doc.actions?.query;
   const gridQuery = query?.input;
+  const items = doc.data?.items || [];
+  /* the ordering actually in force — a declared default sort is real
+     even when nobody typed it, so the header arrow and the sort select
+     point at the same rows the table is showing */
+  const currentSort = params.get("sort") ||
+    gridQuery?.properties?.sort?.default || "";
+  /* a sortable field with no column of its own (created_at/updated_at
+     are engine columns, never item fields) has no header to click, so
+     the select that mobile always shows earns its place here too */
+  const headerless = Object.values(gridColumns(gridQuery)).some(c =>
+    c.sortable && !items.some(it => it.fields && c.field in it.fields));
   if (query) {
-    const {apply, remove} = hashFilterOps(path, params);
+    const {apply, remove} = hashFilterOps(path, params,
+                                          defaultedParams(gridQuery));
     const bar = el("div", {class: "filterbar"});
     const sf = showcaseFilters(gridQuery, params, apply, hints);
     if (sf) bar.append(sf);
     const fp = filterPopover(gridQuery, params, apply, hints);
     if (fp) bar.append(fp);
-    if (MOBILE) {
-      const ss = sortSelect(gridQuery, params.get("sort"), next => {
+    if (MOBILE || headerless) {
+      const ss = sortSelect(gridQuery, currentSort, next => {
         const p = new URLSearchParams(params);
         if (next) p.set("sort", next); else p.delete("sort");
         p.delete("page[number]");
@@ -494,11 +527,10 @@ function renderCollection(view, doc, hints) {
   }
   panel.append(bar);
 
-  const items = doc.data?.items || [];
   panel.append(itemTable(items, {
     selectable: bulkActions.length > 0, selected,
     query: gridQuery ? gridColumns(gridQuery) : null, hints,
-    currentSort: params.get("sort"),
+    currentSort,
     onSort: gridQuery ? (next) => {
       const p = new URLSearchParams(params);
       p.set("sort", next); p.delete("page[number]");
@@ -524,7 +556,8 @@ function renderDeployHistory(view, doc) {
   const {path, params} = parseHrefQuery(doc.self);
   const query = doc.actions?.query;
   if (query) {
-    const {apply, remove} = hashFilterOps(path, params);
+    const {apply, remove} = hashFilterOps(path, params,
+                                          defaultedParams(query.input));
     const fp = filterPopover(query.input, params, apply);
     if (fp) panel.append(fp);
     const fc = filterChips(query.input, params, remove);

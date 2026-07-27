@@ -19,6 +19,7 @@
             [waymark10.guards :as g]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
+            [waymark10.server.store :as store]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -420,6 +421,68 @@
                               ", which is not a filter op; ops are "
                               (vec (sort declaration/filter-ops)))))))
 
+(defn- check-sortable
+  "The sortable surface's two refusals. A schema field NAMED
+  created_at or updated_at shadows the engine column of that name:
+  the declaration would promote f_created_at while every sort by
+  created_at ordered by the engine's own column, so the same word
+  would mean two things — a definition error, never a silent
+  shadowing. And a :sortable field that is neither a data field nor
+  one of those two timestamps promotes no column at all: today that
+  survives the boot and fails at the first sorted page, which is the
+  wrong place to learn it."
+  [r]
+  (let [dkeys (data-keys r)]
+    (doseq [f (sort store/sortable-timestamps)]
+      (when (contains? dkeys f)
+        (err r :sortable
+             (str "schema field " f " shadows the engine column of the same "
+                  "name — every kind table carries created_at/updated_at, and "
+                  "a sort by " (name f) " orders by that column; rename the "
+                  "field"))))
+    (doseq [f (get-in r [:sortable :fields])
+            :when (not (or (contains? dkeys f)
+                           (contains? store/sortable-timestamps f)))]
+      (err r :sortable
+           (str "sortable field " f " is neither a data field nor an engine "
+                "timestamp — ordering runs over a promoted column, and "
+                "nothing promotes " (name f)
+                " (sortable timestamps are "
+                (vec (sort (map name store/sortable-timestamps))) ")")))))
+
+(defn- check-default-filters
+  "A default filter must be a filter the door already accepts: it
+  names a field the declaration filters by equality (or :state, which
+  every kind filters by), and it carries a value that field's own
+  schema admits. Caught here rather than at the first request, because
+  a default nobody can express is a page that serves 422 to a caller
+  who asked for nothing."
+  [r]
+  (let [states (into #{} (map name) (:states r))]
+    (doseq [[f v] (sort-by key (:default-filters r))]
+      (let [ops (set (get (:filterable r) f))
+            array? (let [s (schema/field-schema (:schema r) f)]
+                     (boolean (and (vector? s) (= :vector (first s)))))]
+        (when-not (or (= :state f) (:eq ops) (:in ops) array?)
+          (err r :default-filters
+               (str "default filter " f " is not an :eq/:in-filterable field — "
+                    "a default is an ordinary filter the caller could have "
+                    "typed, so it can only name a param the grammar serves")))
+        (doseq [value (if (str/includes? v ",") (str/split v #",") [v])
+                :let [value (str/trim value)]]
+          (if (= :state f)
+            (when-not (contains? states value)
+              (err r :default-filters
+                   (str "default filter state=" (pr-str value)
+                        " is not a state; one of " (vec (sort states)))))
+            (when-some [problem (schema/filter-value-problem
+                                 (schema/leaf-head (schema/field-schema
+                                                    (:schema r) f))
+                                 value)]
+              (err r :default-filters
+                   (str "default filter " (name f) "=" (pr-str value) " "
+                        problem)))))))))
+
 (defn- check-faceted [r]
   (doseq [f (:faceted r)
           :when (not= f :state)]
@@ -707,6 +770,7 @@
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-summary-template check-waive-tokens
           check-place check-edit check-altitude check-long-text
-          check-filterable check-faceted check-oneof check-unique check-links
+          check-filterable check-sortable check-default-filters
+          check-faceted check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
           check-defaults])})

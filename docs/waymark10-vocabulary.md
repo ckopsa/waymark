@@ -277,3 +277,41 @@ that always held). A colliding write refuses as a 409 problem
 (`unique-conflict`), never a 500. Uniqueness is the row's identity,
 not its state: a released/removed row still holds its slot — design
 for that (or scope the group) deliberately.
+
+## 12 · What a collection page opens on — the sort and filter defaults
+
+```clojure
+:sortable {:fields [:created_at] :default "-created_at"}
+:default-filters {:state "offered"}
+```
+
+`:sortable :fields` may name `:created_at` and `:updated_at` beside the
+kind's own schema fields. They are not schema entries — they promote no
+`f_` column, they advertise no filter param, and ordering by one runs over
+the engine column the table already carries — so recency is expressible for
+every kind, not only for the ones that happen to carry a timestamp of their
+own. A schema field NAMED `created_at`/`updated_at` refuses at the def site
+(`[sortable]`): one word, one meaning. Naming one also mints its index
+(`ix_<table>_created` / `_updated`) — the migration is additive, and a kind
+that never asked to sort by the clock keeps the fingerprint it always had.
+Recorded punt: on a mirror kind `created_at` is when the LOCAL row was
+minted, not when the authority created the thing.
+
+`:default-filters` is a `{field value}` map applied only when the caller
+named no filter on that field — an ordinary filter the declaration types
+for you. Explicit always beats it: `?state=denied` overrides, `?state=`
+(empty) clears it without re-substituting, and a filter on any other field
+leaves it standing. A default naming a field that is not `:eq`/`:in`
+filterable, or carrying a value the field's schema would refuse, is a
+definition error (`[default-filters]`) — caught at the def site, not at the
+first request.
+
+Because a default filter HIDES rows, it is never allowed to apply
+invisibly. It is advertised on the query action's input (`"default"` on the
+param, exactly as sort's already rides `sort`), spelled into the
+collection's `self` href so the URL a person copies is the view they saw,
+echoed in the envelope's summary (`filtered: state=offered`), and rendered
+by the generic client as an ordinary removable chip whose ✕ sends the param
+EMPTY rather than dropping it. Embedded collections (`embed.<rel>.*`) take
+no default filters — their href is the parent's, and their advertised
+columns drop the `default` the parent will not apply.

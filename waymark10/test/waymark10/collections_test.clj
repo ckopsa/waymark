@@ -10,10 +10,17 @@
   Suite-local kind :visit provokes what the fixtures don't declare:
   int eq/in/range/ne filters, date :after/:before filters, a
   presence (:set) and substring (:contains) filter over a nullable
-  notes field, two sortable fields, and a filterable REF (the meal
-  served) — whose query param must advertise its target, so a filter
-  by reference is a pick from the target's rows and not an id typed
-  from memory."
+  notes field, two sortable fields plus both engine timestamps, and a
+  filterable REF (the meal served) — whose query param must advertise
+  its target, so a filter by reference is a pick from the target's
+  rows and not an id typed from memory.
+
+  Suite-local kind :ask is the collection-defaults kind: it opens
+  newest-first over created_at (a column no schema entry names) and on
+  a declared default filter, so the obligations a hiding default must
+  meet — advertised on the query schema, echoed in the summary,
+  spelled in the self href a person copies, overridable, and clearable
+  with an empty value — are checked here rather than trusted."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -45,11 +52,39 @@
                  :arrives_on #{:eq :range :after :before}
                  :party #{:eq :in :range :ne}
                  :notes #{:ne :set :contains}}
-    :sortable {:fields [:arrives_on :party] :default "arrives_on"}
+    ;; the engine's own timestamps sort beside the promoted fields —
+    ;; neither is a schema entry, and neither promotes a column
+    :sortable {:fields [:arrives_on :party :created_at :updated_at]
+               :default "arrives_on"}
     :actions
     {:finish {:from #{:booked} :to :done
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "A finished visit is history."}}}}))
+
+(def ask
+  "The collection-defaults kind: nothing here is sortable but the
+  engine's clock, and the page opens on the asks still waiting."
+  (r/resource
+   {:kind :ask
+    :plural "asks"
+    :states [:offered :approved :denied]
+    :initial :offered
+    :terminal #{:approved :denied}
+    :summary "{data.topic} · {state}"
+    :schema [:map
+             [:topic [:string {:min 1 :max 60}]]
+             [:owner [:string {:min 1 :max 60}]]]
+    :filterable {:state #{:eq :in}
+                 :owner #{:eq}}
+    :sortable {:fields [:created_at] :default "-created_at"}
+    :default-filters {:state "offered"}
+    :actions
+    {:approve {:from #{:offered} :to :approved
+               :safety {:idempotent true :reversible false :confirm false
+                        :one-way "An approved ask is history."}}
+     :deny {:from #{:offered} :to :denied
+            :safety {:idempotent true :reversible false :confirm false
+                     :one-way "A denied ask stays on record."}}}}))
 
 (def ^:dynamic *h* nil)
 
@@ -61,13 +96,13 @@
       (try
         (store/with-tx st
           (fn [tx]
-            (doseq [table ["meals" "plans" "visits" "definitions"
+            (doseq [table ["meals" "plans" "visits" "asks" "definitions"
                            "waymark10_transitions" "waymark10_idempotency"
                            "waymark10_drafts"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (binding [*h* (engine/handler
                        (engine/engine {:storage st
-                                       :resources [fx/meal fx/plan visit]}))]
+                                       :resources [fx/meal fx/plan visit ask]}))]
           (seed!)
           (f))
         (finally (pg/close! st))))))
@@ -114,6 +149,14 @@
    ["Dee" "2026-07-16" 6 nil]
    ["Eli" "2026-07-18" 3 "window"]])
 
+;; topic, owner, and the verdict (if any) each ask is born with,
+;; oldest first
+(def ask-specs
+  [["Read the ledger" "ana" "approve"]
+   ["Write the ledger" "bo" nil]
+   ["Drop the ledger" "cyd" "deny"]
+   ["Read the roster" "ana" nil]])
+
 ;; the seeded meals by name — the ref filter needs a real target id
 (def ^:private meal-ids (atom {}))
 
@@ -137,7 +180,15 @@
                     (cond-> {:start_date start :weeks 1
                              :days [{:date start :eating_out true}]}
                       conflicts (assoc :calendar_conflicts conflicts)))]
-      (assert (= 201 (:status resp)) (:body resp)))))
+      (assert (= 201 (:status resp)) (:body resp))))
+  ;; asks in a known birth order, two of them judged — the judged ones
+  ;; are what a default filter hides, so the suite can prove they are
+  ;; still reachable
+  (doseq [[topic owner verdict] ask-specs]
+    (let [resp (req :post "/api/asks" {:topic topic :owner owner})]
+      (assert (= 201 (:status resp)) (:body resp))
+      (when verdict
+        (req :post (str "/api/asks/" (id-of resp) "/-/" verdict))))))
 
 ;; ── 1. the envelope shape ───────────────────────────────────────────
 
@@ -277,6 +328,134 @@
   (testing "the declared default orders without a param (plan: -start_date)"
     (let [dates (shown (json (req :get "/api/plans")) :start_date)]
       (is (= (reverse (sort dates)) dates)))))
+
+;; ── 3b. the engine's timestamps sort like any other field ───────────
+
+(defn- guests [b] (mapv #(get-in % [:fields :guest]) (get-in b [:data :items])))
+(defn- topics [b] (mapv #(get-in % [:fields :topic]) (get-in b [:data :items])))
+
+(deftest sortable-timestamps-order-by-the-engine-column
+  (let [birth-order (mapv first visit-specs)]
+    (testing "created_at names no schema field, promotes no column, and
+              still orders both ways — the visits come back in the
+              order they were created, and reversed"
+      (is (= birth-order (guests (json (get-q "/api/visits" "sort=created_at")))))
+      (is (= (reverse birth-order)
+             (guests (json (get-q "/api/visits" "sort=-created_at"))))))
+    (testing "updated_at orders too — untouched rows keep their birth order"
+      (is (= birth-order (guests (json (get-q "/api/visits" "sort=updated_at"))))))
+    (testing "…and a touched row moves to the end of it"
+      (let [id (last (str/split (:self (first (get-in (json (get-q "/api/visits" "sort=created_at"))
+                                                      [:data :items])))
+                                #"/"))]
+        (req :post (str "/api/visits/" id "/-/finish"))
+        (is (= (conj (vec (rest birth-order)) (first birth-order))
+               (guests (json (get-q "/api/visits" "sort=updated_at"))))
+            "Ana was just finished, so her row updated last")))
+    (testing "the sort enum advertises them beside the promoted fields"
+      (let [props (get-in (json (req :get "/api/visits"))
+                          [:actions :query :input :properties])]
+        (is (= ["-arrives_on" "-created_at" "-party" "-updated_at"
+                "arrives_on" "created_at" "party" "updated_at"]
+               (sort (get-in props [:sort :enum]))))
+        (is (nil? (:created_at props))
+            "a sortable timestamp is not a filter param — it has no
+             schema entry to type-check a value against")))))
+
+(deftest a-schema-field-may-not-shadow-an-engine-timestamp
+  (doseq [f [:created_at :updated_at]]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"shadows the engine column"
+         (r/resource
+          {:kind :shadow_probe
+           :states [:booked :done]
+           :initial :booked
+           :terminal #{:done}
+           :summary "{data.guest} · {state}"
+           :schema [:map [:guest [:string {:min 1 :max 60}]]
+                    [f {:optional true} [:maybe :waymark/instant]]]
+           :actions
+           {:finish {:from #{:booked} :to :done
+                     :safety {:idempotent true :reversible false
+                              :confirm false
+                              :one-way "A finished probe is history."}}}}))
+        (str f " must not shadow the engine column"))))
+
+;; ── 3c. default filters: applied, advertised, and escapable ─────────
+
+(deftest default-filter-opens-the-page-and-says-so
+  (let [b (json (req :get "/api/asks"))]
+    (testing "the declared default filters the page"
+      (is (= 2 (get-in b [:data :total])) "two asks are still offered")
+      (is (every? #(= "offered" (:state %)) (get-in b [:data :items]))))
+    (testing "…and the default sort orders it, newest ask first"
+      (is (= ["Read the roster" "Write the ledger"] (topics b))))
+    (testing "the summary echoes the filter it applied"
+      (is (str/includes? (:summary b) "filtered: state=offered")))
+    (testing "self carries the applied filter — the URL a person copies
+              is the view they saw"
+      (is (str/includes? (:self b) "state=offered"))
+      (let [[uri q] (str/split (:self b) #"\?" 2)
+            again (json (get-q uri q))]
+        (is (= (topics b) (topics again)) "and it round-trips to itself")))
+    (testing "the query schema advertises it, exactly as sort's rides sort"
+      (let [props (get-in b [:actions :query :input :properties])]
+        (is (= "offered" (get-in props [:state :default])))
+        (is (= "-created_at" (get-in props [:sort :default])))))))
+
+(deftest explicit-always-beats-the-default
+  (testing "another value on the same field overrides"
+    (let [b (json (get-q "/api/asks" "state=denied"))]
+      (is (= 1 (get-in b [:data :total])))
+      (is (= ["Drop the ledger"] (topics b)))
+      (is (str/includes? (:self b) "state=denied"))
+      (is (not (str/includes? (:self b) "state=offered")))))
+  (testing "an empty value clears the default rather than re-substituting it"
+    (let [b (json (get-q "/api/asks" "state="))]
+      (is (= 4 (get-in b [:data :total])) "every ask, judged or not")
+      (is (not (str/includes? (:summary b) "filtered:"))
+          "nothing was filtered, so nothing is echoed")))
+  (testing "an explicit sort beats the declared default sort"
+    (is (= ["Write the ledger" "Read the roster"]
+           (topics (json (get-q "/api/asks" "state=offered&sort=created_at"))))))
+  (testing "a filter on a DIFFERENT field leaves the default standing"
+    (let [b (json (get-q "/api/asks" "owner=ana"))]
+      (is (= 1 (get-in b [:data :total]))
+          "ana asked twice; one ask is already approved")
+      (is (= ["Read the roster"] (topics b)))
+      (is (str/includes? (:self b) "state=offered")))))
+
+(deftest a-default-filter-the-door-would-refuse-is-a-definition-error
+  (let [probe (fn [defaults]
+                {:kind :default_probe
+                 :states [:offered :done]
+                 :initial :offered
+                 :terminal #{:done}
+                 :summary "{data.topic} · {state}"
+                 :schema [:map [:topic [:string {:min 1 :max 60}]]
+                          [:party [:int {:min 1 :max 20}]]
+                          [:note {:optional true} [:maybe [:string {:max 60}]]]]
+                 :filterable {:state #{:eq :in}
+                              :party #{:eq}
+                              :note #{:contains}}
+                 :default-filters defaults
+                 :actions
+                 {:finish {:from #{:offered} :to :done
+                           :safety {:idempotent true :reversible false
+                                    :confirm false
+                                    :one-way "A finished probe is history."}}}})]
+    (is (some? (r/resource (probe {:state "offered"}))) "the good one stands")
+    (is (some? (r/resource (probe {:state :offered})))
+        "a keyword value is the same law, spelled in Clojure")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is not a state"
+                          (r/resource (probe {:state "pending"}))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"must be an integer"
+                          (r/resource (probe {:party "many"}))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not an :eq/:in-filterable"
+                          (r/resource (probe {:note "ledger"})))
+        "a substring-only field has no equality param to default")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not an :eq/:in-filterable"
+                          (r/resource (probe {:nothing "here"}))))))
 
 ;; ── 4. pagination walks the set exactly once ────────────────────────
 

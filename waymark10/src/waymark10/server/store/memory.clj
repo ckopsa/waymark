@@ -141,11 +141,15 @@
 
 (defn- order-rows
   "search-rows's ordering: the promoted field's value (or state, or
-  created_at), ASC nulls last / DESC nulls first, id tiebreak."
+  either engine timestamp, or created_at), ASC nulls last / DESC nulls
+  first, id tiebreak. The row map spells the timestamps in kebab
+  (:created-at/:updated-at) where the declaration names the column."
   [rows order-by desc]
   (let [keyfn (case order-by
                 nil #(:created-at %)
                 :state #(name (:state %))
+                :created_at #(:created-at %)
+                :updated_at #(:updated-at %)
                 #(sort-value (get-in % [:data order-by])))
         cmp2 (fn [a b]
                (let [ka (keyfn a) kb (keyfn b)

@@ -261,6 +261,50 @@
         (second s)
         s))))
 
+;; ── filter values (one home, two readers) ───────────────────────────
+;; A filter value crosses the wire as text and casts server-side, so
+;; "does this string decode into that field's type" is a question the
+;; REQUEST asks (waymark10.server.collections' query grammar) and the
+;; DECLARATION gate asks (waymark10.checks' :default-filters battery,
+;; which must refuse a default the door would reject). Both readings
+;; live here so the two answers can never drift apart.
+
+(defn leaf-head
+  "The leaf type of a schema form, :maybe/:vector layers and property
+  maps unwrapped: [:vector [:waymark/vocab {:open true}]] →
+  :waymark/vocab."
+  [s]
+  (cond
+    (keyword? s) s
+    (vector? s) (if (#{:maybe :vector} (first s))
+                  (leaf-head (last s))
+                  (first s))
+    :else nil))
+
+(defn- instant-problem [^String raw]
+  (when-not (or (try (OffsetDateTime/parse raw) true (catch Exception _ false))
+                (try (Instant/parse raw) true (catch Exception _ false)))
+    "must be an RFC 3339 date-time"))
+
+(defn filter-value-problem
+  "Decode-check one filter value against a field's schema head → nil
+  when fine, else the per-field error sentence. Values cross to
+  storage as strings and cast server-side, so this refuses only what
+  the cast would choke on — a text field takes any text.
+  head :waymark/instant is also the answer for the strict temporal
+  bounds (_after/_before) over a non-date field."
+  [head ^String raw]
+  (case head
+    :waymark/date (when-not (try (LocalDate/parse raw) true
+                                 (catch Exception _ false))
+                    "must be an ISO date (YYYY-MM-DD)")
+    :waymark/instant (instant-problem raw)
+    :int (when (nil? (parse-long raw)) "must be an integer")
+    (:double :decimal) (when (nil? (parse-double raw)) "must be a number")
+    :boolean (when-not (contains? #{"true" "false"} raw)
+               "must be true or false")
+    nil))
+
 ;; ── the JSON-Schema projection ──────────────────────────────────────
 
 (defn ref-props
