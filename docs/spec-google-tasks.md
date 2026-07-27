@@ -165,8 +165,10 @@ time zeroed and milliseconds present, never a bare date.
   `:member` — resist the temptation until `waymark-z61` decides how addressing
   works.
 - **Creation from the queue.** Capture-to-Google (a task born here, pushed
-  there) is the `create-push` law and is deliberately out of the first cut;
-  `"todo"` remains the capture tag.
+  there) is the `create-push` law and was deliberately out of the first cut;
+  `"todo"` remained the capture tag. **Closed by
+  [spec-gtasks-capture.md](spec-gtasks-capture.md)** — ten visible lists with
+  no way to add to them proved lopsided within a day.
 - **Quotas.** Unmeasured. `maxResults` caps at 100, so a large list is several
   round trips per discover; the incremental cursor is what keeps that bounded.
 
