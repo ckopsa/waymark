@@ -88,6 +88,28 @@ The door already offers both affordances and already refuses when both are
 named (the `one-due` guard); this is its sibling. A midnight `:due_at` is
 indistinguishable from a date and may pass.
 
+## Probed live, 2026-07-26
+
+Against a throwaway list, deleted afterwards:
+
+| question | answer |
+|---|---|
+| does `tasks.insert` return the identity? | **yes** — `id`, `etag` and `webViewLink` in the create response |
+| does `due` survive the insert? | **yes** — sent `2026-08-01T00:00:00.000Z`, echoed identically |
+| does `POST` work against `@default`? | **yes** — so the capture list needs no hard-coded id |
+
+So Google's side of the round trip is honest; the only arithmetic that needed
+fixing was ours (see the write-direction note below).
+
+## The write-direction due, which this spec originally missed
+
+`day-end` stores a day-granular due as the day's **closing** midnight, so "due
+Aug 1" lives as `2026-08-02T00:00:00Z`. Taking that instant's own date sends
+Google Aug 2, and the first pull reads the deadline back a day late — silently,
+and in the opposite direction from the discard this spec does warn about. The
+write translation must step back before taking the date. Caught in review, not
+by this document.
+
 ## Recorded punts
 
 - **Moving a task between lists.** Google has a `move` endpoint; the queue has

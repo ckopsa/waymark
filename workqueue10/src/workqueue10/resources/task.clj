@@ -22,6 +22,17 @@
   authority genuinely unsets no longer clears here (status always
   travels, so the queue's working facts never stale).
 
+  CAPTURE ROUTES ON :source, and the birth door's enum is the list of
+  authorities that take one. Both pocket authorities do now — home
+  assistant on the LAN, google in the phone — and the queue's own
+  engines never will, because a chore run is born of choreplan's law
+  and not of anything typed here. Unsaid still means \"todo\": adding
+  a second capture target must not move anyone who never asked for
+  google. A google birth may name the list it lands in (:task_list,
+  a ref, because lists are rows); the guards below hold the two lines
+  that naming buys — a list belongs to the authority capturing into
+  it, and a due bound for google is a DAY, never a clock time.
+
   Two local writes:
   - complete — marking reality. The post-commit pass pushes it and
     the source boundary translates to the authority's own :complete;
@@ -38,7 +49,7 @@
             [waymark10.guards :as g]
             [waymark10.server.mirror :as mirror]
             [waymark10.types :as t])
-  (:import (java.time LocalDate ZoneOffset)))
+  (:import (java.time Instant LocalDate ZoneOffset)))
 
 ;; a household queue: due times matter within minutes, not seconds
 (def ttl-seconds 300)
@@ -59,6 +70,63 @@
    :explain "Name one due — the day OR the clock time, not both; a day widens to its closing midnight."}
   [_row inp _ctx]
   (if (and (:due_date inp) (:due_at inp))
+    (t/deny)
+    (t/allow)))
+
+(defguardfn list-owned-by-the-capturing-source
+  {:judges [:task_list :source]
+   :reads [:task_list]
+   :vars [:owner :capturing]
+   :explain "That list belongs to {owner} and this capture goes to {capturing} — a task lands in a list its own authority owns, and google's is the door that takes a named one."}
+  [_row inp ctx]
+  ;; naming a list is only expressible because lists became rows, and
+  ;; only MEANINGFUL for the authority whose birth honours it: google
+  ;; reads the named list, home assistant captures into its one
+  ;; configured entity and would ignore the name without saying so.
+  ;; So the pair must agree AND be google's — the alternative is a
+  ;; person picking "Errands" and watching the task land somewhere
+  ;; else, which is the failure mode that looks like nothing at all.
+  (let [capturing (or (:source inp) "todo")]
+    (if-some [ref (:task_list inp)]
+      (if-some [read (:read ctx)]
+        (let [row (read :task_list ref)
+              owner (get-in row [:data :source])]
+          (if (= "gtasks" owner capturing)
+            (t/allow)
+            (t/deny (cond-> {:vars {:owner (or owner "no authority we mirror")
+                                    :capturing capturing}}
+                      (nil? row)
+                      (assoc :errors {:task_list ["task list not found"]})))))
+        (t/allow))
+      (t/allow))))
+
+(defn clock-timed?
+  "Does this instant name a time of DAY? Midnight UTC is how the queue
+  spells a whole day — the closing-midnight law every source's dues
+  widen to — so it reads as a date and nothing more, and only
+  something past midnight is a clock time a person typed."
+  [t]
+  (when (instance? Instant t)
+    (let [^Instant t t]
+      (or (pos? (.getNano t))
+          (not (zero? (mod (.getEpochSecond t) 86400)))))))
+
+(defguardfn day-granular-due-for-google
+  {:judges [:due_at :source]
+   :explain "Google records a due DATE and throws the clock time away, so name the day in due_date instead — a time kept here would be silently rewritten to that day's closing midnight on the next pass."}
+  [_row inp _ctx]
+  ;; THE REFUSAL THAT COSTS SOMETHING, and the reason it is worth it.
+  ;; Google's due field discards the time portion on write, confirmed
+  ;; live: a task created at 14:00 comes back as the bare day. So a
+  ;; clock-timed capture bound for google cannot round-trip — the
+  ;; queue would hold 14:00, google would hold the day, and the next
+  ;; discovery pass would rewrite the local row to the day's closing
+  ;; midnight, moving the deadline ten hours without a word. Accepting
+  ;; it and flooring it here would agree with google and still discard
+  ;; what the person typed, so the door says no and points at the
+  ;; affordance that survives the trip. A midnight :due_at is
+  ;; indistinguishable from a date and passes untouched.
+  (if (and (= "gtasks" (:source inp)) (clock-timed? (:due_at inp)))
     (t/deny)
     (t/allow)))
 
@@ -169,19 +237,35 @@
      ;; CAPTURE: a task born HERE, pushed to the authority that will
      ;; own it (create-push — the paydesk worksheet's door). The birth
      ;; input is deliberately small: what you'd say out loud. :source
-     ;; names the authority; only "todo" takes births (the waymark
-     ;; engines' rows are born of their own law), and unsaid it
-     ;; defaults there — capture should cost one field.
+     ;; names the authority; the two POCKET authorities take births
+     ;; (the waymark engines' rows are born of their own law), and
+     ;; unsaid it still defaults to "todo" — capture should cost one
+     ;; field, and widening the enum must not change meaning for
+     ;; anyone who never asked for google.
+     ;; WHICH LIST A GOOGLE CAPTURE LANDS IN, in two layers: the
+     ;; source's configured default (WORKQUEUE10_GTASKS_CAPTURE, the
+     ;; home assistant precedent), and an optional :task_list ref
+     ;; here that wins when given — expressible only because lists
+     ;; became rows, so the picker labels them by title instead of
+     ;; asking for an opaque google id. Neither, and the birth
+     ;; refuses at the boundary rather than guessing which of ten
+     ;; lists the household meant; that refusal is the source's,
+     ;; because only the source knows what it was configured with.
      ;; TWO DUE AFFORDANCES, ONE CANONICAL FACT: the birth door
      ;; offers a day (:due_date — "sometime Tuesday") and a clock
      ;; time (:due_at); both populate the one :due_at instant the
      ;; law, the sort, and every source compare — a day widens to
      ;; its closing midnight at birth and the input field never
      ;; persists. Naming both refuses (one-due): the door stays
-     ;; honest instead of silently preferring.
+     ;; honest instead of silently preferring. Naming a clock time
+     ;; on a google-bound birth refuses too, and for a harder reason
+     ;; — see day-granular-due-for-google.
      :create-schema [:map
                      [:title [:string {:min 1 :max 200}]]
-                     [:source {:optional true} [:maybe [:enum "todo"]]]
+                     [:source {:optional true} [:maybe [:enum "todo" "gtasks"]]]
+                     [:task_list {:optional true :kind :task_list
+                                  :x-display {:label "List (google only)"}}
+                      [:maybe :waymark/ref]]
                      [:due_at {:optional true
                                :x-display {:label "Due by (clock time)"}}
                       [:maybe :waymark/instant]]
@@ -189,14 +273,28 @@
                                  :x-display {:label "Due day (all day — becomes its closing midnight)"}}
                       [:maybe :waymark/date]]
                      [:detail {:optional true} [:maybe [:string {:max 1000}]]]]
-     :create-guards [one-due]
-     :on-create (fn [row _ctx]
-                  (let [d (get-in row [:data :due_date])]
+     :create-guards [one-due list-owned-by-the-capturing-source
+                     day-granular-due-for-google]
+     :on-create (fn [row ctx]
+                  ;; a named list arrives as the ROW's id and has to
+                  ;; leave as the authority's own key: :list_key is
+                  ;; the field the push exports and the field the
+                  ;; next pull will overwrite with the same value, so
+                  ;; the birth stamps it from the list it points at
+                  ;; and the two spellings agree from the first
+                  ;; second rather than from the first pull.
+                  (let [d (get-in row [:data :due_date])
+                        listed (when-some [ref (get-in row [:data :task_list])]
+                                 (when-some [read (:read ctx)]
+                                   (get-in (read :task_list ref)
+                                           [:data :external_id])))]
                     (-> row
                         (update :data dissoc :due_date)
                         (update-in [:data :due_at] #(or % (some-> d day-end)))
                         (update-in [:data :source] #(or % "todo"))
-                        (update-in [:data :status] #(or % "open")))))
+                        (update-in [:data :status] #(or % "open"))
+                        (cond-> listed
+                          (assoc-in [:data :list_key] listed)))))
      ;; the way BACK to the resource that needs work: an :external
      ;; href — a real browser hop to the owning engine's UI, anchored
      ;; on the row. A source that stamps no href (a fake, a future

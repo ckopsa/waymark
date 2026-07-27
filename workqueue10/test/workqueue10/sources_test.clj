@@ -7,6 +7,7 @@
             [clojure.test :refer [deftest is testing]]
             [workqueue10.confluence :as conf]
             [workqueue10.sources.choreplan :as chores]
+            [workqueue10.sources.gtasks :as gt]
             [workqueue10.sources.homeassistant :as ha]
             [workqueue10.sources.mealplan :as meals]
             [workqueue10.sources.waymark :as wm]
@@ -236,6 +237,43 @@
     (testing "an unregistered tag refuses loudly"
       (is (thrown-with-msg? Exception #"no source registered"
                             (mirror/pull feed "laundry:x-1"))))))
+
+(deftest a-birth-routes-on-its-source-and-carries-the-list-back-down
+  (let [todos (conf/fake-source)
+        gtasks (gt/fake-source {:capture "L-inbox"})
+        feed (conf/confluence {"todo" todos "gtasks" gtasks})]
+    (gt/list! gtasks "L-errands" "Errands")
+
+    (testing "the tag names the authority, and the minted identity
+              comes back namespaced by the same tag it routed on"
+      (let [[xid _] (mirror/push-create feed {:source "gtasks"
+                                              :title "Buy sandpaper"
+                                              :list_key "gtasks:L-errands"})]
+        (is (= ["gtasks" "L-errands"]
+               [(first (conf/split-xid xid))
+                (first (gt/split-id (second (conf/split-xid xid))))])
+            "the queue's spelling of the list went in; the authority's
+             own came out, and the row's external id carries both")))
+
+    (testing "a birth naming no authority refuses before any source
+              hears about it"
+      (is (thrown-with-msg? Exception #"names its :source"
+                            (mirror/push-create feed {:title "Nowhere"}))))
+
+    (testing "a list belonging to ANOTHER authority refuses at the
+              routing seam too — the create door's guard says it in a
+              sentence, this holds the line for anything that reaches
+              here another way"
+      (is (thrown-with-msg? Exception #"cannot land in list"
+                            (mirror/push-create feed
+                                                {:source "gtasks"
+                                                 :title "Buy sandpaper"
+                                                 :list_key "todo:todo.inbox"}))))
+
+    (testing "a source with no list concept is handed no list key"
+      (let [[xid _] (mirror/push-create feed {:source "todo"
+                                              :title "Oil the door hinge"})]
+        (is (= "todo" (first (conf/split-xid xid))))))))
 
 ;; ── the list feed ───────────────────────────────────────────────────
 

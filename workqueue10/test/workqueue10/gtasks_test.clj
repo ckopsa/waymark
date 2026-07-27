@@ -2,8 +2,8 @@
   "The Google Tasks boundary, whole: the translation, the two seams
   the spec warns fail SILENTLY (an etag that cannot see our own
   mapping change, and a list read that hides its deletions), the
-  incremental cursor with its overlap window, and the one push that
-  travels.
+  incremental cursor with its overlap window, the one push that
+  travels, and the birth that comes back with an identity.
 
   No database and no network — the fake stands behind the TRANSPORT,
   so every assertion below runs the real source's paging, path
@@ -348,9 +348,130 @@
     (is (= 404 (:status (ex-data (try (conf/source-push f id {:status "done"})
                                       (catch clojure.lang.ExceptionInfo e e))))))))
 
-(deftest google-tasks-takes-no-births
-  (is (thrown-with-msg? Exception #"takes no births"
-                        (conf/source-create (fake) {:title "Something new"}))))
+;; ── capture ─────────────────────────────────────────────────────────
+
+(defn- posts [f]
+  (filter #(= "POST" (:method %)) (gt/requests f)))
+
+(defn- capturing []
+  (gt/fake-source {:lists list-id :capture list-id}))
+
+(deftest the-write-due-is-the-read-due-run-backwards
+  (testing "the queue holds a due as the day's CLOSING midnight, so
+            the day google should record is the one that midnight
+            closes — the day BEFORE, which is exactly what
+            due->instant reads back as that same midnight"
+    (is (= "2026-07-25T00:00:00.000Z" (gt/instant->due "2026-07-26T00:00:00Z")))
+    (is (= "2026-07-26T00:00:00Z"
+           (gt/due->instant (gt/instant->due "2026-07-26T00:00:00Z")))
+        "the round trip a captured deadline has to survive; without
+         the step back, every captured due would drift a day later on
+         its first pull")
+    (is (nil? (gt/instant->due nil)))
+    (is (nil? (gt/instant->due "")))))
+
+(deftest a-birth-is-one-post-and-two-fields
+  (let [f (capturing)
+        [id etag] (conf/source-create f {:title "Buy sandpaper"
+                                         :detail "120 and 220 grit"
+                                         :due_at "2026-07-26T00:00:00Z"
+                                         :status "open"
+                                         :priority 3})
+        [tasklist taskid] (gt/split-id id)]
+
+    (testing "one POST, and the created task comes back with its id —
+              google needs none of home assistant's snapshot / add /
+              re-read / difference dance, because tasks.insert answers
+              what it made"
+      (is (= 1 (count (posts f))))
+      (is (= list-id tasklist))
+      (is (some? (gt/stored f list-id taskid))
+          "the task really exists at the authority — capture is real"))
+
+    (testing "the identity is the source-local half of the
+              confluence's own grammar: an untagged id would refuse at
+              the routing seam"
+      (is (= (str list-id "/" taskid) id)))
+
+    (testing "the etag is google's, with the translation revision
+              composed on — the same law every read reports"
+      (is (= (str (:etag (gt/stored f list-id taskid))
+                  "|" gt/translation-rev)
+             etag)))
+
+    (testing "title, notes and the DAY travel; the queue's own facts
+              do not — google has no field for a ranking, and a birth
+              is open by construction"
+      (let [body (:body (first (posts f)))]
+        (is (= "Buy sandpaper" (:title body)))
+        (is (= "120 and 220 grit" (:notes body)))
+        (is (= "2026-07-25T00:00:00.000Z" (:due body)))
+        (is (nil? (:status body)))
+        (is (nil? (:priority body)))))
+
+    (testing "…and reading it straight back gives the document the
+              queue started with"
+      (let [doc (doc-of f id)]
+        (is (= "Buy sandpaper" (:title doc)))
+        (is (= "open" (:status doc)))
+        (is (= "2026-07-26T00:00:00Z" (:due_at doc))
+            "the due survived the trip through a date-only field")
+        (is (= list-id (:list_key doc)))))))
+
+(deftest a-birth-says-only-what-it-has
+  (let [f (capturing)
+        [id _] (conf/source-create f {:title "Oil the door hinge"})
+        body (:body (first (posts f)))]
+    (is (= {:title "Oil the door hinge"} body)
+        "no notes, no due — an empty string would be a fact google
+         then keeps")
+    (is (nil? (:due_at (doc-of f id))))))
+
+(deftest the-named-list-wins-and-the-configured-one-catches-the-rest
+  (let [f (gt/fake-source {:capture "L-inbox"})]
+    (gt/list! f "L-errands" "Errands")
+
+    (testing "a birth that names its list lands there"
+      (let [[id _] (conf/source-create f {:title "Buy sandpaper"
+                                          :list_key "L-errands"})]
+        (is (= "L-errands" (first (gt/split-id id))))))
+
+    (testing "…and one that names none lands in the configured
+              default — the home assistant precedent, one field of
+              capture"
+      (let [[id _] (conf/source-create f {:title "Oil the door hinge"})]
+        (is (= "L-inbox" (first (gt/split-id id))))))))
+
+(deftest a-capture-with-nowhere-to-land-refuses-rather-than-guessing
+  (let [f (gt/fake-source)]                 ; no capture list configured
+    (gt/list! f "L-errands" "Errands")
+    (is (thrown-with-msg? Exception #"no google list to capture into"
+                          (conf/source-create f {:title "Buy sandpaper"}))
+        "ten lists and no default is not a reason to pick one — the
+         birth lands conflicted with no external id, and a person
+         names a list or configures one")))
+
+(deftest a-list-deleted-under-the-push-is-the-conflicted-landing
+  (let [f (capturing)]
+    (gt/drop-list! f list-id)
+    (is (thrown? Exception (conf/source-create f {:title "Buy sandpaper"}))
+        "the POST fails, the row lands conflicted with NO external id,
+         and keep=local retries against a list that is still gone —
+         the law's own path, no machinery of ours")))
+
+(deftest a-claimed-birth-is-not-re-minted-by-the-next-pass
+  ;; THE DUPLICATE-BIRTH TRAP: the id a capture claims must be exactly
+  ;; the id discovery will name, or every pass mints a second row for
+  ;; the same google task and the household sees its own capture twice
+  (let [f (capturing)
+        [id _] (conf/source-create f {:title "Buy sandpaper"})
+        seen (conf/source-discover f)]
+    (is (= [id] seen)
+        "discovery names the newborn exactly once, under exactly the
+         id claim_external stamped — the engine's unknown-id diff does
+         the rest")
+    (is (= [id] (conf/source-discover f))
+        "…and again on the next pass, still once")))
 
 ;; ── the lists ───────────────────────────────────────────────────────
 

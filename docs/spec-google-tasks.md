@@ -136,11 +136,15 @@ time zeroed and milliseconds present, never a bare date.
 
 ## Prerequisites
 
-1. **A refresh token with the Tasks scope.** The stored one was minted for
-   calendar alone. `scripts/gcal-refresh-token.sh` needs its `SCOPE` to become
-   an argument (space-separated scopes), and the household must re-consent once
-   to mint a token covering both. This is an operator step, not a code step,
-   and it is the only thing here that cannot be done from a keyboard alone.
+1. ~~**A refresh token with the Tasks scope.**~~ **DONE 2026-07-26.**
+   `scripts/gcal-refresh-token.sh` now takes scopes as arguments (and falls
+   back to the stored client pair), the household re-consented once, and the
+   stored `calendar10_google_refresh_token` covers `calendar + tasks`. It is
+   live in the nomad var and in production. The key name still says
+   `calendar10` because that is what terraform declares — a misnomer, not a
+   second secret. Left here struck through rather than deleted: an agent read
+   this section while it still said "outstanding" and reported the scope as
+   unverified when it had in fact been live for hours.
 2. A nomad var for the new refresh token, and the `WORKQUEUE10_GTASKS_*` env
    trio matching the existing source conventions.
 3. ~~A configured list set (`WORKQUEUE10_GTASKS_LISTS`), mirroring HA's

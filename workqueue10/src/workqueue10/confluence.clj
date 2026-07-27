@@ -226,6 +226,26 @@
 
 (defn- stamp-list [tag doc] (assoc doc :source tag))
 
+(defn- unstamp-list-key
+  "stamp-task, run backwards, for the one direction a document travels
+  OUT: a birth names the list it should land in the way the queue
+  spells it (\"gtasks:MTIzNA\" — the :task_list row's own external
+  id), and the source that will honour it only knows its authority's
+  half. A key tagged for ANOTHER authority refuses here rather than
+  being handed over: the create door's guard says the same thing in a
+  sentence a person reads, and this is the routing seam holding the
+  line for anything that reaches it another way."
+  [tag doc]
+  (if (str/blank? (str (:list_key doc)))
+    doc
+    (let [[key-tag id] (split-xid (:list_key doc))]
+      (when-not (= key-tag tag)
+        (throw (ex-info (str "a " tag " capture cannot land in list "
+                             (pr-str (str (:list_key doc))) " — that list is "
+                             key-tag "'s")
+                        {})))
+      (assoc doc :list_key id))))
+
 (defrecord ConfluenceFeed [sources]
   mirror/MirrorAdapter
   (discover [_] (fan-discover sources "task" source-discover))
@@ -243,12 +263,15 @@
   (push-create [_ document]
     ;; a birth names its authority in :source (the create-schema's
     ;; law); the tagged source mints the identity and the confluence
-    ;; namespaces it — the same routing every other verb rides
+    ;; namespaces it — the same routing every other verb rides. The
+    ;; list a birth names travels the same way in reverse: the queue's
+    ;; spelling goes in, the authority's own comes back out.
     (let [tag (:source document)
           _ (when (str/blank? (str tag))
               (throw (ex-info "a captured task names its :source — no authority, no birth" {})))
           [id etag] (source-create (source-for sources tag)
-                                   (dissoc document :source))]
+                                   (unstamp-list-key
+                                    tag (dissoc document :source)))]
       [(xid tag id) etag])))
 
 (defn confluence

@@ -22,10 +22,11 @@
   long-lived token, the browser-facing base for origin links, the
   comma-separated todo entity ids, the zone naive due datetimes
   parse in), WORKQUEUE10_GTASKS_CLIENT_ID / _CLIENT_SECRET /
-  _REFRESH_TOKEN / _LISTS (the google tasks boundary: an OAuth
-  refresh token carrying the tasks scope — the calendar's token does
-  NOT — and the comma-separated task list ids to mirror, EVERY list
-  the account has when unsaid), WAYMARK10_DEPLOY_MODE,
+  _REFRESH_TOKEN / _LISTS / _CAPTURE (the google tasks boundary: an
+  OAuth refresh token carrying the tasks scope — the calendar's token
+  does NOT — the comma-separated task list ids to mirror, EVERY list
+  the account has when unsaid, and the list a capture lands in when
+  the birth names none), WAYMARK10_DEPLOY_MODE,
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan), WAYMARK10_OIDC_* (the family
   IdP — waymark10.server.oidc/from-env names them; absent = the
@@ -71,8 +72,12 @@
 (defonce fake-gtasks
   ;; google tasks gets its OWN twin rather than conf/fake-source: the
   ;; source is the queue's first cursor-bearing feed, and a fake that
-  ;; stands behind the transport runs that cursor for real
-  (gtasks/fake-source))
+  ;; stands behind the transport runs that cursor for real. It is
+  ;; given a capture list because offline dev should be able to WRITE
+  ;; the google half too, and "@default" is google's own spelling of
+  ;; the account's own list — the fake creates it, so a birth that
+  ;; names no list lands somewhere instead of 404ing into conflicted.
+  (gtasks/fake-source {:capture "@default"}))
 
 (defonce engine-ref
   ;; the stage-1 fold's late binding: in-process sources need the

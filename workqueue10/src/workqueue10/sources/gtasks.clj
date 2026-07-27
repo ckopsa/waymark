@@ -98,6 +98,24 @@
   through this source throws, which is exactly the shape an
   un-mintable credential should have.
 
+  CAPTURE IS ONE POST, and it is easier here than anywhere else the
+  queue writes. Home Assistant's birth has to snapshot the list, add
+  the item, re-read the list and difference, because todo/add_item
+  answers nothing; Google's POST /lists/<id>/tasks answers the created
+  task with its id and its etag, so push-create is one call and two
+  fields with no ambiguity window to lose a race in. The list a
+  capture lands in is the birth's own :list_key when the door named
+  one (the confluence hands it over source-local) and the configured
+  capture list otherwise; neither, and the birth refuses rather than
+  guessing which of ten lists the household meant. A list deleted
+  upstream between the pick and the POST fails the call, which is the
+  create-push law's own path: the row lands conflicted with NO
+  external id, and resolve_conflict keep=local retries — against a
+  list that is still gone, so the person picks another one. Only
+  title, notes and due travel; :status is not sent because a birth is
+  open by construction, and :priority is the queue's own ranking that
+  Google has no field for.
+
   PUNTS, recorded. Subtasks flatten: Google's parent/position express
   a hierarchy the canonical task doc has no room for, so a subtask
   becomes a task with its parent's title prefixed into :detail, and
@@ -107,9 +125,13 @@
   Ordering is dropped rather than half-honoured — position is Google's
   manual sort and the queue ranks by its own :priority and due date.
   assignmentInfo and links are ignored, and Google's notion of
-  assignment deliberately does NOT become a :member. Nothing is born
-  here: capture-to-Google is the create-push law, out of this cut, and
-  \"todo\" remains the capture tag."
+  assignment deliberately does NOT become a :member. A capture is
+  always top-level and always at Google's default position, and moving
+  a task between lists is out of scope entirely: Google publishes a
+  move endpoint, the queue has no verb for it, and the list is settled
+  at birth and by the authority thereafter. Editing a captured task's
+  title or notes from the queue is not a channel either — push carries
+  Done and nothing else, per the shared push-plan; capture is a birth."
   (:require [calendar10.oauth :as oauth]
             [clojure.string :as str]
             [workqueue10.confluence :as conf]
@@ -119,7 +141,7 @@
                           HttpRequest$BodyPublishers HttpRequest$Builder
                           HttpResponse$BodyHandlers)
            (java.nio.charset StandardCharsets)
-           (java.time Duration Instant LocalDate)
+           (java.time Duration Instant LocalDate ZoneOffset)
            (java.time.format DateTimeParseException)))
 
 (set! *warn-on-reflection* true)
@@ -162,6 +184,26 @@
               "T00:00:00Z")
          (catch DateTimeParseException _ nil)
          (catch StringIndexOutOfBoundsException _ nil))))
+
+(defn instant->due
+  "The canonical instant → Google's due, the read translation run
+  backwards. The queue holds a due as the day's CLOSING midnight, so
+  the day to record is the one the instant closes rather than the one
+  it starts: a hair before midnight on the 24th is still the 23rd, and
+  the 23rd is exactly what due->instant will read back as the 24th's
+  midnight. Without that step every captured due would drift a day
+  later on its first pull. A clock-timed instant floors to its own
+  day, which is arithmetic rather than truth — the create door refuses
+  those before they reach here, because agreeing with Google by
+  quietly discarding what a person typed is the thing this source will
+  not do. An unparseable instant throws rather than dropping the due:
+  a birth that lands conflicted can be retried, a birth that silently
+  loses its deadline cannot be noticed."
+  [due-at]
+  (when-not (str/blank? (str due-at))
+    (let [^Instant t (Instant/parse (str due-at))]
+      (str (.toLocalDate (.atOffset (.minusNanos t 1) ZoneOffset/UTC))
+           "T00:00:00.000Z"))))
 
 (defn task->doc
   "One Google task → the canonical task doc. parent-title is the
@@ -388,7 +430,7 @@
   [base tasklist doc]
   (assoc doc :source_href (str base (list-path tasklist))))
 
-(defrecord GoogleTasksSource [call base lists cursor]
+(defrecord GoogleTasksSource [call base lists capture-list cursor]
   conf/TaskSource
   (source-discover [this]
     (let [since (updated-min @cursor)
@@ -473,11 +515,34 @@
                              :if-match (:etag current)})]
           (rev-etag (:etag updated))))))
 
-  (source-create [_ _document]
-    (throw (ex-info (str "google tasks takes no births from the queue — "
-                         "capture-to-google is the create-push law and "
-                         "\"todo\" is the capture tag")
-                    {})))
+  (source-create [_ document]
+    ;; THE ONE-POST BIRTH: tasks.insert answers the created task with
+    ;; its id and etag, so nothing has to be differenced and nothing
+    ;; races. A failure here — a list deleted upstream, a credential
+    ;; that will not mint — throws, and the create-push law lands the
+    ;; row conflicted with no external id for a person to resolve.
+    (let [tasklist (or (some-> (:list_key document) str not-empty)
+                       (some-> capture-list str not-empty)
+                       (throw (ex-info (str "no google list to capture into — "
+                                            "name one on the birth or set "
+                                            "WORKQUEUE10_GTASKS_CAPTURE")
+                                       {})))
+          body (cond-> {:title (:title document)}
+                 (not (str/blank? (str (:detail document))))
+                 (assoc :notes (:detail document))
+                 ;; a due travels as the DAY it closes; the door has
+                 ;; already refused anything with a clock time on it
+                 (not (str/blank? (str (:due_at document))))
+                 (assoc :due (instant->due (:due_at document))))
+          created (call "POST" (tasks-path tasklist) {:body body})]
+      (when (str/blank? (str (:id created)))
+        ;; the identity is the whole point of a create push: an
+        ;; unnamed birth must stay unclaimed rather than claim
+        ;; "tasklist/" and route nowhere forever
+        (throw (ex-info (str "google accepted the task in " tasklist
+                             " and named no id — the birth stays unclaimed")
+                        {})))
+      [(join-id tasklist (:id created)) (rev-etag (:etag created))]))
 
   conf/TaskListSource
   (list-discover [this] (list-ids! this))
@@ -521,19 +586,26 @@
   config: :token-fn (a zero-arg access-token source —
   calendar10.oauth/access-token-fn over a refresh token carrying the
   tasks scope), :lists (the task list ids to mirror, comma-separated
-  string or seq — every list the account has when unsaid), :base (the
+  string or seq — every list the account has when unsaid),
+  :capture-list (the list a birth lands in when the door named none —
+  unset, only a birth that names its own list is taken), :base (the
   API base, for tests that want a local server)."
-  [{:keys [token-fn lists base]}]
+  [{:keys [token-fn lists capture-list base]}]
   (->GoogleTasksSource (http-call {:token-fn token-fn :base base})
                        (str/replace (str (or base api-base)) #"/+$" "")
                        (parse-lists lists)
+                       capture-list
                        (atom nil)))
 
 (defn from-env
   "The deployed boundary off WORKQUEUE10_GTASKS_CLIENT_ID /
-  _CLIENT_SECRET / _REFRESH_TOKEN / _LISTS. nil when the credential is
-  not configured, which is offline dev's cue to use the fake — the
-  same nil-means-absent contract calendar10.source/from-env keeps.
+  _CLIENT_SECRET / _REFRESH_TOKEN / _LISTS / _CAPTURE. nil when the
+  credential is not configured, which is offline dev's cue to use the
+  fake — the same nil-means-absent contract
+  calendar10.source/from-env keeps. _CAPTURE names the default list a
+  birth lands in, the WORKQUEUE10_HA_CAPTURE precedent exactly; unset
+  is not an error, it only means a google capture has to name its own
+  list at the door.
 
   A configured-but-unscoped refresh token does NOT come back nil: it
   mints, Google refuses the tasks call, and the source reads as
@@ -546,7 +618,8 @@
                           :client-secret (env "WORKQUEUE10_GTASKS_CLIENT_SECRET")
                           :refresh-token (env "WORKQUEUE10_GTASKS_REFRESH_TOKEN")})]
      (http-source {:token-fn token-fn
-                   :lists (env "WORKQUEUE10_GTASKS_LISTS")}))))
+                   :lists (env "WORKQUEUE10_GTASKS_LISTS")
+                   :capture-list (env "WORKQUEUE10_GTASKS_CAPTURE")}))))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 ;;
@@ -663,6 +736,39 @@
           (case [method (some? taskid)]
             ["GET" false] (fake-list state tasklist params)
 
+            ;; tasks.insert, and the reason capture needs no
+            ;; differencing dance: the created task comes BACK, id and
+            ;; etag included, exactly as the live API answered during
+            ;; the probe. A list google has never heard of refuses —
+            ;; the household deleted it between the pick and the push,
+            ;; and that is the conflicted landing the law describes.
+            ["POST" false]
+            (let [entry (get-in @state [:lists tasklist])]
+              (when (nil? entry)
+                (throw (ex-info (str "no task list " (pr-str tasklist))
+                                {:status 404})))
+              (let [rev (:rev (swap! state update :rev inc))
+                    stamp (tick! state)
+                    id (str "g-" rev)
+                    task (cond-> (merge {:status "needsAction"}
+                                        (select-keys body [:title :notes :due])
+                                        {:id id
+                                         :updated stamp
+                                         :etag (str "\"gt-" rev "\"")
+                                         :webViewLink
+                                         (str "https://tasks.google.com/task/"
+                                              id)})
+                           ;; "the time portion of the timestamp is
+                           ;; discarded when setting this field" —
+                           ;; modelled here so a source that sent a
+                           ;; clock time fails a test rather than
+                           ;; losing ten hours in production
+                           (not (str/blank? (str (:due body))))
+                           (assoc :due (str (subs (str (:due body)) 0 10)
+                                            "T00:00:00.000Z")))]
+                (swap! state assoc-in [:lists tasklist :tasks id] task)
+                task))
+
             ["GET" true]
             (or (get-in @state [:lists tasklist :tasks taskid])
                 (throw (ex-info (str "no task " taskid " in " tasklist)
@@ -716,19 +822,26 @@
 (defn fake-source
   "Google Tasks in memory: the real source over a scriptable Google.
   config: :lists (the list ids it mirrors — every list in the fake
-  inventory when unsaid, the real source's own all-lists posture).
-  Named lists are created empty so a narrowed source finds them;
-  otherwise the inventory starts bare and seed! / list! fill it.
-  Script it with list! / seed! / complete! / delete! / clear! /
-  purge! / down!, and read it back with requests / stored / cursor."
+  inventory when unsaid, the real source's own all-lists posture),
+  :capture (the list a birth lands in when the door named none).
+  Named lists are created empty so a narrowed source finds them, and
+  so is the capture list — a POST to a list google never heard of is
+  a 404, and a test about where a birth LANDS should not have to be a
+  test about inventory; otherwise the inventory starts bare and
+  seed! / list! fill it. Script it with list! / seed! / complete! /
+  delete! / clear! / purge! / down!, and read it back with
+  requests / stored / cursor."
   ([] (fake-source {}))
-  ([{:keys [lists]}]
+  ([{:keys [lists capture]}]
    (let [state (atom fresh-state)
          ids (parse-lists lists)]
-     (doseq [id ids] (put-list! state id id))
+     (doseq [id (distinct (concat ids (when-not (str/blank? (str capture))
+                                        [capture])))]
+       (put-list! state id id))
      (->FakeGoogleTasks
       state
-      (->GoogleTasksSource (fake-call state) api-base ids (atom nil))))))
+      (->GoogleTasksSource (fake-call state) api-base ids capture
+                           (atom nil))))))
 
 (defn list!
   "Name a list in the fake inventory (creating it if new) — the twin

@@ -11,7 +11,10 @@
   to whichever engine owns the row → a task dropped upstream refuses
   with the guard's sentence → a refused push lands conflicted and
   resolve_conflict keep=local pushes it clean → a down source
-  degrades per-source, never queue-wide.
+  degrades per-source, never queue-wide → and a task born HERE pushes
+  out to whichever pocket authority it names, google's included,
+  landing in the list it was told to land in and claiming back the
+  identity that keeps the next discovery pass from minting it twice.
 
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.string :as str]
@@ -21,6 +24,7 @@
             [next.jdbc :as jdbc]
             [workqueue10.confluence :as conf]
             [workqueue10.main :as main]
+            [workqueue10.sources.gtasks :as gt]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.store :as store]
@@ -47,6 +51,7 @@
 (def ^:dynamic *chores* nil)
 (def ^:dynamic *meals* nil)
 (def ^:dynamic *todos* nil)
+(def ^:dynamic *gtasks* nil)
 (def ^:dynamic *clock* nil)
 
 (use-fixtures :once
@@ -55,6 +60,13 @@
           chores (conf/fake-source)
           meals (conf/fake-source)
           todos (conf/fake-source)
+          ;; google gets its own twin (the one that stands behind the
+          ;; TRANSPORT), and no capture list: the google half of this
+          ;; story is a birth that NAMES its list, which is the path
+          ;; only the list-as-a-row work made expressible. Its
+          ;; inventory starts bare so the list feed's own scene below
+          ;; still counts what it means to count.
+          gtasks (gt/fake-source)
           clock (atom (Instant/parse "2026-07-21T08:00:00Z"))]
       (try
         (store/with-tx st
@@ -68,7 +80,7 @@
                    (engine/engine {:storage st
                                    :resources (main/resources
                                                {"chore" chores "meal" meals
-                                                "todo" todos}
+                                                "todo" todos "gtasks" gtasks}
                                                (gcal/fake-calendar))
                                    :now-fn (fn [] @clock)}))]
           (binding [*eng* eng
@@ -76,6 +88,7 @@
                     *chores* chores
                     *meals* meals
                     *todos* todos
+                    *gtasks* gtasks
                     *clock* clock]
             (f)))
         (finally (pg/close! st))))))
@@ -138,6 +151,18 @@
 
 (defn- source-status [fake id]
   (get-in @(:state fake) [:docs id :status]))
+
+(defn- id-of
+  "The row id behind an envelope's :self — what a :waymark/ref holds."
+  [env]
+  (last (str/split (str (:self env)) #"/")))
+
+(defn- list-by-title [title]
+  (let [resp (req :get "/api/task_lists")]
+    (is (= 200 (:status resp)) (:body resp))
+    (or (first (filter #(str/includes? (str (:summary %)) title)
+                       (get-in (json resp) [:data :items])))
+        (throw (ex-info (str "no task list titled " title) {})))))
 
 ;; ── the story ───────────────────────────────────────────────────────
 
@@ -446,6 +471,98 @@
       (is (= 409 (:status resp)))
       (is (= "Name one due — the day OR the clock time, not both; a day widens to its closing midnight."
              (:detail (json resp))))))
+
+  (testing "CAPTURE TO GOOGLE: the second pocket authority takes
+            births too — routed by the same tag, landing in a list
+            named at the door, its identity claimed back"
+    ;; the household's google list arrives the ordinary way first: a
+    ;; row, discovered, before anything can point at it
+    (gt/list! *gtasks* "L-errands" "Errands")
+    (is (= 1 (mirror/discover! *eng* :task_list)))
+    (let [errands (id-of (list-by-title "Errands"))
+          woodworking (id-of (list-by-title "Woodworking"))
+          resp (req :post "/api/tasks"
+                    {:title "Buy sandpaper" :source "gtasks"
+                     :task_list errands :due_date "2026-07-25"}
+                    {"idempotency-key" (str (random-uuid))})
+          env (json resp)]
+      (is (contains? #{200 201} (:status resp)) (:body resp))
+      (is (= "fresh" (:state env)))
+      (is (= "gtasks" (get-in env [:data :source])))
+      (is (= "gtasks:L-errands" (get-in env [:data :list_key]))
+          "the birth stamped the authority's own key from the list row
+           it points at — the two spellings agree from the first
+           second, not from the first pull")
+
+      (let [xid (get-in env [:data :external_id])
+            [tasklist taskid] (gt/split-id (second (str/split (str xid) #":" 2)))]
+        (is (str/starts-with? (str xid) "gtasks:L-errands/")
+            "google minted, claim_external stamped — and the id
+             carries the confluence's tag grammar, without which it
+             would refuse at the routing seam")
+        (let [task (gt/stored *gtasks* tasklist taskid)]
+          (is (= "Buy sandpaper" (:title task))
+              "the task exists in google — capture is real")
+          (is (= "2026-07-25T00:00:00.000Z" (:due task))
+              "the day the person named, in the date-only field google
+               keeps — the closing-midnight instant stepped back to
+               the day it closes")))
+
+      (testing "…and the next discovery pass does NOT mint it again —
+                the id a capture claimed is exactly the id discovery
+                names, or the household would watch its own capture
+                appear twice"
+        (let [before (count (items-of "?source=gtasks"))]
+          (is (= 1 before))
+          (is (zero? (mirror/discover! *eng* :task)))
+          (is (= before (count (items-of "?source=gtasks"))))))
+
+      (testing "a clock time bound for google refuses and names the
+                remedy: google keeps the DAY and discards the hour, so
+                accepting 21:00 would mean the next pass silently
+                rewrote it to the day's closing midnight"
+        (let [refused (req :post "/api/tasks"
+                           {:title "Call the plumber" :source "gtasks"
+                            :task_list errands
+                            :due_at "2026-07-25T21:00:00Z"}
+                           {"idempotency-key" (str (random-uuid))})]
+          (is (= 409 (:status refused)))
+          (is (= (str "Google records a due DATE and throws the clock "
+                      "time away, so name the day in due_date instead — "
+                      "a time kept here would be silently rewritten to "
+                      "that day's closing midnight on the next pass.")
+                 (:detail (json refused))))))
+
+      (testing "…while a MIDNIGHT due_at is indistinguishable from a
+                date and passes untouched"
+        (let [ok (req :post "/api/tasks"
+                      {:title "Return the drill" :source "gtasks"
+                       :task_list errands :due_at "2026-07-26T00:00:00Z"}
+                      {"idempotency-key" (str (random-uuid))})]
+          (is (contains? #{200 201} (:status ok)) (:body ok))
+          (is (= "2026-07-26T00:00:00Z" (get-in (json ok) [:data :due_at])))))
+
+      (testing "capturing into another authority's list is a category
+                error, and the refusal says whose list it is"
+        (let [refused (req :post "/api/tasks"
+                           {:title "Wrong door" :source "gtasks"
+                            :task_list woodworking}
+                           {"idempotency-key" (str (random-uuid))})]
+          (is (= 409 (:status refused)))
+          (is (= (str "That list belongs to todo and this capture goes "
+                      "to gtasks — a task lands in a list its own "
+                      "authority owns, and google's is the door that "
+                      "takes a named one.")
+                 (:detail (json refused)))))
+        (testing "…in both directions: naming a google list on a todo
+                  capture would be silently ignored by a source that
+                  captures into its one configured entity"
+          (let [refused (req :post "/api/tasks"
+                             {:title "Wrong door again" :task_list errands}
+                             {"idempotency-key" (str (random-uuid))})]
+            (is (= 409 (:status refused)))
+            (is (str/includes? (str (:detail (json refused)))
+                               "That list belongs to gtasks and this capture goes to todo")))))))
 
   (testing "the waymark engines take no births — the schema refuses at
             the door, before any push"
