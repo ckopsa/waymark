@@ -612,9 +612,9 @@
   (str "#" (subs (wire/sha256-hex
                   (str (or (get-in eng [:services :field-hash-salt])
                            "waymark10-field-hash")
-                       " " (name kind)
-                       " " (name field)
-                       " " (pr-str value)))
+                       "\u0000" (name kind)
+                       "\u0000" (name field)
+                       "\u0000" (pr-str value)))
                  0 16)))
 
 (defn- required-arg-names
