@@ -96,7 +96,7 @@ reviews are a different feature wearing this one's coat; see punts.
 
 | authority | media | position fact | change feed | note |
 |---|---|---|---|---|
-| Jellyfin | movie, show | playback ticks / runtime | no (poll) | speaks tmdb/tvdb ids → `:work_key` free |
+| ~~Jellyfin~~ **flickr** | movie, show | per-audience, pre-derived | **yes** — cursored | the household's own engine superseded Jellyfin; verified live — see [`spec-media-flickr.md`](spec-media-flickr.md) |
 | Trakt | movie, show | watched history, watchlist | **yes** — `/sync/last_activities` | the second `waymark-8si` feed; watchlist accepts writes → `create-push` candidate |
 | Audiobookshelf | audiobook | seconds / duration | no (poll) | progress API is read-write; `finish` pushes |
 | Komga / Kavita | comic | page / pages per book | no (poll) | series-vs-issue is the hierarchy punt, again |
