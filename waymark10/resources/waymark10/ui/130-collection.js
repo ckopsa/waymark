@@ -105,6 +105,14 @@ function showcaseFilters(query, params, apply, hints) {
   const cols = Object.values(gc).filter(c =>
     Object.keys(c.ops).length && xdisplay(hints, c.field).showcase);
   if (!cols.length) return null;
+  /* a numeric showcase is a SEAT: {:x-display {:showcase 2}} stands
+     second. Plain true keeps the emitted (alphabetical) order, after
+     every numbered seat — sort is stable, ties keep their place. */
+  const seat = c => {
+    const s = xdisplay(hints, c.field).showcase;
+    return typeof s === "number" ? s : Number.MAX_SAFE_INTEGER;
+  };
+  cols.sort((a, b) => seat(a) - seat(b));
   const input = (name, col, ph) => {
     const i = el("input", {
       type: col.format === "date" ? "date"
