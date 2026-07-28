@@ -561,8 +561,13 @@
           parts (map cond-sql conds)
           expr (cond
                  (= :state field) "state"
-                 array? (str "jsonb_array_elements_text(data->'"
-                             (store/definition-checked-name field) "')")
+                 ;; rows without the array carry JSON null (a scalar —
+                 ;; jsonb_array_elements_text refuses it); they count
+                 ;; toward no facet value, exactly like a scalar NULL
+                 array? (let [f (store/definition-checked-name field)]
+                          (str "jsonb_array_elements_text(CASE WHEN"
+                               " jsonb_typeof(data->'" f "') = 'array'"
+                               " THEN data->'" f "' ELSE '[]'::jsonb END)"))
                  :else (str "data->>'"
                             (store/definition-checked-name field) "'"))
           sql (str "SELECT " expr " AS v, count(*) AS n FROM " table
