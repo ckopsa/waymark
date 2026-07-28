@@ -145,6 +145,22 @@ function showcaseFilters(query, params, apply, hints) {
       s.value = active;
       s.addEventListener("change", () => apply({[f]: s.value}));
       body = [s];
+      /* past a scrollable handful a select is a haystack — the same
+         judgement (and the same widget) as the form ref pickers:
+         comboUpgrade fronts the select with a type-to-filter input;
+         picking writes through and fires the change listener above,
+         so the filter applies exactly as a select pick would. "All"
+         rides as a pickable entry — its empty value clears the param.
+         The select needs a parent BEFORE the upgrade: comboUpgrade
+         inserts via select.after(), a silent no-op on a detached
+         node (the form pickers upgrade in-dialog, already attached) */
+      if (options.length > 20) {
+        const entries = [["", "All"],
+          ...options.map(v => [v, pretty(v) + (v in counts ? ` · ${counts[v]}` : "")])];
+        const holder = el("span", {}, s);
+        comboUpgrade(s, entries, active || null);
+        body = [holder];
+      }
     } else if (col.ops.gte || col.ops.lte) {
       body = [input(f + "_gte", col, "min"), "–", input(f + "_lte", col, "max")];
     } else if (col.ops.after) {

@@ -291,4 +291,9 @@
                      white-space: nowrap; }
   .showcase-filter select, .showcase-filter input { font-size: 12px; }
   .showcase-filter input { width: 110px; }
+  /* a combobox-upgraded showcase select: the input fills the combo's
+     box (the bare 110px width above would leave the rest as dead
+     space), and the box itself sizes for names, not sentences */
+  .showcase-filter .combo { min-width: 200px; }
+  .showcase-filter .combo input { width: 100%; }
 
