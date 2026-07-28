@@ -114,8 +114,8 @@
         domains (set (:domains well-known))]
     (is (contains? domains "calendar")
         (str "the well-known's domains: " (pr-str domains)))
-    (testing "and it joins the three that were already there"
-      (is (= #{"queue" "chores" "meals" "calendar"} domains)))))
+    (testing "and it joins the domains that were already there"
+      (is (= #{"queue" "media" "chores" "meals" "calendar"} domains)))))
 
 ;; ── the birth: scheduling onto the family calendar ──────────────────
 

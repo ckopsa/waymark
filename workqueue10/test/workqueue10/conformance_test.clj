@@ -49,7 +49,7 @@
   ;; declares, chore and meal included, so a fixture that drops only
   ;; "tasks" boots into whatever shape another suite left behind —
   ;; a promoted column added to a folded kind refuses at boot
-  ["tasks" "task_lists" "chores" "chore_runs" "days"
+  ["tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "members" "roles" "grants" "approval_requests"
@@ -80,7 +80,7 @@
             (f)))
         (finally (pg/close! st))))))
 
-(def kinds [:task :task_list])
+(def kinds [:task :task_list :media])
 
 ;; ── the enrollment ──────────────────────────────────────────────────
 
@@ -111,6 +111,27 @@
 
 (fac/example-input! :task_list :observe_external
   {:document {:title "Woodworking" :source "gtasks"}
+   :etag "conformance-etag-1"})
+
+;; :media is the SECOND confluence's kind and registers the same
+;; :create-push pair the task does: the walker's captures are hub
+;; births (main's noop hub source mints the identity claim_external
+;; stamps back — spec-media.md's shape 1), and the observed document
+;; is the flickr addendum's verified live shape, wire-shaped
+(fac/example-input! :media :create
+  (fn [_] {:title (str "walked queue " (random-uuid)) :medium "movie"}))
+
+(fac/example-input! :media :observe_external
+  {:document {:title "12 Angry Men"
+              :medium "movie"
+              :status "active"
+              :year 1957
+              :progress 0.0137M
+              :progress_text "1:19"
+              :work_key "movie:12-angry-men-1957"
+              :audience_name "Colton"
+              :source "flickr"
+              :source_ui_href "https://stream.kopsa.info/#/item/51"}
    :etag "conformance-etag-1"})
 
 ;; ── request sugar (the conformance-http pattern) ────────────────────

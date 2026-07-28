@@ -26,7 +26,10 @@
   OAuth refresh token carrying the tasks scope — the calendar's token
   does NOT — the comma-separated task list ids to mirror, EVERY list
   the account has when unsaid, and the list a capture lands in when
-  the birth names none), WAYMARK10_DEPLOY_MODE,
+  the birth names none), WORKQUEUE10_FLICKR_URL (the household's
+  media engine — the :media domain's first authority; unset falls
+  back to the in-memory fake, the hub's noop source always wired
+  beside it), WAYMARK10_DEPLOY_MODE,
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan), WAYMARK10_OIDC_* (the family
   IdP — waymark10.server.oidc/from-env names them; absent = the
@@ -43,11 +46,14 @@
             [choreplan10.resources.day :refer [day day-board]]
             [mealplan10.main :as mealplan]
             [workqueue10.confluence :as conf]
+            [workqueue10.resources.media :refer [media-resource]]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
             [workqueue10.sources.choreplan :as chores]
+            [workqueue10.sources.flickr :as flickr]
             [workqueue10.sources.gtasks :as gtasks]
             [workqueue10.sources.homeassistant :as ha]
+            [workqueue10.sources.hub :as hub]
             [workqueue10.sources.mealplan :as meals]
             [waymark10.dsl :refer [in-domain]]
             [waymark10.server.engine :as engine]
@@ -84,6 +90,15 @@
   ;; engine that hosts them, and the engine's registry needs the
   ;; sources — start! delivers this between engine and serve
   (atom nil))
+
+(defonce fake-flickr
+  ;; the media authority's twin (the transport-standing kind, like
+  ;; google's): the real source's cursor echo, kind filter and
+  ;; translation all run; only the socket is missing. It rides the
+  ;; same engine-ref audience rule the real boundary does, so
+  ;; offline dev exercises the addendum's follow-the-row half too.
+  (flickr/fake-source
+   {:preferred-fn (flickr/engine-audience-fn {:engine-ref engine-ref})}))
 
 (defn- ui-base []
   (or (System/getenv "WAYMARK10_OIDC_APP_URL") "http://localhost:8014"))
@@ -130,6 +145,20 @@
      ;; ordinary state until the household re-consents
      "gtasks" (or (gtasks/from-env) fake-gtasks)}))
 
+(defn media-sources
+  "The MEDIA confluence's tag → source map — a second confluence over
+  the same protocol, spec-media.md's move. flickr goes real when
+  WORKQUEUE10_FLICKR_URL names the engine (fake otherwise, the
+  every-boundary rule), and the hub — the noop authority — is always
+  wired, so an authority-less row (the dinner recommendation) works
+  from day one."
+  []
+  {"flickr" (or (flickr/from-env
+                 {:preferred-fn (flickr/engine-audience-fn
+                                 {:engine-ref engine-ref})})
+                fake-flickr)
+   "hub" (hub/source)})
+
 (defonce fake-calendar
   ;; module-default fake boundary — tests script it, offline dev and
   ;; the declaration gate run over it
@@ -163,19 +192,31 @@
   protocol tomorrow. The sources with no list concept (a chore run's,
   a prep task's) are simply absent from it.
 
-  srcs: the confluence's tag → TaskSource map; adapter: the family
-  calendar's event boundary (a MirrorAdapter AND MirrorCreateAdapter
-  — this one is written to, not merely read)."
-  [srcs adapter]
-  (-> (in-domain :queue [(task-resource (conf/confluence srcs))
-                         (task-list-resource
-                          (conf/list-confluence (conf/list-sources srcs)))])
-      (into (in-domain :chores [chore chore-run day]))
-      (into (in-domain :meals (mealplan/meal-resources)))
-      ;; the kind self-declares :domain :calendar; in-domain would
-      ;; stamp the same token, and saying it here keeps the three
-      ;; domains legible in one place
-      (into (in-domain :calendar (calendar/resources adapter)))))
+  THE MEDIA DOMAIN is the confluence instantiated a second time
+  (spec-media.md): one :media kind over its own tag → source map —
+  flickr, the household's media engine, and the hub's noop source
+  for the rows no catalog owns. Same protocol, same routing law,
+  different canonical doc.
+
+  srcs: the task confluence's tag → TaskSource map; media-srcs: the
+  media confluence's (the two-arg arity fills it with the offline
+  fakes — the pre-media call sites' shape, kept); adapter: the
+  family calendar's event boundary (a MirrorAdapter AND
+  MirrorCreateAdapter — this one is written to, not merely read)."
+  ([srcs adapter]
+   (resources srcs {"flickr" fake-flickr "hub" (hub/source)} adapter))
+  ([srcs media-srcs adapter]
+   (-> (in-domain :queue [(task-resource (conf/confluence srcs))
+                          (task-list-resource
+                           (conf/list-confluence (conf/list-sources srcs)))])
+       (into (in-domain :media [(media-resource
+                                 (conf/confluence media-srcs))]))
+       (into (in-domain :chores [chore chore-run day]))
+       (into (in-domain :meals (mealplan/meal-resources)))
+       ;; the kind self-declares :domain :calendar; in-domain would
+       ;; stamp the same token, and saying it here keeps the domains
+       ;; legible in one place
+       (into (in-domain :calendar (calendar/resources adapter))))))
 
 (def surfaces
   "Both decision screens, one engine: the housekeeper's day board and
@@ -188,6 +229,7 @@
   []
   (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos
               "gtasks" fake-gtasks}
+             {"flickr" fake-flickr "hub" (hub/source)}
              fake-calendar))
 
 (defn- dsn []
@@ -211,6 +253,7 @@
         eng (mirror/with-push
              (engine/engine {:storage storage
                              :resources (resources (sources)
+                                                   (media-sources)
                                                    (calendar-adapter))
                              :surfaces surfaces
                              :deploy-mode (deploy-mode)
@@ -261,6 +304,7 @@
   (let [storage (pg/storage (dsn))]
     (try
       (let [reg (engine/full-registry (resources (sources)
+                                                 (media-sources)
                                                  (calendar-adapter)))
             steps (migrate/plan storage (vals (:kinds reg)))]
         (if (empty? steps)
