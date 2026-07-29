@@ -258,6 +258,13 @@
                                                    (calendar-adapter))
                              :surfaces surfaces
                              :deploy-mode (deploy-mode)
+                             ;; the render probe carries the read hooks
+                             ;; (waymark-1pq): this is the boot prod
+                             ;; actually runs since the fold, so the
+                             ;; discovery enums must fold HERE — the
+                             ;; standalone mealplan10 boot opting in
+                             ;; alone left prod trial-and-409
+                             :probe-reads true
                              ;; dev-only, and only when asked: production
                              ;; posture is refuse-on-drift
                              :auto-migrate (= "1" (System/getenv
