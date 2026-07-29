@@ -18,6 +18,20 @@
   the check_related tradition: refusals happen where every kind is
   known, never at first request); well-known lists them.
 
+  A surface may also be ANCHORLESS (waymark-34n, mealplan's price
+  desk): no :anchor, and every member a collection query — {:name
+  :kind :where}, the standing filter alone, because there is no
+  anchor row to relate through. The queue taught the shape: some work
+  is nobody's row (a stale price belongs to the product, not to any
+  week), yet still wants ONE screen composing the rows with the fix
+  actions at hand. Served at GET /api/surfaces/{name}, no anchor-id;
+  showcase names actions every member's target kind declares (the
+  foregrounding — each item advertises its own full set anyway);
+  :attention is refused (it nominates anchor data fields, and there
+  is no anchor — the members' counts are the flag); each member panel
+  carries its truthful count beside the 200-row items page, because a
+  queue that lies about its size sends the human home early.
+
   Scope, honestly (what waymark9's core/surface.py has that this does
   not, each a sentence):
   - Surfaces are not fingerprinted: no definition row, no revise
@@ -113,6 +127,33 @@
         (assoc resolved :where where))
       resolved)))
 
+(defn- resolve-collection-member
+  "One anchorless member declaration → its resolved collection query:
+  {:name … :target kind, :collection true, :where standing-filter?}.
+  No edge to cite — there is no anchor row to relate through — so the
+  member names its :kind outright and the :where is the whole story."
+  [sname kinds m]
+  (let [mname (:name m)]
+    (when-not (keyword? mname)
+      (throw (err sname (str "member " (pr-str m) " declares no :name"))))
+    (when (or (:related m) (:owns m))
+      (throw (err sname (str "member " (name mname) " cites an edge, but an "
+                             "anchorless surface has no anchor to relate "
+                             "through — declare :kind (and :where)"))))
+    (let [target (or (:kind m)
+                     (throw (err sname (str "member " (name mname)
+                                            " names no :kind — an anchorless "
+                                            "member is a collection query"))))
+          target-rdef (or (get kinds target)
+                          (throw (err sname (str "member " (name mname)
+                                                 " targets unregistered kind "
+                                                 target))))
+          resolved {:name mname :target target :collection true}]
+      (if-some [where (not-empty (:where m))]
+        (do (check-where sname mname target-rdef where)
+            (assoc resolved :where where))
+        resolved))))
+
 (defn assemble
   "Validate every declared surface against the assembled registry and
   return wire-name → sdef. Throws DefinitionError on the first
@@ -128,28 +169,55 @@
            (throw (err sname "surface names are kebab-case")))
          (when (contains? out sname)
            (throw (err sname "declared twice")))
-         (let [anchor-rdef (or (get kinds anchor)
-                               (throw (err sname (str "anchor kind " anchor
-                                                      " is not registered on "
-                                                      "this engine"))))
-               resolved (mapv #(resolve-member sname kinds anchor-rdef %)
-                              members)
-               _ (when-not (apply distinct? ::none (map :name resolved))
-                   (throw (err sname "member names must be distinct")))
-               _ (doseq [a showcase]
-                   (when-not (get-in anchor-rdef [:actions a])
-                     (throw (err sname (str "showcase names unknown action "
-                                            a " of " anchor)))))
-               fields (set (schema/entry-keys (:schema anchor-rdef)))
-               _ (doseq [[f _] attention]
-                   (when-not (contains? fields f)
-                     (throw (err sname (str "attention field " f " is not a "
-                                            "data field of " anchor)))))]
-           (assoc out sname {:name sname
-                             :anchor anchor
-                             :members resolved
-                             :showcase (vec showcase)
-                             :attention (into {} attention)}))))
+         (if (nil? anchor)
+           ;; the anchorless surface: a standing queue, not a row's
+           ;; composition — the members ARE the screen
+           (let [_ (when (empty? members)
+                     (throw (err sname (str "an anchorless surface declares at "
+                                            "least one member — the members "
+                                            "ARE the screen"))))
+                 resolved (mapv #(resolve-collection-member sname kinds %)
+                                members)
+                 _ (when-not (apply distinct? ::none (map :name resolved))
+                     (throw (err sname "member names must be distinct")))
+                 _ (doseq [a showcase
+                           {:keys [target]} resolved]
+                     (when-not (get-in kinds [target :actions a])
+                       (throw (err sname (str "showcase names action " a
+                                              " which member kind " target
+                                              " does not declare")))))
+                 _ (when (seq attention)
+                     (throw (err sname (str "attention nominates anchor data "
+                                            "fields, and an anchorless surface "
+                                            "has no anchor — the members' "
+                                            "counts are the flag"))))]
+             (assoc out sname {:name sname
+                               :anchor nil
+                               :members resolved
+                               :showcase (vec showcase)
+                               :attention {}}))
+           (let [anchor-rdef (or (get kinds anchor)
+                                 (throw (err sname (str "anchor kind " anchor
+                                                        " is not registered on "
+                                                        "this engine"))))
+                 resolved (mapv #(resolve-member sname kinds anchor-rdef %)
+                                members)
+                 _ (when-not (apply distinct? ::none (map :name resolved))
+                     (throw (err sname "member names must be distinct")))
+                 _ (doseq [a showcase]
+                     (when-not (get-in anchor-rdef [:actions a])
+                       (throw (err sname (str "showcase names unknown action "
+                                              a " of " anchor)))))
+                 fields (set (schema/entry-keys (:schema anchor-rdef)))
+                 _ (doseq [[f _] attention]
+                     (when-not (contains? fields f)
+                       (throw (err sname (str "attention field " f " is not a "
+                                              "data field of " anchor)))))]
+             (assoc out sname {:name sname
+                               :anchor anchor
+                               :members resolved
+                               :showcase (vec showcase)
+                               :attention (into {} attention)})))))
      {}
      decls)))
 
@@ -180,18 +248,25 @@
         (:where member)))
 
 (defn- member-rows
-  "The member's target rows for one anchor row: the FK dereference for
-  owns, join conditions bound to the anchor's stored values for
-  related, the declared :where riding along. A nil join value relates
-  to nothing."
+  "The member's target rows: for an edge member of one anchor row, the
+  FK dereference for owns or join conditions bound to the anchor's
+  stored values for related, the declared :where riding along (a nil
+  join value relates to nothing); for a collection member the standing
+  :where alone IS the query."
   [eng anchor-row member]
   (let [st (:storage eng)
         target (:target member)
         target-rdef (get (inv/resources eng) target)
         conds
-        (if-some [edge (:owns member)]
-          [{:target :data :field (name (:via edge)) :cast "text"
+        (cond
+          (:collection member)
+          []
+
+          (:owns member)
+          [{:target :data :field (name (:via (:owns member))) :cast "text"
             :op := :value (:id anchor-row)}]
+
+          :else
           (let [edge (:related member)
                 joins (map (fn [[ours op theirs]]
                              [(get-in anchor-row [:data ours]) op theirs])
@@ -216,49 +291,80 @@
 
 ;; ── the envelope ────────────────────────────────────────────────────
 
+(defn- member-panel
+  "One member's wire panel. An edge member is the phase-9b shape
+  ({items [envelope-minus-data …]}); a collection member additionally
+  says its truthful count over the same conditions — the queue can
+  outrun the 200-row items page, and a queue that lies about its size
+  sends the human home early."
+  [eng anchor-row member ctx-opts]
+  (let [items (mapv (fn [r]
+                      (render/envelope-summary
+                       (get (inv/resources eng) (:target member))
+                       r ctx-opts))
+                    (member-rows eng anchor-row member))]
+    (if (:collection member)
+      {"count" (store/with-tx (:storage eng)
+                 (fn [tx] (store/count-matching (:storage eng) tx
+                                                (:target member)
+                                                (where-conds member))))
+       "items" items}
+      {"items" items})))
+
+(defn- members-map [eng anchor-row sdef ctx-opts]
+  (into {}
+        (map (fn [m] [(p/wire-key (:name m))
+                      (member-panel eng anchor-row m ctx-opts)]))
+        (:members sdef)))
+
 (defn envelope
-  "The composed wire document for one anchor row: {waymark, kind
-  \"surface\", self, name, showcase, attention (each declared flag
-  evaluated against the stored facts), anchor (the full envelope),
-  members {name {items [envelope-minus-data …]}}}. 404 when the
-  anchor row does not exist."
+  "The composed wire document. Anchored: {waymark, kind \"surface\",
+  self, name, showcase, attention (each declared flag evaluated
+  against the stored facts), anchor (the full envelope), members
+  {name {items [envelope-minus-data …]}}} — 404 when the anchor row
+  does not exist. Anchorless: the same document minus the anchor,
+  attention always {}, each member panel carrying count beside items;
+  anchor-id is nil (the router guarantees it)."
   [eng sdef anchor-id ctx-opts]
-  (let [anchor-rdef (get (inv/resources eng) (:anchor sdef))
-        raw (store/with-tx (:storage eng)
-              (fn [tx] (store/load-row (:storage eng) tx (:anchor sdef)
-                                       anchor-id {})))
-        _ (when-not raw (throw (p/not-found (:anchor sdef) anchor-id)))
-        row (inv/decode-row anchor-rdef raw)
-        attention (into {}
-                        (map (fn [[f nominated]]
-                               [f (= nominated (get-in row [:data f]))]))
-                        (:attention sdef))
-        members (into {}
-                      (map (fn [m]
-                             [(p/wire-key (:name m))
-                              {"items"
-                               (mapv (fn [r]
-                                       (render/envelope-summary
-                                        (get (inv/resources eng) (:target m))
-                                        r ctx-opts))
-                                     (member-rows eng row m))}]))
-                      (:members sdef))]
+  (if-some [anchor-kind (:anchor sdef)]
+    (let [anchor-rdef (get (inv/resources eng) anchor-kind)
+          raw (store/with-tx (:storage eng)
+                (fn [tx] (store/load-row (:storage eng) tx anchor-kind
+                                         anchor-id {})))
+          _ (when-not raw (throw (p/not-found anchor-kind anchor-id)))
+          row (inv/decode-row anchor-rdef raw)
+          attention (into {}
+                          (map (fn [[f nominated]]
+                                 [f (= nominated (get-in row [:data f]))]))
+                          (:attention sdef))]
+      (merge
+       (p/wire-value
+        {:waymark "10"
+         :kind "surface"
+         :self (str "/api/surfaces/" (:name sdef) "/" anchor-id)
+         :name (:name sdef)
+         :showcase (:showcase sdef)
+         :attention attention})
+       {"anchor" (render/envelope anchor-rdef row ctx-opts)
+        "members" (members-map eng row sdef ctx-opts)}))
     (merge
      (p/wire-value
       {:waymark "10"
        :kind "surface"
-       :self (str "/api/surfaces/" (:name sdef) "/" anchor-id)
+       :self (str "/api/surfaces/" (:name sdef))
        :name (:name sdef)
        :showcase (:showcase sdef)
-       :attention attention})
-     {"anchor" (render/envelope anchor-rdef row ctx-opts)
-      "members" members})))
+       :attention {}})
+     {"members" (members-map eng nil sdef ctx-opts)})))
 
 (defn well-known-entry
   "The surfaces map the well-known document lists: name → href
-  template."
+  template for an anchored surface, name → plain href for an
+  anchorless one (there is no anchor-id to template)."
   [surfaces]
   (into (sorted-map)
-        (map (fn [[sname _]]
-               [sname {:href (str "/api/surfaces/" sname "/{anchor-id}")}]))
+        (map (fn [[sname sdef]]
+               [sname {:href (if (:anchor sdef)
+                               (str "/api/surfaces/" sname "/{anchor-id}")
+                               (str "/api/surfaces/" sname))}]))
         surfaces))

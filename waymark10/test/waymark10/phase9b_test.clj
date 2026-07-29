@@ -2,10 +2,14 @@
   "Phase-9b acceptance, part 4: surfaces and the OpenAPI overlay. A
   declared surface composes the anchor's full envelope with its
   edge-resolved members (related joins and owns) and the evaluated
-  attention flags; a declaration citing an undeclared edge refuses at
-  assembly; /api/openapi.json derives the real paths and input
-  schemas with the problem responses referenced once. Suite-local
-  kinds over the ring handler; real Postgres."
+  attention flags; an ANCHORLESS surface (waymark-34n) composes
+  collection members ({:name :kind :where}) at the bare
+  /api/surfaces/{name}, each panel carrying its truthful count; a
+  declaration citing an undeclared edge refuses at assembly, as does
+  an anchorless one citing any edge, attention, or an action a member
+  kind does not declare; /api/openapi.json derives the real paths and
+  input schemas with the problem responses referenced once.
+  Suite-local kinds over the ring handler; real Postgres."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -74,6 +78,13 @@
    :showcase [:finish]
    :attention {:hot true}})
 
+;; the anchorless spelling: a standing queue, no row at the center —
+;; every member a collection query over its own kind
+(def ^:private triage
+  {:name :card-triage
+   :members [{:name :fresh :kind :card :where {:state #{"fresh"}}}]
+   :showcase [:file]})
+
 (def ^:dynamic *h* nil)
 
 (use-fixtures :once
@@ -89,7 +100,7 @@
         (binding [*h* (engine/handler
                        (engine/engine {:storage st
                                        :resources [proj card]
-                                       :surfaces [board]}))]
+                                       :surfaces [board triage]}))]
           (f))
         (finally (pg/close! st))))))
 
@@ -142,6 +153,89 @@
         (is (= {:hot false} (:attention b2)))
         (is (= [] (get-in b2 [:members :matching :items]))
             "a nil join value relates to nothing")))))
+
+;; ── 1b. the anchorless surface (waymark-34n) ────────────────────────
+
+(defn- act!
+  "POST an action the way an honest client would — current ETag along."
+  [self action]
+  (let [etag (get-in (req :get self) [:headers "ETag"])
+        resp (*h* {:request-method :post
+                   :uri (str self "/-/" (name action))
+                   :headers {"x-waymark-principal" "priya"
+                             "if-match" etag}})]
+    (is (= 200 (:status resp)) (str self " " (name action) ": " (:body resp)))
+    resp))
+
+(deftest anchorless-surface-composes-the-queue
+  (let [before (json (req :get "/api/surfaces/card-triage"))
+        c0 (get-in before [:members :fresh :count])
+        _ (req :post "/api/cards" {:title "triage me"})
+        done (json (req :post "/api/cards" {:title "triage done"}))
+        _ (act! (:self done) :file)
+        resp (req :get "/api/surfaces/card-triage")
+        b (json resp)
+        items (get-in b [:members :fresh :items])]
+    (is (= 200 (:status resp)))
+    (is (= "surface" (:kind b)))
+    (is (= "/api/surfaces/card-triage" (:self b)))
+    (is (= "card-triage" (:name b)))
+    (is (= ["file"] (:showcase b)))
+    (is (not (contains? b :anchor)) "no row at the center")
+    (is (= {} (:attention b)) "nothing nominated, nothing flagged")
+    (testing "the standing filter is the member: fresh in, filed out"
+      (is (some #(str/starts-with? (:summary %) "triage me") items))
+      (is (not-any? #(str/starts-with? (:summary %) "triage done") items)))
+    (testing "the count is truthful — one fresh card joined the queue"
+      (is (= (inc c0) (get-in b [:members :fresh :count])))
+      (is (= (get-in b [:members :fresh :count]) (count items))
+          "and under the page limit it equals the items served"))
+    (testing "each item advertises its own actions (the showcase is
+              the foregrounding, not the advertisement)"
+      (let [it (some #(when (str/starts-with? (:summary %) "triage me") %)
+                     items)]
+        (is (contains? (:actions it) :file))
+        (is (not (contains? it :data)) "items stay envelope-minus-data")))
+    (testing "well-known lists the bare href — no anchor-id template"
+      (is (= "/api/surfaces/card-triage"
+             (get-in (json (req :get "/api/.well-known/waymark"))
+                     [:surfaces :card-triage :href]))))
+    (testing "the two spellings never blur"
+      (is (= 404 (:status (req :get "/api/surfaces/card-triage/some-id")))
+          "an anchorless surface wears nobody's row")
+      (is (= 404 (:status (req :get "/api/surfaces/proj-board")))
+          "an anchored surface demands its anchor"))))
+
+(deftest anchorless-assembly-refusals
+  (let [reg (registry/registry [proj card])]
+    (is (thrown-with-msg?
+         Exception #"names no :kind"
+         (surface/assemble reg [{:name :bad
+                                 :members [{:name :x
+                                            :where {:state #{"fresh"}}}]}])))
+    (is (thrown-with-msg?
+         Exception #"no anchor to relate through"
+         (surface/assemble reg [{:name :bad
+                                 :members [{:name :x :kind :card
+                                            :related :cards}]}])))
+    (is (thrown-with-msg?
+         Exception #"does not declare"
+         (surface/assemble reg [{:name :bad
+                                 :members [{:name :x :kind :card}]
+                                 :showcase [:finish]}])))
+    (is (thrown-with-msg?
+         Exception #"has no anchor"
+         (surface/assemble reg [{:name :bad
+                                 :members [{:name :x :kind :card}]
+                                 :attention {:hot true}}])))
+    (is (thrown-with-msg?
+         Exception #"at least one member"
+         (surface/assemble reg [{:name :bad :members []}])))
+    (is (thrown-with-msg?
+         Exception #":where field"
+         (surface/assemble reg [{:name :bad
+                                 :members [{:name :x :kind :card
+                                            :where {:nope #{"x"}}}]}])))))
 
 (deftest surface-doors
   (testing "well-known lists the declared surfaces"
@@ -203,4 +297,9 @@
                      [:responses :409 :$ref]))))
     (testing "the engine kinds document themselves too"
       (is (some? (path "/api/jobs/{id}/-/cancel")))
-      (is (some? (path "/api/subscriptions/{id}/-/pause"))))))
+      (is (some? (path "/api/subscriptions/{id}/-/pause"))))
+    (testing "both surface spellings document their real paths"
+      (is (some? (:get (path "/api/surfaces/proj-board/{id}"))))
+      (is (some? (:get (path "/api/surfaces/card-triage"))))
+      (is (nil? (path "/api/surfaces/card-triage/{id}"))
+          "the anchorless surface has no anchored door"))))

@@ -30,7 +30,7 @@
             [mealplan10.resources.plan :refer [plan week-board]]
             [mealplan10.resources.plan-day :refer [plan-day]]
             [mealplan10.resources.prep-task :refer [prep-task]]
-            [mealplan10.resources.product :refer [product]]
+            [mealplan10.resources.product :refer [price-desk product]]
             [mealplan10.resources.rotation :refer [rotation]]
             [mealplan10.resources.substitution :refer [substitution]]
             [waymark10.server.engine :as engine]
@@ -79,8 +79,10 @@
   (conj (meal-resources) (event/event-resource adapter)))
 
 (def surfaces
-  "The declared decision screens (phase 9b): the week board."
-  [week-board])
+  "The declared decision screens (phase 9b): the week board (anchored
+  on one plan) and the price desk (anchorless — the stale-price and
+  needs-weight queues composed with the fix actions, waymark-34n)."
+  [week-board price-desk])
 
 (defn check-resources
   "All eleven kinds over the offline adapter — what `make check10`

@@ -272,21 +272,29 @@
 
 (defn- surface-paths
   "One documented path per declared surface (batch F): the composed
-  decision screen at /api/surfaces/{name}/{anchor-id}."
+  decision screen at /api/surfaces/{name}/{anchor-id}, or the bare
+  /api/surfaces/{name} for an anchorless surface's standing queue."
   [surfaces]
   (into {}
         (map (fn [[sname sdef]]
-               [(str "/api/surfaces/" (name sname) "/{id}")
-                {:get {:tags ["surfaces"]
-                       :summary (str "The " (name sname) " surface")
-                       :description (str "The composed decision screen anchored on one "
-                                         (name (get sdef :anchor "resource"))
-                                         " — panels of related envelopes, assembled per request.")
-                       :parameters [{:name "id" :in "path" :required true
-                                     :schema {:type "string"}
-                                     :description "The anchor resource's id"}]
-                       :responses {"200" {:description "The surface envelope: the anchor plus its panels"}
-                                   "404" (resp-ref "not_found")}}}]))
+               (if (:anchor sdef)
+                 [(str "/api/surfaces/" (name sname) "/{id}")
+                  {:get {:tags ["surfaces"]
+                         :summary (str "The " (name sname) " surface")
+                         :description (str "The composed decision screen anchored on one "
+                                           (name (get sdef :anchor "resource"))
+                                           " — panels of related envelopes, assembled per request.")
+                         :parameters [{:name "id" :in "path" :required true
+                                       :schema {:type "string"}
+                                       :description "The anchor resource's id"}]
+                         :responses {"200" {:description "The surface envelope: the anchor plus its panels"}
+                                     "404" (resp-ref "not_found")}}}]
+                 [(str "/api/surfaces/" (name sname))
+                  {:get {:tags ["surfaces"]
+                         :summary (str "The " (name sname) " surface")
+                         :description "The anchorless composed queue — collection panels with truthful counts, assembled per request."
+                         :responses {"200" {:description "The surface envelope: the member panels, each count beside its items"}
+                                     "404" (resp-ref "not_found")}}}])))
         surfaces))
 
 (defn document

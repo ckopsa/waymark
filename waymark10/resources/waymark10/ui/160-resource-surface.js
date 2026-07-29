@@ -218,25 +218,29 @@ async function renderSurface(view, doc) {
     const items = m.items || [];
     const hints = items.length && items[0].kind
       ? await kindSchema(items[0].kind) : {};
+    /* a collection member says its truthful count — the queue can
+       outrun the items page, and the header should not undersell it */
     view.append(el("div", {},
-      el("h3", {class:"sect"}, title(mname)),
+      el("h3", {class:"sect"},
+        title(mname) + (m.count != null ? " · " + m.count : "")),
       el("div", {class:"panel", style:"padding:10px 14px"},
         items.length ? itemTable(items, {hints})
                      : el("p", {class:"muted"}, "Nothing here."))));
   }
-  const dataPanel = el("div", {class:"panel"});
-  kindSchema(anchor.kind || "").then(schema => {
-    const partPaths = new Set(Object.keys(anchor.parts || {}));
-    const plain = Object.fromEntries(
-      Object.entries(anchor.data || {}).filter(([k]) => !partPaths.has(k)));
-    dataPanel.append(el("details", {open:""},
-      el("summary", {class:"muted"}, "Data"), kvTable(plain, schema)));
-    if (anchor.self)
+  if (anchor.self) {
+    const dataPanel = el("div", {class:"panel"});
+    kindSchema(anchor.kind || "").then(schema => {
+      const partPaths = new Set(Object.keys(anchor.parts || {}));
+      const plain = Object.fromEntries(
+        Object.entries(anchor.data || {}).filter(([k]) => !partPaths.has(k)));
+      dataPanel.append(el("details", {open:""},
+        el("summary", {class:"muted"}, "Data"), kvTable(plain, schema)));
       dataPanel.append(historySection(`${anchor.self}/-/events`));
-    const footer = notNowFooter(grouped, gated, anchor);
-    if (footer) dataPanel.append(footer);
-  });
-  view.append(dataPanel);
-  if (anchor.self) watchScope({self: anchor.self});
+      const footer = notNowFooter(grouped, gated, anchor);
+      if (footer) dataPanel.append(footer);
+    });
+    view.append(dataPanel);
+    watchScope({self: anchor.self});
+  }
 }
 

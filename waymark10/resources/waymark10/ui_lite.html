@@ -284,8 +284,12 @@ async function renderHome() {
     .map(([kind, {href}]) => el("a", {href: "#" + href, class: "chip"},
                                 title(kind) + "s"));
   const surfaces = Object.entries(idx.surfaces || {}).map(([name, {href}]) =>
-    el("li", {}, el("code", {}, name), " ", el("span", {class: "meta mono"}, href),
-       el("span", {class: "meta"}, " — open from an anchor row")));
+    href.includes("{anchor-id}")
+      ? el("li", {}, el("code", {}, name), " ", el("span", {class: "meta mono"}, href),
+           el("span", {class: "meta"}, " — open from an anchor row"))
+      : el("li", {}, el("code", {}, name), " ",
+           el("a", {href: "#" + href, class: "meta mono"}, href),
+           el("span", {class: "meta"}, " — a standing queue, open it")));
   $main.replaceChildren(
     el("h1", {}, "Workspace"),
     el("p", {class: "meta"}, "waymark " + idx.waymark +
@@ -595,6 +599,8 @@ async function surfaceLinks(doc) {
   const id = doc.self.split("/").pop();
   const chips = [];
   for (const [name, {href}] of surfaces) {
+    /* an anchorless surface anchors no row — skip the probe */
+    if (!href.includes("{anchor-id}")) continue;
     const target = href.replace("{anchor-id}", id);
     const res = await api(target);
     if (res.ok) chips.push(el("a", {href: "#" + target, class: "chip"},
@@ -613,7 +619,8 @@ async function renderSurface(href) {
     el("span", {class: "flag " + (up ? "up" : "down")},
        f + (up ? " ⚑" : " ·")));
   const members = Object.entries(doc.members || {}).map(([mname, m]) =>
-    el("div", {}, el("h2", {}, title(mname)),
+    el("div", {},
+      el("h2", {}, title(mname) + (m.count != null ? " · " + m.count : "")),
       el("div", {class: "card tablewrap"},
         (m.items || []).length
           ? el("table", {}, el("tbody", {}, m.items.map(item =>
@@ -627,17 +634,22 @@ async function renderSurface(href) {
       onclick: () => actionDialog({name: a, entry: anchor.actions[a],
                                    doc: anchor, onDone: () => render()})},
       ((anchor.actions[a].display || {}).label || title(a))));
-  $main.replaceChildren(
-    el("p", {class: "crumb"},
-      el("a", {href: "#" + anchor.self}, "‹ " + (anchor.summary || "anchor"))),
+  const kids = [
+    anchor.self
+      ? el("p", {class: "crumb"},
+          el("a", {href: "#" + anchor.self}, "‹ " + (anchor.summary || "anchor")))
+      : el("p", {class: "crumb"}, el("a", {href: "#"}, "‹ Workspace")),
     el("h1", {}, title(doc.name || "surface")),
     el("div", {class: "chips"}, flags),
     el("div", {class: "actions"}, showcase),
-    el("h2", {}, "Anchor"),
-    el("div", {class: "card rowlink", onclick: () => go(anchor.self)},
-      el("span", {class: "statechip"}, anchor.state), " ", anchor.summary),
-    ...members);
-  watchScope({self: anchor.self});
+    anchor.self ? el("h2", {}, "Anchor") : null,
+    anchor.self
+      ? el("div", {class: "card rowlink", onclick: () => go(anchor.self)},
+          el("span", {class: "statechip"}, anchor.state), " ", anchor.summary)
+      : null,
+    ...members].filter(Boolean);
+  $main.replaceChildren(...kids);
+  watchScope({self: anchor.self || doc.self});
 }
 
 /* ════ forms from JSON schemas (x-display honored, enums folded) ════ */

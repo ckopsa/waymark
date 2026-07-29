@@ -227,8 +227,13 @@ async function renderHome(view, seq) {
   if (surfaces.length) {
     view.append(el("h3", {class:"sect"}, "Declared surfaces"),
       el("div", {class:"chips"}, surfaces.map(([name, {href}]) =>
-        el("span", {class:"surface-link", title: href + " — open from an anchor row"},
-          "⧉ " + name))));
+        /* anchored surfaces open from a row; an anchorless one is a
+           standing queue — its href works right here */
+        href.includes("{anchor-id}")
+          ? el("span", {class:"surface-link", title: href + " — open from an anchor row"},
+              "⧉ " + name)
+          : el("a", {href:"#" + href, class:"chip surface-link", title: href},
+              "⧉ " + name + " ↗"))));
   }
 }
 

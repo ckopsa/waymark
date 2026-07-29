@@ -27,8 +27,9 @@
   route, shadowing the plural grammar by position).
 
   Phase 9b: /api/openapi.json (the derived overlay) and
-  /api/surfaces/{name}/{anchor-id} (the composed decision screen)
-  join the static routes; a deferred bulk call (over its :defer-over
+  /api/surfaces/{name}/{anchor-id} (the composed decision screen —
+  or /api/surfaces/{name} bare, for an anchorless surface's standing
+  queue) join the static routes; a deferred bulk call (over its :defer-over
   threshold) mints a job and answers 202 with the job envelope and
   its Location; …/{action}/draft/collab upgrades to the live-collab
   websocket. Recorded: like SSE, the openapi/surface/collab routes
@@ -805,6 +806,18 @@
       (throw (p/problem :not-found 404 "Not found" {:detail "No such route."})))
     (let [sdef (or (get (:surfaces eng) name)
                    (throw (p/not-found "surface" name)))]
+      ;; the two spellings never blur: an anchored surface demands its
+      ;; anchor-id, an anchorless one refuses to wear somebody's row
+      (when (and (:anchor sdef) (nil? id))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail (str "The " name " surface is anchored — "
+                                        "GET /api/surfaces/" name
+                                        "/{anchor-id}.")})))
+      (when (and (nil? (:anchor sdef)) (some? id))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail (str "The " name " surface takes no "
+                                        "anchor — GET /api/surfaces/" name
+                                        ".")})))
       (json-response 200
                      (surface/envelope eng sdef id
                                        {:principal (principal-of req)
@@ -1268,6 +1281,7 @@
                                                       slurp))}]
          ["/api/attachments/:id/bytes" {:put (bytes-put eng)
                                         :get (bytes-get eng)}]
+         ["/api/surfaces/:name" {:get (surface-view eng)}]
          ["/api/surfaces/:name/:id" {:get (surface-view eng)}]
          ["/api/:plural" {:get (collection eng) :post (create eng)}]
          ["/api/:plural/-/worksheet" {:get (worksheet-get eng)

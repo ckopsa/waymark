@@ -30,6 +30,9 @@ async function surfaceChips(doc) {
   const id = doc.self.split("/").pop();
   const chips = [];
   for (const [name, {href}] of surfaces) {
+    /* an anchorless surface anchors no row — its door is the
+       workspace, not a chip on every envelope */
+    if (!href.includes("{anchor-id}")) continue;
     const target = href.replace("{anchor-id}", id);
     const {ok} = await api(target);
     if (ok) chips.push(el("a", {href: "#" + target, class: "chip surface-link"},

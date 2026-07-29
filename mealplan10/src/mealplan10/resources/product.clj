@@ -251,3 +251,30 @@
     :record_sighting record-sighting-action
     :remove_sighting remove-sighting-action
     :update_details update-details}})
+
+;; ── the price desk (waymark-34n): the queues' one screen ────────────
+
+(def price-desk
+  "The price-work, composed where a human can act on it. The scraper
+  run settled who the stale-price queue really serves: 39 of 40
+  retailer pages render their price in JS and don't parse statically
+  (236 of the 286 stale products don't even carry a url), so the
+  queue's real consumer is a human with a receipt — the scraper stays
+  as garnish. An ANCHORLESS surface, because staleness is the
+  product's own clock, not any plan's or week's: two collection
+  members over tracked products — :stale (price_is_stale, the 30-day
+  clock ran out) and :weightless (needs_weight, priced but no
+  package_grams, so spend can't pro-rate) — with record_sighting and
+  update_details showcased: the receipt in one hand, the fix doors in
+  the other. Served read-only at /api/surfaces/price-desk; each panel
+  carries its truthful count, because the queue outruns the 200-row
+  items page. Losing spellings, recorded: a plan-anchored board (the
+  queue has no anchor row), and attention-on-counts (attention
+  nominates anchor data fields; anchorless has none — the counts
+  themselves are the flag)."
+  {:name :price-desk
+   :members [{:name :stale :kind :product
+              :where {:state #{"tracked"} :price_is_stale #{"true"}}}
+             {:name :weightless :kind :product
+              :where {:state #{"tracked"} :needs_weight #{"true"}}}]
+   :showcase [:record_sighting :update_details]})
