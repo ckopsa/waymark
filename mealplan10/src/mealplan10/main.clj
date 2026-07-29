@@ -107,6 +107,11 @@
                             :resources (resources (events-adapter))
                             :surfaces surfaces
                             :deploy-mode (deploy-mode)
+                            ;; the render probe carries the read hooks
+                            ;; (waymark-1pq): a day's picker enumerates
+                            ;; the meals that serve its night — the
+                            ;; envelope IS the discovery
+                            :probe-reads true
                             ;; dev-only, and only when asked: production
                             ;; posture is refuse-on-drift
                             :auto-migrate (= "1" (System/getenv

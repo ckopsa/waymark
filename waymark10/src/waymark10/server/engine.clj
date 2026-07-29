@@ -125,6 +125,16 @@
   finish! remains a recorded punt) — principal-sensitive guards may
   render differently in a replay than they did live.
 
+  :probe-reads true (opt-in, never a default: dev's why-not premise
+  and every envelope pin rest on the pure probe) hands the ROUTER's
+  render path the enforcement :read/:find hooks
+  (invoke/render-hooks), so cross-resource acceptance sets enumerate
+  as picker enums on GET envelopes and cross-row guards tell their
+  real verdict. The invoke-transaction render-fn above stays hookless
+  either way — recorded punt: an action response's envelope still
+  advertises optimistically; the follow-up GET tells the folded
+  truth.
+
   Migrate (the schema gate): after every kind's storage is ensured,
   the boot plans declared-vs-live drift and REFUSES to serve on a
   non-empty plan — unless opts carry :auto-migrate true (dev
@@ -135,7 +145,7 @@
   (let [reg (full-registry resources)
         eng (merge (select-keys opts [:sweep-interval-ms :events-poll-ms
                                       :sse-heartbeat-ms :maintainer-fan-out
-                                      :suppress-mirror-refresh
+                                      :suppress-mirror-refresh :probe-reads
                                       :attachment-dir :attachment-max-bytes
                                       :webhook-attempts :webhook-backoff-ms
                                       :webhook-timeout-ms :webhooks-poll-ms

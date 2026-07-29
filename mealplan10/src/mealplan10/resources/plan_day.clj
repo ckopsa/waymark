@@ -26,9 +26,12 @@
   Day edits follow the PLAN's phase (plan-editable): building in
   :draft, frozen while :planned (the reviewed plan), open again in
   :active — the live week bends around reality, which is what
-  plan.begin's sentence always claimed. assign_meal from :eating_out
-  and mark_eating_out from :planned are multi-origin doors, so they
-  carry no :undo (the inversion rule demands one exact origin);
+  plan.begin's sentence always claimed. Every decision door reaches
+  its state from every origin, the row's own included (waymark-1pq):
+  assign_meal/assign_off_theme swap a planned day's meal in place and
+  mark_eating_out re-marks where — the field-tested gap (swap =
+  clear_day → assign, a briefly undecided day) is closed. Multi-origin
+  doors carry no :undo (the inversion rule demands one exact origin);
   add/remove_side_dish are :planned self-loops and keep their honest
   pair. set_sunday_theme re-themes a rotating Sunday PRE-assignment
   only — a planned Sunday clears first."
@@ -230,19 +233,20 @@
   [:map [:side_id {:kind :meal :pick {:state "on_list"}} :waymark/ref]])
 
 (defaction assign-meal
-  {:from #{:undecided :eating_out} :to :planned
+  {:from #{:undecided :eating_out :planned} :to :planned
    :input meal-input
    :edit {:prefill [:meal_id]}
    :guards [plan-editable meal-fits-day]
-   ;; multi-origin (undecided OR eating_out): the inversion rule
-   ;; allows no :undo — clear_day is the honest, unverified way back
+   ;; multi-origin (undecided, eating_out, OR the swap's own :planned):
+   ;; the inversion rule allows no :undo — clear_day is the honest,
+   ;; unverified way back
    :safety {:idempotent true :reversible false :confirm false
-            :one-way "Assigning covers the day; Clear day walks it back to undecided."}
+            :one-way "Assigning covers the day (a planned day swaps its meal in place); Clear day walks it back to undecided."}
    :handler assign-day-meal
    :display {:label "Assign meal" :style :primary :order 1}})
 
 (defaction assign-off-theme
-  {:from #{:undecided :eating_out} :to :planned
+  {:from #{:undecided :eating_out :planned} :to :planned
    :input meal-input
    :edit {:prefill [:meal_id]}
    :guards [plan-editable meal-is-listed]
@@ -261,7 +265,7 @@
    :display {:label "Pick Sunday theme" :order 2}})
 
 (defaction mark-eating-out
-  {:from #{:undecided :planned} :to :eating_out
+  {:from #{:undecided :planned :eating_out} :to :eating_out
    :input [:map [:where {:optional true :x-display {:label "Where"}}
                  [:maybe [:string {:max 120}]]]]
    :guards [plan-editable]
@@ -337,6 +341,7 @@
    :deviations
    ["The side-dish input field is side_id, not v9's meal_id — it names the SIDE's meal, and the day already owns a meal_id slot it would falsely mirror."
     "assign_meal/mark_eating_out/clear_day carry no :undo — multi-origin doors have no honest reverse (the inversion rule); clear_day is the acknowledged way back."
+    "assign_meal/assign_off_theme/mark_eating_out re-enter their own state (waymark-1pq): a decided day re-decides in place — swapping the meal or the restaurant never routes through undecided; the swap keeps the day's sides (same meal arm), which the one-way sentence owns."
     "The one-of coverage group retired with the promotion: with the eating_out bool gone (state is the fact), the eating-out arm's primary may honestly be absent, so :clears could never fire — each edge's handler nulls what it leaves instead."]
    :links [{:rel "plan" :kind :plan
             :href "/api/plans/{data.plan_id}"

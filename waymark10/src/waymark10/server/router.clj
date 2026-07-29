@@ -191,13 +191,16 @@
 (defn- render-opts
   "The one ctx-opts map every render call shares: identity, clock,
   services, visibility, and the kind map link targets resolve
-  through."
+  through. An engine booted with :probe-reads true also rides one
+  fresh render-hooks instance (:read/:find) per request — its cache's
+  scope — so acceptance sets enumerate on the envelope."
   [eng req]
-  {:principal (principal-of req)
-   :now ((:now-fn eng))
-   :services (:services eng)
-   :visibility (visibility-of req)
-   :resources (inv/resources eng)})
+  (cond-> {:principal (principal-of req)
+           :now ((:now-fn eng))
+           :services (:services eng)
+           :visibility (visibility-of req)
+           :resources (inv/resources eng)}
+    (:probe-reads eng) (merge (inv/render-hooks eng))))
 
 (defn- envelope-response [eng rdef row req status extra-headers]
   (let [env (render/envelope rdef row (render-opts eng req))]

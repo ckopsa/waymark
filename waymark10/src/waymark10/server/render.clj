@@ -1,7 +1,13 @@
 (ns waymark10.server.render
   "The envelope projection: one decoded row + one declaration + one
   probe ctx → the v10 wire document. Pure in (rdef, row, ctx) — no
-  storage reads; guards probe with inp nil, mode :probe.
+  storage reads of its own; guards probe with inp nil, mode :probe.
+  ctx-opts MAY carry the engine's :read/:find hooks (an engine booted
+  with :probe-reads true — invoke/render-hooks): with them, a
+  cross-resource acceptance set enumerates as its field's folded enum
+  and a cross-row code guard tells its real verdict; without them,
+  such sets decline and their guards advertise optimistically, as
+  ever.
 
   Envelope partition per action:
   - state ∈ :from, probe allows (or pends)     → actions entry
@@ -670,11 +676,14 @@
   :visibility (phase 9a) — the per-request grant projection, resolved
   once at the identity boundary: when present, only granted actions
   survive, absent from actions AND unavailable alike (concealment,
-  never narration) — and :resources (batch A), the engine's kind map
-  for link target plurals."
-  [rdef row {:keys [principal now services visibility resources]}]
+  never narration) — :resources (batch A), the engine's kind map for
+  link target plurals — and optionally :read/:find (ns docstring),
+  the probe-reads hooks the probe ctx carries verbatim."
+  [rdef row {:keys [principal now services visibility resources]
+             :as ctx-opts}]
   (let [ctx (t/ctx {:principal (or principal t/anonymous)
-                    :now now :services services :mode :probe})
+                    :now now :services services :mode :probe
+                    :read (:read ctx-opts) :find (:find ctx-opts)})
         self (str "/api/" (:plural rdef) "/" (:id row))
         state (:state row)
         ;; the field/argument projection closures (batch B) — guards

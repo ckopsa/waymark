@@ -40,6 +40,10 @@
                                       " CASCADE")]))))
         (let [eng (engine/engine {:storage st
                                   :resources (main/resources (es/fake-calendar))
+                                  ;; main.clj's posture: the render
+                                  ;; probe carries the read hooks, so
+                                  ;; the day's pickers enumerate
+                                  :probe-reads true
                                   :now-fn (fn [] @clock)})]
           (binding [*h* (engine/handler eng)
                     *clock* clock]
@@ -159,3 +163,64 @@
         (let [d (act! tue :mark_eating_out {:where "surprise date night"})]
           (is (= "eating_out" (:state d))
               "the live week bends around reality — begin's sentence, true"))))))
+
+(deftest discovery-is-the-envelope-and-a-planned-day-swaps-in-place
+  ;; waymark-1pq: the acceptance set RENDERS (probe-reads) — the
+  ;; picker enum is the eligible-meal discovery the client could only
+  ;; try-and-fail toward before — and a decided day re-decides in
+  ;; place, never routing through undecided. Asian meals only: the
+  ;; other deftest's mexican list stays out of Thursday's set either
+  ;; way the vars run.
+  (let [stir-fry (listed-meal! "Chicken stir fry" ["asian"])
+        beef (listed-meal! "Beef and broccoli" ["asian"])
+        noodles (listed-meal! "Garlic noodles" ["asian"])
+        burgers (listed-meal! "Smash burgers" ["american"])
+        plan (created! "plans" {:start_date "2026-07-21" :weeks 1})
+        days (get-in (json (req :get (str "/api/plan_days?plan_id="
+                                          (id-of plan)
+                                          "&page%5Bsize%5D=10")))
+                     [:data :items])
+        thu (:self (nth days 2))
+        asian #{(id-of stir-fry) (id-of beef) (id-of noodles)}]
+
+    (testing "the undecided day's picker enumerates the meals that
+              serve its night — the admitted set IS the enum"
+      (let [env (json (req :get thu))]
+        (is (= "asian" (get-in env [:data :theme])))
+        (is (= asian
+               (set (get-in env [:actions :assign_meal :input
+                                 :properties :meal_id :enum])))
+            "asian meals admitted, the american one excluded")))
+
+    (act! thu :assign_meal {:meal_id (id-of stir-fry)})
+
+    (testing "the planned day advertises the swap door AND the side
+              picker's same admitted set"
+      (let [env (json (req :get thu))]
+        (is (contains? (:actions env) :assign_meal)
+            "re-assign is available in :planned — no clear_day detour")
+        (is (= asian
+               (set (get-in env [:actions :add_side_dish :input
+                                 :properties :side_id :enum]))))))
+
+    (testing "an admitted side attaches; the excluded one refuses with
+              the acceptance set's own sentence"
+      (act! thu :add_side_dish {:side_id (id-of noodles)})
+      (let [p (refuse! thu :add_side_dish {:side_id (id-of burgers)} 409)]
+        (is (str/starts-with?
+             (:detail p) "That side doesn't serve this day's theme night"))))
+
+    (testing "a planned day swaps its meal in one step — state never
+              leaves :planned, the new meal lands, the side survives"
+      (let [d (act! thu :assign_meal {:meal_id (id-of beef)})]
+        (is (= "planned" (:state d)))
+        (is (= (id-of beef) (get-in d [:data :meal_id])))
+        (is (= "Beef and broccoli" (get-in d [:data :meal_name])))
+        (is (= "Garlic noodles" (get-in d [:data :side_dish_name]))
+            "the swap keeps the day's sides — same meal arm")))
+
+    (testing "…and a night out re-marks where without clearing first"
+      (act! thu :mark_eating_out {:where "Culvers"})
+      (let [d (act! thu :mark_eating_out {:where "Cafe Rio"})]
+        (is (= "eating_out" (:state d)))
+        (is (= "Cafe Rio" (get-in d [:data :eating_out_where])))))))

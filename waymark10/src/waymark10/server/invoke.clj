@@ -187,6 +187,47 @@
   [rdef row]
   (update (upcast-row rdef row) :data #(schema/decode (:schema rdef) %)))
 
+(defn render-hooks
+  "The render probe's :read/:find — make-ctx's enforcement hooks
+  twinned for the READ path, each call over a short transaction of
+  its own. An engine booted with :probe-reads true hands one instance
+  of these to every render ctx (router/render-opts), so a
+  cross-resource acceptance set enumerates as the picker enum on the
+  envelope (discovery = the advertised set, waymark-1pq) and a
+  cross-row code guard tells its real verdict instead of advertising
+  optimistically. A per-instance cache (one instance per request)
+  keeps the repeated probes — the same plan read by every action's
+  gate — to one query each. The invoke-side :render-fn takes NO hooks
+  either way: it runs inside the write's own transaction (engine
+  docstring), so an action response's envelope still advertises
+  optimistically — the follow-up GET tells the folded truth."
+  [engine]
+  (let [st (:storage engine)
+        cache (atom {})
+        through (fn [k thunk]
+                  (if-some [e (find @cache k)]
+                    (val e)
+                    (let [v (thunk)]
+                      (swap! cache assoc k v)
+                      v)))]
+    {:read (fn [target-kind id]
+             (through
+              [:read target-kind (str id)]
+              #(when-some [trdef (get (resources engine) target-kind)]
+                 (some->> (store/with-tx
+                           st (fn [tx] (store/load-row st tx target-kind
+                                                       (str id) {})))
+                          (decode-row trdef)))))
+     :find (fn [target-kind where opts]
+             (through
+              [:find target-kind where opts]
+              #(when-some [trdef (get (resources engine) target-kind)]
+                 (mapv (partial decode-row trdef)
+                       (store/with-tx
+                        st (fn [tx] (store/query-rows
+                                     st tx target-kind (or where {})
+                                     (merge {:limit 100} opts))))))))}))
+
 (declare invoke-in-tx! create-in-tx!)
 
 (defn- make-ctx
