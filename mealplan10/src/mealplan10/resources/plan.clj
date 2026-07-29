@@ -276,6 +276,8 @@
 ;; but discarded, the meal-est-cost spelling): era 4's per-trip lists
 ;; must all sum, so there is no "the one active list" — but a
 ;; discarded mistake leaves the totals the moment its door closes.
+;; These three KEEP the 0-over-empty default (no :when-empty :absent,
+;; unlike meal-est-cost): a week with no lists honestly costs $0.
 (defderived est-grocery-cost-cents
   {:sum {:owns :grocery_list :where {:state #{"draft" "ready" "done"}}
          :of :estimated_total_cents}})

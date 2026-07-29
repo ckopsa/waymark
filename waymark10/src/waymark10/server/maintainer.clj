@@ -54,6 +54,10 @@
     store/sum-matching (the protocol op batch C named as follow-up,
     landed in DX round 3), so sums work over every Storage backend;
     the maintainer only lands the value in the fact's declared type.
+    A sum with no contributions (zero matching rows, or matches
+    whose :of are all nil) lands 0 by default; {:when-empty :absent}
+    on the declaration lands nil instead — no information is not a
+    zero (the unpriced-is-not-free law).
   - A spec's :flips-at fn is scheduling advice, never law: it changes
     when the index re-checks, not what any fact means, so it is not
     fingerprinted.
@@ -237,16 +241,24 @@
   "One aggregate fact for one row: COUNT (or SUM of :of) over the
   edge's target, join conditions bound to this row's values,
   where-filtered. A nil join value relates to nothing — the aggregate
-  is 0. spec arrives already resolved under the row's law (the
-  where-filters may be a stored revision's)."
+  is 0 (nil for an absent-over-empty sum). A sum with no
+  contributions lands its declared empty value: 0 unless the spec
+  says {:when-empty :absent}, which lands nil — Postgres's
+  un-coalesced SUM and the memory twin both answer nil there, so the
+  two storages cannot disagree. spec arrives already resolved under
+  the row's law (the where-filters may be a stored revision's)."
   [eng tx rdef row fact spec]
   (let [c (or (:count spec) (:sum spec))
         of (when (:sum spec) (:of (:sum spec)))
+        absent? (= :absent (get-in spec [:sum :when-empty]))
         storage (:storage eng)
         run (fn [target-kind _target-rdef conds]
               (if of
-                (land-sum (store/sum-matching storage tx target-kind of conds)
-                          rdef fact)
+                (let [s (store/sum-matching storage tx target-kind of conds)]
+                  (cond
+                    (some? s) (land-sum s rdef fact)
+                    absent?   nil
+                    :else     (land-sum 0M rdef fact)))
                 (store/count-matching storage tx target-kind conds)))]
     (if-some [child-kind (:owns c)]
       (let [edge (owns-edge rdef child-kind)
@@ -261,7 +273,8 @@
                          [(get-in row [:data ours]) op theirs])
                        (:on edge))]
         (if (some (comp nil? first) joins)
-          0
+          ;; nothing relates: zero matching rows by construction
+          (if absent? nil 0)
           (let [conds (into (mapv (fn [[v op theirs]]
                                     ;; ours op theirs, ours bound to v
                                     ;; ⇒ theirs (flip op) v

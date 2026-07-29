@@ -495,7 +495,10 @@
     (let [table (get @tables kind)
           fname (store/definition-checked-name of)
           parts (map cond-sql conds)
-          sql (str "SELECT COALESCE(SUM((data->>'" fname "')::numeric), 0) AS s"
+          ;; un-coalesced deliberately: SUM over no contributions is
+          ;; NULL, and the maintainer owns the empty default (0, or
+          ;; absent under {:when-empty :absent})
+          sql (str "SELECT SUM((data->>'" fname "')::numeric) AS s"
                    " FROM " table
                    (when (seq parts)
                      (str " WHERE " (str/join " AND " (map first parts)))))]

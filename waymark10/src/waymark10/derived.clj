@@ -16,7 +16,9 @@
   Batch C adds its sibling, earned by the meal-prep quantity rollup
   the blast-radius acceptance declares: {:sum {:related <edge> |
   :owns <child-kind>, :where {…}, :of <target-field>}} — the exact
-  sum of the target field over the same edge-matched rows. Cross-kind
+  sum of the target field over the same edge-matched rows; its
+  optional :when-empty :absent lands nil instead of 0 when the sum
+  has no contributions (no information is not a zero). Cross-kind
   facts read ONLY through these declared edges; the expression
   language stays own-scope. An aggregate fact composes like any data
   field: a derived-over-derived expression names it in :over and

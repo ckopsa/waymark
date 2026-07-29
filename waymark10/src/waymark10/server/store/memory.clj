@@ -316,14 +316,17 @@
                    (vals (get-in @state [:tables kind])))))
 
   (sum-matching [_ _tx kind of conds]
-    ;; SQL SUM skips NULLs; the twin skips non-numbers. Always a
-    ;; BigDecimal, exactly as the ::numeric cast answers.
-    (transduce (comp (filter #(matches-all? % conds))
-                     (keep #(get-in % [:data of]))
-                     (filter number?)
-                     (map bigdec))
-               + 0M
-               (vals (get-in @state [:tables kind]))))
+    ;; SQL SUM skips NULLs; the twin skips non-numbers. And SUM over
+    ;; NO contributions is NULL — the twin answers nil exactly as the
+    ;; un-coalesced ::numeric SUM does; the maintainer owns the empty
+    ;; default. Otherwise always a BigDecimal.
+    (let [vs (into []
+                   (comp (filter #(matches-all? % conds))
+                         (keep #(get-in % [:data of]))
+                         (filter number?)
+                         (map bigdec))
+                   (vals (get-in @state [:tables kind])))]
+      (when (seq vs) (reduce + 0M vs))))
 
   (ids-matching [_ _tx kind conds limit]
     (into []

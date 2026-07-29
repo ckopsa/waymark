@@ -77,16 +77,19 @@
   "The aggregate facet, canonical: the edge by name, where sets as
   sorted vectors — a set has no order, a fingerprint must. :sum
   (batch C) adds :of, the summed target field — edge-identity class,
-  like the edge names."
+  like the edge names — and :when-empty, the empty-sum semantics
+  (projected only when declared, so every default-spelled sum hashes
+  byte-identical to before the option existed)."
   [c]
   (cond-> {}
-    (:related c) (assoc "related" (name (:related c)))
-    (:owns c)    (assoc "owns" (name (:owns c)))
-    (:of c)      (assoc "of" (name (:of c)))
-    (:where c)   (assoc "where" (into (sorted-map)
-                                      (map (fn [[f vs]]
-                                             [(name f) (vec (sort-by str vs))]))
-                                      (:where c)))))
+    (:related c)    (assoc "related" (name (:related c)))
+    (:owns c)       (assoc "owns" (name (:owns c)))
+    (:of c)         (assoc "of" (name (:of c)))
+    (:when-empty c) (assoc "when_empty" (name (:when-empty c)))
+    (:where c)      (assoc "where" (into (sorted-map)
+                                         (map (fn [[f vs]]
+                                                [(name f) (vec (sort-by str vs))]))
+                                         (:where c)))))
 
 (defn- derived-fp [d]
   (cond-> {"over" (mapv name (:over d))}
@@ -360,7 +363,10 @@
 ;; (count.related / count.owns) is :code-or-shape — the maintainer's
 ;; reverse map is built from resident declarations. sum.where (batch
 ;; C) inherits the rule verbatim; sum.of is edge identity — the
-;; column the SQL reads — and stays :code-or-shape with the edges.
+;; column the SQL reads — and stays :code-or-shape with the edges, as
+;; does sum.when_empty — what an empty sum MEANS is the resident
+;; read, not a stored parameter, so flipping it promotes totally (and
+;; the promote's backfill restamps every landed value).
 (def ^:private data-law-path
   #"^derived\.[^.]+\.(?:tolerance$|expr(?:\..+)?$|(?:count|sum)\.where(?:\..+)?$|over\.\d+\.(?:child|related)\.where(?:\..+)?$)")
 

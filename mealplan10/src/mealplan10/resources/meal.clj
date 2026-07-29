@@ -49,9 +49,13 @@
   otherwise look identical to cheap ones. Promotion mints f_*
   generated columns; the migrate planner adds them additively
   (data-safe — Postgres backfills a generated column from the
-  document it derives from). And unpriced ≠ free: the sum grammar
-  coalesces an empty edge to 0, so an est_cost_cents of 0 is read
-  beside priced_ingredients (see :deviations).
+  document it derives from). And unpriced ≠ free, by law since
+  waymark-vpv (2026-07-29, retiring the recorded deviation): the
+  :sum grammar grew {:when-empty :absent}, so a meal with no priced
+  information reports est_cost_cents nil — unknown, sorting after
+  every real price (ASC nulls-last) — and only a genuinely-zero sum
+  reads as $0; priced_ingredients=0 beside has_recipe still names
+  the unpriced shelf.
 
   Recorded deviations ride the declaration itself (:deviations, DX
   phase 5) — fingerprint-carried, rendered by waymark10.dev/explain."
@@ -106,8 +110,12 @@
 ;; ── the cost rollups (pantry-prices era) ────────────────────────────
 
 (defderived meal-est-cost
+  ;; :when-empty :absent — an unpriced meal is unknown, never free:
+  ;; zero on_recipe lines, or lines none of which carry an estimate,
+  ;; land nil (waymark-vpv; the boot's promote backfill restamped the
+  ;; old 0s)
   {:sum {:owns :meal_line :where {:state #{"on_recipe"}}
-         :of :est_cost_cents}})
+         :of :est_cost_cents :when-empty :absent}})
 
 (defderived priced-ingredients
   {:count {:owns :meal_line :where {:state #{"on_recipe"}
@@ -221,8 +229,7 @@
     "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
     "v10 summary templates carry no |join filter — the summary names the meal and its state only."
     "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."
-    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."
-    "est_cost_cents reads 0 over zero priced lines — the SUM aggregate coalesces an empty edge to 0 and the expression grammar has no conditional to blank a number — so unpriced-not-free is carried by the promoted facets instead: priced_ingredients=0 beside has_recipe."]
+    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."]
    ;; the lifecycle doors as flow rows, each wearing its safety story;
    ;; :states stays spelled because the rows are not the whole machine
    ;; (the bulk accept and the editors live in :actions below)

@@ -62,7 +62,11 @@
 ;;    catalog-health facets (total/priced_ingredients promoted to
 ;;    :filter, the composed has_recipe fact), and the unpriced≠$0
 ;;    deviation sentence landed in both spellings — intentional law
-;;    changes, not style drift ─────────────────────────────────────────
+;;    changes, not style drift. Moved again 2026-07-29 (waymark-vpv):
+;;    meal-est-cost adopted the framework's new {:when-empty :absent}
+;;    (an unpriced meal is unknown, not free) and the deviation
+;;    sentence RETIRED — the shared defderived var carries the option
+;;    into both spellings; the dropped sentence leaves both literals ──
 
 (def old-meal
   {:kind :meal
@@ -113,8 +117,7 @@
     "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
     "v10 summary templates carry no |join filter — the summary names the meal and its state only."
     "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."
-    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."
-    "est_cost_cents reads 0 over zero priced lines — the SUM aggregate coalesces an empty edge to 0 and the expression grammar has no conditional to blank a number — so unpriced-not-free is carried by the promoted facets instead: priced_ingredients=0 beside has_recipe."]
+    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."]
    :actions
    {:accept {:from #{:suggested} :to :on_list
              :safety {:idempotent true :reversible false :confirm false
@@ -647,8 +650,14 @@
   ;; cooked-leftover clock): the meal gained update_details (the human
   ;; fix-it door), the catalog-health facets (total/priced_ingredients
   ;; promoted, the composed has_recipe), and the unpriced≠$0 deviation
-  ;; sentence — intentional law changes, not style drift
-  {:meal      "584e7f0e9b0f233335a862b5bacdcb951d55af5f10757bf787a4508456660af3"
+  ;; sentence — intentional law changes, not style drift.
+  ;; re-pinned 2026-07-29 (waymark-vpv): meal-est-cost adopted
+  ;; {:when-empty :absent} (sum.when_empty joined the facet — an
+  ;; unpriced meal lands nil, not 0) and the unpriced≠$0 deviation
+  ;; sentence retired, its law now the sum option itself — an
+  ;; intentional law change whose promote backfill restamps the
+  ;; stored 0s
+  {:meal      "fafa6d152fa12f33f1ef2a66109ab9c939e518da872d9343027fb3a0e0df9390"
    ;; re-pinned 2026-07-24: :date gained :filter #{:eq :range} — the
    ;; day board's related join (one engine since waymark-bwu.2) needs
    ;; the promoted column; an intentional law change, not style drift

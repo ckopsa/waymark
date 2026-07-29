@@ -3,8 +3,14 @@
   mirrors the count: declared over an owns/related edge, computed by
   the maintainer's SQL, fingerprinted as a facet whose where is
   data-law; an expression fact composes over it. The DAG walk refuses
-  aggregate cycles by their kind.fact path at assembly. Suite-local
-  kinds; real Postgres (the DAG tests are registry-pure)."
+  aggregate cycles by their kind.fact path at assembly. Since the
+  sum-over-empty growth (waymark-vpv): {:when-empty :absent} lands
+  nil where nothing contributes — zero matching rows, or matches
+  whose :of are all nil — over Postgres and the memory twin alike;
+  the option is fingerprint law (code-or-shape, backfilled on
+  promote) and the default stays 0-over-empty, hash-identical to
+  before. Suite-local kinds; real Postgres (the DAG tests are
+  registry-pure)."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]
@@ -14,6 +20,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
+            [waymark10.server.store.memory :as memory]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
             [waymark10.types :as t]))
@@ -33,11 +40,14 @@
             (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
       (finally (pg/close! st)))))
 
-(defn- with-eng [resources f]
-  (let [st (pg/storage db/dsn)]
-    (try
-      (f (engine/engine {:storage st :resources resources}))
-      (finally (pg/close! st)))))
+(defn- with-eng
+  ([resources f] (with-eng resources nil f))
+  ([resources mode f]
+   (let [st (pg/storage db/dsn)]
+     (try
+       (f (engine/engine (cond-> {:storage st :resources resources}
+                           mode (assoc :deploy-mode mode))))
+       (finally (pg/close! st))))))
 
 (def ^:private elena (t/principal {:id "elena" :display "Elena"}))
 
@@ -71,6 +81,15 @@
 
 (def ^:private crate (r/resource (crate-map #{"todo"})))
 
+(defn- absent-crate-map
+  "The crate with the sum opted into absent-over-empty: zero matching
+  rows (or matches whose :of are all nil) land nil, not 0."
+  [open-where]
+  (assoc-in (crate-map open-where)
+            [:derived :total_qty :sum :when-empty] :absent))
+
+(def ^:private absent-crate (r/resource (absent-crate-map #{"todo"})))
+
 (def ^:private item
   (r/resource
    {:kind :c_sum_item
@@ -81,7 +100,9 @@
     :summary "{data.title} · {state}"
     :schema [:map
              [:title [:string {:min 1 :max 40}]]
-             [:qty {:filter #{:eq}} :int]
+             ;; :maybe deliberately: an unquantified item is the
+             ;; nil-:of contributor the absent tests need
+             [:qty {:optional true :filter #{:eq}} [:maybe :int]]
              [:crate_id {:kind :c_sum_crate} :waymark/ref]]
     :filterable {:crate_id #{:eq}}
     :actions {:finish {:from #{:todo} :to :done
@@ -127,6 +148,132 @@
             (is (seq classes))
             (is (every? #{"recompute"} classes))))))))
 
+(deftest default-sum-lands-zero-when-nothing-contributes
+  ;; the pre-option law, unchanged: matched rows whose :of are all nil
+  ;; still land 0 under the default spelling (COALESCE semantics kept)
+  (fresh!)
+  (with-eng [crate item]
+    (fn [eng]
+      (let [c (:row (inv/create! eng :c_sum_crate {:title "c"}
+                                 {:principal elena}))]
+        (inv/create! eng :c_sum_item {:title "i" :crate_id (:id c)}
+                     {:principal elena})
+        (is (= 0 (get-in (reload eng :c_sum_crate (:id c))
+                         [:data :total_qty]))
+            "one matching row, nil :of — the default still says 0")))))
+
+;; ── 1b. :when-empty :absent — an empty sum is unknown, not free ─────
+
+(deftest absent-sum-lands-nil-not-zero
+  (fresh!)
+  (with-eng [absent-crate item]
+    (fn [eng]
+      (let [c (:row (inv/create! eng :c_sum_crate {:title "c"}
+                                 {:principal elena}))]
+        (is (nil? (get-in (reload eng :c_sum_crate (:id c))
+                          [:data :total_qty]))
+            "zero matching rows land ABSENT, not 0")
+        (let [i1 (:row (inv/create! eng :c_sum_item
+                                    {:title "i1" :qty 4 :crate_id (:id c)}
+                                    {:principal elena}))]
+          (is (= 4 (get-in (reload eng :c_sum_crate (:id c))
+                           [:data :total_qty]))
+              "matching rows sum normally")
+          (inv/create! eng :c_sum_item {:title "i2" :crate_id (:id c)}
+                       {:principal elena})
+          (let [row (reload eng :c_sum_crate (:id c))]
+            (is (= 4 (get-in row [:data :total_qty]))
+                "a nil :of contributes nothing")
+            (is (false? (get-in row [:data :heavy]))
+                "the composed expression fact reads the sum as any field"))
+          (testing "the only quantified match leaves the where — no
+                    priced information remains, so the sum is absent"
+            (inv/invoke! eng :c_sum_item (:id i1) :finish nil
+                         {:principal elena})
+            (let [row (reload eng :c_sum_crate (:id c))]
+              (is (nil? (get-in row [:data :total_qty]))
+                  "a match with a nil :of is no information — nil, the
+                   same answer SQL's un-coalesced SUM gives")
+              (is (false? (get-in row [:data :heavy]))
+                  "ordering over nil is false — the expression grammar
+                   stays total"))))))))
+
+(deftest absent-sum-agrees-over-the-memory-twin
+  ;; the same scenario over the memory storage: the twin must answer
+  ;; EXACTLY as Postgres's un-coalesced SUM does at every step
+  (let [eng (engine/engine {:storage (memory/storage)
+                            :resources [absent-crate item]})
+        c (:row (inv/create! eng :c_sum_crate {:title "c"}
+                             {:principal elena}))]
+    (is (nil? (get-in (reload eng :c_sum_crate (:id c)) [:data :total_qty]))
+        "zero matching rows: nil over memory too")
+    (let [i1 (:row (inv/create! eng :c_sum_item
+                                {:title "i1" :qty 4 :crate_id (:id c)}
+                                {:principal elena}))]
+      (inv/create! eng :c_sum_item {:title "i2" :crate_id (:id c)}
+                   {:principal elena})
+      (is (= 4 (get-in (reload eng :c_sum_crate (:id c)) [:data :total_qty]))
+          "sums normally; the nil :of contributes nothing")
+      (inv/invoke! eng :c_sum_item (:id i1) :finish nil {:principal elena})
+      (is (nil? (get-in (reload eng :c_sum_crate (:id c)) [:data :total_qty]))
+          "all-nil matches: nil over memory too"))))
+
+(deftest when-empty-is-checked-at-declaration
+  (testing "the only spelling is :absent"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #":when-empty"
+         (r/resource (assoc-in (crate-map #{"todo"})
+                               [:derived :total_qty :sum :when-empty]
+                               :zero)))))
+  (testing "an unknown aggregate key is refused (the closed grammar)"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"exactly one edge"
+         (r/resource (assoc-in (crate-map #{"todo"})
+                               [:derived :total_qty :sum :on-empty]
+                               :absent)))))
+  (testing "an absent sum fact must accept nil in the schema"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"\[:maybe"
+         (r/resource
+          (-> (absent-crate-map #{"todo"})
+              (assoc :schema [:map
+                              [:title [:string {:min 1 :max 40}]]
+                              [:total_qty {:optional true} :int]
+                              [:heavy {:optional true} [:maybe :boolean]]]))))))
+  (testing ":count refuses the option — an empty count is honestly 0"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"exactly one edge"
+         (r/resource
+          (-> (crate-map #{"todo"})
+              (assoc-in [:derived :open_count]
+                        {:count {:owns :c_sum_item
+                                 :where {:state #{"todo"}}
+                                 :when-empty :absent}})
+              (update :schema conj
+                      [:open_count {:optional true} [:maybe :int]])))))))
+
+(deftest promote-backfill-turns-stored-zeros-absent
+  ;; the prod story: rows landed 0 under the old law; the redeclared
+  ;; sum's fingerprint moves (code-or-shape), the boot promotes, and
+  ;; the wired backfill restamps the stored 0 to nil — no row writes
+  (fresh!)
+  (let [id (atom nil)]
+    (with-eng [crate item] :promote
+      (fn [eng]
+        (let [c (:row (inv/create! eng :c_sum_crate {:title "c"}
+                                   {:principal elena}))]
+          (reset! id (:id c))
+          (is (= 0 (get-in (reload eng :c_sum_crate (:id c))
+                           [:data :total_qty]))
+              "the old law landed 0 over the empty edge"))))
+    (with-eng [absent-crate item] :promote
+      (fn [eng]
+        (let [row (reload eng :c_sum_crate @id)]
+          (is (nil? (get-in row [:data :total_qty]))
+              "the promote's backfill restamped the stored 0 to nil")
+          (is (= 1 (:version row))
+              "maintenance, not a write — the version never moved"))))))
+
 ;; ── 2. the fingerprint facet and its law class ──────────────────────
 
 (deftest sum-facet-fingerprints-and-classifies
@@ -145,7 +292,20 @@
                                  (assoc-in [:derived :total_qty :sum :of]
                                            :crate_id))))]
         (is (= :code-or-shape
-               (fp/classify-diff (fp/diff-fingerprints fp1 fp3))))))))
+               (fp/classify-diff (fp/diff-fingerprints fp1 fp3))))))
+    (testing "sum.when_empty is law: the facet carries it, the hash
+              moves, the diff promotes totally, the fact goes stale"
+      (let [fpa (fp/fingerprint-of absent-crate)
+            diff (fp/diff-fingerprints fp1 fpa)]
+        (is (= {"owns" "c_sum_item" "of" "qty" "when_empty" "absent"
+                "where" {"state" ["todo"]}}
+               (get-in fpa ["derived" "total_qty" "sum"])))
+        (is (not= (fp/fingerprint-hash fp1) (fp/fingerprint-hash fpa))
+            "adding the option mints a revision")
+        (is (= :code-or-shape (fp/classify-diff diff))
+            "empty-sum semantics are the resident read, never held")
+        (is (= ["total_qty"] (fp/stale-facts diff))
+            "the promote's backfill restamps the landed values")))))
 
 ;; ── 3. the cross-kind fact DAG ──────────────────────────────────────
 

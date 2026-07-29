@@ -580,15 +580,18 @@
 (defn- check-aggregate-spec
   "One aggregate spec (batch C generalizes phase 6's count check to
   the pair): {:count|:sum {:related <edge> | :owns <child-kind>,
-  :where {field #{values}}, (:sum only) :of <field>}} — exactly one
-  edge, a shaped where, no :over (an aggregate's inputs ARE its
-  edge). A count fact is an :int; a sum fact is :int or :decimal and
-  MUST name :of, the summed target field. The edge's (and :of's)
+  :where {field #{values}}, (:sum only) :of <field>, :when-empty
+  :absent}} — exactly one edge, a shaped where, no :over (an
+  aggregate's inputs ARE its edge). A count fact is an :int; a sum
+  fact is :int or :decimal and MUST name :of, the summed target
+  field. :when-empty :absent (sum only) lands nil when the sum has no
+  contributions — no information is not a zero — and requires the
+  fact's schema to accept nil ([:maybe …]). The edge's (and :of's)
   existence is an assembly question (checks-assembly)."
   [r fact d agg-key]
   (let [c (get d agg-key)
         an (name agg-key)
-        allowed (if (= :sum agg-key) #{:related :owns :where :of}
+        allowed (if (= :sum agg-key) #{:related :owns :where :of :when-empty}
                     #{:related :owns :where})]
     (when (seq (:over d))
       (err r :derived (str "derived field " fact ": a " an "'s inputs are its "
@@ -599,7 +602,8 @@
                    (every? keyword? (vals (select-keys c [:related :owns]))))
       (err r :derived (str "derived field " fact ": :" an " is {:related <edge> "
                            "| :owns <child-kind>, :where {field #{values}}"
-                           (when (= :sum agg-key) ", :of <field>")
+                           (when (= :sum agg-key)
+                             ", :of <field>, :when-empty :absent")
                            "} — exactly one edge")))
     (when (contains? c :where)
       (let [w (:where c)]
@@ -617,7 +621,18 @@
                              (schema-head (schema/field-schema (:schema r) fact)))
           (err r :derived (str "derived field " fact ": a sum fact is numeric — "
                                "declare " fact " as :int or :decimal in the "
-                               "schema"))))
+                               "schema")))
+        (when (contains? c :when-empty)
+          (when-not (= :absent (:when-empty c))
+            (err r :derived (str "derived field " fact ": :sum :when-empty has "
+                                 "one spelling, :absent (a sum with no "
+                                 "contributions lands nil); omit it for the "
+                                 "0-over-empty default")))
+          (let [s (:schema (get (schema/entry-map (:schema r)) fact))]
+            (when-not (and (vector? s) (= :maybe (first s)))
+              (err r :derived (str "derived field " fact ": :when-empty :absent "
+                                   "lands nil — declare " fact " as [:maybe …] "
+                                   "in the schema"))))))
       (when-not (= :int (schema-head (schema/field-schema (:schema r) fact)))
         (err r :derived (str "derived field " fact ": a count fact is an int — "
                              "declare " fact " as :int in the schema"))))))

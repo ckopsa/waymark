@@ -11,10 +11,13 @@
   - catalog health: ?total_ingredients=0 / has_recipe=false are real
     queries — the empty shells among the meals stop hiding behind
     the cheap ones;
-  - unpriced ≠ free: a meal whose lines none price reports
-    est_cost_cents 0 (the SUM-over-empty coalesce, recorded in
-    :deviations) — the truth rides the facets: priced_ingredients=0
-    beside has_recipe=true, filterable; a priced line reports the
+  - unpriced ≠ free, by law since waymark-vpv (2026-07-29): a meal
+    whose lines none price — and a meal with no lines at all —
+    reports est_cost_cents nil (meal-est-cost's :when-empty :absent;
+    the old SUM-over-empty-coalesces-to-0 deviation retired), so an
+    unknown cost can no longer sort or budget as free; the facets
+    still name the shelf (priced_ingredients=0 beside
+    has_recipe=true, filterable), and a priced line reports the
     honest sum.
 
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
@@ -162,7 +165,9 @@
     (testing "the counts and the composed bool are facts on the row"
       (let [b (get-env (:self bare))]
         (is (= 0 (get-in b [:data :total_ingredients])))
-        (is (false? (get-in b [:data :has_recipe]))))
+        (is (false? (get-in b [:data :has_recipe])))
+        (is (nil? (get-in b [:data :est_cost_cents]))
+            "no lines at all: the cost is unknown, not $0 (waymark-vpv)"))
       (is (true? (get-in (get-env (:self full)) [:data :has_recipe]))))
     (testing "?total_ingredients=0 is a real query now"
       (let [zero (selves (get-env "/api/meals"
@@ -191,10 +196,12 @@
     (testing "the line itself is honestly blank"
       (is (nil? (get-in line [:data :est_cost_cents])))
       (is (false? (get-in line [:data :priced]))))
-    (testing "the meal's est reads 0 — the recorded SUM-over-empty
-              deviation — and the facets say unpriced, not free"
+    (testing "the meal's est is ABSENT — no priced information is nil,
+              not $0 (waymark-vpv retired the SUM-over-empty
+              deviation) — and the facets still say unpriced"
       (let [env (get-env (:self steak))]
-        (is (= 0 (get-in env [:data :est_cost_cents])))
+        (is (nil? (get-in env [:data :est_cost_cents]))
+            "a line with no estimate contributes no information")
         (is (= 0 (get-in env [:data :priced_ingredients])))
         (is (= 1 (get-in env [:data :total_ingredients])))
         (is (true? (get-in env [:data :has_recipe])))))
