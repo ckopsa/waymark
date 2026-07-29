@@ -41,7 +41,11 @@
   fanned over a selection (accept_many's bulk shape), and just as
   honestly non-idempotent, so the whole call demands one
   Idempotency-Key. mark_out is the idempotent
-  overwrite it looks like. Era 4 adds the second clock:
+  overwrite it looks like. stocked_on filters on :range as well as
+  :eq, so ?stocked_on_lte=<date>&stocked=true is the staple
+  re-confirmation queue — \"still have the paprika?\" after N quiet
+  months, with restock already the one-tap answer — a query over the
+  existing stamp, deliberately not a new clock fact or action. Era 4 adds the second clock:
   opened_shelf_life_days is how long the ingredient keeps once
   opened — the anchor/flex solver's input, never a law here."
   (:require [waymark10.dsl :refer [defaction defderived defguardfn
@@ -246,7 +250,11 @@
             ;; Solver input only; no law here reads it
             [:opened_shelf_life_days {:optional true}
              [:maybe [:int {:min 1}]]]
-            [:stocked_on {:optional true} [:maybe :waymark/date]]
+            ;; promoted (?stocked_on_lte= beside stocked=true) so the
+            ;; staple re-confirmation queue is a query, not a new
+            ;; clock fact — deliberately the minimal spelling
+            [:stocked_on {:optional true :filter #{:eq :range}}
+             [:maybe :waymark/date]]
             [:out {:optional true} [:maybe :boolean]]
             [:stocked {:optional true :derived stocked :filter #{:eq}}
              [:maybe :boolean]]

@@ -13,6 +13,15 @@
     item carrying an ingredient ref in the same commit, advertised as
     :touches; unref'd manual items stamp nothing.
 
+  And the two fill-the-gaps queues that ride on it:
+
+  - needs_weight (product): priced but weightless — a sighting with
+    no package_grams — answers ?needs_weight=true until update_details
+    records the weight and the unit math unlocks;
+  - stocked_on promoted to :range, so ?stocked_on_lte=<date> beside
+    stocked=true is the staple re-confirmation queue, restock the
+    one-tap answer.
+
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
@@ -213,7 +222,88 @@
         (is (false? (get-in env [:data :out])))
         (is (true? (get-in env [:data :stocked])))))))
 
-;; ── 4. the purchase stamp ───────────────────────────────────────────
+;; ── 4. the two fill-the-gaps queues ─────────────────────────────────
+
+(deftest needs-weight-is-the-priced-but-weightless-queue
+  (let [almonds (active-ingredient! "Almonds (pst)")
+        iid (id-of almonds)
+        weightless (created! "products"
+                             {:ingredient_id iid :store "costco"
+                              :name "Kirkland almonds (pst)"
+                              :sightings [{:seen_on "2026-07-01"
+                                           :price_cents 1299
+                                           :source "receipt"}]})
+        unpriced (created! "products"
+                           {:ingredient_id iid :store "winco"
+                            :name "WinCo almonds (pst)"})]
+    (act! (:self weightless) :confirm_match)
+    (act! (:self unpriced) :confirm_match)
+    (testing "priced but weightless: the sighting landed, the unit
+              math didn't"
+      (let [env (get-env (:self weightless))]
+        (is (= 1299 (get-in env [:data :latest_price_cents])))
+        (is (nil? (get-in env [:data :cents_per_100g])))
+        (is (true? (get-in env [:data :needs_weight])))))
+    (testing "unpriced is not in the gap — nothing to pro-rate yet"
+      (is (false? (get-in (get-env (:self unpriced))
+                          [:data :needs_weight]))))
+    (testing "?needs_weight=true is the fill-the-gap sweep"
+      (let [q (get-env "/api/products"
+                       (str "ingredient_id=" iid
+                            "&state=tracked&needs_weight=true"))]
+        (is (= [(:self weightless)]
+               (mapv :self (get-in q [:data :items]))))))
+    (testing "the filter is the queue, not a wall — receipts don't
+              carry weights, so record_sighting stays open"
+      (let [env (act! (:self weightless) :record_sighting
+                      {:seen_on "2026-07-08" :price_cents 1349
+                       :source "receipt"})]
+        (is (= 1349 (get-in env [:data :latest_price_cents])))
+        (is (true? (get-in env [:data :needs_weight])))))
+    (testing "update_details records the weight — the fact flips and
+              the unit math unlocks in the same write"
+      (let [env (act! (:self weightless) :update_details
+                      {:package_grams 1360})]
+        (is (false? (get-in env [:data :needs_weight])))
+        (is (= 99 (get-in env [:data :cents_per_100g]))    ; 1349×100÷1360
+            "cents_per_100g appears with the weight"))
+      (let [q (get-env "/api/products"
+                       (str "ingredient_id=" iid
+                            "&state=tracked&needs_weight=true"))]
+        (is (= 0 (get-in q [:data :total]))
+            "the queue is empty once the weight is on record")))))
+
+(deftest stocked-on-is-the-staple-reconfirmation-queue
+  ;; wind the world back: paprika was last confirmed in March — a
+  ;; dated restock through the engine's clock, the only stocked_on
+  ;; writer there is
+  (reset! *clock* (Instant/parse "2026-03-05T12:00:00Z"))
+  (let [paprika (active-ingredient! "Paprika (pst)")]
+    (restock! (:self paprika))
+    (reset! *clock* (Instant/parse "2026-07-08T12:00:00Z"))
+    (let [oregano (active-ingredient! "Oregano (pst)")]
+      (restock! (:self oregano))
+      (testing "both staples read stocked — sticky, no clock"
+        (is (true? (get-in (get-env (:self paprika)) [:data :stocked])))
+        (is (true? (get-in (get-env (:self oregano)) [:data :stocked]))))
+      (testing "?stocked_on_lte beside stocked=true is the quiet-months
+                queue — still have the paprika?"
+        (let [q (get-env "/api/ingredients"
+                         "state=active&stocked=true&stocked_on_lte=2026-04-08")
+              selves (into #{} (map :self) (get-in q [:data :items]))]
+          (is (contains? selves (:self paprika))
+              "restocked four quiet months ago — up for re-confirmation")
+          (is (not (contains? selves (:self oregano)))
+              "restocked today — not in the queue")))
+      (testing "restock is the one-tap answer — the row leaves the queue"
+        (let [env (restock! (:self paprika))]
+          (is (= "2026-07-08" (get-in env [:data :stocked_on]))))
+        (let [q (get-env "/api/ingredients"
+                         "state=active&stocked=true&stocked_on_lte=2026-04-08")]
+          (is (not (some #(= (:self paprika) (:self %))
+                         (get-in q [:data :items])))))))))
+
+;; ── 5. the purchase stamp ───────────────────────────────────────────
 
 (deftest a-completed-shop-stamps-the-pantry
   (let [thighs (active-ingredient! "Chicken thighs (pst)")

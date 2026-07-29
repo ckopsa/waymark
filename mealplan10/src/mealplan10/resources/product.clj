@@ -20,7 +20,10 @@
   its fn= lambdas. price_is_stale IS a law: a clock fact whose
   :flips-at hands the maintainer the exact instant, so the scraper's
   whole work queue is ?state=tracked&price_is_stale=true with no
-  write and no poll."
+  write and no poll. needs_weight is the other queue — priced but
+  weightless (latest_price_cents set, package_grams nil), so
+  ?needs_weight=true sweeps the products whose spend can't pro-rate
+  until a human records the package weight."
   (:require [waymark10.dsl :refer [defaction defderived defresource
                                    defhandler guard]])
   (:import (java.time LocalDate ZoneOffset)))
@@ -71,6 +74,18 @@
                        .toInstant))
    :explain "Last priced {last} — a receipt line or a scrape refreshes it."
    :vars {:last '(var :last_seen_on)}})
+
+;; the priced-but-weightless gap: a receipt line prices a product the
+;; family never weighed, so cents_per_100g stays blank and the spend
+;; can't pro-rate. The filter is the queue, not a wall — package_grams
+;; STAYS nullable and record_sighting STAYS unblocked, because
+;; receipts don't carry weights; ?needs_weight=true is the sweep and
+;; update_details is the fix
+(defderived needs-weight
+  {:over [:latest_price_cents :package_grams]
+   :expr '(and (is-set (var :latest_price_cents))
+               (not (is-set (var :package_grams))))
+   :explain "Priced but weightless — record the package weight and the unit math unlocks."})
 
 (def sighting-on-record
   (guard {:name :sighting-on-record
@@ -189,6 +204,9 @@
              [:maybe [:int {:min 0}]]]
             [:price_is_stale {:optional true :derived price-is-stale
                               :filter #{:eq}}
+             [:maybe :boolean]]
+            [:needs_weight {:optional true :derived needs-weight
+                            :filter #{:eq}}
              [:maybe :boolean]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
