@@ -38,25 +38,41 @@
 
 ;; ── the pricing law (handler code — the v9 fn= boundary) ────────────
 
-(defn- best-unit-price
-  "The cheapest unit-priceable TRACKED product of an ingredient:
-  preferred-store order first (the ingredient's own list, best
-  first), then cents_per_100g. nil when nothing is unit-priceable."
+(defn best-product
+  "The best TRACKED product of an ingredient, picked exactly as the
+  pricing law picks it: unit-priceable products first, in
+  preferred-store order (the ingredient's own list, best first), then
+  by cents_per_100g — so whenever anything unit-prices, the winner IS
+  the product the pricing arithmetic uses. When nothing unit-prices,
+  the best tracked product by preferred-store order alone: identity
+  without arithmetic, so a priced-but-weightless product can still
+  name itself. nil when the ingredient has no tracked products.
+  Shared law (waymark-cx0): price-line prices through this winner's
+  unit price, and grocery-list's compile_from_plan cites it to
+  resolve each compiled item's shopping identity (product, store,
+  product_id)."
   [ctx ingredient-id]
   (when-some [find' (:find ctx)]
     (let [ing ((:read ctx) :ingredient ingredient-id)
           prefs (into {}
                       (map-indexed (fn [i s] [s i]))
                       (get-in ing [:data :preferred_stores]))
-          offers (keep (fn [p]
-                         (when-some [u (get-in p [:data :cents_per_100g])]
-                           {:unit u :store (get-in p [:data :store])}))
-                       (find' :product {:ingredient_id ingredient-id
-                                        :state :tracked}
-                              {:limit 200}))]
-      (:unit (first (sort-by (fn [{:keys [store unit]}]
-                               [(get prefs store 99) unit])
-                             offers))))))
+          rank (fn [p] (get prefs (get-in p [:data :store]) 99))
+          products (find' :product {:ingredient_id ingredient-id
+                                    :state :tracked}
+                          {:limit 200})]
+      (or (first (sort-by (fn [p] [(rank p)
+                                   (get-in p [:data :cents_per_100g])])
+                          (filter #(some? (get-in % [:data :cents_per_100g]))
+                                  products)))
+          (first (sort-by rank products))))))
+
+(defn- best-unit-price
+  "best-product's winner's cents_per_100g — the winner is
+  unit-priceable by construction whenever anything is. nil when
+  nothing is unit-priceable."
+  [ctx ingredient-id]
+  (get-in (best-product ctx ingredient-id) [:data :cents_per_100g]))
 
 (defn- ratio-str
   "×0.8, trailing zeros dropped — garnish for priced_via."

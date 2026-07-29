@@ -372,7 +372,15 @@
 ;;    into a :discarded terminal beside :done, confirmed in the
 ;;    worksheet's own discard voice (danger, order 9) — so stale and
 ;;    test lists stop accumulating; both spellings grew the state and
-;;    the action together ────────────────────────────────────────────
+;;    the action together. And a sixth, 2026-07-29 (the field test's
+;;    second pass — waymark-cx0, waymark-ltr, waymark-9th): the items
+;;    grew the shopping identity (product / store / product_id) and
+;;    the honest price margins (price_note, price_stale), and
+;;    unlinked_items joined the derived counts (:filter :eq/:range —
+;;    ingredient_id stays optional on add_item; visibility instead of
+;;    coercion); both spellings carry the fields and cite the same
+;;    compile handler, which now resolves through
+;;    meal-line/best-product and curates on recompile ───────────────
 
 (def old-grocery-list
   {:kind :grocery_list
@@ -403,6 +411,14 @@
                                         :x-display {:widget "money"
                                                     :label "Est. cost"}}
                        [:maybe [:int {:min 0}]]]
+                      [:product {:optional true}
+                       [:maybe [:string {:max 200}]]]
+                      [:store {:optional true} [:maybe [:string {:max 50}]]]
+                      [:product_id {:optional true :kind :product}
+                       [:maybe :waymark/ref]]
+                      [:price_note {:optional true}
+                       [:maybe [:string {:max 200}]]]
+                      [:price_stale {:optional true} [:maybe :boolean]]
                       [:source {:optional true} [:maybe [:enum "plan"]]]
                       [:have {:optional true} [:maybe :boolean]]]]]
             [:assumed_on_hand {:optional true
@@ -419,6 +435,7 @@
              [:maybe :int]]
             [:priced_items {:optional true} [:maybe :int]]
             [:total_items {:optional true} [:maybe :int]]
+            [:unlinked_items {:optional true} [:maybe :int]]
             [:window_paired {:optional true} [:maybe :boolean]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
@@ -448,6 +465,10 @@
              :total_items
              {:over [:items]
               :expr '(count (var :items))}
+             :unlinked_items
+             {:over [:items]
+              :expr '(count [i (var :items)]
+                            (not (is-set (get i :ingredient_id))))}
              :window_paired
              {:over [:covers_from :covers_until]
               :expr '(or (and (is-set (var :covers_from))
@@ -464,7 +485,8 @@
                 :plan_id #{:eq}
                 :estimated_total_cents #{:eq :range}
                 :priced_items #{:eq :range}
-                :total_items #{:eq :range}}
+                :total_items #{:eq :range}
+                :unlinked_items #{:eq :range}}
    :display {:title "Grocery list"}
    :deviations
    ["The compile walk (plan_day → meal_line, summed per ingredient) is handler code, not law — join-and-group sits outside the expression grammar, the fn= boundary price-line and absorb-duplicate already record."

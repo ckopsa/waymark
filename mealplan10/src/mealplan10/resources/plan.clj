@@ -71,9 +71,11 @@
     week and its state.
   - cross-resource acceptance sets (theme_in_rotation, meal_fits_day)
     and the cross-resource code guards decline when ctx carries no
-    :read/:find — the pure render probe advertises optimistically
-    there; every enforcement ctx (and the conformance probe) carries
-    the hooks, so enforcement and the walker hold the line."
+    :read/:find — mealplan10 boots :probe-reads, so GET's render
+    probe carries the hooks and folds the acceptance sets, while
+    invoke-response envelopes stay the optimistic probe; every
+    enforcement ctx (and the conformance probe) carries the hooks, so
+    enforcement and the walker hold the line."
   (:require [mealplan10.themes :as themes]
             [waymark10.dsl :refer [defaction defderived defguardfn
                                    defresource defhandler expr-guard

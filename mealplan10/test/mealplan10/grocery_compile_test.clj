@@ -23,6 +23,19 @@
   (era 4's per-trip law), a discarded one counts nothing, in the same
   commit — and :discarded is terminal from draft and ready alike.
 
+  The shopping identity and the honest price margins (the field
+  test's second pass — waymark-cx0, waymark-ltr, waymark-9th): the
+  compile resolves each group's best tracked product (preferred-store
+  order, then cents_per_100g — meal-line/best-product, the pricing
+  law's own order) and stamps product/store/product_id; a group no
+  line priced but whose product unit-prices is priced grams × unit
+  (HALF_UP); a priced-but-weightless product stamps price_note; an
+  est priced through a stale product stamps price_stale; recompile
+  derives the need but curates the shopping (prior category always
+  wins; store/product/est survive where the new compile has nothing
+  better); and unlinked_items counts the manual no-ref rows —
+  ingredient_id stays optional, visibility instead of coercion.
+
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
@@ -123,13 +136,20 @@
   (let [i (created! "ingredients" (merge {:name nm} body))]
     (act! (:self i) :accept)))
 
-(defn- priced-product! [ing store nm grams cents]
-  (let [p (created! "products"
-                    {:ingredient_id (id-of ing) :store store :name nm
-                     :package_grams grams
-                     :sightings [{:seen_on "2026-01-02" :price_cents cents
-                                  :source "receipt"}]})]
-    (act! (:self p) :confirm_match)))
+(defn- priced-product!
+  "A tracked, unit-priceable product. The default sighting date
+  (2026-01-02) is >30 days before the fixture clock (2026-07-08), so
+  these products are price_is_stale — pass a fresh seen-on
+  (e.g. 2026-07-01) when the test needs an unstale price."
+  ([ing store nm grams cents]
+   (priced-product! ing store nm grams cents "2026-01-02"))
+  ([ing store nm grams cents seen-on]
+   (let [p (created! "products"
+                     {:ingredient_id (id-of ing) :store store :name nm
+                      :package_grams grams
+                      :sightings [{:seen_on seen-on :price_cents cents
+                                   :source "receipt"}]})]
+     (act! (:self p) :confirm_match))))
 
 (defn- listed-meal! [nm themes]
   (let [m (created! "meals" {:name nm :themes themes})]
@@ -320,6 +340,156 @@
             "the restocked ingredient left the items")
         (is (some? (items "Olive oil (gc3)"))
             "the still-out oil stays an item")))))
+
+;; ── the shopping identity and the honest price margins (the field
+;;    test's second pass — waymark-cx0, waymark-ltr, waymark-9th) ────
+;; 2026-01-06 Tue = mexican, as above; the fixture clock is
+;; 2026-07-08, so a 2026-07-01 sighting is fresh and the helper's
+;; default 2026-01-02 sighting is stale.
+
+(deftest the-compile-resolves-the-product
+  (let [thighs (active-ingredient! "Chicken thighs (cxa)"
+                                   {:category "meat"
+                                    :preferred_stores ["costco" "winco"]})
+        saffron (active-ingredient! "Saffron (cxa)" {:category "spices"})
+        beans (active-ingredient! "Black beans (cxa)" {:category "pantry"})
+        ;; winco is CHEAPER per 100 g (40 vs 70) but costco is
+        ;; PREFERRED — the pricing law's order: store rank first
+        _ (priced-product! thighs "winco" "WinCo thighs (cxa)"
+                           1000 400 "2026-07-01")
+        costco (priced-product! thighs "costco"
+                                "Kirkland Signature Fresh Chicken Thighs (cxa)"
+                                2720 1900 "2026-07-01")
+        ;; a package price with NO package_grams: never unit-priceable
+        _ (let [p (created! "products"
+                            {:ingredient_id (id-of saffron) :store "winco"
+                             :name "Saffron jar (cxa)"
+                             :sightings [{:seen_on "2026-07-01"
+                                          :price_cents 998
+                                          :source "receipt"}]})]
+            (act! (:self p) :confirm_match))
+        ;; the helper's default sighting date is stale by the clock
+        _ (priced-product! beans "winco" "WinCo black beans (cxa)" 1000 300)
+        dinner (listed-meal! "Feast (cxa)" ["mexican"])
+        _ (created! "meal_lines" {:meal_id (id-of dinner)
+                                  :ingredient_id (id-of thighs)
+                                  :grams 500})   ; est 350 via costco
+        _ (created! "meal_lines" {:meal_id (id-of dinner)
+                                  :ingredient_id (id-of saffron)
+                                  :grams 2})     ; unpriced — no unit
+        _ (created! "meal_lines" {:meal_id (id-of dinner)
+                                  :ingredient_id (id-of beans)
+                                  :grams 200})   ; est 60, stale world
+        plan (created! "plans" {:start_date "2026-01-06" :weeks 1})
+        _ (act! (:self (day-env plan "2026-01-06")) :assign_meal
+                {:meal_id (id-of dinner)})
+        glist (created! "grocery_lists" {:plan_id (id-of plan)})
+        gself (:self glist)]
+    (act! gself :add_item {:name "birthday candles (cxa)"})
+    (act! gself :add_item {:name "streamers (cxa)"})
+    (let [env (act! gself :compile_from_plan nil (fresh-key))
+          items (by-name env)]
+      (testing "the compiled item carries the resolved product identity"
+        (let [it (items "Chicken thighs (cxa)")]
+          (is (= "Kirkland Signature Fresh Chicken Thighs (cxa)"
+                 (:product it))
+              "preferred-store order beats the cheaper unit price")
+          (is (= "costco" (:store it)))
+          (is (= (id-of costco) (:product_id it)) "a real :product ref")
+          (is (= 350 (:est_cost_cents it)) "the line's write-time est,
+                                            priced through the same
+                                            product")
+          (is (nil? (:price_stale it)) "a fresh price stamps nothing")
+          (is (nil? (:price_note it)))))
+      (testing "a priced-but-weightless product becomes a note, not
+                an invented unit price"
+        (let [it (items "Saffron (cxa)")]
+          (is (nil? (:est_cost_cents it)) "no per-gram arithmetic")
+          (is (= "≈$9.98 per package, weight unknown" (:price_note it)))
+          (is (= "Saffron jar (cxa)" (:product it))
+              "identity still resolves without arithmetic")
+          (is (= "winco" (:store it)))
+          (is (nil? (:price_stale it)) "no est — nothing priced stale")))
+      (testing "an est priced through a stale product says so"
+        (let [it (items "Black beans (cxa)")]
+          (is (= 60 (:est_cost_cents it)))
+          (is (true? (:price_stale it)))))
+      (testing "unlinked_items counts the manual no-ref rows"
+        (is (= 2 (get-in env [:data :unlinked_items]))
+            "candles and streamers; every compiled item is linked")))))
+
+(deftest an-unpriced-group-prices-through-the-resolved-product
+  (let [rice (active-ingredient! "Arborio rice (cxb)" {:category "pantry"})
+        risotto (listed-meal! "Risotto (cxb)" ["mexican"])
+        ;; the line is born BEFORE any product exists — write-time
+        ;; pricing finds nothing, the est stays blank on the line
+        _ (created! "meal_lines" {:meal_id (id-of risotto)
+                                  :ingredient_id (id-of rice)
+                                  :grams 250})
+        _ (priced-product! rice "winco" "WinCo arborio (cxb)"
+                           1000 200 "2026-07-01")
+        plan (created! "plans" {:start_date "2026-01-06" :weeks 1})
+        _ (act! (:self (day-env plan "2026-01-06")) :assign_meal
+                {:meal_id (id-of risotto)})
+        glist (created! "grocery_lists" {:plan_id (id-of plan)})]
+    (let [env (act! (:self glist) :compile_from_plan nil (fresh-key))
+          it ((by-name env) "Arborio rice (cxb)")]
+      (is (= "250 g" (:quantity it)))
+      (is (= 50 (:est_cost_cents it))
+          "250 g × 20 ¢/100 g, HALF_UP — price-line's arithmetic, on
+           a group no line priced")
+      (is (= "WinCo arborio (cxb)" (:product it)))
+      (is (nil? (:price_stale it)) "the price is fresh"))))
+
+(deftest recompile-preserves-the-hand-curation
+  (let [brisket (active-ingredient! "Brisket (cxc)" {:category "meat"})
+        wax (active-ingredient! "Candlewax (cxc)" {:category "party"})
+        bp (priced-product! brisket "costco" "Costco brisket flat (cxc)"
+                            1000 2000 "2026-07-01")
+        bbq (listed-meal! "BBQ night (cxc)" ["mexican" "american"])
+        _ (created! "meal_lines" {:meal_id (id-of bbq)
+                                  :ingredient_id (id-of brisket)
+                                  :grams 500})   ; est 1000 via costco
+        _ (created! "meal_lines" {:meal_id (id-of bbq)
+                                  :ingredient_id (id-of wax)
+                                  :grams 100})   ; unpriceable, forever
+        plan (created! "plans" {:start_date "2026-01-06" :weeks 1})
+        _ (act! (:self (day-env plan "2026-01-06")) :assign_meal
+                {:meal_id (id-of bbq)})
+        glist (created! "grocery_lists" {:plan_id (id-of plan)})
+        gself (:self glist)]
+    (let [env (act! gself :compile_from_plan nil (fresh-key))
+          it ((by-name env) "Brisket (cxc)")]
+      (is (= "Costco brisket flat (cxc)" (:product it)))
+      (is (= 1000 (:est_cost_cents it))))
+    ;; the hand-curation: the aisle truth and a hand-priced est
+    (act! gself :add_item {:name "Brisket (cxc)" :category "aisle 12"})
+    (act! gself :add_item {:name "Candlewax (cxc)"
+                           :est_cost_cents 10437})
+    ;; the world moves: the product discontinues, the plan grows a
+    ;; second BBQ night — the need doubles
+    (act! (:self bp) :discontinue)
+    (act! (:self (day-env plan "2026-01-07")) :assign_meal
+          {:meal_id (id-of bbq)})
+    (let [env (act! gself :compile_from_plan nil (fresh-key))
+          items (by-name env)]
+      (testing "the need is derived: grams follow the plan"
+        (is (= "1000 g" (:quantity (items "Brisket (cxc)"))))
+        (is (= "200 g" (:quantity (items "Candlewax (cxc)")))))
+      (testing "the shopping is curated: prior category always wins"
+        (is (= "aisle 12" (:category (items "Brisket (cxc)")))
+            "aisle curation beats the ingredient-category default"))
+      (testing "…prior product identity survives when nothing resolves"
+        (let [it (items "Brisket (cxc)")]
+          (is (= "Costco brisket flat (cxc)" (:product it))
+              "the discontinued product resolves nil — the prior
+               compile's identity is kept, not blanked")
+          (is (= "costco" (:store it)))
+          (is (= (id-of bp) (:product_id it)))
+          (is (= 2000 (:est_cost_cents it))
+              "the new line-sum est wins when present — both nights")))
+      (testing "…and a hand-set est survives an est-less recompile"
+        (is (= 10437 (:est_cost_cents (items "Candlewax (cxc)"))))))))
 
 ;; ── the discard door and the honest rollups (waymark-3by,
 ;;    waymark-8se) ───────────────────────────────────────────────────

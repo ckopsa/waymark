@@ -88,8 +88,32 @@
   rides the later trip, and a use no trip can honestly serve still
   lands on the latest trip before it, never dropped.
 
+  The shopping identity (the field test's second pass — waymark-cx0,
+  waymark-ltr, waymark-9th): compile resolves each unstocked group's
+  best tracked product exactly as the pricing law does
+  (meal-line/best-product — preferred-store order, then
+  cents_per_100g) and stamps product / store / product_id beside the
+  item; :name STAYS the ingredient — it is the part key, and identity
+  must survive product changes — and nothing resolved leaves the
+  fields nil, honestly. The est is still the lines' write-time sum
+  when any line priced; a group NO line priced but whose resolved
+  product unit-prices is priced directly (grams × unit, HALF_UP —
+  price-line's arithmetic), a priced-but-weightless product stamps
+  price_note instead of inventing a unit price, and an est priced
+  through a stale product stamps price_stale — unknown and $0 stop
+  reading the same. Recompile resolves derive-or-curate as
+  derive-the-need, curate-the-shopping: grams/quantity/meals always
+  follow the plan, while a prior plan item's hand-editable fields
+  (category above all — aisle curation is human truth — plus store,
+  product, product_id, est_cost_cents, price_note) survive wherever
+  the new compile has nothing better. And the unlinked stay visible
+  (waymark-9th, decided): ingredient_id stays optional on add_item —
+  birthday candles are legal — so unlinked_items counts them instead
+  of coercing a ref.
+
   Recorded punt: the with_plan profile has no v10 spelling."
-  (:require [waymark10.dsl :refer [defderived defguardfn defresource
+  (:require [mealplan10.resources.meal-line :as meal-line]
+            [waymark10.dsl :refer [defderived defguardfn defresource
                                    defhandler guard require-fact]]
             [waymark10.types :as t])
   (:import (java.time LocalDate)))
@@ -281,6 +305,16 @@
 ;; the trip schedule, and compiles only the purchases the solver opens
 ;; at ITS covers_from; the nil-window list takes every use, era-1 law
 ;; untouched.
+;; The shopping identity (waymark-cx0/ltr): each unstocked group
+;; resolves its best tracked product through meal-line/best-product —
+;; the pricing law's own order — for product/store/product_id, prices
+;; the group directly when no line priced but the product
+;; unit-prices, stamps price_note when only a package price exists,
+;; and price_stale when the est priced through a stale product. The
+;; recompile merge below is derive-or-curate, resolved: derive the
+;; NEED (grams, quantity, meals — always the plan's), curate the
+;; SHOPPING (the prior plan item's hand-editable fields survive
+;; wherever this compile has nothing better).
 (defhandler compile-from-plan [row _inp ctx]
   (let [find' (:find ctx)
         read' (:read ctx)
@@ -316,23 +350,59 @@
                                   {:plan_id (get-in row [:data :plan_id])}
                                   {:limit 200}))))
         groups (group-by #(get-in % [:data :ingredient_id]) lines)
-        item-of (fn [iid ing ls]
-                  (let [ests (keep #(get-in % [:data :est_cost_cents]) ls)]
+        item-of (fn [iid ing ls stocked?]
+                  (let [ests (keep #(get-in % [:data :est_cost_cents]) ls)
+                        grams (transduce (map #(get-in % [:data :grams]))
+                                         + ls)
+                        ;; the shopping identity (waymark-cx0): the
+                        ;; best tracked product, resolved exactly as
+                        ;; the pricing law resolves it — skipped for
+                        ;; stocked groups, which buy nothing
+                        best (when-not stocked?
+                               (meal-line/best-product ctx iid))
+                        unit (get-in best [:data :cents_per_100g])
+                        latest (get-in best [:data :latest_price_cents])
+                        est (cond
+                              ;; the lines' write-time estimates,
+                              ;; summed — pricing is linear in grams,
+                              ;; so a partial sum stays an honest
+                              ;; lower bound
+                              (seq ests) (reduce + ests)
+                              ;; no line priced, but the resolved
+                              ;; product unit-prices: price the grams
+                              ;; here — price-line's arithmetic,
+                              ;; HALF_UP (waymark-ltr)
+                              (some? unit)
+                              (quot (+ (* (long grams) (long unit)) 50)
+                                    100))]
                     {:name (or (some #(not-empty
                                        (get-in % [:data :ingredient_name]))
                                      ls)
                                (get-in ing [:data :name]))
-                     :quantity (str (transduce
-                                     (map #(get-in % [:data :grams])) + ls)
-                                    " g")
+                     :quantity (str grams " g")
                      :category (get-in ing [:data :category])
                      :meals (vec (distinct (keep ::meal ls)))
                      :ingredient_id iid
-                     ;; the lines' write-time estimates, summed —
-                     ;; pricing is linear in grams, so a partial sum
-                     ;; stays an honest lower bound; a group NO line
-                     ;; prices stays blank
-                     :est_cost_cents (when (seq ests) (reduce + ests))
+                     ;; :name stays the ingredient (the part key —
+                     ;; identity survives product changes); the
+                     ;; product identity rides beside it, nil when
+                     ;; nothing tracked resolves, honestly
+                     :product (get-in best [:data :name])
+                     :store (get-in best [:data :store])
+                     :product_id (:id best)
+                     :est_cost_cents est
+                     ;; a package price with no weight: visible,
+                     ;; never converted — no invented unit price
+                     :price_note (when (and (nil? est) (some? latest))
+                                   (format "≈$%d.%02d per package, weight unknown"
+                                           (quot (long latest) 100)
+                                           (mod (long latest) 100)))
+                     ;; line-sums can price through several products
+                     ;; (and substitutions); staleness reads the one
+                     ;; resolved best product — rough, and said so
+                     :price_stale (when (and (some? est)
+                                             (true? (get-in best [:data :price_is_stale])))
+                                    true)
                      :source "plan"
                      :have false}))
         compiled
@@ -359,7 +429,7 @@
                         ;; opens at another trip is not this trip's
                         ;; problem — no item, no assumption
                         (when (or stocked? (seq mine))
-                          (assoc (item-of iid ing mine)
+                          (assoc (item-of iid ing mine stocked?)
                                  ::stocked stocked?)))))
               (distinct (map #(get-in % [:data :ingredient_id]) lines)))
         to-buy (into [] (comp (remove ::stocked)
@@ -377,16 +447,48 @@
                         on-hand))
         (update-in [:data :items]
                    (fn [items]
-                     (let [kept (into [] (remove #(= "plan" (:source %)))
+                     (let [prior (into {}
+                                       (comp (filter #(= "plan" (:source %)))
+                                             (map (juxt :name identity)))
+                                       items)
+                           kept (into [] (remove #(= "plan" (:source %)))
                                       items)
-                           taken (into #{} (map :name) to-buy)]
+                           taken (into #{} (map :name) to-buy)
+                           ;; derive the need, curate the shopping
+                           ;; (waymark-cx0): grams/quantity/meals are
+                           ;; the plan's and always recompute; the
+                           ;; prior plan item's hand-editable
+                           ;; shopping fields survive wherever this
+                           ;; compile has nothing better — and a
+                           ;; prior category ALWAYS wins over the
+                           ;; ingredient-category default (aisle
+                           ;; curation is human truth; the compile
+                           ;; only fills a blank)
+                           curate (fn [{nm :name :as it}]
+                                    (if-some [old (get prior nm)]
+                                      (-> it
+                                          (assoc :category
+                                                 (or (:category old)
+                                                     (:category it)))
+                                          (update :store
+                                                  #(or % (:store old)))
+                                          (update :product
+                                                  #(or % (:product old)))
+                                          (update :product_id
+                                                  #(or % (:product_id old)))
+                                          (update :est_cost_cents
+                                                  #(or % (:est_cost_cents old)))
+                                          (update :price_note
+                                                  #(or % (:price_note old))))
+                                      it))]
                        ;; manual items survive (nil :source); old plan
-                       ;; items are the compiler's to drop and rewrite. A
-                       ;; manual item whose NAME the compile now claims
-                       ;; becomes the compiled row — the part scope keys
-                       ;; by :name, one row per name
+                       ;; items are the compiler's to drop, rewrite,
+                       ;; and curate from. A manual item whose NAME the
+                       ;; compile now claims becomes the compiled row —
+                       ;; the part scope keys by :name, one row per name
                        (into (into [] (remove #(contains? taken (:name %)))
                                    kept)
+                             (map curate)
                              to-buy)))))))
 
 (defn- ensure-items [row _ctx]
@@ -419,6 +521,13 @@
 (defderived total-items
   {:over [:items]
    :expr '(count (var :items))})
+
+;; the unlinked, visible (waymark-9th, decided): ingredient_id stays
+;; optional on add_item — birthday candles are legal — so the count
+;; surfaces what the pantry logic cannot see instead of coercing a ref
+(defderived unlinked-items
+  {:over [:items]
+   :expr '(count [i (var :items)] (not (is-set (get i :ingredient_id))))})
 
 ;; the window's honest contract (era 4): both ends or neither, in
 ;; order — and required at create (the substitution :distinct
@@ -471,6 +580,19 @@
                                  :x-display {:widget "money"
                                              :label "Est. cost"}}
                 [:maybe [:int {:min 0}]]]
+               ;; the shopping identity (waymark-cx0): the resolved
+               ;; product's name, store, and ref — compiler-stamped,
+               ;; nil when nothing tracked resolves; :name stays the
+               ;; ingredient, the part key
+               [:product {:optional true} [:maybe [:string {:max 200}]]]
+               [:store {:optional true} [:maybe [:string {:max 50}]]]
+               [:product_id {:optional true :kind :product}
+                [:maybe :waymark/ref]]
+               ;; the honest price margins (waymark-ltr): a package
+               ;; price with no weight, and an est priced through a
+               ;; stale product
+               [:price_note {:optional true} [:maybe [:string {:max 200}]]]
+               [:price_stale {:optional true} [:maybe :boolean]]
                ;; provenance (spec-pantry era 1): the compiler's
                ;; stamp, never the client's claim — add_item's input
                ;; does not admit it, and nil reads as manual (no
@@ -502,6 +624,11 @@
              [:maybe :int]]
             [:total_items {:optional true :derived total-items
                            :filter #{:eq :range}}
+             [:maybe :int]]
+            ;; the unlinked count (waymark-9th): visibility instead
+            ;; of coercion — manual no-ref items, surfaced
+            [:unlinked_items {:optional true :derived unlinked-items
+                              :filter #{:eq :range}}
              [:maybe :int]]
             [:window_paired {:optional true :derived window-paired}
              [:maybe :boolean]]
