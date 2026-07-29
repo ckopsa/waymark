@@ -34,12 +34,38 @@
   doors carry no :undo (the inversion rule demands one exact origin);
   add/remove_side_dish are :planned self-loops and keep their honest
   pair. set_sunday_theme re-themes a rotating Sunday PRE-assignment
-  only — a planned Sunday clears first."
+  only — a planned Sunday clears first.
+
+  The meal identity join (waymark-m6j): :related :meal joins the
+  promoted meal_id against the meal row's own id, and recipe_lines
+  sums the meal's total_ingredients through it — a LIVE
+  engine-maintained fact: a meal_line write reaches this row's
+  stored count through the maintainer's meal_line → meal → plan_day
+  chain in the same call, so the number never goes stale. The plan's
+  days_without_recipe counts planned days where it reads 0, and its
+  finalize warning judges that. Considered and rejected: stamping
+  meal_has_recipe here at assign time (ctx :read the meal in the
+  handler) — an as-of-assign copy of meal.has_recipe that a recipe
+  filled in (or emptied) LATER never flips; a second writer of one
+  truth, drifting both directions. An unassigned or eating-out day
+  honestly reads 0 — no meal, no lines feeding the night."
   (:require [mealplan10.themes :as themes]
-            [waymark10.dsl :refer [defaction defguardfn defresource
-                                   defhandler expr-guard guard]]
+            [waymark10.dsl :refer [defaction defderived defguardfn
+                                   defresource defhandler expr-guard
+                                   guard]]
             [waymark10.types :as t])
   (:import (java.time DayOfWeek LocalDate)))
+
+;; ── derived facts ───────────────────────────────────────────────────
+
+;; the recipe truth behind this day's dinner (waymark-m6j): the
+;; assigned meal's total_ingredients, read through the :meal identity
+;; join — 0 while no meal is assigned (nil relates to nothing) and 0
+;; for a hollow meal, which is exactly the count the plan's
+;; days_without_recipe filters on. Live, one writer (the engine),
+;; never an assign-time stamp.
+(defderived recipe-lines
+  {:sum {:related :meal :of :total_ingredients}})
 
 (def overwrite
   {:idempotent true :reversible false :confirm false})
@@ -312,7 +338,11 @@
             [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
             [:date {:filter #{:eq :range} :sort :default} :waymark/date]
             [:theme {:optional true} [:maybe [:string {:min 1 :max 50}]]]
+            ;; promoted (:filter): the identity join below rides the
+            ;; indexed column, and "which days serve this meal" is a
+            ;; real query
             [:meal_id {:optional true :kind :meal :label :meal_name
+                       :filter #{:eq}
                        :pick {:state "on_list"}}
              [:maybe :waymark/ref]]
             [:meal_name {:optional true} [:maybe [:string {:max 200}]]]
@@ -328,7 +358,16 @@
             [:second_side_dish_name {:optional true}
              [:maybe [:string {:max 200}]]]
             [:eating_out_where {:optional true :x-display {:label "Where"}}
-             [:maybe [:string {:max 120}]]]]
+             [:maybe [:string {:max 120}]]]
+            ;; the recipe truth, surfaced and promoted (waymark-m6j):
+            ;; ?state=planned&recipe_lines=0 IS the hollow-day query
+            [:recipe_lines {:optional true :derived recipe-lines
+                            :filter #{:eq :range}}
+             [:maybe :int]]]
+   ;; the identity join (waymark-m6j): this day's meal, as a declared
+   ;; edge — what lets recipe_lines read the meal's counted truth and
+   ;; lets the maintainer chase a meal_line write back to this row
+   :related {:meal {:kind :meal :on [[:meal_id := :id]]}}
    ;; the birth door supplies these; a hand-made day states the same
    :create-schema [:map
                    [:plan_id {:kind :plan} :waymark/ref]

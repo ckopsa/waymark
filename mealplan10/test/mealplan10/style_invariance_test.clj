@@ -235,7 +235,13 @@
 ;;    {:state draft/ready/done} — the explicit allow-set, everything
 ;;    but discarded (waymark-8se, the field test's over-count fix);
 ;;    an intentional law change, not style drift, carried by both
-;;    spellings together ──────────────────────────────────────────────
+;;    spellings together. Moved again 2026-07-29 (waymark-m6j, the
+;;    hollow-plan field finding): days_without_recipe joined the
+;;    schema and the derived counts (:count over owned planned
+;;    plan_days where recipe_lines = 0, promoted :eq/:range), and
+;;    finalize gained the recipes-attached warning — calendar-clear's
+;;    acknowledgeable posture over the new stored fact; both
+;;    spellings carry the fact and cite the same guard object ───────
 
 (def old-plan
   {:kind :plan
@@ -255,6 +261,7 @@
             [:total_days {:optional true} [:maybe :int]]
             [:undecided_days {:optional true} [:maybe :int]]
             [:all_days_covered {:optional true} [:maybe :boolean]]
+            [:days_without_recipe {:optional true} [:maybe :int]]
             [:calendar_conflicts {:optional true} [:maybe :int]]
             [:has_conflicts {:optional true} [:maybe :boolean]]
             [:open_tasks {:optional true} [:maybe :int]]
@@ -282,6 +289,9 @@
     :all_days_covered {:over [:undecided_days]
                        :expr '(= 0 (var :undecided_days))
                        :explain "Every day needs a meal or an eating-out mark before finalizing."}
+    :days_without_recipe {:count {:owns :plan_day
+                                  :where {:state #{"planned"}
+                                          :recipe_lines #{0}}}}
     :calendar_conflicts {:count {:related :calendar
                                  :where {:kind #{"blocking"}
                                          :state #{"fresh" "stale"}}}}
@@ -315,13 +325,15 @@
    :filterable {:state #{:eq :in}
                 :start_date #{:eq :range}
                 :end_date #{:eq :range}
+                :days_without_recipe #{:eq :range}
                 :has_conflicts #{:eq}
                 :calendar_conflicts #{:eq :range}}
    :sortable {:fields [:start_date] :default "-start_date"}
    :display {:title "Meal plan — week of {data.start_date}"}
    :actions
    {:finalize {:from #{:draft} :to :planned
-               :guards [plan/all-days-covered-gate plan/calendar-clear]
+               :guards [plan/all-days-covered-gate plan/calendar-clear
+                        plan/recipes-attached]
                :safety {:idempotent true :reversible true :confirm false}
                :display {:label "Finalize plan" :style :primary :order 1}}
     :reopen {:from #{:planned} :to :draft

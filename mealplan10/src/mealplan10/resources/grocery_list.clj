@@ -318,9 +318,15 @@
 (defhandler compile-from-plan [row _inp ctx]
   (let [find' (:find ctx)
         read' (:read ctx)
-        days (find' :plan_day {:plan_id (get-in row [:data :plan_id])
-                               :state :planned}
-                    {:limit 200})
+        ;; PLAN order is the walk's own law, sorted here — the store's
+        ;; find orders by created_at, and a week's days are born in one
+        ;; breath (ties), so heap order would otherwise leak into item
+        ;; :meals order (waymark-m6j surfaced it: the day rows gained a
+        ;; maintained fact, and maintenance rewrites moved the ties)
+        days (sort-by #(get-in % [:data :date])
+                      (find' :plan_day {:plan_id (get-in row [:data :plan_id])
+                                        :state :planned}
+                             {:limit 200}))
         lines (into []
                     (mapcat
                      (fn [day]

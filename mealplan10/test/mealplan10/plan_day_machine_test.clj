@@ -73,9 +73,10 @@
 
 (defn- act!
   ([self action] (act! self action nil))
-  ([self action body]
+  ([self action body] (act! self action body {}))
+  ([self action body headers]
    (let [resp (req :post (str self "/-/" (name action)) body
-                   {"if-match" (etag-of self)})]
+                   (merge {"if-match" (etag-of self)} headers))]
      (is (= 200 (:status resp))
          (str self " " (name action) ": " (:status resp) " " (:body resp)))
      (json resp))))
@@ -154,7 +155,11 @@
                 the LIVE week opens again"
         (doseq [d (rest days)]
           (act! (:self d) :mark_eating_out nil))
-        (act! (:self plan) :finalize nil)
+        ;; tacos carries no meal_line rows yet, so the hollow-week
+        ;; warning (waymark-m6j) fires — acknowledged here; the full
+        ;; story lives in the-plan-tells-you-its-hollow below
+        (act! (:self plan) :finalize nil
+              {"waymark-acknowledge" "recipes-attached"})
         (let [p (refuse! tue :clear_day nil 409)]
           (is (str/includes? (:detail p) "frozen"))
           (is (= ["plan.reopen" "plan.begin"] (:remedies p))))
@@ -224,3 +229,70 @@
       (let [d (act! thu :mark_eating_out {:where "Cafe Rio"})]
         (is (= "eating_out" (:state d)))
         (is (= "Cafe Rio" (get-in d [:data :eating_out_where])))))))
+
+(deftest the-plan-tells-you-its-hollow
+  ;; waymark-m6j, the field finding: a plan built from meals with
+  ;; EMPTY recipes (zero meal_line rows) compiled a hollow grocery
+  ;; list and nothing warned. Now the day stores recipe_lines (a live
+  ;; :sum through the :meal identity join), the plan stores
+  ;; days_without_recipe, and finalize warns in calendar-clear's
+  ;; acknowledgeable posture — and because the facts are maintained,
+  ;; not stamped at assign, a recipe filled in LATER flips them
+  ;; without touching the day.
+  (let [hollow (listed-meal! "Freezer surprise" ["mexican"])
+        plan (created! "plans" {:start_date "2026-08-04" :weeks 1})
+        days (get-in (json (req :get (str "/api/plan_days?plan_id="
+                                          (id-of plan)
+                                          "&page%5Bsize%5D=10")))
+                     [:data :items])
+        tue (:self (first days))]
+    (act! tue :assign_meal {:meal_id (id-of hollow)})
+    (doseq [d (rest days)]
+      (act! (:self d) :mark_eating_out nil))
+
+    (testing "the gap is surfaced as data before any door is tried"
+      (is (= 0 (get-in (json (req :get tue)) [:data :recipe_lines]))
+          "the day knows its dinner has no ingredient lines")
+      (is (= 1 (get-in (json (req :get (:self plan)))
+                       [:data :days_without_recipe]))
+          "…and the plan counts the hollow day"))
+
+    (testing "finalize warns with the count and names the acknowledge"
+      (let [p (refuse! (:self plan) :finalize nil 409)]
+        (is (= ["recipes-attached"] (get-in p [:acknowledge :names])))
+        (is (str/includes? (-> p :warnings first :reason)
+                           "1 planned day(s) have meals with no recipe"))))
+
+    (testing "a hollow plan finalizes with acknowledgment, not never"
+      (let [env (act! (:self plan) :finalize nil
+                      {"waymark-acknowledge" "recipes-attached"})]
+        (is (= "planned" (:state env)))))
+
+    (testing "filling the recipe flips the stored facts LIVE — the
+              maintainer chains meal_line → meal → plan_day → plan;
+              no re-assign, no stamp to go stale"
+      (let [ing (created! "ingredients" {:name "Mystery pork"})]
+        (act! (:self ing) :accept)
+        (created! "meal_lines" {:meal_id (id-of hollow)
+                                :ingredient_id (id-of ing)
+                                :grams 700}))
+      (is (= 1 (get-in (json (req :get tue)) [:data :recipe_lines]))
+          "the day's stored count moved with the meal_line write")
+      (is (= 0 (get-in (json (req :get (:self plan)))
+                       [:data :days_without_recipe]))
+          "…and the already-planned plan tells the updated truth"))
+
+    (testing "a fully-reciped plan finalizes with no warning"
+      (let [plan2 (created! "plans" {:start_date "2026-08-11" :weeks 1})
+            days2 (get-in (json (req :get (str "/api/plan_days?plan_id="
+                                               (id-of plan2)
+                                               "&page%5Bsize%5D=10")))
+                          [:data :items])
+            tue2 (:self (first days2))]
+        (act! tue2 :assign_meal {:meal_id (id-of hollow)})
+        (doseq [d (rest days2)]
+          (act! (:self d) :mark_eating_out nil))
+        (is (= 0 (get-in (json (req :get (:self plan2)))
+                         [:data :days_without_recipe])))
+        (is (= "planned" (:state (act! (:self plan2) :finalize)))
+            "no acknowledgment demanded of an honest week")))))

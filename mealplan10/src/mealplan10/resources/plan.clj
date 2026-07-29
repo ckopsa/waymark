@@ -30,6 +30,28 @@
   WARNS over the stored fact — a week with a recital in it finalizes
   with acknowledgment, not never.
 
+  Recipe coverage (waymark-m6j): a week could be built from meals
+  with EMPTY recipes — zero meal_line rows — and the grocery compile
+  would buy nothing for them, silently. The truth is stored, LIVE
+  facts now: each day's recipe_lines (a :sum through plan_day's
+  :meal identity join) and this plan's days_without_recipe (:count
+  over owned planned days where recipe_lines = 0), both maintained
+  by the engine along the meal_line → meal → plan_day → plan chain
+  in the same call as any recipe write. recipes-attached judges the
+  stored fact at finalize — calendar-clear's exact posture: a
+  :warning whose sentence carries the count, so a hollow week
+  finalizes with acknowledgment, never never. Considered and
+  rejected, each for lying: (a) stamping meal_has_recipe onto
+  plan_day in the assign handlers — an as-of-assign copy of
+  meal.has_recipe that a recipe filled in (or emptied) LATER never
+  flips: a second writer of one truth, drifting both directions, its
+  staleness a standing deviation; (b) a live code guard walking days
+  → meals over ctx :find at enforcement — truthful at the door but
+  storing nothing, so the plan's own envelope could not show,
+  filter, or badge the gap it warns about. The maintained facts are
+  (b)'s liveness with (a)'s surface: one writer, no stamp, and the
+  guard stays a declarative expr over stored data.
+
   The grocery rollups (est_grocery_cost_cents / priced_grocery_items
   / total_grocery_items) sum the week's LIVE lists — every state but
   discarded, spelled as the explicit allow-set on each :sum. Era 4's
@@ -96,6 +118,19 @@
                :when '(not (data :has_conflicts))
                :explain "{n} calendar conflict(s) overlap this week — move or cancel them on the calendar itself, or acknowledge to finalize anyway."
                :vars {:n '(data :calendar_conflicts)}}))
+
+;; the hollow-week warning (waymark-m6j): calendar-clear's posture
+;; over the stored days_without_recipe fact — a plan whose meals have
+;; no recipes finalizes with acknowledgment, not never. Nil-safe by
+;; the grammar (an ordering claim over nil is false), so a
+;; pre-backfill row warns nothing.
+(def recipes-attached
+  (expr-guard {:name :recipes-attached
+               :severity :warning
+               :when '(not (< 0 (data :days_without_recipe)))
+               :explain "{n} planned day(s) have meals with no recipe — a grocery compile would buy nothing for them. Add the meals' ingredient lines or reassign those days, or acknowledge to finalize anyway."
+               :vars {:n '(data :days_without_recipe)}
+               :remedies [:meal_line/create :plan_day/assign_meal]}))
 
 ;; the clock gate as data; becomes-available-at stays a callable:
 ;; structured hope is scheduling garnish, not the verdict
@@ -212,6 +247,15 @@
    :expr '(= 0 (var :undecided_days))
    :explain "Every day needs a meal or an eating-out mark before finalizing."})
 
+;; the hollow-day count (waymark-m6j): planned days whose meal
+;; carries zero recipe lines, read off the day's own stored
+;; recipe_lines fact — live end to end (the maintainer chains
+;; meal_line → meal → plan_day → here), so a recipe filled in after
+;; assignment flips this in the same commit
+(defderived days-without-recipe
+  {:count {:owns :plan_day :where {:state #{"planned"}
+                                   :recipe_lines #{0}}}})
+
 ;; facts over the relation (design 6.0 §2): the conflict count badges
 ;; the calendar link, filters the plan list, and feeds the finalize
 ;; warning; nobody re-joins the calendar in a handler
@@ -280,6 +324,13 @@
              [:maybe :int]]
             [:all_days_covered {:optional true :derived all-days-covered}
              [:maybe :boolean]]
+            ;; the hollow-day count, surfaced and promoted
+            ;; (waymark-m6j): the plan tells you it's hollow before
+            ;; finalize warns about it
+            [:days_without_recipe {:optional true
+                                   :derived days-without-recipe
+                                   :filter #{:eq :range}}
+             [:maybe :int]]
             [:calendar_conflicts {:optional true :derived calendar-conflicts
                                   :filter #{:eq :range}}
              [:maybe :int]]
@@ -354,7 +405,7 @@
                   :touches [{:kind :prep_task :action :cancel :may true}]
                   :display {:label "Abandon plan" :style :danger :order 9}}]
      [[:draft   :finalize :planned
-       {:requires [all-days-covered-gate calendar-clear]
+       {:requires [all-days-covered-gate calendar-clear recipes-attached]
         :undo :reopen
         :display {:label "Finalize plan" :style :primary :order 1}}]
       [:planned :reopen   :draft

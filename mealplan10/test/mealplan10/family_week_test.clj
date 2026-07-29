@@ -248,14 +248,21 @@
             (is (true? (get-in env [:data :has_conflicts])))))
 
         ;; ── finalize: warned, acknowledged, planned ───────────────────
-        (testing "finalize warns about the conflict and names the acknowledge"
+        (testing "finalize warns about the conflict AND the hollow
+                  meals (waymark-m6j — none of the six planned
+                  dinners carries meal_line rows), naming both
+                  acknowledges in one 409"
           (let [p (refuse! self :finalize nil 409)]
             (is (= "Waymark-Acknowledge" (get-in p [:acknowledge :header])))
-            (is (= ["calendar-clear"] (get-in p [:acknowledge :names])))
+            (is (= ["calendar-clear" "recipes-attached"]
+                   (get-in p [:acknowledge :names])))
             (is (str/includes? (-> p :warnings first :reason)
-                               "1 calendar conflict(s) overlap this week"))))
+                               "1 calendar conflict(s) overlap this week"))
+            (is (str/includes? (-> p :warnings second :reason)
+                               "6 planned day(s) have meals with no recipe"))))
         (let [env (act! self :finalize nil
-                        {"waymark-acknowledge" "calendar-clear"})]
+                        {"waymark-acknowledge"
+                         "calendar-clear,recipes-attached"})]
           (is (= "planned" (:state env))))
 
         ;; ── begin: the clock gate holds, then opens ───────────────────
