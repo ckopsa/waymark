@@ -273,6 +273,115 @@
         (is (= 0 (get-in q [:data :total]))
             "the queue is empty once the weight is on record")))))
 
+;; ── yield_percent: price the plate, not the carry-out weight ────────
+;;
+;; The one rounding law: usable grams (package_grams × yield ÷ 100)
+;; are never rounded on their own — the ÷ 100 folds into the final
+;; division, so HALF_UP happens once, at the cents:
+;;   cents_per_100g = round(price × 100 × 100 ÷ (package_grams × yield))
+;; With yield nil (= 100) the formula is bit-identical to the old
+;; price × 100 ÷ package_grams, so every yieldless expectation below
+;; and across the suite stands unmoved.
+
+(deftest yield-percent-prices-the-plate
+  (let [chicken (active-ingredient! "Whole chicken (yld)")
+        iid (id-of chicken)]
+    (testing "the rotisserie: package_grams stays what you carry out;
+              the unit price pays for the carcass"
+      (let [bird (created! "products"
+                           {:ingredient_id iid :store "costco"
+                            :name "Rotisserie chicken (yld)"
+                            :package_grams 1361 :yield_percent 51
+                            :sightings [{:seen_on "2026-07-01"
+                                         :price_cents 499
+                                         :source "receipt"}]})]
+        (is (= 1361 (get-in bird [:data :package_grams]))
+            "the honest carry-out weight — no more lying 700 g birds")
+        (is (= 51 (get-in bird [:data :yield_percent])))
+        ;; usable = 1361 × 51 ÷ 100 = 694.11 g, carried exact:
+        ;; round(499 × 10000 ÷ 69411) = round(71.89) = 72
+        (is (= 72 (get-in bird [:data :cents_per_100g]))
+            "¢ per 100 USABLE g — ~$3.30/lb plate meat from a $1.66/lb bird")))
+    (testing "no yield = the old math, bit-identical (the pantry-prices
+              fixture's own numbers)"
+      (let [thighs (created! "products"
+                             {:ingredient_id iid :store "winco"
+                              :name "Thighs no-yield (yld)"
+                              :package_grams 2720
+                              :sightings [{:seen_on "2026-07-01"
+                                           :price_cents 1899
+                                           :source "receipt"}]})]
+        (is (= 70 (get-in thighs [:data :cents_per_100g]))
+            "1899 × 100 ÷ 2720 rounded half-up — the suite's standing 70")))))
+
+(deftest yield-above-100-subsumes-concentrates
+  (let [rice (active-ingredient! "Rice (yld)")
+        dry (created! "products"
+                      {:ingredient_id (id-of rice) :store "costco"
+                       :name "Dry rice (yld)" :package_grams 800
+                       :sightings [{:seen_on "2026-07-01"
+                                    :price_cents 240
+                                    :source "receipt"}]})]
+    (act! (:self dry) :confirm_match)
+    (is (= 30 (get-in (get-env (:self dry)) [:data :cents_per_100g]))
+        "priced dry: 240 × 100 ÷ 800 = 30")
+    (testing "yield 300 (300 g cooked per 100 g dry): the plate price
+              drops to a third, in the same update_details write"
+      (let [env (act! (:self dry) :update_details {:yield_percent 300})]
+        (is (= 300 (get-in env [:data :yield_percent])))
+        (is (= 10 (get-in env [:data :cents_per_100g])))))))
+
+(deftest update-details-carries-yield-through-the-same-reprice
+  (let [chicken (active-ingredient! "Whole chicken 2 (yld)")
+        bird (created! "products"
+                       {:ingredient_id (id-of chicken) :store "costco"
+                        :name "Rotisserie 2 (yld)" :package_grams 1361
+                        :sightings [{:seen_on "2026-07-01"
+                                     :price_cents 499
+                                     :source "receipt"}]})]
+    (act! (:self bird) :confirm_match)
+    (is (= 37 (get-in (get-env (:self bird)) [:data :cents_per_100g]))
+        "yieldless first: round(49900 ÷ 1361) = 37 — carry-out pricing")
+    (testing "setting yield reprices in the same write"
+      (let [env (act! (:self bird) :update_details {:yield_percent 51})]
+        (is (= 51 (get-in env [:data :yield_percent])))
+        (is (= 72 (get-in env [:data :cents_per_100g])))))
+    (testing "an ABSENT key never clears — select-keys drops it, so an
+              unrelated edit leaves the yield (and the price) standing"
+      (let [env (act! (:self bird) :update_details {:upc "0000000012345"})]
+        (is (= 51 (get-in env [:data :yield_percent])))
+        (is (= 72 (get-in env [:data :cents_per_100g])))))
+    (testing "an explicit null DOES clear — merge keeps a present-nil
+              key, and nil yield reads as 100 again"
+      (let [env (act! (:self bird) :update_details {:yield_percent nil})]
+        (is (nil? (get-in env [:data :yield_percent])))
+        (is (= 37 (get-in env [:data :cents_per_100g]))
+            "back to carry-out pricing, the yieldless 37")))))
+
+(deftest needs-weight-ignores-yield
+  ;; the recorded fact is still package_grams — a yield with no weight
+  ;; pro-rates nothing, so the queue judgment does not move
+  (let [pork (active-ingredient! "Pork shoulder (yld)")
+        weightless (created! "products"
+                             {:ingredient_id (id-of pork) :store "costco"
+                              :name "Pork shoulder weightless (yld)"
+                              :yield_percent 60
+                              :sightings [{:seen_on "2026-07-01"
+                                           :price_cents 1599
+                                           :source "receipt"}]})]
+    (act! (:self weightless) :confirm_match)
+    (let [env (get-env (:self weightless))]
+      (is (true? (get-in env [:data :needs_weight]))
+          "priced + yield but weightless: still in the queue")
+      (is (nil? (get-in env [:data :cents_per_100g]))
+          "no carry-out weight, no unit price — yield alone unlocks nothing"))
+    (testing "the weight lands: the fact flips and the yield folds in"
+      (let [env (act! (:self weightless) :update_details
+                      {:package_grams 3000})]
+        (is (false? (get-in env [:data :needs_weight])))
+        ;; round(1599 × 10000 ÷ (3000 × 60)) = round(88.83) = 89
+        (is (= 89 (get-in env [:data :cents_per_100g])))))))
+
 (deftest stocked-on-is-the-staple-reconfirmation-queue
   ;; wind the world back: paprika was last confirmed in March — a
   ;; dated restock through the engine's clock, the only stocked_on

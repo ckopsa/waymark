@@ -81,6 +81,10 @@ window_ends   = min over the set clocks of
                   first_use  + opened_shelf_life_days   (opened)
 ```
 
+When the chosen product carries a `yield_percent`, `need_grams` are plate
+grams and the store sells carry-out grams, so need ÷ (yield_percent/100) is
+the purchase-side conversion before the ceil.
+
 `trip_date` is the list's `covers_from`, else the plan's `start_date` — the
 compile's honest approximation of the purchase date; `first_use` is the
 earliest use date in this list's slice (era 4 already keeps use dates).

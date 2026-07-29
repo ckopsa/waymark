@@ -45,21 +45,43 @@
 (defn reprice-product
   "The price facts from the sightings, restated: sightings sorted by
   seen_on (the upsert key), last_seen_on/latest_price_cents from the
-  newest, cents_per_100g = latest × 100 ÷ package_grams rounded
+  newest, cents_per_100g = latest × 100 ÷ USABLE grams rounded
   half-up — nil when nothing is unit-priceable (no sightings, or a
-  counted good with no package_grams)."
+  counted good with no package_grams).
+
+  Usable grams = package_grams × yield_percent ÷ 100 (nil yield =
+  100: everything you carry out is plate), so the unit price reads ¢
+  per 100 PLATE grams — a $4.99 rotisserie is a 1361 g bird but only
+  ~51% picks as meat, and the plate pays for the carcass. Usable
+  grams are never rounded on their own: the ÷ 100 folds into one
+  integer division, so rounding happens ONCE, half-up, at the final
+  cents — cents_per_100g = round(price × 100 × 100 ÷ (package_grams
+  × yield)). With yield 100 the formula reduces exactly to the old
+  price × 100 ÷ package_grams (same fractional part, same half-up
+  verdict), so yieldless products price bit-identically to before.
+
+  Verified downstream (why this is the ONE change): recipe grams are
+  plate grams (the house rule — grams of what goes in the dish), and
+  every consumer prices through cents_per_100g alone —
+  meal-line/best-unit-price reads it off best-product's winner,
+  price-line multiplies it by plate grams, and grocery-list's
+  compile_from_plan does the same for its direct-priced groups — so
+  meal_line pricing, substitution pricing, and the grocery compile
+  all inherit plate-cost correctness with zero downstream change."
   [data]
   (let [ss (vec (sort-by :seen_on (:sightings data)))
         latest (peek ss)
         grams (:package_grams data)
+        yield (long (or (:yield_percent data) 100))
         price (:price_cents latest)]
     (assoc data
            :sightings ss
            :last_seen_on (:seen_on latest)
            :latest_price_cents price
            :cents_per_100g (when (and price grams (pos? (long grams)))
-                             (quot (+ (* (long price) 100) (quot (long grams) 2))
-                                   (long grams))))))
+                             (let [denom (* (long grams) yield)]
+                               (quot (+ (* (long price) 10000) (quot denom 2))
+                                     denom))))))
 
 (defderived price-is-stale
   {:over [:last_seen_on :now]
@@ -117,9 +139,9 @@
 (defhandler apply-product-details [row inp _ctx]
   (update row :data
           (fn [data]
-            (reprice-product   ; package_grams moves cents_per_100g
-             (merge data (select-keys inp [:name :package_grams :package_count
-                                           :upc :url]))))))
+            (reprice-product   ; package_grams/yield_percent move cents_per_100g
+             (merge data (select-keys inp [:name :package_grams :yield_percent
+                                           :package_count :upc :url]))))))
 
 (defaction rematch
   {:from #{:suggested :tracked} :to :tracked
@@ -158,11 +180,14 @@
    :input [:map
            [:name {:optional true} [:maybe [:string {:min 1 :max 200}]]]
            [:package_grams {:optional true} [:maybe [:int {:min 1}]]]
+           [:yield_percent {:optional true}
+            [:maybe [:int {:min 1 :max 10000}]]]
            [:package_count {:optional true} [:maybe [:int {:min 1}]]]
            [:upc {:optional true} [:maybe [:string {:max 20}]]]
            [:url {:optional true :x-display {:raw true}}
             [:maybe [:string {:max 280}]]]]
-   :edit {:prefill [:name :package_grams :package_count :upc :url]}
+   :edit {:prefill [:name :package_grams :yield_percent :package_count
+                    :upc :url]}
    :safety overwrite
    :handler apply-product-details
    :display {:label "Update details" :order 4}})
@@ -185,6 +210,17 @@
             [:store {:filter #{:eq :in}} [:string {:min 1 :max 50}]]
             [:name {:sort :default} [:string {:min 1 :max 200}]]
             [:package_grams {:optional true} [:maybe [:int {:min 1}]]]
+            ;; what survives to the plate, per 100 g carried out of
+            ;; the store: nil = 100 — everything you carry out is
+            ;; plate. Below 100 = trim (a whole chicken picks ~51%
+            ;; meat); ABOVE 100 = concentrates (dry rice ~300: 300 g
+            ;; cooked per 100 g dry; bouillon ~4000). package_grams
+            ;; stays the honest carry-out weight; cents_per_100g
+            ;; divides by usable grams, so it reads ¢ per 100 PLATE
+            ;; grams — recipe grams are plate grams, so every price
+            ;; consumer inherits the correction
+            [:yield_percent {:optional true}
+             [:maybe [:int {:min 1 :max 10000}]]]
             [:package_count {:optional true} [:maybe [:int {:min 1}]]]
             [:upc {:optional true :filter #{:eq}} [:maybe [:string {:max 20}]]]
             [:url {:optional true :x-display {:raw true}}
@@ -219,6 +255,10 @@
                    [:store [:string {:min 1 :max 50}]]
                    [:name [:string {:min 1 :max 200}]]
                    [:package_grams {:optional true} [:maybe [:int {:min 1}]]]
+                   ;; nil = 100 (all plate); >100 = concentrates —
+                   ;; the schema comment above carries the full story
+                   [:yield_percent {:optional true}
+                    [:maybe [:int {:min 1 :max 10000}]]]
                    [:package_count {:optional true} [:maybe [:int {:min 1}]]]
                    [:upc {:optional true} [:maybe [:string {:max 20}]]]
                    [:url {:optional true :x-display {:raw true}}
@@ -232,6 +272,7 @@
    :display {:title "{data.name}"}
    :deviations
    ["last_seen_on / latest_price_cents / cents_per_100g are handler-maintained plain fields, not derived laws — argmax-over-parts is beyond the expression grammar, the boundary v9 drew with its fn= lambdas; reprice-product is their one writer."
+    "yield_percent sits on the recorded-fact side of that fn= boundary: a client-stated input like package_grams, folded into cents_per_100g only by reprice-product — needs_weight still judges package_grams alone, because the carry-out weight stays the recorded fact."
     "cents_per_100g rounds half-up in exact integer arithmetic; v9's Python round() was banker's — they differ only at an exact half-cent."]
    :links [{:rel :ingredient :kind :ingredient
             :href "/api/ingredients/{data.ingredient_id}"
