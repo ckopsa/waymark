@@ -29,9 +29,11 @@
   and not of anything typed here. Unsaid still means \"todo\": adding
   a second capture target must not move anyone who never asked for
   google. A google birth may name the list it lands in (:task_list,
-  a ref, because lists are rows); the guards below hold the two lines
-  that naming buys — a list belongs to the authority capturing into
-  it, and a due bound for google is a DAY, never a clock time.
+  a ref, because lists are rows), and ANY birth may name a NATIVE
+  list — the engine's own grouping, a hub-local fact no authority
+  hears about; the guards below hold the two lines that naming buys
+  — a mirrored list belongs to the authority capturing into it, and
+  a due bound for google is a DAY, never a clock time.
 
   Two local writes:
   - complete — marking reality. The post-commit pass pushes it and
@@ -77,21 +79,26 @@
   {:judges [:task_list :source]
    :reads [:task_list]
    :vars [:owner :capturing]
-   :explain "That list belongs to {owner} and this capture goes to {capturing} — a task lands in a list its own authority owns, and google's is the door that takes a named one."}
+   :explain "That list belongs to {owner} and this capture goes to {capturing} — a mirrored list rides only google's own capture, and the lists any door may name are the engine's native ones."}
   [_row inp ctx]
   ;; naming a list is only expressible because lists became rows, and
-  ;; only MEANINGFUL for the authority whose birth honours it: google
-  ;; reads the named list, home assistant captures into its one
-  ;; configured entity and would ignore the name without saying so.
-  ;; So the pair must agree AND be google's — the alternative is a
+  ;; only MEANINGFUL when someone honours it. For a MIRRORED list that
+  ;; someone is the authority whose birth reads it: google reads the
+  ;; named list, home assistant captures into its one configured
+  ;; entity and would ignore the name without saying so. So a
+  ;; mirrored pair must agree AND be google's — the alternative is a
   ;; person picking "Errands" and watching the task land somewhere
   ;; else, which is the failure mode that looks like nothing at all.
+  ;; A NATIVE list the hub itself honours: the parent is the hub's
+  ;; own fact (the :priority posture, one field over), no authority
+  ;; ever hears of it, so any capture may carry one.
   (let [capturing (or (:source inp) "todo")]
     (if-some [ref (:task_list inp)]
       (if-some [read (:read ctx)]
         (let [row (read :task_list ref)
               owner (get-in row [:data :source])]
-          (if (= "gtasks" owner capturing)
+          (if (or (= "native" owner)
+                  (= "gtasks" owner capturing))
             (t/allow)
             (t/deny (cond-> {:vars {:owner (or owner "no authority we mirror")
                                     :capturing capturing}}
@@ -264,7 +271,7 @@
                      [:title [:string {:min 1 :max 200}]]
                      [:source {:optional true} [:maybe [:enum "todo" "gtasks"]]]
                      [:task_list {:optional true :kind :task_list
-                                  :x-display {:label "List (google only)"}}
+                                  :x-display {:label "List (google's, or a native one)"}}
                       [:maybe :waymark/ref]]
                      [:due_at {:optional true
                                :x-display {:label "Due by (clock time)"}}
@@ -282,7 +289,11 @@
                   ;; next pull will overwrite with the same value, so
                   ;; the birth stamps it from the list it points at
                   ;; and the two spellings agree from the first
-                  ;; second rather than from the first pull.
+                  ;; second rather than from the first pull. A NATIVE
+                  ;; list has no key to stamp (no external identity) —
+                  ;; :list_key stays unset, the authority never hears
+                  ;; of the parent, and the sync recompute leaves a
+                  ;; keyless native ref alone (the mirror's own rule).
                   (let [d (get-in row [:data :due_date])
                         listed (when-some [ref (get-in row [:data :task_list])]
                                  (when-some [read (:read ctx)]

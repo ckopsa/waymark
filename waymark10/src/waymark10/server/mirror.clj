@@ -85,7 +85,23 @@
     discovery heals (resolve-refs!, a maintenance write, no
     transition). A push exports the resolved row ids with the rest of
     the document — adapters ignore what the external system doesn't
-    own.
+    own. One stored ref the recompute leaves alone: a scalar ref
+    whose sibling key is silent and whose target carries no external
+    identity (a :local-rows row, below) was set by a deliberate local
+    write and no key could ever re-derive it — clearing it would
+    erase the engine's own fact.
+  - LOCAL ROWS (workqueue10's native task lists demanded it): a kind
+    declared {:local-rows true} may birth rows that live HERE alone —
+    no external identity, ever. The sync machinery already treats a
+    nil external_id as invisible (pull-through serves stored, resync
+    and discovery pass it by), so the flag only widens the
+    declaration: external_id goes optional, and the author's
+    :create-schema/:create-guards/:on-create are accepted without
+    :create-push (the guards hold the pairing law — which rows carry
+    an identity and which lawfully never will). Local rows COEXIST
+    with mirrored rows in the one kind. Pull-only at this scope:
+    :local-rows refuses beside :push-on-write/:create-push until a
+    dogfood demands the mix.
 
   Recorded punts, deliberately out of scope until a dogfood demands
   them: the per-kind discovery cursor (a restarted dev server
@@ -179,10 +195,11 @@
   ;; external_id renders nowhere (machine plumbing — the row's own
   ;; summary and refs say who it is) but stays filterable on the wire.
   ;; A :create-push kind's rows may be BORN without one (the authority
-  ;; mints it; claim_external stamps it), so there alone it is
-  ;; optional — every other mirror keeps the hard birth invariant.
-  [create-push?]
-  [(if create-push?
+  ;; mints it; claim_external stamps it), and a :local-rows kind's
+  ;; local rows never carry one at all — those two alone make it
+  ;; optional; every other mirror keeps the hard birth invariant.
+  [optional-external-id?]
+  [(if optional-external-id?
      [:external_id {:optional true :x-display {:hidden true}}
       [:maybe [:string {:min 1 :max 256}]]]
      [:external_id {:x-display {:hidden true}} [:string {:min 1 :max 256}]])
@@ -485,7 +502,20 @@
                    (when (and (some? xid) (not= "" (str xid)))
                      (some-> (first (find-rows kind {match (str xid)}
                                                {:limit 1}))
-                             :id str)))]
+                             :id str)))
+          local-target?
+          ;; the one stored ref the recompute leaves alone: a target
+          ;; carrying no external identity (a :local-rows row) is a
+          ;; ref no sibling key could ever name — it was set by a
+          ;; deliberate local write, and recomputing it from the
+          ;; key's silence would erase the engine's own fact. A
+          ;; mirrored target stays the key's projection, exactly as
+          ;; before.
+          (fn [kind rid]
+            (boolean
+             (when-some [read (:read ctx)]
+               (when-some [target (read kind (str rid))]
+                 (nil? (get-in target [:data :external_id]))))))]
       (reduce-kv
        (fn [m field {:keys [kind external-key match shape]}]
          (let [xv (get m external-key)]
@@ -493,7 +523,12 @@
                   (if (= :many shape)
                     (when (sequential? xv)
                       (into [] (keep #(lookup kind match %)) xv))
-                    (lookup kind match xv)))))
+                    (or (lookup kind match xv)
+                        (let [cur (get m field)]
+                          (when (and (or (nil? xv) (= "" (str xv)))
+                                     (some? cur)
+                                     (local-target? kind cur))
+                            cur)))))))
        merged specs))
     merged))
 
@@ -667,9 +702,12 @@
   declared {:create-push true} (its adapter a MirrorCreateAdapter)
   may declare :create-schema / :create-guards / :on-create — local
   births the post-commit pass pushes as CREATES, the authority
-  minting the identity claim_external stamps back."
+  minting the identity claim_external stamps back. A pull-only kind
+  declared {:local-rows true} takes local births too, but they STAY
+  local: no external id, no push, and the sync passes never touch
+  them (see LOCAL ROWS in the ns docstring)."
   [rmap {:keys [adapter ttl-seconds discover-every push-on-write document
-                create-push on-gone resync-every priority]}]
+                create-push on-gone resync-every priority local-rows]}]
   (when (nil? adapter)
     (throw (t/definition-error
             (str (some-> (:kind rmap) name) ": a mirror declares its :adapter"))))
@@ -706,13 +744,21 @@
             (str (some-> (:kind rmap) name)
                  ": :create-push needs a MirrorCreateAdapter — this adapter "
                  "cannot mint an external row"))))
-  (when-not create-push
+  (when (and local-rows (or create-push push-on-write))
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name)
+                 ": :local-rows rides a pull-only mirror — a local row has "
+                 "no authority to push to, and mixing local births with "
+                 ":push-on-write/:create-push waits for a dogfood that "
+                 "needs it"))))
+  (when-not (or create-push local-rows)
     (when-some [k (some #(when (contains? rmap %) %)
                         [:create-schema :create-guards :on-create])]
       (throw (t/definition-error
               (str (some-> (:kind rmap) name) ": " k " on a mirror whose rows "
                    "are born from discovery alone — declare {:create-push true} "
-                   "(and :push-on-write) to mint rows locally")))))
+                   "(and :push-on-write) to mint rows locally, or "
+                   "{:local-rows true} for rows that live here alone")))))
   (when (and create-push (nil? (:create-schema rmap)))
     (throw (t/definition-error
             (str (some-> (:kind rmap) name)
@@ -742,8 +788,10 @@
                  ":push-on-write true to add domain actions"))))
   (when push-on-write
     (check-domain-actions! (:kind rmap) (:actions rmap)))
-  (let [data-schema (into [:map] (concat (bookkeeping-schema (boolean create-push))
-                                         (rest (:schema rmap))))
+  (let [data-schema (into [:map]
+                          (concat (bookkeeping-schema
+                                   (boolean (or create-push local-rows)))
+                                  (rest (:schema rmap))))
         ;; refusals precede the window parse — a malformed date gets
         ;; the definition error, never a raw parse exception
         _ (check-external-refs! (:kind rmap) data-schema)
@@ -791,6 +839,7 @@
                                 :document mode
                                 :push-on-write (boolean push-on-write)
                                 :create-push (boolean create-push)
+                                :local-rows (boolean local-rows)
                                 :priority (or priority 50)
                                 :on-gone (if gone-patch {:set gone-patch} :keep)}
                          resync-every (assoc :resync-every resync-every))
@@ -870,7 +919,7 @@
         (update :filterable (fn [f] (update (or f {}) :external_id
                                             #(or % #{:eq}))))
         (cond->
-          (and create-push (:on-create rmap))
+          (and (or create-push local-rows) (:on-create rmap))
           (assoc :on-create
                  (let [oc (:on-create rmap)]
                    ;; discovery mints ({:external_id id} alone) skip

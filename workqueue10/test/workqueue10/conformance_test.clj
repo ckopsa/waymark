@@ -101,11 +101,13 @@
               :list_key "todo:todo.woodworking"}
    :etag "conformance-etag-1"})
 
-;; :task_list is the PULL-ONLY half of the pair (no local writes, no
-;; birth door — the queue mirrors the household's lists and never
-;; writes them), so it registers the plain mirror shape: an
-;; external-identity create carrying the confluence's source tag, and
-;; a wire-shaped document
+;; :task_list is the PULL-ONLY half of the pair (no local writes —
+;; the queue mirrors the household's lists and never writes them,
+;; though the NATIVE birth door stands beside the mirrors since
+;; waymark-fnl), so it registers the plain mirror shape: an
+;; external-identity create carrying the confluence's source tag
+;; (the paired birth law reads it as mirrored), and a wire-shaped
+;; document
 (fac/example-input! :task_list :create
   (fn [_] {:external_id (str "gtasks:walk-" (random-uuid))}))
 

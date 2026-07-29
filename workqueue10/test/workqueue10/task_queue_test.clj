@@ -550,9 +550,9 @@
                            {"idempotency-key" (str (random-uuid))})]
           (is (= 409 (:status refused)))
           (is (= (str "That list belongs to todo and this capture goes "
-                      "to gtasks — a task lands in a list its own "
-                      "authority owns, and google's is the door that "
-                      "takes a named one.")
+                      "to gtasks — a mirrored list rides only google's "
+                      "own capture, and the lists any door may name are "
+                      "the engine's native ones.")
                  (:detail (json refused)))))
         (testing "…in both directions: naming a google list on a todo
                   capture would be silently ignored by a source that
@@ -569,4 +569,85 @@
     (let [resp (req :post "/api/tasks" {:title "Ghost chore" :source "chore"}
                     {"idempotency-key" (str (random-uuid))})]
       (is (= 422 (:status resp))
-          "a chore is born of its own engine's law, never captured"))))
+          "a chore is born of its own engine's law, never captured")))
+
+  (testing "NATIVE LISTS: a source without an upstream — the list that
+            lives only in this engine, beside the mirrors it never
+            replaces"
+    (let [resp (req :post "/api/task_lists"
+                    {:title "Projects" :source "native"}
+                    {"idempotency-key" (str (random-uuid))})
+          env (json resp)]
+      (is (contains? #{200 201} (:status resp)) (:body resp))
+      (is (= "fresh" (:state env)))
+      (is (= "native" (get-in env [:data :source])))
+      (is (nil? (get-in env [:data :external_id]))
+          "no upstream was fabricated — the row is the engine's own")
+      (is (= "Projects · native" (:summary env))))
+
+    (testing "the birth law holds both ways: a native list carries no
+              external id…"
+      (let [resp (req :post "/api/task_lists"
+                      {:title "Sneaky" :source "native"
+                       :external_id "todo:sneaky"}
+                      {"idempotency-key" (str (random-uuid))})]
+        (is (= 409 (:status resp)))
+        (is (= (str "A native list is this engine's own and carries no "
+                    "external id; a mirrored list names the identity "
+                    "its authority keeps.")
+               (:detail (json resp))))))
+
+    (testing "…and a mirrored source still names one"
+      (let [resp (req :post "/api/task_lists"
+                      {:title "Halfway" :source "todo"}
+                      {"idempotency-key" (str (random-uuid))})]
+        (is (= 409 (:status resp)))))
+
+    (testing "the mirror machinery never learns its name: resync walks
+              the mirrored lists and the native row is not even a
+              candidate — never rewritten, never gone-from-feed"
+      (let [projects-self (:self (list-by-title "Projects"))
+            stats (mirror/resync! *eng* :task_list)]
+        (is (= 2 (:checked stats))
+            "only the two mirrored lists (Woodworking, Errands) walked")
+        (is (zero? (:gone stats))
+            "absent from every feed, yet never counted gone")
+        (is (zero? (mirror/discover! *eng* :task_list))
+            "discovery has nothing to mint — the native row casts no id")
+        (let [after (json (req :get projects-self))]
+          (is (= "fresh" (:state after)))
+          (is (= "Projects" (get-in after [:data :title])))
+          (is (nil? (get-in after [:data :synced_at]))
+              "nothing ever synced it — the gap renders honestly"))))
+
+    (testing "a task parents onto the native list like any other — and
+              the parent is the hub's own fact: the authority's next
+              word does not wash it away"
+      (let [projects (id-of (list-by-title "Projects"))
+            env (json (req :post "/api/tasks"
+                           {:title "Sand the bench" :task_list projects}
+                           {"idempotency-key" (str (random-uuid))}))]
+        (is (= "fresh" (:state env)) (pr-str env))
+        (is (= "todo" (get-in env [:data :source]))
+            "the capture still lands at its pocket authority")
+        (is (= projects (get-in env [:data :task_list])))
+        (is (nil? (get-in env [:data :list_key]))
+            "a native list has no authority-side key to stamp")
+        (is (= 1 (count (items-of (str "?task_list=" projects))))
+            "the queue filters by the native list exactly as by a
+             mirrored one")
+        ;; the authority revises its side of the captured row; the
+        ;; pull recomputes mirrored refs from :list_key — and keeps
+        ;; its hands off a parent no key could ever name
+        (let [local-id (second (str/split
+                                (str (get-in env [:data :external_id]))
+                                #":" 2))]
+          (conf/seed! *todos* local-id
+                      {:title "Sand the bench" :status "open"
+                       :detail "80 grit, then 120"}))
+        (tick! (Duration/ofMinutes 30))
+        (let [again (json (req :get (:self env)))]
+          (is (= "80 grit, then 120" (get-in again [:data :detail]))
+              "the authority's change landed")
+          (is (= projects (get-in again [:data :task_list]))
+              "…and the native parent survived the recompute"))))))

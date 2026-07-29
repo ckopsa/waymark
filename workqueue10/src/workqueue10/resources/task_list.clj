@@ -23,8 +23,23 @@
   does not create, rename or delete them. That is not a limitation
   waiting to be lifted — a list is a shape its authority owns, and the
   hub inventing one would leave a row no phone could ever see. So
-  there are no local writes, no :push-on-write, and no birth door: the
-  rows arrive by discovery and by discovery alone.
+  there are no local writes, no :push-on-write, and for a MIRRORED
+  list no birth door: those rows arrive by discovery and by discovery
+  alone.
+
+  AND ONE SOURCE WITHOUT AN UPSTREAM: \"native\", the list that lives
+  only in this engine. The field test found every list door demanding
+  an external id from an authority that had never heard of the list,
+  so standalone work sat parentless rather than fabricate an upstream
+  — the fabrication stops here. A native list is born at the create
+  door with a title and no external_id at all (the birth law is the
+  pairing, identity_paired: native carries no identity, a mirrored
+  source always names one), and the sync machinery never learns its
+  name — nothing pulls it, resync never rewrites it, no feed can mark
+  it gone, because every one of those passes selects rows BY their
+  external identity ({:local-rows true}, the mirror's own fence).
+  External integration stays a growth direction: native lists COEXIST
+  with the mirrors beside them, they do not replace them.
 
   A GONE LIST KEEPS SERVING (:on-gone unsaid — the framework's :keep).
   A list the household deletes stops being discovered, and its tasks
@@ -45,13 +60,33 @@
   (GET /api/tasks?task_list=<id>) rather than an embedded table. The
   filter is the honest primitive and the embed is a display choice;
   it can be declared the day someone wants it on the page."
-  (:require [waymark10.dsl :refer [resource]]
+  (:require [waymark10.dsl :refer [defderived require-fact resource]]
             [waymark10.server.mirror :as mirror]))
 
 ;; a list is named once and renamed almost never — the queue can be
 ;; slower here than it is about the work itself (task's 300s)
 (def ttl-seconds 900)
 (def discover-every 900)
+
+;; ── the native birth law ────────────────────────────────────────────
+;; the paired-field create law, the pantry window's pattern
+;; (spec-pantry: window_paired — a derived fact require-fact'd at the
+;; birth door, so the half-set shape is unrepresentable): a list is
+;; native XOR it names its upstream. Discovery mints speak neither
+;; :source nor the create-schema's vocabulary and skip create guards
+;; by the engine's own rule; the fact still reads them as mirrored
+;; (an external id, no \"native\").
+(defderived identity-paired
+  {:over [:source :external_id]
+   :expr '(or (and (= (var :source) "native")
+                   (not (is-set (var :external_id))))
+              (and (not= (var :source) "native")
+                   (is-set (var :external_id))))
+   :explain "A native list is this engine's own and carries no external id; a mirrored list names the identity its authority keeps."})
+
+(def identity-is-paired
+  (require-fact :identity_paired
+                {:explain "A native list is this engine's own and carries no external id; a mirrored list names the identity its authority keeps."}))
 
 (defn task-list-resource
   [adapter]
@@ -64,9 +99,13 @@
               [:title {:optional true} [:maybe [:string {:max 200}]]]
               ;; the confluence's routing tag, stamped by the adapter —
               ;; the same vocabulary task declares, narrowed to the
-              ;; authorities that actually keep lists
+              ;; authorities that actually keep lists — plus "native",
+              ;; the one tag no adapter ever stamps: the engine's own
               [:source {:optional true :filter #{:eq :in}}
-               [:maybe [:enum "todo" "gtasks"]]]
+               [:maybe [:enum "todo" "gtasks" "native"]]]
+              ;; the birth law as a maintained fact (see above)
+              [:identity_paired {:optional true :derived identity-paired}
+               [:maybe :boolean]]
               ;; where the row drinks from, as URLs the source stamps.
               ;; Hidden: the origin LINK is the affordance, a raw URL
               ;; in the fields is noise. A source with no browser face
@@ -78,11 +117,19 @@
                [:maybe [:string {:max 500}]]]]
      :filterable {:state #{:eq :in}}
      :display {:title "{data.title}"}
+     ;; the one birth door: native lists (and, unchanged, the
+     ;; full-schema creates a mirrored row could always take) — the
+     ;; paired law is the whole gate
+     :create-guards [identity-is-paired]
      :links [{:rel "origin" :href "{data.source_ui_href}" :external true
               :summary "The list this row mirrors, at the authority that keeps it"}]}
     {:adapter adapter
      :ttl-seconds ttl-seconds
      :discover-every discover-every
+     ;; native lists live here alone: external_id optional-and-absent,
+     ;; and every sync pass (pull-through, resync, discovery) already
+     ;; selects rows by external identity, so they are never touched
+     :local-rows true
      :priority 40
      ;; the cadenced whole-kind heal: a list renamed on the phone lands
      ;; within the window rather than at the next boot
