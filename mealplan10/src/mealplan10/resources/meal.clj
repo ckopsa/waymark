@@ -30,6 +30,29 @@
   advertised as :touches, honestly non-idempotent (the outcome
   depends on the price world outside the row).
 
+  update_details is the human fix-it door beside the AI's
+  update_recipe: name, servings, and the prep/thaw clocks were frozen
+  at create before it existed. prep_minutes and thaw_hours ride BOTH
+  editors deliberately — update_recipe carries them because the AI
+  states them with the recipe; update_details carries them because a
+  phantom thaw is a human's fix, not a re-authoring. The door can
+  CLEAR: the input boundary keeps an explicit null distinct from an
+  absent key (decode preserves nulls; apply-defaults fills only
+  ABSENT keys), so apply-details reads (contains? inp k) — explicit
+  null blanks a field, an absent key leaves it, and zeroing a
+  phantom thaw is just writing 0. name is optional but never null —
+  a meal keeps its name.
+
+  Catalog health: total_ingredients, priced_ingredients, and the
+  composed has_recipe are promoted filters — ?total_ingredients=0 /
+  has_recipe=false find the empty shells among ~130 meals that
+  otherwise look identical to cheap ones. Promotion mints f_*
+  generated columns; the migrate planner adds them additively
+  (data-safe — Postgres backfills a generated column from the
+  document it derives from). And unpriced ≠ free: the sum grammar
+  coalesces an empty edge to 0, so an est_cost_cents of 0 is read
+  beside priced_ingredients (see :deviations).
+
   Recorded deviations ride the declaration itself (:deviations, DX
   phase 5) — fingerprint-carried, rendered by waymark10.dev/explain."
   (:require [waymark10.dsl :refer [defaction defderived defresource
@@ -58,6 +81,20 @@
 (defhandler apply-themes [row inp _ctx]
   (assoc-in row [:data :themes] (vec (distinct (:themes inp)))))
 
+(defhandler apply-details [row inp _ctx]
+  ;; explicit null CLEARS, an absent key leaves — the decode boundary
+  ;; keeps the difference, so (contains? inp k) is the honest
+  ;; conditional; name never clears (the schema holds it required)
+  (cond-> row
+    (some? (:name inp))
+    (assoc-in [:data :name] (:name inp))
+    (contains? inp :servings)
+    (assoc-in [:data :servings] (:servings inp))
+    (contains? inp :prep_minutes)
+    (assoc-in [:data :prep_minutes] (:prep_minutes inp))
+    (contains? inp :thaw_hours)
+    (assoc-in [:data :thaw_hours] (:thaw_hours inp))))
+
 (def theme-schema
   [:vector {:min 1 :max 10} [:waymark/vocab {:open true}]])
 
@@ -78,6 +115,12 @@
 
 (defderived total-ingredients
   {:count {:owns :meal_line :where {:state #{"on_recipe"}}}})
+
+(defderived has-recipe
+  ;; composed over the count fact (plan's has_conflicts shape): the
+  ;; actionable catalog facet — ?has_recipe=false is the empty shell
+  {:over [:total_ingredients]
+   :expr '(< 0 (var :total_ingredients))})
 
 ;; ── the on-list editors, def'd ──────────────────────────────────────
 
@@ -111,6 +154,19 @@
    :display {:label "Update themes" :order 3
              :description "Retag the meal with every theme night it can serve"}})
 
+(defaction update-details
+  {:from #{:on_list} :to :on_list
+   :input [:map
+           [:name {:optional true} [:string {:min 1 :max 200}]]
+           [:servings {:optional true} [:maybe [:int {:min 1}]]]
+           [:prep_minutes {:optional true} [:maybe [:int {:min 0}]]]
+           [:thaw_hours {:optional true} [:maybe [:int {:min 0}]]]]
+   :edit {:prefill [:name :servings :prep_minutes :thaw_hours]}
+   :safety overwrite
+   :handler apply-details
+   :display {:label "Update details" :order 5
+             :description "Rename the meal or fix its servings and prep/thaw clocks"}})
+
 (defresource meal
   {:kind :meal
    :states [:suggested :on_list :retired]
@@ -139,10 +195,15 @@
                               :x-display {:widget "money"
                                           :label "Est. cost"}}
              [:maybe :int]]
-            [:priced_ingredients {:optional true :derived priced-ingredients}
+            [:priced_ingredients {:optional true :derived priced-ingredients
+                                  :filter #{:eq :range}}
              [:maybe :int]]
-            [:total_ingredients {:optional true :derived total-ingredients}
+            [:total_ingredients {:optional true :derived total-ingredients
+                                 :filter #{:eq :range}}
              [:maybe :int]]
+            [:has_recipe {:optional true :derived has-recipe
+                          :filter #{:eq}}
+             [:maybe :boolean]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}}
@@ -160,7 +221,8 @@
     "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
     "v10 summary templates carry no |join filter — the summary names the meal and its state only."
     "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."
-    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."]
+    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."
+    "est_cost_cents reads 0 over zero priced lines — the SUM aggregate coalesces an empty edge to 0 and the expression grammar has no conditional to blank a number — so unpriced-not-free is carried by the promoted facets instead: priced_ingredients=0 beside has_recipe."]
    ;; the lifecycle doors as flow rows, each wearing its safety story;
    ;; :states stays spelled because the rows are not the whole machine
    ;; (the bulk accept and the editors live in :actions below)
@@ -182,6 +244,7 @@
                   :display {:label "Add selected to meal list" :style :primary}}
     :update_recipe update-recipe
     :update_themes update-themes
+    :update_details update-details
     :reprice {:from #{:on_list} :to :on_list
               ;; the cascade does the fan-out; no handler. Honestly
               ;; non-idempotent: the price world moves outside this row

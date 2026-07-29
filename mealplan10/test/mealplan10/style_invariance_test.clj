@@ -56,7 +56,13 @@
   (is (= (hash-of-map old) (hash-of-resource new))
       (str (name kind) ": byte-identical fingerprint hashes")))
 
-;; ── meal (old split spelling; handlers renamed apply-* in the ns) ────
+;; ── meal (old split spelling; handlers renamed apply-* in the ns).
+;;    Moved 2026-07-28: update_details (the human fix-it door — rename,
+;;    servings, the prep/thaw clocks, explicit-null clears), the
+;;    catalog-health facets (total/priced_ingredients promoted to
+;;    :filter, the composed has_recipe fact), and the unpriced≠$0
+;;    deviation sentence landed in both spellings — intentional law
+;;    changes, not style drift ─────────────────────────────────────────
 
 (def old-meal
   {:kind :meal
@@ -83,17 +89,22 @@
              [:maybe :int]]
             [:priced_ingredients {:optional true} [:maybe :int]]
             [:total_ingredients {:optional true} [:maybe :int]]
+            [:has_recipe {:optional true} [:maybe :boolean]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :derived {:est_cost_cents meal/meal-est-cost
              :priced_ingredients meal/priced-ingredients
-             :total_ingredients meal/total-ingredients}
+             :total_ingredients meal/total-ingredients
+             :has_recipe meal/has-recipe}
    :owns [{:kind :meal_line :via :meal_id :on {:reprice :reprice}}]
    :links [{:rel :ingredients :owns :meal_line :embed true
             :badge :total_ingredients
             :where {:state "on_recipe"}
             :summary "The recipe's ingredient lines and what they cost"}]
-   :filterable {:state #{:eq :in}}
+   :filterable {:state #{:eq :in}
+                :priced_ingredients #{:eq :range}
+                :total_ingredients #{:eq :range}
+                :has_recipe #{:eq}}
    :sortable {:fields [:name :est_cost_cents] :default "name"}
    :display {:title "{data.name}"}
    :deviations
@@ -102,7 +113,8 @@
     "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
     "v10 summary templates carry no |join filter — the summary names the meal and its state only."
     "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."
-    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."]
+    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."
+    "est_cost_cents reads 0 over zero priced lines — the SUM aggregate coalesces an empty edge to 0 and the expression grammar has no conditional to blank a number — so unpriced-not-free is carried by the promoted facets instead: priced_ingredients=0 beside has_recipe."]
    :actions
    {:accept {:from #{:suggested} :to :on_list
              :safety {:idempotent true :reversible false :confirm false
@@ -140,6 +152,22 @@
                     :handler meal/apply-themes
                     :display {:label "Update themes" :order 3
                               :description "Retag the meal with every theme night it can serve"}}
+    :update_details {:from #{:on_list} :to :on_list
+                     :input [:map
+                             [:name {:optional true}
+                              [:string {:min 1 :max 200}]]
+                             [:servings {:optional true}
+                              [:maybe [:int {:min 1}]]]
+                             [:prep_minutes {:optional true}
+                              [:maybe [:int {:min 0}]]]
+                             [:thaw_hours {:optional true}
+                              [:maybe [:int {:min 0}]]]]
+                     :edit {:prefill [:name :servings :prep_minutes
+                                      :thaw_hours]}
+                     :safety {:idempotent true :reversible false :confirm false}
+                     :handler meal/apply-details
+                     :display {:label "Update details" :order 5
+                               :description "Rename the meal or fix its servings and prep/thaw clocks"}}
     :retire {:from #{:on_list} :to :retired
              :safety {:idempotent true :reversible false :confirm true
                       :consequence "The meal leaves the family list and can no longer be assigned to plan days."}
@@ -581,10 +609,12 @@
   ;; The canonical residue: what the fingerprint reduces each kind to,
   ;; pinned as a literal so an accidental law change cannot ride in on
   ;; a refactor. Re-pin deliberately, with a note saying why.
-  ;; re-pinned 2026-07-28: the meal gained leftover_days (the cooked-
-  ;; leftover clock, spec-pantry side-thread) — an intentional law
-  ;; change, not style drift
-  {:meal      "426f2c3d521c3f01a19c2c5503540dd7ba0bcefbf201a349f80d47a3ff12011f"
+  ;; re-pinned 2026-07-28 (earlier the same day: leftover_days, the
+  ;; cooked-leftover clock): the meal gained update_details (the human
+  ;; fix-it door), the catalog-health facets (total/priced_ingredients
+  ;; promoted, the composed has_recipe), and the unpriced≠$0 deviation
+  ;; sentence — intentional law changes, not style drift
+  {:meal      "584e7f0e9b0f233335a862b5bacdcb951d55af5f10757bf787a4508456660af3"
    ;; re-pinned 2026-07-24: :date gained :filter #{:eq :range} — the
    ;; day board's related join (one engine since waymark-bwu.2) needs
    ;; the promoted column; an intentional law change, not style drift
