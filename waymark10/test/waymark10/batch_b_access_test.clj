@@ -15,6 +15,7 @@
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.conformance :as conf]
@@ -423,3 +424,85 @@
                                  {:grant_id g1 :task "Asking again"
                                   :scope [{:kind "plan" :actions ["finalize"]}]}
                                  own-scoped))))))))
+
+;; ── 6. scope honesty (waymark-vnc): asks and grants speak real names ─
+
+(deftest scope-names-real-things
+  (let [gid (offer-grant! {:audience "agent-7"
+                           :scope [{:kind "plan" :actions ["assign_meal"]}]})]
+    (accept! gid)
+    (testing "an ask naming a nonexistent action refuses NOW, spelling
+              the kind's real actions in the reason"
+      (let [resp (req :post "/api/approval_requests"
+                      {:grant_id gid
+                       :task "Update the details"
+                       :scope [{:kind "meal" :actions ["update_details"]}]}
+                      (scoped gid))
+            b (json resp)]
+        (is (= 409 (:status resp)))
+        (is (= "scope-names-real-actions" (:guard b)))
+        (is (str/includes? (:detail b) "update_details")
+            "the refusal names the action that does not exist")
+        (is (str/includes? (:detail b) "meal"))
+        (is (and (str/includes? (:detail b) "accept")
+                 (str/includes? (:detail b) "retire"))
+            "the reason spells the kind's REAL action vocabulary")))
+    (testing "an ask naming a nonexistent kind refuses"
+      (let [resp (req :post "/api/approval_requests"
+                      {:grant_id gid
+                       :task "See the unicorns"
+                       :scope [{:kind "unicorn" :actions []}]}
+                      (scoped gid))
+            b (json resp)]
+        (is (= 409 (:status resp)))
+        (is (= "scope-names-real-kinds" (:guard b)))
+        (is (str/includes? (:detail b) "unicorn"))))
+    (testing "a valid ask is unaffected"
+      (is (= 201 (:status (req :post "/api/approval_requests"
+                               {:grant_id gid
+                                :task "Accept the suggestions"
+                                :scope [{:kind "meal" :actions ["accept"]}]}
+                               (scoped gid))))))
+    (testing "the read-only ask (actions []) stays legal"
+      (is (= 201 (:status (req :post "/api/approval_requests"
+                               {:grant_id gid
+                                :task "Just read the meals"
+                                :scope [{:kind "meal" :actions []}]}
+                               (scoped gid))))))
+    (testing "the hand-offered grant meets the same gate"
+      (let [resp (req :post "/api/grants"
+                      {:audience "agent-7"
+                       :scope [{:kind "meal" :actions ["update_details"]}]})
+            b (json resp)]
+        (is (= 409 (:status resp)))
+        (is (= "scope-names-real-actions" (:guard b)))
+        (is (str/includes? (:detail b) "accept")))
+      (let [resp (req :post "/api/grants"
+                      {:audience "agent-7"
+                       :scope [{:kind "unicorn" :actions []}]})]
+        (is (= 409 (:status resp)))
+        (is (= "scope-names-real-kinds" (:guard (json resp))))))
+    (testing "upgrade honesty: a STORED grant whose action later
+              disappeared loads, boots and reads fine — the stale pair
+              simply never matches (no retroactive sweep)"
+      ;; the mint door skips create guards — exactly a pre-validation
+      ;; row surviving an upgrade that removed the action
+      (inv/create! *eng* :grant
+                   {:audience "agent-7"
+                    :scope [{:kind "meal" :actions ["gone_action"]}
+                            {:kind "meal" :actions ["accept"]}]}
+                   {:principal grants/approvals-actor
+                    :id "grant-stale-vnc"
+                    :mint? true})
+      (accept! "grant-stale-vnc")
+      (let [env (json (req :get "/api/meals" nil (scoped "grant-stale-vnc")))]
+        (is (some? (get-in env [:data :items]))
+            "the kind still renders under the stale-bearing grant"))
+      (let [mid (id-of (req :post "/api/meals" {:name "Brisket" :themes ["bbq"]}))
+            env (json (req :get (str "/api/meals/" mid)
+                           nil (scoped "grant-stale-vnc")))]
+        (is (not (contains? (:actions env) :gone_action))
+            "the stale action is nowhere advertised")
+        (is (= 404 (:status (req :post (str "/api/meals/" mid "/-/gone_action")
+                                 nil (scoped "grant-stale-vnc"))))
+            "and invoking it draws the same 404 it always did")))))

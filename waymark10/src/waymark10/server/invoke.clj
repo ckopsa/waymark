@@ -161,6 +161,17 @@
   (or (get (resources engine) kind)
       (throw (p/not-found kind "?"))))
 
+(defn action-names
+  "Every action-name string a request (or a grant scope entry) may
+  name on this kind — declared actions (:flow rows already desugared
+  into :actions at declaration time), generated field editors, and
+  the create verb: exactly the vocabulary check-action! enforces and
+  well-known publishes."
+  [rdef]
+  (into (sorted-set)
+        (map name)
+        (concat (keys (:actions rdef)) (:create-action-names rdef))))
+
 (defn upcast-row
   "The load boundary's shape step (phase 8): a stored row older than
   the declaration folds forward through :upcasts — one fn per shape,
@@ -319,6 +330,15 @@
                              (store/query-rows (:storage engine) tx target-kind
                                                (or where {})
                                                (merge {:limit 100} opts)))))
+             ;; the vocabulary hook (waymark-vnc): kind → its declared
+             ;; action-name strings, nil for a kind this engine does
+             ;; not serve — the same registry check-action! and render
+             ;; consult, so a guard judging a grant scope refuses a
+             ;; (kind, action) pair that does not exist
+             :action-names (fn [target-kind]
+                             (some-> (get (resources engine)
+                                          (keyword target-kind))
+                                     action-names))
              :actor-of (fn [row transition]
                          ;; the newest matching transition's actor id
                          (some (fn [rec]

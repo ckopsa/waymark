@@ -197,6 +197,59 @@
            :explain "The grant has not reached its expiry."
            :becomes-available-at (fn [row] (get-in row [:data :expires_at]))}))
 
+;; ── scope honesty (waymark-vnc): a scope names things that exist ────
+;;
+;; The field-test finding: an ask for meal.update_details sailed
+;; through before that action existed — accepted and silently useless.
+;; An authoring-time refusal is the honest answer, spelled with the
+;; kind's REAL action vocabulary so the requester can respell the ask.
+;; The vocabulary is the ctx :action-names hook (invoke's registry —
+;; the same union of :flow-desugared :actions and the create verb that
+;; check-action! enforces and well-known publishes); a ctx without the
+;; hook (render's pure probe) declines rather than guesses, the
+;; phase-8 discipline. Validation gates NEW asks and grants only: a
+;; STORED scope naming an action that later disappeared loads and
+;; boots untouched — enforcement (surface-of / :action?) simply never
+;; matches it against a live route, so upgrade honesty costs nothing
+;; retroactive. "actions []" stays the legal read-only ask; the KIND
+;; must still exist.
+
+(g/defguard scope-names-real-kinds
+  {:judges [:scope]
+   :reads [:services]
+   :vars [:kind]
+   :open "The legal kind names are well-known's resources, one GET away; enumerating the registry into every scope form would duplicate it."
+   :explain "A scope grants kinds this surface serves; there is no kind {kind}."}
+  [_row inp ctx]
+  (if-some [names-of (:action-names ctx)]
+    (if-some [bad (some (fn [e]
+                          (let [k (:kind e)]
+                            (when (nil? (names-of k)) k)))
+                        (:scope inp))]
+      (t/deny {:vars {:kind bad}})
+      (t/allow))
+    (t/allow)))
+
+(g/defguard scope-names-real-actions
+  {:judges [:scope]
+   :reads [:services]
+   :vars [:kind :action :actions]
+   :open "Each kind's action vocabulary is well-known's actions list, one GET away; the refusal spells the kind's real actions when an ask misses."
+   :explain "There is no action {action} on {kind}; its actions are: {actions}. (An empty actions list is the read-only ask.)"}
+  [_row inp ctx]
+  (if-some [names-of (:action-names ctx)]
+    (if-some [bad (first
+                   (for [e (:scope inp)
+                         :let [known (names-of (:kind e))]
+                         :when known
+                         a (:actions e)
+                         :when (not (contains? known (str a)))]
+                     {:kind (:kind e) :action (str a)
+                      :actions (str/join ", " known)}))]
+      (t/deny {:vars bad})
+      (t/allow))
+    (t/allow)))
+
 (g/defguard approval-route-only
   {:reads [:principal]
    :hide true
@@ -231,6 +284,10 @@
    :links [{:rel "member" :kind :member
             :href "/api/members/{data.audience}"
             :summary "The member this grant empowers"}]
+   ;; a hand-offered grant speaks the same vocabulary an ask must
+   ;; (waymark-vnc): a scope naming a kind or action that does not
+   ;; exist refuses at the door, never lands silently useless
+   :create-guards [scope-names-real-kinds scope-names-real-actions]
    :actions
    {:accept {:from #{:offered} :to :accepted
              :guards [audience-only]
@@ -252,7 +309,14 @@
              :record true
              :edit {:prefill [:scope :expires_at] :fence false
                     :unfenced-reason "Written once by the approval effect the moment its approve commits; there is no human form to clobber."}
-             :guards [approval-route-only]
+             ;; the scope pair rides behind the hide guard: a
+             ;; non-system probe conceals before any scope truth could
+             ;; narrate; the system caller (an approve whose ask was
+             ;; validated at create) meets them only when the registry
+             ;; changed in between — approval-effects! catches and
+             ;; warns, the grant honestly does not move
+             :guards [approval-route-only
+                      scope-names-real-kinds scope-names-real-actions]
              ;; idempotent, deliberately: a non-idempotent action's 428
              ;; fires before the hide guard can conceal (invoke's step
              ;; order), and a keyless human probe must see 404, not a
@@ -449,7 +513,13 @@
                    requester-holds-the-grant
                    asks-are-paced
                    asks-are-few
-                   asks-are-short]
+                   asks-are-short
+                   ;; the honesty gate (waymark-vnc): an ask for a
+                   ;; (kind, action) that does not exist refuses NOW,
+                   ;; naming the kind's real actions — never approved
+                   ;; into a scope that can never match
+                   scope-names-real-kinds
+                   scope-names-real-actions]
    :on-create (fn [row ctx]
                 (-> row
                     (assoc-in [:data :requested_by]

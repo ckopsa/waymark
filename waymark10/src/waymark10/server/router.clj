@@ -282,11 +282,10 @@
   Exposed on well-known so building a grant/approval_request scope
   needs no source read: an invited agent sees the real strings, not
   a guess at hyphen-vs-underscore or at what a :while-open group
-  generated."
+  generated. (Delegates to invoke's action-names — the one accessor
+  the ctx :action-names hook and grant-scope validation also read.)"
   [rdef]
-  (into (sorted-set)
-        (map name)
-        (concat (keys (:actions rdef)) (:create-action-names rdef))))
+  (inv/action-names rdef))
 
 (defn- well-known [eng]
   (fn [req]
