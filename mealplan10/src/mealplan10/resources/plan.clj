@@ -30,6 +30,14 @@
   WARNS over the stored fact — a week with a recital in it finalizes
   with acknowledgment, not never.
 
+  The grocery rollups (est_grocery_cost_cents / priced_grocery_items
+  / total_grocery_items) sum the week's LIVE lists — every state but
+  discarded, spelled as the explicit allow-set on each :sum. Era 4's
+  per-trip lists must all count (there is no \"the one active list\"),
+  but a discarded mistake or superseded compile counts nothing; each
+  list's own derived totals stay its one writer, and the plan only
+  sums them.
+
   Spelled in the batch-H declaration style: the lifecycle is :flow
   rows, finalize/reopen and the side-dish pair declare each other as
   :undo (the engine verifies the pointers — \"honestly reversible\"
@@ -216,16 +224,23 @@
            :where {:state #{"pending" "scheduled"}}}})
 
 ;; the money rollups (pantry-prices era): the week's grocery cost,
-;; summed over the owned lists' own derived totals — child writes
-;; flip these in the same commit
+;; summed over the owned LIVE lists' own derived totals — child
+;; writes (a discard among them) flip these in the same commit. The
+;; :where is the explicit allow-set (draft/ready/done — every state
+;; but discarded, the meal-est-cost spelling): era 4's per-trip lists
+;; must all sum, so there is no "the one active list" — but a
+;; discarded mistake leaves the totals the moment its door closes.
 (defderived est-grocery-cost-cents
-  {:sum {:owns :grocery_list :of :estimated_total_cents}})
+  {:sum {:owns :grocery_list :where {:state #{"draft" "ready" "done"}}
+         :of :estimated_total_cents}})
 
 (defderived priced-grocery-items
-  {:sum {:owns :grocery_list :of :priced_items}})
+  {:sum {:owns :grocery_list :where {:state #{"draft" "ready" "done"}}
+         :of :priced_items}})
 
 (defderived total-grocery-items
-  {:sum {:owns :grocery_list :of :total_items}})
+  {:sum {:owns :grocery_list :where {:state #{"draft" "ready" "done"}}
+         :of :total_items}})
 
 ;; ── the actions ─────────────────────────────────────────────────────
 

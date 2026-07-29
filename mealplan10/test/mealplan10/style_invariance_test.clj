@@ -202,7 +202,12 @@
   (pin! :rotation old-rotation rotation/rotation))
 
 ;; ── plan (old split spelling: top-level derived/filterable/sortable/
-;;    part-scopes, every action inline) ───────────────────────────────
+;;    part-scopes, every action inline).
+;;    Moved 2026-07-29: the three grocery :sum rollups gained :where
+;;    {:state draft/ready/done} — the explicit allow-set, everything
+;;    but discarded (waymark-8se, the field test's over-count fix);
+;;    an intentional law change, not style drift, carried by both
+;;    spellings together ──────────────────────────────────────────────
 
 (def old-plan
   {:kind :plan
@@ -257,9 +262,14 @@
     :open_tasks {:count {:owns :prep_task
                          :where {:state #{"pending" "scheduled"}}}}
     :est_grocery_cost_cents {:sum {:owns :grocery_list
+                                   :where {:state #{"draft" "ready" "done"}}
                                    :of :estimated_total_cents}}
-    :priced_grocery_items {:sum {:owns :grocery_list :of :priced_items}}
-    :total_grocery_items {:sum {:owns :grocery_list :of :total_items}}}
+    :priced_grocery_items {:sum {:owns :grocery_list
+                                 :where {:state #{"draft" "ready" "done"}}
+                                 :of :priced_items}}
+    :total_grocery_items {:sum {:owns :grocery_list
+                                :where {:state #{"draft" "ready" "done"}}
+                                :of :total_items}}}
    :related {:calendar {:kind :event
                         :on [[:start_date :<= :date]
                              [:end_date :>= :date]]}}
@@ -329,13 +339,18 @@
 ;;    (:create-guards cites the hoisted glist/window-is-paired, the
 ;;    g/require rule again), and the second :deviations sentence;
 ;;    both spellings carry the window and cite the same guard and
-;;    compile handler ───────────────────────────────────────────────
+;;    compile handler. And a fifth, 2026-07-29 (the field test's fix,
+;;    waymark-3by): the discard door — :discard from draft AND ready
+;;    into a :discarded terminal beside :done, confirmed in the
+;;    worksheet's own discard voice (danger, order 9) — so stale and
+;;    test lists stop accumulating; both spellings grew the state and
+;;    the action together ────────────────────────────────────────────
 
 (def old-grocery-list
   {:kind :grocery_list
-   :states [:draft :ready :done]
+   :states [:draft :ready :done :discarded]
    :initial :draft
-   :terminal #{:done}
+   :terminal #{:done :discarded}
    :summary "Groceries · {state}"
    :schema [:map
             [:plan_id {:kind :plan} :waymark/ref]
@@ -484,7 +499,11 @@
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "Completing records a finished shop; the list stays readable as history."}
                :handler glist/stamp-purchases
-               :display {:label "Shopping done" :order 2}}}})
+               :display {:label "Shopping done" :order 2}}
+    :discard {:from #{:draft :ready} :to :discarded
+              :safety {:idempotent true :reversible false :confirm true
+                       :consequence "The list was a mistake or is superseded; it leaves the plan's totals and stays readable as history."}
+              :display {:label "Discard list" :style :danger :order 9}}}})
 
 (deftest the-grocery-list-fingerprint-survived-the-style-refactor
   (pin! :grocery_list old-grocery-list glist/grocery-list))

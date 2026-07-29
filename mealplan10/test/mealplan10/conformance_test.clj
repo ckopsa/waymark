@@ -161,7 +161,9 @@
                   (step! eng :grocery_list gid :check_item {:name "tortillas"})
                   (step! eng :grocery_list gid :check_item
                          {:name "pork shoulder 1400g"})
-                  (:row (step! eng :grocery_list gid :complete)))))))
+                  (:row (step! eng :grocery_list gid :complete)))
+        ;; the mistake door (waymark-3by): terminal beside :done
+        :discarded (:row (step! eng :grocery_list gid :discard))))))
 
 (fac/example-input! :prep_task :create
   (fn [eng]

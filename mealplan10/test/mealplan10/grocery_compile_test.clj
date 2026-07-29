@@ -18,6 +18,11 @@
   every compile — while mark_out + recompile moves it back; a manual
   row for an assumed ingredient survives beside the assumption.
 
+  The discard door (waymark-3by) and the honest rollups (waymark-8se):
+  a plan's grocery sums cover its LIVE lists — two lists both count
+  (era 4's per-trip law), a discarded one counts nothing, in the same
+  commit — and :discarded is terminal from draft and ready alike.
+
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
@@ -94,6 +99,21 @@
      (json resp))))
 
 (defn- fresh-key [] {"idempotency-key" (str (random-uuid))})
+
+(defn- refuse!
+  "POST an action (ETag along), assert the status, return the problem."
+  [self action body status]
+  (let [resp (req :post (str self "/-/" (name action)) body
+                  {"if-match" (etag-of self)})]
+    (is (= status (:status resp))
+        (str self " " (name action) " answered " (:status resp)
+             ", wanted " status ": " (:body resp)))
+    (json resp)))
+
+(defn- get! [self]
+  (let [resp (req :get self)]
+    (is (= 200 (:status resp)))
+    (json resp)))
 
 (defn- restock! [self] (act! self :restock nil (fresh-key)))
 
@@ -300,3 +320,57 @@
             "the restocked ingredient left the items")
         (is (some? (items "Olive oil (gc3)"))
             "the still-out oil stays an item")))))
+
+;; ── the discard door and the honest rollups (waymark-3by,
+;;    waymark-8se) ───────────────────────────────────────────────────
+
+(deftest a-discarded-list-leaves-the-plans-totals
+  (let [plan (created! "plans" {:start_date "2026-01-06" :weeks 1})
+        pself (:self plan)
+        real (created! "grocery_lists" {:plan_id (id-of plan)})
+        stale (created! "grocery_lists" {:plan_id (id-of plan)})]
+    (act! (:self real) :add_item {:name "Chicken thighs (gd)"
+                                  :est_cost_cents 650})
+    (act! (:self real) :add_item {:name "Cilantro (gd)"})
+    (act! (:self stale) :add_item {:name "Chicken thighs (gd)"
+                                   :est_cost_cents 650})
+    (act! (:self stale) :add_item {:name "Rice (gd)" :est_cost_cents 40})
+    (act! (:self stale) :add_item {:name "Cumin (gd)"})
+
+    (testing "two live lists SUM — era 4's law, no 'the one active list'"
+      (let [penv (get! pself)]
+        (is (= 1340 (get-in penv [:data :est_grocery_cost_cents])))
+        (is (= 3 (get-in penv [:data :priced_grocery_items])))
+        (is (= 5 (get-in penv [:data :total_grocery_items])))))
+
+    (testing "discard from draft: the totals drop it in the same commit"
+      (is (= "discarded" (:state (act! (:self stale) :discard))))
+      (let [penv (get! pself)]
+        (is (= 650 (get-in penv [:data :est_grocery_cost_cents])))
+        (is (= 1 (get-in penv [:data :priced_grocery_items])))
+        (is (= 2 (get-in penv [:data :total_grocery_items])))))
+
+    (testing "discarded is terminal — item actions refuse"
+      (refuse! (:self stale) :add_item {:name "Anything (gd)"} 409)
+      (refuse! (:self stale) :remove_item {:name "Rice (gd)"} 409)
+      (refuse! (:self stale) :check_item {:name "Rice (gd)"} 409)
+      (testing "…and the row stays readable as history"
+        (let [env (get! (:self stale))]
+          (is (= "discarded" (:state env)))
+          (is (= 3 (get-in env [:data :total_items]))))))
+
+    (testing "discard works from ready too (the mid-shop mistake)"
+      ;; a ready list needs a planned plan: eating out all week
+      (doseq [date ["2026-01-06" "2026-01-07" "2026-01-08" "2026-01-09"
+                    "2026-01-10" "2026-01-11" "2026-01-12"]]
+        (act! (:self (day-env plan date)) :mark_eating_out
+              {:where "out (gd)"}))
+      (act! pself :finalize)
+      (act! (:self real) :finalize)
+      (act! (:self real) :check_item {:name "Cilantro (gd)"})
+      (is (= "discarded" (:state (act! (:self real) :discard))))
+      (let [penv (get! pself)]
+        (is (= 0 (get-in penv [:data :est_grocery_cost_cents]))
+            "no live list left — the sums read zero, not stale")
+        (is (= 0 (get-in penv [:data :priced_grocery_items])))
+        (is (= 0 (get-in penv [:data :total_grocery_items])))))))

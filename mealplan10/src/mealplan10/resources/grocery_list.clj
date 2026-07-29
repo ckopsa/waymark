@@ -6,7 +6,12 @@
   fills it with add_item. finalize is guarded on the plan actually
   being finalized — a list can't get ahead of the plan it shops for.
   In ready the humans shop, checking items off; complete refuses while
-  anything is unchecked.
+  anything is unchecked. Two doors close the lifecycle, and they say
+  different things: done means the shopping happened (the purchase
+  stamp fires); discard means the list was a mistake or is superseded
+  (a test compile, a plan re-cut into per-trip windows) — it leaves
+  the plan's totals for good but stays readable as history, from
+  draft or from ready alike, stamping nothing.
 
   The item-shaped actions share one part scope; item_on_list /
   item_not_checked / item_checked are pure acceptance-set
@@ -33,8 +38,8 @@
   The money layer (pantry-prices era): items carry an optional
   pantry ref and an AI-stamped estimate — the client authors the
   cross-kind price judgment through add_item, the list owns only the
-  arithmetic (the three derived totals below), and the plan sums the
-  lists in the same commit.
+  arithmetic (the three derived totals below), and the plan sums its
+  live lists — every state but discarded — in the same commit.
 
   The pantry era (spec-pantry, era 1): the list compiles itself.
   compile_from_plan walks the derivation chain plan → plan_day →
@@ -434,7 +439,7 @@
 (defresource grocery-list
   {:kind :grocery_list
    :initial :draft
-   :terminal #{:done}
+   :terminal #{:done :discarded}
    :summary "Groceries · {state}"
    :schema [:map
             [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
@@ -528,65 +533,74 @@
    ;; the shopping phase (check things off), and the doors between —
    ;; the self-loop item edits mint the idempotent-overwrite safety,
    ;; every input keyed by :name, the part-scoped rows citing
-   ;; :place :items
+   ;; :place :items. Discard's two origins cite one opts value (the
+   ;; abandon pattern): terminal like done but saying the opposite
+   ;; thing, so it confirms — the worksheet's own discard voice
+   ;; (danger, order 9), not decline's cheap :one-way, because a live
+   ;; list can carry hand-added items and check-offs.
    :flow
-   [[:draft :add_item     :draft
-     {:input [:map
-              [:name [:string {:min 1 :max 200}]]
-              [:quantity {:optional true} [:maybe [:string {:max 50}]]]
-              [:category {:optional true} [:maybe [:string {:max 50}]]]
-              [:meals {:optional true}
-               [:maybe [:vector [:string {:max 200}]]]]
-              [:ingredient_id {:optional true :kind :ingredient
-                               :pick {:state "active"}}
-               [:maybe :waymark/ref]]
-              [:est_cost_cents {:optional true
-                                :x-display {:widget "money"
-                                            :label "Est. cost"}}
-               [:maybe [:int {:min 0}]]]]
-      :handler add-item
-      :display {:label "Add item" :style :primary :order 1}}]
-    ;; the :altitude waivers below answer a false positive: these
-    ;; actions are already placed on :items — assumed_on_hand merely
-    ;; shares the :name spelling, is compiler-written, and no action
-    ;; addresses its entries. Waived, not re-scoped, honestly.
-    [:draft :remove_item  :draft
-     {:input name-input :place :items
-      :requires [item-on-list]
-      :waives #{:altitude}
-      :handler remove-item
-      :display {:label "Remove item" :order 2}}]
-    [:draft :compile_from_plan :draft
-     {;; the outcome depends on the plan and the price world OUTSIDE
-      ;; the row — natural replay must never swallow a repeat, so:
-      ;; honestly non-idempotent (the reprice story)
-      :safety {:idempotent false :reversible false :confirm false}
-      :handler compile-from-plan
-      :display {:label "Compile from plan" :style :primary :order 3}}]
-    [:draft :finalize     :ready
-     {:requires [plan-is-planned]
-      :undo :reopen
-      :display {:label "Ready to shop" :style :primary :order 1}}]
-    [:ready :check_item   :ready
-     {:input name-input :place :items
-      :requires [item-on-list item-not-checked]
-      :undo :uncheck_item
-      :waives #{:altitude}
-      :handler check-item
-      :display {:label "Check off" :style :primary :order 1}}]
-    [:ready :uncheck_item :ready
-     {:input name-input :place :items
-      :requires [item-on-list item-checked]
-      :undo :check_item
-      :waives #{:altitude}
-      :handler uncheck-item
-      :display {:label "Uncheck" :order 2}}]
-    [:ready :reopen       :draft
-     {:undo :finalize
-      :display {:label "Back to editing" :order 3}}]
-    [:ready :complete     :done
-     {:requires [all-checked-gate]
-      :touches [{:kind :ingredient :action :restock :may true}]
-      :handler stamp-purchases
-      :one-way "Completing records a finished shop; the list stays readable as history."
-      :display {:label "Shopping done" :order 2}}]]})
+   (let [discard
+         {:confirm "The list was a mistake or is superseded; it leaves the plan's totals and stays readable as history."
+          :display {:label "Discard list" :style :danger :order 9}}]
+     [[:draft :add_item     :draft
+       {:input [:map
+                [:name [:string {:min 1 :max 200}]]
+                [:quantity {:optional true} [:maybe [:string {:max 50}]]]
+                [:category {:optional true} [:maybe [:string {:max 50}]]]
+                [:meals {:optional true}
+                 [:maybe [:vector [:string {:max 200}]]]]
+                [:ingredient_id {:optional true :kind :ingredient
+                                 :pick {:state "active"}}
+                 [:maybe :waymark/ref]]
+                [:est_cost_cents {:optional true
+                                  :x-display {:widget "money"
+                                              :label "Est. cost"}}
+                 [:maybe [:int {:min 0}]]]]
+        :handler add-item
+        :display {:label "Add item" :style :primary :order 1}}]
+      ;; the :altitude waivers below answer a false positive: these
+      ;; actions are already placed on :items — assumed_on_hand merely
+      ;; shares the :name spelling, is compiler-written, and no action
+      ;; addresses its entries. Waived, not re-scoped, honestly.
+      [:draft :remove_item  :draft
+       {:input name-input :place :items
+        :requires [item-on-list]
+        :waives #{:altitude}
+        :handler remove-item
+        :display {:label "Remove item" :order 2}}]
+      [:draft :compile_from_plan :draft
+       {;; the outcome depends on the plan and the price world OUTSIDE
+        ;; the row — natural replay must never swallow a repeat, so:
+        ;; honestly non-idempotent (the reprice story)
+        :safety {:idempotent false :reversible false :confirm false}
+        :handler compile-from-plan
+        :display {:label "Compile from plan" :style :primary :order 3}}]
+      [:draft :finalize     :ready
+       {:requires [plan-is-planned]
+        :undo :reopen
+        :display {:label "Ready to shop" :style :primary :order 1}}]
+      [:ready :check_item   :ready
+       {:input name-input :place :items
+        :requires [item-on-list item-not-checked]
+        :undo :uncheck_item
+        :waives #{:altitude}
+        :handler check-item
+        :display {:label "Check off" :style :primary :order 1}}]
+      [:ready :uncheck_item :ready
+       {:input name-input :place :items
+        :requires [item-on-list item-checked]
+        :undo :check_item
+        :waives #{:altitude}
+        :handler uncheck-item
+        :display {:label "Uncheck" :order 2}}]
+      [:ready :reopen       :draft
+       {:undo :finalize
+        :display {:label "Back to editing" :order 3}}]
+      [:ready :complete     :done
+       {:requires [all-checked-gate]
+        :touches [{:kind :ingredient :action :restock :may true}]
+        :handler stamp-purchases
+        :one-way "Completing records a finished shop; the list stays readable as history."
+        :display {:label "Shopping done" :order 2}}]
+      [:draft :discard      :discarded discard]
+      [:ready :discard      :discarded discard]])})
