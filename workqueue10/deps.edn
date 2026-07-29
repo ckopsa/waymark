@@ -21,4 +21,8 @@
   :check {:main-opts ["-m" "waymark10.check" "workqueue10.main/check-resources"]}
   ;; make migrate-queue: print the schema plan; APPLY=1 executes,
   ;; DESTRUCTIVE=1 includes state renames
-  :migrate {:main-opts ["-e" "((requiring-resolve 'workqueue10.main/migrate!))"]}}}
+  :migrate {:main-opts ["-e" "((requiring-resolve 'workqueue10.main/migrate!))"]}
+  ;; the stale-price scraper (waymark-1qn): one polite pass over
+  ;; ?state=tracked&price_is_stale=true against WORKQUEUE10_DSN;
+  ;; SCRAPE_LIMIT / SCRAPE_DELAY_MS override politeness
+  :scrape {:main-opts ["-e" "((requiring-resolve 'workqueue10.main/scrape!))"]}}}

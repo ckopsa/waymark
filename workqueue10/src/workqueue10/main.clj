@@ -45,6 +45,7 @@
             [choreplan10.resources.chore-run :refer [chore-run]]
             [choreplan10.resources.day :refer [day day-board]]
             [mealplan10.main :as mealplan]
+            [mealplan10.scraper :as scraper]
             [workqueue10.confluence :as conf]
             [workqueue10.resources.media :refer [media-resource]]
             [workqueue10.resources.task :refer [task-resource]]
@@ -324,6 +325,46 @@
                   (System/exit 1)))
               (do (println "dry run — APPLY=1 executes (DESTRUCTIVE=1 includes state renames).")
                   (System/exit 1))))))
+      (finally
+        (pg/close! storage)
+        (shutdown-agents)))))
+
+;; ── the scrape CLI (the :scrape alias) ──────────────────────────────
+
+(defn scrape!
+  "One pass of the stale-price scraper (mealplan10.scraper) over THIS
+  engine — the consumer product.clj promised, run as a job. Boots
+  exactly as start! does, minus the server and the runtime; no
+  :auto-migrate, so a drifted schema REFUSES the pass and names the
+  plan (production posture — migrate! is the fix). The loop drives
+  the engine's own ring handler in-process (the engine-transport
+  precedent), fetches with the real HTTP client, and prints the
+  honest report. SCRAPE_LIMIT / SCRAPE_DELAY_MS override politeness
+  (default 40 fetches, 3000 ms apart)."
+  [& _]
+  (let [storage (pg/storage (dsn))]
+    (try
+      (let [eng (mirror/with-push
+                 (engine/engine {:storage storage
+                                 :resources (resources (sources)
+                                                       (media-sources)
+                                                       (calendar-adapter))
+                                 :surfaces surfaces
+                                 :deploy-mode (deploy-mode)
+                                 :oidc (oidc/from-env)
+                                 :services {:field-hash-salt
+                                            (System/getenv
+                                             "WAYMARK10_FIELD_HASH_SALT")}}))
+            _ (reset! engine-ref eng)
+            io (scraper/handler-io {:handler (engine/handler eng)
+                                    :principal "scraper"})]
+        (scraper/run! {:find (:find io)
+                       :invoke (:invoke io)
+                       :fetch scraper/fetch
+                       :limit (some-> (System/getenv "SCRAPE_LIMIT")
+                                      parse-long)
+                       :delay-ms (some-> (System/getenv "SCRAPE_DELAY_MS")
+                                         parse-long)}))
       (finally
         (pg/close! storage)
         (shutdown-agents)))))
