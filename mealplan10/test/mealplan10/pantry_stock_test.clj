@@ -183,7 +183,37 @@
                              :out true}}))
         "an out row is already false — no flip to schedule")))
 
-;; ── 3. the purchase stamp ───────────────────────────────────────────
+;; ── 3. the seeding door ─────────────────────────────────────────────
+
+(deftest bulk-restock-seeds-the-pantry
+  (reset! *clock* (Instant/parse "2026-07-08T12:00:00Z"))
+  (let [flour (active-ingredient! "Flour (pst)")            ; staple
+        yogurt (active-ingredient! "Yogurt (pst)"           ; perishable
+                                   {:shelf_life_days 14})
+        pepper (active-ingredient! "Pepper (pst)")
+        ids (mapv id-of [flour yogurt pepper])]
+    (testing "the fan-out is as honestly non-idempotent as the single
+              verdict — no Idempotency-Key, no write"
+      (let [resp (req :post "/api/ingredients/-/restock_many" {:ids ids})]
+        (is (= 428 (:status resp)))
+        (is (nil? (get-in (get-env (:self flour)) [:data :stocked_on])))))
+    (testing "one call seeds the selection"
+      (let [resp (req :post "/api/ingredients/-/restock_many" {:ids ids}
+                      (fresh-key))
+            doc (json resp)]
+        (is (= 200 (:status resp)) (str (:status resp) " " (:body resp)))
+        (is (= "bulk_report" (:kind doc)))
+        (is (= {:succeeded 3 :refused 0 :failed 0}
+               (select-keys (:data doc) [:succeeded :refused :failed])))))
+    (testing "each selected row carries the stamp — the staple sticky,
+              the perishable's clock wound"
+      (doseq [env (map (comp get-env :self) [flour yogurt pepper])]
+        (is (= "2026-07-08" (get-in env [:data :stocked_on]))
+            (str (get-in env [:data :name]) " stamped with today"))
+        (is (false? (get-in env [:data :out])))
+        (is (true? (get-in env [:data :stocked])))))))
+
+;; ── 4. the purchase stamp ───────────────────────────────────────────
 
 (deftest a-completed-shop-stamps-the-pantry
   (let [thighs (active-ingredient! "Chicken thighs (pst)")

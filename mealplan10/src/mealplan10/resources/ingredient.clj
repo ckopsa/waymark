@@ -36,7 +36,11 @@
   verdicts carry no :undo pair — restock stamps a date, so they are
   not exact inverses — and restock is honestly non-idempotent (the
   reprice posture): today lives outside the row, so natural replay
-  must never swallow a later restock. mark_out is the idempotent
+  must never swallow a later restock. restock_many is the seeding
+  door — the recorded punt, promoted once it hurt: the same stamp
+  fanned over a selection (accept_many's bulk shape), and just as
+  honestly non-idempotent, so the whole call demands one
+  Idempotency-Key. mark_out is the idempotent
   overwrite it looks like. Era 4 adds the second clock:
   opened_shelf_life_days is how long the ingredient keeps once
   opened — the anchor/flex solver's input, never a law here."
@@ -278,6 +282,16 @@
     :update_aliases update-aliases
     :update_details update-details
     :restock restock
+    ;; the seeding door: restock, fanned — each selected row runs the
+    ;; same apply-restock through the per-item algorithm; max-items
+    ;; 500 (the framework caps nothing, defaults 100; the pantry is
+    ;; 716 wide), over 50 defers to a job like accept_many
+    :restock_many {:from #{:active} :to :active
+                   :bulk {:max-items 500 :defer-over 50}
+                   :safety {:idempotent false :reversible false :confirm true
+                            :consequence "Every selected ingredient is marked on hand as of today."}
+                   :handler apply-restock
+                   :display {:label "Restock selected"}}
     :mark_out mark-out
     :absorb absorb
     :retire {:from #{:active} :to :retired

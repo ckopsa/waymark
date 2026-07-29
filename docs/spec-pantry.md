@@ -166,8 +166,11 @@ becomes rows.
   human verdict, never "300 g remain".
 - No servings scaling at compile; eating-out and leftover nights don't yet
   reduce quantities.
-- Seeding is per-row `restock` (idempotent; the AI can loop) — no bulk
-  action until it hurts.
+- ~~Seeding is per-row `restock` (idempotent; the AI can loop) — no bulk
+  action until it hurts.~~ Landed 2026-07-29: it hurt (716 ingredients, one
+  call each) — `restock_many` is the bulk door, accept_many's shape with
+  restock's honest non-idempotence (the whole call demands one
+  Idempotency-Key; over 50 ids defers to a job).
 - `leftover_days` is declared but unconsumed until leftover-night planning
   exists.
 
