@@ -51,7 +51,9 @@
     (some? (:prep_minutes inp))
     (assoc-in [:data :prep_minutes] (:prep_minutes inp))
     (some? (:thaw_hours inp))
-    (assoc-in [:data :thaw_hours] (:thaw_hours inp))))
+    (assoc-in [:data :thaw_hours] (:thaw_hours inp))
+    (some? (:leftover_days inp))
+    (assoc-in [:data :leftover_days] (:leftover_days inp))))
 
 (defhandler apply-themes [row inp _ctx]
   (assoc-in row [:data :themes] (vec (distinct (:themes inp)))))
@@ -88,11 +90,13 @@
            [:prep_minutes {:optional true}
             [:maybe [:int {:min 0}]]]
            [:thaw_hours {:optional true}
+            [:maybe [:int {:min 0}]]]
+           [:leftover_days {:optional true}
             [:maybe [:int {:min 0}]]]]
    ;; one edit concept: prefilled (editing is not re-authoring), fenced
    ;; (a prefilled form is a snapshot), drafted shared + live (the
    ;; whole family can polish a recipe together)
-   :edit {:prefill [:recipe :prep_minutes :thaw_hours]
+   :edit {:prefill [:recipe :prep_minutes :thaw_hours :leftover_days]
           :draft {:shared true :live true}}
    :safety overwrite
    :handler apply-recipe
@@ -128,6 +132,7 @@
              [:maybe [:string {:min 1 :max 8000}]]]
             [:prep_minutes {:optional true} [:maybe [:int {:min 0}]]]
             [:thaw_hours {:optional true} [:maybe [:int {:min 0}]]]
+            [:leftover_days {:optional true} [:maybe [:int {:min 0}]]]
             [:servings {:optional true} [:maybe [:int {:min 1}]]]
             [:est_cost_cents {:optional true :derived meal-est-cost
                               :sort true
@@ -154,7 +159,8 @@
     "The on-list editors stay def'd actions — :fields would mint one all-optional writer, but apply-recipe writes conditionally and apply-themes dedupes: a different law under different names."
     "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
     "v10 summary templates carry no |join filter — the summary names the meal and its state only."
-    "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."]
+    "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."
+    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."]
    ;; the lifecycle doors as flow rows, each wearing its safety story;
    ;; :states stays spelled because the rows are not the whole machine
    ;; (the bulk accept and the editors live in :actions below)

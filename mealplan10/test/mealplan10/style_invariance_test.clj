@@ -75,6 +75,7 @@
              [:maybe [:string {:min 1 :max 8000}]]]
             [:prep_minutes {:optional true} [:maybe [:int {:min 0}]]]
             [:thaw_hours {:optional true} [:maybe [:int {:min 0}]]]
+            [:leftover_days {:optional true} [:maybe [:int {:min 0}]]]
             [:servings {:optional true} [:maybe [:int {:min 1}]]]
             [:est_cost_cents {:optional true
                               :x-display {:widget "money"
@@ -100,7 +101,8 @@
     "The on-list editors stay def'd actions — :fields would mint one all-optional writer, but apply-recipe writes conditionally and apply-themes dedupes: a different law under different names."
     "No :undo pointers — nothing here is declared reversible, and nothing walks retired back."
     "v10 summary templates carry no |join filter — the summary names the meal and its state only."
-    "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."]
+    "prep_minutes and thaw_hours carry no field defaults — the AI writes them with the recipe."
+    "leftover_days is declared but unconsumed — the cooked-leftover clock waits for leftover-night planning."]
    :actions
    {:accept {:from #{:suggested} :to :on_list
              :safety {:idempotent true :reversible false :confirm false
@@ -123,8 +125,10 @@
                             [:prep_minutes {:optional true}
                              [:maybe [:int {:min 0}]]]
                             [:thaw_hours {:optional true}
+                             [:maybe [:int {:min 0}]]]
+                            [:leftover_days {:optional true}
                              [:maybe [:int {:min 0}]]]]
-                    :edit {:prefill [:recipe :prep_minutes :thaw_hours]
+                    :edit {:prefill [:recipe :prep_minutes :thaw_hours :leftover_days]
                            :draft {:shared true :live true}}
                     :safety {:idempotent true :reversible false :confirm false}
                     :handler meal/apply-recipe
@@ -309,7 +313,23 @@
 ;;    one deliberate law revision taken with batch H: check/uncheck
 ;;    became honestly reversible (mutual :undo in the new spelling),
 ;;    so BOTH spellings moved together — the pin proves the spellings
-;;    agree on the revised law, not that the law never moved ─────────
+;;    agree on the revised law, not that the law never moved.
+;;    Moved again 2026-07-28: compile_from_plan and item provenance
+;;    (:source — spec-pantry era 1) landed in both spellings — an
+;;    intentional law change, not style drift. And again the same
+;;    day: complete gained the purchase stamp (spec-pantry era 2 —
+;;    :handler stamp-purchases + :touches ingredient restock), both
+;;    spellings citing the same handler object. And a third landing
+;;    the same day: compile consults the pantry (spec-pantry era 3)
+;;    — assumed_on_hand joined the schema, the stocked ingredients'
+;;    honest record; both spellings carry the field and cite the
+;;    same compile handler. And a fourth, still 2026-07-28: the
+;;    anchor/flex solver (spec-pantry era 4) — the covers_from/
+;;    covers_until window, the window_paired fact required at create
+;;    (:create-guards cites the hoisted glist/window-is-paired, the
+;;    g/require rule again), and the second :deviations sentence;
+;;    both spellings carry the window and cite the same guard and
+;;    compile handler ───────────────────────────────────────────────
 
 (def old-grocery-list
   {:kind :grocery_list
@@ -319,6 +339,12 @@
    :summary "Groceries · {state}"
    :schema [:map
             [:plan_id {:kind :plan} :waymark/ref]
+            [:covers_from {:optional true
+                           :x-display {:label "Covers from"}}
+             [:maybe :waymark/date]]
+            [:covers_until {:optional true
+                            :x-display {:label "Covers until"}}
+             [:maybe :waymark/date]]
             [:items [:vector
                      [:map
                       [:name [:string {:min 1 :max 200}]]
@@ -334,7 +360,15 @@
                                         :x-display {:widget "money"
                                                     :label "Est. cost"}}
                        [:maybe [:int {:min 0}]]]
+                      [:source {:optional true} [:maybe [:enum "plan"]]]
                       [:have {:optional true} [:maybe :boolean]]]]]
+            [:assumed_on_hand {:optional true
+                               :x-display {:label "Assumed on hand"}}
+             [:maybe [:vector
+                      [:map
+                       [:name [:string {:min 1 :max 200}]]
+                       [:meals {:optional true}
+                        [:maybe [:vector [:string {:max 200}]]]]]]]]
             [:all_items_checked {:optional true} [:maybe :boolean]]
             [:estimated_total_cents {:optional true
                                      :x-display {:widget "money"
@@ -342,12 +376,20 @@
              [:maybe :int]]
             [:priced_items {:optional true} [:maybe :int]]
             [:total_items {:optional true} [:maybe :int]]
+            [:window_paired {:optional true} [:maybe :boolean]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :create-schema [:map
                    [:plan_id {:kind :plan} :waymark/ref]
+                   [:covers_from {:optional true
+                                  :x-display {:label "Covers from"}}
+                    [:maybe :waymark/date]]
+                   [:covers_until {:optional true
+                                   :x-display {:label "Covers until"}}
+                    [:maybe :waymark/date]]
                    [:notes {:optional true :x-display {:widget "prose"}}
                     [:maybe [:string {:max 2000}]]]]
+   :create-guards [glist/window-is-paired]
    :on-create @#'glist/ensure-items
    :derived {:all_items_checked
              {:over [:items]
@@ -362,7 +404,15 @@
               :expr '(count [i (var :items)] (is-set (get i :est_cost_cents)))}
              :total_items
              {:over [:items]
-              :expr '(count (var :items))}}
+              :expr '(count (var :items))}
+             :window_paired
+             {:over [:covers_from :covers_until]
+              :expr '(or (and (is-set (var :covers_from))
+                              (is-set (var :covers_until))
+                              (<= (var :covers_from) (var :covers_until)))
+                         (and (not (is-set (var :covers_from)))
+                              (not (is-set (var :covers_until)))))
+              :explain "A coverage window is both ends or neither — covers_from through covers_until, in order."}}
    :links [{:rel "plan" :kind :plan
             :href "/api/plans/{data.plan_id}"
             :summary "The meal plan this list shops for"}]
@@ -373,6 +423,9 @@
                 :priced_items #{:eq :range}
                 :total_items #{:eq :range}}
    :display {:title "Grocery list"}
+   :deviations
+   ["The compile walk (plan_day → meal_line, summed per ingredient) is handler code, not law — join-and-group sits outside the expression grammar, the fn= boundary price-line and absorb-duplicate already record."
+    "The era-4 coverage solver (the trip schedule, the two clocks, purchases opening greedily at the latest covering trip) is the same boundary grown — cross-row date arithmetic sits outside the grammar too, so the law lives in trip-uses and its tests."]
    :actions
    {:add_item {:from #{:draft} :to :draft
                :input [:map
@@ -394,9 +447,16 @@
     :remove_item {:from #{:draft} :to :draft
                   :input glist/name-input :place :items
                   :guards [glist/item-on-list]
+                  :waives #{:altitude}
                   :safety {:idempotent true :reversible false :confirm false}
                   :handler glist/remove-item
                   :display {:label "Remove item" :order 2}}
+    :compile_from_plan {:from #{:draft} :to :draft
+                        :safety {:idempotent false :reversible false
+                                 :confirm false}
+                        :handler glist/compile-from-plan
+                        :display {:label "Compile from plan"
+                                  :style :primary :order 3}}
     :finalize {:from #{:draft} :to :ready
                :guards [glist/plan-is-planned]
                :safety {:idempotent true :reversible true :confirm false}
@@ -407,19 +467,23 @@
     :check_item {:from #{:ready} :to :ready
                  :input glist/name-input :place :items
                  :guards [glist/item-on-list glist/item-not-checked]
+                 :waives #{:altitude}
                  :safety {:idempotent true :reversible true :confirm false}
                  :handler glist/check-item
                  :display {:label "Check off" :style :primary :order 1}}
     :uncheck_item {:from #{:ready} :to :ready
                    :input glist/name-input :place :items
                    :guards [glist/item-on-list glist/item-checked]
+                   :waives #{:altitude}
                    :safety {:idempotent true :reversible true :confirm false}
                    :handler glist/uncheck-item
                    :display {:label "Uncheck" :order 2}}
     :complete {:from #{:ready} :to :done
                :guards [glist/all-checked-gate]
+               :touches [{:kind :ingredient :action :restock :may true}]
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "Completing records a finished shop; the list stays readable as history."}
+               :handler glist/stamp-purchases
                :display {:label "Shopping done" :order 2}}}})
 
 (deftest the-grocery-list-fingerprint-survived-the-style-refactor
@@ -498,7 +562,10 @@
   ;; The canonical residue: what the fingerprint reduces each kind to,
   ;; pinned as a literal so an accidental law change cannot ride in on
   ;; a refactor. Re-pin deliberately, with a note saying why.
-  {:meal      "ac2f3f372fdb779d61f1cc35cbf440c1bc6da00ef3e81aaf0fb20baa4ee375ec"
+  ;; re-pinned 2026-07-28: the meal gained leftover_days (the cooked-
+  ;; leftover clock, spec-pantry side-thread) — an intentional law
+  ;; change, not style drift
+  {:meal      "426f2c3d521c3f01a19c2c5503540dd7ba0bcefbf201a349f80d47a3ff12011f"
    ;; re-pinned 2026-07-24: :date gained :filter #{:eq :range} — the
    ;; day board's related join (one engine since waymark-bwu.2) needs
    ;; the promoted column; an intentional law change, not style drift

@@ -382,16 +382,23 @@
 
 (defn- whole-days
   "Numeric → Period of that many days; nil for non-integral or
-  out-of-range values — the calendar has no fractional day."
+  out-of-range values — the calendar has no fractional day. The whole
+  long family passes (int?, the same boundary scalar-literal? draws):
+  JSON decoding hands scope values over as Integer, and evaluation is
+  total over JSON-shaped values — (days (var :n)) must mean what
+  (days n) means."
   [v]
   (try
     (cond
-      (instance? Long v)
+      (int? v)
       (when (<= Integer/MIN_VALUE (long v) Integer/MAX_VALUE)
         (Period/ofDays (int (long v))))
       (decimal? v)
+      ;; integral means scale ≤ 0 after the strip: stripTrailingZeros
+      ;; turns 10M into 1E+1 (scale -1), and a negative scale is as
+      ;; whole as a zero one — longValueExact restates it exactly
       (let [s (.stripTrailingZeros ^java.math.BigDecimal v)]
-        (when (zero? (.scale s))
+        (when-not (pos? (.scale s))
           (let [l (.longValueExact s)]
             (when (<= Integer/MIN_VALUE l Integer/MAX_VALUE)
               (Period/ofDays (int l))))))

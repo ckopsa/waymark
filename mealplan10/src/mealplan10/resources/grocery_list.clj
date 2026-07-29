@@ -36,10 +36,58 @@
   arithmetic (the three derived totals below), and the plan sums the
   lists in the same commit.
 
+  The pantry era (spec-pantry, era 1): the list compiles itself.
+  compile_from_plan walks the derivation chain plan → plan_day →
+  meal_line and writes the items — grams summed per ingredient
+  across every planned night (a meal cooked twice buys twice),
+  estimates summed from the lines' write-time ests (pricing is
+  linear in grams, so the sum of line ests IS the total est), each
+  item stamped with its provenance (:source \"plan\"; nil reads as
+  manual, so existing rows need no shape bump). Recompile replaces
+  only its own plan-stamped rows; hand-added extras survive.
+  Honestly non-idempotent — the outcome depends on the plan and the
+  price world outside the row, the reprice story.
+
+  The purchase stamp (era 2): complete gained a handler — every
+  CHECKED item carrying an ingredient ref invokes that ingredient's
+  restock through ctx :invoke, advertised as :touches, so a finished
+  shop refreshes the pantry in the same commit. The all-checked gate
+  already guarantees checked = bought; unref'd manual items stamp
+  nothing.
+
+  The noise fix (era 3): compile consults the pantry — each grouped
+  ingredient's stocked fact, read through ctx :read (materialized in
+  :data by the ingredient's last write or clock sweep, the same value
+  its own laws judge by). Stocked ingredients leave the list but
+  never silently: assumed_on_hand is the compiler's honest record —
+  {name, meals}, replaced wholesale every compile like the
+  plan-stamped rows — so one glance verifies twenty staples, and a
+  wrong assumption is mark_out + recompile (or just add_item) away.
+  A manual item whose ingredient is assumed on hand survives
+  untouched; the assumption is recorded beside it, honestly.
+
+  The anchor/flex solver (era 4): a two-week plan gets one list per
+  trip — an optional covers_from/covers_until window, both ends or
+  neither (window_paired is required at create, the :distinct
+  pattern), and a list with NO window covers the whole plan: era-1
+  law, every existing row unchanged. The windowed compile walks the
+  same chain but keeps each use's date, reads the plan's other
+  lists' covers_from as the trip schedule, and assigns purchases
+  greedily from the earliest use: a use rides the standing purchase
+  while both clocks hold (use − trip ≤ shelf_life_days, use −
+  first_use ≤ opened_shelf_life_days; a nil clock never binds), else
+  a new purchase opens at the latest trip that covers it. Each
+  purchase belongs to the trip where it opens, and this list
+  compiles exactly its own trip's purchases — anchors (flour) ride
+  trip 1, flex (cilantro, cream that won't survive opened to day 12)
+  rides the later trip, and a use no trip can honestly serve still
+  lands on the latest trip before it, never dropped.
+
   Recorded punt: the with_plan profile has no v10 spelling."
   (:require [waymark10.dsl :refer [defderived defguardfn defresource
                                    defhandler guard require-fact]]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time LocalDate)))
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
@@ -146,6 +194,196 @@
 (defhandler check-item [row inp _ctx] (set-have row inp true))
 (defhandler uncheck-item [row inp _ctx] (set-have row inp false))
 
+;; the purchase stamp (spec-pantry era 2): every CHECKED item carrying
+;; an ingredient ref restocks its pantry row through the ctx :invoke
+;; door — the absorb-cascade shape, one commit, one writer for
+;; stocked_on. The all-checked gate already guarantees checked =
+;; bought at this door; unref'd manual items ("birthday candles")
+;; simply don't stamp.
+(defhandler stamp-purchases [row _inp ctx]
+  (let [invoke! (:invoke ctx)]
+    (doseq [it (get-in row [:data :items])
+            :when (and (true? (:have it)) (some? (:ingredient_id it)))]
+      (invoke! :ingredient (:ingredient_id it) :restock nil))
+    row))
+
+;; ── the anchor/flex solver (spec-pantry era 4) ──────────────────────
+
+(defn- day-span
+  "Whole days from a to b — the solver's only arithmetic."
+  [^LocalDate a ^LocalDate b]
+  (- (.toEpochDay b) (.toEpochDay a)))
+
+;; the coverage law, one ingredient at a time: walk its uses in date
+;; order, ride the standing purchase while both clocks hold, else
+;; open a new purchase at the latest trip that covers the use. The
+;; greedy is safe because the newest purchase carries both the latest
+;; trip and the latest first-use — if IT can't cover a use, no older
+;; purchase can. Returns the uses whose purchase opens at `at`.
+(defn- trip-uses
+  [trips at shelf opened ls]
+  (let [covers? (fn [^LocalDate trip ^LocalDate first-use ^LocalDate d]
+                  ;; a purchase at `trip`, first opened at `first-use`,
+                  ;; still serves the use at `d` iff both clocks hold —
+                  ;; and a nil clock never binds (shelf-stable; opening
+                  ;; changes nothing)
+                  (and (or (nil? shelf) (<= (day-span trip d) shelf))
+                       (or (nil? opened) (<= (day-span first-use d) opened))))
+        opens-at (fn [^LocalDate d]
+                   (or ;; the latest trip on/before the use that the
+                       ;; raw clock still allows — the opened clock
+                       ;; starts AT the use, so it never bars an open
+                       (last (filter (fn [^LocalDate t]
+                                       (and (not (.isAfter t d))
+                                            (or (nil? shelf)
+                                                (<= (day-span t d) shelf))))
+                                     trips))
+                       ;; no trip can honestly serve d (cilantro used
+                       ;; day 12, one trip on day 1): the purchase
+                       ;; still lands on the latest trip before d —
+                       ;; the best the schedule offers; dropping it
+                       ;; would silently lose groceries
+                       (last (filterv (fn [^LocalDate t]
+                                        (not (.isAfter t d)))
+                                      trips))
+                       ;; a use before every trip: the first trip, the
+                       ;; same best-the-schedule-offers honesty
+                       (first trips)))
+        purchases
+        (reduce (fn [ps {d ::date :as line}]
+                  (let [p (peek ps)]
+                    (if (and p (covers? (::trip p) (::first-use p) d))
+                      (conj (pop ps) (update p ::uses conj line))
+                      (conj ps {::trip (opens-at d) ::first-use d
+                                ::uses [line]}))))
+                []
+                (sort-by ::date ls))]
+    (into [] (comp (filter #(= at (::trip %))) (mapcat ::uses)) purchases)))
+
+;; the era-1 compiler (spec-pantry): the derivation chain plan →
+;; plan_day → meal_line, walked as handler code over ctx :find/:read
+;; — the fn= boundary price-line and absorb-duplicate already record.
+;; A meal cooked on two nights contributes its lines once PER NIGHT
+;; (double groceries, honestly), so meal_ids are never deduped. The
+;; store's find pages by :limit alone (no cursor), so the honest page
+;; is one wide enough for the law: a plan owns at most 14 days
+;; (:weeks caps at 2) and a recipe stays far under 200 lines.
+;; Era 3, the pantry consult: each group also reads its ingredient's
+;; stocked fact — a stocked group skips the items and lands in
+;; assumed_on_hand instead, the noise fix that never goes silent.
+;; Era 4, the windowed branch: a list carrying covers_from/covers_until
+;; keeps each contribution's use date, reads the plan's other lists as
+;; the trip schedule, and compiles only the purchases the solver opens
+;; at ITS covers_from; the nil-window list takes every use, era-1 law
+;; untouched.
+(defhandler compile-from-plan [row _inp ctx]
+  (let [find' (:find ctx)
+        read' (:read ctx)
+        days (find' :plan_day {:plan_id (get-in row [:data :plan_id])
+                               :state :planned}
+                    {:limit 200})
+        lines (into []
+                    (mapcat
+                     (fn [day]
+                       (map #(assoc % ::meal
+                                    (or (get-in day [:data :meal_name])
+                                        (get-in % [:data :meal_name]))
+                                    ;; era 4 keeps each contribution's
+                                    ;; USE DATE — the night it feeds
+                                    ::date (get-in day [:data :date]))
+                            (find' :meal_line
+                                   {:meal_id (get-in day [:data :meal_id])
+                                    :state :on_recipe}
+                                   {:limit 200}))))
+                    days)
+        from (get-in row [:data :covers_from])
+        ;; the trip schedule: every windowed sibling's covers_from plus
+        ;; this list's own, ascending. Draft, ready, and done lists are
+        ;; all real trips — none excluded but this row itself. A
+        ;; half-set window cannot be born (window_paired is required at
+        ;; create), so both-ends-set IS the windowed branch; nil-window
+        ;; siblings simply contribute no trip date.
+        trips (when (and from (get-in row [:data :covers_until]))
+                (vec (into (sorted-set from)
+                           (comp (remove #(= (str (:id %)) (str (:id row))))
+                                 (keep #(get-in % [:data :covers_from])))
+                           (find' :grocery_list
+                                  {:plan_id (get-in row [:data :plan_id])}
+                                  {:limit 200}))))
+        groups (group-by #(get-in % [:data :ingredient_id]) lines)
+        item-of (fn [iid ing ls]
+                  (let [ests (keep #(get-in % [:data :est_cost_cents]) ls)]
+                    {:name (or (some #(not-empty
+                                       (get-in % [:data :ingredient_name]))
+                                     ls)
+                               (get-in ing [:data :name]))
+                     :quantity (str (transduce
+                                     (map #(get-in % [:data :grams])) + ls)
+                                    " g")
+                     :category (get-in ing [:data :category])
+                     :meals (vec (distinct (keep ::meal ls)))
+                     :ingredient_id iid
+                     ;; the lines' write-time estimates, summed —
+                     ;; pricing is linear in grams, so a partial sum
+                     ;; stays an honest lower bound; a group NO line
+                     ;; prices stays blank
+                     :est_cost_cents (when (seq ests) (reduce + ests))
+                     :source "plan"
+                     :have false}))
+        compiled
+        (into []
+              (keep (fn [iid]
+                      (let [ls (get groups iid)
+                            ;; the pantry consult (era 3): the derived
+                            ;; stocked fact, materialized in the
+                            ;; ingredient's :data by its last write or
+                            ;; clock sweep — the same value its own
+                            ;; laws judge by. Era 3 wins before era 4:
+                            ;; a stocked group is the pantry's,
+                            ;; whatever the trip schedule says
+                            ing (read' :ingredient iid)
+                            stocked? (true? (get-in ing [:data :stocked]))
+                            mine (if (and trips (not stocked?))
+                                   (trip-uses
+                                    trips from
+                                    (get-in ing [:data :shelf_life_days])
+                                    (get-in ing [:data :opened_shelf_life_days])
+                                    ls)
+                                   ls)]
+                        ;; an unstocked group whose every purchase
+                        ;; opens at another trip is not this trip's
+                        ;; problem — no item, no assumption
+                        (when (or stocked? (seq mine))
+                          (assoc (item-of iid ing mine)
+                                 ::stocked stocked?)))))
+              (distinct (map #(get-in % [:data :ingredient_id]) lines)))
+        to-buy (into [] (comp (remove ::stocked)
+                              (map #(dissoc % ::stocked)))
+                     compiled)
+        on-hand (filterv ::stocked compiled)]
+    (-> row
+        ;; the compiler's record of THIS compile, replaced wholesale
+        ;; every run (the source=plan posture): stocked ingredients
+        ;; leave the list but never silently — and a manual row for
+        ;; one of them stays a manual row, the assumption recorded
+        ;; beside it
+        (assoc-in [:data :assumed_on_hand]
+                  (mapv (fn [g] {:name (:name g) :meals (:meals g)})
+                        on-hand))
+        (update-in [:data :items]
+                   (fn [items]
+                     (let [kept (into [] (remove #(= "plan" (:source %)))
+                                      items)
+                           taken (into #{} (map :name) to-buy)]
+                       ;; manual items survive (nil :source); old plan
+                       ;; items are the compiler's to drop and rewrite. A
+                       ;; manual item whose NAME the compile now claims
+                       ;; becomes the compiled row — the part scope keys
+                       ;; by :name, one row per name
+                       (into (into [] (remove #(contains? taken (:name %)))
+                                   kept)
+                             to-buy)))))))
+
 (defn- ensure-items [row _ctx]
   (update-in row [:data :items] #(vec (or % []))))
 
@@ -177,6 +415,22 @@
   {:over [:items]
    :expr '(count (var :items))})
 
+;; the window's honest contract (era 4): both ends or neither, in
+;; order — and required at create (the substitution :distinct
+;; pattern, design §24), so a half-set window is unrepresentable
+(defderived window-paired
+  {:over [:covers_from :covers_until]
+   :expr '(or (and (is-set (var :covers_from))
+                   (is-set (var :covers_until))
+                   (<= (var :covers_from) (var :covers_until)))
+              (and (not (is-set (var :covers_from)))
+                   (not (is-set (var :covers_until)))))
+   :explain "A coverage window is both ends or neither — covers_from through covers_until, in order."})
+
+(def window-is-paired
+  (require-fact :window_paired
+                {:explain "A coverage window is both ends or neither — covers_from through covers_until, in order."}))
+
 (defresource grocery-list
   {:kind :grocery_list
    :initial :draft
@@ -184,6 +438,15 @@
    :summary "Groceries · {state}"
    :schema [:map
             [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
+            ;; the coverage window (spec-pantry era 4): this trip's
+            ;; slice of a two-week plan. Nil = the whole plan (era-1
+            ;; law, every existing row); the trip date is covers_from
+            [:covers_from {:optional true
+                           :x-display {:label "Covers from"}}
+             [:maybe :waymark/date]]
+            [:covers_until {:optional true
+                            :x-display {:label "Covers until"}}
+             [:maybe :waymark/date]]
             [:items {:part-scope {:key :name}}
              [:vector
               [:map
@@ -203,7 +466,23 @@
                                  :x-display {:widget "money"
                                              :label "Est. cost"}}
                 [:maybe [:int {:min 0}]]]
+               ;; provenance (spec-pantry era 1): the compiler's
+               ;; stamp, never the client's claim — add_item's input
+               ;; does not admit it, and nil reads as manual (no
+               ;; shape bump for existing rows)
+               [:source {:optional true} [:maybe [:enum "plan"]]]
                [:have {:optional true} [:maybe :boolean]]]]]
+            ;; the compiler's record (spec-pantry era 3): what the
+            ;; meals need that the pantry already holds — written only
+            ;; by compile_from_plan (no create-schema entry, no action
+            ;; input admits it), replaced wholesale each compile
+            [:assumed_on_hand {:optional true
+                               :x-display {:label "Assumed on hand"}}
+             [:maybe [:vector
+                      [:map
+                       [:name [:string {:min 1 :max 200}]]
+                       [:meals {:optional true}
+                        [:maybe [:vector [:string {:max 200}]]]]]]]]
             [:all_items_checked {:optional true :derived all-items-checked}
              [:maybe :boolean]]
             ;; promoted (:filter): the plan's sums run on these
@@ -219,19 +498,32 @@
             [:total_items {:optional true :derived total-items
                            :filter #{:eq :range}}
              [:maybe :int]]
+            [:window_paired {:optional true :derived window-paired}
+             [:maybe :boolean]]
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
-   ;; the create form: pick the plan; items arrive via add_item
+   ;; the create form: pick the plan (and this trip's window, both
+   ;; ends or neither); items arrive via add_item
    :create-schema [:map
                    [:plan_id {:kind :plan} :waymark/ref]
+                   [:covers_from {:optional true
+                                  :x-display {:label "Covers from"}}
+                    [:maybe :waymark/date]]
+                   [:covers_until {:optional true
+                                   :x-display {:label "Covers until"}}
+                    [:maybe :waymark/date]]
                    [:notes {:optional true :x-display {:widget "prose"}}
                     [:maybe [:string {:max 2000}]]]]
+   :create-guards [window-is-paired]
    :on-create ensure-items
    :links [{:rel "plan" :kind :plan
             :href "/api/plans/{data.plan_id}"
             :summary "The meal plan this list shops for"}]
    :filterable {:state #{:eq :in}}
    :display {:title "Grocery list"}
+   :deviations
+   ["The compile walk (plan_day → meal_line, summed per ingredient) is handler code, not law — join-and-group sits outside the expression grammar, the fn= boundary price-line and absorb-duplicate already record."
+    "The era-4 coverage solver (the trip schedule, the two clocks, purchases opening greedily at the latest covering trip) is the same boundary grown — cross-row date arithmetic sits outside the grammar too, so the law lives in trip-uses and its tests."]
    ;; the whole machine as rows: the draft phase (build the list),
    ;; the shopping phase (check things off), and the doors between —
    ;; the self-loop item edits mint the idempotent-overwrite safety,
@@ -254,11 +546,23 @@
                [:maybe [:int {:min 0}]]]]
       :handler add-item
       :display {:label "Add item" :style :primary :order 1}}]
+    ;; the :altitude waivers below answer a false positive: these
+    ;; actions are already placed on :items — assumed_on_hand merely
+    ;; shares the :name spelling, is compiler-written, and no action
+    ;; addresses its entries. Waived, not re-scoped, honestly.
     [:draft :remove_item  :draft
      {:input name-input :place :items
       :requires [item-on-list]
+      :waives #{:altitude}
       :handler remove-item
       :display {:label "Remove item" :order 2}}]
+    [:draft :compile_from_plan :draft
+     {;; the outcome depends on the plan and the price world OUTSIDE
+      ;; the row — natural replay must never swallow a repeat, so:
+      ;; honestly non-idempotent (the reprice story)
+      :safety {:idempotent false :reversible false :confirm false}
+      :handler compile-from-plan
+      :display {:label "Compile from plan" :style :primary :order 3}}]
     [:draft :finalize     :ready
      {:requires [plan-is-planned]
       :undo :reopen
@@ -267,12 +571,14 @@
      {:input name-input :place :items
       :requires [item-on-list item-not-checked]
       :undo :uncheck_item
+      :waives #{:altitude}
       :handler check-item
       :display {:label "Check off" :style :primary :order 1}}]
     [:ready :uncheck_item :ready
      {:input name-input :place :items
       :requires [item-on-list item-checked]
       :undo :check_item
+      :waives #{:altitude}
       :handler uncheck-item
       :display {:label "Uncheck" :order 2}}]
     [:ready :reopen       :draft
@@ -280,5 +586,7 @@
       :display {:label "Back to editing" :order 3}}]
     [:ready :complete     :done
      {:requires [all-checked-gate]
+      :touches [{:kind :ingredient :action :restock :may true}]
+      :handler stamp-purchases
       :one-way "Completing records a finished shop; the list stays readable as history."
       :display {:label "Shopping done" :order 2}}]]})

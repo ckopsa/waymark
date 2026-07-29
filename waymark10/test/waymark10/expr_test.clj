@@ -75,7 +75,21 @@
                           :now (Instant/parse "2026-07-09T12:00:00Z")})))
   (is (= (LocalDate/parse "2026-07-09")
          (e/evaluate '(date-of (now))
-                     {:now (Instant/parse "2026-07-09T23:59:59Z")}))))
+                     {:now (Instant/parse "2026-07-09T23:59:59Z")})))
+  (testing "(days …) accepts the whole long family — JSON decoding
+            hands scope values over as Integer, and evaluation is
+            total over JSON-shaped values"
+    (let [expect (LocalDate/parse "2026-07-17")]
+      (doseq [n [(long 10) (int 10) (short 10) (byte 10) 10M]]
+        (is (= expect
+               (e/evaluate '(+ (var :on) (days (var :n)))
+                           {:vars {:on (LocalDate/parse "2026-07-07")
+                                   :n n}}))
+            (str (class n) " counts days like its long twin"))))
+    (is (nil? (e/evaluate '(+ (var :on) (days (var :n)))
+                          {:vars {:on (LocalDate/parse "2026-07-07")
+                                  :n 1.5M}}))
+        "the calendar still has no fractional day")))
 
 (deftest quantifiers
   (is (true? (e/evaluate '(every [d (var :days)]
