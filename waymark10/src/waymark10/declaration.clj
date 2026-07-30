@@ -37,7 +37,7 @@
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; collection surface
-   :filterable :sortable :faceted :worksheet :default-filters
+   :filterable :sortable :faceted :worksheet :default-filters :views
    ;; edges
    :owns :links :related
    ;; advertisement
@@ -78,13 +78,27 @@
         (map (fn [k] [k {:optional true} :any]))
         link-keys))
 
+(def view-keys
+  "One :views entry's whole authored surface — an alternate collection
+  view (:deck swipe-triage, :feed sequential). The same closure the
+  other surfaces get: a typo'd view key refuses at the def site instead
+  of advertising nothing. The semantic rules (deck gestures name
+  reversible actions, the queue drains itself) live in checks.clj."
+  [:name :kind :where :right :left :card :display])
+
+(def ^:private view-schema
+  (into [:map {:closed true}]
+        (map (fn [k] [k {:optional true} :any]))
+        view-keys))
+
 (def ^:private declaration-schema
   (m/schema
    (-> [:map {:closed true}]
        (into (map (fn [k] [k {:optional true} :any]))
-             (remove #{:actions :links} top-level-keys))
+             (remove #{:actions :links :views} top-level-keys))
        (conj [:actions {:optional true} [:map-of :keyword action-schema]])
-       (conj [:links {:optional true} [:vector link-schema]]))))
+       (conj [:links {:optional true} [:vector link-schema]])
+       (conj [:views {:optional true} [:vector view-schema]]))))
 
 (def ^:private lone-action-schema (m/schema action-schema))
 
@@ -115,8 +129,9 @@
   [rmap]
   (when-some [[e & _] (errors rmap)]
     (let [kind-label (or (some-> (:kind rmap) name) "(unnamed kind)")]
-      (if (= :actions (first (:path e)))
-        (refuse! kind-label e action-keys "action")
+      (case (first (:path e))
+        :actions (refuse! kind-label e action-keys "action")
+        :views (refuse! kind-label e view-keys "view")
         (refuse! kind-label e top-level-keys "declaration"))))
   rmap)
 

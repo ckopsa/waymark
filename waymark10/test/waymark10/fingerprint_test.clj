@@ -76,6 +76,18 @@
   (is (= (fp/fingerprint-hash (fp/fingerprint-of (plan-rmap)))
          (fp/fingerprint-hash (fp/fingerprint-of (plan-rmap))))))
 
+(deftest views-are-advertisement-never-law
+  ;; :views is presentation — advertising, renaming, or dropping a
+  ;; collection view must not mint a revision
+  (is (= (fp/fingerprint-hash (fp/fingerprint-of (plan-rmap)))
+         (fp/fingerprint-hash
+          (fp/fingerprint-of
+           (assoc (plan-rmap)
+                  :views [{:name :triage :kind :deck
+                           :where {:state "draft"}
+                           :right :finalize :left :abandon
+                           :display {:label "Triage"}}]))))))
+
 (deftest a-fingerprint-diffs-empty-against-itself
   ;; regression: leaves holding nil/false (a guard's check, an off
   ;; safety flag) are present paths, not added/removed ones

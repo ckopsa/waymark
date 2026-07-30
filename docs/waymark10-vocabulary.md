@@ -213,6 +213,33 @@ refuse against) print from the REPL — `(waymark10.dev/vocab)` — and live in
 `[from action to opts?]`; per-origin rows of one action must agree on
 everything but `:confirm`.
 
+`:views` declares alternate collection views, each its own closed map
+(`waymark10.declaration/view-keys`):
+
+```clojure
+:views [{:name :triage :kind :deck :where {:state "pending"}
+         :right :approve :left :flag
+         :card [:title] :display {:label "Triage"}}
+        {:name :review :kind :feed :where {:state "pending"}}]
+```
+
+`:name` is a unique snake token (`view=<name>` in the client's hash picks
+it), `:kind` is `:deck` (swipe triage) or `:feed` (sequential read).
+`:where` carries the `:default-filters` wire semantics — an ordinary
+filter the caller could have typed, values normalized to wire strings at
+the def site — and `:card` names the data-field subset a card shows. A
+`:deck` is a queue, so its rules are checked by name (`[views]`): `:where`
+must constrain `:state`, both gestures are required and must name declared
+REVERSIBLE actions (a swipe is a snap judgment — `:undo` is the honest
+reverse), each gesture departs from every `:where` state and lands outside
+them (the queue drains itself). A `:feed` refuses gestures. Views are
+advertisement, never law: the envelope carries them beside
+`actions`/`links` (deck entries with `gestures {right {action label} …}`,
+labels from the action's own display), the fingerprint never moves, and
+the per-item affordances still gate what a gesture may actually do. The
+generic client renders switcher chips; a view kind with no registered
+renderer falls back to the table.
+
 ## 9 · `:touches` — the declared cross-write set
 
 An action that advances OTHER rows says so on its declaration:

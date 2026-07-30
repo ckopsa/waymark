@@ -162,6 +162,106 @@
 (deftest oneof
   (breaks :oneof (assoc base :one-of {:naming {:arms {:a [:name] :b [:name]}}})))
 
+;; ── :views — the deck-rule battery ──────────────────────────────────
+;; A valid triage world: pending cards, each gesture reversible via
+;; its :undo pair, each gesture draining the deck. Every refusal below
+;; is this base with exactly one thing broken.
+
+(def deck-base
+  {:kind :ticket
+   :states [:pending :approved :flagged]
+   :initial :pending
+   :terminal #{}
+   :summary "{data.title} · {state}"
+   :schema [:map [:title [:string {:min 1 :max 100}]]]
+   :filterable {:state #{:eq :in}}
+   :flow [[:pending :approve :approved {:undo :unapprove
+                                        :display {:label "Approve"}}]
+          [:approved :unapprove :pending {:undo :approve}]
+          [:pending :flag :flagged {:undo :unflag
+                                    :display {:label "Flag"}}]
+          [:flagged :unflag :pending {:undo :flag}]]
+   :views [{:name :triage :kind :deck :where {:state "pending"}
+            :right :approve :left :flag
+            :card [:title] :display {:label "Triage"}}
+           {:name :review :kind :feed :where {:state "pending"}
+            :display {:label "Review"}}]})
+
+(defn- with-views [views] (assoc deck-base :views views))
+
+(def triage-view (first (:views deck-base)))
+
+(deftest a-deck-and-feed-declaration-is-green
+  (is (= [] (warnings-of deck-base))))
+
+(deftest views-refuse-a-duplicate-name
+  (breaks :views (with-views [triage-view (assoc triage-view :kind :feed
+                                                 :right nil :left nil)]))
+  ;; and the honest spelling of the same collision
+  (breaks :views (with-views [(assoc triage-view :name :same)
+                              {:name :same :kind :feed}])))
+
+(deftest views-refuse-a-nameless-view
+  (breaks :views (with-views [(dissoc triage-view :name)])))
+
+(deftest a-deck-gesture-must-name-a-declared-action
+  (breaks :views (with-views [(assoc triage-view :right :bless)])))
+
+(deftest a-deck-gesture-must-be-reversible
+  ;; :discard has no :undo — a swipe with no honest reverse refuses
+  (breaks :views
+          (-> deck-base
+              (assoc-in [:actions :discard]
+                        {:from #{:pending} :to :flagged
+                         :safety {:idempotent true :reversible false
+                                  :confirm false
+                                  :one-way "Discarding is acknowledged."}})
+              (assoc :views [(assoc triage-view :left :discard)]))))
+
+(deftest a-deck-requires-a-where
+  (breaks :views (with-views [(dissoc triage-view :where)])))
+
+(deftest a-deck-where-must-constrain-state
+  (breaks :views
+          (-> deck-base
+              (assoc :schema [:map [:title [:string {:min 1 :max 100}]]
+                              [:owner {:filter #{:eq}} [:string {:max 60}]]])
+              (assoc :views [(assoc triage-view :where {:owner "ana"})]))))
+
+(deftest a-deck-gesture-must-depart-from-every-where-state
+  ;; the deck shows pending AND flagged, but :approve only departs
+  ;; from pending — a card the gesture refuses
+  (breaks :views
+          (with-views [(assoc triage-view
+                              :where {:state #{:pending :flagged}}
+                              :left :unflag)])))
+
+(deftest a-deck-gesture-must-leave-the-where-states
+  ;; :touch is honestly reversible (its own undo) but lands back in
+  ;; pending — the queue would never drain
+  (breaks :views
+          (-> deck-base
+              (assoc-in [:actions :touch]
+                        {:from #{:pending} :to :pending :undo :touch
+                         :safety {:idempotent true :reversible true
+                                  :confirm false}})
+              (assoc :views [(assoc triage-view :right :touch)]))))
+
+(deftest a-view-card-names-schema-fields
+  (breaks :views (with-views [(assoc triage-view :card [:title :priority])])))
+
+(deftest a-view-where-is-an-expressible-filter
+  ;; :title declares no filter ops — a view's where is an ordinary
+  ;; filter the caller could have typed
+  (breaks :views (with-views [{:name :mine :kind :feed
+                               :where {:title "x"}}]))
+  ;; and a state value that is not a state
+  (breaks :views (with-views [(assoc triage-view
+                                     :where {:state "nonexistent"})])))
+
+(deftest a-deck-requires-both-gestures
+  (breaks :views (with-views [(dissoc triage-view :left)])))
+
 (deftest unique
   (breaks :unique (assoc base :unique [:name])))
 

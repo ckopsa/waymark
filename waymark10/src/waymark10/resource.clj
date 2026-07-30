@@ -1033,6 +1033,38 @@
                  defs))
     rmap))
 
+(defn- where-wire-str
+  "One :where value as the wire text a filter param carries: a keyword
+  by its name, a set/vector as the comma list the :in grammar speaks
+  (sets sorted — a set has no order, a wire string must), anything
+  else stringified."
+  [v]
+  (cond
+    (keyword? v) (name v)
+    (set? v) (str/join "," (sort (map #(if (keyword? %) (name %) (str %)) v)))
+    (sequential? v) (str/join "," (map #(if (keyword? %) (name %) (str %)) v))
+    :else (str v)))
+
+(defn- normalize-views
+  "A view's :where values are WIRE values, exactly as :default-filters'
+  already are — they land in a query string when a client opens the
+  view. Two spellings, one law: keywords and sets normalize to the
+  filter grammar's text here; check-views then validates the
+  normalized form. A kind declaring no views stays without the key."
+  [rmap]
+  (if-some [views (:views rmap)]
+    (assoc rmap :views
+           (mapv (fn [v]
+                   (if (and (map? v) (map? (:where v)))
+                     (update v :where
+                             (fn [w]
+                               (into {}
+                                     (map (fn [[f val]] [f (where-wire-str val)]))
+                                     w)))
+                     v))
+                 views))
+    rmap))
+
 (defn normalize-resource
   [rmap]
   ;; flow first: a :flow declaration may derive :states, which the
@@ -1098,6 +1130,7 @@
         (update :allow-dead set)
         (update :deviations #(vec (or % [])))
         normalize-default-filters
+        normalize-views
         ;; the continuity map (migrate): retired tokens → their current
         ;; spellings; boot refuses rows in states neither declared nor
         ;; mapped, and replay-history reads the log through the chain

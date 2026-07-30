@@ -329,6 +329,31 @@ function facetChips(query, selfHref, hints) {
   return rows;
 }
 
+/* the view switcher: one chip per advertised view plus the default
+   table, shown whenever the envelope carries views. A chip rewrites
+   view= in the HASH query (client state — splitViewParam strips it
+   before the fetch, so the server never sees it); the table chip
+   clears it. The current pick reads from the live hash, not doc.self:
+   doc.self is the server's echo, which never carries view=. */
+function viewSwitcher(views) {
+  if (!views || !views.length) return null;
+  const raw = location.hash.slice(1) || "";
+  const [path, q] = raw.split("?");
+  const params = new URLSearchParams(q || "");
+  const current = params.get("view") || "";
+  const chip = (name, label) => el("span",
+    {class: "chip" + (current === name ? " on" : ""),
+     style: "cursor:pointer",
+     onclick: () => {
+       const p = new URLSearchParams(params);
+       if (name) p.set("view", name); else p.delete("view");
+       go(path + (p.toString() ? "?" + p : ""));
+     }}, label);
+  return el("div", {class: "chips viewswitcher"},
+    chip("", "Table"),
+    ...views.map(v => chip(v.name, v.display?.label || title(v.name))));
+}
+
 function pagerOf(doc) {
   const page = doc.data?.page || {};
   const pager = el("div", {class:"pager"});
@@ -476,6 +501,10 @@ function renderCollection(view, doc, hints) {
   /* the server's own sentence, verbatim — it carries the honest filter
      echo ("filtered: state=retired") and count */
   if (doc.summary) panel.append(el("div", {class:"metaline"}, doc.summary));
+
+  /* advertised alternate views stand as switcher chips above the bar */
+  const vs = viewSwitcher(doc.views);
+  if (vs) panel.append(vs);
 
   const {path, params} = parseHrefQuery(doc.self);
   const query = doc.actions?.query;

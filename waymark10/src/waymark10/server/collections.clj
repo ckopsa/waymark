@@ -417,6 +417,36 @@
               :input (query-input-schema rdef)}}
      bulk-entries)))
 
+(defn- action-label
+  "The human label a gesture wears: the bound action's declared
+  display label, else the name humanized (the render layer's own
+  fallback, read twice)."
+  [rdef aname]
+  (or (get-in rdef [:actions aname :display :label])
+      (str/replace (name aname) "_" " ")))
+
+(defn- view-entries
+  "The declared :views, advertised: name/kind as wire tokens, :where
+  as the query params a client appends (already normalized to wire
+  strings, the :default-filters discipline), :card as the field
+  subset, and — for a :deck — the two gestures, each naming its bound
+  action and that action's human label. The view is presentation: a
+  client still finds the actual affordance per-item in item.actions,
+  so grants and state keep gating."
+  [rdef]
+  (mapv (fn [v]
+          (cond-> {:name (:name v) :kind (:kind v)}
+            (seq (:where v)) (assoc :where (:where v))
+            (seq (:card v)) (assoc :card (mapv name (:card v)))
+            (= :deck (:kind v))
+            (assoc :gestures
+                   {:right {:action (:right v)
+                            :label (action-label rdef (:right v))}
+                    :left {:action (:left v)
+                           :label (action-label rdef (:left v))}})
+            (seq (:display v)) (assoc :display (:display v))))
+        (:views rdef)))
+
 ;; ── facets ──────────────────────────────────────────────────────────
 
 (defn- facet-map
@@ -574,14 +604,17 @@
                      acts)
                acts)
         doc (p/wire-value
-             {:waymark "10"
-              :kind (str kname "_collection")
-              :self self
-              :state "ok"
-              :summary summary
-              :data {:items items
-                     :total total
-                     :page {:size size :number number}}
-              :actions acts
-              :links links})]
+             (cond-> {:waymark "10"
+                      :kind (str kname "_collection")
+                      :self self
+                      :state "ok"
+                      :summary summary
+                      :data {:items items
+                             :total total
+                             :page {:size size :number number}}
+                      :actions acts
+                      :links links}
+               ;; the declared alternate views, advertised beside the
+               ;; actions/links — absent when the kind declares none
+               (seq (:views rdef)) (assoc :views (view-entries rdef))))]
     (splice-facets doc facets)))

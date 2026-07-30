@@ -86,6 +86,31 @@
             :safety {:idempotent true :reversible false :confirm false
                      :one-way "A denied ask stays on record."}}}}))
 
+(def ticket
+  "The views kind: a triage :deck (both gestures reversible via their
+  :undo pairs, the where naming the states the deck drains) and a
+  sequential :feed — what the envelope must advertise beside its
+  actions and links."
+  (r/resource
+   {:kind :ticket
+    :states [:pending :approved :flagged]
+    :initial :pending
+    :terminal #{}
+    :summary "{data.title} · {state}"
+    :schema [:map [:title [:string {:min 1 :max 100}]]]
+    :filterable {:state #{:eq :in}}
+    :flow [[:pending :approve :approved {:undo :unapprove
+                                         :display {:label "Approve"}}]
+           [:approved :unapprove :pending {:undo :approve}]
+           [:pending :flag :flagged {:undo :unflag
+                                     :display {:label "Flag"}}]
+           [:flagged :unflag :pending {:undo :flag}]]
+    :views [{:name :triage :kind :deck :where {:state "pending"}
+             :right :approve :left :flag
+             :card [:title] :display {:label "Triage"}}
+            {:name :review :kind :feed :where {:state "pending"}
+             :display {:label "Review"}}]}))
+
 (def ^:dynamic *h* nil)
 
 (declare seed!)
@@ -96,13 +121,15 @@
       (try
         (store/with-tx st
           (fn [tx]
-            (doseq [table ["meals" "plans" "visits" "asks" "definitions"
+            (doseq [table ["meals" "plans" "visits" "asks" "tickets"
+                           "definitions"
                            "waymark10_transitions" "waymark10_idempotency"
                            "waymark10_drafts"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (binding [*h* (engine/handler
                        (engine/engine {:storage st
-                                       :resources [fx/meal fx/plan visit ask]}))]
+                                       :resources [fx/meal fx/plan visit ask
+                                                   ticket]}))]
           (seed!)
           (f))
         (finally (pg/close! st))))))
@@ -617,6 +644,34 @@
                    :safety {:idempotent true :reversible false
                             :confirm false
                             :one-way "A finished probe is history."}}}}))))
+
+;; ── 7b. declared views advertise on the envelope ────────────────────
+
+(deftest views-advertise-on-the-collection-envelope
+  (let [_ (req :post "/api/tickets" {:title "Fix the door"})
+        resp (req :get "/api/tickets")
+        b (json resp)]
+    (is (= 200 (:status resp)))
+    (testing "the envelope carries both declared views, wire-shaped"
+      (is (= [{:name "triage" :kind "deck"
+               :where {:state "pending"}
+               :card ["title"]
+               :gestures {:right {:action "approve" :label "Approve"}
+                          :left {:action "flag" :label "Flag"}}
+               :display {:label "Triage"}}
+              {:name "review" :kind "feed"
+               :where {:state "pending"}
+               :display {:label "Review"}}]
+             (:views b))))
+    (testing "a feed advertises no gestures"
+      (is (not (contains? (second (:views b)) :gestures))))
+    (testing "the per-item affordances still gate the gestures — the
+              view names actions, the item carries them"
+      (let [item (first (get-in b [:data :items]))]
+        (is (contains? (:actions item) :approve))
+        (is (contains? (:actions item) :flag))))
+    (testing "a kind declaring no views advertises none"
+      (is (not (contains? (json (req :get "/api/visits")) :views))))))
 
 ;; ── 8. filtered self round-trips ────────────────────────────────────
 

@@ -73,10 +73,31 @@ function fieldHidden(hints, f) { return !!xdisplay(hints, f).hidden; }
 function go(href) { location.hash = href; }
 window.addEventListener("hashchange", render);
 
+/* ── collection view renderers: kind → (view, body, hints, viewDecl).
+   The registry is the dispatch seam — the deck (swipe-triage) and feed
+   (sequential) renderers register here when they land; an advertised
+   view whose kind has no entry falls back to renderCollection. */
+const VIEW_RENDERERS = {};
+
+/* view=<name> is CLIENT state, never a query param: it names which of
+   the envelope's advertised views renders this collection, and the
+   server would 422 it as an unknown parameter — so it is parsed OUT of
+   the hash query before the fetch. Returns {href, viewName}. */
+function splitViewParam(href) {
+  if (!href || !href.includes("?")) return {href, viewName: null};
+  const [path, q] = href.split("?");
+  const p = new URLSearchParams(q);
+  const viewName = p.get("view");
+  if (viewName === null) return {href, viewName: null};
+  p.delete("view");
+  return {href: path + (p.toString() ? "?" + p : ""), viewName};
+}
+
 let renderSeq = 0;
 async function render() {
   const seq = ++renderSeq;               // fetch first, swap after — a
-  const href = location.hash.slice(1) || null;
+  const raw = location.hash.slice(1) || null;
+  const {href, viewName} = splitViewParam(raw);
   const view = $("#view");               // superseded render never blanks
   renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
   if (!href) { lawStamp(null); return renderHome(view, seq); }
@@ -101,8 +122,16 @@ async function render() {
   lawStamp(ok ? body : null);
   if (!ok) return view.append(problemBox(body));
   if (body.kind === "definition_collection") renderDeployHistory(view, body);
-  else if (body.kind && body.kind.endsWith("_collection"))
-    renderCollection(view, body, hints);
+  else if (body.kind && body.kind.endsWith("_collection")) {
+    /* view dispatch: the envelope must advertise the named view AND a
+       renderer for its kind must be registered — anything less falls
+       back to the table, gracefully */
+    const decl = viewName &&
+      (body.views || []).find(v => v.name === viewName) || null;
+    const renderer = decl && VIEW_RENDERERS[decl.kind];
+    if (renderer) renderer(view, body, hints, decl);
+    else renderCollection(view, body, hints);
+  }
   else renderResource(view, body, hints);
 }
 

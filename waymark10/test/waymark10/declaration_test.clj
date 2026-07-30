@@ -45,6 +45,33 @@
     (is (= [:actions :touch :guard] (:path (ex-data e))))
     (is (re-find #":guards" (ex-message e)))))
 
+;; ── the :views surface ──────────────────────────────────────────────
+;; closure here (an unknown view key refuses with a path), semantics
+;; in checks.clj (checks_test carries the deck-rule battery)
+
+(deftest a-typoed-view-key-refuses-with-a-path
+  (let [e (try (r/resource (assoc clean :views
+                                  [{:name :later :kind :feed
+                                    :wehre {:state "open"}}]))
+               (catch clojure.lang.ExceptionInfo e e))]
+    (is (= :declaration (:check (ex-data e))))
+    (is (= [:views 0 :wehre] (:path (ex-data e))))
+    (is (re-find #":where" (ex-message e)))))
+
+(deftest a-view-with-an-unknown-kind-refuses
+  (let [e (try (r/resource (assoc clean :views
+                                  [{:name :later :kind :swipe}]))
+               (catch clojure.lang.ExceptionInfo e e))]
+    (is (= :views (:check (ex-data e))))
+    (is (re-find #":deck or :feed" (ex-message e)))))
+
+(deftest a-feed-view-refuses-gestures
+  (let [e (try (r/resource (assoc clean :views
+                                  [{:name :later :kind :feed :right :close}]))
+               (catch clojure.lang.ExceptionInfo e e))]
+    (is (= :views (:check (ex-data e))))
+    (is (re-find #"feed" (ex-message e)))))
+
 (deftest every-declaration-refusal-carries-a-path
   (doseq [bad [(assoc clean :filtrable {})
                (assoc clean :actions {:touch {:frmo #{:open}}})]]
