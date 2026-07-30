@@ -18,6 +18,7 @@
    "waymark10/ui/110-discovery-routing.js"
    "waymark10/ui/120-nav-home.js"
    "waymark10/ui/130-collection.js"
+   "waymark10/ui/134-feed.js"
    "waymark10/ui/140-links-access.js"
    "waymark10/ui/150-values-parts.js"
    "waymark10/ui/160-resource-surface.js"

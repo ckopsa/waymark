@@ -23,3 +23,10 @@
     (is (str/includes? page "\"use strict\";"))
     (is (str/includes? page "render();"))
     (is (str/includes? page "html[data-ui=\"mobile\"]"))))
+
+(deftest the-feed-renderer-rides-the-page
+  ;; the :feed collection view (waymark-h50): the fragment registers on
+  ;; the dispatch seam and its snap-scroll CSS survives assembly
+  (let [page (sut/assemble)]
+    (is (str/includes? page "VIEW_RENDERERS.feed"))
+    (is (str/includes? page "scroll-snap-type: y mandatory"))))

@@ -215,6 +215,13 @@
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}}
+   ;; the review feed: AI suggestions read one full screen at a time —
+   ;; the same rows ?state=suggested serves, in the same order, with
+   ;; each meal's own accept/decline buttons riding its envelope. A
+   ;; :feed is presentation, never law (waymark-h50).
+   :views [{:name :review :kind :feed :where {:state "suggested"}
+            :card [:themes :servings :prep_minutes :est_cost_cents]
+            :display {:label "Review feed"}}]
    :display {:title "{data.name}"}
    ;; the recipe lines: owned rows, the reprice cascade, the embedded
    ;; on_recipe view with the honest count badge

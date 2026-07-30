@@ -94,3 +94,11 @@
   /* the filter popover pins to the viewport, not the button */
   html[data-ui="mobile"] .filterpanel {
     position: fixed; left: 10px; right: 10px; min-width: 0; }
+
+  /* --- feed view (mobile): tighter chrome, full-bleed panels -------- */
+  html[data-ui="mobile"] .feed-top { padding: 8px 12px; gap: 8px; }
+  html[data-ui="mobile"] .feed-name { font-size: 12.5px; }
+  html[data-ui="mobile"] .feed-body { padding: 18px 14px 36px; }
+  html[data-ui="mobile"] .feed-title { font-size: 21px; }
+  html[data-ui="mobile"] .feed-kv { max-width: none; }
+  html[data-ui="mobile"] .feed-actions button { font-size: 13px; }
