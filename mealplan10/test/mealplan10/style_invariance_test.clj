@@ -66,7 +66,10 @@
 ;;    meal-est-cost adopted the framework's new {:when-empty :absent}
 ;;    (an unpriced meal is unknown, not free) and the deviation
 ;;    sentence RETIRED — the shared defderived var carries the option
-;;    into both spellings; the dropped sentence leaves both literals ──
+;;    into both spellings; the dropped sentence leaves both literals.
+;;    Moved 2026-07-30 (waymark-h50): the :review feed view landed in
+;;    both spellings — :views is advertisement, not law, so the
+;;    fingerprint pin below is untouched by it ──
 
 (def old-meal
   {:kind :meal
@@ -110,6 +113,9 @@
                 :total_ingredients #{:eq :range}
                 :has_recipe #{:eq}}
    :sortable {:fields [:name :est_cost_cents] :default "name"}
+   :views [{:name :review :kind :feed :where {:state "suggested"}
+            :card [:themes :servings :prep_minutes :est_cost_cents]
+            :display {:label "Review feed"}}]
    :display {:title "{data.name}"}
    :deviations
    ["accept_many stays a declared action — bulk has no flow-row spelling."
