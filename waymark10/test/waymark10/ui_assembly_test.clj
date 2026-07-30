@@ -23,3 +23,12 @@
     (is (str/includes? page "\"use strict\";"))
     (is (str/includes? page "render();"))
     (is (str/includes? page "html[data-ui=\"mobile\"]"))))
+
+(deftest the-deck-renderer-registers-against-the-dispatch-seam
+  ;; order matters in one flat <script>: the registry (110) must be
+  ;; initialized before 133 assigns into it — const, not hoisted
+  (let [page (sut/assemble)]
+    (is (str/includes? page "VIEW_RENDERERS.deck"))
+    (is (< (str/index-of page "const VIEW_RENDERERS = {};")
+           (str/index-of page "VIEW_RENDERERS.deck"))
+        "the registry is declared before the deck registers")))
