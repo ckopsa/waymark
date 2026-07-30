@@ -106,3 +106,8 @@
   html[data-ui="mobile"] .feed-title { font-size: 21px; }
   html[data-ui="mobile"] .feed-kv { max-width: none; }
   html[data-ui="mobile"] .feed-actions button { font-size: 13px; }
+
+  /* ── dashboard screen (mobile): one column, tighter panels ──────── */
+  html[data-ui="mobile"] .slot-grid { grid-template-columns: 1fr; gap: 10px; }
+  html[data-ui="mobile"] .slot-panel { min-height: 0; padding: 10px 12px; }
+  html[data-ui="mobile"] .slot-count { font-size: 23px; }

@@ -39,3 +39,15 @@
   (let [page (sut/assemble)]
     (is (str/includes? page "VIEW_RENDERERS.feed"))
     (is (str/includes? page "scroll-snap-type: y mandatory"))))
+
+(deftest the-dashboard-renderer-rides-the-page
+  ;; the dashboard screen (waymark-ggw): render() forks by kind to
+  ;; renderDashboard (function declarations hoist across the one flat
+  ;; <script>, so fragment order does not gate the call), and the slot
+  ;; grid CSS survives assembly in both stylesheets
+  (let [page (sut/assemble)]
+    (is (str/includes? page "async function renderDashboard"))
+    (is (str/includes? page "renderDashboard(view, body)")
+        "the dispatch seam calls it")
+    (is (str/includes? page ".slot-grid"))
+    (is (str/includes? page "html[data-ui=\"mobile\"] .slot-grid"))))

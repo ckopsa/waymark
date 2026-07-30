@@ -493,78 +493,138 @@
 
 (def ^:private view-kinds #{:deck :feed})
 
-(defn- check-view-where
+(defn view-where-problems
   "A view's :where is a filter the door already accepts — the
   :default-filters law read twice: each field is :state or an
   :eq/:in-filterable field (or an array), each comma value one the
   field's own schema admits. Runs on the normalized (wire-string)
-  form."
-  [r vname where]
+  form: {field-keyword wire-string}. Returns problem strings, empty
+  when clean — shared verbatim by the declaration-time battery and
+  the saved_view write gate (views as resources, waymark-rla)."
+  [r where]
   (let [states (into #{} (map name) (:states r))]
-    (doseq [[f v] (sort-by key where)]
-      (when-not (keyword? f)
-        (err r :views (str "view " vname " :where key " (pr-str f)
-                           " is not a field keyword")))
-      (let [ops (set (get (:filterable r) f))
-            array? (let [s (schema/field-schema (:schema r) f)]
-                     (boolean (and (vector? s) (= :vector (first s)))))]
-        (when-not (or (= :state f) (:eq ops) (:in ops) array?)
-          (err r :views
-               (str "view " vname " :where names " f ", which is not an "
-                    ":eq/:in-filterable field — a view's where is an ordinary "
-                    "filter the caller could have typed")))
-        (doseq [value (str/split (str v) #",")
-                :let [value (str/trim value)]]
-          (if (= :state f)
-            (when-not (contains? states value)
-              (err r :views
-                   (str "view " vname " :where state=" (pr-str value)
-                        " is not a state; one of " (vec (sort states)))))
-            (when-some [problem (schema/filter-value-problem
-                                 (schema/leaf-head (schema/field-schema
-                                                    (:schema r) f))
-                                 value)]
-              (err r :views
-                   (str "view " vname " :where " (name f) "=" (pr-str value)
-                        " " problem)))))))))
+    (into []
+          (mapcat
+           (fn [[f v]]
+             (cond
+               (not (keyword? f))
+               [(str ":where key " (pr-str f) " is not a field keyword")]
 
-(defn- check-deck-gesture
+               (not (let [ops (set (get (:filterable r) f))
+                          array? (let [s (schema/field-schema (:schema r) f)]
+                                   (boolean (and (vector? s)
+                                                 (= :vector (first s)))))]
+                      (or (= :state f) (:eq ops) (:in ops) array?)))
+               [(str ":where names " f ", which is not an "
+                     ":eq/:in-filterable field — a view's where is an ordinary "
+                     "filter the caller could have typed")]
+
+               :else
+               (into []
+                     (keep (fn [value]
+                             (let [value (str/trim value)]
+                               (if (= :state f)
+                                 (when-not (contains? states value)
+                                   (str ":where state=" (pr-str value)
+                                        " is not a state; one of "
+                                        (vec (sort states))))
+                                 (when-some [problem (schema/filter-value-problem
+                                                      (schema/leaf-head
+                                                       (schema/field-schema
+                                                        (:schema r) f))
+                                                      value)]
+                                   (str ":where " (name f) "=" (pr-str value)
+                                        " " problem))))))
+                     (str/split (str v) #",")))))
+          (sort-by key where))))
+
+(defn deck-gesture-problems
   "One bound gesture of a :deck view. The action exists, it is
   reversible (a swipe is a snap judgment — every gesture must have an
   honest undo), it departs from EVERY state the view's :where shows
   (no card the gesture refuses), and it lands OUTSIDE them (a triaged
-  card leaves the deck — the queue drains itself)."
-  [r vname side aname where-states]
-  (let [a (get (:actions r) aname)]
-    (when-not (keyword? aname)
-      (err r :views (str "view " vname " " side " must name an action, got "
-                         (pr-str aname))))
-    (when-not a
-      (err r :views (str "view " vname " " side " names " aname
-                         ", which is not a declared action")))
-    (when-not (get-in a [:safety :reversible])
-      (err r :views
-           (str "view " vname " " side " binds " aname ", which is not "
-                "reversible — a swipe is a snap judgment; declare the "
-                "action's honest reverse (:undo)")))
-    (let [froms (into #{} (map name) (:from a))]
-      (when-some [uncovered (seq (sort (remove froms where-states)))]
-        (err r :views
-             (str "view " vname " " side " binds " aname ", which does not "
-                  "depart from " (vec uncovered) " — every card the deck "
-                  "shows must take the gesture"))))
-    (when (contains? where-states (name (:to a)))
-      (err r :views
-           (str "view " vname " " side " binds " aname ", which lands in "
-                (:to a) " — still inside the deck's :where; a triaged card "
-                "must leave the queue")))))
+  card leaves the deck — the queue drains itself). Returns problem
+  strings, empty when clean."
+  [r side aname where-states]
+  (if-not (keyword? aname)
+    [(str side " must name an action, got " (pr-str aname))]
+    (if-some [a (get (:actions r) aname)]
+      (-> []
+          (into (when-not (get-in a [:safety :reversible])
+                  [(str side " binds " aname ", which is not "
+                        "reversible — a swipe is a snap judgment; declare the "
+                        "action's honest reverse (:undo)")]))
+          (into (let [froms (into #{} (map name) (:from a))]
+                  (when-some [uncovered (seq (sort (remove froms where-states)))]
+                    [(str side " binds " aname ", which does not "
+                          "depart from " (vec uncovered) " — every card the deck "
+                          "shows must take the gesture")])))
+          (into (when (contains? where-states (name (:to a)))
+                  [(str side " binds " aname ", which lands in "
+                        (:to a) " — still inside the deck's :where; a triaged card "
+                        "must leave the queue")])))
+      [(str side " names " aname ", which is not a declared action")])))
+
+(defn view-problems
+  "The core rules of ONE view map — {:kind (:deck|:feed) :where
+  {field wire-string} :card [field-kw …] :right <action> :left
+  <action>} — judged against one kind's normalized rdef. The one
+  battery both gates run: the declaration-time check (check-views,
+  which errs on the first) and the saved_view write gate (which
+  denies with all of them) — a user-authored view obeys exactly the
+  law a declared one does. Returns problem strings, empty when the
+  view composes only declared primitives."
+  [r v]
+  (-> []
+      (into (when-not (contains? view-kinds (:kind v))
+              [(str ":kind is :deck or :feed, got " (pr-str (:kind v)))]))
+      (into (when (contains? v :where)
+              (if-not (and (map? (:where v)) (seq (:where v)))
+                [":where is a non-empty {field value} map"]
+                (view-where-problems r (:where v)))))
+      (into (when (contains? v :card)
+              (if-not (and (vector? (:card v)) (seq (:card v))
+                           (every? keyword? (:card v)))
+                [":card is a non-empty vector of field keywords"]
+                (when-some [bad (seq (remove (data-keys r) (:card v)))]
+                  [(str ":card names " (vec bad)
+                        ", not data field(s) of the schema")]))))
+      (into (case (:kind v)
+              :feed
+              (for [side [:right :left]
+                    :when (contains? v side)]
+                (str "is a :feed — a sequential read takes no " side
+                     " gesture"))
+              :deck
+              (let [where (:where v)]
+                (cond
+                  (not (map? where))
+                  [(str "is a :deck with no :where — a deck is a queue, "
+                        "and a queue names what belongs in it")]
+
+                  (not (contains? where :state))
+                  [(str ":where must constrain :state — a deck drains by "
+                        "moving cards out of its own states")]
+
+                  :else
+                  (let [where-states (into #{}
+                                           (map str/trim)
+                                           (str/split (str (get where :state))
+                                                      #","))]
+                    (mapcat (fn [side]
+                              (if-not (contains? v side)
+                                [(str "is a :deck and declares no " side
+                                      " — both gestures are required")]
+                                (deck-gesture-problems r side (get v side)
+                                                       where-states)))
+                            [:right :left]))))
+              nil))))
 
 (defn- check-views
-  "The declared :views battery: names are unique snake tokens, kinds
-  are :deck or :feed, :where is a filter the grammar serves, :card
-  names data fields; a :deck declares both gestures over a :state-
-  constrained :where and each gesture drains the queue; a :feed
-  refuses gestures. Runs post-normalize, where :undo has already
+  "The declared :views battery: names are unique snake tokens, and
+  each view passes the shared view-problems core (kind token, :where
+  expressibility, :card ⊆ schema, the :deck queue rules, a :feed's
+  refusal of gestures). Runs post-normalize, where :undo has already
   stamped [:safety :reversible]."
   [r]
   (when-some [views (:views r)]
@@ -579,49 +639,10 @@
       (when-not (and (keyword? vname) (re-matches snake (name vname)))
         (err r :views (str "every view declares a snake_case keyword :name, got "
                            (pr-str vname))))
-      (when-not (contains? view-kinds (:kind v))
-        (err r :views (str "view " vname " :kind is :deck or :feed, got "
-                           (pr-str (:kind v)))))
-      (when (contains? v :where)
-        (when-not (and (map? (:where v)) (seq (:where v)))
-          (err r :views (str "view " vname " :where is a non-empty "
-                             "{field value} map")))
-        (check-view-where r vname (:where v)))
-      (when (contains? v :card)
-        (when-not (and (vector? (:card v)) (seq (:card v))
-                       (every? keyword? (:card v)))
-          (err r :views (str "view " vname " :card is a non-empty vector of "
-                             "field keywords")))
-        (when-some [bad (seq (remove (data-keys r) (:card v)))]
-          (err r :views (str "view " vname " :card names " (vec bad)
-                             ", not data field(s) of the schema"))))
       (when (and (:display v) (not (map? (:display v))))
         (err r :views (str "view " vname " :display is a map")))
-      (case (:kind v)
-        :feed
-        (doseq [side [:right :left]]
-          (when (contains? v side)
-            (err r :views (str "view " vname " is a :feed — a sequential "
-                               "read takes no " side " gesture"))))
-        :deck
-        (let [where (:where v)]
-          (when-not (map? where)
-            (err r :views (str "view " vname " is a :deck with no :where — "
-                               "a deck is a queue, and a queue names what "
-                               "belongs in it")))
-          (when-not (contains? where :state)
-            (err r :views (str "view " vname " :where must constrain :state "
-                               "— a deck drains by moving cards out of its "
-                               "own states")))
-          (let [where-states (into #{}
-                                   (map str/trim)
-                                   (str/split (str (get where :state)) #","))]
-            (doseq [side [:right :left]]
-              (when-not (contains? v side)
-                (err r :views (str "view " vname " is a :deck and declares no "
-                                   side " — both gestures are required")))
-              (check-deck-gesture r vname side (get v side) where-states))))
-        nil))))
+      (when-some [p (first (view-problems r v))]
+        (err r :views (str "view " vname " " p))))))
 
 (defn- check-oneof [r]
   (doseq [[gname spec] (sort-by key (:one-of r))]

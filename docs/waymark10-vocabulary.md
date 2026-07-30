@@ -240,6 +240,49 @@ the per-item affordances still gate what a gesture may actually do. The
 generic client renders switcher chips; a view kind with no registered
 renderer falls back to the table.
 
+Views are also authorable at RUNTIME (waymark-rla): the framework ships a
+ready-made `saved_view` kind (`waymark10.saved-view/saved-view`) an app
+opts into by adding it to its resources vector, like any app kind —
+storage, forms, grants, and events come free. A row carries the same
+surface as a declared view, as wire strings: a `label`, the `target`
+collection (kind name or plural), `view_kind` (`deck`|`feed`), `where`
+(filter params in the collection's own wire grammar, e.g.
+`state=pending&owner=ana` — the same string the filter bar puts in the
+hash), `card`, and the deck gestures `right`/`left`. The declaration-time
+`[views]` rules are enforced at WRITE time instead, by the same extracted
+battery (`waymark10.checks/view-problems`) judged against the live
+registry (`ctx :rdef-of`): create and revise refuse a view its target's
+declaration would refuse. ACTIVE rows merge into the target collection's
+envelope `views` beside the declared entries, marked `source: "saved"` and
+carrying the row's own `href`; a row stranded by a redeploy (its gesture
+retired, say) is skipped there with a warning — never a broken page — and
+stays visible in the `saved_views` collection for its owner to fix or
+retire (`retire`/`restore` are an `:undo` pair; `clone` forks a copy
+through the same create gate). The client adds one affordance: a "save
+view" chip on any filtered collection, prefilled from the current params.
+
+Surfaces are user-composable the same way (waymark-ggw): the framework
+ships a `dashboard` kind that OWNS `dashboard_slot` parts
+(`waymark10.dashboard/resources` — an app opts into the pair like any app
+kinds). A dashboard is the anchorless declared surface's user-authored
+sibling: each slot is a collection query composed from declared primitives
+only — a `target` (kind name or plural), a `where` in the collection's own
+wire grammar, an optional `view` deep link (a declared view token, or the
+`sv-<id>` name the envelope mints for an active saved view targeting the
+same kind), and a `seat` ordering int — never a query/layout DSL. Slot
+create/revise run a write gate in the saved_view tradition: `ctx :rdef-of`
+resolves the target, the shared `checks/view-where-problems` battery
+judges the `where`, and a `view` reference must resolve. The dashboard's
+GET splices its ACTIVE slots at `links.slots.embedded` (the render
+contract); the generic client forks on the kind and renders a grid of live
+panels — label, truthful count, a few top rows, a click-through carrying
+the slot's params (+ `view=`) — each panel fetched concurrently and
+degrading alone: a slot stranded by a redeploy wears the collection's own
+refusal with a retry and the door to revise or remove it, never a broken
+page. `retire`/`restore` and `remove`/`restore` are `:undo` pairs;
+`clone` deep-copies the active slots through the same create gate, so a
+stale slot cannot propagate.
+
 ## 9 · `:touches` — the declared cross-write set
 
 An action that advances OTHER rows says so on its declaration:

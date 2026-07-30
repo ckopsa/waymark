@@ -33,6 +33,8 @@
             [mealplan10.resources.product :refer [price-desk product]]
             [mealplan10.resources.rotation :refer [rotation]]
             [mealplan10.resources.substitution :refer [substitution]]
+            [waymark10.dashboard :as dashboard]
+            [waymark10.saved-view :as saved-view]
             [waymark10.server.engine :as engine]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
@@ -68,15 +70,21 @@
    ingredient product substitution])
 
 (defn resources
-  "All eleven kinds — the meal plan's ten plus the LOCAL event kind,
-  for mealplan10 standing alone.
+  "All fourteen kinds — the meal plan's ten, the LOCAL event kind, and
+  the framework's user-authoring kinds (opted into like any app kind):
+  saved_view (user-authored collection views, waymark-rla) and the
+  dashboard pair (user-composed surfaces, waymark-ggw), for mealplan10
+  standing alone.
 
   The event kind is calendar10's — the same one workqueue10 serves —
   over this module's fake calendar. workqueue10 does not call this
   (see meal-resources); it composes calendar10's kind itself, under
   the :calendar domain, against the real adapter."
   [adapter]
-  (conj (meal-resources) (event/event-resource adapter)))
+  (into (conj (meal-resources)
+              (event/event-resource adapter)
+              saved-view/saved-view)
+        dashboard/resources))
 
 (def surfaces
   "The declared decision screens (phase 9b): the week board (anchored
@@ -85,7 +93,7 @@
   [week-board price-desk])
 
 (defn check-resources
-  "All eleven kinds over the offline adapter — what `make check10`
+  "All fourteen kinds over the offline adapter — what `make check10`
   (waymark10.check) assembles. Zero-arg so the gate needs no env."
   []
   (resources events))

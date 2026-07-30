@@ -132,6 +132,12 @@ async function render() {
     if (renderer) renderer(view, body, hints, decl);
     else renderCollection(view, body, hints);
   }
+  /* the dashboard fork (waymark-ggw), the deploy-history tradition:
+     kind picks the renderer — but only when the envelope carries the
+     framework kind's render contract (the embedded :slots link), so
+     an app's own unrelated "dashboard" kind keeps its kv table */
+  else if (body.kind === "dashboard" && ((body.links || {}).slots || {}).embedded)
+    renderDashboard(view, body);
   else renderResource(view, body, hints);
 }
 

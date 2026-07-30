@@ -33,7 +33,9 @@
   - waymark9's rows=none, depth= and the recomputing un-advertising
     have no v10 counterpart yet — deferred with their machinery."
   (:require [clojure.string :as str]
+            [waymark10.checks :as checks]
             [waymark10.machine :as machine]
+            [waymark10.saved-view :as sv]
             [waymark10.schema :as schema]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
@@ -447,6 +449,72 @@
             (seq (:display v)) (assoc :display (:display v))))
         (:views rdef)))
 
+(defn- saved-view-entry
+  "One ACTIVE saved_view row as a wire view entry on rdef's own
+  envelope — the declared entries' exact shape plus {:source \"saved\"}
+  and the row's self href (the client's edit-this-view affordance);
+  the wire :name is minted from the row id (\"sv-<id>\"), so it never
+  collides with a declared snake token and survives a relabel. nil
+  (with a *err* warning) when the row no longer validates against the
+  CURRENT declaration — a redeploy can strand a saved gesture or
+  field, and a stale view must not break the collection page; the row
+  stays visible in the saved_views collection itself, where its owner
+  can fix or retire it."
+  [rdef self-href row]
+  (let [data (:data row)
+        view (sv/view-of data)]
+    (if-some [ps (seq (checks/view-problems rdef view))]
+      (do (binding [*out* *err*]
+            (println "waymark10 saved view" (:id row) "skipped for"
+                     (name (:kind rdef)) "-" (first ps)))
+          nil)
+      (cond-> {:name (str "sv-" (:id row))
+               :kind (:kind view)
+               :source "saved"
+               :href self-href
+               :display {:label (:label data)}}
+        (seq (:where view)) (assoc :where (:where view))
+        (seq (:card view)) (assoc :card (mapv name (:card view)))
+        (= :deck (:kind view))
+        (assoc :gestures
+               {:right {:action (:right view)
+                        :label (action-label rdef (:right view))}
+                :left {:action (:left view)
+                       :label (action-label rdef (:left view))}})))))
+
+(defn- saved-view-entries
+  "The ACTIVE saved_view rows targeting this kind (by kind name or
+  plural), advertised beside the declared views. Costs one store
+  query, and only when the registry hosts the saved_view kind —
+  membership checked against sv/kind, the definite marker, never a
+  name string. Best-effort like facet-map: a failed read drops the
+  merge with a *err* warning, never the page."
+  [eng rdef]
+  (when-some [sv-rdef (get (inv/resources eng) sv/kind)]
+    (try
+      (let [st (:storage eng)
+            rows (store/with-tx st
+                   (fn [tx]
+                     (store/search-rows
+                      st tx sv/kind
+                      [{:target :state :op := :value "active"}
+                       {:target :data :field :target :cast "text" :op :in
+                        :values [(name (:kind rdef)) (:plural rdef)]}]
+                      {:limit 50 :offset 0})))]
+        (into []
+              (keep (fn [row]
+                      (let [row (inv/decode-row sv-rdef row)]
+                        (saved-view-entry
+                         rdef
+                         (str "/api/" (:plural sv-rdef) "/" (:id row))
+                         row))))
+              rows))
+      (catch Exception e
+        (binding [*out* *err*]
+          (println "waymark10 saved views merge failed for"
+                   (name (:kind rdef)) "-" (ex-message e)))
+        nil))))
+
 ;; ── facets ──────────────────────────────────────────────────────────
 
 (defn- facet-map
@@ -603,6 +671,11 @@
                                       ((:action? vis) (:kind rdef) aname))))
                      acts)
                acts)
+        ;; the alternate views: the declared entries plus the ACTIVE
+        ;; saved_view rows targeting this kind (views as resources,
+        ;; waymark-rla) — one wire shape, saved entries marked
+        ;; {:source "saved"} and carrying their own href
+        views (into (view-entries rdef) (saved-view-entries eng rdef))
         doc (p/wire-value
              (cond-> {:waymark "10"
                       :kind (str kname "_collection")
@@ -614,7 +687,7 @@
                              :page {:size size :number number}}
                       :actions acts
                       :links links}
-               ;; the declared alternate views, advertised beside the
-               ;; actions/links — absent when the kind declares none
-               (seq (:views rdef)) (assoc :views (view-entries rdef))))]
+               ;; the declared+saved alternate views, advertised beside
+               ;; the actions/links — absent when neither exists
+               (seq views) (assoc :views views)))]
     (splice-facets doc facets)))

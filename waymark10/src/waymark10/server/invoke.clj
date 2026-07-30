@@ -339,6 +339,17 @@
                              (some-> (get (resources engine)
                                           (keyword target-kind))
                                      action-names))
+             ;; the registry consult (views as resources, waymark-rla):
+             ;; a kind token or a collection plural → the assembled
+             ;; rdef, nil when this engine serves no such kind — how
+             ;; the saved_view write gate validates a user-authored
+             ;; view against the target kind's own declared law
+             :rdef-of (fn [token]
+                        (let [rs (resources engine)
+                              t (name token)]
+                          (or (get rs (keyword t))
+                              (some (fn [[_ r]] (when (= t (:plural r)) r))
+                                    rs))))
              :actor-of (fn [row transition]
                          ;; the newest matching transition's actor id
                          (some (fn [rec]
