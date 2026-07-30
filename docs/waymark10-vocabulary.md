@@ -261,6 +261,28 @@ retire (`retire`/`restore` are an `:undo` pair; `clone` forks a copy
 through the same create gate). The client adds one affordance: a "save
 view" chip on any filtered collection, prefilled from the current params.
 
+Surfaces are user-composable the same way (waymark-ggw): the framework
+ships a `dashboard` kind that OWNS `dashboard_slot` parts
+(`waymark10.dashboard/resources` — an app opts into the pair like any app
+kinds). A dashboard is the anchorless declared surface's user-authored
+sibling: each slot is a collection query composed from declared primitives
+only — a `target` (kind name or plural), a `where` in the collection's own
+wire grammar, an optional `view` deep link (a declared view token, or the
+`sv-<id>` name the envelope mints for an active saved view targeting the
+same kind), and a `seat` ordering int — never a query/layout DSL. Slot
+create/revise run a write gate in the saved_view tradition: `ctx :rdef-of`
+resolves the target, the shared `checks/view-where-problems` battery
+judges the `where`, and a `view` reference must resolve. The dashboard's
+GET splices its ACTIVE slots at `links.slots.embedded` (the render
+contract); the generic client forks on the kind and renders a grid of live
+panels — label, truthful count, a few top rows, a click-through carrying
+the slot's params (+ `view=`) — each panel fetched concurrently and
+degrading alone: a slot stranded by a redeploy wears the collection's own
+refusal with a retry and the door to revise or remove it, never a broken
+page. `retire`/`restore` and `remove`/`restore` are `:undo` pairs;
+`clone` deep-copies the active slots through the same create gate, so a
+stale slot cannot propagate.
+
 ## 9 · `:touches` — the declared cross-write set
 
 An action that advances OTHER rows says so on its declaration:

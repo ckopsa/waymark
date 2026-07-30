@@ -290,3 +290,38 @@
   .feed-end-body { text-align: center; }
   .feed-fin { font-family: var(--serif); color: var(--muted);
               font-size: 15px; margin-bottom: 12px; }
+
+  /* ── the dashboard screen (waymark-ggw): the user-composed grid ─── */
+  .slot-grid { display: grid; gap: 12px; margin: 12px 0 16px;
+               grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+  .slot-panel { background: var(--panel); border: 1px solid var(--line);
+                border-radius: var(--radius); padding: 12px 14px;
+                min-height: 120px; display: flex; flex-direction: column;
+                gap: 8px; }
+  .slot-head { display: flex; align-items: baseline; gap: 8px;
+               justify-content: space-between; }
+  .slot-name { font-size: 14px; font-weight: 800; letter-spacing: -.01em; }
+  .slot-name a { color: var(--ink); }
+  .slot-edit { color: var(--muted); font-size: 12px; text-decoration: none; }
+  .slot-edit:hover { color: var(--ink); }
+  .slot-count { font-family: var(--mono); font-size: 27px; line-height: 1.1; }
+  .slot-count a { color: var(--ink); text-decoration: none; }
+  .slot-none { font-family: var(--serif); color: var(--muted);
+               font-size: 14.5px; }
+  .slot-rows { display: flex; flex-direction: column; }
+  .slot-row { display: block; padding: 4px 0; font-size: 13px;
+              border-top: 1px solid var(--line);
+              overflow: hidden; text-overflow: ellipsis;
+              white-space: nowrap; }
+  .slot-more { margin-top: auto; font-size: 12px; align-self: flex-end; }
+  .slot-manage { align-self: center; font-size: 13px; margin-left: 4px; }
+  .slot-desc { color: var(--muted); max-width: 640px; }
+  /* a slot stranded by a redeploy or a failed fetch: its own quiet
+     problem panel — the reason, a retry, the door to fix it */
+  .slot-problem { background: var(--refusal-wash);
+                  border-left: 3px solid var(--refusal);
+                  border-radius: 4px; padding: 8px 10px;
+                  font-size: 13px; color: var(--ink); }
+  .slot-problem .slot-foot { display: flex; gap: 10px; align-items: center;
+                             margin-top: 8px; }
+  .slot-problem button { font-size: 12px; padding: 2px 10px; }
