@@ -354,6 +354,52 @@ function viewSwitcher(views) {
     ...views.map(v => chip(v.name, v.display?.label || title(v.name))));
 }
 
+/* the save-view chip (waymark-rla): a collection standing on filters
+   can be KEPT — one click opens the saved_view kind's own create form
+   prefilled with this kind, the current filter params (the same wire
+   string the filter bar already put in the hash), and feed as the
+   default view kind. Shown only when the engine hosts the saved_view
+   kind (well-known lists its collection) and the page carries scalar
+   filter params the saved-view where grammar serves (eq/in — suffix
+   ops stay behind). Everything else — editing, retiring, cloning —
+   happens through the standard resource UI that kind gets for free. */
+async function addSaveViewChip(panel, vrow, doc, kind) {
+  try {
+    const {params} = parseHrefQuery(doc.self);
+    const where = new URLSearchParams();
+    for (const [k, v] of params) {
+      if (["sort", "rows", "view"].includes(k) || k.startsWith("page[")) continue;
+      if (/_(gte|lte|ne|after|before|set|contains)$/.test(k)) continue;
+      if (v) where.set(k, v);
+    }
+    if (![...where.keys()].length) return;
+    const w = await wellKnown();
+    const svHref = collectionHref(w, "saved_view");
+    if (!svHref) return;
+    const chip = el("span",
+      {class: "chip", style: "cursor:pointer", "data-save-view": "",
+       title: "keep this filtered slice as a saved view — it becomes a "
+            + "switcher chip on this collection",
+       onclick: async () => {
+         const {ok, body} = await api(svHref);
+         if (!ok || !body.actions?.create)
+           return toast("saved views are not writable here");
+         actionDialog({name: "create", entry: body.actions.create, doc: body,
+           prefill: {target: kind, view_kind: "feed",
+                     where: where.toString()},
+           onDone: () => render()});
+       }},
+      "☆ Save view");
+    if (vrow && document.contains(vrow)) vrow.append(chip);
+    else if (document.contains(panel)) {
+      const row = el("div", {class: "chips viewswitcher"}, chip);
+      const anchor = panel.querySelector(".filterbar") ||
+        panel.querySelector(".actions");
+      if (anchor) panel.insertBefore(row, anchor); else panel.append(row);
+    }
+  } catch {}
+}
+
 function pagerOf(doc) {
   const page = doc.data?.page || {};
   const pager = el("div", {class:"pager"});
@@ -502,9 +548,11 @@ function renderCollection(view, doc, hints) {
      echo ("filtered: state=retired") and count */
   if (doc.summary) panel.append(el("div", {class:"metaline"}, doc.summary));
 
-  /* advertised alternate views stand as switcher chips above the bar */
+  /* advertised alternate views stand as switcher chips above the bar;
+     the save-view chip (waymark-rla) joins the same row, async */
   const vs = viewSwitcher(doc.views);
   if (vs) panel.append(vs);
+  addSaveViewChip(panel, vs, doc, kind);
 
   const {path, params} = parseHrefQuery(doc.self);
   const query = doc.actions?.query;

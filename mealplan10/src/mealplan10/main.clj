@@ -33,6 +33,7 @@
             [mealplan10.resources.product :refer [price-desk product]]
             [mealplan10.resources.rotation :refer [rotation]]
             [mealplan10.resources.substitution :refer [substitution]]
+            [waymark10.saved-view :as saved-view]
             [waymark10.server.engine :as engine]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
@@ -68,15 +69,19 @@
    ingredient product substitution])
 
 (defn resources
-  "All eleven kinds — the meal plan's ten plus the LOCAL event kind,
-  for mealplan10 standing alone.
+  "All twelve kinds — the meal plan's ten, the LOCAL event kind, and
+  the framework's saved_view kind (user-authored collection views,
+  waymark-rla — opted into like any app kind), for mealplan10
+  standing alone.
 
   The event kind is calendar10's — the same one workqueue10 serves —
   over this module's fake calendar. workqueue10 does not call this
   (see meal-resources); it composes calendar10's kind itself, under
   the :calendar domain, against the real adapter."
   [adapter]
-  (conj (meal-resources) (event/event-resource adapter)))
+  (conj (meal-resources)
+        (event/event-resource adapter)
+        saved-view/saved-view))
 
 (def surfaces
   "The declared decision screens (phase 9b): the week board (anchored

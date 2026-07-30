@@ -240,6 +240,27 @@ the per-item affordances still gate what a gesture may actually do. The
 generic client renders switcher chips; a view kind with no registered
 renderer falls back to the table.
 
+Views are also authorable at RUNTIME (waymark-rla): the framework ships a
+ready-made `saved_view` kind (`waymark10.saved-view/saved-view`) an app
+opts into by adding it to its resources vector, like any app kind —
+storage, forms, grants, and events come free. A row carries the same
+surface as a declared view, as wire strings: a `label`, the `target`
+collection (kind name or plural), `view_kind` (`deck`|`feed`), `where`
+(filter params in the collection's own wire grammar, e.g.
+`state=pending&owner=ana` — the same string the filter bar puts in the
+hash), `card`, and the deck gestures `right`/`left`. The declaration-time
+`[views]` rules are enforced at WRITE time instead, by the same extracted
+battery (`waymark10.checks/view-problems`) judged against the live
+registry (`ctx :rdef-of`): create and revise refuse a view its target's
+declaration would refuse. ACTIVE rows merge into the target collection's
+envelope `views` beside the declared entries, marked `source: "saved"` and
+carrying the row's own `href`; a row stranded by a redeploy (its gesture
+retired, say) is skipped there with a warning — never a broken page — and
+stays visible in the `saved_views` collection for its owner to fix or
+retire (`retire`/`restore` are an `:undo` pair; `clone` forks a copy
+through the same create gate). The client adds one affordance: a "save
+view" chip on any filtered collection, prefilled from the current params.
+
 ## 9 · `:touches` — the declared cross-write set
 
 An action that advances OTHER rows says so on its declaration:
