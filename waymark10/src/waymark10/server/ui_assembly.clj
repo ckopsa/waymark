@@ -19,6 +19,7 @@
    "waymark10/ui/120-nav-home.js"
    "waymark10/ui/130-collection.js"
    "waymark10/ui/133-deck.js"          ; VIEW_RENDERERS.deck (registry: 110)
+   "waymark10/ui/134-feed.js"          ; VIEW_RENDERERS.feed (registry: 110)
    "waymark10/ui/140-links-access.js"
    "waymark10/ui/150-values-parts.js"
    "waymark10/ui/160-resource-surface.js"

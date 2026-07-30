@@ -253,3 +253,40 @@
                border: 1px dashed var(--line); border-radius: 8px; }
   .deck-done-mark { font-size: 36px; color: var(--verdigris); }
   .deck-done .prose { color: var(--muted); }
+
+  /* --- feed view (134-feed.js): full-screen sequential read --------- */
+  /* the overlay sits above the page chrome (header z 5) and below the
+     ledger (15) and toast (20) — activity and toasts stay visible */
+  .feedview { position: fixed; inset: 0; z-index: 10; background: var(--paper);
+              display: flex; flex-direction: column; }
+  .feed-top { display: flex; align-items: center; gap: 12px;
+              padding: 8px 20px; flex: 0 0 auto;
+              background: var(--panel); border-bottom: 1px solid var(--line); }
+  .feed-name { font-size: 13px; font-weight: 700; }
+  .feed-pos { margin-left: auto; font-family: var(--mono); font-size: 11px;
+              color: var(--muted); white-space: nowrap; }
+  .feed-close { font-size: 12px; padding: 3px 10px; white-space: nowrap; }
+  .feed-scroll { flex: 1 1 auto; overflow-y: auto;
+                 scroll-snap-type: y mandatory; overscroll-behavior: contain; }
+  /* one item per viewport: each panel fills the scroller and snaps;
+     an over-tall panel scrolls internally rather than break the snap */
+  .feed-panel { height: 100%; scroll-snap-align: start;
+                scroll-snap-stop: always; overflow-y: auto;
+                display: flex; }
+  /* margin:auto centers short content and, unlike justify-content,
+     keeps tall content reachable from the top */
+  .feed-body { margin: auto; width: min(720px, 100%);
+               padding: 28px 20px 44px; }
+  .feed-meta { display: flex; align-items: baseline; gap: 8px;
+               margin-bottom: 10px; }
+  .feed-title { margin: 0 0 4px; font-family: var(--serif);
+                font-size: 26px; font-weight: 700; letter-spacing: -.01em;
+                line-height: 1.25; }
+  .feed-summary { font-family: var(--serif); font-size: 15.5px;
+                  color: var(--muted); margin: 4px 0 14px; }
+  .feed-kv { max-width: 560px; margin: 10px 0 4px; }
+  .feed-actions { margin-top: 16px; }
+  .feed-open { display: inline-block; margin-top: 14px; font-size: 13px; }
+  .feed-end-body { text-align: center; }
+  .feed-fin { font-family: var(--serif); color: var(--muted);
+              font-size: 15px; margin-bottom: 12px; }

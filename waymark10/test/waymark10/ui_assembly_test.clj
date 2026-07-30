@@ -32,3 +32,10 @@
     (is (< (str/index-of page "const VIEW_RENDERERS = {};")
            (str/index-of page "VIEW_RENDERERS.deck"))
         "the registry is declared before the deck registers")))
+
+(deftest the-feed-renderer-rides-the-page
+  ;; the :feed collection view (waymark-h50): the fragment registers on
+  ;; the dispatch seam and its snap-scroll CSS survives assembly
+  (let [page (sut/assemble)]
+    (is (str/includes? page "VIEW_RENDERERS.feed"))
+    (is (str/includes? page "scroll-snap-type: y mandatory"))))
