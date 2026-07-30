@@ -40,7 +40,18 @@
     a role-reading guard judges the reconstruction, not the original
     credential (waymark9 had the same property).
   - A deferred call skips whole-call idempotency (the job row is its
-    record); each item still natural-replays like any invoke."
+    record); each item still natural-replays like any invoke.
+
+  MIRROR SYNC JOBS (the manual trigger): a job whose :action is one
+  of sync-actions (\"resync\"/\"discover\") carries a KIND-level
+  mirror pass, not a deferred bulk call — minted by the trigger door
+  (waymark10.server.mirror/request-sync!) and serviced by the mirror
+  discovery daemon, the lease-elected singleton that owns every sync
+  pass and the adapter census. The bulk worker SKIPS them (run-once!
+  — bulk-item! could not run one: there are no ids, and the sync
+  doors are system-only). The orphan sweep does NOT skip them: a
+  daemon that dies mid-pass leaves its job re-queued for the next
+  lease holder, the same visibility the bulk jobs get."
   (:require [waymark10.guards :as g]
             [waymark10.resource :refer [defresource]]
             [waymark10.schema :as schema]
@@ -61,6 +72,24 @@
 (def worker-actor
   "The system actor that mints, advances and completes deferred jobs."
   (t/principal {:id "waymark10-jobs" :type :system :display "Job worker"}))
+
+(def sync-actions
+  "The job actions that carry a mirror sync request — a kind-level
+  pass, not a per-item bulk call. The bulk worker never claims one;
+  the mirror discovery daemon services them (see the ns docstring
+  and waymark10.server.mirror/service-sync-jobs!)."
+  #{"resync" "discover"})
+
+(defn sync-job?
+  "Is this job row (raw or decoded — :action is a plain string either
+  way) a mirror sync request rather than a deferred bulk call? The
+  action name alone would collide with an app's own bulk action
+  spelled \"resync\" — a sync job also carries NO ids (a deferred
+  bulk call always carries at least its threshold's worth), so the
+  pair discriminates."
+  [job]
+  (and (contains? sync-actions (get-in job [:data :action]))
+       (empty? (get-in job [:data :ids]))))
 
 ;; ── the resource ────────────────────────────────────────────────────
 
@@ -151,7 +180,10 @@
 
 ;; ── execution ───────────────────────────────────────────────────────
 
-(defn- load-job [eng id]
+(defn load-job
+  "The decoded job row by id, nil when gone. Public for the mirror
+  daemon's sync-job service pass; the bulk worker's own callers."
+  [eng id]
   (let [rdef (get (inv/resources eng) :job)
         raw (store/with-tx (:storage eng)
               (fn [tx] (store/load-row (:storage eng) tx :job id {})))]
@@ -163,9 +195,11 @@
                   :type (keyword (or (:type rb) "human"))
                   :display (:display rb)})))
 
-(defn- persist-data!
+(defn persist-data!
   "The maintenance write: the job document updates in place — no
-  version bump, no transition (the items log on their own rows)."
+  version bump, no transition (the items log on their own rows).
+  Public for the mirror daemon's report persist, the same artifact
+  discipline the bulk worker follows."
   [eng job data]
   (let [rdef (get (inv/resources eng) :job)]
     (store/with-tx (:storage eng)
@@ -289,7 +323,10 @@
                     (into (store/query-rows (:storage eng) tx :job
                                             {:state :queued} {:limit 50})
                           (store/query-rows (:storage eng) tx :job
-                                            {:state :running} {:limit 50}))))]
+                                            {:state :running} {:limit 50}))))
+        ;; sync jobs are the mirror daemon's — bulk-item! could not
+        ;; run one (no ids, and the sync doors are system-only)
+        running (remove sync-job? running)]
     (reduce
      (fn [n job]
        (if (claim! eng (:id job) holder lease-seconds)

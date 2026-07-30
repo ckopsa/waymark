@@ -76,6 +76,21 @@
     keep). Discovery mints — born WITH an external id — never
     create-push, and an unclaimed local birth is invisible to
     pull-through and resync (nothing external names it yet).
+  - MANUAL SYNC (the trigger door): a sync otherwise runs only on
+    the boot heal, the declared cadences, TTL pull-through and push
+    — an operator watching a known-changed feed had to wait or
+    restart. POST /api/-/mirrors/{plural}/{resync|discover} mints a
+    SYNC JOB (request-sync!): an ordinary :job row — the codebase's
+    one durable, cross-process please-do-this — with the requester
+    recorded, progress and a report in data, cancel and the orphan
+    sweep for free. The discovery daemon services it on its next
+    beat (service-sync-jobs!): the lease-elected singleton runs ALL
+    passes, so a manual pass never overlaps a cadenced one and the
+    adapter census keeps one process's eyes. The bulk worker skips
+    sync jobs (jobs/sync-actions); one pending job per (kind,
+    flavor) — the door answers the existing job instead of minting
+    a twin. A pass is monolithic: cancel takes effect before the
+    run starts or not at all (recorded).
   - EXTERNAL-KEYED REFS (paydesk's assignment demanded it): a
     :waymark/ref entry declaring {:kind … :external-key <field>}
     resolves at every sync write — the sibling field's external id
@@ -116,6 +131,7 @@
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.jobs :as jobs]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Duration Instant LocalDate ZoneOffset)
@@ -1552,6 +1568,140 @@
              rewritten " rewritten"
              (when (pos? (long gone)) (str ", " gone " gone-from-feed"))))))
 
+;; ── manual sync: the trigger door's jobs ────────────────────────────
+;; A sync otherwise runs only on the boot heal, the declared cadences,
+;; TTL pull-through and push-on-write. The manual trigger rides the
+;; jobs machinery — the codebase's one durable, cross-process
+;; please-do-this — but NOT the bulk worker: a sync job is a
+;; kind-level pass (no ids, system-only doors), so the discovery
+;; daemon services it, keeping every pass and the adapter census in
+;; the one lease-elected process. jobs/run-once! skips these rows
+;; (jobs/sync-actions is the discriminator).
+
+(defn pending-sync-job
+  "The queued-or-running sync job for (kind, flavor), decoded, when
+  one exists — the trigger door's dedupe read: a second trigger while
+  one pass is pending answers the existing job instead of minting a
+  twin (the daemon serializes anyway; a twin would only double the
+  adapter round trips). Best-effort — two racing triggers may still
+  both mint, and the second pass is a cheap re-check."
+  [eng kind flavor]
+  (let [st (:storage eng)
+        raw (store/with-tx st
+              (fn [tx]
+                (into (store/query-rows st tx :job
+                                        {:state :queued :kind (name kind)}
+                                        {:limit 50})
+                      (store/query-rows st tx :job
+                                        {:state :running :kind (name kind)}
+                                        {:limit 50}))))]
+    (some #(when (= (name flavor) (get-in % [:data :action]))
+             (jobs/load-job eng (:id %)))
+          raw)))
+
+(defn request-sync!
+  "Mint the sync job for one mirror kind — the manual trigger's
+  durable request; the discovery daemon services it on its next
+  beat. flavor is :resync or :discover. → {:job decoded-row
+  :existing? bool}, :existing? true when a pending job for (kind,
+  flavor) already stood. Created by the system actor (jobs are never
+  wire-created) with the requesting principal recorded in data —
+  jobs/enqueue!'s own pattern, through the operator's door."
+  [eng kind flavor principal]
+  (if-some [job (pending-sync-job eng kind flavor)]
+    {:job job :existing? true}
+    {:job (:row (inv/create!
+                 eng :job
+                 {:action (name flavor)
+                  :kind (name kind)
+                  :ids []
+                  :requested_by {:id (:id principal)
+                                 :type (name (:type principal :human))
+                                 :display (:display principal)}
+                  :progress {:done 0 :total 1 :refusals []}}
+                 {:principal jobs/worker-actor}))
+     :existing? false}))
+
+(defn run-sync-job!
+  "Service one claimed sync job: start it (queued → running — the
+  claim made visible), run the kind-level pass, persist the report
+  artifact, complete. The pass is monolithic, so a cancel takes
+  effect before the run starts or not at all — the row reloads
+  around the pass, and a cancel that landed mid-run wins the state
+  (the pass's writes stand; they are convergent observations). An
+  unreachable adapter completes WITH the failure in the report —
+  resync is a heal, never a gate, and a spinning retry would be the
+  gate. → :completed | :cancelled | :gone."
+  [eng job-id]
+  (let [job (jobs/load-job eng job-id)]
+    (cond
+      (nil? job) :gone
+      (contains? #{:completed :cancelled} (:state job)) (:state job)
+      :else
+      (let [job (if (= :queued (:state job))
+                  (:row (inv/invoke! eng :job job-id :start nil
+                                     {:principal jobs/worker-actor
+                                      :correlation-id job-id}))
+                  job)
+            {:keys [action kind]} (:data job)
+            k (keyword kind)
+            rdef (get (inv/resources eng) k)
+            report (cond
+                     (nil? (:mirror rdef))
+                     ;; the declaration moved between mint and service
+                     ;; — terminal, not retried; the report says why
+                     {:error (str kind " is not a mirror kind on this engine")}
+
+                     (= "discover" action)
+                     {:minted (discover! eng k)}
+
+                     :else
+                     (or (resync! eng k)
+                         {:error (str "the external system was unreachable; "
+                                      "stored truth keeps serving")}))
+            job' (or (jobs/load-job eng job-id) job)]
+        (if (= :cancelled (:state job'))
+          :cancelled
+          (do (jobs/persist-data!
+               eng job' (assoc (:data job')
+                               :progress {:done 1 :total 1 :refusals []}
+                               :report (assoc report :action action :kind kind)))
+              (inv/invoke! eng :job job-id :complete nil
+                           {:principal jobs/worker-actor
+                            :correlation-id job-id})
+              :completed))))))
+
+(defn service-sync-jobs!
+  "One pass over the queued sync jobs — the discovery daemon's beat
+  (tests call it directly). Claims each job's lease (the orphan
+  sweep's liveness signal), runs it, releases; active-job (an atom,
+  when given) names the job under work so the daemon's heartbeat can
+  renew its lease mid-pass — a whole-kind heal outlives any sane
+  TTL, the discovery lease's own lesson. A daemon that dies mid-run
+  stops renewing and the sweep re-queues the job for the next lease
+  holder. → the number of jobs serviced."
+  [eng {:keys [holder lease-seconds active-job]
+        :or {lease-seconds 120}}]
+  (let [holder (or holder (str "mirror-sync-" (random-uuid)))
+        queued (store/with-tx (:storage eng)
+                 (fn [tx] (store/query-rows (:storage eng) tx :job
+                                            {:state :queued} {:limit 50})))]
+    (reduce
+     (fn [n job]
+       (if (and (jobs/sync-job? job)
+                (jobs/claim! eng (:id job) holder lease-seconds))
+         (do (when active-job (reset! active-job (:id job)))
+             (try
+               (run-sync-job! eng (:id job))
+               (catch Exception e
+                 (warn! "sync job " (:id job) " aborted: " (ex-message e)))
+               (finally
+                 (when active-job (reset! active-job nil))
+                 (jobs/release! eng (:id job) holder)))
+             (inc n))
+         n))
+     0 queued)))
+
 (def ^:private discovery-lease-id "mirror-discovery")
 (def ^:private discovery-lease-ttl-s 120)
 (def ^:private discovery-heartbeat-ms 10000)
@@ -1580,7 +1730,13 @@
   already holds and fills what it doesn't, core kinds whole before
   a reference table's heal even starts (the all-heals-first shape
   never survived node churn long enough to mint anything). Each
-  kind's boot heal counts as its first cadenced resync."
+  kind's boot heal counts as its first cadenced resync.
+
+  Each beat also services the queued SYNC JOBS — the manual
+  trigger's rows (request-sync!/service-sync-jobs!) — so a manual
+  pass runs in the same one process as the cadenced ones; the
+  heartbeat renews the active job's lease alongside the discovery
+  lease (renewal never waits on work)."
   [eng]
   (let [stop (CountDownLatch. 1)
         st (:storage eng)
@@ -1589,6 +1745,7 @@
         last-run (atom {})
         last-resync (atom {})
         healed? (atom false)
+        active-sync-job (atom nil)
         lease! (fn []
                  (reset! held?
                          (try
@@ -1601,6 +1758,16 @@
                              (warn! "discovery lease claim failed: "
                                     (ex-message e))
                              false))))
+        renew-job! (fn []
+                     (when-some [jid @active-sync-job]
+                       (try
+                         (store/with-tx st
+                           (fn [tx]
+                             (store/claim-job-lease!
+                              st tx jid holder discovery-lease-ttl-s)))
+                         (catch Exception e
+                           (warn! "sync job lease renewal failed: "
+                                  (ex-message e))))))
         heal (fn []
                ;; per KIND, heal THEN discover, in priority order — a
                ;; kind's fill must not wait for every other kind's heal
@@ -1652,6 +1819,7 @@
                     (fn []
                       (loop []
                         (lease!)
+                        (renew-job!)
                         (when-not (.await stop discovery-heartbeat-ms
                                           TimeUnit/MILLISECONDS)
                           (recur))))
@@ -1662,7 +1830,15 @@
                        (when @held?
                          (when (compare-and-set! healed? false true)
                            (heal))
-                         (tick))
+                         (tick)
+                         (try
+                           (service-sync-jobs!
+                            eng {:holder holder
+                                 :lease-seconds discovery-lease-ttl-s
+                                 :active-job active-sync-job})
+                           (catch Exception e
+                             (warn! "sync job service pass failed: "
+                                    (ex-message e)))))
                        (when-not (.await stop 5000 TimeUnit/MILLISECONDS)
                          (recur))))
                    "waymark10-mirror-discovery")]
