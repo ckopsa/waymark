@@ -23,7 +23,7 @@
   Routes (composed via engine/start!'s :wrap-handler seam — the
   router table stays untouched):
 
-    GET /auth/login?return-to=/api/-/ui  302 → the IdP; state + PKCE
+    GET /auth/login?return-to=/          302 → the IdP; state + PKCE
         verifier ride a short-lived signed cookie — no server state
     GET /auth/callback?code=…&state=…    code exchange, the access
         token verified through the SAME JWKS path as bearer
@@ -139,7 +139,7 @@
   [s]
   (if (and s (str/starts-with? s "/") (not (str/starts-with? s "//")))
     s
-    "/api/-/ui"))
+    "/"))
 
 (defn- login [oidc req]
   (let [rp (:rp oidc)
@@ -350,7 +350,8 @@
   slip past the door because it exists."
   [oidc req]
   (and (:login-redirect? (:rp oidc))
-       (str/starts-with? (:uri req) "/api/-/ui")
+       (or (= "/" (:uri req))
+           (str/starts-with? (:uri req) "/api/-/ui"))
        (some-> (get-in req [:headers "accept"]) (str/includes? "text/html"))
        (nil? (get-in req [:headers "authorization"]))
        (nil? (resolve-session oidc req))))

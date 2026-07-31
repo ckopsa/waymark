@@ -1142,9 +1142,12 @@
                     (get-in req [:headers "user-agent"] ""))))
 
 (defn- ui-page
-  "GET /api/-/ui (and /api/-/ui-lite): the envelope-driven generic UI
-  — one self-contained page (vanilla JS, no external hosts) that
-  renders whatever the wire declares: kinds from well-known,
+  "GET / and /api/-/ui (and /api/-/ui-lite): the envelope-driven
+  generic UI — the root is its canonical address; /api/-/ui stays
+  as the back-compat spelling existing deep links (source_ui_href,
+  bookmarks) already carry. One self-contained page (vanilla JS, no
+  external hosts) that renders whatever the wire declares: kinds
+  from well-known,
   collections from the query grammar, envelopes as forms. A static
   asset, served to anyone — a scoped request's DATA stays projected
   by the API it drives. The full client (the waymark9 generic UI,
@@ -1300,41 +1303,43 @@
   grammar), identity boundary inside the problem boundary, problem
   boundary outermost."
   [eng]
-  (-> (ring/ring-handler
-       (ring/router
-        [["/api/.well-known/waymark" {:get (well-known eng)}]
-         ["/api/openapi.json" {:get (openapi-doc eng)}]
-         ["/api/schemas/:kind" {:get (kind-schema eng)}]
-         ["/api/-/events" {:get (firehose-events eng)}]
-         ["/api/-/presence" {:get (presence-stream eng)
-                             :post (presence-report eng)}]
-         ["/api/-/intents" {:get (intents-stream eng)
-                            :post (intents-report eng)}]
-         ["/api/-/intents/abandon" {:post (intents-abandon eng)}]
-         ["/api/-/intents/answer" {:post (intents-answer eng)}]
-         ["/api/-/collab-ticket" {:post (collab-ticket-mint eng)}]
-         ["/api/-/mirrors/:plural/:action" {:post (mirror-sync-trigger eng)}]
-         ["/api/-/welcome" {:get (welcome-doc eng)}]
-         ["/api/-/ui" {:get (ui-page eng (ui-assembly/assemble))}]
-         ["/api/-/ui-lite" {:get (ui-page eng (some-> (io/resource "waymark10/ui_lite.html")
-                                                      slurp))}]
-         ["/api/attachments/:id/bytes" {:put (bytes-put eng)
-                                        :get (bytes-get eng)}]
-         ["/api/surfaces/:name" {:get (surface-view eng)}]
-         ["/api/surfaces/:name/:id" {:get (surface-view eng)}]
-         ["/api/:plural" {:get (collection eng) :post (create eng)}]
-         ["/api/:plural/-/worksheet" {:get (worksheet-get eng)
-                                      :post (worksheet-post eng)}]
-         ["/api/:plural/-/:action" {:post (bulk-action eng)}]
-         ["/api/:plural/:id" {:get (get-one eng)}]
-         ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
-         ["/api/:plural/:id/-/:action" {:post (invoke-action eng)}]
-         ["/api/:plural/:id/-/:action/batch" {:post (batch-action eng)}]
-         ["/api/:plural/:id/-/:action/draft" {:get (draft-get eng)
-                                              :put (draft-put eng)
-                                              :delete (draft-delete eng)}]
-         ["/api/:plural/:id/-/:action/draft/collab" {:get (draft-collab eng)}]]
-        {:conflicts nil})
-       not-found-handler)
-      (wrap-identity eng)
-      wrap-problems))
+  (let [ui (ui-page eng (ui-assembly/assemble))]
+    (-> (ring/ring-handler
+         (ring/router
+          [["/" {:get ui}]
+           ["/api/.well-known/waymark" {:get (well-known eng)}]
+           ["/api/openapi.json" {:get (openapi-doc eng)}]
+           ["/api/schemas/:kind" {:get (kind-schema eng)}]
+           ["/api/-/events" {:get (firehose-events eng)}]
+           ["/api/-/presence" {:get (presence-stream eng)
+                               :post (presence-report eng)}]
+           ["/api/-/intents" {:get (intents-stream eng)
+                              :post (intents-report eng)}]
+           ["/api/-/intents/abandon" {:post (intents-abandon eng)}]
+           ["/api/-/intents/answer" {:post (intents-answer eng)}]
+           ["/api/-/collab-ticket" {:post (collab-ticket-mint eng)}]
+           ["/api/-/mirrors/:plural/:action" {:post (mirror-sync-trigger eng)}]
+           ["/api/-/welcome" {:get (welcome-doc eng)}]
+           ["/api/-/ui" {:get ui}]
+           ["/api/-/ui-lite" {:get (ui-page eng (some-> (io/resource "waymark10/ui_lite.html")
+                                                        slurp))}]
+           ["/api/attachments/:id/bytes" {:put (bytes-put eng)
+                                          :get (bytes-get eng)}]
+           ["/api/surfaces/:name" {:get (surface-view eng)}]
+           ["/api/surfaces/:name/:id" {:get (surface-view eng)}]
+           ["/api/:plural" {:get (collection eng) :post (create eng)}]
+           ["/api/:plural/-/worksheet" {:get (worksheet-get eng)
+                                        :post (worksheet-post eng)}]
+           ["/api/:plural/-/:action" {:post (bulk-action eng)}]
+           ["/api/:plural/:id" {:get (get-one eng)}]
+           ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
+           ["/api/:plural/:id/-/:action" {:post (invoke-action eng)}]
+           ["/api/:plural/:id/-/:action/batch" {:post (batch-action eng)}]
+           ["/api/:plural/:id/-/:action/draft" {:get (draft-get eng)
+                                                :put (draft-put eng)
+                                                :delete (draft-delete eng)}]
+           ["/api/:plural/:id/-/:action/draft/collab" {:get (draft-collab eng)}]]
+          {:conflicts nil})
+         not-found-handler)
+        (wrap-identity eng)
+        wrap-problems)))

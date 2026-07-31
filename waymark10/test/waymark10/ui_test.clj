@@ -39,6 +39,16 @@
     (is (str/starts-with? (get-in resp [:headers "Content-Type"]) "text/html"))
     (is (str/includes? (:body resp) "waymark"))))
 
+(deftest ui-serves-at-the-root
+  ;; the root is the canonical address; /api/-/ui stays as the
+  ;; back-compat spelling existing deep links already carry
+  (let [root (*h* {:request-method :get :uri "/" :headers {}})]
+    (is (= 200 (:status root)))
+    (is (str/starts-with? (get-in root [:headers "Content-Type"]) "text/html"))
+    (is (= (:body root)
+           (:body (*h* {:request-method :get :uri "/api/-/ui" :headers {}})))
+        "one page, two addresses")))
+
 (def ^:private iphone-ua
   (str "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 "

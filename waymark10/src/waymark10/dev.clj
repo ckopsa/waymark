@@ -23,7 +23,7 @@
   port:
 
       (def h (dev/serve! [meal]))
-      ;; => http://localhost:8123/api/-/ui
+      ;; => http://localhost:8123/
       (def h (dev/restart! h [meal plan]))  ; add a resource, same DB+port
       (dev/stop! h)
 
@@ -78,7 +78,7 @@
          eng (engine/engine (merge {:storage st :resources (vec resources)}
                                    (dissoc opts :dsn :port)))
          srv (engine/start! eng port)]
-     (println (str "waymark10 UI: http://localhost:" port "/api/-/ui"))
+     (println (str "waymark10 UI: http://localhost:" port "/"))
      {:engine eng :server srv :storage st :port port :resources (vec resources)})))
 
 (defn restart!
@@ -90,7 +90,7 @@
   (engine/stop! (:engine handle) (:server handle))
   (let [eng (engine/engine {:storage (:storage handle) :resources (vec resources)})
         srv (engine/start! eng (:port handle))]
-    (println (str "waymark10 UI: http://localhost:" (:port handle) "/api/-/ui"))
+    (println (str "waymark10 UI: http://localhost:" (:port handle) "/"))
     (assoc handle :engine eng :server srv :resources (vec resources))))
 
 (defn stop!

@@ -126,11 +126,11 @@
                    (jwt/unsign (get (cookie-of resp) "waymark_auth")
                                session-secret {:alg :hs256}))]
     (testing "an absolute return-to is refused"
-      (is (= "/api/-/ui"
+      (is (= "/"
              (:return-to (stash-of ((app) (get-req "/auth/login"
                                                    {:query "return-to=https%3A%2F%2Fevil.test"})))))))
     (testing "a protocol-relative return-to is refused"
-      (is (= "/api/-/ui"
+      (is (= "/"
              (:return-to (stash-of ((app) (get-req "/auth/login"
                                                    {:query "return-to=%2F%2Fevil.test"})))))))))
 
@@ -238,6 +238,10 @@
   (let [a (app {:login-redirect? true})]
     (testing "a browser with no session"
       (let [resp (a (get-req "/api/-/ui" {:headers {"accept" "text/html"}}))]
+        (is (= 302 (:status resp)))
+        (is (str/starts-with? (location resp) "/auth/login?return-to="))))
+    (testing "the root path bounces too — the ui's canonical address"
+      (let [resp (a (get-req "/" {:headers {"accept" "text/html"}}))]
         (is (= 302 (:status resp)))
         (is (str/starts-with? (location resp) "/auth/login?return-to="))))
     (testing "an API client keeps its honest answer"
