@@ -51,6 +51,7 @@
 (def ^:private rm-gauge (remote))
 (def ^:private rm-dial (remote))
 (def ^:private rm-flare (remote))
+(def ^:private rm-lever (remote))
 
 (defn- mirror-kind [kw plural adapter]
   (r/resource
@@ -69,8 +70,9 @@
         (store/with-tx st
           (fn [tx]
             (doseq [table ["sync_metrics" "sync_gauges" "sync_dials"
-                           "sync_flares" "jobs" "subscriptions"
+                           "sync_flares" "sync_levers" "jobs" "subscriptions"
                            "definitions" "members" "roles" "grants"
+                           "approval_requests"
                            "attachments" "waymark10_transitions"
                            "waymark10_idempotency" "waymark10_job_leases"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
@@ -79,7 +81,8 @@
                     :resources [(mirror-kind :sync_metric "sync_metrics" rm-metric)
                                 (mirror-kind :sync_gauge "sync_gauges" rm-gauge)
                                 (mirror-kind :sync_dial "sync_dials" rm-dial)
-                                (mirror-kind :sync_flare "sync_flares" rm-flare)]})]
+                                (mirror-kind :sync_flare "sync_flares" rm-flare)
+                                (mirror-kind :sync_lever "sync_levers" rm-lever)]})]
           (binding [*eng* eng
                     *h* (engine/handler eng)]
             (f)))
@@ -187,6 +190,68 @@
           "resync is a heal, never a gate — no spinning retry")
       (is (str/includes? (get-in done [:data :report :error] "")
                          "unreachable")))))
+
+;; ── the leashed door: a granted flavor opens it ─────────────────────
+
+(defn- agent-req
+  ([method uri] (agent-req method uri nil nil))
+  ([method uri body headers]
+   (*h* (cond-> {:request-method method
+                 :uri uri
+                 :headers (merge {"x-waymark-principal" "syncer-1"
+                                  "x-waymark-actor-type" "agent"}
+                                 headers)}
+          body (assoc :body (wire/write-json body))))))
+
+(deftest a-granted-leash-pulls-the-trigger-and-watches-its-job
+  (seed! rm-lever "l1" {:name "L1"})
+  (is (= 1 (mirror/discover! *eng* :sync_lever)))
+  ;; the hand-in-hand loop, compressed: named, bound, asked, approved
+  (is (= 201 (:status (req :post "/api/members"
+                           {:display "Syncer" :actor_type "agent"
+                            :bind_token "tok-syncer"}))))
+  (let [ask (json (agent-req :post "/api/approval_requests"
+                             {:task "Refresh the levers when the feed moves."
+                              :scope [{:kind "sync_lever"
+                                       :actions ["resync"]}]}
+                             {"x-waymark-invite" "tok-syncer"}))
+        _ (is (= "offered" (:state ask)) (pr-str ask))
+        approved (json (req :post (str (:self ask) "/-/approve")))
+        gid (get-in approved [:data :grant_id])
+        granted {"x-waymark-grant" gid}]
+    (is (some? gid) (pr-str approved))
+    (testing "the granted flavor opens the door; the job records the leash"
+      (let [resp (agent-req :post "/api/-/mirrors/sync_levers/resync"
+                            nil granted)
+            job (json resp)]
+        (is (= 202 (:status resp)) (pr-str job))
+        (is (= "syncer-1" (get-in job [:data :requested_by :id])))
+        (testing "the requester watches its own job through the leash"
+          (is (= "queued" (:state (json (agent-req :get (:self job)
+                                                   nil granted))))))
+        (is (= 1 (mirror/service-sync-jobs! *eng* {:holder "test-daemon"})))
+        (let [done (json (agent-req :get (:self job) nil granted))]
+          (is (= "completed" (:state done)))
+          (is (= 1 (get-in done [:data :report :checked]))))))
+    (testing "every scoped miss answers the one route-shaped 404"
+      (doseq [[label uri hdrs]
+              [["the ungranted flavor" "/api/-/mirrors/sync_levers/discover" granted]
+               ["an ungranted kind" "/api/-/mirrors/sync_gauges/resync" granted]
+               ["an unknown collection" "/api/-/mirrors/nope/resync" granted]
+               ["the bootstrap leash (no grant)" "/api/-/mirrors/sync_levers/resync" nil]]]
+        (let [resp (agent-req :post uri nil hdrs)]
+          (is (= 404 (:status resp)) label)
+          (is (= "No such route." (:detail (json resp))) label))))
+    (testing "another requester's job stays concealed from the leash"
+      (let [theirs (json (req :post "/api/-/mirrors/sync_levers/discover"))]
+        (is (= 404 (:status (agent-req :get (:self theirs) nil granted))))
+        ;; leave the suite clean: no queued sync job outlives its test
+        (is (= 1 (mirror/service-sync-jobs! *eng* {:holder "test-daemon"})))))
+    (testing "well-known teaches the flavors on the mirror kind"
+      (let [w (json (agent-req :get "/api/.well-known/waymark"))
+            actions (set (get-in w [:resources :sync_lever :actions]))]
+        (is (contains? actions "resync"))
+        (is (contains? actions "discover"))))))
 
 ;; ── the door's refusals ─────────────────────────────────────────────
 

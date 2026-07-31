@@ -729,10 +729,13 @@
         surface))
 
 (def ^:private own-kinds
-  "The negotiation surface's kinds — riding every named principal's
-  scoped request, whatever the presented grant's fate: the asking
-  door is never concealed, because it is how access starts."
-  #{"grant" "approval_request"})
+  "The kinds every named principal sees its OWN rows of, riding every
+  scoped request whatever the presented grant's fate: the negotiation
+  kinds (the asking door is never concealed, because it is how access
+  starts) and the jobs it asked for (the sync trigger's 202 hands the
+  requester a job — the record of who asked IS the sight; a leash
+  that may mint a pass may watch it run)."
+  #{"grant" "approval_request" "job"})
 
 (defn- own-ids
   "The principal's own rows of one negotiation kind, as the id cond
@@ -743,6 +746,22 @@
               (fn [tx]
                 (mapv :id (store/query-rows (:storage eng) tx kind where
                                             {:limit 200}))))]
+    (if (seq ids) (vec (sort ids)) ["-none-"])))
+
+(defn- own-job-ids
+  "The jobs this principal asked for, own-ids' sibling: requested_by
+  rides as an OBJECT in data ({:id :type :display}), out of cond-sql's
+  top-level reach, so the window filters in memory — a recorded seam
+  (the orphan sweep keeps the table small; a deployment that outgrows
+  the window promotes the id to its own field). Same never-empty rule."
+  [eng pid]
+  (let [ids (store/with-tx (:storage eng)
+              (fn [tx]
+                (into []
+                      (comp (filter #(= pid (get-in % [:data :requested_by :id])))
+                            (map :id))
+                      (store/query-rows (:storage eng) tx :job {}
+                                        {:limit 200}))))]
     (if (seq ids) (vec (sort ids)) ["-none-"])))
 
 (defn visibility
@@ -773,7 +792,13 @@
                                       (get-in [:data :audience])))
                        "approval_request"
                        (= pid (some-> (load-decoded eng :approval_request id)
-                                      (get-in [:data :requested_by]))))))]
+                                      (get-in [:data :requested_by])))
+                       ;; the job the principal asked for — jobs record
+                       ;; the requester as an object (jobs/enqueue!'s
+                       ;; pattern, the sync trigger's too)
+                       "job"
+                       (= pid (some-> (load-decoded eng :job id)
+                                      (get-in [:data :requested_by :id]))))))]
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
@@ -828,10 +853,12 @@
                  (if-some [e (get surface k)]
                    (some-> (:ids e) sort vec)
                    (when (own-kind? k)
-                     (own-ids eng (keyword k)
-                              (case k
-                                "grant" {:audience pid}
-                                "approval_request" {:requested_by pid}))))))}))
+                     (if (= "job" k)
+                       (own-job-ids eng pid)
+                       (own-ids eng (keyword k)
+                                (case k
+                                  "grant" {:audience pid}
+                                  "approval_request" {:requested_by pid})))))))}))
 
 (defn bootstrap-visibility
   "The agent default (waymark-rci): a named agent that presents NO

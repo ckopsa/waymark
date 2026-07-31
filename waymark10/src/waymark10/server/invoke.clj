@@ -166,11 +166,15 @@
   name on this kind — declared actions (:flow rows already desugared
   into :actions at declaration time), generated field editors, and
   the create verb: exactly the vocabulary check-action! enforces and
-  well-known publishes."
+  well-known publishes. A mirror kind adds the manual sync trigger's
+  flavors (resync, discover) — kind-level doors like the create verb,
+  never row actions — so an ask can name the trigger and a leash be
+  granted it (the door consults :action? on exactly these strings)."
   [rdef]
   (into (sorted-set)
         (map name)
-        (concat (keys (:actions rdef)) (:create-action-names rdef))))
+        (concat (keys (:actions rdef)) (:create-action-names rdef)
+                (when (:mirror rdef) [:resync :discover]))))
 
 (defn upcast-row
   "The load boundary's shape step (phase 8): a stored row older than

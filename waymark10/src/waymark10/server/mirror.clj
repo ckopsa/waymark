@@ -90,7 +90,13 @@
     sync jobs (jobs/sync-actions); one pending job per (kind,
     flavor) — the door answers the existing job instead of minting
     a twin. A pass is monolithic: cancel takes effect before the
-    run starts or not at all (recorded).
+    run starts or not at all (recorded). The door is not operators'
+    alone: the flavors ride the kind's action vocabulary
+    (invoke/action-names), so an agent's ask can name them and a
+    scoped request passes when its grant carries the flavor on the
+    kind; the requester watches the minted job through the grants
+    own-surface (the job records who asked — that record IS the
+    sight).
   - EXTERNAL-KEYED REFS (paydesk's assignment demanded it): a
     :waymark/ref entry declaring {:kind … :external-key <field>}
     resolves at every sync write — the sibling field's external id
@@ -691,6 +697,12 @@
           writable (disj (set sync-states) :conflicted)]
       (when (contains? sync-action-names aname)
         (err "shadows an engine sync action"))
+      ;; the trigger flavors ride the kind's action vocabulary
+      ;; (invoke/action-names) so a leash can be granted the manual
+      ;; sync door — a domain action reusing a flavor's name would
+      ;; make one granted string mean two different levers
+      (when (contains? #{:resync :discover} aname)
+        (err "shadows a manual sync trigger flavor"))
       (when-not (and (seq from) (every? writable from)
                      (contains? writable (:to a)))
         (err (str "a mirror's machine IS the sync machine — a local "
