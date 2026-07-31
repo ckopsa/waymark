@@ -56,7 +56,9 @@
             [workqueue10.sources.homeassistant :as ha]
             [workqueue10.sources.hub :as hub]
             [workqueue10.sources.mealplan :as meals]
+            [waymark10.dashboard :as dashboard]
             [waymark10.dsl :refer [in-domain]]
+            [waymark10.saved-view :refer [saved-view]]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
@@ -217,7 +219,16 @@
        ;; the kind self-declares :domain :calendar; in-domain would
        ;; stamp the same token, and saying it here keeps the domains
        ;; legible in one place
-       (into (in-domain :calendar (calendar/resources adapter))))))
+       (into (in-domain :calendar (calendar/resources adapter)))
+       ;; the composition domain (waymark-rla, waymark-ggw): the two
+       ;; framework kinds that let the family author what a developer
+       ;; otherwise declares once per deploy — a saved_view is a
+       ;; :views entry with an author, a dashboard the anchorless
+       ;; surface's user-composed sibling. Opt-in, never engine magic;
+       ;; dashboard-slot rides along because the parent's :owns edge
+       ;; needs the child on the same engine. saved_view first so the
+       ;; collections merge (collections.clj) has its kind hosted.
+       (into (in-domain :views (into [saved-view] dashboard/resources))))))
 
 (def surfaces
   "Both decision screens, one engine: the housekeeper's day board and
