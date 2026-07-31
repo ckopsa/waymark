@@ -40,6 +40,18 @@
     (is (str/includes? page "VIEW_RENDERERS.feed"))
     (is (str/includes? page "scroll-snap-type: y mandatory"))))
 
+(deftest the-prefill-refetches-a-summary-doc
+  ;; a collection row is an envelope-summary and render.clj drops
+  ;; "data" from those, so an :edit {:prefill} action opened from the
+  ;; grid (or a feed card) read an absent projection and built a blank
+  ;; form. The dialog fetches the row's :self first when the doc it
+  ;; holds carries no data.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "!doc.data && doc.self"))
+    (is (str/includes? page "prefillFromDoc(source, {properties:"))
+    (is (str/includes? page "prefillFromDoc(source, input)")
+        "the draft branch reads the refetched source too")))
+
 (deftest the-dashboard-renderer-rides-the-page
   ;; the dashboard screen (waymark-ggw): render() forks by kind to
   ;; renderDashboard (function declarations hoist across the one flat

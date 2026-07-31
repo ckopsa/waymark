@@ -29,15 +29,29 @@ async function actionDialog({name, entry, doc, bulkIds, prefill, onDone}) {
     const d = await api(entry.draft.href);
     if (d.ok) draftView = d.body;
   }
+  /* the row a collection hands us is an envelope-SUMMARY, and
+     render.clj drops "data" from those — so prefillFromDoc would read
+     an absent projection and open the form blank (the detail screen,
+     holding the full envelope, prefilled fine). Fetch the document
+     when this action wants prefill and the doc at hand has none;
+     summaries carry :self, which is the whole cost of the round
+     trip. A collection envelope has no :self row to fetch, and a bulk
+     write must not seed from one row — both skip. */
+  let source = doc;
+  if (!bulkIds && (Array.isArray(entry.prefill) || entry.draft)
+      && !doc.data && doc.self) {
+    const d = await api(doc.self);
+    if (d.ok && d.body && d.body.data) source = d.body;
+  }
   /* the declared :edit {:prefill} — the fields the row already
      answers. Not for a bulk write: one row's values must never seed a
      many-row form. A drafted action keeps its wider doc projection. */
   const declared = (!bulkIds && Array.isArray(entry.prefill))
-    ? prefillFromDoc(doc, {properties: Object.fromEntries(
+    ? prefillFromDoc(source, {properties: Object.fromEntries(
         entry.prefill.map((f) => [f, true]))})
     : {};
   const initialValues = Object.assign({},
-    entry.draft && !bulkIds ? prefillFromDoc(doc, input) : {},
+    entry.draft && !bulkIds ? prefillFromDoc(source, input) : {},
     declared,
     prefill || {},
     (draftView || {}).prefill || {},

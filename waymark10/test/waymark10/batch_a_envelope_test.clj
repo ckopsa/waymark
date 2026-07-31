@@ -345,6 +345,13 @@
         summary (:body (get-json (str (:self plan) "?depth=summary")))]
     (testing "summary = envelope minus data/parts, actions complete"
       (is (empty? (ob/depth-violations {:full full :summary summary}))))
+    (testing "a summary drops :data but keeps :self — the prefill door"
+      ;; the action dialog prefills from doc.data, and a collection row
+      ;; is exactly this projection; :self is how it fetches the rest
+      ;; rather than opening an edit form blank
+      (is (nil? (:data summary)))
+      (is (some? (:data full)))
+      (is (= (:self full) (:self summary))))
     (testing "depth=full is the default spelling"
       (is (= full (:body (get-json (str (:self plan) "?depth=full"))))))
     (testing "an unknown depth is one 422 naming the parameter"
