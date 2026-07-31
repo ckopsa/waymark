@@ -220,15 +220,18 @@
        ;; stamp the same token, and saying it here keeps the domains
        ;; legible in one place
        (into (in-domain :calendar (calendar/resources adapter)))
-       ;; the composition domain (waymark-rla, waymark-ggw): the two
+       ;; the composition kinds (waymark-rla, waymark-ggw): the two
        ;; framework kinds that let the family author what a developer
-       ;; otherwise declares once per deploy — a saved_view is a
-       ;; :views entry with an author, a dashboard the anchorless
-       ;; surface's user-composed sibling. Opt-in, never engine magic;
-       ;; dashboard-slot rides along because the parent's :owns edge
-       ;; needs the child on the same engine. saved_view first so the
-       ;; collections merge (collections.clj) has its kind hosted.
-       (into (in-domain :views (into [saved-view] dashboard/resources))))))
+       ;; otherwise declares once per deploy — a saved_view, a dashboard
+       ;; the anchorless surface's user-composed sibling. Opt-in, never
+       ;; engine magic; dashboard-slot rides along because the parent's
+       ;; :owns edge needs the child on the same engine. Left domainless
+       ;; on purpose: composing a view isn't a domain of family life
+       ;; beside queue/chores/meals/calendar, so these fold behind the
+       ;; ⋯ menu rather than minting a top-level nav group of their own.
+       ;; saved_view first so the collections merge (collections.clj)
+       ;; has its kind hosted.
+       (into (into [saved-view] dashboard/resources)))))
 
 (def surfaces
   "Both decision screens, one engine: the housekeeper's day board and

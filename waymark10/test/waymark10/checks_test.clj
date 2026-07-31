@@ -321,6 +321,72 @@
             :input [:map [:name [:string {:max 100}]]]
             :safety {:idempotent true :reversible false :confirm false}})))
 
+(defn- touching
+  "base with a touch action whose only input is the given field form —
+  the minimal edit-shaped candidate."
+  [field]
+  (with-action base :touch
+    {:from #{:open} :to :open
+     :input (into [:map] [field])
+     :safety {:idempotent true :reversible false :confirm false}}))
+
+(defn- does-not-warn [substr m]
+  (let [ws (warnings-of m)]
+    (is (not-any? #(str/includes? % substr) ws)
+        (str "expected NO warning containing " (pr-str substr)
+             " in " (pr-str ws)))))
+
+(deftest edit-shaped-warns-on-near-mirrors
+  ;; data.name is [:string {:max 100}]. Each of these is the same field
+  ;; wearing one ordinary bit of drift; strict = called them all
+  ;; strangers and the nudge went silent (waymark-01f).
+  (testing "an added :x-display label is presentation, not a new field"
+    (warns "edit-shaped"
+           (touching [:name {:x-display {:label "Name"}} [:string {:max 100}]])))
+  (testing "a tightened constraint is the same field, narrower"
+    (warns "edit-shaped" (touching [:name [:string {:max 20}]])))
+  (testing "a :maybe wrapper is the same field, nullable"
+    (warns "edit-shaped" (touching [:name [:maybe [:string {:max 100}]]])))
+  (testing "an :optional wrapper is the same field, skippable"
+    (warns "edit-shaped" (touching [:name {:optional true} [:string {:max 100}]])))
+  (testing "all of it at once"
+    (warns "edit-shaped"
+           (touching [:name {:optional true :x-display {:label "Name"}}
+                      [:maybe [:string {:max 20}]]]))))
+
+(deftest edit-shaped-stays-quiet-on-strangers
+  (testing "a field name the data schema never declares"
+    (does-not-warn "edit-shaped" (touching [:note [:string {:max 100}]])))
+  (testing "the same name over a different base type"
+    (does-not-warn "edit-shaped" (touching [:name :int])))
+  (testing "the same name and leaf, but a list where the document holds one"
+    (does-not-warn "edit-shaped" (touching [:name [:vector [:string {:max 100}]]]))))
+
+(deftest edit-shape-is-waivable
+  ;; the looser rule sees name and shape, never emptiness: a door that
+  ;; welds a FIRST value onto a blank field reads identically to one
+  ;; rewriting an existing one (members/bind is the live case). The
+  ;; waiver is how a declaration says which it is.
+  (let [mirror [:name {:x-display {:label "Name"}} [:string {:max 100}]]]
+    (testing "the near-mirror warns on its own"
+      (warns "edit-shaped" (touching mirror)))
+    (testing "and goes quiet when the action waives :edit-shape"
+      (does-not-warn "edit-shaped"
+                     (with-action base :touch
+                       {:from #{:open} :to :open
+                        :input (into [:map] [mirror])
+                        :waives #{:edit-shape}
+                        :safety {:idempotent true :reversible false
+                                 :confirm false}})))
+    (testing "and :edit-shape is a known token, not a typo the gate rejects"
+      (does-not-warn "waives unknown"
+                     (with-action base :touch
+                       {:from #{:open} :to :open
+                        :input (into [:map] [mirror])
+                        :waives #{:edit-shape}
+                        :safety {:idempotent true :reversible false
+                                 :confirm false}})))))
+
 (deftest prose-required-warns
   (warns "demands composition with no draft"
          (with-action base :annotate

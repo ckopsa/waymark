@@ -31,7 +31,7 @@
 
 (def ^:private snake #"[a-z][a-z0-9_]*")
 
-(def ^:private waivable #{:altitude :large-effort})
+(def ^:private waivable #{:altitude :edit-shape :large-effort})
 
 (def ^:private long-text-budget 280)
 
@@ -277,6 +277,42 @@
 (defn- prose-widget? [props]
   (= "prose" (get-in props [:x-display :widget])))
 
+(defn- vector-depth
+  "How many :vector layers a schema form wears, :maybe layers seen
+  through: [:maybe [:vector :string]] → 1, :string → 0."
+  [s]
+  (if (and (vector? s) (#{:maybe :vector} (first s)))
+    (cond-> (vector-depth (last s)) (= :vector (first s)) inc)
+    0))
+
+(defn- base-shape
+  "The comparable shape of one field's schema: [vector-depth leaf-type],
+  nil when there is no leaf to name. This is the deliberately blunt
+  reading the edit-shaped heuristic wants — schema/leaf-head already
+  drops :maybe layers and property maps, so a tightened :max, a widened
+  :max, or any other constraint tuning leaves the shape untouched, and
+  schema/field-schema hands us the child form with the ENTRY properties
+  (:optional, :x-display and friends) already left behind. What survives
+  is 'an int is an int, a list of strings is a list of strings' — which
+  is all a similarity question ever needed to ask."
+  [s]
+  (when-some [head (schema/leaf-head s)]
+    [(vector-depth s) head]))
+
+(defn- mirrors-data?
+  "Does this input field mirror a data field of the same name? Same key
+  in both, compatible base shape. NOT =: strict equality was equality
+  doing a similarity job, and every ordinary drift — an added
+  :x-display label, a tightened :max, a :maybe or :optional wrapper —
+  made the schemas unequal, so the genuine near-mirror stopped warning
+  and nobody was nudged toward :edit {:prefill …} (waymark-01f). A
+  different base type (data holds a string, the input takes an int) or
+  a name the data schema never declares still says no, so the heuristic
+  stays a nudge and not noise."
+  [dform iform f]
+  (when-some [dshape (base-shape (schema/field-schema dform f))]
+    (= dshape (base-shape (schema/field-schema iform f)))))
+
 (defn- check-edit
   "Edit declarations validate hard; edit-shaped actions that never
   declared one get the heuristic warning, and required prose without a
@@ -302,11 +338,16 @@
              (when (and (:input a) (not (:bulk a)))
                (let [ikeys (schema/entry-keys (:input a))
                      entries (schema/entry-map (:input a))
-                     mirrored (when-not (:edit a)
+                     ;; :edit-shape is the escape hatch the looser
+                     ;; heuristic earns (waymark-01f): name-and-shape
+                     ;; cannot see that a field is EMPTY in the only
+                     ;; state its action runs from — a door that welds
+                     ;; a first value onto a blank looks exactly like
+                     ;; one that rewrites an existing one
+                     mirrored (when-not (or (:edit a)
+                                            (contains? (:waives a) :edit-shape))
                                 (seq (filter
-                                      (fn [f]
-                                        (when-some [df (schema/field-schema dform f)]
-                                          (= df (schema/field-schema (:input a) f))))
+                                      (fn [f] (mirrors-data? dform (:input a) f))
                                       ikeys)))
                      prose-req (seq (filter
                                      (fn [f]

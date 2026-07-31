@@ -115,10 +115,7 @@
     (is (contains? domains "calendar")
         (str "the well-known's domains: " (pr-str domains)))
     (testing "and it joins the domains that were already there"
-      ;; :views is the composition domain (waymark-rla, waymark-ggw) —
-      ;; saved_view and the dashboard pair, the kinds the family
-      ;; authors rather than the developer declaring them per deploy
-      (is (= #{"queue" "media" "chores" "meals" "calendar" "views"}
+      (is (= #{"queue" "media" "chores" "meals" "calendar"}
              domains)))))
 
 ;; ── the birth: scheduling onto the family calendar ──────────────────

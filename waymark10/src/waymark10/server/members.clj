@@ -164,6 +164,12 @@
    {:bind {:from #{:invited} :to :active
            :input [:map [:subject [:string {:min 1 :max 256}]]]
            :record true
+           ;; :subject names a data field, but an :invited row has none
+           ;; — the invite is unclaimed by definition, and the value
+           ;; comes from the principal presenting the token, never from
+           ;; the row. Prefilling it would offer back a blank at best
+           ;; and a stale identity at worst (waymark-01f)
+           :waives #{:edit-shape}
            :guards [registrar-binds]
            :safety {:idempotent true :reversible false :confirm false
                     :one-way "Binding welds the invitation to the principal that presented its token; a different account is a fresh invite."}
