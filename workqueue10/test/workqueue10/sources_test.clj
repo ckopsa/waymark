@@ -164,7 +164,7 @@
               {:title "Dishes" :status "open"})]
       (is (= "https://rod.kopsa.info/api/chore_runs/abc-123"
              (:source_href t)))
-      (is (= "https://rod.kopsa.info/api/-/ui#/api/chore_runs/abc-123"
+      (is (= "https://rod.kopsa.info/#/api/chore_runs/abc-123"
              (:source_ui_href t)))
       (is (= "Dishes" (:title t)) "the translation rides through untouched"))))
 

@@ -174,7 +174,7 @@
                :due_at "2026-07-22T00:00:00Z" :status "open"
                :detail "load and run before bed"
                :source_href "https://rod.kopsa.info/api/chore_runs/cr-dishes"
-               :source_ui_href "https://rod.kopsa.info/api/-/ui#/api/chore_runs/cr-dishes"})
+               :source_ui_href "https://rod.kopsa.info/#/api/chore_runs/cr-dishes"})
   (conf/seed! *chores* "cr-mow"
               {:title "Mow the lawn" :assignee_name "colton"
                :due_at "2026-07-20T00:00:00Z" :status "open"})
@@ -275,7 +275,7 @@
       (is (= "load and run before bed" (get-in dishes [:data :detail])))
       (testing "…and the way back: the origin link, an external hop to
                 the engine that owns the row"
-        (is (= {:href "https://rod.kopsa.info/api/-/ui#/api/chore_runs/cr-dishes"
+        (is (= {:href "https://rod.kopsa.info/#/api/chore_runs/cr-dishes"
                 :external true
                 :summary "The row this task mirrors, at the engine that owns it"}
                (select-keys (get-in dishes [:links :origin])

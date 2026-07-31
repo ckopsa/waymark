@@ -126,7 +126,7 @@
   etag can't see our code. Bump this when any row->task / with-origin
   output changes shape, and every stored row re-observes on its next
   pull instead of serving the old translation forever."
-  "t2")
+  "t3")
 
 (defn- rev-etag [etag]
   (when etag (str etag "|" translation-rev)))
@@ -141,7 +141,7 @@
   [base self task]
   (assoc task
          :source_href (str base self)
-         :source_ui_href (str base "/api/-/ui#" self)))
+         :source_ui_href (str base "/#" self)))
 
 (defrecord WaymarkSource [transport base kind-path discover-query
                           row->task]
