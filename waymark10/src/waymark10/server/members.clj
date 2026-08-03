@@ -297,6 +297,88 @@
     (catch Exception e
       (or (load-member eng (:id principal)) (throw e)))))
 
+(def knock-shelf-cap
+  "Unclaimed self-requested invitations that may stand at once — the
+  standing wall: it persists across restarts because it IS the rows."
+  12)
+
+(def knock-log
+  "The knock door's rolling-hour window, process-local: instants of
+  every mint, pruned as the hour passes. An atom and not a query
+  because query-rows' one ordering is oldest-first — a paced read
+  past the limit would go stale exactly when an abuser needs it to
+  (the grants pace guard's recorded punt, not repeated here). The
+  cost is honesty about the trade: a restart forgets the window (the
+  shelf cap above survives it). Tests may reset it."
+  (atom []))
+
+(defn- knock-paced!
+  "Prune the window, refuse (429) when full, record this knock. The
+  window is what the unclaimed-shelf cap cannot be: a wall an abuser
+  cannot drain by BINDING each invite as it is minted — bound rows
+  leave the shelf, but the mint stays in the hour."
+  [eng ^java.time.Instant now]
+  (let [limit (long (get-in eng [:services :agent-knock-hourly] 12))
+        cutoff (.minusSeconds now 3600)
+        ;; one swap: prune, and append only under the limit — the
+        ;; check and the record are atomic, so a concurrent pair
+        ;; cannot both pass through the last slot. Ours went in
+        ;; exactly when the new value ends with OUR instant (swap!
+        ;; returns the state our fn produced; identity, not equality,
+        ;; because two knocks can share a millisecond).
+        after (swap! knock-log
+                     (fn [log]
+                       (let [live (filterv #(neg? (compare cutoff %)) log)]
+                         (if (< (count live) limit) (conj live now) live))))]
+    (when-not (identical? (peek after) now)
+      (throw (p/problem :agent-invite-pace 429 "The door is paced"
+                        {:detail (str "Self-requested invitations are paced to "
+                                      limit " an hour; knock again when the "
+                                      "window reopens.")})))))
+
+(defn knock!
+  "The self-service half of the invite loop (the /agentInvite door):
+  an agent with no credential and no standing invitation names itself
+  and the door mints the SAME invite the Access panel mints — a
+  token-bearing member create, born :invited — except the inviter
+  recorded is the registrar, which marks the row as self-invited
+  (the Access panel badges it: a knocker chose its own name, so an
+  ask wearing a familiar display must still say nobody here minted
+  it). Two walls pace the anonymous: the standing shelf (at most
+  knock-shelf-cap unclaimed :invited rows — inert by design, an
+  agent principal without a grant sees only the bootstrap surface)
+  and the rolling hour (knock-paced!, which binding cannot drain).
+  Returns the new row; the caller renders the welcome link (the
+  agent's half) and the follow link (the human's half)."
+  [eng {:keys [display handle]}]
+  (when (nil? (get (inv/resources eng) :member))
+    (throw (p/problem :not-found 404 "Not found"
+                      {:detail "This engine keeps no members."})))
+  (when (str/blank? (str display))
+    (throw (p/problem :agent-invite-nameless 422 "Name yourself"
+                      {:detail (str "POST {\"display\": \"your name\"} — the "
+                                    "invitation needs a name to greet you by.")})))
+  (let [open (store/with-tx (:storage eng)
+               (fn [tx] (store/query-rows (:storage eng) tx :member
+                                          {:invited_by (:id registrar)
+                                           :state :invited}
+                                          {:limit (inc knock-shelf-cap)})))]
+    (when (>= (count open) knock-shelf-cap)
+      (throw (p/problem :agent-invite-pace 429 "Too many open invitations"
+                        {:detail (str knock-shelf-cap " self-requested "
+                                      "invitations already stand unclaimed; "
+                                      "the door pauses until one binds or an "
+                                      "administrator clears the shelf.")}))))
+  (knock-paced! eng (java.time.Instant/now))
+  (:row (inv/create! eng :member
+                     (cond-> {:display (subs (str display)
+                                             0 (min (count (str display)) 80))
+                              :actor_type "agent"
+                              :bind_token (str (random-uuid))}
+                       (not (str/blank? (str handle)))
+                       (assoc :handle handle))
+                     {:principal registrar})))
+
 (defn gate!
   "The principal-resolution consult: anonymous and system principals
   pass untouched (system actors are the engine's own, not members);

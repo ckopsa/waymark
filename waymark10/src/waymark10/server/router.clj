@@ -1153,6 +1153,80 @@
                             "Prefer this over the bind header when you "
                             "hold nothing else.")}))))))
 
+;; ── the agent-invite door (the knock, self-service) ────────────────
+
+(defn- origin-of
+  "The scheme+host this request arrived under — for the two links the
+  knock answers with, which leave this response (one rides to a human
+  in another window), so relative hrefs would not survive the trip."
+  [req]
+  (let [proto (or (get-in req [:headers "x-forwarded-proto"])
+                  (some-> (:scheme req) name)
+                  "https")
+        host (get-in req [:headers "host"] "")]
+    (str proto "://" host)))
+
+(defn- url-encode [s]
+  (-> (java.net.URLEncoder/encode (str s) "UTF-8")
+      (str/replace "+" "%20")))
+
+(defn- agent-invite-doc
+  "GET /agentInvite: how to knock, as one small document — an agent
+  handed only this URL learns the POST without a human in the loop."
+  [_eng]
+  (fn [_req]
+    (json-response
+     200
+     {:waymark "10"
+      :knock {:href "/agentInvite"
+              :method "POST"
+              :body {:display "your name — what the humans will call you"
+                     :handle "optional — what other systems already call you"}
+              :note (str "the answer carries two links: a welcome link "
+                         "(yours — the whole joining protocol) and a "
+                         "follow link (your human's — one click follows "
+                         "you and lands where your ask will arrive)")}})))
+
+(defn- agent-invite-mint
+  "POST /agentInvite {display, handle?}: the invite loop inverted —
+  instead of a human minting a link and carrying it to the agent, the
+  agent knocks and carries a link back to the human. The invite
+  minted is the Access panel's own (members/knock!, paced); the
+  answer's :follow href opens the UI already following this member
+  and parked on the Access panel, where approving the agent's ask is
+  one click (and approval auto-follows, so the two halves converge).
+  The follow id is the member row's id, which IS the principal id
+  down the credential-less /auth/agent path this door exists for; an
+  agent with its own bearer never needed a knock — its bound member
+  resolves by subject on every request."
+  [eng]
+  (fn [req]
+    (let [body (read-body req)
+          row (members/knock! eng {:display (:display body)
+                                   :handle (:handle body)})
+          display (get-in row [:data :display])
+          token (get-in row [:data :bind_token])
+          origin (origin-of req)]
+      (json-response
+       201
+       {:waymark "10"
+        :invited display
+        :welcome {:href (str origin "/api/-/welcome?invite="
+                             (url-encode token))
+                  :note (str "yours — GET it first, it teaches the whole "
+                             "joining protocol; the token spends on the "
+                             "first request that binds")}
+        :follow {:href (str origin "/?follow=" (url-encode (:id row))
+                            "&follow_name=" (url-encode display) "#access")
+                 :note (str "your human's — show them this link. One "
+                            "click follows you and opens the Access "
+                            "panel, where your ask lands live and "
+                            "approval is one press.")}
+        :then (str "read the welcome doc, bind, file your ask "
+                   "(POST /api/approval_requests), and work under the "
+                   "granted leash — every act you take is what they "
+                   "are watching")}))))
+
 ;; ── the generic UI (phase 10) ───────────────────────────────────────
 
 (defn- mobile-ua?
@@ -1342,6 +1416,10 @@
            ["/api/-/collab-ticket" {:post (collab-ticket-mint eng)}]
            ["/api/-/mirrors/:plural/:action" {:post (mirror-sync-trigger eng)}]
            ["/api/-/welcome" {:get (welcome-doc eng)}]
+           ["/agentInvite" {:get (agent-invite-doc eng)
+                            :post (agent-invite-mint eng)}]
+           ["/api/-/agent-invite" {:get (agent-invite-doc eng)
+                                   :post (agent-invite-mint eng)}]
            ["/api/-/ui" {:get ui}]
            ["/api/-/ui-lite" {:get (ui-page eng (some-> (io/resource "waymark10/ui_lite.html")
                                                         slurp))}]

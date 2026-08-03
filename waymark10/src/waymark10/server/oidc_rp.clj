@@ -420,6 +420,17 @@
               ;; gate must not close what the link exists to open
               (and get? (= (:uri req) "/api/-/welcome")) (handler req)
 
+              ;; the knock (self-service invite, router.clj
+              ;; agent-invite-*): exists precisely for the principal
+              ;; that holds nothing yet — the gate must not close the
+              ;; door whose whole purpose is arriving without a key.
+              ;; What a knock can DO is paced and inert by design
+              ;; (members/knock!): unclaimed :invited rows, nothing
+              ;; more.
+              (contains? #{"/agentInvite" "/api/-/agent-invite"}
+                         (:uri req))
+              (handler req)
+
               (and (:require-auth? rp) (not (credentialed? oidc req)))
               (refuse-anonymous req)
 

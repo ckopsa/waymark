@@ -114,6 +114,18 @@ async function renderAccess(view, seq) {
   const agents = members.filter(m => m.data?.actor_type === "agent");
   const byPrincipal = id =>
     agents.find(m => m.data.subject === id || String(m.self).endsWith("/" + id));
+  /* a knock-born member (the /agentInvite door) recorded the
+     registrar as its inviter — it chose its OWN name, so wherever
+     that name shows, the provenance must show beside it: a familiar
+     display on a self-invited stranger is exactly the trick the
+     badge exists to spoil */
+  const selfInvited = m => m?.data?.invited_by === "waymark10-members";
+  const knockBadge = m => selfInvited(m)
+    ? el("span", {class:"statechip", style:"margin-left:6px",
+        title: "self-invited: this agent knocked at /agentInvite and "
+             + "named itself — nobody here minted its invitation"},
+        "🚪 self-invited")
+    : null;
 
   /* 1 · the knock's first half: name an agent, mint its link */
   const invite = el("div", {class:"panel"});
@@ -178,6 +190,7 @@ async function renderAccess(view, seq) {
       style:"border:1px solid var(--line);border-radius:var(--radius);padding:10px;margin:8px 0"});
     card.append(el("div", {},
       el("b", {}, who ? who.data.display : d.requested_by),
+      knockBadge(who),
       el("span", {class:"muted"}, ` (${d.requested_by}) asks:`)));
     card.append(el("div", {style:"font-size:15px;margin:4px 0"},
       `“${d.task}”`));
@@ -219,6 +232,7 @@ async function renderAccess(view, seq) {
     card.append(el("div", {},
       el("b", {}, m.data.display),
       el("span", {class:"statechip", style:"margin-left:6px"}, m.state),
+      knockBadge(m),
       el("span", {class:"muted mono", style:"margin-left:6px"}, pid),
       el("button", {style:"margin-left:10px;font-size:12px;padding:3px 8px",
         onclick: () => { follow({id: pid, display: m.data.display});

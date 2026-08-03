@@ -16,6 +16,7 @@
             [next.jdbc :as jdbc]
             [waymark10.fixtures :as fx]
             [waymark10.server.engine :as engine]
+            [waymark10.server.members :as members]
             [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -203,3 +204,90 @@
 
       (testing "dropping the grant header drops the sight again"
         (is (= 404 (:status (as-agent :get (:self meal)))))))))
+
+;; ── the knock: the invite loop inverted (/agentInvite) ──────────────
+
+(deftest the-agent-knocks-and-carries-the-link-back
+  (testing "the door teaches the anonymous before it mints — open
+            through the require-auth gate by design"
+    (let [resp (req* *gated* :get "/agentInvite")]
+      (is (= 200 (:status resp)))
+      (is (= "POST" (get-in (json resp) [:knock :method]))))
+    (is (= 200 (:status (req* *gated* :get "/api/-/agent-invite")))
+        "the /api/-/ spelling answers too"))
+
+  (testing "a nameless knock is refused with the way in"
+    (is (= 422 (:status (req* *gated* :post "/agentInvite" {:body {}})))))
+
+  (testing "a named knock mints both halves: the agent's welcome link
+            and the human's follow link"
+    (let [resp (req* *gated* :post "/agentInvite"
+                     {:body {:display "Knocker"}
+                      :headers {"host" "app.test"
+                                "x-forwarded-proto" "https"}})
+          body (json resp)
+          welcome (get-in body [:welcome :href])
+          follow (get-in body [:follow :href])]
+      (is (= 201 (:status resp)) (pr-str body))
+      (is (str/starts-with? (str welcome)
+                            "https://app.test/api/-/welcome?invite="))
+      (is (str/starts-with? (str follow) "https://app.test/?follow="))
+      (is (str/includes? (str follow) "follow_name=Knocker"))
+      (is (str/ends-with? (str follow) "#access"))
+
+      (let [tok (subs welcome (inc (str/index-of welcome "=")))]
+        (testing "the minted token opens the same welcome doc"
+          (is (= 200 (:status (req* *gated* :get "/api/-/welcome"
+                                    {:query (str "invite=" tok)})))))
+        (testing "and binds down the credential-less door — the follow
+                  link already names the principal the session acts as"
+          (let [bound (req* *gated* :post "/auth/agent"
+                            {:query (str "invite=" tok)})
+                agent-id (get-in (json bound) [:agent :id])]
+            (is (= 200 (:status bound)))
+            (is (= "Knocker" (get-in (json bound) [:agent :display])))
+            (is (str/includes? (str follow) (str agent-id)))))))))
+
+(deftest a-bodyless-knock-is-still-the-nameless-refusal
+  (is (= 422 (:status (req* *gated* :post "/agentInvite")))))
+
+(deftest the-knock-is-paced-two-ways
+  (let [knock #(req* *gated* :post "/agentInvite"
+                     {:body {:display (str "pace-probe-" %)}
+                      :headers {"host" "app.test"}})
+        token-of (fn [resp]
+                   (let [w (get-in (json resp) [:welcome :href])]
+                     (subs w (inc (str/index-of w "=")))))
+        bind! (fn [tok]
+                (is (= 200 (:status (req* *gated* :post "/auth/agent"
+                                          {:query (str "invite=" tok)})))))]
+
+    (testing "the rolling hour refuses a window already full — the
+              wall binding cannot drain"
+      (reset! members/knock-log
+              (vec (repeat 12 (java.time.Instant/now))))
+      (let [resp (knock "hour")]
+        (is (= 429 (:status resp)))
+        (is (str/includes? (:detail (json resp)) "paced"))))
+
+    (testing "the standing shelf refuses the 13th unclaimed invitation,
+              and binding reopens the door"
+      (let [minted (loop [n 0 toks []]
+                     (reset! members/knock-log [])   ; isolate the shelf
+                     (let [resp (knock n)]
+                       (cond (= 429 (:status resp))
+                             (do (is (str/includes? (:detail (json resp))
+                                                    "unclaimed"))
+                                 toks)
+                             (< n 13) (recur (inc n)
+                                             (conj toks (token-of resp)))
+                             :else (do (is false "the shelf never filled")
+                                       toks))))]
+        (is (pos? (count minted)) "the loop minted before it was refused")
+        ;; drain the shelf: every invitation binds, none stand unclaimed
+        (doseq [tok minted] (bind! tok))
+        (reset! members/knock-log [])
+        (let [again (knock "reopened")]
+          (is (= 201 (:status again)))
+          (bind! (token-of again)))))
+    (reset! members/knock-log [])))
