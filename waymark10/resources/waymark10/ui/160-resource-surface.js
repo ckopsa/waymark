@@ -56,6 +56,11 @@ async function renderResource(view, doc, hints) {
       a.localeCompare(b));
   for (const [name, entry] of entries) {
     const btn = actionButton({name, entry, doc, onDone: out => {
+      /* approving an ask ANYWHERE follows its requester — the agent
+         hands its human a link straight to the ask envelope, so the
+         hand-off must not depend on the Access panel */
+      if (kind === "approval_request" && name === "approve")
+        followRequester(doc.data?.requested_by);
       if (out && out.self && out.self !== doc.self) go(out.self);
       else render();
     }});

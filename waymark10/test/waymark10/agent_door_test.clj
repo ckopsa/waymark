@@ -234,6 +234,9 @@
       (is (str/starts-with? (str follow) "https://app.test/?follow="))
       (is (str/includes? (str follow) "follow_name=Knocker"))
       (is (str/ends-with? (str follow) "#access"))
+      (is (str/starts-with? (str (get-in body [:approve :template]))
+                            "https://app.test/#/api/approval_requests/")
+          "the hand-off link template rides the knock answer")
 
       (let [tok (subs welcome (inc (str/index-of welcome "=")))]
         (testing "the minted token opens the same welcome doc"
@@ -291,3 +294,16 @@
           (is (= 201 (:status again)))
           (bind! (token-of again)))))
     (reset! members/knock-log [])))
+
+(deftest the-login-bounce-carries-the-whole-address
+  ;; waymark-0hh: a deep link's query must survive the bounce — the
+  ;; agent's follow link dies on a cold browser otherwise. (The
+  ;; fragment never reaches a server; browsers carry it themselves.)
+  (let [resp (req* *gated* :get "/"
+                   {:query "follow=abc&follow_name=X"
+                    :headers {"accept" "text/html"}})]
+    (is (= 302 (:status resp)))
+    (is (str/includes?
+         (str (get-in resp [:headers "Location"]))
+         (str "return-to=" (java.net.URLEncoder/encode
+                            "/?follow=abc&follow_name=X" "UTF-8"))))))

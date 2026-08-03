@@ -202,7 +202,8 @@ async function renderAccess(view, seq) {
         onDone: () => {
           if (name === "approve") {
             follow({id: d.requested_by,
-                    display: who ? who.data.display : d.requested_by});
+                    display: who ? who.data.display : d.requested_by},
+                   {jump: true});
             toast(`approved — following ${who ? who.data.display : d.requested_by}`);
           }
           render();

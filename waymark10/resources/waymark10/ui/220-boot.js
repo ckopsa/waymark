@@ -48,9 +48,14 @@ sse("/api/-/presence", ({event, data: f}) => {
       followId && f.principal.id === followId && f.self) {
     clearTimeout(followMoveTimer);
     followMoveTimer = setTimeout(() => {
-      if (f.self !== hereHref() && hereHref() !== "access" &&
-          !$("dialog[open]"))
+      /* an armed jump (a fresh approve) spends itself leaving the
+         balcony; passive following still parks there */
+      if (f.self !== hereHref() &&
+          (hereHref() !== "access" || followJumpArmed) &&
+          !$("dialog[open]")) {
+        followJumpArmed = false;
         location.hash = "#" + f.self;
+      }
     }, 250);
   }
 });

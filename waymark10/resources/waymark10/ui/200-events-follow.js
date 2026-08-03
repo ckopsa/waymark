@@ -100,7 +100,13 @@ let followName = localStorage.getItem("wm10.follow.name") || null;
    live while presence holds them, kept (faded) after they leave so
    silence reads as "last seen …", never as a broken chip */
 let followGaze = null;
-function follow(actor) {
+/* one-shot: an APPROVE is an expressed intent to go where the agent
+   goes — it may leave the Access balcony once, where passive
+   following stays parked. Armed by follow(actor, {jump:true}) when
+   no gaze is known yet; the next move spends it. */
+let followJumpArmed = false;
+function follow(actor, opts) {
+  const jump = !!(opts && opts.jump);
   followId = actor.id;
   followName = actor.display || actor.id;
   followGaze = null;
@@ -109,7 +115,7 @@ function follow(actor) {
   followChip();
   /* the balcony parks navigation — say so, or follow looks broken
      (delayed one beat: the call site's own toast speaks first) */
-  if (hereHref() === "access")
+  if (!jump && hereHref() === "access")
     setTimeout(() => toast(`following ${followName} — navigation parks on `
       + `Access; leave this panel and your screen goes where they look`), 1500);
   /* meet them where they already are: if their gaze is on the board
@@ -118,16 +124,41 @@ function follow(actor) {
      parks, dialogs still guard). Deferred one tick: the ?follow=
      boot param calls this before the presence consts evaluate. */
   const id = followId;
+  followJumpArmed = jump;
   setTimeout(() => {
     const known = followId === id && PRESENCE.get(id);
     if (known && known.self) {
       followGaze = {self: known.self, at: known.at, live: true};
       followChip();
-      if (known.self !== hereHref() && hereHref() !== "access" &&
-          !$("dialog[open]"))
+      if (known.self !== hereHref() &&
+          (jump || hereHref() !== "access") && !$("dialog[open]")) {
+        followJumpArmed = false;
         location.hash = "#" + known.self;
+      }
     }
   }, 0);
+}
+/* the approve hand-off: follow whoever filed the ask, jumping even
+   off the Access balcony — the approver just said yes to watching
+   this agent work. The display resolves from the member the
+   principal bound to; the id alone still follows. */
+async function followRequester(pid) {
+  if (!pid) return;
+  let display = pid;
+  try {
+    const col = await api("/api/members?subject=" + encodeURIComponent(pid));
+    const hit = (col.ok && (col.body.data?.items || [])[0]) || null;
+    if (hit) {
+      const env = await api(hit.self);
+      if (env.ok && env.body.data?.display) display = env.body.data.display;
+    } else {
+      /* the credential-less door binds a member to its own id */
+      const env = await api("/api/members/" + encodeURIComponent(pid));
+      if (env.ok && env.body.data?.display) display = env.body.data.display;
+    }
+  } catch (_e) { /* the id is enough */ }
+  follow({id: pid, display}, {jump: true});
+  toast(`approved — following ${display}`);
 }
 function unfollow() {
   followId = followName = followGaze = null;

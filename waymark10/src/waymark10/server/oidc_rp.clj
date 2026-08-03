@@ -357,9 +357,17 @@
        (nil? (resolve-session oidc req))))
 
 (defn- login-bounce [req]
+  ;; the WHOLE address rides along — path and query; a deep link
+  ;; (?follow=…) must survive the bounce or every link a knocking
+  ;; agent hands its human dies on a cold browser (waymark-0hh). The
+  ;; fragment never reaches a server; browsers carry it across the
+  ;; 302 chain themselves.
   {:status 302
    :headers {"Location" (str "/auth/login?return-to="
-                             (url-encode (:uri req)))}
+                             (url-encode
+                              (str (:uri req)
+                                   (when-some [q (:query-string req)]
+                                     (str "?" q)))))}
    :body ""})
 
 (defn- credentialed?

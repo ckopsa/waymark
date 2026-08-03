@@ -1118,6 +1118,12 @@
                     :note "propose the shortest leash your task needs; unstated means the default"}}
         :then {:poll (str "GET /api/approval_requests — your own asks are "
                           "always visible to you; approval stamps grant_id")
+               :handoff {:template "/#/api/approval_requests/{ask-id}"
+                         :note (str "show your human this link (on this "
+                                    "host) the moment your ask exists — "
+                                    "it opens the ask directly, and "
+                                    "approving follows you automatically; "
+                                    "they need nothing else open")}
                :grant {:header "X-Waymark-Grant"
                        :note (str "send the stamped grant_id on every "
                                   "request — it selects your approved "
@@ -1218,14 +1224,20 @@
                              "first request that binds")}
         :follow {:href (str origin "/?follow=" (url-encode (:id row))
                             "&follow_name=" (url-encode display) "#access")
-                 :note (str "your human's — show them this link. One "
+                 :note (str "your human's, BEFORE you have asked — one "
                             "click follows you and opens the Access "
-                            "panel, where your ask lands live and "
-                            "approval is one press.")}
+                            "panel, where your ask lands live.")}
+        :approve {:template (str origin "/#/api/approval_requests/{ask-id}")
+                  :note (str "the better hand-off, once your ask exists: "
+                             "fill in the id off your ask's :self and "
+                             "show your human THIS link instead — it "
+                             "opens the ask directly, and approving "
+                             "follows you automatically, wherever they "
+                             "were.")}
         :then (str "read the welcome doc, bind, file your ask "
-                   "(POST /api/approval_requests), and work under the "
-                   "granted leash — every act you take is what they "
-                   "are watching")}))))
+                   "(POST /api/approval_requests), hand over the "
+                   "approve link, and work under the granted leash — "
+                   "every act you take is what they are watching")}))))
 
 ;; ── the generic UI (phase 10) ───────────────────────────────────────
 
