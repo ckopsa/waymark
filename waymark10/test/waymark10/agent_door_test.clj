@@ -489,3 +489,77 @@
     (testing "the well-formed filter still lands"
       (is (= 201 (:status (try-grant [{:kind "guest_chore" :actions []
                                        :filter {:assignee "jack"}}])))))))
+
+;; ── attenuated delegation: an agent mints only within its leash ──────
+
+(deftest an-agent-mints-only-within-its-leash
+  (let [tok "guest-tok-9944"
+        member (json (req* *raw* :post "/api/members"
+                           {:body {:display "minter" :actor_type "agent"
+                                   :bind_token tok}
+                            :headers admin}))
+        mid (last (str/split (str (:self member)) #"/"))
+        kit (json (req* *raw* :post "/api/grants"
+                        {:body {:audience mid
+                                :scope [{:kind "guest_chore"
+                                         :actions ["complete"]
+                                         :filter {:assignee "jack"}}
+                                        {:kind "member" :actions ["create"]}
+                                        {:kind "grant" :actions ["create"]}]
+                                :expires_at (str (.plusSeconds
+                                                  (java.time.Instant/now)
+                                                  259200))}
+                         :headers admin}))
+        _ (is (some? (:self kit)) (pr-str kit))
+        cookie (-> (req* *gated* :get "/auth/guest"
+                         {:query (str "invite=" tok)})
+                   (get-in [:headers "Set-Cookie"]) str
+                   (str/split #";") first)
+        as-minter (fn [method uri & [opts]]
+                    (req* *gated* method uri
+                          (update opts :headers merge {"cookie" cookie})))]
+    (is (str/starts-with? cookie "waymark_session="))
+
+    (testing "widening refuses: an unfiltered complete is more than held"
+      (is (contains? #{409 422}
+                     (:status (as-minter :post "/api/grants"
+                                {:body {:audience "someone"
+                                        :scope [{:kind "guest_chore"
+                                                 :actions ["complete"]}]}})))))
+
+    (testing "a kind the minter does not hold refuses"
+      (is (contains? #{409 422}
+                     (:status (as-minter :post "/api/grants"
+                                {:body {:audience "someone"
+                                        :scope [{:kind "meal"
+                                                 :actions []}]}})))))
+
+    (testing "the attenuated mint lands and its link admits a working,
+              filtered guest"
+      (let [gtok2 (str "minted-" (System/nanoTime))
+            guest (json (as-minter :post "/api/members"
+                                   {:body {:display "minted-alice"
+                                           :actor_type "agent"
+                                           :bind_token gtok2}}))
+            _ (is (some? (:self guest)) (pr-str guest))
+            gid (last (str/split (str (:self guest)) #"/"))
+            minted (as-minter :post "/api/grants"
+                              {:body {:audience gid
+                                      :scope [{:kind "guest_chore"
+                                               :actions ["complete"]
+                                               :filter {:assignee "jack"}}]
+                                      :expires_at (str (.plusSeconds
+                                                        (java.time.Instant/now)
+                                                        86400))}})]
+        (is (= 201 (:status minted)) (pr-str (json minted)))
+        (let [c2 (-> (req* *gated* :get "/auth/guest"
+                           {:query (str "invite=" gtok2)})
+                     (get-in [:headers "Set-Cookie"]) str
+                     (str/split #";") first)]
+          (is (str/starts-with? c2 "waymark_session="))
+          (let [col (json (req* *gated* :get "/api/guest_chores"
+                                {:headers {"cookie" c2}}))]
+            (is (pos? (get-in col [:data :total])))
+            (is (every? #(not (str/includes? (str (:summary %)) "Couple"))
+                        (get-in col [:data :items]))
+                "the minted guest sees jack's rows, never colton's")))))))

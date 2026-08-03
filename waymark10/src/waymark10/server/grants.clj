@@ -294,6 +294,57 @@
     ;; probe ctx carries no registry — decline to guess (phase-8)
     (t/allow)))
 
+(declare surface-of)
+
+(defn- entry-within-surface?
+  "Does one minted scope entry fit inside one minter grant's surface
+  for its kind? Subset on actions and ids; a minter filter must ride
+  the minted entry whole (equal-or-narrower — every minter pair
+  present); a minter carrying field/hashed/arg restrictions on the
+  kind refuses delegation of that kind outright (v1's conservative
+  floor, recorded — comparing admission algebras is not this
+  guard's afternoon). The minted entry's OWN extra narrowing is
+  always welcome."
+  [e s]
+  (when-some [sk (get s (str (:kind e)))]
+    (and (empty? (remove (:actions sk) (map str (:actions e))))
+         (or (nil? (:ids sk))
+             (and (seq (:ids e))
+                  (every? (:ids sk) (map str (:ids e)))))
+         (or (nil? (:filters sk))
+             (and (:filter e)
+                  (every? (fn [[f v]]
+                            (= (str v)
+                               (str (get (:filter e) (keyword (name f))))))
+                          (first (:filters sk)))))
+         (nil? (:fields sk))
+         (empty? (:hashed sk))
+         (empty? (:args sk)))))
+
+(g/defguard agents-mint-within-their-leash
+  {:judges [:scope]
+   :reads [:principal :now :grant]
+   :vars [:kind]
+   :open "Delegation attenuates: an agent hands out only slices of the leash it holds — hold it first (an approved ask), then mint within it."
+   :explain "An agent mints only within its own live leash: no grant you hold covers the {kind} entry as asked (kind, every action, every id, and at least your own filter must all fit inside one grant you hold)."}
+  [_row inp ctx]
+  (let [p (:principal ctx)]
+    (if (or (not= :agent (:type p))
+            (nil? (:find ctx)))          ; probe ctx — decline to guess
+      (t/allow)
+      (let [now (:now ctx)
+            live (filter (fn [g]
+                           (and (= :accepted (:state g))
+                                (let [exp (get-in g [:data :expires_at])]
+                                  (or (nil? exp) (neg? (compare now exp))))))
+                         ((:find ctx) :grant {:audience (:id p)} {:limit 100}))
+            surfaces (map surface-of live)
+            bad (first (for [e (:scope inp)
+                             :when (not (some #(entry-within-surface? e %)
+                                              surfaces))]
+                         {:kind (str (:kind e))}))]
+        (if bad (t/deny {:vars bad}) (t/allow))))))
+
 (g/defguard approval-route-only
   {:reads [:principal]
    :hide true
@@ -330,9 +381,13 @@
             :summary "The member this grant empowers"}]
    ;; a hand-offered grant speaks the same vocabulary an ask must
    ;; (waymark-vnc): a scope naming a kind or action that does not
-   ;; exist refuses at the door, never lands silently useless
+   ;; exist refuses at the door, never lands silently useless — and
+   ;; an AGENT's hand mints only within its own leash (waymark9's
+   ;; attenuation ceiling, landed at the mint): delegation
+   ;; attenuates, never widens; the widening path stays the ask
    :create-guards [scope-names-real-kinds scope-names-real-actions
-                   scope-filters-are-filterable]
+                   scope-filters-are-filterable
+                   agents-mint-within-their-leash]
    :actions
    {:accept {:from #{:offered} :to :accepted
              :guards [audience-only]
