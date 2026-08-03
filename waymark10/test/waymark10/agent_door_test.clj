@@ -493,7 +493,13 @@
 ;; ── attenuated delegation: an agent mints only within its leash ──────
 
 (deftest an-agent-mints-only-within-its-leash
-  (let [tok "guest-tok-9944"
+  ;; the world this test stands on — its own rows, whatever order the
+  ;; runner deals (kaocha randomizes; a sibling's fixtures are not ours)
+  (let [_ (is (some? (:self (json (req* *raw* :post "/api/guest_chores"
+                                        {:body {:title "Delegated dishes"
+                                                :assignee "jack"}
+                                         :headers admin})))))
+        tok "guest-tok-9944"
         member (json (req* *raw* :post "/api/members"
                            {:body {:display "minter" :actor_type "agent"
                                    :bind_token tok}

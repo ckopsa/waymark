@@ -498,7 +498,15 @@ function itemTable(items, opts) {
           onclick: e => e.stopPropagation()})) : null,
       el("td", {class:"c-state"}, el("span", {class:"statechip"}, item.state)),
       el("td", {class:"c-summary"}, el("a", {class:"rowlink",
-        href:"#"+item.self, title: item.self}, item.summary)),
+        href:"#"+item.self, title: item.self}, item.summary),
+        /* prose teasers (the wire truncates them server-side) ride as
+           a quiet second line, never a column */
+        ...Object.keys(item.fields || {})
+          .filter(f => xdisplay(opts.hints, f).widget === "prose" &&
+                       item.fields[f])
+          .map(f => el("div", {class:"muted",
+            style:"font-size:12px;white-space:normal;max-width:48em"},
+            String(item.fields[f])))),
       ...cols.map(f => el("td",
         {class:"c-field", "data-label": fieldLabel(opts.hints, f)},
         fieldCell(opts.hints, f, (item.fields || {})[f]))),

@@ -608,9 +608,12 @@
   "The bounded column set a summary/embedded item's :fields projects
   from :data — every schema-declared field EXCEPT a :vector (a
   part-scoped sub-item or array doesn't fit a flat cell; a vocab
-  array already surfaces via facetChips/x-facets, nothing lost) and a
-  prose-widget field (up to 8000 chars — too large to ship on every
-  row of a paginated page). entry-map's :schema is the raw child
+  array already surfaces via facetChips/x-facets, nothing lost). A
+  prose-widget field RIDES the projection since the saved-view card
+  ask (a card naming :detail must find it on the wire) — but as a
+  bounded TEASER: the projection site truncates it (prose-teaser),
+  so a paginated page never ships 8000-char rows; the row link is
+  where the whole text lives. entry-map's :schema is the raw child
   form, [:maybe …] for an optional field, so the vector check unwraps
   it first the same way schema/field-schema does — otherwise an
   optional vector field would wrongly read as a column. Public: the
@@ -619,12 +622,36 @@
   so there is one rule, never two that could drift."
   [rdef]
   (into #{}
-        (keep (fn [[f {:keys [properties schema]}]]
+        (keep (fn [[f {:keys [schema]}]]
                 (let [s (unwrap-maybe schema)]
-                  (when-not (or (and (vector? s) (= :vector (first s)))
-                                (= "prose" (get-in properties [:x-display :widget])))
+                  (when-not (and (vector? s) (= :vector (first s)))
                     f))))
         (schema/entry-map (:schema rdef))))
+
+(defn prose-fields
+  "The prose-widget fields of a kind — the ones :fields carries as
+  truncated teasers, and the ones a table renders as a quiet second
+  line instead of a column."
+  [rdef]
+  (into #{}
+        (keep (fn [[f {:keys [properties]}]]
+                (when (= "prose" (get-in properties [:x-display :widget]))
+                  f)))
+        (schema/entry-map (:schema rdef))))
+
+(def ^:private teaser-length 240)
+
+(defn- prose-teaser
+  "Truncate prose values in a projected :fields map — the teaser ends
+  in an ellipsis so a cut is never mistaken for the whole."
+  [fields rdef]
+  (reduce (fn [m f]
+            (let [v (get m f)]
+              (if (and (string? v) (> (count v) teaser-length))
+                (assoc m f (str (subs v 0 (dec teaser-length)) "…"))
+                m)))
+          fields
+          (prose-fields rdef)))
 
 (def ^:private summary-data-token #"\{data\.([A-Za-z0-9_]+)")
 
@@ -764,7 +791,7 @@
         ;; to render real DataGrid-style columns without carrying the
         ;; whole document (prose text, sub-item vectors) on every row
         ;; of a paginated page
-        fields (select-keys enc-data (grid-fields rdef))
+        fields (prose-teaser (select-keys enc-data (grid-fields rdef)) rdef)
         public-row (redact-row hrow redacted)
         ;; a hashed parts path collapses to one opaque token — the
         ;; parts group drops rather than iterate a string

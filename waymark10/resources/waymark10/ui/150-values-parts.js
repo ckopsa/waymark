@@ -123,7 +123,12 @@ function fieldColumns(items, query, hints) {
   for (const it of items)
     for (const f of Object.keys(it.fields || {}))
       if (!seen.has(f)) { seen.add(f); ordered.push(f); }
-  return groupFields(ordered.filter(f => !fieldHidden(hints, f)), hints);
+  /* prose teasers ride item.fields for the CARD views (a saved view's
+     :card names them) and the summary's second line — never as a
+     table column; a 240-char cell is a table nobody can read */
+  return groupFields(ordered.filter(f => !fieldHidden(hints, f) &&
+                                         xdisplay(hints, f).widget !== "prose"),
+                     hints);
 }
 
 /* one referenced row's own summary, read live (wire 10 has no lookup
