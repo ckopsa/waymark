@@ -307,3 +307,75 @@
          (str (get-in resp [:headers "Location"]))
          (str "return-to=" (java.net.URLEncoder/encode
                             "/?follow=abc&follow_name=X" "UTF-8"))))))
+
+;; ── the magic link: /auth/guest — invite + session + grant, one URL ──
+
+(deftest the-magic-link-admits-a-scoped-guest
+  (let [gtok "guest-tok-5150"
+        member (json (req* *raw* :post "/api/members"
+                           {:body {:display "guest-alice" :actor_type "agent"
+                                   :bind_token gtok}
+                            :headers admin}))
+        mid (last (str/split (str (:self member)) #"/"))
+        meal (json (req* *raw* :post "/api/meals"
+                         {:body {:name "pool meal" :themes ["pool"]}
+                          :headers {"x-waymark-principal" "colton"}}))
+        _ (is (some? (:self meal)))
+        expires (str (.plusSeconds (java.time.Instant/now) 259200))
+        grant (json (req* *raw* :post "/api/grants"
+                          {:body {:audience mid
+                                  :scope [{:kind "meal" :actions []}]
+                                  :expires_at expires}
+                           :headers admin}))]
+    (is (= "offered" (:state grant)) (pr-str grant))
+
+    (testing "a garbage link is dark"
+      (is (= 404 (:status (req* *gated* :get "/auth/guest"
+                                {:query "invite=nope"})))))
+
+    (let [resp (req* *gated* :get "/auth/guest"
+                     {:query (str "invite=" gtok)})
+          set-cookie (str (get-in resp [:headers "Set-Cookie"]))
+          cookie (first (str/split set-cookie #";"))]
+      (testing "first arrival: 302 home, session minted, offer accepted
+                as the audience"
+        (is (= 302 (:status resp)))
+        (is (= "/" (get-in resp [:headers "Location"])))
+        (is (str/starts-with? cookie "waymark_session="))
+        (is (= "accepted" (:state (json (req* *raw* :get (:self grant)
+                                              {:headers admin}))))))
+
+      (testing "the visitor lands already scoped — no header presented,
+                sight of exactly the granted kind and nothing else"
+        (is (= 200 (:status (req* *gated* :get (:self meal)
+                                  {:headers {"cookie" cookie}}))))
+        (is (= 404 (:status (req* *gated* :get "/api/roles"
+                                  {:headers {"cookie" cookie}})))))
+
+      (testing "the same link re-admits while the grant lives — a
+                lapsed cookie is not a lapsed welcome"
+        (is (= 302 (:status (req* *gated* :get "/auth/guest"
+                                  {:query (str "invite=" gtok)})))))
+
+      (testing "revoke: the link goes dark AND the worn session scopes
+                to nothing"
+        (is (= 200 (:status (req* *raw* :post (str (:self grant) "/-/revoke")
+                                  {:headers admin}))))
+        (is (= 404 (:status (req* *gated* :get "/auth/guest"
+                                  {:query (str "invite=" gtok)}))))
+        (is (= 404 (:status (req* *gated* :get (:self meal)
+                                  {:headers {"cookie" cookie}}))))))))
+
+(deftest a-linkless-grant-and-a-grantless-link-both-stay-dark
+  (testing "an invited member with NO standing grant: the guest door
+            refuses WITHOUT spending the token"
+    (let [tok "guest-tok-7207"
+          _ (req* *raw* :post "/api/members"
+                  {:body {:display "guest-limbo" :actor_type "agent"
+                          :bind_token tok}
+                   :headers admin})]
+      (is (= 404 (:status (req* *gated* :get "/auth/guest"
+                                {:query (str "invite=" tok)}))))
+      (is (= 200 (:status (req* *gated* :get "/api/-/welcome"
+                                {:query (str "invite=" tok)})))
+          "the token is unspent — the invite still stands whole"))))

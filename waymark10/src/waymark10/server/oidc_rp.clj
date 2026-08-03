@@ -45,6 +45,7 @@
   (:require [buddy.sign.jwt :as jwt]
             [clojure.string :as str]
             [org.httpkit.client :as http]
+            [waymark10.server.grants :as grants]
             [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
             [waymark10.types :as t]
@@ -200,16 +201,21 @@
   mid-flight session silently expire between form load and submit.
   The trade (recorded): a session can outlive the IdP's own session;
   the ttl bounds it and /auth/logout ends both."
-  [rp principal]
-  (let [now (now-secs)
-        exp (+ now (:session-ttl-s rp))]
-    {:exp exp
-     :token (jwt/sign {:sub (:id principal)
-                       :roles (vec (:roles principal))
-                       :actor_type (name (:type principal))
-                       :display (:display principal)
-                       :iat now :exp exp}
-                      (:session-secret rp) {:alg :hs256})}))
+  ([rp principal] (mint-session rp principal nil))
+  ([rp principal extra]
+   (let [now (now-secs)
+         exp (+ now (:session-ttl-s rp))]
+     {:exp exp
+      :token (jwt/sign (merge {:sub (:id principal)
+                               :roles (vec (:roles principal))
+                               :actor_type (name (:type principal))
+                               :display (:display principal)
+                               :iat now :exp exp}
+                              ;; the guest door's scope selector rides
+                              ;; the session — strictly narrowing, so
+                              ;; a forged claim could only conceal
+                              (select-keys extra [:grant]))
+                       (:session-secret rp) {:alg :hs256})})))
 
 (defn- callback [oidc req]
   (let [rp (:rp oidc)
@@ -269,15 +275,19 @@
   (when-some [rp (:rp oidc)]
     (when-some [c (get (cookies req) (:cookie-name rp))]
       (try
-        (let [{:keys [sub roles actor_type display]}
+        (let [{:keys [sub roles actor_type display grant]}
               (jwt/unsign c (:session-secret rp) {:alg :hs256})
               at (some-> actor_type str str/lower-case keyword)]
           (when-not (str/blank? (str sub))
-            (t/principal {:id (str sub)
-                          ;; system stays engine-internal, same as bearer
-                          :type (if (contains? #{:human :agent} at) at :human)
-                          :roles (set (map str roles))
-                          :display (or display (str sub))})))
+            (cond-> (t/principal {:id (str sub)
+                                  ;; system stays engine-internal, same as bearer
+                                  :type (if (contains? #{:human :agent} at) at :human)
+                                  :roles (set (map str roles))
+                                  :display (or display (str sub))})
+              ;; the guest door's worn scope: wrap-identity falls back
+              ;; to it when no X-Waymark-Grant header is presented
+              (not (str/blank? (str grant)))
+              (assoc :session-grant (str grant)))))
         (catch Exception _ nil)))))
 
 ;; ── /auth/agent: the invite link is the whole key ───────────────────
@@ -341,6 +351,60 @@
              "No live session rides this request — renewal is for the living.")))
 
 ;; ── the wrap engine/start! composes ─────────────────────────────────
+
+(defn- guest-entry
+  "GET /auth/guest?invite=TOKEN — the magic link, browser-shaped: the
+  human mints a member + a grant scoped to exactly what a visitor
+  needs, and texts them one URL. First arrival binds (the
+  credential-less bind) and ACCEPTS the standing grant as its
+  audience; the session minted carries the grant id, so the visitor
+  lands already scoped — no header to know, no panel to find. While
+  that grant stays live the SAME link re-admits its holder (a lapsed
+  cookie is not a lapsed welcome — the link is the credential for
+  its window, deliberately); the grant dead or absent, the link is
+  dark: one identical 404, before anything binds, saying nothing.
+
+  The guest member rides actor_type agent — the leash-by-default
+  type: even a shed session-grant falls to the bootstrap surface,
+  never to full sight."
+  [eng oidc req]
+  (let [rp (:rp oidc)
+        token (get (query-params req) "invite")
+        dark (problem 404 "Not found" "No standing invitation.")
+        admit (fn [member]
+                (let [principal (t/principal
+                                 {:id (:id member) :type :agent
+                                  :display (get-in member [:data :display])})
+                      grant (some-> (grants/standing-grant-for eng (:id member))
+                                    (as-> g (grants/accept-as-audience!
+                                             eng g principal)))]
+                  (if-not (and grant (= :accepted (:state grant)))
+                    dark
+                    (let [{:keys [exp token]} (mint-session
+                                               rp principal
+                                               {:grant (:id grant)})]
+                      {:status 302
+                       :headers {"Location" "/"
+                                 "Set-Cookie" (set-cookie
+                                               rp (:cookie-name rp) token
+                                               (- exp (now-secs)) "/")}
+                       :body ""}))))]
+    (cond
+      ;; first arrival: the grant must stand BEFORE the token spends —
+      ;; a link minted without its grant stays unspent, not half-used
+      (some? (members/invited-by-token eng token))
+      (if (nil? (grants/standing-grant-for
+                 eng (:id (members/invited-by-token eng token))))
+        dark
+        (if-some [member (members/bind-agent! eng token)]
+          (admit member)
+          dark))
+
+      ;; the return path: the same link, while the grant lives
+      :else
+      (if-some [member (members/re-enterable-by-token eng token)]
+        (admit member)
+        dark))))
 
 (defn- ui-redirect?
   "An anonymous HTML GET on the ui: a browser that should be sent to
@@ -422,6 +486,12 @@
               (agent-session eng oidc req)
               (and post? (= (:uri req) "/auth/agent/renew"))
               (agent-renew oidc req)
+
+              ;; the magic link (guest-entry): browser-shaped, and
+              ;; open by the same logic as the invite doors — it
+              ;; exists precisely for a visitor holding nothing else
+              (and get? (= (:uri req) "/auth/guest"))
+              (guest-entry eng oidc req)
 
               ;; the welcome document is token-gated BY DESIGN (the
               ;; invite is the secret; router.clj welcome-doc) — the

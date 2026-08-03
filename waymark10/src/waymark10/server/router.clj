@@ -1394,7 +1394,11 @@
           ;; gate — first authenticated sight binds an invited member
           principal (members/gate! eng principal
                                    (get-in req [:headers "x-waymark-invite"]))
-          vis (if-some [gid (get-in req [:headers "x-waymark-grant"])]
+          vis (if-some [gid (or (get-in req [:headers "x-waymark-grant"])
+                                ;; the guest door's worn scope rides
+                                ;; the session (oidc-rp); the header,
+                                ;; deliberately presented, still wins
+                                (:session-grant principal))]
                 (grants/visibility eng gid principal)
                 ;; the agent default (waymark-rci): a named agent
                 ;; NEVER runs unscoped — no grant presented means the

@@ -764,6 +764,44 @@
                                         {:limit 200}))))]
     (if (seq ids) (vec (sort ids)) ["-none-"])))
 
+(defn standing-grant-for
+  "The grant the guest door hangs a session on: the newest grant for
+  this audience that still confers or could — :accepted first, then
+  a still-:offered one (the door accepts it AS the audience on
+  arrival; acceptance is the audience's own act). Unexpired judged
+  by the live clock, same as enforcement. nil when nothing stands —
+  and the door goes dark with it."
+  [eng audience]
+  (let [now ((:now-fn eng))
+        rows (->> (store/with-tx (:storage eng)
+                    (fn [tx] (store/query-rows (:storage eng) tx :grant
+                                               {:audience (str audience)}
+                                               {:limit 100})))
+                  ;; oldest-first is the one ordering; decode restores
+                  ;; instants for the expiry compare
+                  (map #(load-decoded eng :grant (:id %)))
+                  (remove nil?)
+                  reverse)
+        unexpired? (fn [row]
+                     (let [exp (get-in row [:data :expires_at])]
+                       (or (nil? exp) (neg? (compare now exp)))))]
+    (or (some #(when (and (= :accepted (:state %)) (unexpired? %)) %) rows)
+        (some #(when (and (= :offered (:state %)) (unexpired? %)) %) rows))))
+
+(defn accept-as-audience!
+  "The guest door's first-arrival courtesy: accept a still-:offered
+  grant AS its audience (the accept guard's own rule — acceptance is
+  never someone else's act). Returns the accepted row, or the row
+  unchanged when it already stands accepted; nil when the accept
+  refuses (a race's loser reloads and moves on)."
+  [eng row principal]
+  (if (= :offered (:state row))
+    (try
+      (inv/invoke! eng :grant (:id row) :accept {} {:principal principal})
+      (load-decoded eng :grant (:id row))
+      (catch Exception _ (load-decoded eng :grant (:id row))))
+    row))
+
 (defn visibility
   "The per-request visibility, resolved once: the X-Waymark-Grant
   header names a grant whose audience must be this principal; an

@@ -175,6 +175,65 @@ async function renderAccess(view, seq) {
           "show link")))));
   view.append(invite);
 
+  /* 1b · the magic link: a temporary, scoped guest. One press mints a
+     member and its leash together; one URL admits its holder for as
+     long as the grant lives and lands them ALREADY scoped — no
+     header to know, no panel to find. Revoke the grant and the link
+     goes dark. */
+  const guest = el("div", {class:"panel"});
+  guest.append(el("h2", {}, "Guest link"));
+  guest.append(el("div", {class:"muted"},
+    "Temporary scoped access for a visitor — text them one link. It "
+    + "binds on first open, re-admits while the leash lives, and shows "
+    + "only what the scope names; revoking the grant kills the link."));
+  const gName = el("input", {placeholder:"the guest's name — e.g. Alice",
+                             style:"margin:8px 8px 8px 0"});
+  const gDays = el("input", {type:"number", value:"3", min:"1", max:"30",
+                             style:"width:70px",
+                             title:"days until the leash expires"});
+  const gScope = el("textarea", {rows:"3",
+    style:"width:100%;font-family:var(--mono);font-size:12px;margin-top:6px",
+    title:"the grant's scope — kind + actions ([] = read-only), ids to pin rows"});
+  gScope.value = '[{"kind":"task","actions":["complete"]}]';
+  const gOut = el("div", {});
+  guest.append(
+    el("div", {}, gName, gDays, el("span", {class:"muted"}, " days")),
+    gScope,
+    el("button", {class:"primary", style:"margin-top:6px",
+      onclick: async () => {
+        const display = gName.value.trim();
+        if (!display) { toast("name the guest first"); return; }
+        let scope;
+        try { scope = JSON.parse(gScope.value); }
+        catch { toast("the scope is not valid JSON"); return; }
+        const tok = uuid();
+        const m = await api("/api/members", {method:"POST",
+          body: JSON.stringify({display, actor_type:"agent",
+                                bind_token: tok})});
+        if (!m.ok) { gOut.replaceChildren(problemBox(m.body)); return; }
+        const mid = String(m.body.self).split("/").pop();
+        const days = Math.max(1, Number(gDays.value) || 3);
+        const g = await api("/api/grants", {method:"POST",
+          body: JSON.stringify({audience: mid, scope,
+            expires_at: new Date(Date.now() + days * 86400e3).toISOString()})});
+        if (!g.ok) { gOut.replaceChildren(problemBox(g.body)); return; }
+        const url = `${location.origin}/auth/guest?invite=${encodeURIComponent(tok)}`;
+        gName.value = "";
+        gOut.replaceChildren(el("div", {class:"field", style:"margin-top:8px"},
+          el("div", {class:"muted"},
+            `${display}'s link — lives ${days} day(s), scoped; revoke the `
+            + `grant to kill it early:`),
+          el("input", {value: url, readonly: "true",
+                       style:"width:100%;font-family:var(--mono)",
+                       onclick: e => e.target.select()}),
+          el("button", {style:"margin-top:4px", onclick: () =>
+            navigator.clipboard?.writeText(url).then(
+              () => toast("guest link copied — text it over"),
+              () => toast("select and copy the link above"))}, "Copy link")));
+      }}, "Mint guest link"),
+    gOut);
+  view.append(guest);
+
   /* 2 · the asks awaiting a verdict — approve/deny straight off the
      envelope (four-eyes and the consequence banner come with them) */
   const asksPanel = el("div", {class:"panel"});

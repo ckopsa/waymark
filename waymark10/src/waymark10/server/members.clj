@@ -247,6 +247,24 @@
       (when (and candidate (= :invited (:state candidate)))
         candidate))))
 
+(defn re-enterable-by-token
+  "The guest door's return path (the magic link, durable for its
+  window): the ACTIVE member a presented token names — but only when
+  the row bound to ITSELF, the credential-less door's own signature;
+  a header-bound agent's spent token re-admits nobody, its principal
+  lives elsewhere. Whether re-entry is WELCOME is the standing
+  grant's question, not this one's. nil is the same 404 as a spent
+  link."
+  [eng token]
+  (when-not (str/blank? (str token))
+    (let [row (first (store/with-tx (:storage eng)
+                       (fn [tx] (store/query-rows (:storage eng) tx :member
+                                                  {:bind_token token}
+                                                  {:limit 1}))))]
+      (when (and row (= :active (:state row))
+                 (= (:id row) (get-in row [:data :subject])))
+        row))))
+
 (defn bind-agent!
   "The /auth/agent door's bind (waymark10.server.oidc-rp): an agent
   holding ONLY the invite link has no principal yet, so the invited
