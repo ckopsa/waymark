@@ -228,7 +228,11 @@
               [:priority {:optional true :sort :default
                           :x-display {:label "Priority (lower ranks sooner)"}}
                [:maybe [:int {:min 0}]]]
-              [:detail {:optional true :x-display {:widget "prose"}}
+              ;; :teaser — the instructions ride every row truncated
+              ;; (the caregiver reads the how right on the queue); the full
+              ;; text lives on the task itself
+              [:detail {:optional true
+                        :x-display {:widget "prose" :teaser true}}
                [:maybe [:string {:max 1000}]]]
               ;; where the row drinks from, as URLs the source client
               ;; stamps: the API envelope (a client's route) and the

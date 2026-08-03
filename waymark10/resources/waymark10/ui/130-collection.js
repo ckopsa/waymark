@@ -499,10 +499,12 @@ function itemTable(items, opts) {
       el("td", {class:"c-state"}, el("span", {class:"statechip"}, item.state)),
       el("td", {class:"c-summary"}, el("a", {class:"rowlink",
         href:"#"+item.self, title: item.self}, item.summary),
-        /* prose teasers (the wire truncates them server-side) ride as
-           a quiet second line, never a column */
+        /* teaser-flagged prose (the wire truncates it server-side, and
+           only :x-display {:teaser true} fields ride rows at all)
+           shows as a quiet second line, never a column */
         ...Object.keys(item.fields || {})
           .filter(f => xdisplay(opts.hints, f).widget === "prose" &&
+                       xdisplay(opts.hints, f).teaser &&
                        item.fields[f])
           .map(f => el("div", {class:"muted",
             style:"font-size:12px;white-space:normal;max-width:48em"},

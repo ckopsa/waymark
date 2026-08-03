@@ -48,9 +48,9 @@
             [:project_id {:kind :ba_project} :waymark/ref]
             [:due_date {:optional true} [:maybe :waymark/date]]
             [:points {:optional true} [:maybe :int]]
-            ;; the one prose-widget field in the batch-a fixtures —
-            ;; rides row :fields as render's truncated teaser (never a
-            ;; table column; the row link holds the whole text)
+            ;; the one prose-widget field in the batch-a fixtures — an
+            ;; exclusion case for render/grid-fields: unflagged prose
+            ;; stays off the rows (:x-display {:teaser true} opts in)
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}

@@ -280,10 +280,10 @@
 (defn fields-violations
   "The grid-column obligation for one envelope (full or summary
   alike — :fields is always present at both depths, unlike :data):
-  every key rides render/grid-fields' own rule (no :vector; prose
-  rides as a truncated teaser — the SAME fn envelope itself calls,
-  so this checks the rule was actually applied, not a second copy of
-  it that could drift), and :fields is never absent."
+  every key rides render/grid-fields' own rule (no :vector, no prose
+  unless teaser-flagged — the SAME fn envelope itself calls, so this
+  checks the rule was actually applied, not a second copy of it that
+  could drift), and :fields is never absent."
   [rdef env]
   (let [where (where-of env)
         eligible (render/grid-fields rdef)]

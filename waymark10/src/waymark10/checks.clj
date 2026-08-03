@@ -627,9 +627,24 @@
               (if-not (and (vector? (:card v)) (seq (:card v))
                            (every? keyword? (:card v)))
                 [":card is a non-empty vector of field keywords"]
-                (when-some [bad (seq (remove (data-keys r) (:card v)))]
-                  [(str ":card names " (vec bad)
-                        ", not data field(s) of the schema")]))))
+                (concat
+                 (when-some [bad (seq (remove (data-keys r) (:card v)))]
+                   [(str ":card names " (vec bad)
+                         ", not data field(s) of the schema")])
+                 ;; a prose field rides rows only when it opts in with
+                 ;; :x-display {:teaser true} — a card naming one
+                 ;; without the flag would render silently blank, so
+                 ;; the gate says it out loud instead
+                 (let [entries (schema/entry-map (:schema r))]
+                   (for [f (:card v)
+                         :let [props (:properties (get entries f))]
+                         :when (and (= "prose" (get-in props
+                                                       [:x-display :widget]))
+                                    (not (get-in props
+                                                 [:x-display :teaser])))]
+                     (str ":card names " f ", a prose field without "
+                          ":x-display {:teaser true} — flag it or the "
+                          "card cell stays blank")))))))
       (into (case (:kind v)
               :feed
               (for [side [:right :left]

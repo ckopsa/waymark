@@ -609,33 +609,40 @@
   from :data — every schema-declared field EXCEPT a :vector (a
   part-scoped sub-item or array doesn't fit a flat cell; a vocab
   array already surfaces via facetChips/x-facets, nothing lost). A
-  prose-widget field RIDES the projection since the saved-view card
-  ask (a card naming :detail must find it on the wire) — but as a
-  bounded TEASER: the projection site truncates it (prose-teaser),
-  so a paginated page never ships 8000-char rows; the row link is
-  where the whole text lives. entry-map's :schema is the raw child
-  form, [:maybe …] for an optional field, so the vector check unwraps
-  it first the same way schema/field-schema does — otherwise an
-  optional vector field would wrongly read as a column. Public: the
-  same rule envelope's :fields uses is what
-  waymark10.test.envelope-obligations checks summary items against,
-  so there is one rule, never two that could drift."
+  prose-widget field stays off the rows (up to 8000 chars — too
+  large to ship on every row of a paginated page) UNLESS its
+  declaration opts in with :x-display {:teaser true} — then it rides
+  as a bounded TEASER: the projection site truncates it
+  (prose-teaser), the saved-view card finds it on the wire, and the
+  table shows it as a second line, never a column. entry-map's
+  :schema is the raw child form, [:maybe …] for an optional field,
+  so the vector check unwraps it first the same way
+  schema/field-schema does — otherwise an optional vector field
+  would wrongly read as a column. Public: the same rule envelope's
+  :fields uses is what waymark10.test.envelope-obligations checks
+  summary items against, so there is one rule, never two that could
+  drift."
   [rdef]
   (into #{}
-        (keep (fn [[f {:keys [schema]}]]
+        (keep (fn [[f {:keys [properties schema]}]]
                 (let [s (unwrap-maybe schema)]
-                  (when-not (and (vector? s) (= :vector (first s)))
+                  (when-not (or (and (vector? s) (= :vector (first s)))
+                                (and (= "prose" (get-in properties
+                                                        [:x-display :widget]))
+                                     (not (get-in properties
+                                                  [:x-display :teaser]))))
                     f))))
         (schema/entry-map (:schema rdef))))
 
-(defn prose-fields
-  "The prose-widget fields of a kind — the ones :fields carries as
-  truncated teasers, and the ones a table renders as a quiet second
+(defn teaser-fields
+  "The teaser-flagged prose fields of a kind — the ones :fields
+  carries truncated, and the ones a table renders as a quiet second
   line instead of a column."
   [rdef]
   (into #{}
         (keep (fn [[f {:keys [properties]}]]
-                (when (= "prose" (get-in properties [:x-display :widget]))
+                (when (and (= "prose" (get-in properties [:x-display :widget]))
+                           (get-in properties [:x-display :teaser]))
                   f)))
         (schema/entry-map (:schema rdef))))
 
@@ -651,7 +658,7 @@
                 (assoc m f (str (subs v 0 (dec teaser-length)) "…"))
                 m)))
           fields
-          (prose-fields rdef)))
+          (teaser-fields rdef)))
 
 (def ^:private summary-data-token #"\{data\.([A-Za-z0-9_]+)")
 

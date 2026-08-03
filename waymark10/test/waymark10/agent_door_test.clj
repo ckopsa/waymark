@@ -44,7 +44,11 @@
    :summary "{data.title} · {state}"
    :schema [:map
             [:title [:string {:min 1 :max 80}]]
-            [:assignee {:optional true} [:maybe [:string {:max 40}]]]]
+            [:assignee {:optional true} [:maybe [:string {:max 40}]]]
+            ;; teaser-flagged prose: rides row :fields truncated
+            [:detail {:optional true
+                      :x-display {:widget "prose" :teaser true}}
+             [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in} :assignee #{:eq}}
    :actions
    {:complete {:from #{:open} :to :done
@@ -443,6 +447,24 @@
         (is (every? #(str/includes? (str (:summary %)) "·")
                     (get-in col [:data :items])))))
 
+    (testing "teaser-flagged prose rides the row truncated, ellipsis
+              honest — never the whole 8000 chars"
+      (let [long-detail (apply str (repeat 60 "scrub then dry "))
+            row (json (req* *raw* :post "/api/guest_chores"
+                            {:body {:title "Detailed dishes"
+                                    :assignee "jack"
+                                    :detail long-detail}
+                             :headers admin}))
+            _ (is (some? (:self row)))
+            item (->> (get-in (json (as-guest :get "/api/guest_chores"))
+                              [:data :items])
+                      (filter #(str/includes? (str (:summary %)) "Detailed"))
+                      first)
+            teaser (get-in item [:fields :detail])]
+        (is (string? teaser))
+        (is (= 240 (count teaser)) (str "got " (count teaser)))
+        (is (str/ends-with? teaser "…"))))
+
     (testing "row sight follows the filter, not the kind"
       (is (= 200 (:status (as-guest :get (:self jack1)))))
       (is (= 404 (:status (as-guest :get (:self other))))))
@@ -459,7 +481,7 @@
               moment it matches — the pool stays covered"
       (let [late (mk "Dishes (next week)" "jack")]
         (is (= 200 (:status (as-guest :get (:self late)))))
-        (is (= 3 (get-in (json (as-guest :get "/api/guest_chores"))
+        (is (= 4 (get-in (json (as-guest :get "/api/guest_chores"))
                          [:data :total])))))
 
     (testing "the collection oracle stays closed: the guest's own
@@ -497,7 +519,7 @@
   ;; runner deals (kaocha randomizes; a sibling's fixtures are not ours)
   (let [_ (is (some? (:self (json (req* *raw* :post "/api/guest_chores"
                                         {:body {:title "Delegated dishes"
-                                                :assignee "jack"}
+                                                :assignee "jack-d"}
                                          :headers admin})))))
         tok "guest-tok-9944"
         member (json (req* *raw* :post "/api/members"
@@ -509,7 +531,7 @@
                         {:body {:audience mid
                                 :scope [{:kind "guest_chore"
                                          :actions ["complete"]
-                                         :filter {:assignee "jack"}}
+                                         :filter {:assignee "jack-d"}}
                                         {:kind "member" :actions ["create"]}
                                         {:kind "grant" :actions ["create"]}]
                                 :expires_at (str (.plusSeconds
@@ -553,7 +575,7 @@
                               {:body {:audience gid
                                       :scope [{:kind "guest_chore"
                                                :actions ["complete"]
-                                               :filter {:assignee "jack"}}]
+                                               :filter {:assignee "jack-d"}}]
                                       :expires_at (str (.plusSeconds
                                                         (java.time.Instant/now)
                                                         86400))}})]
