@@ -15,6 +15,7 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
             [waymark10.fixtures :as fx]
+            [waymark10.resource :refer [defresource]]
             [waymark10.server.engine :as engine]
             [waymark10.server.members :as members]
             [waymark10.server.oidc-rp :as rp]
@@ -32,8 +33,27 @@
   {:keys [(assoc (bkeys/public-key->jwk (.getPublic keypair))
                  :kid "door-key" :alg "RS256" :use "sig")]})
 
+;; the filter-scope fixture: a kind with a filterable data field, so
+;; a grant can scope "the rows matching" instead of "these ids"
+(defresource guest-chore
+  {:kind :guest_chore
+   :plural "guest_chores"
+   :states [:open :done]
+   :initial :open
+   :terminal #{:done}
+   :summary "{data.title} · {state}"
+   :schema [:map
+            [:title [:string {:min 1 :max 80}]]
+            [:assignee {:optional true} [:maybe [:string {:max 40}]]]]
+   :filterable {:state #{:eq :in} :assignee #{:eq}}
+   :actions
+   {:complete {:from #{:open} :to :done
+               :safety {:idempotent true :reversible false :confirm false
+                        :one-way "Done is done; a fresh run is a fresh row."}
+               :display {:label "Complete" :order 1}}}})
+
 (def ^:private tables
-  ["meals" "members" "roles" "grants" "approval_requests"
+  ["meals" "guest_chores" "members" "roles" "grants" "approval_requests"
    "attachments" "subscriptions" "jobs" "definitions"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
    "waymark10_cursors" "waymark10_job_leases"])
@@ -50,7 +70,7 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [eng (engine/engine
-                   {:storage st :resources [fx/meal]
+                   {:storage st :resources [fx/meal guest-chore]
                     :oidc {:issuer "https://idp.test/realms/home"
                            :audience "door-test"
                            :jwks jwks
@@ -379,3 +399,93 @@
       (is (= 200 (:status (req* *gated* :get "/api/-/welcome"
                                 {:query (str "invite=" tok)})))
           "the token is unspent — the invite still stands whole"))))
+
+;; ── filter-scoped grants: the leash names a QUERY, not just ids ──────
+
+(deftest a-filter-scoped-grant-admits-the-rows-matching
+  (let [mk (fn [title assignee]
+             (json (req* *raw* :post "/api/guest_chores"
+                         {:body {:title title :assignee assignee}
+                          :headers admin})))
+        jack1 (mk "Dishes" "jack")
+        jack2 (mk "Wipe out drawers" "jack")
+        other (mk "Couple stuff" "colton")
+        _ (is (every? (comp some? :self) [jack1 jack2 other]))
+        gtok "guest-tok-8815"
+        member (json (req* *raw* :post "/api/members"
+                           {:body {:display "guest-iris" :actor_type "agent"
+                                   :bind_token gtok}
+                            :headers admin}))
+        mid (last (str/split (str (:self member)) #"/"))
+        grant (json (req* *raw* :post "/api/grants"
+                          {:body {:audience mid
+                                  :scope [{:kind "guest_chore"
+                                           :actions ["complete"]
+                                           :filter {:assignee "jack"}}]
+                                  :expires_at (str (.plusSeconds
+                                                    (java.time.Instant/now)
+                                                    259200))}
+                           :headers admin}))
+        _ (is (some? (:self grant)) (pr-str grant))
+        cookie (-> (req* *gated* :get "/auth/guest"
+                         {:query (str "invite=" gtok)})
+                   (get-in [:headers "Set-Cookie"]) str
+                   (str/split #";") first)
+        as-guest (fn [method uri & [opts]]
+                   (req* *gated* method uri
+                         (update opts :headers merge {"cookie" cookie})))]
+    (is (str/starts-with? cookie "waymark_session="))
+
+    (testing "the collection is the filtered story: jack's rows, an
+              honest total, nothing else"
+      (let [col (json (as-guest :get "/api/guest_chores"))]
+        (is (= 2 (get-in col [:data :total])) (pr-str (:data col)))
+        (is (every? #(str/includes? (str (:summary %)) "·")
+                    (get-in col [:data :items])))))
+
+    (testing "row sight follows the filter, not the kind"
+      (is (= 200 (:status (as-guest :get (:self jack1)))))
+      (is (= 404 (:status (as-guest :get (:self other))))))
+
+    (testing "the granted action works INSIDE the filter and is the
+              same 404 outside it"
+      (is (= 200 (:status (as-guest :post (str (:self jack1) "/-/complete")
+                                    {:body {}}))))
+      (is (= "done" (:state (json (as-guest :get (:self jack1))))))
+      (is (= 404 (:status (as-guest :post (str (:self other) "/-/complete")
+                                    {:body {}})))))
+
+    (testing "a row minted AFTER the grant lands inside the leash the
+              moment it matches — the pool stays covered"
+      (let [late (mk "Dishes (next week)" "jack")]
+        (is (= 200 (:status (as-guest :get (:self late)))))
+        (is (= 3 (get-in (json (as-guest :get "/api/guest_chores"))
+                         [:data :total])))))
+
+    (testing "the collection oracle stays closed: the guest's own
+              probe filters still answer the grammar honestly"
+      (is (= 200 (:status (as-guest :get "/api/guest_chores"
+                                    {:query "state=open"})))))))
+
+(deftest a-filter-scope-speaks-the-declared-grammar-or-not-at-all
+  (let [try-grant (fn [scope]
+                    (req* *raw* :post "/api/grants"
+                          {:body {:audience "whoever" :scope scope}
+                           :headers admin}))]
+    (testing "a filter on an unfilterable field refuses at the door"
+      (is (contains? #{409 422}
+                     (:status (try-grant [{:kind "guest_chore" :actions []
+                                           :filter {:title "Dishes"}}])))))
+    (testing "state is never a grant filter"
+      (is (contains? #{409 422}
+                     (:status (try-grant [{:kind "guest_chore" :actions []
+                                           :filter {:state "open"}}])))))
+    (testing "two filtered entries on one kind refuse"
+      (is (contains? #{409 422}
+                     (:status (try-grant [{:kind "guest_chore" :actions []
+                                           :filter {:assignee "a"}}
+                                          {:kind "guest_chore" :actions []
+                                           :filter {:assignee "b"}}])))))
+    (testing "the well-formed filter still lands"
+      (is (= 201 (:status (try-grant [{:kind "guest_chore" :actions []
+                                       :filter {:assignee "jack"}}])))))))

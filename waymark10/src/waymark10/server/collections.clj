@@ -616,6 +616,12 @@
         conds (if-some [ids (when vis ((:ids-of vis) (:kind rdef)))]
                 (conj conds {:target :id :op :in :values (vec ids)})
                 conds)
+        ;; a filter-scoped grant narrows the query the same way it
+        ;; narrows row? — page, total and facets stay one story
+        conds (if-some [fconds (when (and vis (:conds-of vis))
+                                 ((:conds-of vis) (:kind rdef)))]
+                (into conds fconds)
+                conds)
         st (:storage eng)
         {:keys [rows total]}
         (store/with-tx st

@@ -127,7 +127,14 @@
     visibility (the phase-3 render-fn seam's recorded punt, extended):
     a scoped replay serves the first execution's unprojected envelope.
   - own-id collections cap at 200 held grants/requests per principal
-    (the member-visibility page waymark9 also capped)."
+    (the member-visibility page waymark9 also capped).
+  - a scope entry may carry :filter {field value} — admission by
+    MATCH (eq on a declared-filterable data field, never state; one
+    filtered entry per kind), judged at the row (row?) and ANDed
+    into the collection query (conds-of), so rows minted after the
+    grant land inside the leash the moment they match. The worksheet
+    export's missing visibility is that route's own recorded gap,
+    not this entry's."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
@@ -163,6 +170,15 @@
     ;; a restriction is never absorbed the way openness absorbs.
     [:hashed {:optional true}
      [:maybe [:vector [:string {:min 1 :max 64}]]]]
+    ;; the filter-scoped entry (waymark: pools as first-class): the
+    ;; rows this entry admits are the ones MATCHING, judged at render
+    ;; — rows minted after the grant land inside the leash the moment
+    ;; they match. field → exact value, the collection grammar's :eq
+    ;; only; the field must be one the kind declares filterable (the
+    ;; scope-filters guard), so the promise is enforceable at the
+    ;; query AND the row. Keys arrive keywordized off the wire.
+    [:filter {:optional true}
+     [:maybe [:map-of :keyword [:string {:min 1 :max 200}]]]]
     [:args {:optional true}
      [:maybe [:vector
               [:map
@@ -250,6 +266,34 @@
       (t/allow))
     (t/allow)))
 
+(g/defguard scope-filters-are-filterable
+  {:judges [:scope]
+   :reads [:services]
+   :vars [:kind :field]
+   :open "A grant filter narrows by a field the kind already declares filterable with eq — the collection grammar is the vocabulary; one filtered entry per kind."
+   :explain "The kind {kind} cannot be filter-scoped by {field}: a filter names a data field the kind declares filterable (eq), never state, and only ONE entry may filter a kind."}
+  [_row inp ctx]
+  (if-some [rdef-of (:rdef-of ctx)]
+    (let [entries (filter :filter (:scope inp))
+          dup (->> entries (map :kind) frequencies
+                   (some (fn [[k n]] (when (< 1 n) k))))
+          bad (first
+               (for [e entries
+                     :let [rdef (rdef-of (:kind e))]
+                     :when rdef
+                     [f _] (:filter e)
+                     :let [fname (name f)
+                           ops (get (:filterable rdef) (keyword fname))]
+                     :when (or (= "state" fname)
+                               (not (contains? (or ops #{}) :eq)))]
+                 {:kind (:kind e) :field fname}))]
+      (cond
+        dup (t/deny {:vars {:kind dup :field "(two filtered entries)"}})
+        bad (t/deny {:vars bad})
+        :else (t/allow)))
+    ;; probe ctx carries no registry — decline to guess (phase-8)
+    (t/allow)))
+
 (g/defguard approval-route-only
   {:reads [:principal]
    :hide true
@@ -287,7 +331,8 @@
    ;; a hand-offered grant speaks the same vocabulary an ask must
    ;; (waymark-vnc): a scope naming a kind or action that does not
    ;; exist refuses at the door, never lands silently useless
-   :create-guards [scope-names-real-kinds scope-names-real-actions]
+   :create-guards [scope-names-real-kinds scope-names-real-actions
+                   scope-filters-are-filterable]
    :actions
    {:accept {:from #{:offered} :to :accepted
              :guards [audience-only]
@@ -316,7 +361,8 @@
              ;; changed in between — approval-effects! catches and
              ;; warns, the grant honestly does not move
              :guards [approval-route-only
-                      scope-names-real-kinds scope-names-real-actions]
+                      scope-names-real-kinds scope-names-real-actions
+                      scope-filters-are-filterable]
              ;; idempotent, deliberately: a non-idempotent action's 428
              ;; fires before the hide guard can conceal (invoke's step
              ;; order), and a keyless human probe must see 404, not a
@@ -519,7 +565,8 @@
                    ;; naming the kind's real actions — never approved
                    ;; into a scope that can never match
                    scope-names-real-kinds
-                   scope-names-real-actions]
+                   scope-names-real-actions
+                   scope-filters-are-filterable]
    :on-create (fn [row ctx]
                 (-> row
                     (assoc-in [:data :requested_by]
@@ -675,8 +722,28 @@
                  ;; hashes it kind-wide — a privacy restriction is
                  ;; never absorbed the way openness absorbs
                  :hashed (into #{} (comp (mapcat :hashed) (map str)) entries)
+                 ;; filter-scoped admission: nil when any entry lacks a
+                 ;; filter (openness absorbs, the ids rule); the guard
+                 ;; keeps filtered entries to one per kind, so the vec
+                 ;; is the row?/conds-of contract, not an OR machine
+                 :filters (when-not (some #(nil? (:filter %)) entries)
+                            (mapv :filter entries))
                  :args (args-of entries)}]))
         (group-by :kind (get-in row [:data :scope]))))
+
+(defn- row-matches?
+  "Does this decoded row sit inside one of the entry's filter maps?
+  Exact text comparison against the data field — the same value the
+  collection's :eq cond compares in SQL, so the row check and the
+  query check tell one story."
+  [row filter-maps]
+  (boolean
+   (some (fn [fm]
+           (every? (fn [[f v]]
+                     (= (str (get-in row [:data (keyword (name f))]))
+                        (str v)))
+                   fm))
+         filter-maps)))
 
 (def dead
   "The scoped-to-nothing surface a dead or unknown grant confers."
@@ -847,7 +914,14 @@
              (let [k (name kind)]
                (boolean
                 (if-some [e (get surface k)]
-                  (or (nil? (:ids e)) (contains? (:ids e) (str id)))
+                  (and (or (nil? (:ids e)) (contains? (:ids e) (str id)))
+                       ;; filter-scoped: the row itself is the judge —
+                       ;; one load per check, paid only by filtered
+                       ;; entries; a row outside the filter is the
+                       ;; same 404 as a row outside the ids
+                       (or (nil? (:filters e))
+                           (when-some [row (load-decoded eng (keyword k) id)]
+                             (row-matches? row (:filters e)))))
                   (own-row? k id)))))
      :action? (fn [kind action]
                 (let [k (name kind) a (name action)]
@@ -886,6 +960,15 @@
                (if-some [e (get surface k)]
                  (admits? (get-in e [:args (name action)]) (name arg))
                  (own-kind? k))))
+     ;; the filter entry's query half: conds the collection ANDs into
+     ;; its search, so listings, totals and facets tell the same story
+     ;; row? tells — the guard's one-filtered-entry rule is what keeps
+     ;; this a conjunction instead of an OR machine
+     :conds-of (fn [kind]
+                 (when-some [fms (get-in surface [(name kind) :filters])]
+                   (vec (for [[f v] (first fms)]
+                          {:target :data :field (keyword (name f))
+                           :cast "text" :op := :value (str v)}))))
      :ids-of (fn [kind]
                (let [k (name kind)]
                  (if-some [e (get surface k)]

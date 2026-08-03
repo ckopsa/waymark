@@ -193,8 +193,11 @@ async function renderAccess(view, seq) {
                              title:"days until the leash expires"});
   const gScope = el("textarea", {rows:"3",
     style:"width:100%;font-family:var(--mono);font-size:12px;margin-top:6px",
-    title:"the grant's scope — kind + actions ([] = read-only), ids to pin rows"});
-  gScope.value = '[{"kind":"task","actions":["complete"]}]';
+    title:"the grant's scope — kind + actions ([] = read-only); ids pins "
+        + "rows, filter {field: value} scopes by MATCH (a declared-"
+        + "filterable field), covering rows minted later too"});
+  gScope.value = '[{"kind":"task","actions":["complete"],'
+               + '"filter":{"assignee":"…member-id…"}}]';
   const gOut = el("div", {});
   guest.append(
     el("div", {}, gName, gDays, el("span", {class:"muted"}, " days")),
