@@ -100,7 +100,10 @@ function leashEl(at) {
 async function fullItems(colHref) {
   const col = await api(colHref);
   if (!col.ok) return [];
-  const items = (col.body.data?.items || []).slice(0, 50);
+  /* a phone pays for every request — 20 rows per collection, not 50 */
+  const cap = document.documentElement.getAttribute("data-ui") === "mobile"
+    ? 20 : 50;
+  const items = (col.body.data?.items || []).slice(0, cap);
   const envs = await Promise.all(items.map(it => api(it.self)));
   return envs.filter(r => r.ok).map(r => r.body);
 }
@@ -193,11 +196,14 @@ async function renderAccess(view, seq) {
                              title:"days until the leash expires"});
   const gScope = el("textarea", {rows:"3",
     style:"width:100%;font-family:var(--mono);font-size:12px;margin-top:6px",
-    title:"the grant's scope — kind + actions ([] = read-only); ids pins "
-        + "rows, filter {field: value} scopes by MATCH (a declared-"
-        + "filterable field), covering rows minted later too"});
-  gScope.value = '[{"kind":"task","actions":["complete"],'
-               + '"filter":{"assignee":"…member-id…"}}]';
+    title:"the grant's scope — defaults to [] (read-only nothing); paste "
+        + "richer scope JSON as needed: kind + actions ([] = read-only), "
+        + "ids pins rows, filter {field: value} scopes by MATCH (a "
+        + "declared-filterable field), covering rows minted later too"});
+  /* the honest minimum, not a template to hand-edit: an empty scope
+     vector is schema-valid and admits nothing — the phone path mints
+     the link in one press; richer scope is the paste-JSON path */
+  gScope.value = '[]';
   const gOut = el("div", {});
   guest.append(
     el("div", {}, gName, gDays, el("span", {class:"muted"}, " days")),

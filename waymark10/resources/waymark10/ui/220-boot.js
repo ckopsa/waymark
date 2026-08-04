@@ -73,5 +73,62 @@ setInterval(presenceBeat, 10000);
 window.addEventListener("hashchange", presenceBeat);
 presenceBeat();
 
+/* ── intents: the considering/asking stream (GET /api/-/intents,
+   ephemeral like presence — never law). An agent's dry-run arrives as
+   a quiet "considering…" card that vanishes on its close frame; a
+   warning wall it hit lingers as a question with an "answer yes"
+   button. The answer only DELIVERS (POST /api/-/intents/answer) — the
+   agent's retry still passes the guard through its own acknowledge
+   header, so this button can never override anything. Concealment is
+   the server's job: a card this viewer may not see never arrives. */
+const INTENTS = new Map();   // intent id → freshest entry
+async function answerIntent(id) {
+  try {
+    const res = await fetch("/api/-/intents/answer", {method: "POST",
+      headers: Object.assign({"Content-Type": "application/json"},
+                             principalHeaders()),
+      body: JSON.stringify({id})});
+    if (!res.ok) toast(`answer refused (${res.status})`);
+  } catch (_e) { /* engine restarting; the stream restates the truth */ }
+}
+function paintIntents() {
+  const box = $("#intents");
+  if (!box) return;
+  /* questions outrank shadows — an ask must never hide under a pile
+     of considerings when the stack caps at four */
+  const all = [...INTENTS.values()]
+    .sort((a, b) => (a.status === "considering") - (b.status === "considering"));
+  const more = all.length - 4;
+  box.replaceChildren(...all.slice(0, 4).map(i =>
+    el("div", {class: "intent"},
+      el("div", {},
+        el("span", {class: "actor-mark " + (i.principal.type || "agent")},
+          ACTOR_MARKS[i.principal.type] || "◆"),
+        ` ${i.principal.display || i.principal.id} — `,
+        el("b", {}, pretty(i.action)), " on ",
+        el("a", {href: "#" + i.self, title: i.self},
+          i.self.replace(/^\/api\//, ""))),
+      i.question ? el("div", {class: "q"}, i.question)
+                 : el("div", {class: "muted"}, "considering…"),
+      i.status === "asking"
+        ? el("button", {onclick: () => answerIntent(i.id)}, "answer yes")
+        : i.status === "answered"
+          ? el("div", {class: "muted"}, "✓ answered by "
+              + ((i.answer && i.answer.by
+                  && (i.answer.by.display || i.answer.by.id)) || "someone"))
+          : null)),
+    ...(more > 0 ? [el("div", {class: "intent-more"},
+                      `… and ${more} more`)] : []));
+}
+sse("/api/-/intents", ({event, data: f}) => {
+  if (event !== "intent") return;
+  if (f.event === "snapshot") {
+    INTENTS.clear();
+    for (const i of f.intents || []) INTENTS.set(i.id, i);
+  } else if (f.event === "close") INTENTS.delete(f.id);
+  else INTENTS.set(f.id, f);   // open | update
+  paintIntents();
+});
+
 $("#apphost").textContent = location.host;  // the honest app identity
 render();

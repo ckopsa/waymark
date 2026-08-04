@@ -327,6 +327,38 @@
          (and (seq (:surfaces eng)) (nil? vis))
          (assoc :surfaces (surface/well-known-entry (:surfaces eng)))
 
+         ;; the doors (hospitality audit, agent walk #4): a kind index
+         ;; with no door index taught a cold bearer-arriving agent the
+         ;; nouns and none of the verbs of arrival. None of these
+         ;; hrefs is a secret — each door gates itself.
+         true
+         (assoc :doors
+                (cond-> {:welcome {:href "/api/-/welcome" :method "GET"
+                                   :note (str "the joining protocol — "
+                                              "?invite=TOKEN while invited; "
+                                              "any named principal re-reads "
+                                              "it bare, forever")}
+                         :knock {:href "/agentInvite" :method "POST"
+                                 :note "self-service invitation — name yourself"}
+                         :ask {:href "/api/approval_requests" :method "POST"
+                               :note "how sight is negotiated"}
+                         :grant_check {:href "/api/-/grant-check" :method "GET"
+                                       :note "capability-grant introspection"}
+                         :presence {:href "/api/-/presence"
+                                    :note "who is looking where (SSE / POST)"}
+                         :events {:href "/api/-/events"
+                                  :note "the firehose (SSE; unscoped only — a recorded punt)"}}
+                  (get-in eng [:oidc :rp])
+                  (assoc :agent_session
+                         {:href "/auth/agent" :method "POST"
+                          :note "invite token → session cookie, no credential needed"}
+                         :guest {:template "/auth/guest?invite={bind_token}"
+                                 :note (str "the magic link: an invited member "
+                                            "with a standing grant enters "
+                                            "scoped, re-enters while it lives")}
+                         :welcome_link {:template "/api/-/welcome?invite={bind_token}"
+                                        :note "the link a minted invitation becomes"})))
+
          ;; who the engine resolved this request to — the UI's
          ;; signed-in identity; absent when anonymous
          (not= t/anonymous principal)
@@ -1046,13 +1078,19 @@
 ;; ── the welcome document (the invite link's destination) ───────────
 
 (defn- welcome-doc
-  "GET /api/-/welcome?invite=TOKEN: what the invite link the human
-  hands an agent points at — the whole joining protocol as one wire
-  document, readable cold. Token-gated, not authenticated (the token
-  IS the secret); an unknown or already-spent token answers 404 and
-  says nothing. No side effects: the token spends on the agent's
-  first real request carrying X-Waymark-Invite — which can be the
-  access request itself, so joining is one POST.
+  "GET /api/-/welcome?invite=TOKEN — or, for any NAMED principal, no
+  token at all: the whole joining protocol as one wire document. The
+  token gate serves the cold arrival (the token IS the secret; an
+  unknown or spent token with no credential answers 404, and the
+  refusal names the knock door — the one remedy that leaks nothing,
+  because it is the same sentence whatever the token's fate). A
+  principal already through the door re-reads the manual forever —
+  the hospitality audit's first finding was that following the doc's
+  own cautious_path SPENT the doc: bind first, and the manual 404'd
+  behind you. The :bind and :session sections ride only while an
+  invitation actually stands; everything else is schema, not secret
+  (the :vocabulary-open? argument, again). No side effects either
+  way.
 
   :ask.vocabulary is the closing-the-loop link: well-known's
   per-kind :actions names the exact scope-entry strings this engine
@@ -1063,9 +1101,18 @@
   [eng]
   (fn [req]
     (let [token (get (query-params req) "invite")
-          member (or (members/invited-by-token eng token)
-                     (throw (p/problem :not-found 404 "Not found"
-                                       {:detail "No standing invitation."})))
+          member (members/invited-by-token eng token)
+          principal (principal-of req)
+          named? (and (some? principal)
+                      (not= (:id principal) (:id t/anonymous)))
+          _ (when-not (or member named?)
+              (throw (p/problem :not-found 404 "Not found"
+                                {:detail "No standing invitation."
+                                 :knock {:href "/agentInvite" :method "POST"
+                                         :note (str "no invitation? knock — "
+                                                    "name yourself and the "
+                                                    "door answers with a "
+                                                    "fresh one")}})))
           services (:services eng)
           default-ttl (long (:grant-default-ttl-seconds services 3600))
           max-ttl (long (:grant-max-ttl-seconds services 86400))]
@@ -1073,7 +1120,10 @@
        200
        (cond->
         {:waymark "10"
-         :welcome (get-in member [:data :display])
+         :welcome (or (get-in member [:data :display])
+                      (:display principal))}
+        member
+        (assoc
          :bind {:header "X-Waymark-Invite"
                :token token
                :note (str "send this header on your FIRST request — it "
@@ -1091,11 +1141,20 @@
                     "request; same end state, nothing rides on one shot")}
         :identity {:header "x-waymark-principal"
                    :note "your stable agent id — every act is recorded under it"
-                   :actor_type "agent"}
+                   :actor_type "agent"})
+
+        ;; everything below is schema, not secret — it rides for every
+        ;; reader, invited or long since through the door
+        true
+        (assoc
         :ask {:href "/api/approval_requests"
               :method "POST"
               :body {:task "what you are here to do, one sentence"
-                     :scope [{:kind "a kind name from the vocabulary"
+                     :scope [{:kind (str "a kind name from the vocabulary — "
+                                         "or a dotted capability token "
+                                         "(telegram.send) from GET "
+                                         "/api/capabilities: an EXTERNAL "
+                                         "power, granted the same way")
                               :actions ["exact action-name strings from the vocabulary"]
                               :ids "optional — specific rows"
                               :fields "optional — {mode allow|deny, names […]}"
@@ -1118,6 +1177,16 @@
                     :note "propose the shortest leash your task needs; unstated means the default"}}
         :then {:poll (str "GET /api/approval_requests — your own asks are "
                           "always visible to you; approval stamps grant_id")
+               :watch {:template "/api/approval_requests/{ask-id}/-/events"
+                       :note (str "better than polling: SSE on your OWN "
+                                  "ask — you already hold this stream, "
+                                  "and the verdict arrives as a frame")}
+               :grant_check {:href "/api/-/grant-check"
+                             :note (str "for capability grants: the "
+                                        "enforcement point (or you) asks "
+                                        "?grant=&principal=&capability= "
+                                        "and gets {allowed, constraints, "
+                                        "expires_at}")}
                :handoff {:template "/#/api/approval_requests/{ask-id}"
                          :note (str "show your human this link (on this "
                                     "host) the moment your ask exists — "
@@ -1143,12 +1212,23 @@
                               "present; silence fades you out in ~45s). "
                               "The reference client (waymark10.client) "
                               "beats it for you on every read.")}
-         :discovery "/api/.well-known/waymark"}
+         :discovery "/api/.well-known/waymark")
+
+         ;; the registry rides when this engine keeps one — the
+         ;; external powers a dotted scope entry may name
+         (get (inv/resources eng) :capability)
+         (assoc :capabilities
+                {:href "/api/capabilities"
+                 :note (str "the EXTERNAL powers this house grants "
+                            "(telegram.send, email.read …) — readable "
+                            "to every named principal; a scope entry "
+                            "naming one is asked, approved, leashed "
+                            "and revoked exactly like a kind")})
 
          ;; the credential-less door (oidc-rp's /auth/agent): present
-         ;; exactly when the RP flow guards this engine — an agent
-         ;; holding ONLY this link can still get in
-         (get-in eng [:oidc :rp])
+         ;; exactly when the RP flow guards this engine AND an
+         ;; invitation still stands — the session mints off the token
+         (and member (get-in eng [:oidc :rp]))
          (assoc :session
                 {:href (str "/auth/agent?invite=" token)
                  :method "POST"

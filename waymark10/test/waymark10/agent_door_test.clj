@@ -145,11 +145,33 @@
           "the vocabulary stays whole — an agent must be able to
            NAME what it asks for"))
 
-    (testing "the link went dark — door and welcome both"
-      (is (= 404 (:status (req* *gated* :post "/auth/agent"
-                                {:query (str "invite=" token)}))))
+    (testing "the link went dark — door and welcome both — and the
+              dark answer names the knock"
+      (let [dead (req* *gated* :post "/auth/agent"
+                       {:query (str "invite=" token)})]
+        (is (= 404 (:status dead)))
+        (is (= "/agentInvite" (get-in (json dead) [:knock :href]))
+            "a dark invite's one legal remedy rides the refusal"))
       (is (= 404 (:status (req* *gated* :get "/api/-/welcome"
-                                {:query (str "invite=" token)})))))
+                                {:query (str "invite=" token)})))
+          "anonymous with a spent token stays dark"))
+
+    (testing "the manual survives being followed — a named principal
+              re-reads the welcome bare, forever"
+      (let [doc (json (req* *gated* :get "/api/-/welcome"
+                            {:headers {"cookie" cookie}}))]
+        (is (some? (:ask doc)))
+        (is (nil? (:bind doc))
+            "no standing invitation — no bind section to mislead")
+        (is (some? (get-in doc [:then :watch]))
+            "the doc teaches watching your own ask over polling")))
+
+    (testing "well-known indexes the doors"
+      (let [w (json (req* *gated* :get "/api/.well-known/waymark"
+                          {:headers {"cookie" cookie}}))]
+        (is (= "/agentInvite" (get-in w [:doors :knock :href])))
+        (is (some? (get-in w [:doors :guest :template]))
+            "the RP engine publishes the magic-link template")))
 
     (testing "a live session renews; nothing renews nothing"
       (let [renewed (req* *gated* :post "/auth/agent/renew"

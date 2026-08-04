@@ -26,6 +26,13 @@
   html[data-ui="mobile"] body {
     padding-bottom: calc(var(--tabbar-h) + 44px); }
   html[data-ui="mobile"] #who { width: 90px; }
+  /* the header chips stay nowrap (020-base.css) — on a phone they
+     clamp and ellipsize instead of shoving the page into horizontal
+     scroll; the header itself wraps rather than widens */
+  html[data-ui="mobile"] header { flex-wrap: wrap; }
+  html[data-ui="mobile"] #followchip,
+  html[data-ui="mobile"] #grantchip {
+    max-width: 46vw; overflow: hidden; text-overflow: ellipsis; }
   /* the kinds nav rides a fixed bottom tab bar — thumb reach first */
   html[data-ui="mobile"] header nav {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 16;

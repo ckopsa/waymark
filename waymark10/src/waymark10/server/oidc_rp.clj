@@ -103,12 +103,23 @@
 
 (defn- problem
   "These routes sit OUTSIDE wrap-problems (the :wrap-handler seam), so
-  refusals are built responses, not thrown ones."
-  [status title detail]
-  {:status status
-   :headers {"Content-Type" "application/problem+json"}
-   :body (wire/write-json {:type "about:blank" :status status
-                           :title title :detail detail})})
+  refusals are built responses, not thrown ones. extra keys ride into
+  the body — the knock remedy on a dark invite, and nothing secret."
+  ([status title detail] (problem status title detail nil))
+  ([status title detail extra]
+   {:status status
+    :headers {"Content-Type" "application/problem+json"}
+    :body (wire/write-json (merge {:type "about:blank" :status status
+                                   :title title :detail detail}
+                                  extra))}))
+
+(def ^:private knock-remedy
+  "The one remedy a dark invite may name without leaking: /agentInvite
+  is anonymous, paced, and exists precisely for the principal holding
+  nothing — the same sentence whether the token was spent, wrong, or
+  never existed (hospitality audit, agent walk #8)."
+  {:href "/agentInvite" :method "POST"
+   :note "no invitation? knock — name yourself and the door answers with a fresh one"})
 
 ;; ── the IdP's doors (Keycloak realm shapes, overridable) ────────────
 
@@ -338,7 +349,7 @@
                             :roles (set (get-in row [:data :roles]))
                             :display (or (get-in row [:data :display])
                                          (:id row))})
-      (problem 404 "Not found" "No standing invitation."))))
+      (problem 404 "Not found" "No standing invitation." {:knock knock-remedy}))))
 
 (defn- agent-renew
   "POST /auth/agent/renew — possession of a LIVE session renews it
@@ -370,7 +381,8 @@
   [eng oidc req]
   (let [rp (:rp oidc)
         token (get (query-params req) "invite")
-        dark (problem 404 "Not found" "No standing invitation.")
+        dark (problem 404 "Not found" "No standing invitation."
+                      {:knock knock-remedy})
         admit (fn [member]
                 (let [principal (t/principal
                                  {:id (:id member) :type :agent

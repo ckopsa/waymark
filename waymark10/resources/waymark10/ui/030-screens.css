@@ -127,6 +127,21 @@
   #ticker b { color: var(--ink); font-weight: 600; }
   #ticker .mono { font-size: 11px; }
 
+  /* intent cards: an agent's considering/asking as a small stack out
+     of the way bottom-right — chrome beside the work, never a wall
+     over it (above the ticker, below the toast) */
+  #intents { position: fixed; right: 12px; bottom: 34px; z-index: 15;
+             display: flex; flex-direction: column; gap: 6px;
+             width: 264px; max-width: 90vw; }
+  .intent { background: var(--panel); border: 1px solid var(--line);
+            border-radius: var(--radius); box-shadow: var(--shadow);
+            padding: 8px 10px; font-size: 12.5px; }
+  .intent .q { font-family: var(--serif); font-size: 13.5px;
+               margin: 4px 0; }
+  .intent button { font-size: 12px; padding: 3px 10px; }
+  .intent-more { font-size: 11.5px; color: var(--muted);
+                 text-align: right; }
+
   /* refusals and problems speak in the server's voice: serif */
   .problem { background: var(--refusal-wash); border: 1px solid var(--line);
              border-left: 3px solid var(--refusal); color: var(--ink);

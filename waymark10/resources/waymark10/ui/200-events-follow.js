@@ -192,7 +192,10 @@ function followChip() {
            + "/api/-/presence to be seen"},
       "no gaze yet"));
   }
-  if (hereHref() === "access")
+  /* the parked note earns its width on a desktop; on a phone the chip
+     is already fighting for the header, so the toast alone says it */
+  if (hereHref() === "access" &&
+      document.documentElement.getAttribute("data-ui") !== "mobile")
     chip.append(" · ", el("span", {class: "gaze-faded",
       title: "follow-navigation parks on the Access panel — leave it and "
            + "this screen goes where they look"},
