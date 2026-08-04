@@ -67,6 +67,7 @@
             [waymark10.resource :as r]
             [waymark10.schema :as schema]
             [waymark10.server.collections :as collections]
+            [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
@@ -188,39 +189,76 @@
   "The filtered view as an xlsx response: the collection query
   grammar verbatim (pagination params ignored — a worksheet is the
   whole subset), one header row (id / version / state, then the
-  declared columns), one row per match. Over export-cap refuses 422."
-  [eng rdef params]
-  (let [ws (spec-of rdef)
-        {:keys [conds sort]} (collections/parse-query
-                              rdef (dissoc params "page[size]" "page[number]"))
-        st (:storage eng)
-        rows (store/with-tx st
-               (fn [tx]
-                 (store/search-rows st tx (:kind rdef) conds
-                                    {:order-by (:field sort)
-                                     :desc (:desc sort)
-                                     :limit (inc export-cap)})))]
-    (when (> (count rows) export-cap)
-      (throw (p/schema-invalid
-              :worksheet
-              {:rows [(str "over " export-cap
-                           " rows match — narrow the filter and export again")]})))
-    (let [cols (:columns ws)
-          header (into reserved-headers (map (comp name :field)) cols)
-          body (mapv (fn [raw]
-                       (let [row (inv/decode-row rdef raw)
-                             enc (schema/encode (:schema rdef) (:data row))]
-                         (into [(str (:id row))
-                                (:version row)
-                                (name (:state row))]
-                               (map (fn [c] (export-cell (get enc (:field c)))))
-                               cols)))
-                     rows)]
-      {:status 200
-       :headers {"Content-Type" "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                 "Content-Disposition" (str "attachment; filename=\""
-                                            (:plural rdef) ".xlsx\"")}
-       :body (xlsx/write-sheet (into [header] body))})))
+  declared columns), one row per match. Over export-cap refuses 422.
+  A visibility (the per-request grant projection) narrows the file
+  exactly as it narrows the collection envelope: the query oracle
+  judges requested filters and sorts, a non-plain default sort softens
+  to natural order, the leash's ids/conds AND into the search (so the
+  rows and the cap count tell the grant's story), columns project by
+  field admission, and a hashed field's cells land as tokens."
+  ([eng rdef params] (export eng rdef params nil))
+  ([eng rdef params vis]
+   (let [ws (spec-of rdef)
+         {:keys [conds sort]} (collections/parse-query
+                               rdef (dissoc params "page[size]" "page[number]"))
+         _ (grants/check-query! vis rdef (remove :default? conds)
+                                (when (contains? params "sort")
+                                  (:field sort)))
+         sort (if (and vis (:field sort)
+                       (not (#{:id :state} (:field sort)))
+                       (not (grants/plain-field? vis (:kind rdef)
+                                                 (:field sort))))
+                (assoc sort :field nil)
+                sort)
+         conds (if-some [ids (when vis ((:ids-of vis) (:kind rdef)))]
+                 (conj conds {:target :id :op :in :values (vec ids)})
+                 conds)
+         conds (if-some [fconds (when (and vis (:conds-of vis))
+                                  ((:conds-of vis) (:kind rdef)))]
+                 (into conds fconds)
+                 conds)
+         st (:storage eng)
+         rows (store/with-tx st
+                (fn [tx]
+                  (store/search-rows st tx (:kind rdef) conds
+                                     {:order-by (:field sort)
+                                      :desc (:desc sort)
+                                      :limit (inc export-cap)})))]
+     (when (> (count rows) export-cap)
+       (throw (p/schema-invalid
+               :worksheet
+               {:rows [(str "over " export-cap
+                            " rows match — narrow the filter and export again")]})))
+     (let [kind (:kind rdef)
+           cols (cond->> (:columns ws)
+                  (:field? vis) (filterv #((:field? vis) kind (:field %))))
+           hashed? (:hashed? vis)
+           header (into reserved-headers (map (comp name :field)) cols)
+           body (mapv (fn [raw]
+                        (let [row (inv/decode-row rdef raw)
+                              enc (schema/encode (:schema rdef) (:data row))]
+                          (into [(str (:id row))
+                                 (:version row)
+                                 (name (:state row))]
+                                (map (fn [c]
+                                       (let [f (:field c)]
+                                         ;; the hashed disposition: the
+                                         ;; token of the DECODED value —
+                                         ;; encoding ran over the
+                                         ;; original, tokens land after
+                                         ;; (render's own order)
+                                         (if (and hashed? (hashed? kind f))
+                                           (when (contains? (:data row) f)
+                                             ((:hash vis) kind f
+                                              (get-in row [:data f])))
+                                           (export-cell (get enc f))))))
+                                cols)))
+                      rows)]
+       {:status 200
+        :headers {"Content-Type" "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  "Content-Disposition" (str "attachment; filename=\""
+                                             (:plural rdef) ".xlsx\"")}
+        :body (xlsx/write-sheet (into [header] body))}))))
 
 ;; ── staging: workbook bytes → normalized lines ──────────────────────
 

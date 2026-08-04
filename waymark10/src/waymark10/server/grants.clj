@@ -133,8 +133,9 @@
     filtered entry per kind), judged at the row (row?) and ANDed
     into the collection query (conds-of), so rows minted after the
     grant land inside the leash the moment they match. The worksheet
-    export's missing visibility is that route's own recorded gap,
-    not this entry's."
+    export consumes both halves the way the collection does
+    (waymark-ecq closed); the upload half still refuses scoped
+    requests — staging lands rows the uploader cannot see."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]

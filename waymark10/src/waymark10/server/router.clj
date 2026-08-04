@@ -1414,12 +1414,10 @@
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)]
       (check-kind! req rdef)
-      ;; the export is unprojected (recorded gap): a scoped request
-      ;; is refused whole rather than handed the kind unredacted —
-      ;; the same 404 as a concealed kind, until projection lands
-      (when (visibility-of req)
-        (throw (p/not-found "collection" plural)))
-      (worksheet/export eng rdef (query-params req)))))
+      ;; the export projects (waymark-ecq closed): the visibility
+      ;; rides into the query and the columns exactly as it rides
+      ;; the collection envelope
+      (worksheet/export eng rdef (query-params req) (visibility-of req)))))
 
 (defn- worksheet-post
   "POST /api/:plural/-/worksheet — the edited workbook back, raw

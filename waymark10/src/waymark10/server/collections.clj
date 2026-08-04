@@ -659,11 +659,13 @@
                 ;; the offline round-trip, carrying THIS view's filters
                 ;; — the downloaded workbook holds exactly what the
                 ;; page's query shows (unpaged; the worksheet route
-                ;; ignores pagination)
-                ;; the worksheet routes are unprojected (the recorded
-                ;; export gap) — a scoped reader is not handed the
-                ;; button to a door that would leak past the leash
-                (and (:worksheet rdef) (nil? vis))
+                ;; ignores pagination). The export PROJECTS under a
+                ;; grant (waymark-ecq closed), so a scoped reader gets
+                ;; the button back — but the upload half still refuses
+                ;; scoped requests (staging lands rows the uploader
+                ;; cannot see), so the scoped summary promises only
+                ;; the download
+                (:worksheet rdef)
                 (assoc :worksheet
                        (let [q (dissoc applied "page[size]" "page[number]")]
                          {:href (str "/api/" plural "/-/worksheet"
@@ -673,7 +675,9 @@
                                                                  (str (enc k) "=" (enc v)))
                                                                q)))))
                           :kind "worksheet"
-                          :summary "This view as an editable workbook — download, edit offline, upload the edits"})))
+                          :summary (if vis
+                                     "This view as a workbook download"
+                                     "This view as an editable workbook — download, edit offline, upload the edits")})))
         acts (collection-actions rdef)
         ;; a scoped request's collection affordances: query stays (the
         ;; kind itself is granted or this envelope never rendered),

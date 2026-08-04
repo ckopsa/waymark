@@ -22,6 +22,7 @@
             [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
+            [waymark10.server.xlsx :as xlsx]
             [waymark10.test.db :as db]
             [waymark10.wire :as wire])
   (:import (java.security KeyPairGenerator)))
@@ -51,6 +52,9 @@
                       :x-display {:widget "prose" :teaser true}}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in} :assignee #{:eq}}
+   ;; the offline round-trip, so the projected export (waymark-ecq)
+   ;; is testable through the real doors — read-only columns suffice
+   :worksheet {:columns [{:field :title} {:field :assignee}]}
    :actions
    {:complete {:from #{:open} :to :done
                :safety {:idempotent true :reversible false :confirm false
@@ -58,8 +62,8 @@
                :display {:label "Complete" :order 1}}}})
 
 (def ^:private tables
-  ["meals" "guest_chores" "capabilities" "members" "roles" "grants"
-   "approval_requests"
+  ["meals" "guest_chores" "worksheets" "capabilities" "members" "roles"
+   "grants" "approval_requests"
    "attachments" "subscriptions" "jobs" "definitions"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
    "waymark10_cursors" "waymark10_job_leases"])
@@ -511,7 +515,34 @@
     (testing "the collection oracle stays closed: the guest's own
               probe filters still answer the grammar honestly"
       (is (= 200 (:status (as-guest :get "/api/guest_chores"
-                                    {:query "state=open"})))))))
+                                    {:query "state=open"})))))
+
+    (testing "the scoped reader gets the worksheet button back — the
+              download projects (waymark-ecq), so the link is honest
+              again, promising only the download"
+      (let [link (get-in (json (as-guest :get "/api/guest_chores"))
+                         [:links :worksheet])]
+        (is (= "/api/guest_chores/-/worksheet" (:href link)))
+        (is (= "This view as a workbook download" (:summary link)))))
+
+    (testing "the export is the leash's view: jack's rows and no one
+              else's — the file and the collection tell one story"
+      (let [resp (as-guest :get "/api/guest_chores/-/worksheet")
+            sheet (xlsx/read-sheet (:body resp))
+            titles (into #{} (map #(nth % 3)) (rest sheet))]
+        (is (= 200 (:status resp)))
+        (is (= ["id" "version" "state" "title" "assignee"] (first sheet)))
+        (is (= (get-in (json (as-guest :get "/api/guest_chores"))
+                       [:data :total])
+               (count (rest sheet)))
+            "every leashed row and only the leashed rows")
+        (is (contains? titles "Dishes"))
+        (is (not (contains? titles "Couple stuff")))))
+
+    (testing "the upload half still refuses a scoped request —
+              staging lands rows the uploader cannot see"
+      (is (= 404 (:status (as-guest :post "/api/guest_chores/-/worksheet"
+                                    {:body {}})))))))
 
 (deftest a-filter-scope-speaks-the-declared-grammar-or-not-at-all
   (let [try-grant (fn [scope]

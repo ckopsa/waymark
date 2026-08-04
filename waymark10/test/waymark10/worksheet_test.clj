@@ -7,7 +7,8 @@
   conflict, read-only edits become notes, id-less lines create (a
   create-push mirror claims its mint). Needs the test database:
   WAYMARK10_TEST_DSN=…waymark10_test."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]
             [waymark10.resource :as r :refer [defhandler]]
             [waymark10.server.engine :as engine]
@@ -81,7 +82,7 @@
               [:author {:optional true :x-display {:hidden true}}
                [:maybe [:string {:max 120}]]]
               [:parent_id {:optional true} [:maybe [:string {:max 64}]]]]
-     :filterable {:state #{:eq}}
+     :filterable {:state #{:eq} :score #{:eq}}
      :create-schema [:map
                      [:title [:string {:min 1 :max 120}]]
                      [:score {:optional true} [:maybe :decimal]]]
@@ -197,6 +198,75 @@
         (is (= #{"One" "Two"} (set (map #(col sheet % "title") [1 2]))))
         (is (every? #(some? (col sheet % "id")) [1 2]))
         (is (every? #(number? (col sheet % "version")) [1 2]))))))
+
+;; ── the projected export (waymark-ecq) ──────────────────────────────
+
+(defn- vis-stub
+  "A hand-built visibility: exactly the closures export consults —
+  grants/visibility's documented shape. The real minted thing rides
+  the HTTP tests (agent_door_test's filter-scoped guest)."
+  [& {:keys [ids conds fields hashed]}]
+  {:kind? (fn [_] true)
+   :field? (fn [_ f] (if fields (contains? fields f) true))
+   :hashed? (fn [_ f] (contains? (or hashed #{}) f))
+   :hash (fn [k f v] (str "#" (name k) "/" (name f) "/" (hash v)))
+   :ids-of (fn [_] ids)
+   :conds-of (fn [_] conds)})
+
+(defn- export-scoped [eng params vis]
+  (let [res (worksheet/export eng (note-rdef eng) params vis)]
+    (is (= 200 (:status res)))
+    (xlsx/read-sheet (:body res))))
+
+(deftest a-scoped-export-is-the-grants-view
+  (with-worksheet-engine
+    (fn [eng rm]
+      (swap! (:state rm) assoc :docs
+             {"n1" {:title "One" :score 1M :done_at nil :author "feed"}
+              "n2" {:title "Two" :score 2M :done_at nil :author "feed"}})
+      (mirror/discover! eng :note)
+      (let [n1 (row-of eng "n1")]
+        (testing "an ids leash narrows the rows — never the whole kind"
+          (let [sheet (export-scoped eng {} (vis-stub :ids [(str (:id n1))]))]
+            (is (= 2 (count sheet)) "one granted row plus the header")
+            (is (= (str (:id n1)) (col sheet 1 "id")))))
+        (testing "a filter leash ANDs into the query the collection's way"
+          (let [sheet (export-scoped
+                       eng {}
+                       (vis-stub :conds [{:target :data :field :title
+                                          :cast "text" :op := :value "Two"
+                                          :vis? true}]))]
+            (is (= 2 (count sheet)))
+            (is (= "Two" (col sheet 1 "title")))))
+        (testing "a non-admitted field's column is not in the file"
+          (let [sheet (export-scoped
+                       eng {}
+                       (vis-stub :fields #{:title :score :done_at :parent_id}))]
+            (is (= ["id" "version" "state" "title" "score" "done_at"
+                    "parent_id"]
+                   (first sheet)))))
+        (testing "a hashed field exports stable tokens, never values"
+          (let [v (vis-stub :hashed #{:title})
+                sheet (export-scoped eng {} v)
+                titles (set (map #(col sheet % "title") [1 2]))]
+            (is (every? #(str/starts-with? (str %) "#") titles)
+                (pr-str titles))
+            (is (empty? (filter #{"One" "Two"} titles)))
+            (is (= titles (set (map #(col (export-scoped eng {} v) % "title")
+                                    [1 2])))
+                "the token is stable — correlation is the point")))
+        (testing "the oracle is closed: a filter on a non-plain field
+                  answers the unknown-parameter 422"
+          (doseq [v [(vis-stub :fields #{:title :done_at :author :parent_id})
+                     (vis-stub :hashed #{:score})]]
+            (let [e (try (worksheet/export eng (note-rdef eng)
+                                           {"score" "1"} v)
+                         nil
+                         (catch Exception e e))]
+              (is (= 422 (:status (ex-data e))))
+              (is (re-find #"score" (str (get-in (ex-data e) [:detail])))))))
+        (testing "an unscoped export still serves the whole view"
+          (is (= 3 (count (export-rows eng {})))))))))
 
 (deftest an-upload-stages-as-a-planned-resource
   (with-worksheet-engine
