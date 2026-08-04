@@ -1159,6 +1159,40 @@
                             "Prefer this over the bind header when you "
                             "hold nothing else.")}))))))
 
+;; ── the grant-introspection door (waymark-44h) ──────────────────────
+
+(defn- grant-check
+  "GET /api/-/grant-check?grant=G&principal=P&capability=C — the
+  OAuth-token-introspection move for capability grants: the system
+  fronting external data (Gate, a telemetry proxy) asks whether the
+  grant its caller presented admits the named capability, and
+  forwards or refuses with its own hands. Named principals only; an
+  AGENT may introspect only a grant whose audience is itself —
+  anyone else's answer is the same {:allowed false} as a dead grant
+  (concealment holds at this door like every other)."
+  [eng]
+  (fn [req]
+    (let [caller (principal-of req)
+          _ (when (or (nil? caller)
+                      (= (:id caller) (:id t/anonymous)))
+              (throw (p/problem :unauthenticated 401 "Unauthenticated"
+                                {:detail (str "Introspection is for named "
+                                              "principals — present a "
+                                              "credential.")})))
+          q (query-params req)
+          gid (get q "grant")
+          pid (get q "principal")
+          cap (get q "capability")]
+      (if (some str/blank? [(str gid) (str pid) (str cap)])
+        (throw (p/problem :invalid-params 422 "Missing parameters"
+                          {:detail "grant, principal and capability are all required."}))
+        (json-response
+         200
+         (if (and (= :agent (:type caller))
+                  (not= (:id caller) (str pid)))
+           {:allowed false}
+           (grants/check-capability eng gid pid cap)))))))
+
 ;; ── the agent-invite door (the knock, self-service) ────────────────
 
 (defn- origin-of
@@ -1432,6 +1466,7 @@
            ["/api/-/collab-ticket" {:post (collab-ticket-mint eng)}]
            ["/api/-/mirrors/:plural/:action" {:post (mirror-sync-trigger eng)}]
            ["/api/-/welcome" {:get (welcome-doc eng)}]
+           ["/api/-/grant-check" {:get (grant-check eng)}]
            ["/agentInvite" {:get (agent-invite-doc eng)
                             :post (agent-invite-mint eng)}]
            ["/api/-/agent-invite" {:get (agent-invite-doc eng)

@@ -59,11 +59,15 @@
             [waymark10.dashboard :as dashboard]
             [waymark10.dsl :refer [in-domain]]
             [waymark10.saved-view :refer [saved-view]]
+            [waymark10.server.capabilities :refer [capability]]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
+            [waymark10.server.invoke :as inv]
+            [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
+            [waymark10.types :as t]
             [waymark10.server.store.postgres :as pg])
   (:gen-class))
 
@@ -231,7 +235,11 @@
        ;; ⋯ menu rather than minting a top-level nav group of their own.
        ;; saved_view first so the collections merge (collections.clj)
        ;; has its kind hosted.
-       (into (into [saved-view] dashboard/resources)))))
+       ;; the capability registry (waymark-44h): the grantable
+       ;; EXTERNAL powers this deployment names — enforcement lives
+       ;; at Gate, the law lives here. Domainless like the
+       ;; composition kinds, and for the same reason.
+       (into (into [saved-view capability] dashboard/resources)))))
 
 (def surfaces
   "Both decision screens, one engine: the housekeeper's day board and
@@ -255,6 +263,26 @@
   (case (System/getenv "WAYMARK10_DEPLOY_MODE")
     "propose" :propose
     :promote))
+
+(defn- ensure-capabilities!
+  "The registry's boot seed (waymark-44h): the capabilities this
+  deployment grants ride the code, ensured idempotently — created
+  when absent, never overwritten; retire/restore stay the humans'
+  doors."
+  [eng]
+  (doseq [{:keys [token] :as cap}
+          [{:token "telegram.send"
+            :description (str "Send a Telegram message through Gate — "
+                              "the household's addressed-notice "
+                              "transport, leashed per grant.")
+            :enforced_by "gate-mcp (192.168.1.40:8100)"}]]
+    (when (empty? (store/with-tx (:storage eng)
+                    (fn [tx] (store/query-rows (:storage eng) tx :capability
+                                               {:token token} {:limit 1}))))
+      (inv/create! eng :capability cap
+                   {:principal (t/principal {:id "workqueue10-boot"
+                                             :type :system
+                                             :display "Boot seed"})}))))
 
 (defonce ^:private dev (atom nil))
 
@@ -296,6 +324,7 @@
         ;; the in-process sources' late binding: delivered BEFORE
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
+        _ (ensure-capabilities! eng)
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         server (engine/start! eng port
                               {:wrap-handler (oidc-rp/wrap-handler eng)})]
@@ -377,6 +406,7 @@
                                             (System/getenv
                                              "WAYMARK10_FIELD_HASH_SALT")}}))
             _ (reset! engine-ref eng)
+        _ (ensure-capabilities! eng)
             io (scraper/handler-io {:handler (engine/handler eng)
                                     :principal "scraper"})]
         (scraper/run! {:find (:find io)

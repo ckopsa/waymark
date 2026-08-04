@@ -239,8 +239,20 @@
   [_row inp ctx]
   (if-some [names-of (:action-names ctx)]
     (if-some [bad (some (fn [e]
-                          (let [k (:kind e)]
-                            (when (nil? (names-of k)) k)))
+                          (let [k (str (:kind e))]
+                            (if (str/includes? k ".")
+                              ;; a dotted token names a CAPABILITY
+                              ;; (waymark-44h): judged against the
+                              ;; active registry, not the routes — an
+                              ;; engine without the registry, or a
+                              ;; token it never registered, refuses
+                              ;; the same way an unknown kind does
+                              (when-not (and (:find ctx)
+                                             (some #(= :active (:state %))
+                                                   ((:find ctx) :capability
+                                                    {:token k} {:limit 1})))
+                                k)
+                              (when (nil? (names-of k)) k))))
                         (:scope inp))]
       (t/deny {:vars {:kind bad}})
       (t/allow))
@@ -294,7 +306,7 @@
     ;; probe ctx carries no registry — decline to guess (phase-8)
     (t/allow)))
 
-(declare surface-of)
+(declare surface-of visibility)
 
 (defn- entry-within-surface?
   "Does one minted scope entry fit inside one minter grant's surface
@@ -885,6 +897,29 @@
                       (store/query-rows (:storage eng) tx :job {}
                                         {:limit 200}))))]
     (if (seq ids) (vec (sort ids)) ["-none-"])))
+
+(defn check-capability
+  "The introspection answer (waymark-44h, the grant-check door): does
+  grant G, held by principal P, admit capability C right now? Rides
+  the same visibility resolution every request rides — wrong
+  audience, unaccepted, revoked, expired and unknown all collapse to
+  {:allowed false} with nothing else said (concealment: the caller
+  learns no scope it did not name). :constraints is the capability
+  entry's filter map, the enforcement point's to interpret;
+  :expires_at rides along so the caller can cache the yes no longer
+  than it lives."
+  [eng grant-id principal-id capability]
+  (let [vis (visibility eng (str grant-id)
+                        (t/principal {:id (str principal-id) :type :agent
+                                      :display (str principal-id)}))
+        e (get (:surface vis) (str capability))]
+    (if (nil? e)
+      {:allowed false}
+      {:allowed true
+       :constraints (some-> (:filters e) first)
+       :actions (vec (sort (:actions e)))
+       :expires_at (some-> (load-decoded eng :grant (str grant-id))
+                           (get-in [:data :expires_at]) str)})))
 
 (defn standing-grant-for
   "The grant the guest door hangs a session on: the newest grant for

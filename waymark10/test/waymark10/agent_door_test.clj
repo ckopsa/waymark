@@ -16,6 +16,7 @@
             [next.jdbc :as jdbc]
             [waymark10.fixtures :as fx]
             [waymark10.resource :refer [defresource]]
+            [waymark10.server.capabilities :refer [capability]]
             [waymark10.server.engine :as engine]
             [waymark10.server.members :as members]
             [waymark10.server.oidc-rp :as rp]
@@ -57,7 +58,8 @@
                :display {:label "Complete" :order 1}}}})
 
 (def ^:private tables
-  ["meals" "guest_chores" "members" "roles" "grants" "approval_requests"
+  ["meals" "guest_chores" "capabilities" "members" "roles" "grants"
+   "approval_requests"
    "attachments" "subscriptions" "jobs" "definitions"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
    "waymark10_cursors" "waymark10_job_leases"])
@@ -74,7 +76,7 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
         (let [eng (engine/engine
-                   {:storage st :resources [fx/meal guest-chore]
+                   {:storage st :resources [fx/meal guest-chore capability]
                     :oidc {:issuer "https://idp.test/realms/home"
                            :audience "door-test"
                            :jwks jwks
@@ -591,3 +593,99 @@
             (is (every? #(not (str/includes? (str (:summary %)) "Couple"))
                         (get-in col [:data :items]))
                 "the minted guest sees jack's rows, never colton's")))))))
+
+;; ── capability grants: the authority crosses, not the data ──────────
+
+(deftest a-capability-grant-is-law-about-access-not-data
+  (testing "an unregistered dotted token refuses at the door"
+    (is (contains? #{409 422}
+                   (:status (req* *raw* :post "/api/grants"
+                                  {:body {:audience "gate-pilot"
+                                          :scope [{:kind "telegram.send"
+                                                   :actions []}]}
+                                   :headers admin})))))
+
+  ;; the registry names the power; the dot is how a scope entry is
+  ;; known to mean it
+  (let [cap (json (req* *raw* :post "/api/capabilities"
+                        {:body {:token "telegram.send"
+                                :description "Send a Telegram message via Gate"
+                                :enforced_by "gate-mcp"}
+                         :headers admin}))]
+    (is (= "active" (:state cap)) (pr-str cap))
+    (is (contains? #{409 422}
+                   (:status (req* *raw* :post "/api/capabilities"
+                                  {:body {:token "undotted"
+                                          :description "no dot no entry"}
+                                   :headers admin})))
+        "a token without a dot refuses — the dot IS the convention"))
+
+  (let [grant (json (req* *raw* :post "/api/grants"
+                          {:body {:audience "gate-pilot"
+                                  :scope [{:kind "telegram.send"
+                                           :actions []
+                                           :filter {:chat "family"}}]
+                                  :expires_at (str (.plusSeconds
+                                                    (java.time.Instant/now)
+                                                    3600))}
+                           :headers admin}))
+        gid (last (str/split (str (:self grant)) #"/"))
+        as-pilot {"x-waymark-principal" "gate-pilot"
+                  "x-waymark-actor-type" "agent"}
+        check (fn [headers & [{:keys [principal capability]}]]
+                (req* *raw* :get "/api/-/grant-check"
+                      {:query (str "grant=" gid
+                                   "&principal=" (or principal "gate-pilot")
+                                   "&capability=" (or capability
+                                                      "telegram.send"))
+                       :headers headers}))]
+    (is (some? (:self grant)) (pr-str grant))
+
+    (testing "an offered grant confers nothing yet"
+      (is (false? (:allowed (json (check admin))))))
+
+    (testing "the audience accepts, and introspection answers whole"
+      (is (= 200 (:status (req* *raw* :post
+                                (str (:self grant) "/-/accept")
+                                {:headers as-pilot}))))
+      (let [ans (json (check admin))]
+        (is (true? (:allowed ans)) (pr-str ans))
+        (is (= {:chat "family"} (:constraints ans))
+            "the constraint rides the yes, the enforcement point's to interpret")
+        (is (string? (:expires_at ans)))))
+
+    (testing "concealment at the introspection door"
+      (is (= 401 (:status (req* *gated* :get "/api/-/grant-check"
+                                {:query (str "grant=" gid
+                                             "&principal=gate-pilot"
+                                             "&capability=telegram.send")})))
+          "the anonymous get nothing at all")
+      (is (true? (:allowed (json (check as-pilot))))
+          "the audience may introspect itself")
+      (is (false? (:allowed (json (check {"x-waymark-principal" "snoop"
+                                          "x-waymark-actor-type" "agent"}))))
+          "a FOREIGN agent's answer is the same false as a dead grant")
+      (is (false? (:allowed (json (check admin
+                                         {:capability "gmail.search"}))))
+          "a capability the grant never named is false, nothing more"))
+
+    (testing "revoke severs the external power like any other sight"
+      (is (= 200 (:status (req* *raw* :post (str (:self grant) "/-/revoke")
+                                {:headers admin}))))
+      (is (false? (:allowed (json (check admin))))))
+
+    (testing "a retired capability refuses NEW grants; the registry is
+              the vocabulary's clock"
+      (let [row-self (-> (json (req* *raw* :get "/api/capabilities"
+                                     {:query "token=telegram.send"
+                                      :headers admin}))
+                         (get-in [:data :items]) first :self)]
+        (is (some? row-self))
+        (is (= 200 (:status (req* *raw* :post (str row-self "/-/retire")
+                                  {:headers admin})))))
+      (is (contains? #{409 422}
+                     (:status (req* *raw* :post "/api/grants"
+                                    {:body {:audience "gate-pilot-2"
+                                            :scope [{:kind "telegram.send"
+                                                     :actions []}]}
+                                     :headers admin})))))))
