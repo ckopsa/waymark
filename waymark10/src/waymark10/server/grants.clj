@@ -868,8 +868,12 @@
   kinds (the asking door is never concealed, because it is how access
   starts) and the jobs it asked for (the sync trigger's 202 hands the
   requester a job — the record of who asked IS the sight; a leash
-  that may mint a pass may watch it run)."
-  #{"grant" "approval_request" "job"})
+  that may mint a pass may watch it run). :capability rides too
+  (hospitality audit, agent walk #3): the registry is VOCABULARY —
+  an agent that cannot read what powers exist cannot compose its
+  ask, the same argument :vocabulary-open? already won — and its
+  rows are public words, not anyone's data."
+  #{"grant" "approval_request" "job" "capability"})
 
 (defn- own-ids
   "The principal's own rows of one negotiation kind, as the id cond
@@ -993,7 +997,10 @@
                        ;; pattern, the sync trigger's too)
                        "job"
                        (= pid (some-> (load-decoded eng :job id)
-                                      (get-in [:data :requested_by :id]))))))]
+                                      (get-in [:data :requested_by :id])))
+                       ;; the registry's rows are everyone's words
+                       "capability"
+                       (some? (load-decoded eng :capability id)))))]
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
@@ -1057,15 +1064,23 @@
      :conds-of (fn [kind]
                  (when-some [fms (get-in surface [(name kind) :filters])]
                    (vec (for [[f v] (first fms)]
+                          ;; :vis? marks the cond as the LEASH, never a
+                          ;; client filter — facet counting strips a
+                          ;; field's own client conds so options don't
+                          ;; collapse, and must never strip this one
+                          ;; (hospitality audit, guest walk #3)
                           {:target :data :field (keyword (name f))
-                           :cast "text" :op := :value (str v)}))))
+                           :cast "text" :op := :value (str v)
+                           :vis? true}))))
      :ids-of (fn [kind]
                (let [k (name kind)]
                  (if-some [e (get surface k)]
                    (some-> (:ids e) sort vec)
                    (when (own-kind? k)
-                     (if (= "job" k)
-                       (own-job-ids eng pid)
+                     (case k
+                       "job" (own-job-ids eng pid)
+                       ;; nil = unrestricted: the whole registry lists
+                       "capability" nil
                        (own-ids eng (keyword k)
                                 (case k
                                   "grant" {:audience pid}
@@ -1107,8 +1122,17 @@
   [vis rdef conds requested-sort]
   (when vis
     (let [kind (:kind rdef)
+          ;; a data cond's judged NAME is its :field — :target is the
+          ;; storage column (:data), which is not a field and judged
+          ;; every data filter with one wrong answer (hospitality
+          ;; audit, guest walk #2: the oracle stood open for hashed
+          ;; filterable fields and 422'd every filter under an
+          ;; allow-list)
           bad (into []
-                    (comp (keep :target)
+                    (comp (keep (fn [c]
+                                  (if (= :data (:target c))
+                                    (:field c)
+                                    (:target c))))
                           (remove #{:id :state})
                           (remove #(plain-field? vis kind %))
                           (map name))

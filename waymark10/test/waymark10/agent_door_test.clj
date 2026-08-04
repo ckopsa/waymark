@@ -641,6 +641,12 @@
                        :headers headers}))]
     (is (some? (:self grant)) (pr-str grant))
 
+    (testing "the registry is readable at bootstrap — an agent that
+              cannot read what powers exist cannot compose its ask"
+      (let [col (json (req* *raw* :get "/api/capabilities"
+                            {:headers as-pilot}))]
+        (is (pos? (get-in col [:data :total])) (pr-str (:data col)))))
+
     (testing "an offered grant confers nothing yet"
       (is (false? (:allowed (json (check admin))))))
 

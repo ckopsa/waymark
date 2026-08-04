@@ -1334,6 +1334,11 @@
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)]
       (check-kind! req rdef)
+      ;; the export is unprojected (recorded gap): a scoped request
+      ;; is refused whole rather than handed the kind unredacted —
+      ;; the same 404 as a concealed kind, until projection lands
+      (when (visibility-of req)
+        (throw (p/not-found "collection" plural)))
       (worksheet/export eng rdef (query-params req)))))
 
 (defn- worksheet-post
@@ -1347,6 +1352,11 @@
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
+          ;; staging writes rows the scoped uploader then cannot see
+          ;; (worksheet is outside every grant surface) — refuse at
+          ;; the door instead of after the file has landed
+          _ (when (visibility-of req)
+              (throw (p/not-found "collection" plural)))
           result (worksheet/stage!
                   eng rdef (:body req)
                   {:principal (principal-of req)

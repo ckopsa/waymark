@@ -531,9 +531,13 @@
                    (try
                      (let [array? (and (not= :state f)
                                        (:array? (field-info rdef f)))
-                           own? (fn [c] (if (= :state f)
-                                          (= :state (:target c))
-                                          (= f (:field c))))
+                           ;; the leash cond (:vis?, grants/conds-of) is
+                           ;; never "the field's own filter" — stripping
+                           ;; it counted the whole kind past the grant
+                           own? (fn [c] (and (not (:vis? c))
+                                             (if (= :state f)
+                                               (= :state (:target c))
+                                               (= f (:field c)))))
                            counts (store/with-tx st
                                     #(store/facet-counts st % (:kind rdef)
                                                          f (remove own? conds)
@@ -656,7 +660,10 @@
                 ;; — the downloaded workbook holds exactly what the
                 ;; page's query shows (unpaged; the worksheet route
                 ;; ignores pagination)
-                (:worksheet rdef)
+                ;; the worksheet routes are unprojected (the recorded
+                ;; export gap) — a scoped reader is not handed the
+                ;; button to a door that would leak past the leash
+                (and (:worksheet rdef) (nil? vis))
                 (assoc :worksheet
                        (let [q (dissoc applied "page[size]" "page[number]")]
                          {:href (str "/api/" plural "/-/worksheet"
