@@ -270,12 +270,46 @@
   when absent, never overwritten; retire/restore stay the humans'
   doors."
   [eng]
+  ;; verb granularity is what a human reasons about when approving:
+  ;; read vs send/write per system — never per tool. Gate's gsd
+  ;; family (todos/calendar) is deliberately ABSENT: waymark is the
+  ;; task authority and mirrors those sources; a gsd capability
+  ;; would leash an agent around the queue's own law.
   (doseq [{:keys [token] :as cap}
-          [{:token "telegram.send"
-            :description (str "Send a Telegram message through Gate — "
-                              "the household's addressed-notice "
-                              "transport, leashed per grant.")
-            :enforced_by "gate-mcp (192.168.1.40:8100)"}]]
+          (let [gate "gate-mcp (192.168.1.40:8100)"]
+            [{:token "telegram.send"
+              :description (str "Send a Telegram message through Gate — "
+                                "the household's addressed-notice "
+                                "transport, leashed per grant.")
+              :enforced_by gate}
+             {:token "telegram.read"
+              :description "Read Telegram chats and messages through Gate."
+              :enforced_by gate}
+             {:token "messages.read"
+              :description "Read text-message threads through Gate."
+              :enforced_by gate}
+             {:token "email.read"
+              :description (str "Read email through Gate — folders, inbox, "
+                                "search, messages, attachments.")
+              :enforced_by gate}
+             {:token "email.send"
+              :description "Send email through Gate."
+              :enforced_by gate}
+             {:token "email.move"
+              :description "File email through Gate — move messages and senders between folders."
+              :enforced_by gate}
+             {:token "ynab.read"
+              :description "Read the budget through Gate — accounts, transactions, categories, months."
+              :enforced_by gate}
+             {:token "ynab.write"
+              :description "Write the budget through Gate — create, update, split, approve transactions."
+              :enforced_by gate}
+             {:token "amazon.read"
+              :description "Read Amazon through Gate — orders, search, product details, the cart."
+              :enforced_by gate}
+             {:token "amazon.cart"
+              :description "Change the Amazon cart through Gate — add items, reset. Never places orders."
+              :enforced_by gate}])]
     (when (empty? (store/with-tx (:storage eng)
                     (fn [tx] (store/query-rows (:storage eng) tx :capability
                                                {:token token} {:limit 1}))))
