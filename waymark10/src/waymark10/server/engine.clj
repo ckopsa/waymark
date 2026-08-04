@@ -150,6 +150,7 @@
                                       :webhook-attempts :webhook-backoff-ms
                                       :webhook-timeout-ms :webhooks-poll-ms
                                       :jobs-poll-ms :jobs-batch-size
+                                      :report-pass
                                       :members :collab-heartbeat-ms
                                       :presence-heartbeat-ms
                                       :collab-ticket-ttl-ms

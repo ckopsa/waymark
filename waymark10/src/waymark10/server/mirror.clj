@@ -965,6 +965,18 @@
   (binding [*out* *err*]
     (println (apply str "waymark10 mirror: " parts))))
 
+(defn- report-pass!
+  "One kind-level pass outcome to the engine's :report-pass hook (the
+  breaker panel's feed, waymark-kyg): the app-side reporter turns
+  these into connection-row health. A reporter that throws is warned
+  and dropped — health reporting must never cost the pass it reports
+  on."
+  [eng kind flavor ok? error]
+  (when-some [f (:report-pass eng)]
+    (try (f {:kind kind :flavor flavor :ok? ok? :error error})
+         (catch Exception e
+           (warn! "pass reporter failed (" (ex-message e) ")")))))
+
 (defn- within-ttl? [row ^Instant now ttl-seconds]
   (when-some [^Instant synced (get-in row [:data :synced_at])]
     (< (.getSeconds (Duration/between synced now)) (long ttl-seconds))))
@@ -1278,10 +1290,13 @@
   (let [rdef (get (inv/resources eng) kind)
         spec (:mirror rdef)
         adapter (:adapter spec)
-        ids (try (mapv str (discover adapter))
+        ids (try (let [v (mapv str (discover adapter))]
+                   (report-pass! eng kind :discover true nil)
+                   v)
                  (catch Exception e
                    (warn! "discovery for " (name kind) " failed ("
                           (ex-message e) "); retrying next interval")
+                   (report-pass! eng kind :discover false (ex-message e))
                    nil))
         known (store/with-tx (:storage eng)
                 (fn [tx]
@@ -1474,6 +1489,7 @@
                    " is declared :expect :volatile but moved on none of "
                    npairs " documents — the feed may be stale (or this "
                    "resync ran hot on the heels of the last)")))
+        (report-pass! eng kind :resync true nil)
         (reduce
          (fn [acc row]
            (let [xid (get-in row [:data :external_id])
@@ -1565,6 +1581,7 @@
       (catch Exception e
         (warn! "resync for " (name kind) " failed (" (ex-message e)
                "); stored truth keeps serving")
+        (report-pass! eng kind :resync false (ex-message e))
         nil))))
 
 (defn resync-all!
@@ -1840,9 +1857,20 @@
                    (fn []
                      (loop []
                        (when @held?
-                         (when (compare-and-set! healed? false true)
-                           (heal))
-                         (tick)
+                         ;; nothing in a beat may kill the daemon: heal
+                         ;; and tick contain uncovered stretches (a
+                         ;; resync!'s candidate fetch runs before its
+                         ;; own try — waymark-t6s's open half), and an
+                         ;; escape here used to stop every FUTURE beat
+                         ;; silently, not just this one
+                         (try
+                           (when (compare-and-set! healed? false true)
+                             (heal))
+                           (tick)
+                           (catch Exception e
+                             (warn! "discovery beat failed ("
+                                    (ex-message e)
+                                    "); the next beat still runs")))
                          (try
                            (service-sync-jobs!
                             eng {:holder holder

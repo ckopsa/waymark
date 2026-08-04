@@ -208,6 +208,21 @@ async function renderHome(view, seq) {
           n === 1 ? " job is running or queued." : " jobs are running or queued.")));
     }).catch(() => {}));
 
+  /* the breaker panel (waymark-kyg.1): a dark connection is an outage
+     the family should meet at the front door, not discover row by row */
+  const connHref = collectionHref(w, "connection");
+  if (connHref)
+    settling.push(api(mergeParams(connHref, {rows: "none", state: "dark"}))
+      .then(({ok, body}) => {
+        if (!ok) return;
+        const n = body.data?.total ?? 0;
+        if (n) attention.push(el("div", {class:"item"},
+          el("a", {href: "#" + mergeParams(connHref, {state: "dark"})},
+            el("span", {class:"mono"}, String(n)),
+            n === 1 ? " connection is dark — a source has stopped answering."
+                    : " connections are dark — sources have stopped answering.")));
+      }).catch(() => {}));
+
   await Promise.allSettled(settling);
   if (seq !== renderSeq) return;
   if (attention.length) strip.append(el("div", {class:"attention"}, attention));

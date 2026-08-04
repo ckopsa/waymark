@@ -168,17 +168,31 @@
 ;; partial-tolerance posture is: a source that throws costs its own
 ;; rows a pass and nothing else, on either feed.
 
+(defn- tell
+  "One per-tag pass outcome to the wired :report-fn (the breaker
+  panel's feed, waymark-kyg.1). nil report-fn says nothing; a
+  reporter that throws is warned and dropped — health reporting must
+  never cost the pass it reports on."
+  [report-fn tag ok? error]
+  (when report-fn
+    (try (report-fn {:tag tag :ok? ok? :error error})
+         (catch Exception e
+           (warn! "pass reporter for " tag " failed (" (ex-message e) ")")))))
+
 (defn- fan-discover
   "Every tagged source's ids, namespaced. A source that throws
   discovers nothing THIS pass; its known rows go per-row unreachable
   through pull — honest partial staleness, never a dead feed."
-  [sources what discover-one]
+  [sources report-fn what discover-one]
   (into []
         (mapcat (fn [[tag src]]
-                  (try (mapv #(xid tag %) (discover-one src))
+                  (try (let [ids (mapv #(xid tag %) (discover-one src))]
+                         (tell report-fn tag true nil)
+                         ids)
                        (catch Exception e
                          (warn! what " discover for " tag " failed ("
                                 (ex-message e) "); skipping this pass")
+                         (tell report-fn tag false (ex-message e))
                          nil))))
         sources))
 
@@ -188,17 +202,20 @@
   when it returns); a :gone sentinel rides through untouched — the
   source's honest deletion signal, which only a declared :on-gone
   policy gives meaning to."
-  [sources what pull-many-one stamp xids]
+  [sources report-fn what pull-many-one stamp xids]
   (reduce-kv
    (fn [acc tag pairs]
      (let [src (get sources tag)
            ids (mapv second pairs)
            pulled (when src
-                    (try (pull-many-one src ids)
+                    (try (let [m (pull-many-one src ids)]
+                           (tell report-fn tag true nil)
+                           m)
                          (catch Exception e
                            (warn! what " pull-many for " tag " failed ("
                                   (ex-message e) "); its rows keep "
                                   "their stored truth")
+                           (tell report-fn tag false (ex-message e))
                            nil)))]
        (reduce-kv (fn [m id entry]
                     (assoc m (xid tag id)
@@ -246,15 +263,16 @@
                         {})))
       (assoc doc :list_key id))))
 
-(defrecord ConfluenceFeed [sources]
+(defrecord ConfluenceFeed [sources report-fn]
   mirror/MirrorAdapter
-  (discover [_] (fan-discover sources "task" source-discover))
+  (discover [_] (fan-discover sources report-fn "task" source-discover))
   (pull [_ x]
     (let [[tag id] (split-xid x)
           [doc etag] (source-pull (source-for sources tag) id)]
       [(stamp-task tag doc) etag]))
   (pull-many [_ xids]
-    (fan-pull-many sources "task" source-pull-many stamp-task xids))
+    (fan-pull-many sources report-fn "task" source-pull-many stamp-task
+                   xids))
   (push [_ x document]
     (let [[tag id] (split-xid x)]
       (source-push (source-for sources tag) id document)))
@@ -277,19 +295,21 @@
 (defn confluence
   "sources: {tag TaskSource} — e.g. {\"chore\" … \"meal\" …}. The tag
   set is the :source enum's vocabulary; the two are declared together
-  in resources/task.clj."
-  [sources]
-  (->ConfluenceFeed sources))
+  in resources/task.clj. report-fn (optional) hears each fan pass's
+  per-tag outcome — the breaker panel's feed."
+  ([sources] (confluence sources nil))
+  ([sources report-fn] (->ConfluenceFeed sources report-fn)))
 
-(defrecord ListConfluence [sources]
+(defrecord ListConfluence [sources report-fn]
   mirror/MirrorAdapter
-  (discover [_] (fan-discover sources "task_list" list-discover))
+  (discover [_] (fan-discover sources report-fn "task_list" list-discover))
   (pull [_ x]
     (let [[tag id] (split-xid x)
           [doc etag] (list-pull (source-for sources tag) id)]
       [(stamp-list tag doc) etag]))
   (pull-many [_ xids]
-    (fan-pull-many sources "task_list" list-pull-many stamp-list xids))
+    (fan-pull-many sources report-fn "task_list" list-pull-many stamp-list
+                   xids))
   (push [_ x _document]
     ;; :task_list is pull-only and this throw is unreachable through
     ;; the sync machine (the framework never pushes a kind that does
@@ -308,9 +328,10 @@
   confluence's own sources (list-sources narrows it). One adapter for
   the :task_list kind, routing on exactly the same tags the task feed
   routes on, so \"gtasks:MTIzNA\" names a list and
-  \"gtasks:MTIzNA/t-1\" names a task in it."
-  [sources]
-  (->ListConfluence sources))
+  \"gtasks:MTIzNA/t-1\" names a task in it. report-fn as on
+  confluence — both feeds speak the same tag to the same breaker."
+  ([sources] (list-confluence sources nil))
+  ([sources report-fn] (->ListConfluence sources report-fn)))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 

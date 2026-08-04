@@ -57,6 +57,7 @@
             [workqueue10.sources.hub :as hub]
             [workqueue10.sources.mealplan :as meals]
             [waymark10.dashboard :as dashboard]
+            [workqueue10.connections :as connections :refer [connection]]
             [waymark10.dsl :refer [in-domain]]
             [waymark10.saved-view :refer [saved-view]]
             [waymark10.server.capabilities :refer [capability]]
@@ -213,11 +214,14 @@
   ([srcs adapter]
    (resources srcs {"flickr" fake-flickr "hub" (hub/source)} adapter))
   ([srcs media-srcs adapter]
-   (-> (in-domain :queue [(task-resource (conf/confluence srcs))
+   (resources srcs media-srcs adapter nil))
+  ([srcs media-srcs adapter report-fn]
+   (-> (in-domain :queue [(task-resource (conf/confluence srcs report-fn))
                           (task-list-resource
-                           (conf/list-confluence (conf/list-sources srcs)))])
+                           (conf/list-confluence (conf/list-sources srcs)
+                                                 report-fn))])
        (into (in-domain :media [(media-resource
-                                 (conf/confluence media-srcs))]))
+                                 (conf/confluence media-srcs report-fn))]))
        (into (in-domain :chores [chore chore-run day]))
        (into (in-domain :meals (mealplan/meal-resources)))
        ;; the kind self-declares :domain :calendar; in-domain would
@@ -238,8 +242,12 @@
        ;; the capability registry (waymark-44h): the grantable
        ;; EXTERNAL powers this deployment names — enforcement lives
        ;; at Gate, the law lives here. Domainless like the
-       ;; composition kinds, and for the same reason.
-       (into (into [saved-view capability] dashboard/resources)))))
+       ;; composition kinds, and for the same reason. The breaker
+       ;; panel (waymark-kyg.1) sits beside them: infrastructure the
+       ;; family reads when something is dark, not a domain of family
+       ;; life.
+       (into (into [saved-view capability connection]
+                   dashboard/resources)))))
 
 (def surfaces
   "Both decision screens, one engine: the housekeeper's day board and
@@ -318,6 +326,28 @@
                                              :type :system
                                              :display "Boot seed"})}))))
 
+(defn- connection-descriptors
+  "The breaker panel's inventory (waymark-kyg.1): one entry per wired
+  authority, real-or-fake judged by the same env gates sources/
+  media-sources/calendar-adapter judge by — said HERE so the panel
+  can say out loud when a boundary quietly fell back to its twin.
+  chore and meal are real either way: the in-process fold is the
+  authority, not a stand-in. The hub is the noop authority — a
+  permanently live breaker, wired so the inventory is whole."
+  []
+  {"chore" {:mode "real"}
+   "meal" {:mode "real"}
+   "todo" {:mode (if (System/getenv "WORKQUEUE10_HA_URL") "real" "fake")}
+   "gtasks" {:provider "google"
+             :mode (if (System/getenv "WORKQUEUE10_GTASKS_REFRESH_TOKEN")
+                     "real" "fake")}
+   "flickr" {:mode (if (System/getenv "WORKQUEUE10_FLICKR_URL")
+                     "real" "fake")}
+   "hub" {:mode "real"}
+   "calendar" {:provider "google"
+               :mode (if (System/getenv "CALENDAR10_GOOGLE_REFRESH_TOKEN")
+                       "real" "fake")}})
+
 (defonce ^:private dev (atom nil))
 
 (defn start!
@@ -329,9 +359,16 @@
         ;; seam in mirror/with-push) — the embedding wraps
         eng (mirror/with-push
              (engine/engine {:storage storage
-                             :resources (resources (sources)
-                                                   (media-sources)
-                                                   (calendar-adapter))
+                             :resources (resources
+                                         (sources)
+                                         (media-sources)
+                                         (calendar-adapter)
+                                         (connections/fan-reporter engine-ref))
+                             ;; the calendar's adapter is no confluence,
+                             ;; so its health arrives kind-level through
+                             ;; the mirror's own pass hook
+                             :report-pass (connections/pass-reporter
+                                           engine-ref {:event "calendar"})
                              :surfaces surfaces
                              :deploy-mode (deploy-mode)
                              ;; the render probe carries the read hooks
@@ -359,6 +396,7 @@
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
         _ (ensure-capabilities! eng)
+        _ (connections/ensure-connections! eng (connection-descriptors))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
         server (engine/start! eng port
                               {:wrap-handler (oidc-rp/wrap-handler eng)})]
