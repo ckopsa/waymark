@@ -105,9 +105,9 @@ async function fullItems(colHref) {
   return envs.filter(r => r.ok).map(r => r.body);
 }
 async function renderAccess(view, seq) {
-  const [members, asks, grants] = await Promise.all([
+  const [members, asks, grants, powers] = await Promise.all([
     fullItems("/api/members"), fullItems("/api/approval_requests"),
-    fullItems("/api/grants")]);
+    fullItems("/api/grants"), fullItems("/api/capabilities")]);
   if (seq !== renderSeq) return;
   clearLiveTimers();
   view.textContent = "";
@@ -317,6 +317,40 @@ async function renderAccess(view, seq) {
     agentsPanel.append(card);
   }
   view.append(agentsPanel);
+
+  /* 4 · the house rules: the capability registry (waymark-44h) — the
+     EXTERNAL powers an ask may name, posted where the asks are
+     judged. Retire is the standing no; grants already given keep
+     their word until they expire or are revoked. Engines without
+     the registry simply don't show the panel. */
+  if (powers.length) {
+    const powersPanel = el("div", {class:"panel"});
+    powersPanel.append(el("h2", {}, "External powers"));
+    powersPanel.append(el("div", {class:"muted"},
+      "What an ask may reach beyond this board — enforced by the "
+      + "system named on each. Retire one and new asks naming it "
+      + "refuse; standing grants keep their word until they end."));
+    for (const p of powers.sort((a, b) =>
+        String(a.data.token).localeCompare(String(b.data.token)))) {
+      const row = el("div", {class:"field",
+        style:"display:flex;align-items:baseline;gap:10px;"
+            + "padding:6px 0;border-bottom:1px solid var(--line)"});
+      row.append(
+        el("b", {class:"mono", style:"white-space:nowrap"}, p.data.token),
+        el("span", {class:"statechip"}, p.state),
+        el("span", {class:"muted", style:"flex:1"}, p.data.description || "",
+          p.data.enforced_by
+            ? el("span", {class:"gaze-faded"}, ` · via ${p.data.enforced_by}`)
+            : null));
+      const bar = el("span", {});
+      for (const [name, entry] of Object.entries(p.actions || {}))
+        bar.append(actionButton({name, entry, doc: p, small: true,
+                                 onDone: () => render()}));
+      row.append(bar);
+      powersPanel.append(row);
+    }
+    view.append(powersPanel);
+  }
   watchScope({});   /* liveness rides the access branch of the firehose */
 }
 
