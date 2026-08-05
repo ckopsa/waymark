@@ -35,14 +35,38 @@
     absent (the default)       → auto-provisioned on first sight, as
                                  before (a logged system-actor create)
 
+  ── re-entry: the homecoming credential (waymark-4zj.8) ─────────────
+
+  An ACTIVE agent member whose durable credential is unreachable can
+  be handed a one-shot way back in: a recovery-admin HUMAN mints
+  :offer_reentry (the token is minter-supplied — the bind_token
+  precedent, and the row render conceals :secret fields, so the
+  engine could never answer with a minted one), short-lived by guard.
+  The /auth/agent door resolves it (reentrant-by-token), nulls it
+  through the concealed registrar :spend_reentry — one shot under
+  race because invoke.clj loads the row FOR UPDATE (invoke.clj ~892):
+  a Postgres row lock, so a two-POST race's loser BLOCKS, re-reads the
+  emptied row, and the spend's compare-and-set refuses (save-row!'s
+  optimistic version check is only a memory-store backstop, never the
+  wall on a lock-holding backend) — and mints a session naming the
+  member's STABLE id; a fresh member is never minted. Fields separate
+  from :bind_token, deliberately: invite semantics stay welded to
+  :invited, and a re-entry mint can never masquerade as an unclaimed
+  invite. The token rides the POST BODY only (never a query string,
+  where it would land in access and proxy logs), is machine-minted at
+  128 bits by the Access panel (never a human's typing), and the door
+  is paced (reentry-door-paced!, a rolling-hour window kept separate
+  from the invite door's own — N1) so the uniform 404 can't be guessed
+  against a short window.
+
   Recorded deviations and named punts (each a sentence):
   - the invite carries no email and the outbox sends nothing —
     waymark9 bound by verified email claim; v10 binds by the token
     the admin hands over out of band.
-  - :bind_token renders like any field to an unscoped members-collection
-    reader — waymark9's SECRET_FIELDS owner-gating is unported (v10
-    has no member-level field modes; a named punt beside role
-    uniqueness under race).
+  - :bind_token and :reentry_token are :secret (waymark-kyg): the
+    punt that let a credential render raw to an unscoped members
+    reader is closed — the row stays visible, the credentials never
+    leave the engine in any projection.
   - token uniqueness is unenforced under race (two invites sharing a
     token bind whichever the query returns first) — the role-create
     guard's sibling, recorded not fixed.
@@ -127,6 +151,182 @@
       (t/allow)
       (t/deny))))
 
+;; ── the re-entry mint (waymark-4zj.8) ───────────────────────────────
+
+(def reentry-default-ttl-seconds
+  "A minted re-entry link lives fifteen minutes unless the minter
+  says less — long enough to hand across a live session, short
+  enough that a mislaid handoff goes stale before it is found."
+  (* 15 60))
+
+(def reentry-max-ttl-seconds
+  "The ceiling on a minted expiry — one hour by the live clock. The
+  guard refuses longer; it never silently clamps, because a minter
+  who asked for a day should learn the door's shape, not discover an
+  hour later that the engine quietly disagreed."
+  3600)
+
+;; the second credential boundary on this kind (the assign_roles
+;; lesson, applied): a re-entry token IS a session for its member, so
+;; minting one must be narrower than holding one. HUMAN and the role,
+;; both asserted — an agent holding recovery-admin must never mint
+;; its own way back in (self-escalation, day one), and the engine's
+;; own actors have no hand here either: a system path would be one
+;; ctx :invoke away from any handler, which is exactly the reach a
+;; credential mint must not have.
+;;
+;; BOTH facts come from the minter's own durable member ROW, never the
+;; token (waymark-4zj.8.2 R1). The adversarial review's HIGH: the
+;; token's :actor_type claim is OPTIONAL and principal-of defaults an
+;; absent one to :human (oidc.clj) — a fail-open toward privilege on a
+;; mint boundary, so an AGENT whose actor_type mapper is dropped, but
+;; whose token still claims recovery-admin, resolved :human and minted
+;; its own way back in. The engine's own record knows better: the row
+;; carries the actor's true kind (provision! stamped it) and its
+;; durably-assigned roles. A single source of truth, read from the
+;; row gate! already loaded this principal against — a token that
+;; cannot be matched to a HUMAN member row carrying recovery-admin
+;; cannot mint, whatever it claims. (Stricter than assign_roles's
+;; row-OR-claim on purpose: minting a credential is the most sensitive
+;; act on this kind, so the role must be durably assigned, not merely
+;; asserted this session.)
+(g/defguard reentry-minters-are-recovery-admin-humans
+  {:reads [:principal :member]
+   :explain "Re-entry is minted by a recovery-admin human, in person; neither an agent nor the engine's own actors can mint a way back in."}
+  [_row _inp ctx]
+  (let [read' (:read ctx)
+        find' (:find ctx)
+        p (:principal ctx)]
+    ;; the pure render probe carries no read hooks — advertise
+    ;; optimistically there (roles-registered's precedent); the real
+    ;; invoke, which DOES carry them, is the wall
+    (if (or (nil? read') (nil? find'))
+      (t/allow)
+      (let [row (or (read' :member (:id p))
+                    (first (find' :member {:subject (:id p)} {:limit 1})))]
+        (if (and row
+                 (= "human" (get-in row [:data :actor_type]))
+                 (contains? (set (get-in row [:data :roles]))
+                            "recovery-admin"))
+          (t/allow)
+          (t/deny))))))
+
+;; the write fence (waymark-4zj.8.2 R2, the :subject precedent made
+;; real): reentry_token/reentry_expires_at are schema fields, so a
+;; plain create — which lands :active unless it carries a bind_token —
+;; would otherwise stamp a LIVE credential with no mint guard, no
+;; type check, no TTL cap and no audit (the review's HIGH: any
+;; authenticated human POSTed a member row carrying reentry_token +
+;; recovery-admin + a 365-day expiry → an invisible backdoor, since
+;; the field is :secret). The ONLY writer is set-reentry, under
+;; :offer_reentry's guards; a create OR edit that carries either field
+;; by hand is refused. (Action inputs are closed maps, so no OTHER
+;; action's :input can smuggle these; this guard closes the create
+;; door the same way.)
+(g/defguard reentry-not-written-by-hand
+  {:judges [:reentry_token :reentry_expires_at]
+   :explain "The re-entry credential is written by :offer_reentry alone, never by hand — a create or edit may not carry reentry_token or reentry_expires_at."}
+  [_row inp _ctx]
+  (if (or (contains? inp :reentry_token)
+          (contains? inp :reentry_expires_at))
+    (t/deny)
+    (t/allow)))
+
+(g/defguard reentry-targets-agents
+  {:explain "Re-entry is the agent door's credential; a human re-enters through the identity provider, never through a minted token."}
+  [row _inp _ctx]
+  (if (= "agent" (get-in row [:data :actor_type]))
+    (t/allow)
+    (t/deny)))
+
+(g/defguard reentry-is-short
+  {:judges [:expires_at]
+   :reads [:now]
+   :vars [:max_minutes :asked]
+   :explain "A re-entry link is short — at most {max_minutes} minutes; this one runs to {asked}. Mint closer to the moment of use."}
+  [_row inp ctx]
+  (if-some [^java.time.Instant exp (:expires_at inp)]
+    (let [cap (.plusSeconds ^java.time.Instant (:now ctx)
+                            reentry-max-ttl-seconds)]
+      (if (pos? (compare exp cap))
+        (t/deny {:vars {:max_minutes (quot reentry-max-ttl-seconds 60)
+                        :asked (str exp)}})
+        (t/allow)))
+    (t/allow)))
+
+;; the spend's own wall, a COMPARE-AND-SET (waymark-4zj.8.2 R4): spend
+;; ONLY the exact token the door resolved, and only if the row still
+;; carries it. Two properties ride this one guard, both under the
+;; :for-update lock invoke.clj holds when it runs:
+;;   • one-shot under race — the loser of a two-POST race re-loads a
+;;     row the winner already emptied (reentry_token nil) and refuses;
+;;   • revocation cannot be defeated (the review's TOCTOU MEDIUM) — a
+;;     remint to a FRESH token between the door's lookup and its spend
+;;     leaves the row carrying the new token, so a stale in-flight
+;;     token no longer equals it and spends nothing. Without the
+;;     compare, the stale holder's spend nulled whatever token was
+;;     there, destroying the fresh credential a revoke had just
+;;     minted.
+;; Hidden: the wire never reaches this action; a race's loser (or a
+;; stale token) deserves the door's uniform 404, not a narrated verdict.
+;; :needs-input false ON PURPOSE: this guard must also run on the
+;; concealment PROBE (nil input, invoke.clj ~920) so that a two-POST
+;; race's loser — which re-reads the winner's emptied row — is 404'd
+;; there, BEFORE step-8 natural-replay could replay the winner's spend
+;; (both racers carry the same token, so the same input digest). On
+;; the probe it conceals only when NO credential stands; a standing
+;; one defers its exact match to the real spend, so a valid spend is
+;; never 404'd before it runs.
+(g/defguard reentry-token-matches
+  {:judges [:token]
+   :hide true
+   :needs-input false
+   :explain "No re-entry credential stands on this member."}
+  [row inp _ctx]
+  (let [standing (get-in row [:data :reentry_token])]
+    (cond
+      (nil? inp) (if (some? standing) (t/allow) (t/deny))
+      (and (some? standing) (= standing (:token inp))) (t/allow)
+      :else (t/deny))))
+
+;; the mint's uniqueness wall (waymark-4zj.8.2 R6c): the header's
+;; recorded "token uniqueness is unenforced" punt is tolerable for an
+;; INVITE (two invites sharing a token bind whichever the query
+;; returns first), but not for a one-shot re-entry credential — the
+;; review showed one token minted onto two rows opening TWO sessions
+;; as two identities, "exactly one session per credential" made false.
+;; Refuse at mint a token already live on ANOTHER member row. (Checked
+;; before the handler writes, so the target row does not yet carry it;
+;; excluded by id regardless. reentry_token is :secret, not
+;; :filterable — this scans data->>'reentry_token', the same read
+;; reentrant-by-token does; a mint is rare, so the scan is cheap.)
+(g/defguard reentry-token-is-fresh
+  {:judges [:token]
+   :reads [:member]
+   :explain "That re-entry token is already live on another member — generate a fresh one."}
+  [row inp ctx]
+  (let [find' (:find ctx)
+        tok (:token inp)]
+    (if (and find' (some? tok))
+      (if (seq (remove #(= (:id %) (:id row))
+                       (find' :member {:reentry_token tok} {:limit 2})))
+        (t/deny)
+        (t/allow))
+      (t/allow))))
+
+(defhandler set-reentry [row inp ctx]
+  ;; re-minting overwrites: at most ONE live re-entry credential per
+  ;; member — the prior token dies the moment a fresh one lands
+  (-> row
+      (assoc-in [:data :reentry_token] (:token inp))
+      (assoc-in [:data :reentry_expires_at]
+                (or (:expires_at inp)
+                    (.plusSeconds ^java.time.Instant (:now ctx)
+                                  reentry-default-ttl-seconds)))))
+
+(defhandler clear-reentry [row _inp _ctx]
+  (update row :data dissoc :reentry_token :reentry_expires_at))
+
 (defhandler set-roles [row inp _ctx]
   (assoc-in row [:data :roles] (vec (distinct (:roles inp)))))
 
@@ -162,8 +362,24 @@
              [:vector [:string {:min 1 :max 40}]]]
             ;; the invite's credential: presented once (X-Waymark-Invite)
             ;; by the principal the row will bind to
-            [:bind_token {:optional true}
+            [:bind_token {:optional true :secret true}
              [:maybe [:string {:min 8 :max 128}]]]
+            ;; the homecoming credential (waymark-4zj.8): a one-shot
+            ;; re-entry token for an ACTIVE agent member, minted by
+            ;; :offer_reentry, spent by the /auth/agent door. :min 22
+            ;; is the entropy floor (~128 bits base64url) — the minter
+            ;; supplies it, never the engine
+            [:reentry_token {:optional true :secret true}
+             [:maybe [:string {:min 22 :max 128}]]]
+            ;; :secret too (waymark-4zj.8.2 R7): the raw expiry rendered
+            ;; to any members reader was a live-credential beacon — it
+            ;; announced which member holds a re-entry token and its
+            ;; exact death time, a targeting signal beside the sealed
+            ;; token. The door reads it off the decoded row (concealment
+            ;; is a render-layer disposition, not a storage one); no
+            ;; reader needs the instant
+            [:reentry_expires_at {:optional true :secret true}
+             [:maybe :waymark/instant]]
             ;; the bound principal id — written by :bind, never by hand
             [:subject {:optional true :x-display {:raw true}}
              [:maybe [:string {:max 256}]]]
@@ -176,7 +392,7 @@
                 ;; indexed read per distinct assignee, per sync pass
                 :handle #{:eq}}
    :sortable {:fields [:display] :default "display"}
-   :create-guards [roles-registered]
+   :create-guards [roles-registered reentry-not-written-by-hand]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
    ;; transition logs the landing state honestly)
@@ -225,9 +441,54 @@
                  :safety {:idempotent true :reversible true :confirm false}
                  :handler set-handle
                  :display {:label "Set handle" :order 3}}
+    ;; the homecoming mint (waymark-4zj.8). The token is
+    ;; MINTER-SUPPLIED, the bind_token precedent: the row render
+    ;; conceals :secret fields, so the engine could never hand a
+    ;; minted one back without a one-time response seam this door
+    ;; does not need. NOT :record — a recorded action persists its
+    ;; RAW inputs into the transition log (invoke.clj), and this
+    ;; input IS the credential; the transition row (actor, one-way
+    ;; digest, summary) is still the audit that a link was minted,
+    ;; by whom, when. Not hidden: an admin should see and use the
+    ;; door, and a non-admin earns an honest refusal.
+    :offer_reentry {:from #{:active} :to :active
+                    :input [:map
+                            [:token [:string {:min 22 :max 128}]]
+                            [:expires_at {:optional true}
+                             [:maybe :waymark/instant]]]
+                    :guards [reentry-minters-are-recovery-admin-humans
+                             reentry-targets-agents
+                             reentry-is-short
+                             reentry-token-is-fresh]
+                    :safety {:idempotent true :reversible true :confirm false}
+                    :handler set-reentry
+                    :display {:label "Offer re-entry" :order 4}}
+    ;; the door's spend (the :bind precedent): registrar only,
+    ;; concealed; carries the exact token the door resolved
+    ;; (waymark-4zj.8.2 R4). One shot under race because invoke.clj
+    ;; loads the row FOR UPDATE (~892), so the loser BLOCKS, re-reads
+    ;; the emptied row, and reentry-token-matches refuses; the same
+    ;; compare defeats a stale token trying to spend a freshly-reminted
+    ;; credential. NOT :record — the token would otherwise persist raw
+    ;; into the transition log; the transition entry (actor, one-way
+    ;; digest, summary) IS the audit that the link was spent.
+    :spend_reentry {:from #{:active} :to :active
+                    :input [:map [:token [:string {:min 22 :max 128}]]]
+                    :guards [registrar-binds reentry-token-matches]
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "Spending nulls the credential; the way back in again is a fresh mint."}
+                    :handler clear-reentry
+                    :display {:label "Spend re-entry" :order 6}}
+    ;; suspension revokes the credential too (waymark-4zj.8.2 R8): a
+    ;; suspend that only HID the member (its old behaviour) left the
+    ;; re-entry token live on the row, so a suspend/reinstate cycle
+    ;; resurrected the same way back in. Nulling it here makes suspend
+    ;; a real credential reset — a reinstated member re-enters through
+    ;; a fresh mint, not a token that outlived its suspension.
     :suspend {:from #{:active} :to :suspended
               :safety {:idempotent true :reversible true :confirm true
-                       :consequence "Every request this member makes is refused until reinstated; their held roles stop acting."}
+                       :consequence "Every request this member makes is refused until reinstated; their held roles stop acting, and any standing re-entry credential is revoked."}
+              :handler clear-reentry
               :display {:label "Suspend" :style :danger :order 9}}
     :reinstate {:from #{:suspended} :to :active
                 :safety {:idempotent true :reversible true :confirm false}
@@ -294,6 +555,83 @@
       (when (and row (= :active (:state row))
                  (= (:id row) (get-in row [:data :subject])))
         row))))
+
+(defn- reentry-row-by-token
+  "The decoded :member row carrying this EXACT re-entry token, whatever
+  its state or expiry — nil when no row does. Decodes because the
+  expiry compare needs its instant back (standing-grant-for's recorded
+  shape: the store hands strings)."
+  [eng token]
+  (when-not (str/blank? (str token))
+    (let [rdef (get (inv/resources eng) :member)]
+      (some->> (store/with-tx (:storage eng)
+                 (fn [tx] (store/query-rows (:storage eng) tx :member
+                                            {:reentry_token token}
+                                            {:limit 1})))
+               first
+               (inv/decode-row rdef)))))
+
+(defn- reentry-live?
+  "Is this row's re-entry credential ADMISSIBLE at the door: an ACTIVE,
+  AGENT member (waymark-4zj.8.2 R3 — the agents-only rule holds at the
+  door, not only at the mint, defence in depth against any row that
+  acquired a token by some other path) whose window is still open by
+  the live clock ((:now-fn eng), the same clock grants enforce with)."
+  [eng row]
+  (let [exp (get-in row [:data :reentry_expires_at])]
+    (boolean
+     (and row
+          (= :active (:state row))
+          (= "agent" (get-in row [:data :actor_type]))
+          exp
+          (neg? (compare ((:now-fn eng)) exp))))))
+
+(defn reentrant-by-token
+  "The homecoming door's lookup (waymark-4zj.8): the ACTIVE agent
+  member a presented re-entry token names, while the token's window is
+  open by the live clock. nil otherwise — unknown, spent, expired,
+  suspended and human-actor all collapse to the door's one 404, and
+  nothing here spends. A pure lookup; the door's spend (and the lazy
+  sweep of dead tokens) lives in spend-reentry!."
+  [eng token]
+  (when-some [row (reentry-row-by-token eng token)]
+    (when (reentry-live? eng row) row)))
+
+(defn spend-reentry!
+  "The /auth/agent door's re-entry resolution. On a LIVE credential:
+  null it through the concealed :spend_reentry (registrar, logged,
+  carrying the exact token so the spend is a compare-and-set), and
+  hand back the still-ACTIVE row the session will name — the member's
+  STABLE id, never a fresh row. nil when the token names nobody, or
+  when the row it names cannot open the door.
+
+  One shot under race: invoke.clj loads the row FOR UPDATE (~892), so
+  a two-POST race's loser BLOCKS, re-reads the emptied row, and
+  reentry-token-matches refuses — exactly one session per credential,
+  however the race falls.
+
+  R9 (lazy sweep): a token that names an EXPIRED but still-:active row
+  is dead by the clock — null it here (best-effort, the same
+  compare-and-set spend) so it does not linger raw in rows and nightly
+  backups. This nulls, it never mints a session: the door still
+  answers its uniform 404, and an expired token still 'does not
+  spend' in the sense the spec meant — no way back in is opened."
+  [eng token]
+  (when-some [row (reentry-row-by-token eng token)]
+    (if (reentry-live? eng row)
+      (try
+        (inv/invoke! eng :member (:id row) :spend_reentry {:token token}
+                     {:principal registrar})
+        (load-member eng (:id row))
+        (catch Exception _ nil))
+      (let [exp (get-in row [:data :reentry_expires_at])]
+        (when (and (= :active (:state row)) exp
+                   (not (neg? (compare ((:now-fn eng)) exp))))
+          (try
+            (inv/invoke! eng :member (:id row) :spend_reentry {:token token}
+                         {:principal registrar})
+            (catch Exception _ nil)))
+        nil))))
 
 (defn bind-agent!
   "The /auth/agent door's bind (waymark10.server.oidc-rp): an agent
@@ -426,6 +764,91 @@
                        (not (str/blank? (str handle)))
                        (assoc :handle handle))
                      {:principal registrar})))
+
+;; ── the /auth/agent door's pacing (waymark-4zj.8.2 R6b; N1 fix) ──────
+;;
+;; The door is ANONYMOUS and pre-auth — an agent arrives holding only a
+;; link — so the window must be a wall a flood cannot turn into a
+;; lockout of everyone else. Two failures shaped this design:
+;;
+;;   • DECOUPLED buckets (N1). One process-global window (default 60/hr)
+;;     shared by BOTH flows and charged before EITHER branch meant an
+;;     anonymous flood of 60 garbage tokens 429'd everyone — legitimate
+;;     invite onboarding AND re-entry homecoming alike. This is the
+;;     Keycloak-unreachable FALLBACK door, the one time it most needs to
+;;     stay open, so the two flows get SEPARATE windows: exhausting one
+;;     can never starve the other. A re-entry guessing flood (body
+;;     tokens) burns only the re-entry bucket; invite onboarding (a
+;;     query ?invite=) burns only the invite bucket.
+;;
+;;   • GLOBAL, not per-source keyed — deliberately, and stated so it is
+;;     not mistaken for an oversight. No trustworthy per-source key
+;;     stands at this pre-auth door: every engine sits behind the
+;;     reverse proxy that fronts the household's apps, so http-kit's
+;;     :remote-addr collapses to the proxy's own address (one value for
+;;     the whole world — a global bucket wearing a disguise), and
+;;     X-Forwarded-For is client-supplied and is NOT confirmed anywhere
+;;     this repo can see to be set-and-sanitized by that proxy. Keying
+;;     on a spoofable header would give FALSE assurance — an abuser
+;;     rotates the value per request and the cap never bites — so it is
+;;     refused (the brief's rule). Keying by target member is
+;;     impossible too: the member is known only AFTER the token lookup,
+;;     and the pace must run BEFORE it so the window leaks nothing about
+;;     which tokens exist.
+;;
+;; So each flow gets one GENEROUS global ceiling: high enough that
+;; legitimate use never approaches it (re-entry is a rare emergency;
+;; invite onboarding rarer still — a handful an hour at the very most),
+;; low enough that a crude high-rate flood trips it within a second and
+;; the log stays bounded. 128-bit machine-minted tokens are the real
+;; wall against guessing; this pacing is defense-in-depth beside them.
+;; A restart forgets the window (honest, as knock-log is). Tests reset
+;; the atoms.
+
+(def reentry-door-log
+  "The re-entry (homecoming) flow's rolling-hour window on /auth/agent,
+  process-local. Charged by body-token attempts. See the block above."
+  (atom []))
+
+(def invite-door-log
+  "The invite-bind (onboarding) flow's rolling-hour window on
+  /auth/agent, process-local. Charged by query ?invite= attempts.
+  Separate from reentry-door-log so neither flow can starve the other."
+  (atom []))
+
+(defn- door-swap!
+  "The atomic prune-check-record swap knock-paced! builds, factored so
+  the two /auth/agent buckets share one implementation. Records this
+  attempt only if the live window is under the limit; returns true when
+  admitted, false when full. Every attempt that lands is recorded
+  regardless of the token's fate, so the pace itself leaks nothing
+  about which tokens exist. The check and the record are one swap, so a
+  concurrent flood cannot both pass the last slot."
+  [log-atom ^long limit ^java.time.Instant now]
+  (let [cutoff (.minusSeconds now 3600)
+        after (swap! log-atom
+                     (fn [log]
+                       (let [live (filterv #(neg? (compare cutoff %)) log)]
+                         (if (< (count live) limit) (conj live now) live))))]
+    (identical? (peek after) now)))
+
+(defn reentry-door-paced!
+  "Pace a re-entry (homecoming) attempt in its own window. Returns true
+  when admitted, false when the bucket is full (the caller answers
+  429). Generous global default 600/hour — see the block above."
+  [eng ^java.time.Instant now]
+  (door-swap! reentry-door-log
+              (long (get-in eng [:services :reentry-door-hourly] 600))
+              now))
+
+(defn invite-door-paced!
+  "Pace an invite-bind (onboarding) attempt in its own window, separate
+  from re-entry (N1). Returns true when admitted, false when full.
+  Generous global default 600/hour — see the block above."
+  [eng ^java.time.Instant now]
+  (door-swap! invite-door-log
+              (long (get-in eng [:services :invite-door-hourly] 600))
+              now))
 
 (defn gate!
   "The principal-resolution consult: anonymous and system principals

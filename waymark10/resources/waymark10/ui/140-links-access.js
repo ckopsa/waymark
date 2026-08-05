@@ -107,6 +107,21 @@ async function fullItems(colHref) {
   const envs = await Promise.all(items.map(it => api(it.self)));
   return envs.filter(r => r.ok).map(r => r.body);
 }
+/* the homecoming credential's entropy floor, generated CLIENT-SIDE
+   (waymark-4zj.8.2 R6): 128 bits of crypto.getRandomValues, base64url,
+   ~22 chars — exactly the schema's :min. The human never types a
+   re-entry token, so a hand-picked weak one (which unpaced online
+   guessing over a 15-minute window could reach) is never minted. The
+   server keeps its minter-supplied semantics: the token is the whole
+   handoff, shown once here, and the returning agent POSTs it to
+   /auth/agent in the BODY. */
+function reentryToken() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
 async function renderAccess(view, seq) {
   const [members, asks, grants, powers] = await Promise.all([
     fullItems("/api/members"), fullItems("/api/approval_requests"),
@@ -166,16 +181,18 @@ async function renderAccess(view, seq) {
       nameIn.value = "";
       showLink(display, token);
     }}, "Invite")), linkBox);
-  const pending = agents.filter(m => m.state === "invited" && m.data.bind_token);
+  /* bind_token is :secret now (waymark-4zj.8 closed the raw-render
+     punt): the credential never rides a render, so the link shows
+     ONCE — at mint time, from the token this page generated itself.
+     A lost link is a fresh invitation, not a lookup. */
+  const pending = agents.filter(m => m.state === "invited");
   if (pending.length)
     invite.append(el("div", {style:"margin-top:10px"},
-      el("div", {class:"muted"}, "standing invitations, unclaimed:"),
-      pending.map(m => el("div", {},
-        el("b", {}, m.data.display), " · ",
-        el("a", {href: mintLink(m.data.bind_token), class:"mono",
-                 onclick: e => { e.preventDefault();
-                   showLink(m.data.display, m.data.bind_token); }},
-          "show link")))));
+      el("div", {class:"muted"},
+        "standing invitations, unclaimed (each link was shown once, "
+        + "at mint — lost means mint a fresh one):"),
+      pending.map(m => el("div", {}, el("b", {}, m.data.display),
+        knockBadge(m)))));
   view.append(invite);
 
   /* 1b · the magic link: a temporary, scoped guest. One press mints a
@@ -317,6 +334,39 @@ async function renderAccess(view, seq) {
       card.append(el("div", {class:"muted", style:"margin-top:6px"},
         "no live grant — its next ask lands above"));
     }
+    /* the homecoming fallback (waymark-4zj.8): when this agent's
+       durable credential (its Keycloak service account) is
+       unreachable, mint a one-shot re-entry token here and hand the
+       string over the session you already share. The token is
+       generated in this page (128-bit, crypto), submitted to
+       :offer_reentry, and shown ONCE — it never renders back (the
+       field is :secret), so a lost handoff is a fresh mint, not a
+       lookup. The agent POSTs it to /auth/agent in the request body. */
+    const reentryOut = el("div", {});
+    card.append(el("div", {style:"margin-top:8px"},
+      el("button", {style:"font-size:12px;padding:3px 8px",
+        title: "mint a one-shot, ~15-minute way back in for this agent "
+             + "— hand the string over your live session",
+        onclick: async () => {
+          const token = reentryToken();
+          const {ok, body} = await api(m.self + "/-/offer_reentry",
+            {method: "POST", body: JSON.stringify({token})});
+          if (!ok) { reentryOut.replaceChildren(problemBox(body)); return; }
+          reentryOut.replaceChildren(el("div", {class:"field",
+              style:"margin-top:6px"},
+            el("div", {class:"muted"},
+              `${m.data.display}'s one-shot re-entry token — shown once, `
+              + `~15 min; the agent POSTs it to /auth/agent in the body:`),
+            el("input", {value: token, readonly: "true",
+                         style:"width:100%;font-family:var(--mono)",
+                         onclick: e => e.target.select()}),
+            el("button", {style:"margin-top:4px", onclick: () =>
+              navigator.clipboard?.writeText(token).then(
+                () => toast("re-entry token copied — hand it over your session"),
+                () => toast("select and copy the token above"))},
+              "Copy token")));
+        }}, "Offer re-entry"),
+      reentryOut));
     card.append(el("div", {"data-agent-feed": pid,
       class:"feed", style:"margin-top:8px;max-height:180px;overflow-y:auto"},
       el("div", {class:"muted"}, "actions land here live…")));

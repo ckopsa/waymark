@@ -30,9 +30,16 @@
         (oidc/verify), session cookie minted
     GET /auth/logout                     session cleared, 302 → the
         IdP's RP-initiated logout
-    POST /auth/agent?invite=TOKEN        the agent door: a valid
-        invite binds its member row to its own id and answers with
-        an engine-minted session — the link is the whole key, once
+    POST /auth/agent                     the agent door, two
+        resolutions, each rate-paced in its own window (members/
+        reentry-door-paced! + invite-door-paced!, decoupled — N1). An invite
+        token binds its member row to its own id and answers with an
+        engine-minted session — the link is the whole key, once (the
+        invite's pre-existing spelling accepts ?invite=TOKEN or the
+        body). A live re-entry token (members :offer_reentry) re-admits
+        its ACTIVE member as the same stable id, one shot — and it
+        rides the JSON body ONLY, never a query string, where a
+        credential would land in access and proxy logs
     POST /auth/agent/renew               a LIVE session (the cookie)
         answers with a fresh one; lapsed = a new invitation
 
@@ -334,24 +341,26 @@
   "The door's answer: the session token, how to wear it (the SAME
   cookie the browser flow mints — resolve-session already reads it,
   so an agent with curl and this header is a full citizen), and the
-  way to stay alive."
-  [rp principal]
-  (let [{:keys [exp token]} (mint-session rp principal)]
-    {:status 200
-     :headers {"Content-Type" "application/json"}
-     :body (wire/write-json
-            {:waymark "10"
-             :agent {:id (:id principal) :display (:display principal)}
-             :session {:token token
-                       :expires_at exp
-                       :use {:header "Cookie"
-                             :value (str (:cookie-name rp) "=" token)
-                             :note (str "send this Cookie header on every "
-                                        "request — it is your credential")}}
-             :renew {:href "/auth/agent/renew" :method "POST"
-                     :note (str "POST with the LIVE session cookie for a "
-                                "fresh token; a lapsed session needs a "
-                                "fresh invitation from the human")}})}))
+  way to stay alive. extra rides into mint-session — the re-entry
+  branch's standing grant, when one lives."
+  ([rp principal] (session-response rp principal nil))
+  ([rp principal extra]
+   (let [{:keys [exp token]} (mint-session rp principal extra)]
+     {:status 200
+      :headers {"Content-Type" "application/json"}
+      :body (wire/write-json
+             {:waymark "10"
+              :agent {:id (:id principal) :display (:display principal)}
+              :session {:token token
+                        :expires_at exp
+                        :use {:header "Cookie"
+                              :value (str (:cookie-name rp) "=" token)
+                              :note (str "send this Cookie header on every "
+                                         "request — it is your credential")}}
+              :renew {:href "/auth/agent/renew" :method "POST"
+                      :note (str "POST with the LIVE session cookie for a "
+                                 "fresh token; a lapsed session needs a "
+                                 "fresh invitation from the human")}})})))
 
 (defn- body-invite
   "The invite token off a JSON body — nil on absence or garbage; the
@@ -361,22 +370,79 @@
        (catch Exception _ nil)))
 
 (defn- agent-session
-  "POST /auth/agent?invite=TOKEN — the signed-URL onboarding closed
-  end to end (waymark-b4y's distinct-identity form, no pre-shared
-  secret): an agent holding ONLY the link binds its invited member
-  row and walks away with an engine-minted session; the link goes
-  dark behind it. An unknown or spent token answers the welcome
-  document's own 404 and says nothing."
+  "POST /auth/agent — two resolutions, one door, rate-paced. The
+  signed-URL onboarding closed end to end (waymark-b4y's
+  distinct-identity form, no pre-shared secret): an agent holding
+  ONLY the link binds its invited member row and walks away with an
+  engine-minted session; the link goes dark behind it. That invite's
+  token keeps its pre-existing spelling — ?invite=TOKEN or the body.
+  And the homecoming (waymark-4zj.8): an ACTIVE member holding a live
+  re-entry token spends it and the session names its STABLE id — a
+  fresh member is never minted, which is the whole point (a new id
+  owns none of the story a welcome hands back). The re-entry token
+  rides the JSON BODY ONLY (waymark-4zj.8.2 R5): a query-string
+  credential lands in access logs, proxy traces and shell history,
+  and an uncredentialed GET of such a URL would copy the live token
+  into a login-bounce Location header without even spending it. The
+  returning member wears its standing grant when one lives (the guest
+  door's own courtesy), but homecoming never REQUIRES one — the
+  welcome's :home is own-surface and owes nothing to a grant. An
+  unknown, spent or expired token answers the welcome document's own
+  404, before anything spends, and says nothing; each flow is paced in
+  its OWN rolling-hour window (members/reentry-door-paced! and
+  invite-door-paced!, kept separate — N1) so that 404 can't be guessed
+  against, and a flood of one flow can never lock out the other."
   [eng oidc req]
   (let [rp (:rp oidc)
-        token (or (get (query-params req) "invite") (body-invite req))]
-    (if-some [row (members/bind-agent! eng token)]
-      (session-response rp {:id (:id row)
+        now (java.time.Instant/now)
+        ;; body-invite slurps the request body's InputStream, so read
+        ;; it ONCE. The invite token keeps its pre-existing shape
+        ;; (query or body); the re-entry token is read from the BODY
+        ;; alone (waymark-4zj.8.2 R5) — never off the query string
+        body-token (body-invite req)
+        query-token (get (query-params req) "invite")
+        invite-token (or query-token body-token)
+        ;; N1: the two flows are paced in SEPARATE buckets so a flood
+        ;; of one can never lock out the other. A query ?invite= is
+        ;; unambiguously invite onboarding → the invite bucket; a body
+        ;; token is the re-entry spelling (and the legacy body-invite
+        ;; path) → the re-entry bucket. Each is charged whatever the
+        ;; token's fate, so the pace leaks nothing about which tokens
+        ;; exist; both windows are generous globals (members' pacing
+        ;; block explains why no per-source key is trustworthy here).
+        invite-ok (or (nil? query-token)
+                      (members/invite-door-paced! eng now))
+        reentry-ok (or (nil? body-token)
+                       (members/reentry-door-paced! eng now))
+        paced (problem 429 "The door is paced"
+                       (str "This door is rate-limited; try again when the "
+                            "window reopens.")
+                       {:knock knock-remedy})]
+    (cond
+      (not invite-ok) paced
+      (not reentry-ok) paced
+      :else
+      (if-some [row (members/bind-agent! eng invite-token)]
+        (session-response rp {:id (:id row)
+                              :type :agent
+                              :roles (set (get-in row [:data :roles]))
+                              :display (or (get-in row [:data :display])
+                                           (:id row))})
+        (if-some [row (members/spend-reentry! eng body-token)]
+          (let [principal (t/principal
+                           {:id (:id row)
                             :type :agent
                             :roles (set (get-in row [:data :roles]))
                             :display (or (get-in row [:data :display])
                                          (:id row))})
-      (problem 404 "Not found" "No standing invitation." {:knock knock-remedy}))))
+                grant (some-> (grants/standing-grant-for eng (:id row))
+                              (as-> g (grants/accept-as-audience!
+                                       eng g principal)))]
+            (session-response rp principal
+                              (when (and grant (= :accepted (:state grant)))
+                                {:grant (:id grant)})))
+          (problem 404 "Not found" "No standing invitation."
+                   {:knock knock-remedy}))))))
 
 (defn- agent-renew
   "POST /auth/agent/renew — possession of a LIVE session renews it
