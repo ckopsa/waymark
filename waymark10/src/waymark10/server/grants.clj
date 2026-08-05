@@ -307,6 +307,39 @@
     ;; probe ctx carries no registry — decline to guess (phase-8)
     (t/allow)))
 
+;; ── private, own-surface-only kinds (waymark-4zj.1): never grantable ─
+;;
+;; :self and :journal are OWN-SURFACE-ONLY private kinds — an agent
+;; sees and edits ONLY the rows it OWNS (data.owner == its principal
+;; id), unscoped humans see all, and there is NO grant path in
+;; between. A grant (or an ask, which MINTS a grant on approval) whose
+;; scope named one of these would BYPASS own-surface: row?/ids-of
+;; consult the grant surface — which carries no owner filter — and
+;; would expose EVERY agent's private rows. Privacy here is
+;; STRUCTURAL, not a human remembering to hand-craft an {:filter
+;; {:owner …}}: these kinds are simply not shareable, so the scope
+;; validator refuses any entry naming them at BOTH doors (grant create
+;; AND approval_request create; the trio is shared, so the guard rides
+;; :extend too — defense in depth for the approval effect's mint).
+;; Own-surface (owner sees own) is untouched — it never goes through a
+;; grant.
+(def ^:private private-own-surface-kinds
+  "Kinds that live ONLY on the own-surface and can never be granted."
+  #{"self" "journal"})
+
+(g/defguard scope-omits-private-kinds
+  {:judges [:scope]
+   :vars [:kind]
+   :open "The private kinds are the own-surface-only pair (self, journal); enumerating them into every scope form would duplicate a house rule the refusal already spells."
+   :explain "self and journal are private to their owner and cannot be granted; the {kind} entry is refused (these kinds ride the own-surface, where owner sees own, with no grant path)."}
+  [_row inp _ctx]
+  (if-some [bad (some (fn [e]
+                        (let [k (str (:kind e))]
+                          (when (contains? private-own-surface-kinds k) k)))
+                      (:scope inp))]
+    (t/deny {:vars {:kind bad}})
+    (t/allow)))
+
 (declare surface-of visibility)
 
 (defn- entry-within-surface?
@@ -400,6 +433,7 @@
    ;; attenuates, never widens; the widening path stays the ask
    :create-guards [scope-names-real-kinds scope-names-real-actions
                    scope-filters-are-filterable
+                   scope-omits-private-kinds
                    agents-mint-within-their-leash]
    :actions
    {:accept {:from #{:offered} :to :accepted
@@ -430,7 +464,8 @@
              ;; warns, the grant honestly does not move
              :guards [approval-route-only
                       scope-names-real-kinds scope-names-real-actions
-                      scope-filters-are-filterable]
+                      scope-filters-are-filterable
+                      scope-omits-private-kinds]
              ;; idempotent, deliberately: a non-idempotent action's 428
              ;; fires before the hide guard can conceal (invoke's step
              ;; order), and a keyless human probe must see 404, not a
@@ -634,7 +669,8 @@
                    ;; into a scope that can never match
                    scope-names-real-kinds
                    scope-names-real-actions
-                   scope-filters-are-filterable]
+                   scope-filters-are-filterable
+                   scope-omits-private-kinds]
    :on-create (fn [row ctx]
                 (-> row
                     (assoc-in [:data :requested_by]
@@ -873,8 +909,16 @@
   (hospitality audit, agent walk #3): the registry is VOCABULARY —
   an agent that cannot read what powers exist cannot compose its
   ask, the same argument :vocabulary-open? already won — and its
-  rows are public words, not anyone's data."
-  #{"grant" "approval_request" "job" "capability"})
+  rows are public words, not anyone's data.
+
+  :self and :journal ride too (waymark-4zj.1): an agent's profile and
+  the shared history are OWN-SURFACE — an agent sees and edits the
+  rows it OWNS (data.owner == its principal id) without a grant, and
+  by the same default-deny wall sees NOTHING of another agent's. The
+  ownership is the row's data.owner (own-row? / own-ids below), so
+  these two need no grant to be lived in and stay private from other
+  agents by construction. Humans run unscoped and see every row."
+  #{"grant" "approval_request" "job" "capability" "self" "journal"})
 
 (defn- own-ids
   "The principal's own rows of one negotiation kind, as the id cond
@@ -1001,7 +1045,17 @@
                                       (get-in [:data :requested_by :id])))
                        ;; the registry's rows are everyone's words
                        "capability"
-                       (some? (load-decoded eng :capability id)))))]
+                       (some? (load-decoded eng :capability id))
+                       ;; the dwelling kinds (waymark-4zj.1): an agent
+                       ;; owns the self and the journal entries whose
+                       ;; data.owner is its own id — a foreign row 404s
+                       ;; like any un-granted one
+                       "self"
+                       (= pid (some-> (load-decoded eng :self id)
+                                      (get-in [:data :owner])))
+                       "journal"
+                       (= pid (some-> (load-decoded eng :journal id)
+                                      (get-in [:data :owner]))))))]
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
@@ -1037,7 +1091,18 @@
                            (or (and (= k "approval_request")
                                     (contains? #{"create" "approve" "deny"} a))
                                (and (= k "grant")
-                                    (contains? #{"accept" "revoke"} a)))))))
+                                    (contains? #{"accept" "revoke"} a))
+                               ;; the dwelling kinds (waymark-4zj.1): an
+                               ;; agent may create and edit its OWN self
+                               ;; and journal entries — row-gated to its
+                               ;; own rows by own-row? above, and the
+                               ;; create/edit guards stamp and enforce
+                               ;; the owner so no cross-owner write lands
+                               (and (= k "self")
+                                    (contains? #{"create" "update"
+                                                 "retire" "restore"} a))
+                               (and (= k "journal")
+                                    (contains? #{"create" "amend"} a)))))))
      :field? (fn [kind field]
                (let [k (name kind)]
                  (if-some [e (get surface k)]
@@ -1085,7 +1150,11 @@
                        (own-ids eng (keyword k)
                                 (case k
                                   "grant" {:audience pid}
-                                  "approval_request" {:requested_by pid})))))))}))
+                                  "approval_request" {:requested_by pid}
+                                  ;; the dwelling kinds: an agent's own
+                                  ;; rows are the ones it owns (filterable
+                                  ;; data.owner, pushed down as a cond)
+                                  ("self" "journal") {:owner pid})))))))}))
 
 (defn bootstrap-visibility
   "The agent default (waymark-rci): a named agent that presents NO

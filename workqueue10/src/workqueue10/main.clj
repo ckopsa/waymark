@@ -52,6 +52,7 @@
             [mealplan10.scraper :as scraper]
             [workqueue10.confluence :as conf]
             [workqueue10.reconsent :as reconsent]
+            [workqueue10.resources.dwelling :refer [self journal]]
             [workqueue10.resources.media :refer [media-resource]]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
@@ -271,7 +272,15 @@
        ;; panel (waymark-kyg.1) sits beside them: infrastructure the
        ;; family reads when something is dark, not a domain of family
        ;; life.
-       (into (into [saved-view capability connection]
+       ;; the dwelling kinds (waymark-4zj.1): an agent's :self profile
+       ;; and the shared :journal, one entry per row. Domainless like
+       ;; the composition and capability kinds — an agent's continuity
+       ;; and our shared history are the house's inner life, not a
+       ;; domain of family logistics beside queue/chores/meals. Their
+       ;; privacy is the framework's own: humans unscoped see all,
+       ;; agents default-deny see nothing but their OWN (the
+       ;; own-surface addition in waymark10.server.grants).
+       (into (into [saved-view capability connection self journal]
                    dashboard/resources)))))
 
 (def surfaces
