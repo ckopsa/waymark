@@ -85,6 +85,46 @@
                 (:id p)
                 (get-in row [:data :owner])))))
 
+;; the owner the engine WILL stamp, computed at GUARD time — create
+;; guards run with row nil BEFORE :on-create (invoke.clj create-in-tx!:
+;; create-guard-pass precedes the :on-create call), so a guard that
+;; keys on the owner cannot read the stamp yet and must derive it the
+;; same way stamp-owner will: an agent's own principal id, else the
+;; owner a person named in the body. Same rule, one write earlier.
+(defn- stamped-owner [inp ctx]
+  (let [p (:principal ctx)]
+    (if (= :agent (:type p))
+      (:id p)
+      (supplied-owner inp))))
+
+;; ── :self is a SINGLETON per owner ──────────────────────────────────
+
+;; the existing ACTIVE self for an owner, read through the ctx :find
+;; hook (same transaction as the create — roles/active-role?'s idiom).
+;; A RETIRED self is invisible here on purpose: retire→recreate is a
+;; supported path, so only a live self blocks a new one. A ctx without
+;; the hook (the storage-free render probe) declines with nil, and a
+;; nil owner (a person who named none — owner-is-self-or-on-behalf will
+;; already refuse that create) has no self to find.
+(defn- active-self-for [ctx owner]
+  (when-some [find' (:find ctx)]
+    (when (some? owner)
+      (first (find' :self {:owner (str owner) :state "active"} {:limit 1})))))
+
+;; the singleton wall: a self is an agent's ONE profile (the counterpart
+;; to its one member row), so an owner that already has an ACTIVE self
+;; cannot mint a second — the welcome payload's home-self assumes one
+;; and would otherwise return an arbitrary row order-dependently. Keyed
+;; on the STAMPED owner (an agent's own id, a person's named owner), so
+;; a human minting a second self on an agent's behalf is refused too. A
+;; retired self does not block: retire, then create anew.
+(defguardfn self-is-singleton
+  {:reads [:self :principal]
+   :explain "This agent already has a self; retire it first and create anew, or edit the existing one with its \"update\" action."}
+  [_row inp ctx]
+  (if (active-self-for ctx (stamped-owner inp ctx))
+    (t/deny) (t/allow)))
+
 ;; ── :self — the agent's profile ─────────────────────────────────────
 
 (defhandler edit-self [row inp _ctx]
@@ -132,7 +172,7 @@
    ;; owner filterable → own-ids queries data.owner == pid; state too
    :filterable {:state #{:eq} :owner #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
-   :create-guards [owner-is-self-or-on-behalf]
+   :create-guards [owner-is-self-or-on-behalf self-is-singleton]
    :on-create stamp-owner
    :actions
    {:update {:from #{:active} :to :active

@@ -94,8 +94,15 @@
 
 ;; ── 1. an agent lives in its own rows (own-surface, round-trip) ─────
 
+;; a self is now a SINGLETON per owner (workqueue10.resources.dwelling/
+;; self-is-singleton), and the deftests share one :once DB under kaocha's
+;; random order — so every test that MINTS a self names its own agent,
+;; or a second test's create would be refused and the ids would collide.
+;; The reader-only tests (grants, scopes) keep the shared cairn/flint.
+
 (deftest agent-lives-in-its-own-self-and-journal
-  (let [make (req :post "/api/selves"
+  (let [cairn (agent-headers "cairn-own")
+        make (req :post "/api/selves"
                   {:display "Cairn"
                    :pronouns "it/its"
                    :about "A steady hand at the house's inner work."
@@ -106,7 +113,7 @@
         sid (id-of make)]
     (testing "the create lands, owner stamped to the creating agent"
       (is (= 201 (:status make)))
-      (is (= "cairn" (get-in (json make) [:data :owner]))))
+      (is (= "cairn-own" (get-in (json make) [:data :owner]))))
     (testing "the agent reads its own self back — prose bodies round-trip"
       (let [r (req :get (str "/api/selves/" sid) cairn)
             d (:data (json r))]
@@ -131,7 +138,7 @@
       (let [coll (req :get "/api/selves" cairn)]
         (is (= 200 (:status coll)))
         (is (some #(= sid (item-id %)) (items coll)))
-        (is (every? #(= "cairn" (item-owner %)) (items coll)))))
+        (is (every? #(= "cairn-own" (item-owner %)) (items coll)))))
 
     ;; a journal entry, the shared history's first page
     (let [je (req :post "/api/journals"
@@ -142,7 +149,7 @@
           jid (id-of je)]
       (testing "an agent writes into its own journal, owner stamped"
         (is (= 201 (:status je)))
-        (is (= "cairn" (get-in (json je) [:data :owner]))))
+        (is (= "cairn-own" (get-in (json je) [:data :owner]))))
       (testing "it reads the entry back, body prose intact"
         (let [r (req :get (str "/api/journals/" jid) cairn)]
           (is (= 200 (:status r)))
@@ -163,7 +170,9 @@
 ;; ── 2. THE KEY TEST: a different agent sees NOTHING ─────────────────
 
 (deftest a-foreign-agent-is-locked-out-by-construction
-  (let [sid (id-of (req :post "/api/selves"
+  (let [cairn (agent-headers "cairn-lock")
+        flint (agent-headers "flint-lock")
+        sid (id-of (req :post "/api/selves"
                         {:display "Cairn" :about "private thoughts"} cairn))
         jid (id-of (req :post "/api/journals"
                         {:title "Private page" :body "not for other agents"}
@@ -177,9 +186,9 @@
         (is (= 404 (:status r)))
         (is (not (str/includes? (body-str r) "not for other agents")))))
     (testing "the foreign agent's collections surface NONE of cairn's rows"
-      (is (not-any? #(= "cairn" (item-owner %))
+      (is (not-any? #(= "cairn-lock" (item-owner %))
                     (items (req :get "/api/selves" flint))))
-      (is (not-any? #(= "cairn" (item-owner %))
+      (is (not-any? #(= "cairn-lock" (item-owner %))
                     (items (req :get "/api/journals" flint))))
       (is (not-any? #(= sid (item-id %)) (items (req :get "/api/selves" flint))))
       (is (not-any? #(= jid (item-id %)) (items (req :get "/api/journals" flint)))))
@@ -190,7 +199,8 @@
 ;; ── 3. the family sees the whole story (humans run unscoped) ────────
 
 (deftest a-human-sees-every-self-and-entry
-  (let [sid (id-of (req :post "/api/selves"
+  (let [cairn (agent-headers "cairn-fam")
+        sid (id-of (req :post "/api/selves"
                         {:display "Cairn" :about "the house's inner work"}
                         cairn))
         jid (id-of (req :post "/api/journals"
@@ -211,15 +221,17 @@
 ;; ── 4. an agent cannot forge ownership, nor touch another's rows ────
 
 (deftest an-agent-cannot-mint-or-edit-what-it-does-not-own
+ (let [cairn (agent-headers "cairn-forge")
+       flint (agent-headers "flint-forge")]
   (testing "an agent naming a DIFFERENT owner on create is refused"
     (let [r (req :post "/api/selves"
-                 {:owner "flint" :display "Not yours" :about "forged"}
+                 {:owner "flint-forge" :display "Not yours" :about "forged"}
                  cairn)]
       (is (>= (:status r) 400))
       (is (not= 201 (:status r)))))
   (testing "the same forge on a journal entry is refused"
     (let [r (req :post "/api/journals"
-                 {:owner "flint" :title "Forged" :body "not cairn's to write"}
+                 {:owner "flint-forge" :title "Forged" :body "not cairn's to write"}
                  cairn)]
       (is (>= (:status r) 400))
       (is (not= 201 (:status r)))))
@@ -248,7 +260,34 @@
                                [:data :display])))
         (is (= "flint's words"
                (get-in (json (req :get (str "/api/journals/" fjid) flint))
-                       [:data :body])))))))
+                       [:data :body]))))))))
+
+;; ── 4b. a self is a SINGLETON per owner (workqueue10.resources.dwelling)
+
+(deftest self-is-a-singleton-per-owner
+  (let [cairn (agent-headers "cairn-solo")
+        first-self (req :post "/api/selves"
+                        {:display "Cairn" :about "the one"} cairn)
+        sid (id-of first-self)]
+    (testing "an agent's first self is minted"
+      (is (= 201 (:status first-self))))
+    (testing "a SECOND self is refused while the first is active"
+      (let [r (req :post "/api/selves"
+                   {:display "Cairn again" :about "the two"} cairn)]
+        (is (>= (:status r) 400))
+        (is (not= 201 (:status r)))))
+    (testing "a human minting a second self on the agent's behalf is refused too"
+      (let [r (req :post "/api/selves"
+                   {:owner "cairn-solo" :display "By Colton" :about "on behalf"}
+                   colton)]
+        (is (>= (:status r) 400))
+        (is (not= 201 (:status r)))))
+    (testing "retire the active self, then a fresh one is allowed (retire→recreate)"
+      (is (= 200 (:status (req :post (str "/api/selves/" sid "/-/retire")
+                               {} cairn))))
+      (is (= 201 (:status (req :post "/api/selves"
+                               {:display "Cairn reborn" :about "the third"}
+                               cairn)))))))
 
 ;; ── 5. Colton adds to our story; the agent then sees it ─────────────
 
@@ -345,7 +384,9 @@
 (deftest own-surface-survives-the-grant-refusal
   ;; own-surface does NOT go through grants — the refusal must not touch
   ;; it. An agent still reads and lists its OWN self/journal with no grant.
-  (let [sid (id-of (req :post "/api/selves"
+  (let [cairn (agent-headers "cairn-surf")
+        flint (agent-headers "flint-surf")
+        sid (id-of (req :post "/api/selves"
                         {:display "Cairn" :about "still mine"} cairn))
         jid (id-of (req :post "/api/journals"
                         {:title "Still mine" :body "own-surface intact"} cairn))]

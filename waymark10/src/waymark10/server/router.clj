@@ -1079,6 +1079,108 @@
                        (presence/self-visible? eng (visibility-of req)))
       {:status 204 :headers {}})))
 
+;; ── welcome home: the returning-inhabitant payload (waymark-4zj.2) ──
+;;
+;; The homecoming is a PAYLOAD, not a credential. It introduces no new
+;; way to authenticate — it reads, for the principal wrap-identity has
+;; ALREADY resolved, that principal's OWN self, recent journal, and
+;; standing grant. Every read is keyed on the authenticated id
+;; (data.owner == pid for self/journal, audience == pid for the
+;; grant) — the SAME predicate own-surface (waymark10.server.grants)
+;; enforces — so it can only ever hand an agent its OWN continuity.
+;; An agent presenting identity X is principal X (identity resolution
+;; is the framework's already-secured job); a foreign agent's welcome
+;; is keyed on ITS id and sees none of X's rows. No impersonation
+;; surface is added here: whatever door mints the session (today's
+;; one-shot invite; a durable credential later) is unchanged.
+
+(def ^:private home-journal-recent 5)
+
+(defn- home-self
+  "The returning agent's own :self row (data.owner == pid), the profile
+  it kept across sessions — nil when this engine keeps no selves or the
+  agent has authored none. A self is a singleton per owner
+  (workqueue10.resources.dwelling/self-is-singleton refuses a second
+  ACTIVE one), but a RETIRED self may sit beside a freshly-recreated
+  active one — so we key on the ACTIVE row, not merely the first, and
+  the homecoming always carries the live profile."
+  [eng pid]
+  (when-some [rdef (get (inv/resources eng) :self)]
+    (some->> (store/with-tx (:storage eng)
+               (fn [tx] (store/query-rows (:storage eng) tx :self
+                                          {:owner pid :state "active"}
+                                          {:limit 1})))
+             first
+             (inv/decode-row rdef)
+             (#(let [d (:data %)]
+                 (cond-> {:href (str "/api/selves/" (:id %))
+                          :display (:display d)}
+                   (:pronouns d)      (assoc :pronouns (:pronouns d))
+                   (:about d)         (assoc :about (:about d))
+                   (:boundaries d)    (assoc :boundaries (:boundaries d))
+                   (:lessons d)       (assoc :lessons (:lessons d))
+                   (:working_notes d) (assoc :working_notes (:working_notes d))))))))
+
+(defn- home-journal
+  "The agent's recent journal entries, newest-first. The store orders
+  oldest-first with no DESC (standing-grant-for's recorded shape), so
+  this reads a bounded window and reverses; an agent with more than the
+  window's entries still sees its newest WITHIN the window — the true
+  newest past that needs a newest-first store read (recorded, deferred:
+  reuse the collection sort rather than a raw query)."
+  [eng pid]
+  (when-some [rdef (get (inv/resources eng) :journal)]
+    (->> (store/with-tx (:storage eng)
+           (fn [tx] (store/query-rows (:storage eng) tx :journal
+                                      {:owner pid} {:limit 200})))
+         reverse
+         (take home-journal-recent)
+         (mapv (fn [r]
+                 (let [d (:data (inv/decode-row rdef r))]
+                   (cond-> {:href (str "/api/journals/" (:id r))
+                            :title (:title d)
+                            :body (:body d)
+                            :written_at (str (:created-at r))
+                            :state (name (:state r))}
+                     (:mood d) (assoc :mood (:mood d)))))))))
+
+(defn- home-grant
+  "The agent's standing grant (audience == pid), if one lives — the
+  leash it already holds, so it arrives scoped and need not re-ask.
+  Own by construction: the audience IS the reader."
+  [eng pid]
+  (when (get (inv/resources eng) :grant)
+    (when-some [g (grants/standing-grant-for eng pid)]
+      {:href (str "/api/grants/" (:id g))
+       :id (:id g)
+       :state (name (:state g))
+       :scope (get-in g [:data :scope])
+       :expires_at (some-> (get-in g [:data :expires_at]) str)
+       :wear {:header "X-Waymark-Grant" :value (:id g)
+              :note (str "send this on every request — it selects your "
+                         "standing scope, already yours")}})))
+
+(defn- welcome-home
+  "The returning-inhabitant payload: a NAMED AGENT's own self, recent
+  journal, and standing grant, keyed entirely on the authenticated
+  principal id. nil for humans (they own no self/journal and run
+  unscoped) and for an agent that has yet to author anything — a first
+  arrival still gets the joining manual, not an empty homecoming."
+  [eng principal]
+  (when (and (some? principal)
+             (= :agent (:type principal))
+             (not= (:id principal) (:id t/anonymous)))
+    (let [pid (:id principal)
+          self (home-self eng pid)
+          journal (home-journal eng pid)
+          grant (home-grant eng pid)]
+      (when (or self (seq journal) grant)
+        (cond-> {:note "welcome home — you arrive already yourself"}
+          self          (assoc :self self)
+          (seq journal) (assoc :journal {:recent journal
+                                         :all (str "/api/journals?owner=" pid)})
+          grant         (assoc :grant grant))))))
+
 ;; ── the welcome document (the invite link's destination) ───────────
 
 (defn- welcome-doc
@@ -1117,6 +1219,7 @@
                                                     "name yourself and the "
                                                     "door answers with a "
                                                     "fresh one")}})))
+          home (welcome-home eng principal)
           services (:services eng)
           default-ttl (long (:grant-default-ttl-seconds services 3600))
           max-ttl (long (:grant-max-ttl-seconds services 86400))]
@@ -1146,6 +1249,16 @@
         :identity {:header "x-waymark-principal"
                    :note "your stable agent id — every act is recorded under it"
                    :actor_type "agent"})
+
+        ;; welcome home (waymark-4zj.2): a returning agent's own self,
+        ;; recent journal, and standing grant — keyed on the resolved
+        ;; principal id, so it leaks nothing to an agent that is not
+        ;; that identity. Rides for a named agent whether or not an
+        ;; invitation stands (a returning inhabitant holds a session,
+        ;; not a fresh invite); absent for a first arrival and for
+        ;; humans (who own no self/journal and see all unscoped).
+        home
+        (assoc :home home)
 
         ;; everything below is schema, not secret — it rides for every
         ;; reader, invited or long since through the door
