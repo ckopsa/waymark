@@ -610,13 +610,22 @@
   A configured-but-unscoped refresh token does NOT come back nil: it
   mints, Google refuses the tasks call, and the source reads as
   unreachable. That is deliberate. A credential that half works should
-  look broken, not absent."
+  look broken, not absent.
+
+  opts may carry :refresh-token-fn (the row-first read workqueue10's
+  reconsent door feeds — connections/google-refresh-token-fn); with
+  it, the client PAIR alone configures the source, and the token
+  arrives by connection row or env fallback at mint time — so a
+  deployment registers the Web client once and the household's one
+  consent click does the rest."
   ([] (from-env #(System/getenv ^String %)))
-  ([env]
+  ([env] (from-env env nil))
+  ([env {:keys [refresh-token-fn]}]
    (when-some [token-fn (oauth/access-token-fn
                          {:client-id (env "WORKQUEUE10_GTASKS_CLIENT_ID")
                           :client-secret (env "WORKQUEUE10_GTASKS_CLIENT_SECRET")
-                          :refresh-token (env "WORKQUEUE10_GTASKS_REFRESH_TOKEN")})]
+                          :refresh-token (env "WORKQUEUE10_GTASKS_REFRESH_TOKEN")
+                          :refresh-token-fn refresh-token-fn})]
      (http-source {:token-fn token-fn
                    :lists (env "WORKQUEUE10_GTASKS_LISTS")
                    :capture-list (env "WORKQUEUE10_GTASKS_CAPTURE")}))))

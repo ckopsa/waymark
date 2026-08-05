@@ -100,6 +100,33 @@
   (if (= :system (get-in ctx [:principal :type]))
     (t/allow) (t/deny)))
 
+;; the credential boundary (waymark-du2): assigning roles is how a
+;; principal's authority GROWS, so the ASSIGNMENT itself must be
+;; authorized — roles-registered only judges the role NAMES, never the
+;; caller, so without this guard any authenticated human runs unscoped
+;; and could POST assign_roles {:roles ["recovery-admin"]} onto its own
+;; member row and self-escalate. Authority is the engine's own (a
+;; :system write — the registrar's bootstrap, an engine-internal
+;; invoke) OR a principal that ALREADY holds "recovery-admin" (gate!
+;; unions the member's held roles, and the IdP's token roles claim
+;; onto them, so a real admin authenticates WITH the role). The FIRST
+;; admin therefore comes from the identity provider, never from a bare
+;; assign_roles — which is what makes recovery-admin a real credential
+;; boundary (the reconsent door depends on it). The exact
+;; system-OR-recovery-admin shape the connections panel's revoke lever
+;; draws (workqueue10.connections/revoke-is-recovery-admins). Not
+;; hidden: an admin SHOULD see and use the action, and a non-admin
+;; earns an honest refusal rather than a vanished door.
+(g/defguard assign-is-recovery-admins
+  {:reads [:principal]
+   :explain "Assigning roles is the recovery-admin's authority (and the engine's own); a member cannot grant itself roles it does not already hold."}
+  [_row _inp ctx]
+  (let [p (:principal ctx)]
+    (if (or (= :system (:type p))
+            (contains? (set (:roles p)) "recovery-admin"))
+      (t/allow)
+      (t/deny))))
+
 (defhandler set-roles [row inp _ctx]
   (assoc-in row [:data :roles] (vec (distinct (:roles inp)))))
 
@@ -179,7 +206,10 @@
                    :input [:map [:roles [:vector [:string {:min 1 :max 40}]]]]
                    :record true
                    :edit {:prefill [:roles]}   ; the fence rides along
-                   :guards [roles-registered]
+                   ;; two questions, both answered: WHO may assign
+                   ;; (system or a recovery-admin) and WHAT names are
+                   ;; assignable (registered roles only)
+                   :guards [assign-is-recovery-admins roles-registered]
                    :safety {:idempotent true :reversible true :confirm false}
                    :handler set-roles
                    :display {:label "Assign roles" :order 2}}

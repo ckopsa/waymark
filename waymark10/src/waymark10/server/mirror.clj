@@ -1072,10 +1072,14 @@
 
 (defn export-document
   "Our row as the external document: the declared domain fields,
-  wire-encoded, bookkeeping excluded (waymark9 export_external)."
+  wire-encoded, bookkeeping excluded (waymark9 export_external).
+  :secret fields drop (waymark-kyg): a concealed value never leaves
+  the engine, the push authority included — a :push-on-write secret
+  field is pushed as absent, not in the clear."
   [rdef row]
-  (select-keys (schema/encode (:schema rdef) (:data row))
-               (declared-fields (:schema rdef))))
+  (let [secret (schema/secret-fields (:schema rdef))]
+    (select-keys (schema/encode (:schema rdef) (:data row))
+                 (remove secret (declared-fields (:schema rdef))))))
 
 (defn push-after-write!
   "The write-back pass for one committed, non-replayed write: when the

@@ -411,7 +411,13 @@
     (merge
      {:create {:method "POST"
                :href base
-               :input (schema/json-schema model)
+               ;; the secret disposition (waymark-kyg): the door
+               ;; accepts a secret field; the ADVERTISED create input
+               ;; never names it — union over both spellings, since a
+               ;; separate :create-schema may carry the mark itself
+               :input (schema/conceal (schema/json-schema model)
+                                      (into (schema/secret-fields (:schema rdef))
+                                            (schema/secret-fields model)))
                :effect {:to (name (:initial rdef))}
                :safety {:idempotent false :reversible false :confirm false}}
       :query {:method "GET"

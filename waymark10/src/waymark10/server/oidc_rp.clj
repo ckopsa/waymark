@@ -60,12 +60,16 @@
 
 (defn- b64 ^String [^bytes bs] (.encodeToString b64url bs))
 
-(defn- rand-token []
+(defn rand-token
+  "32 random bytes, base64url — a state or a PKCE verifier. Public
+  for the sibling OAuth doors an app composes beside this one
+  (workqueue10's reconsent door) — shared cloth, never copied."
+  []
   (let [bs (byte-array 32)]
     (.nextBytes (java.security.SecureRandom.) bs)
     (b64 bs)))
 
-(defn- s256
+(defn s256
   "The PKCE S256 challenge: BASE64URL(SHA-256(verifier))."
   [^String verifier]
   (b64 (.digest (java.security.MessageDigest/getInstance "SHA-256")
@@ -75,16 +79,22 @@
 
 (defn- url-encode [s] (java.net.URLEncoder/encode (str s) "UTF-8"))
 
-(defn- query-str [m]
+(defn query-str
+  "{param value} → an encoded query string."
+  [m]
   (str/join "&" (map (fn [[k v]] (str k "=" (url-encode v))) m)))
 
-(defn- query-params [req]
+(defn query-params
+  "The request's query string as a {string string} map."
+  [req]
   (into {}
         (keep #(let [[k v] (str/split % #"=" 2)]
                  (when v [k (java.net.URLDecoder/decode ^String v "UTF-8")])))
         (str/split (or (:query-string req) "") #"&")))
 
-(defn- cookies [req]
+(defn cookies
+  "The request's Cookie header as a {name value} map."
+  [req]
   (into {}
         (keep #(let [[k v] (str/split (str/trim %) #"=" 2)]
                  (when v [k v])))
@@ -92,7 +102,10 @@
 
 (defn- secure? [rp] (str/starts-with? (str (:app-url rp)) "https"))
 
-(defn- set-cookie [rp cname value max-age path]
+(defn set-cookie
+  "One Set-Cookie value: HttpOnly, SameSite=Lax, Secure when the rp
+  config's :app-url is https. Max-age 0 with an empty value clears."
+  [rp cname value max-age path]
   (str cname "=" value
        "; Path=" path
        "; Max-Age=" max-age
@@ -101,7 +114,7 @@
 
 (defn- clear-cookie [rp cname path] (set-cookie rp cname "" 0 path))
 
-(defn- problem
+(defn problem
   "These routes sit OUTSIDE wrap-problems (the :wrap-handler seam), so
   refusals are built responses, not thrown ones. extra keys ride into
   the body — the knock remedy on a dark invite, and nothing secret."
@@ -186,22 +199,36 @@
     (try (jwt/unsign c (:session-secret rp) {:alg :hs256})
          (catch Exception _ nil))))
 
-(defn- exchange-code
-  "The back-channel POST: code + verifier → the IdP's token response,
-  or nil when the IdP refuses."
-  [oidc code verifier]
+(defn token-exchange
+  "The generic authorization-code back-channel: code + PKCE verifier +
+  the client pair as one plain form POST against ANY authorization
+  server's token endpoint — Keycloak's callback below and a sibling
+  door's Google exchange (workqueue10's reconsent) both speak exactly
+  this shape. The parsed token response, nil when the server refuses."
+  [{:keys [endpoint client-id client-secret redirect-uri code verifier]}]
   (let [{:keys [status body error]}
-        @(http/post (token-endpoint oidc)
+        @(http/post endpoint
                     {:timeout 10000
                      :form-params
                      {"grant_type" "authorization_code"
                       "code" code
-                      "redirect_uri" (redirect-uri (:rp oidc))
-                      "client_id" (get-in oidc [:rp :client-id])
-                      "client_secret" (get-in oidc [:rp :client-secret])
+                      "redirect_uri" redirect-uri
+                      "client_id" client-id
+                      "client_secret" client-secret
                       "code_verifier" verifier}})]
     (when (and (nil? error) (= 200 status))
       (wire/read-json (if (string? body) body (slurp body))))))
+
+(defn- exchange-code
+  "The back-channel POST: code + verifier → the IdP's token response,
+  or nil when the IdP refuses."
+  [oidc code verifier]
+  (token-exchange {:endpoint (token-endpoint oidc)
+                   :client-id (get-in oidc [:rp :client-id])
+                   :client-secret (get-in oidc [:rp :client-secret])
+                   :redirect-uri (redirect-uri (:rp oidc))
+                   :code code
+                   :verifier verifier}))
 
 (defn- mint-session
   "The session cookie's JWT: the principal's OWN claims, living

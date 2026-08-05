@@ -26,7 +26,11 @@
   OAuth refresh token carrying the tasks scope — the calendar's token
   does NOT — the comma-separated task list ids to mirror, EVERY list
   the account has when unsaid, and the list a capture lands in when
-  the birth names none), WORKQUEUE10_FLICKR_URL (the household's
+  the birth names none), WORKQUEUE10_RECONSENT_CLIENT_ID /
+  _CLIENT_SECRET / _SCOPES (the reconsent door, waymark-kyg.2: the
+  Web-application OAuth client the /auth/google doors consent
+  through — the mint client pairs above must name this SAME client
+  for a reconsented token to spend), WORKQUEUE10_FLICKR_URL (the household's
   media engine — the :media domain's first authority; unset falls
   back to the in-memory fake, the hub's noop source always wired
   beside it), WAYMARK10_DEPLOY_MODE,
@@ -47,6 +51,7 @@
             [mealplan10.main :as mealplan]
             [mealplan10.scraper :as scraper]
             [workqueue10.confluence :as conf]
+            [workqueue10.reconsent :as reconsent]
             [workqueue10.resources.media :refer [media-resource]]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
@@ -111,6 +116,17 @@
 (defn- ui-base []
   (or (System/getenv "WAYMARK10_OIDC_APP_URL") "http://localhost:8014"))
 
+(defn- google-token-source
+  "The row-first refresh-token read (waymark-kyg.2): the reconsent
+  door's stored token wins at mint time, the named env var backstops
+  it. Built over engine-ref so the sources — constructed before the
+  engine boots — see the row the moment it exists. NOTE: a row token
+  can revive a RUNNING real source at its next mint (that is the
+  door's whole point); it makes a previously-fake source real only at
+  next boot — no hot source swapping (recorded punt)."
+  [env-var]
+  (connections/google-refresh-token-fn engine-ref (System/getenv env-var)))
+
 (defn sources
   "The confluence's tag → TaskSource map. The chore kinds live in
   THIS engine since the stage-1 fold (waymark-bwu.1) — their source
@@ -147,11 +163,15 @@
                 :zone (System/getenv "WORKQUEUE10_HA_ZONE")
                 :capture-list (System/getenv "WORKQUEUE10_HA_CAPTURE")})
               fake-todos)
-     ;; the google half of pocket capture — real only when a refresh
-     ;; token is configured, and that token must carry the TASKS
-     ;; scope; the calendar's does not, so an unset trio is the
-     ;; ordinary state until the household re-consents
-     "gtasks" (or (gtasks/from-env) fake-gtasks)}))
+     ;; the google half of pocket capture — real when the mint CLIENT
+     ;; PAIR is configured; the refresh token arrives row-first from
+     ;; the reconsent door (env backstops it), and it must carry the
+     ;; TASKS scope — the door's default consent asks for both
+     "gtasks" (or (gtasks/from-env
+                   #(System/getenv ^String %)
+                   {:refresh-token-fn (google-token-source
+                                       "WORKQUEUE10_GTASKS_REFRESH_TOKEN")})
+                  fake-gtasks)}))
 
 (defn media-sources
   "The MEDIA confluence's tag → source map — a second confluence over
@@ -177,7 +197,12 @@
   credential, the scriptable fake otherwise — the same
   real-when-configured rule every other boundary here follows."
   []
-  (or (gcal/from-env (gcal-oauth/from-env)) fake-calendar))
+  (or (gcal/from-env
+       (gcal-oauth/from-env
+        #(System/getenv ^String %)
+        {:refresh-token-fn (google-token-source
+                            "CALENDAR10_GOOGLE_REFRESH_TOKEN")}))
+      fake-calendar))
 
 (defn resources
   "One domestic economics (waymark-bwu), across three domains: the
@@ -338,21 +363,55 @@
   {"chore" {:mode "real"}
    "meal" {:mode "real"}
    "todo" {:mode (if (System/getenv "WORKQUEUE10_HA_URL") "real" "fake")}
+   ;; the google pair: real when the mint CLIENT PAIR is set — the
+   ;; same judgment gtasks/from-env and gcal-oauth/from-env make now
+   ;; that the refresh token arrives row-first at mint time; a real
+   ;; source with no token anywhere reads dark with an honest error,
+   ;; which is exactly the state the reconsent door fixes
    "gtasks" {:provider "google"
-             :mode (if (System/getenv "WORKQUEUE10_GTASKS_REFRESH_TOKEN")
+             :mode (if (and (System/getenv "WORKQUEUE10_GTASKS_CLIENT_ID")
+                            (System/getenv "WORKQUEUE10_GTASKS_CLIENT_SECRET"))
                      "real" "fake")}
    "flickr" {:mode (if (System/getenv "WORKQUEUE10_FLICKR_URL")
                      "real" "fake")}
    "hub" {:mode "real"}
    "calendar" {:provider "google"
-               :mode (if (System/getenv "CALENDAR10_GOOGLE_REFRESH_TOKEN")
+               :mode (if (and (System/getenv "CALENDAR10_GOOGLE_CLIENT_ID")
+                              (System/getenv "CALENDAR10_GOOGLE_CLIENT_SECRET"))
                        "real" "fake")}})
+
+(defn assert-reconsent-client-pairing!
+  "Refuse to boot on the household misconfig that silently breaks
+  capture (waymark-kyg.2, finding #6 review): a refresh token minted
+  through the reconsent door's OAuth client spends ONLY at that same
+  client. If the door names a client id and a google source's MINT
+  pair names a DIFFERENT one, a reconsented token could never spend
+  (Google 400 invalid_grant) AND it would shadow a working env token.
+  A silent break of the very capability the door exists to repair
+  deserves a boot failure, not a warning."
+  ([] (assert-reconsent-client-pairing! #(System/getenv ^String %)))
+  ([env]
+   (when-some [door (not-empty (str (env "WORKQUEUE10_RECONSENT_CLIENT_ID")))]
+     (doseq [[label var] [["gtasks" "WORKQUEUE10_GTASKS_CLIENT_ID"]
+                          ["calendar" "CALENDAR10_GOOGLE_CLIENT_ID"]]]
+       (when-some [mint (not-empty (str (env var)))]
+         (when-not (= door mint)
+           (throw (ex-info
+                   (str "reconsent client mismatch: "
+                        "WORKQUEUE10_RECONSENT_CLIENT_ID (" door ") differs "
+                        "from " var " (" mint ") — a token reconsented "
+                        "through the door could never spend at the " label
+                        " source's mint client (Google 400 invalid_grant), "
+                        "and would shadow a working env token. Point BOTH at "
+                        "the same Web-application OAuth client, or unset one.")
+                   {:reconsent-client door :mint-client mint :source label}))))))))
 
 (defonce ^:private dev (atom nil))
 
 (defn start!
   "Boot and serve. Returns the engine."
   []
+  (assert-reconsent-client-pairing!)
   (let [storage (pg/storage (dsn))
         ;; with-push: task declares :push-on-write, and engine boot
         ;; does not auto-wire the post-commit push pass (the recorded
@@ -398,8 +457,14 @@
         _ (ensure-capabilities! eng)
         _ (connections/ensure-connections! eng (connection-descriptors))
         port (or (some-> (System/getenv "WORKQUEUE10_PORT") parse-long) 8014)
+        ;; the reconsent door composes OUTSIDE oidc-rp's wrap — comp
+        ;; applies rightmost first, so the door's routes answer before
+        ;; the require-auth gate can judge them (the door carries its
+        ;; own session check and 401)
         server (engine/start! eng port
-                              {:wrap-handler (oidc-rp/wrap-handler eng)})]
+                              {:wrap-handler
+                               (comp (reconsent/wrap eng)
+                                     (oidc-rp/wrap-handler eng))})]
     (reset! dev {:engine eng :server server :storage storage})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))

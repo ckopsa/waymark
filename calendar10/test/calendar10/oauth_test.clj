@@ -26,6 +26,48 @@
     (is (nil? (oauth/access-token-fn (assoc config :refresh-token ""))))
     (is (nil? (oauth/access-token-fn (assoc config :client-secret nil))))))
 
+(deftest a-refresh-token-fn-is-read-at-mint-time
+  (testing "the reconsent door's seam: the CURRENT token, not the boot's"
+    (let [current (atom "1//first")
+          saw (atom [])
+          mint (fn [config]
+                 (swap! saw conj (:refresh-token config))
+                 ;; expires_in 0: the cache dies at once, so the next
+                 ;; call re-mints and re-reads the fn
+                 {:access_token (str "ya29.token-" (count @saw))
+                  :expires_in 0})
+          token-fn (oauth/access-token-fn
+                    {:client-id "cid" :client-secret "secret"
+                     :refresh-token-fn (fn [] @current)
+                     :mint-fn mint})]
+      (is (some? token-fn)
+          "the fn alone configures — no static token needed")
+      (token-fn)
+      (reset! current "1//reconsented")
+      (token-fn)
+      (is (= ["1//first" "1//reconsented"] @saw)
+          "a reconsent lands at the very next mint, no reboot"))))
+
+(deftest the-fn-falls-back-to-the-static-token
+  (let [saw (atom [])
+        mint (fn [config] (swap! saw conj (:refresh-token config))
+               {:access_token "ya29.t" :expires_in 3600})
+        token-fn (oauth/access-token-fn
+                  (assoc config
+                         :refresh-token-fn (constantly nil)
+                         :mint-fn mint))]
+    (token-fn)
+    (is (= ["1//refresh"] @saw)
+        "a fn answering nothing yields to the configured static token")))
+
+(deftest a-fn-with-nothing-anywhere-throws-honestly
+  (let [token-fn (oauth/access-token-fn
+                  {:client-id "cid" :client-secret "secret"
+                   :refresh-token-fn (constantly nil)
+                   :mint-fn (fn [_] (throw (ex-info "must not mint" {})))})]
+    (is (thrown-with-msg? Exception #"no refresh token" (token-fn))
+        "configured-but-empty looks broken, never absent")))
+
 (deftest a-live-token-is-reused
   (let [[calls mint] (scripted [3600])
         token-fn (oauth/access-token-fn (assoc config :mint-fn mint))]

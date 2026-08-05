@@ -510,35 +510,50 @@
              (and (t/deny? v) (:hide d))))
          (:guards defn))))
 
+(defn- narration-row
+  "The row a refusal narrates over (waymark-kyg): secret fields
+  concealed so a guard's :vars-fn garnish cannot surface a value the
+  projection hides — the 409/dry-run reason is a projection like any
+  envelope. Judgment already read the FULL row above; this is display
+  only. nil passes through (create judges rowless)."
+  [rdef row]
+  (if-some [secret (and (some? row)
+                        (not-empty (schema/secret-fields (:schema rdef))))]
+    (update row :data #(apply dissoc % secret))
+    row))
+
 (defn- deny-outcome
   "One denying guard, graded the way every judgment door shares (the
   full loop and §23's partial rehearsal — one grading, no drift): a
   warning collects (acknowledged names pass, recorded as overridden);
   a hide flag conceals — what render hides the wire must 404, not
   narrate, since a 409 here would leak the very reason hide=
-  conceals; anything else refuses with the guard's own sentence."
+  conceals; anything else refuses with the guard's own sentence.
+  Reasons render over the secret-concealed row (waymark-kyg); id,
+  state and the gate-safe summary keep the full row."
   [acc v d row acknowledged defn rdef]
-  (cond
-    (= :warning (:severity d))
-    (if (contains? acknowledged (:name d))
-      (update acc :overridden conj (:name d))
-      (update acc :warned conj
-              {:name (:name d)
-               :reason (g/render-reason d v row)
-               :remedies (:remedies d)}))
+  (let [nrow (narration-row rdef row)]
+    (cond
+      (= :warning (:severity d))
+      (if (contains? acknowledged (:name d))
+        (update acc :overridden conj (:name d))
+        (update acc :warned conj
+                {:name (:name d)
+                 :reason (g/render-reason d v nrow)
+                 :remedies (:remedies d)}))
 
-    (:hide d)
-    (throw (p/not-found (:kind rdef) (:id row)))
+      (:hide d)
+      (throw (p/not-found (:kind rdef) (:id row)))
 
-    :else
-    (throw (p/guard-refused
-            (:name defn) (:state row)
-            (g/render-reason d v row)
-            {:guard (:name d)
-             :remedies (:remedies d)
-             :becomes-available (g/becomes-available d v row)}
-            {:kind (:kind rdef) :id (:id row)
-             :summary (summary-of rdef row)}))))
+      :else
+      (throw (p/guard-refused
+              (:name defn) (:state row)
+              (g/render-reason d v nrow)
+              {:guard (:name d)
+               :remedies (:remedies d)
+               :becomes-available (g/becomes-available d v nrow)}
+              {:kind (:kind rdef) :id (:id row)
+               :summary (summary-of rdef row)})))))
 
 (defn- run-guards
   "→ {:warned [{:name :reason :remedies}] :overridden [names]} or

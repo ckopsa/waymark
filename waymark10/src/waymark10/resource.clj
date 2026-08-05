@@ -1018,6 +1018,97 @@
         (when-some [oc (:on-clear col)]
           (check-invoke (:field col) (:action oc) (:param oc) ":on-clear"))))))
 
+(def ^:private data-template-token #"\{data\.([A-Za-z0-9_]+)")
+
+(defn- check-secret!
+  "The :secret disposition's def-site gate (waymark-kyg): a secret
+  field's value never leaves the engine, so every surface that would
+  materialize, advertise or print it refuses at the declaration —
+  a filterable/sortable field promotes a generated column and stands
+  as a filter oracle, a facet enumerates the values themselves, a
+  summary or label template prints them on every envelope and event
+  frame, a worksheet column exports them, a derivation re-emits them
+  as a computed value, and an :edit :prefill serves them raw from the
+  draft view. Runs over the FULLY normalized map, so colocated sugar
+  and the vocab self-merge have already landed. Nested {:secret true}
+  marks refuse too — the disposition is a top-level field's; a mark
+  malli would ignore (a bare nested map, or the {:x-display {:secret
+  true}} misspelling) must not read as concealment.
+
+  RECORDED seam: a cross-kind :sum {:of <secret>} reads a field of the
+  SUMMED kind, whose rdef is not reachable from this kind's gate — the
+  summed kind's own gate cannot see that its field is re-emitted
+  elsewhere either, so a secret field summed across an edge is not
+  caught here. Own-kind :derived :over is caught (a derivation binds
+  only :over fields, so :expr cannot read what :over does not name)."
+  [rmap]
+  (let [kind (:kind rmap)
+        secret (schema/secret-fields (:schema rmap))
+        err (fn [msg] (throw (t/definition-error
+                              (str (name kind) " [secret] " msg)
+                              {:check :secret})))
+        template-hit (fn [template]
+                       (some (comp secret keyword second)
+                             (re-seq data-template-token (str template))))
+        nested-mark? (fn walk [x]
+                       (cond
+                         (map? x) (or (:secret x) (some walk (vals x)))
+                         (vector? x) (some walk x)
+                         :else false))]
+    (when (seq secret)
+      (when (contains? secret :state)
+        (err ":state is the machine's token, not a data value — it cannot be :secret"))
+      (doseq [[f {:keys [schema]}] (schema/entry-map (:schema rmap))
+              :when (contains? secret f)]
+        (when (= :waymark/vocab (schema-head schema))
+          (err (str (name f) " is a :secret vocabulary field — a vocabulary "
+                    "filters and facets by declaration; it cannot be concealed"))))
+      (doseq [f (sort (filter secret (keys (:filterable rmap))))]
+        (err (str (name f) " is :secret and :filterable — a filter is a "
+                  "value oracle over what the projection conceals")))
+      (let [sortable (into (set (get-in rmap [:sortable :fields]))
+                           (when-some [d (get-in rmap [:sortable :default])]
+                             [(keyword (if (str/starts-with? d "-")
+                                         (subs d 1)
+                                         d))]))]
+        (doseq [f (sort (filter secret sortable))]
+          (err (str (name f) " is :secret and sortable — ordering by a "
+                    "concealed value tells its story"))))
+      (doseq [f (sort (filter secret (:faceted rmap)))]
+        (err (str (name f) " is :secret and :faceted — a facet enumerates "
+                  "the very values the disposition conceals")))
+      (when-some [f (template-hit (:summary rmap))]
+        (err (str "the summary template reads " (name f) ", a :secret field — "
+                  "the summary rides every envelope and event frame")))
+      (when-some [f (template-hit (:label-template rmap))]
+        (err (str ":label-template reads " (name f) ", a :secret field — "
+                  "labels ride pickers and touch narrations")))
+      (doseq [col (get-in rmap [:worksheet :columns])
+              :when (contains? secret (:field col))]
+        (err (str "worksheet column " (name (:field col)) " is :secret — "
+                  "the export would carry the value out of the engine")))
+      (doseq [[fact d] (:derived rmap)
+              f (filter secret (:over d))]
+        (err (str "derivation " (name fact) " reads " (name f) ", a :secret "
+                  "field — a derived value re-emits what the disposition "
+                  "conceals")))
+      (doseq [[aname a] (:actions rmap)
+              f (filter secret (get-in a [:edit :prefill]))]
+        (err (str "action " (name aname) " prefills " (name f) ", a :secret "
+                  "field — the draft view serves prefill from the raw row"))))
+    ;; a nested mark declares nothing (secret-fields reads a top-level
+    ;; entry's properties) — refuse the silent drift instead of
+    ;; ignoring it, in the schema child AND in the properties map (the
+    ;; {:x-display {:secret true}} misspelling lands here, not in
+    ;; secret-fields, and is the most likely mis-declaration)
+    (doseq [[f {:keys [schema properties]}] (schema/entry-map (:schema rmap))
+            :when (and (not (contains? secret f))
+                       (or (nested-mark? schema) (nested-mark? properties)))]
+      (err (str (name f) " carries a nested {:secret true} (a mark malli "
+                "ignores, or under :x-display) — :secret is a top-level field "
+                "disposition; mark the field itself")))
+    rmap))
+
 (defn- normalize-default-filters
   "A default filter's value is a WIRE value: it lands in the query
   string, in the collection's self href and in the chip a person
@@ -1101,7 +1192,11 @@
                      (every? #(and (string? %) (not (str/blank? %))) ds))
         (throw (t/definition-error
                 ":deviations is a vector of sentences — each recorded deviation explains itself"))))
-    (-> rmap
+    ;; check-secret! runs LAST — colocated sugar and the vocab
+    ;; self-merge must land before the disposition judges the
+    ;; filter/facet surface it forbids
+    (check-secret!
+     (-> rmap
         project-colocated
         desugar-owns
         (update :plural #(or % (str (name kind) "s")))
@@ -1137,7 +1232,7 @@
         (update :renames #(merge {:states {} :actions {}} %))
         normalize-derived
         bind-require-specs
-        merge-vocab-filters)))
+        merge-vocab-filters))))
 
 ;; ── the import-time gate ────────────────────────────────────────────
 

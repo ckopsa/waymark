@@ -376,11 +376,15 @@
           (throw (p/not-found "kind" kind))))
       ;; batch B (flagged router seam): the published schema view
       ;; projects per grant field modes — a redacted field is not in
-      ;; the schema; grants.clj owns the logic, nil vis is untouched
+      ;; the schema; grants.clj owns the logic, nil vis is untouched.
+      ;; A :secret field (waymark-kyg) drops FIRST, visibility or not
+      ;; — the disposition is law, not a grant mode
       (json-response 200 (p/wire-value
                           (grants/project-json-schema
                            (visibility-of req) (:kind rdef)
-                           (schema/json-schema (:schema rdef))))))))
+                           (schema/conceal
+                            (schema/json-schema (:schema rdef))
+                            (schema/secret-fields (:schema rdef)))))))))
 
 (defn- rows-of
   "The collection's rows= parameter: absent → full item summaries;

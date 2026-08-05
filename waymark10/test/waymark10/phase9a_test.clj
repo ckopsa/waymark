@@ -94,6 +94,11 @@
 
 (def ^:private root (dev-headers "root"))
 
+;; assigning roles is a recovery-admin's authority (waymark-du2); an
+;; admin authenticates WITH the role (prod: the Keycloak token roles
+;; claim; here: the dev-header roles), never from a bare assign_roles
+(def ^:private admin (dev-headers "root" {"x-waymark-roles" "recovery-admin"}))
+
 (defn- req
   ([method uri] (req method uri nil root))
   ([method uri body] (req method uri body root))
@@ -165,22 +170,63 @@
         (is (str/includes? (:detail (json again)) "already exists"))))
     (testing "an unregistered role refuses at assignment, naming it"
       (req :get "/api/meals" nil (dev-headers "rohan"))
-      (let [etag (etag-of "/api/members/rohan" root)
+      (let [etag (etag-of "/api/members/rohan" admin)
             resp (req :post "/api/members/rohan/-/assign_roles"
                       {:roles ["adminn"]}
-                      (assoc root "if-match" etag))]
+                      (assoc admin "if-match" etag))]
         (is (= 409 (:status resp)))
         (is (str/includes? (:detail (json resp)) "adminn"))))
     (testing "a registered role assigns, and rides the member's principal"
-      (let [etag (etag-of "/api/members/rohan" root)
+      (let [etag (etag-of "/api/members/rohan" admin)
             resp (req :post "/api/members/rohan/-/assign_roles"
                       {:roles ["admin"]}
-                      (assoc root "if-match" etag))]
+                      (assoc admin "if-match" etag))]
         (is (= 200 (:status resp)))
         (is (= ["admin"] (get-in (json resp) [:data :roles]))))
       (is (contains? (:roles (members/gate! *eng* (t/principal {:id "rohan"})))
                      "admin")
           "the gate unions the member's held roles onto the credential"))))
+
+;; ── 3b. assign_roles is a credential boundary (waymark-du2) ──────────
+
+(deftest assign-roles-is-recovery-admins
+  ;; the roles this test assigns must be registered (roles-registered
+  ;; still applies beside the new authorization guard)
+  (req :post "/api/roles" {:name "recovery-admin"})
+  (req :post "/api/roles" {:name "planner"})
+  ;; a role-less member to act on (auto-provisioned on first sight)
+  (req :get "/api/meals" nil (dev-headers "faramir"))
+  (testing "a non-admin human cannot assign roles — self-escalation is closed"
+    (let [self (dev-headers "faramir")
+          etag (etag-of "/api/members/faramir" self)
+          resp (req :post "/api/members/faramir/-/assign_roles"
+                    {:roles ["recovery-admin"]}
+                    (assoc self "if-match" etag))]
+      (is (= 409 (:status resp))
+          "a bare assign_roles by a role-less principal is refused")
+      (is (str/includes? (str (:detail (json resp))) "recovery-admin")
+          "the refusal names the recovery-admin authority")
+      (is (empty? (get-in (json (req :get "/api/members/faramir" nil self))
+                          [:data :roles]))
+          "no role was granted — the escalation did not land")))
+  (testing "an admin holding recovery-admin may assign roles"
+    (let [_ (req :get "/api/meals" nil admin)
+          etag (etag-of "/api/members/faramir" admin)
+          resp (req :post "/api/members/faramir/-/assign_roles"
+                    {:roles ["planner"]}
+                    (assoc admin "if-match" etag))]
+      (is (= 200 (:status resp)))
+      (is (= ["planner"] (get-in (json resp) [:data :roles])))))
+  (testing "a system principal may assign roles"
+    (let [sys (dev-headers "deploy-bot" {"x-waymark-actor-type" "system"})
+          etag (etag-of "/api/members/faramir" sys)
+          resp (req :post "/api/members/faramir/-/assign_roles"
+                    {:roles ["planner" "recovery-admin"]}
+                    (assoc sys "if-match" etag))]
+      (is (= 200 (:status resp)))
+      (is (= #{"planner" "recovery-admin"}
+             (set (get-in (json resp) [:data :roles])))
+          "the system actor's assign is allowed"))))
 
 ;; ── 4. OIDC: the bearer resolver ────────────────────────────────────
 

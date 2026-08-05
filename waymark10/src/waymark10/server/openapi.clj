@@ -192,6 +192,12 @@
         col (str "/api/" (:plural rdef))
         qs (collections/query-input-schema rdef)
         create-model (or (:create-schema rdef) (:schema rdef))
+        ;; the secret disposition (waymark-kyg): a secret field drops
+        ;; from the PUBLISHED create body though the door accepts it —
+        ;; the union covers a separate :create-schema spelling the
+        ;; mark either place
+        secret (into (schema/secret-fields (:schema rdef))
+                     (schema/secret-fields create-model))
         base
         {col
          {:get {:tags [kname]
@@ -205,7 +211,9 @@
                             "422" (resp-ref "schema_invalid")}}
           :post {:tags [kname]
                  :summary (str "Create a " kname " (initial-state transition)")
-                 :requestBody (body-of (schema/json-schema create-model))
+                 :requestBody (body-of (schema/conceal
+                                        (schema/json-schema create-model)
+                                        secret))
                  :responses {"201" {:description "The new resource envelope; Location carries its self"
                                     :content envelope-content}
                              "409" (resp-ref "refused")

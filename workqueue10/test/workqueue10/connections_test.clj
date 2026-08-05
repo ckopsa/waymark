@@ -102,6 +102,31 @@
   (connections/report! *eng* "ghost" false "boom")
   (is (nil? (row "ghost"))))
 
+(deftest a-reconsent-between-a-passs-read-and-write-survives
+  ;; waymark-kyg.2: the health pass reads the row, then persist! writes
+  ;; the health keys onto a FRESH read — a refresh_token landed by the
+  ;; reconsent door in that gap must not be clobbered back to absent.
+  (connections/ensure-connections!
+   *eng* {"race" {:provider "google" :mode "real"}})
+  (let [stale (row "race")]                 ; the pass's own snapshot
+    (is (nil? (get-in stale [:data :refresh_token])))
+    ;; the reconsent door lands its credential AFTER the pass read it
+    (connections/receive-token! *eng* (:id stale)
+                                {:refresh-token "rt-FRESH"
+                                 :reconsented-by "ana"})
+    ;; the pass now writes its health — over the stale snapshot
+    (#'connections/persist! *eng* stale
+                            {:last_answered (java.time.Instant/now)
+                             :last_error nil
+                             :failed_since nil
+                             :consecutive_failures 0})
+    (let [r (row "race")]
+      (testing "the credential written in the gap survived the write"
+        (is (= "rt-FRESH" (get-in r [:data :refresh_token]))))
+      (testing "the health keys the pass owns still landed"
+        (is (= 0 (long (get-in r [:data :consecutive_failures]))))
+        (is (some? (get-in r [:data :last_answered])))))))
+
 (deftest the-panel-is-the-systems-own-record
   (connections/ensure-connections! *eng* {"chore" {:mode "real"}})
   (testing "a human can read the breaker but never work it"

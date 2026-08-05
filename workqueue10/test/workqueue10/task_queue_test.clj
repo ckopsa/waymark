@@ -293,10 +293,17 @@
     (let [role-resp (req :post "/api/roles" {:name "ranker"}
                          {"idempotency-key" (str (random-uuid))})]
       (is (contains? #{200 201} (:status role-resp)) (:body role-resp)))
-    ;; an auto-provisioned member row's ID is the principal's own id
-    (let [member (json (req :get "/api/members/colton"))]
+    ;; an auto-provisioned member row's ID is the principal's own id.
+    ;; assigning roles is a recovery-admin's authority (waymark-du2), so
+    ;; the assign rides the admin role — a bare self-assign is refused
+    (let [member (json (req :get "/api/members/colton"))
+          etag (get-in (req :get (:self member)) [:headers "ETag"])]
       (is (some? (:self member)) "colton auto-provisioned on his first request")
-      (act-fenced! (:self member) :assign_roles {:roles ["ranker"]}))
+      (is (= 200 (:status (req :post (str (:self member) "/-/assign_roles")
+                               {:roles ["ranker"]}
+                               {"if-match" etag
+                                "x-waymark-roles" "recovery-admin"})))
+          "an admin (recovery-admin) may assign the ranker role"))
     (let [jack-headers {"x-waymark-principal" "jack"}
           any-open (:self (task-by-title "Dishes"))
           read (req :get any-open nil jack-headers)

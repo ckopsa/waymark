@@ -102,7 +102,36 @@
     still probe over the FULL row (advertisement equals enforcement;
     the projection is what leaves the building, not what the law
     judges) — recorded seam: an unavailable narration's deny vars may
-    still name a redacted value (the grants ns records the punt)."
+    still name a redacted value (the grants ns records the punt).
+
+  ── waymark-kyg: the secret disposition ─────────────────────────────
+
+  A schema entry declaring {:secret true} conceals its VALUE with NO
+  visibility required — the third always-on set beside batch B's
+  redacted and waymark-rci's hashed, computed from the law rather
+  than the grant. It folds into the redacted set (data, fields,
+  links, the summary/display honesty trap, part groups) and subtracts
+  from the hashed set (concealment outranks tokenization); guards and
+  handlers still judge the full row, and the 409/dry-run and
+  unavailable narrations render over the concealed row (the reason is
+  a projection too). The declaration gate (resource/check-secret!)
+  refuses every surface that would materialize or print the value —
+  filterable/sortable/faceted columns, summary and label templates,
+  worksheet columns, own-kind derivations, and :edit :prefill — the
+  publish sites drop the entry from the schema views, the fingerprint
+  carries it as shape-class law, and the mirror export drops it.
+
+  RECORDED seams (not fully gated — a future secret field on these
+  paths would leak): a cross-kind :sum {:of <secret>} reads a field
+  of the summed kind, unreachable from either kind's gate; a part
+  reason's :vars-fn still renders over the hashed part row, not the
+  concealed one, so a secret field OTHER than the part-scope key
+  could surface in a per-item denial narration; and an EXPRESSION
+  guard's own :vars are evaluated at judgment over the full row and
+  baked into the deny before render sees it — public-row conceals only
+  the render-time :vars-fn garnish, so a guard whose :explain prints
+  {secret_field} via expr :vars still leaks (the gate does not yet
+  refuse a guard that names a secret field)."
   (:require [clojure.string :as str]
             [waymark10.demand :as demand]
             [waymark10.guards :as g]
@@ -725,7 +754,26 @@
         ;; building projects
         field? (:field? visibility)
         arg? (:arg? visibility)
-        redacted (redacted-fields rdef visibility)
+        ;; the secret disposition (waymark-kyg): declared on the
+        ;; schema entry, computed from the LAW, never from a
+        ;; visibility — the third always-on set beside redacted and
+        ;; hashed. A secret field folds into redacted here, so every
+        ;; downstream pass (data, links, the summary/display honesty
+        ;; trap) conceals it on unscoped requests too.
+        secret (not-empty (schema/secret-fields (:schema rdef)))
+        redacted (not-empty (into (set (redacted-fields rdef visibility))
+                                  secret))
+        ;; the hashed/concealed row is built BEFORE the probe so the
+        ;; unavailable narration can render its reasons over public-row
+        ;; (the already-concealed row) — a guard's :vars-fn garnish must
+        ;; never surface a secret or redacted value the projection
+        ;; hides, though the probe below still judges the FULL row. A
+        ;; secret field never tokenizes: concealment outranks the
+        ;; grant's hashed disposition.
+        hashed (not-empty (reduce disj (set (hashed-fields rdef visibility))
+                                  (or secret #{})))
+        hrow (hash-view rdef row visibility hashed)
+        public-row (redact-row hrow redacted)
         ;; the row's law resolves the probe's guards too (phase 5):
         ;; advertisement equals enforcement, per row
         resolved (map #(judgment/resolve-action rdef % (:law-revision row))
@@ -744,7 +792,7 @@
                    (assoc-in acc [:actions (:name defn')]
                              (action-entry defn' rdef self row ctx arg?)))
                  :unavailable (assoc-in acc [:unavailable (:name defn')]
-                                        (unavailable-entry denier deny row))
+                                        (unavailable-entry denier deny public-row))
                  :hidden acc))
              (if (probe-hidden-only? defn' row ctx)
                acc
@@ -776,14 +824,11 @@
                    (fn [[aname _]] ((:action? visibility) (:kind rdef) aname)))
         actions (cond->> actions granted? (into {} (filter granted?)))
         unavailable (cond->> unavailable granted? (into {} (filter granted?)))
-        ;; the hashed view (waymark-rci): tokens replace raw values in
-        ;; everything that leaves the building; guards above judged
-        ;; the full row. Encoding runs over the ORIGINAL data — a
-        ;; token is not a date — and the tokens land after.
-        hashed (hashed-fields rdef visibility)
-        hrow (hash-view rdef row visibility hashed)
-        ;; the redacted view (batch B): absent from data and from the
-        ;; link pass; guards above judged the full row
+        ;; hashed/hrow/public-row are built above the probe (the reasons
+        ;; render over public-row); the tokens land over the ORIGINAL
+        ;; data — a token is not a date — in enc-data below. The
+        ;; redacted view (batch B): absent from data and from the link
+        ;; pass; guards above judged the full row
         enc-data (cond-> (schema/encode (:schema rdef) (:data row))
                    (seq redacted) (as-> d (apply dissoc d redacted))
                    (seq hashed)
@@ -799,12 +844,15 @@
         ;; whole document (prose text, sub-item vectors) on every row
         ;; of a paginated page
         fields (prose-teaser (select-keys enc-data (grid-fields rdef)) rdef)
-        public-row (redact-row hrow redacted)
-        ;; a hashed parts path collapses to one opaque token — the
-        ;; parts group drops rather than iterate a string
-        pfield? (if (seq hashed)
-                  (fn [k f] (and (or (nil? field?) (field? k f))
-                                 (not (contains? hashed (keyword (name f))))))
+        ;; a hashed parts path collapses to one opaque token, a secret
+        ;; one conceals whole — the parts group drops rather than
+        ;; iterate what the projection hides
+        pfield? (if (or (seq hashed) (seq secret))
+                  (fn [k f]
+                    (let [f (keyword (name f))]
+                      (and (or (nil? field?) (field? k f))
+                           (not (contains? (or hashed #{}) f))
+                           (not (contains? (or secret #{}) f)))))
                   field?)
         ;; parts render over the SURVIVING actions — a concealed placed
         ;; action never re-renders per item
@@ -835,8 +883,11 @@
   project like the full envelope's: batch B's redaction holds at
   every depth)."
   [rdef row {:keys [resources visibility]}]
-  (let [redacted (redacted-fields rdef visibility)
-        hashed (hashed-fields rdef visibility)
+  (let [secret (not-empty (schema/secret-fields (:schema rdef)))
+        redacted (not-empty (into (set (redacted-fields rdef visibility))
+                                  secret))
+        hashed (not-empty (reduce disj (set (hashed-fields rdef visibility))
+                                  (or secret #{})))
         hrow (hash-view rdef row visibility hashed)
         public-row (redact-row hrow redacted)]
     (p/wire-value

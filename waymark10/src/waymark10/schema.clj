@@ -261,6 +261,37 @@
         (second s)
         s))))
 
+(defn secret-fields
+  "The {:secret true} entries of a :map schema — the fields whose
+  VALUES never leave the engine in any projection, scoped or not.
+  :x-display {:hidden true} hides browser pixels and grant
+  dispositions hide per-visibility; :secret is law without a
+  visibility: the render/export/publish sites drop these fields
+  always. Guards, handlers and the system door still read the full
+  row — concealment is projection-time, never judgment-time."
+  [form]
+  (into #{}
+        (keep (fn [[k {:keys [properties]}]]
+                (when (:secret properties) k)))
+        (entry-map form)))
+
+(defn conceal
+  "A published JSON Schema minus the named fields — absent from
+  properties and required alike, so a reader can neither see the
+  entry nor infer it from the required list. The publication sites
+  (/api/schemas/{kind}, the openapi/collection create bodies) pass
+  the row schema's secret set; an empty set is the identity."
+  [js fields]
+  (if (empty? fields)
+    js
+    (let [names (into #{} (map name) fields)]
+      (-> js
+          (update :properties #(apply dissoc % fields))
+          (update :required
+                  (fn [r]
+                    (some->> r
+                             (filterv #(not (contains? names (name %)))))))))))
+
 ;; ── filter values (one home, two readers) ───────────────────────────
 ;; A filter value crosses the wire as text and casts server-side, so
 ;; "does this string decode into that field's type" is a question the

@@ -230,7 +230,14 @@
                {:rows [(str "over " export-cap
                             " rows match — narrow the filter and export again")]})))
      (let [kind (:kind rdef)
+           ;; the secret disposition (waymark-kyg): the def-site gate
+           ;; already refuses a :secret worksheet column, so this
+           ;; filter only holds the line against a declaration that
+           ;; never crossed resource/check-secret! — concealment is
+           ;; not entrusted to one gate
+           secret (schema/secret-fields (:schema rdef))
            cols (cond->> (:columns ws)
+                  (seq secret) (into [] (remove #(contains? secret (:field %))))
                   (:field? vis) (filterv #((:field? vis) kind (:field %))))
            hashed? (:hashed? vis)
            header (into reserved-headers (map (comp name :field)) cols)

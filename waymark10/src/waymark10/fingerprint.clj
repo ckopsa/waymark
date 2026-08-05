@@ -254,6 +254,15 @@
     (and (:schema rmap) (:plural rmap))
     (assoc "storage" (storage-fp rmap))
 
+    ;; the :secret disposition (waymark-kyg) is shape-class law: a field
+    ;; whose value never leaves the engine. Removing it flips a field
+    ;; concealed→world-readable, so it must mint a revision and show in
+    ;; the diff. Non-empty-only, so every secret-free kind hashes
+    ;; byte-identical to before the disposition existed
+    (and (:schema rmap) (seq (schema/secret-fields (:schema rmap))))
+    (assoc "shape" {"secret" (vec (sort (map name (schema/secret-fields
+                                                   (:schema rmap)))))})
+
     ;; the create facet (design §24, anticipated above): declared
     ;; field defaults are law — a default changes what a blank write
     ;; stores. Non-empty-only: the default-free world hashes as ever

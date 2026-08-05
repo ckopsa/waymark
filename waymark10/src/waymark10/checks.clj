@@ -424,9 +424,12 @@
                         s-max (when (and (vector? s) (map? (second s)))
                                 (:max (second s)))
                         xd (:x-display props)]
+                    ;; a :secret entry never renders — no projection
+                    ;; carries the value, so no display shape is owed
                     (when (and text?
                                (not (and s-max (< s-max long-text-budget)))
-                               (not (or (:widget xd) (:hidden xd) (:raw xd))))
+                               (not (or (:widget xd) (:hidden xd) (:raw xd)
+                                        (:secret props))))
                       (str "[long-text] " where "." (name k)
                            " is a text field with no shape: declare prose widget, "
                            "a max under " long-text-budget ", hidden, or raw")))))

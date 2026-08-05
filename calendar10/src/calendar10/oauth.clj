@@ -78,24 +78,45 @@
 
 (defn access-token-fn
   "A zero-arg token source. config: :client-id, :client-secret,
-  :refresh-token, optional :endpoint (the token URL — tests point it
-  at a local server), optional :mint-fn (the whole HTTP step, for
-  tests that want no server at all).
+  :refresh-token, optional :refresh-token-fn (a zero-arg fn returning
+  the CURRENT refresh token at mint time — workqueue10's reconsent
+  door stores a fresh one on the connection row, and a static string
+  could never see it; given, it wins and :refresh-token is its
+  fallback), optional :endpoint (the token URL — tests point it at a
+  local server), optional :mint-fn (the whole HTTP step, for tests
+  that want no server at all).
 
-  Returns nil when the credential is not configured, so an app may
-  wire it unconditionally and offline dev simply has no calendar —
-  the same nil-means-absent contract oidc/outbound-token-fn uses."
-  [{:keys [client-id client-secret refresh-token mint-fn] :as config}]
-  (when-not (some str/blank? [(str client-id) (str client-secret)
-                              (str refresh-token)])
+  Returns nil when the credential is not configured — the client pair
+  blank, or NO refresh token source at all (neither the static string
+  nor the fn) — so an app may wire it unconditionally and offline dev
+  simply has no calendar — the same nil-means-absent contract
+  oidc/outbound-token-fn uses. A :refresh-token-fn that answers blank
+  at mint time throws instead: a configured-but-empty credential
+  should look broken, not absent."
+  [{:keys [client-id client-secret refresh-token refresh-token-fn
+           mint-fn]
+    :as config}]
+  (when (and (not (some str/blank? [(str client-id) (str client-secret)]))
+             (or refresh-token-fn
+                 (not (str/blank? (str refresh-token)))))
     (let [mint (or mint-fn http-mint)
+          current (if refresh-token-fn
+                    #(or (refresh-token-fn) refresh-token)
+                    (constantly refresh-token))
           cache (atom nil)]
       (fn []
         (let [now (quot (System/currentTimeMillis) 1000)
               {:keys [token exp]} @cache]
           (if (and token (< (+ now refresh-skew-seconds) exp))
             token
-            (let [{:keys [access_token expires_in]} (mint config)]
+            (let [rt (current)
+                  _ (when (str/blank? (str rt))
+                      (throw (ex-info (str "no refresh token to mint with — "
+                                           "nothing stored on a connection row "
+                                           "and none configured in env")
+                                      {})))
+                  {:keys [access_token expires_in]}
+                  (mint (assoc config :refresh-token rt))]
               (when (str/blank? (str access_token))
                 (throw (ex-info "google's token response carried no access_token"
                                 {})))
@@ -105,10 +126,15 @@
 
 (defn from-env
   "The deployed credential off CALENDAR10_GOOGLE_CLIENT_ID /
-  _CLIENT_SECRET / _REFRESH_TOKEN. nil when any is unset — offline dev
-  and the declaration gate run over the fake calendar instead."
+  _CLIENT_SECRET / _REFRESH_TOKEN. nil when unconfigured — offline
+  dev and the declaration gate run over the fake calendar instead.
+  opts may carry :refresh-token-fn (the row-first read the reconsent
+  door feeds); with it, the client pair alone configures — the token
+  arrives by row, or the env fallback, at mint time."
   ([] (from-env #(System/getenv ^String %)))
-  ([env]
+  ([env] (from-env env nil))
+  ([env {:keys [refresh-token-fn]}]
    (access-token-fn {:client-id (env "CALENDAR10_GOOGLE_CLIENT_ID")
                      :client-secret (env "CALENDAR10_GOOGLE_CLIENT_SECRET")
-                     :refresh-token (env "CALENDAR10_GOOGLE_REFRESH_TOKEN")})))
+                     :refresh-token (env "CALENDAR10_GOOGLE_REFRESH_TOKEN")
+                     :refresh-token-fn refresh-token-fn})))
