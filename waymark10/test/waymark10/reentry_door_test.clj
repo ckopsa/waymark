@@ -620,6 +620,133 @@
                  (:status home) " " (pr-str (json home))))
         (is (= mid (get-in (json home) [:agent :id])))))))
 
+;; ── homecoming is durable-only (waymark-4zj.8.3, reproduced-then-closed) ─
+
+(deftest offer-reentry-refuses-a-hollow-guest
+  ;; waymark-4zj.8.3 [LIVE ACCEPTANCE FAILURE]: offer_reentry had no
+  ;; durable-self guard, so a recovery-admin could mint a way home onto a
+  ;; HOLLOW namesake — a knock-born guest row that owns no self, no
+  ;; story (in prod the mint bound to an empty duplicate 'Cairn' and
+  ;; welcome-home came back empty). Against the pre-guard code that mint
+  ;; SUCCEEDED (200); the durable-only guard now refuses it.
+  (reset! members/knock-log [])
+  (testing "a durable idp agent (born 'idp') can be offered re-entry —
+            even self-less: an idp row is your own durable identity with
+            an empty journal, not a foreign namesake (GAP A, intended —
+            durable == provenance idp, owns-self is not a signal)"
+    (let [durable (agent-member! "durable-cairn")]
+      (is (= "idp" (get-in (json (req* *raw* :get (str "/api/members/" durable)
+                                       {:headers admin}))
+                           [:data :provenance])))
+      (is (= 200 (:status (mint! durable "durable-reentry-token-00001"))))))
+  (testing "a knock-born guest — active agent, provenance 'knock', owns no
+            self — is REFUSED (the hollow mint 4zj.8.3 let through)"
+    (let [krow (members/knock! *eng* {:display "hollow-cairn"})
+          bound (members/bind-agent! *eng* (get-in krow [:data :bind_token]))
+          gid (:id bound)]
+      (is (= :active (:state bound)))
+      (is (= "knock" (get-in bound [:data :provenance])))
+      (is (contains? #{409 422}
+                     (:status (mint! gid "hollow-reentry-token-000001")))
+          "the durable guard closes the hollow-namesake homecoming")
+      (is (nil? (first (store/with-tx (:storage *eng*)
+                         (fn [tx] (store/query-rows
+                                   (:storage *eng*) tx :member
+                                   {:reentry_token "hollow-reentry-token-000001"}
+                                   {:limit 1})))))
+          "no credential was minted onto the hollow row"))))
+
+(deftest offer-reentry-fails-closed-without-provenance
+  ;; REVISED (waymark-4zj.9.1): durable == provenance "idp", the sole
+  ;; unforgeable signal — the old "owns an active :self" fallback is
+  ;; GONE. A :self is forgeable (waymark-4zj.10), so it must never open
+  ;; the door. A row that PREDATES the backfill carries no provenance
+  ;; and now FAILS CLOSED, whether or not it owns a self — which is why
+  ;; the backfill is a required deploy companion, not optional cleanup.
+  (let [with-self (agent-member! "legacy-with-self")
+        without (agent-member! "legacy-without-self")]
+    ;; strip provenance to simulate a pre-backfill row
+    (doseq [id [with-self without]]
+      (store/with-tx (:storage *eng*)
+        (fn [tx]
+          (jdbc/execute! tx
+            ["UPDATE members SET data = data - 'provenance' WHERE id = ?" id]))))
+    (is (= 201 (:status (req* *raw* :post "/api/selves"
+                              {:body {:owner with-self :display "Legacy Home"}
+                               :headers admin}))))
+    (testing "no provenance + owns an active self → STILL refused: a
+              forgeable self is no longer a durable signal"
+      (is (contains? #{409 422}
+                     (:status (mint! with-self "legacy-self-reentry-tok-0001")))
+          "the guard fails closed on an unlabelled row, self or no self"))
+    (testing "no provenance + owns no self → refused"
+      (is (contains? #{409 422}
+                     (:status (mint! without "legacy-none-reentry-tok-01")))))))
+
+(deftest a-planted-self-cannot-open-a-provenance-less-door
+  ;; the GAP-4 repro (skeptic pass on waymark-4zj.9.1, closed): :self
+  ;; ownership is forgeable (waymark-4zj.10) — a role-less human can
+  ;; create a :self naming ANY owner id — and the old owns-self fallback
+  ;; treated "owns an active :self" as durable, so a planted self flipped
+  ;; offer_reentry 409→200 on a hollow provenance-less row. The revised
+  ;; guard reads provenance ALONE, so the plant can no longer open the
+  ;; door: an unlabelled row fails closed regardless of any :self on it.
+  (let [hollow (agent-member! "gap4-hollow")
+        mallory {"x-waymark-principal" "mallory"}]
+    ;; strip provenance to simulate a pre-backfill hollow row
+    (store/with-tx (:storage *eng*)
+      (fn [tx]
+        (jdbc/execute! tx
+          ["UPDATE members SET data = data - 'provenance' WHERE id = ?" hollow])))
+    (testing "before the plant, the hollow (unlabelled) row is refused"
+      (is (contains? #{409 422}
+                     (:status (mint! hollow "gap4-before-plant-tok-0001")))))
+    (testing "mallory — a role-less human — plants a :self on the hollow id"
+      (is (= 201 (:status (req* *raw* :post "/api/selves"
+                                {:body {:owner hollow :display "Planted"}
+                                 :headers mallory})))
+          "the plant itself still lands — :self ownership is forgeable
+           (waymark-4zj.10, tracked separately)"))
+    (testing "the planted self does NOT open the door — provenance is
+              still absent, so the guard fails closed (GAP 4 closed)"
+      (is (contains? #{409 422}
+                     (:status (mint! hollow "gap4-after-plant-tok-00001")))))))
+
+(deftest the-provenance-backfill-proposes-and-writes-nothing
+  ;; REVISED (waymark-4zj.9.1): the classifier reads the UNFORGEABLE
+  ;; subject/origin signals, NOT "owns a :self" (forgeable — a planted
+  ;; self would mis-propose a hollow guest as durable). A subject==nil,
+  ;; origin-less row is idp; a subject==self row is a guest.
+  (reset! members/knock-log [])
+  (let [;; a token-less create — never bound (subject nil), no origin → idp
+        durable (agent-member! "backfill-durable")
+        ;; a self, planted on the durable id, must NOT sway the proposal
+        _ (is (= 201 (:status (req* *raw* :post "/api/selves"
+                                    {:body {:owner durable :display "Durable"}
+                                     :headers admin}))))
+        ;; a knock, BOUND: subject == its own id, invited_by == registrar
+        knock-row (members/knock! *eng* {:display "backfill-knock"})
+        bound (members/bind-agent! *eng* (get-in knock-row [:data :bind_token]))
+        knock-id (:id bound)
+        snap #(store/with-tx (:storage *eng*)
+                (fn [tx] (store/query-rows (:storage *eng*) tx :member
+                                           {} {:limit 100000})))
+        before (snap)
+        proposal (members/provenance-backfill-proposal *eng*)
+        by-id (into {} (map (juxt :id identity)) proposal)]
+    (testing "a subject==nil, origin-less row is proposed 'idp' — on the
+              subject signal, not on the self it happens to own"
+      (is (= "idp" (:provenance (by-id durable))))
+      (is (nil? (get-in (by-id durable) [:because :subject])))
+      (is (false? (get-in (by-id durable) [:because :subject-is-self?]))))
+    (testing "a self-bound knock guest (subject == its own id, registrar
+              inviter) is proposed 'knock'"
+      (is (= "knock" (:provenance (by-id knock-id))))
+      (is (true? (get-in (by-id knock-id) [:because :subject-is-self?])))
+      (is (true? (get-in (by-id knock-id) [:because :self-invited?]))))
+    (testing "the proposal wrote NOTHING — every member row is unchanged"
+      (is (= before (snap))))))
+
 (deftest r8-suspend-revokes-the-standing-credential
   ;; R8 [S1-F6/F7]: suspension hid the member but left the re-entry
   ;; token live, so a suspend/reinstate cycle resurrected it. Suspend

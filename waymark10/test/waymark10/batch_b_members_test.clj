@@ -167,3 +167,60 @@
       (is (= 200 (:status (default :get "/api/meals" nil (headers-for "walkin")))))
       (is (= 200 (:status (default :get "/api/members/walkin" nil
                                    (headers-for "root"))))))))
+
+;; ── provenance: the honest identity key at every birth (waymark-4zj.9.1) ─
+
+(deftest provenance-is-stamped-at-each-birth-path
+  (testing "provision! (IdP/Bearer first-sight, via gate!'s auto-provision)
+            stamps 'idp' — a durable identity"
+    (is (= 200 (:status (default :get "/api/meals" nil
+                                 (headers-for "idp-first-sight")))))
+    (is (= "idp" (get-in (json (default :get "/api/members/idp-first-sight"
+                                        nil (headers-for "root")))
+                         [:data :provenance]))))
+  (testing "a token-bearing admin create (an INVITE) stamps 'invite'"
+    (let [mid (invite! "Provenance Invitee" "tok-prov-invite-01" nil)]
+      (is (= "invite" (get-in (json (invited :get (str "/api/members/" mid)
+                                             nil admin))
+                              [:data :provenance])))))
+  (testing "knock! (the self-service /agentInvite) stamps 'knock' — a guest —
+            and KEEPS it across its later bind (bind-agent! does not touch it)"
+    (reset! members/knock-log [])
+    (let [krow (members/knock! *eng* {:display "Prov Knocker"})]
+      (is (= "knock" (get-in krow [:data :provenance])))
+      (is (= :invited (:state krow)))
+      (let [bound (members/bind-agent! *eng* (get-in krow [:data :bind_token]))]
+        (is (= :active (:state bound)))
+        (is (= "knock" (get-in bound [:data :provenance]))
+            "the bind welds the principal but never rewrites provenance")))))
+
+(deftest provenance-cannot-be-set-by-hand
+  ;; the :subject / reentry_token precedent: provenance is the offer_reentry
+  ;; durable guard's key, so a hand-set "idp" would forge a way home. Only
+  ;; the birth path writes it — a create or edit carrying it is refused.
+  (testing "a create carrying provenance is refused — never a 201"
+    (let [resp (default :post "/api/members"
+                        {:display "forger" :actor_type "agent"
+                         :provenance "idp"}
+                        (headers-for "forger"))]
+      (is (not= 201 (:status resp)) (pr-str (json resp)))
+      (is (contains? #{409 422} (:status resp)))))
+  (testing "an honest create — no provenance in the body — still lands, and
+            the birth path stamps it"
+    (let [resp (default :post "/api/members"
+                        {:display "honest-agent" :actor_type "agent"}
+                        admin)]
+      (is (= 201 (:status resp)))
+      (is (= "idp" (get-in (json resp) [:data :provenance])))))
+  (testing "no action's closed input can smuggle provenance either: a
+            knock-born guest stays 'knock' even when a set_handle carries a
+            provenance key (the input map is closed to :handle)"
+    (reset! members/knock-log [])
+    (let [krow (members/knock! *eng* {:display "knock-editee"})
+          mid (:id (members/bind-agent! *eng* (get-in krow [:data :bind_token])))]
+      (default :post (str "/api/members/" mid "/-/set_handle")
+               {:handle "knock-editee" :provenance "idp"} admin)
+      (is (= "knock" (get-in (json (default :get (str "/api/members/" mid)
+                                            nil admin))
+                             [:data :provenance]))
+          "provenance is untouched — no edit path can forge a durable identity"))))

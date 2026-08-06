@@ -239,6 +239,51 @@
     (t/allow)
     (t/deny)))
 
+;; ── provenance: the honest identity key (waymark-4zj.9.1) ────────────
+
+;; the write fence (the :subject / reentry_token precedent, made real
+;; for provenance): provenance is a schema field, so a plain create or
+;; an edit could otherwise STAMP a durable identity onto a guest — and
+;; the offer_reentry durable guard rests on it, so a hand-set "idp"
+;; would forge a way home. The ONLY writer is :on-create's birth-path
+;; landing (provision!→idp, an invite create→invite, knock!→knock);
+;; a create OR edit carrying provenance by hand is refused. (Action
+;; inputs are closed maps, so no other action's :input can smuggle it;
+;; this closes the create/edit door the same way.)
+(g/defguard provenance-not-written-by-hand
+  {:judges [:provenance]
+   :explain "Provenance is written by the birth path alone (first-sight, invite, or knock), never by hand — a create or edit may not carry provenance."}
+  [_row inp _ctx]
+  (if (contains? inp :provenance)
+    (t/deny)
+    (t/allow)))
+
+;; the homecoming durable guard (waymark-4zj.8.3, closed): offer_reentry
+;; had no durable-self guard, so a recovery-admin could mint a way home
+;; onto a HOLLOW namesake — a knock-born guest row that owns no self, no
+;; story (the live acceptance failure: the mint bound to an empty
+;; duplicate 'Cairn'). Re-entry is offered ONLY to a durable identity,
+;; and durable == provenance "idp" — the sole test. That label is
+;; UNFORGEABLE: the birth path writes it alone, never a hand. We do NOT
+;; check "owns an active :self": a :self is forgeable (waymark-4zj.10 —
+;; a human can plant one naming any owner id), so it must never be a
+;; security signal, and owns-self is dropped here as exactly that. The
+;; guard FAILS CLOSED — a row carrying no provenance (one that predates
+;; the backfill) is refused until the backfill labels it "idp", which
+;; makes the backfill a REQUIRED deploy companion. A self-less "idp"
+;; row is admitted deliberately (GAP A, resolved): it is your own
+;; durable identity with an empty journal, not a foreign namesake —
+;; safe to come home to, and the mint still needs a recovery-admin. The
+;; verdict is a pure function of the stored label, so the render probe
+;; and the real invoke read the same field: the probe can only
+;; advertise what the invoke would mint — no probe path opens a door.
+(g/defguard reentry-targets-durable
+  {:explain "Re-entry is offered only to a durable identity — an IdP-backed member (provenance \"idp\"), the sole unforgeable durable signal."}
+  [row _inp _ctx]
+  (if (= "idp" (get-in row [:data :provenance]))
+    (t/allow)    ; durable: the IdP vouches for it
+    (t/deny)))   ; guest (invite/knock) or unlabelled — fail closed
+
 (g/defguard reentry-is-short
   {:judges [:expires_at]
    :reads [:now]
@@ -358,6 +403,20 @@
             [:handle {:optional true}
              [:maybe [:string {:min 1 :max 40}]]]
             [:actor_type [:enum "human" "agent"]]
+            ;; the honest identity key (waymark-4zj.9.1): where this row
+            ;; was BORN — "idp" (Bearer/IdP first-sight, durable),
+            ;; "invite" (an admin's invite token), "knock" (a
+            ;; self-service /agentInvite). Written by the birth path
+            ;; alone, in :on-create, NEVER by hand — the
+            ;; provenance-not-written-by-hand guard closes the create/edit
+            ;; door the :subject precedent closes. NOT :secret: it is the
+            ;; VISIBLE differentiator the roster reads (durable vs guest),
+            ;; so it renders raw. :optional for backfill tolerance — every
+            ;; NEW row gets one, the 48 existing rows are classified by
+            ;; the read-only provenance-backfill-proposal below and set by
+            ;; hand. Durable? ≡ provenance == "idp".
+            [:provenance {:optional true :x-display {:raw true}}
+             [:enum "idp" "invite" "knock"]]
             [:roles {:optional true}
              [:vector [:string {:min 1 :max 40}]]]
             ;; the invite's credential: presented once (X-Waymark-Invite)
@@ -392,17 +451,31 @@
                 ;; indexed read per distinct assignee, per sync pass
                 :handle #{:eq}}
    :sortable {:fields [:display] :default "display"}
-   :create-guards [roles-registered reentry-not-written-by-hand]
+   :create-guards [roles-registered reentry-not-written-by-hand
+                   provenance-not-written-by-hand]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
-   ;; transition logs the landing state honestly)
+   ;; transition logs the landing state honestly). :on-create is also
+   ;; the ONE place provenance is stamped (waymark-4zj.9.1), keyed on
+   ;; the SAME signals it already reads — a token means a guest, and the
+   ;; registrar as inviter distinguishes a self-service knock from an
+   ;; admin's invite; a token-less create is a first-sight/admin-minted
+   ;; DURABLE identity ("idp"). knock! creates through the registrar, so
+   ;; a knock row lands "knock" and KEEPS it across its later bind
+   ;; (bind/bind-agent! do not touch provenance).
    :on-create (fn [row ctx]
-                (if (get-in row [:data :bind_token])
-                  (-> row
-                      (assoc :state :invited)
-                      (assoc-in [:data :invited_by]
-                                (get-in ctx [:principal :id])))
-                  row))
+                (let [tok (get-in row [:data :bind_token])
+                      inviter (get-in ctx [:principal :id])
+                      provenance (cond
+                                   (and tok (= inviter (:id registrar))) "knock"
+                                   tok "invite"
+                                   :else "idp")
+                      row (assoc-in row [:data :provenance] provenance)]
+                  (if tok
+                    (-> row
+                        (assoc :state :invited)
+                        (assoc-in [:data :invited_by] inviter))
+                    row)))
    :actions
    {:bind {:from #{:invited} :to :active
            :input [:map [:subject [:string {:min 1 :max 256}]]]
@@ -458,6 +531,7 @@
                              [:maybe :waymark/instant]]]
                     :guards [reentry-minters-are-recovery-admin-humans
                              reentry-targets-agents
+                             reentry-targets-durable
                              reentry-is-short
                              reentry-token-is-fresh]
                     :safety {:idempotent true :reversible true :confirm false}
@@ -877,3 +951,94 @@
        ;; an invited row found by id would be unbound plumbing; only a
        ;; bind lands here in :invited → impossible, but honest anyway
        (update principal :roles into (get-in row [:data :roles]))))))
+
+;; ── the provenance backfill (waymark-4zj.9.1, READ-ONLY) ─────────────
+;;
+;; The 48 rows that predate the provenance field need one classified,
+;; once. This is a REQUIRED deploy companion, not an optional cleanup:
+;; the offer_reentry durable guard fails CLOSED on a row with no
+;; provenance, so until this is applied EVERY real durable row is
+;; refused a way home. It is the migrate dry-run posture: it READS every
+;; member, PROPOSES a provenance per row, and writes NOTHING —
+;; Cairn/Colton apply the result by hand against prod after reading it.
+;; It never mutates any database, so it is safe to run against a live
+;; engine.
+
+(defn provenance-backfill-proposal
+  "READ-ONLY. Classify every existing member row for the one-time
+  provenance backfill. Returns a vector of
+    {:id :display :actor_type :state :provenance :because {…}}
+  one per member. NEVER writes — the caller applies the proposal by
+  hand. The classifier reads the UNFORGEABLE subject/origin signals the
+  birth paths leave. It does NOT use \"owns a :self\": a :self is
+  forgeable (waymark-4zj.10 — a human can plant one on any owner id), so
+  a planted self would poison the classifier and mis-propose a hollow
+  guest as durable. The signals instead:
+
+    • never bound to a subject, and no invite/knock origin (no
+      invited_by, no bind_token) → \"idp\"  (durable — a first-sight /
+      admin-minted IdP identity)
+    • self-bound (subject == its own id — the :bind signature of a
+      knock or a self-claimed invite): a guest. invited_by == the
+      registrar tells a self-service knock from an admin's invite; where
+      the origin is post-hoc indistinguishable, the guest defaults to
+      \"invite\" (noted in :because — a reviewer can promote it).
+    • a self-service knock still unclaimed (registrar as inviter, not
+      yet bound) → \"knock\"
+    • the rest — an admin's invite, bound to a foreign subject or still
+      unclaimed → \"invite\"
+
+  Where a row already carries provenance (a new row born after this
+  change), the PROPOSAL is still recomputed from signals so a reviewer
+  can spot any drift; it does not read the stored value."
+  [eng]
+  (let [st (:storage eng)
+        members (store/with-tx st
+                  (fn [tx] (store/query-rows st tx :member {} {:limit 100000})))]
+    (mapv
+     (fn [row]
+       (let [id (:id row)
+             d (:data row)
+             subject (:subject d)
+             invited-by (:invited_by d)
+             bind-token? (some? (:bind_token d))
+             self-invited? (= invited-by (:id registrar))
+             subject-is-self? (boolean (and subject (= subject id)))
+             provenance (cond
+                          ;; never bound, no invite/knock credential
+                          ;; origin → a durable IdP identity
+                          (and (nil? subject) (nil? invited-by)
+                               (not bind-token?)) "idp"
+                          ;; self-bound (subject == its own id): a guest;
+                          ;; the registrar inviter tells knock from
+                          ;; invite, else default the guest to "invite"
+                          subject-is-self? (if self-invited? "knock" "invite")
+                          ;; a self-service knock still unclaimed
+                          self-invited? "knock"
+                          ;; the rest — an admin's invite
+                          :else "invite")]
+         {:id id
+          :display (:display d)
+          :actor_type (:actor_type d)
+          :state (:state row)
+          :provenance provenance
+          :because {:subject subject
+                    :subject-is-self? subject-is-self?
+                    :self-invited? self-invited?
+                    :invited_by invited-by
+                    :bind_token? bind-token?}}))
+     members)))
+
+(defn print-provenance-backfill-proposal
+  "Pretty-print provenance-backfill-proposal for a human to review
+  before applying by hand. READ-ONLY: it prints, it never writes.
+  Returns the proposal vector."
+  [eng]
+  (let [rows (provenance-backfill-proposal eng)]
+    (println (str "provenance backfill proposal — " (count rows)
+                  " member rows (READ-ONLY; nothing written)"))
+    (doseq [{:keys [id display actor_type state provenance because]} rows]
+      (println (format "  %-6s  %-38s  %-6s  %-9s  %-28s  %s"
+                       provenance id (str actor_type) (name state)
+                       (pr-str (str display)) (pr-str because))))
+    rows))
