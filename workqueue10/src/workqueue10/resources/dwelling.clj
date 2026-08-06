@@ -42,36 +42,104 @@
 (defn- supplied-owner [inp]
   (some-> (:owner inp) str str/trim not-empty))
 
+;; the role that unlocks writing into ANOTHER member's own-surface room
+;; (waymark-4zj.10). recovery-admin — Colton holds it — rather than a
+;; dedicated "house-scribe" role only because assign_roles is broken
+;; (waymark-l81), so a fresh role could not be assigned to anyone yet;
+;; recovery-admin keeps Colton's journal-amend working the moment this
+;; ships, and a purpose-built role is the follow-up once l81 is fixed.
+(def ^:private on-behalf-role "recovery-admin")
+
+;; on-behalf writing is gated to a TRUSTED HUMAN CURATOR: a principal
+;; whose :type is :human AND whose EFFECTIVE roles carry recovery-admin.
+;; The role set is the one members/gate! already composes (verified
+;; Keycloak claims ∪ the member row's held roles) BEFORE any guard runs,
+;; so a role a principal does not truly hold never reaches it — a plain
+;; membership test is the whole role check, NOT the fail-open TYPE
+;; problem seen elsewhere. The human requirement mirrors members.clj's
+;; reentry-minters-are-recovery-admin-humans (waymark-4zj.10): on-behalf
+;; is the "a HUMAN curates the story" feature, so a :system-typed caller
+;; is never a legitimate curator even if it somehow carries the role
+;; (dev headers can present type=system + roles=recovery-admin; OIDC
+;; never mints :system for an external caller and the engine's own
+;; system actors hold EMPTY roles, so this closes a dev-only gap and
+;; hardens the guard defense-in-depth). An agent forging its OWN row and
+;; a person writing its OWN row never reach here — those are the
+;; owner-match branches, checked first.
+(defn- trusted-on-behalf? [p]
+  (and (= :human (:type p))
+       (contains? (set (:roles p)) on-behalf-role)))
+
+;; on-behalf create also demands the named owner be a REAL member of the
+;; household (waymark-4zj.10): a write to a hollow/nonexistent id would
+;; plant a row nobody owns — the very hole that poisons the provenance
+;; backfill's owns-self heuristic. Resolved the way members/gate!
+;; resolves a principal (registrar-binds' precedent): by member id, else
+;; by the subject a binding wrote, through the ctx :read/:find hooks (the
+;; write's own transaction). Returns nil at the storage-free render
+;; probe (no hooks) — the caller reads that as "cannot disprove" and
+;; advertises to a trusted curator, while the REAL create, which always
+;; carries the hooks, is the wall that a nonexistent id fails CLOSED
+;; against. An engine serving no :member kind resolves nothing the same
+;; safe way.
+(defn- existing-member? [ctx owner]
+  (when (some? owner)
+    (let [owner (str owner)]
+      (or (when-some [read' (:read ctx)]
+            (some? (read' :member owner)))
+          (when-some [find' (:find ctx)]
+            (boolean (seq (find' :member {:subject owner} {:limit 1}))))))))
+
 ;; the create wall: an AGENT may only mint a row it owns — it either
-;; names its own id or names nothing (on-create stamps it). A human or
-;; the engine mints ON BEHALF, so it MUST name whose row this is (the
-;; owner is the inhabitant agent, never the acting person). The
-;; own-surface in grants.clj lets an agent CALL create at all; this
-;; guard is what keeps that create honest about ownership.
+;; names its own id or names nothing (on-create stamps it). SELF-authoring
+;; (owner omitted, or owner == the creator's own id) is free for anyone.
+;; But writing ON BEHALF — naming an owner that is NOT the creator — is
+;; the family-curates feature, and it is now gated (waymark-4zj.10):
+;; before this, ANY authenticated person could name an ARBITRARY owner
+;; and forge a self or a journal entry INTO another member's room. So an
+;; on-behalf create is admitted only when the creator is a HUMAN holding
+;; recovery-admin AND the named owner is a real member; every role-less
+;; human, anonymous, agent, or system caller is refused. The own-surface
+;; in grants.clj lets an agent CALL create at all; this guard is what
+;; keeps that create honest about ownership.
 (defguardfn owner-is-self-or-on-behalf
-  {:reads [:principal]
-   :explain "An agent may only create a row it owns; a person names whose row it is."}
+  {:reads [:principal :member]
+   :explain "You may create a row you own; writing into another member's room needs a recovery-admin human and a real owner."}
   [_row inp ctx]
   (let [p (:principal ctx)
         supplied (supplied-owner inp)]
     (if (= :agent (:type p))
+      ;; an agent forges nothing: its own id or nothing (stamped to self)
       (if (or (nil? supplied) (= supplied (:id p)))
         (t/allow) (t/deny))
-      ;; humans and the engine create on behalf — they must name an owner
-      (if supplied (t/allow) (t/deny)))))
+      (cond
+        ;; a person must still name whose row this is (unchanged)
+        (nil? supplied) (t/deny)
+        ;; a person authoring its OWN row — self-authoring, allowed
+        (= supplied (:id p)) (t/allow)
+        ;; on-behalf: only a trusted human curator, only for a real member
+        (and (trusted-on-behalf? p)
+             (not (false? (existing-member? ctx supplied))))
+        (t/allow)
+        :else (t/deny)))))
 
-;; the edit wall: an agent edits only its OWN row (a person edits any —
-;; the family curates the story). own-row? in grants.clj already 404s a
-;; foreign row before an agent can address it; this guard is the
-;; defense-in-depth that also refuses a mislabeled or engine-internal
-;; cross-owner edit.
+;; the edit wall: the OWNER edits its own row freely (an agent its own
+;; self/journal, a person a row it owns). Editing a row you do NOT own —
+;; retiring, updating, amending another member's self or journal — is on
+;; behalf, so it carries the SAME gate as an on-behalf create
+;; (waymark-4zj.10): only a recovery-admin HUMAN may. This closes the
+;; 2-step overwrite where a role-less human retired another agent's self
+;; (no If-Match fence) and then planted a shadow in the freed singleton
+;; slot. own-row? in grants.clj already 404s a foreign row before an
+;; agent can address it; this guard is the defense-in-depth that also
+;; refuses a mislabeled or engine-internal cross-owner edit.
 (defguardfn edit-is-owner-or-human
   {:reads [:principal]
-   :explain "Only the owning agent, or a person, may edit these words."}
+   :explain "The owner may edit these words; touching another member's words needs a recovery-admin human."}
   [row _inp ctx]
   (let [p (:principal ctx)]
-    (if (or (not= :agent (:type p))
-            (= (:id p) (get-in row [:data :owner])))
+    (if (or (= (:id p) (get-in row [:data :owner]))
+            (trusted-on-behalf? p))
       (t/allow) (t/deny))))
 
 ;; owner is stamped by the ENGINE, never trusted from the body: an

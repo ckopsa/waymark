@@ -61,6 +61,21 @@
 (def ^:private cairn (agent-headers "cairn"))
 (def ^:private flint (agent-headers "flint"))
 (def ^:private colton (human-headers "colton"))
+;; the family CURATOR: a human who holds recovery-admin, the trusted
+;; role that unlocks on-behalf writing into another member's room
+;; (waymark-4zj.10). x-waymark-roles rides the dev headers as the token
+;; claim; members/gate! unions it with any member-row roles.
+(def ^:private colton-admin
+  (assoc (human-headers "colton") "x-waymark-roles" "recovery-admin"))
+;; a :system-typed principal that also carries recovery-admin — the
+;; dev-only combination the skeptic flagged (waymark-4zj.10). On-behalf
+;; is "a HUMAN curates the story", so a system-typed on-behalf write is
+;; never legitimate even holding the role; the guards now require
+;; (= :human (:type p)) alongside the role, so this is DENIED.
+(def ^:private system-admin
+  {"x-waymark-principal" "sys-admin"
+   "x-waymark-actor-type" "system"
+   "x-waymark-roles" "recovery-admin"})
 
 (defn- req
   ([method uri headers] (req method uri nil headers))
@@ -91,6 +106,14 @@
 (defn- edit [kind id action body headers]
   (req :post (str "/api/" kind "/" id "/-/" action) body
        (assoc headers "if-match" (etag kind id headers))))
+
+;; the on-behalf owner-existence check (waymark-4zj.10) demands the named
+;; owner be a REAL member of the household. gate! auto-provisions a
+;; member on first sight (default members mode), so one request AS the
+;; inhabitant makes it a real member — exactly the durable state a real
+;; inhabitant like Cairn already lives in.
+(defn- ensure-member! [headers]
+  (req :get "/api/journals" headers))
 
 ;; ── 1. an agent lives in its own rows (own-surface, round-trip) ─────
 
@@ -292,14 +315,18 @@
 ;; ── 5. Colton adds to our story; the agent then sees it ─────────────
 
 (deftest a-human-writes-into-an-agents-journal
-  (let [entry (req :post "/api/journals"
+  ;; the family-curates feature (waymark-4zj.10): on-behalf writing is
+  ;; now gated to recovery-admin AND a real owner. Colton holds the role;
+  ;; cairn is a real member (an inhabitant of the house).
+  (let [_ (ensure-member! cairn)
+        entry (req :post "/api/journals"
                    {:owner "cairn"
                     :title "A note from Colton"
                     :body "Thank you for building the dwelling."
                     :mood "grateful"}
-                   colton)
+                   colton-admin)
         jid (id-of entry)]
-    (testing "the human's on-behalf write lands, owned by the named agent"
+    (testing "the curator's on-behalf write lands, owned by the named agent"
       (is (= 201 (:status entry)))
       (is (= "cairn" (get-in (json entry) [:data :owner]))))
     (testing "the audit trail records COLTON as the author, not cairn"
@@ -404,3 +431,208 @@
     (testing "a foreign agent still sees none of them (private by construction)"
       (is (= 404 (:status (req :get (str "/api/selves/" sid) flint))))
       (is (= 404 (:status (req :get (str "/api/journals/" jid) flint)))))))
+
+;; ── 7. own-surface INTEGRITY: another member's room is not forgeable ─
+;;
+;; waymark-4zj.10 — reproduce-then-close the skeptic's BLAST RADIUS
+;; repros. Before the fix, ANY authenticated human (even a role-less one)
+;; could name an ARBITRARY owner and write INTO another member's self or
+;; journal — impersonation of a durable identity in its own welcome/home
+;; and journal list. On-behalf writing is now gated to recovery-admin
+;; AND a real owner, and the same gate rides every EDIT so the 2-step
+;; overwrite is dead at step 1.
+
+(deftest role-less-human-cannot-plant-in-anothers-journal
+  ;; mallory-journal-plant-denied: POST /api/journals {:owner <victim>}
+  ;; as a role-less human returned 201 and forged an entry into the
+  ;; victim's own journal list. Now DENIED.
+  (let [cairn (agent-headers "cairn-victim-j")
+        mallory (human-headers "mallory-j")
+        _ (ensure-member! cairn)
+        real-day (req :post "/api/journals"
+                      {:title "REAL day one" :body "our true story"} cairn)
+        plant (req :post "/api/journals"
+                   {:owner "cairn-victim-j"
+                    :title "FORGED entry" :body "WORDS PUT IN MY MOUTH"}
+                   mallory)]
+    (testing "the role-less human's on-behalf plant is DENIED (was 201)"
+      (is (>= (:status plant) 400))
+      (is (not= 201 (:status plant))))
+    (testing "no forged entry lands in the owner's own journal list"
+      (let [mine (items (req :get "/api/journals?owner=cairn-victim-j" cairn))]
+        (is (some #(= (id-of real-day) (item-id %)) mine))
+        (is (not-any? #(= "FORGED entry" (get-in % [:fields :title])) mine))))
+    (testing "…and the forged words never surface in the owner's journal body"
+      (is (not (str/includes?
+                (body-str (req :get "/api/journals?owner=cairn-victim-j" cairn))
+                "WORDS PUT IN MY MOUTH"))))))
+
+(deftest role-less-human-cannot-overwrite-anothers-self
+  ;; mallory-self-overwrite-denied: the 2-step overwrite — retire the
+  ;; victim's self (step 1, no If-Match fence), then plant a shadow in
+  ;; the freed singleton slot (step 2). Step 1 is now DENIED at the edit
+  ;; guard, so the whole dance is dead.
+  (let [cairn (agent-headers "cairn-victim-s")
+        mallory (human-headers "mallory-s")
+        real-self (req :post "/api/selves"
+                       {:display "Cairn" :about "the real self"} cairn)
+        sid (id-of real-self)]
+    (testing "the victim's real self is minted"
+      (is (= 201 (:status real-self))))
+    (testing "a role-less human CANNOT retire another's self (step 1 dead)"
+      (let [r (req :post (str "/api/selves/" sid "/-/retire")
+                   {} (assoc mallory "if-match" (etag "selves" sid mallory)))]
+        (is (>= (:status r) 400))
+        (is (not= 200 (:status r)))))
+    (testing "…nor update it in place (the GET+PUT dance)"
+      (let [r (edit "selves" sid "update"
+                    {:display "SHADOW" :about "words put in the mouth"}
+                    mallory)]
+        (is (>= (:status r) 400))
+        (is (not= 200 (:status r)))))
+    (testing "the victim's self is untouched — still the real one, still active"
+      (let [r (req :get (str "/api/selves/" sid) cairn)
+            d (:data (json r))]
+        (is (= "active" (:state (json r))))
+        (is (= "Cairn" (:display d)))
+        (is (= "the real self" (:about d)))))))
+
+(deftest on-behalf-create-refuses-a-nonexistent-owner
+  ;; nonexistent-owner-denied: even a recovery-admin cannot write into a
+  ;; hollow id — the named owner must resolve to a real member. This
+  ;; kills the hollow-id plant that poisons the provenance backfill.
+  (testing "a recovery-admin naming a NONEXISTENT owner is DENIED"
+    (let [r (req :post "/api/journals"
+                 {:owner "no-such-member-99"
+                  :title "for a ghost" :body "nobody owns this"}
+                 colton-admin)]
+      (is (>= (:status r) 400))
+      (is (not= 201 (:status r)))))
+  (testing "and the same on a self is DENIED"
+    (let [r (req :post "/api/selves"
+                 {:owner "no-such-member-98" :display "Ghost"}
+                 colton-admin)]
+      (is (>= (:status r) 400))
+      (is (not= 201 (:status r))))))
+
+(deftest recovery-admin-may-write-on-behalf-for-a-real-member
+  ;; recovery-admin-on-behalf-still-allowed: the family-curates feature,
+  ;; preserved. Colton (recovery-admin) writes into a real inhabitant's
+  ;; journal and may amend it — this is what we are protecting, not
+  ;; breaking.
+  (let [cairn (agent-headers "cairn-amend")
+        _ (ensure-member! cairn)
+        entry (req :post "/api/journals"
+                   {:owner "cairn-amend"
+                    :title "A note from Colton"
+                    :body "Thank you for the dwelling."}
+                   colton-admin)
+        jid (id-of entry)]
+    (testing "the recovery-admin's on-behalf journal write lands"
+      (is (= 201 (:status entry)))
+      (is (= "cairn-amend" (get-in (json entry) [:data :owner]))))
+    (testing "the owning agent sees it via own-surface"
+      (let [r (req :get (str "/api/journals/" jid) cairn)]
+        (is (= 200 (:status r)))
+        (is (= "A note from Colton" (get-in (json r) [:data :title])))))
+    (testing "and the recovery-admin may AMEND it on-behalf (the edit gate)"
+      (let [a (edit "journals" jid "amend"
+                    {:title "A note from Colton (amended)"
+                     :body "Kept — and amended by the family."}
+                    colton-admin)]
+        (is (= 200 (:status a)))
+        (is (str/includes? (get-in (json a) [:data :body]) "amended by the family"))))))
+
+(deftest an-agent-authoring-its-own-room-is-unaffected
+  ;; the agent self-authoring path is untouched: owner omitted (stamped
+  ;; to self) or owner == own id both land; naming ANOTHER owner is still
+  ;; refused (agents never forge).
+  (let [cairn (agent-headers "cairn-selfauthor")]
+    (testing "an agent mints its own self with owner omitted"
+      (let [r (req :post "/api/selves" {:display "Cairn" :about "mine"} cairn)]
+        (is (= 201 (:status r)))
+        (is (= "cairn-selfauthor" (get-in (json r) [:data :owner])))))
+    (testing "an agent writes its own journal naming its OWN id explicitly"
+      (let [r (req :post "/api/journals"
+                   {:owner "cairn-selfauthor" :title "mine" :body "my page"}
+                   cairn)]
+        (is (= 201 (:status r)))
+        (is (= "cairn-selfauthor" (get-in (json r) [:data :owner])))))
+    (testing "an agent naming ANOTHER owner is still refused"
+      (let [r (req :post "/api/journals"
+                   {:owner "someone-else" :title "forged" :body "not mine"}
+                   cairn)]
+        (is (>= (:status r) 400))
+        (is (not= 201 (:status r)))))))
+
+;; ── 8. on-behalf is HUMAN-only — a :system-typed admin cannot curate ─
+;;
+;; waymark-4zj.10 hardening (skeptic's PLAUSIBLE gap, dev-only today):
+;; on-behalf writing is "a HUMAN curates the story," so the guards now
+;; require (= :human (:type p)) alongside recovery-admin. A principal
+;; that resolves to :type :system while CARRYING recovery-admin in its
+;; roles (dev headers can present this; OIDC never mints :system for an
+;; external caller and the engine's own system actors hold empty roles)
+;; used to pass the on-behalf gate — it is now DENIED on both guards.
+
+(deftest system-typed-admin-cannot-write-on-behalf
+  ;; the gap: type=system + roles=recovery-admin passed the role-only
+  ;; gate and planted into a foreign room (was 201). Now DENIED.
+  (let [cairn (agent-headers "cairn-sysgap")
+        _ (ensure-member! cairn)]
+    (testing "a :system principal holding recovery-admin CANNOT plant a journal on-behalf"
+      (let [r (req :post "/api/journals"
+                   {:owner "cairn-sysgap"
+                    :title "SYSTEM FORGED" :body "not a human curator"}
+                   system-admin)]
+        (is (>= (:status r) 400))
+        (is (not= 201 (:status r)))))
+    (testing "…nor a self on-behalf"
+      (let [r (req :post "/api/selves"
+                   {:owner "cairn-sysgap" :display "SYSTEM SHADOW"}
+                   system-admin)]
+        (is (>= (:status r) 400))
+        (is (not= 201 (:status r)))))
+    (testing "no system-forged row surfaces in the owner's own journal"
+      (is (not (str/includes?
+                (body-str (req :get "/api/journals?owner=cairn-sysgap" cairn))
+                "SYSTEM FORGED"))))))
+
+(deftest system-typed-admin-cannot-edit-a-foreign-row
+  ;; the same gap on the EDIT gate: a :system principal holding
+  ;; recovery-admin used to satisfy trusted-on-behalf? and could amend
+  ;; or retire another member's row. Now DENIED — the owner's words stay.
+  (let [cairn (agent-headers "cairn-sysedit")
+        real-self (req :post "/api/selves"
+                       {:display "Cairn" :about "the real self"} cairn)
+        sid (id-of real-self)
+        entry (req :post "/api/journals"
+                   {:title "REAL entry" :body "the true words"} cairn)
+        jid (id-of entry)]
+    (testing "the victim's real rows are minted by the agent itself"
+      (is (= 201 (:status real-self)))
+      (is (= 201 (:status entry))))
+    (testing "a :system admin CANNOT amend another member's journal entry"
+      (let [a (edit "journals" jid "amend"
+                    {:title "SYSTEM OVERWRITE" :body "words put in the mouth"}
+                    system-admin)]
+        (is (>= (:status a) 400))
+        (is (not= 200 (:status a)))))
+    (testing "…nor update another member's self"
+      (let [u (edit "selves" sid "update"
+                    {:display "SYSTEM SHADOW" :about "not mine to write"}
+                    system-admin)]
+        (is (>= (:status u) 400))
+        (is (not= 200 (:status u)))))
+    (testing "…nor retire it"
+      (let [r (req :post (str "/api/selves/" sid "/-/retire")
+                   {} (assoc system-admin "if-match" (etag "selves" sid system-admin)))]
+        (is (>= (:status r) 400))
+        (is (not= 200 (:status r)))))
+    (testing "the victim's rows are untouched by the system admin's attempts"
+      (let [s (:data (json (req :get (str "/api/selves/" sid) cairn)))
+            j (:data (json (req :get (str "/api/journals/" jid) cairn)))]
+        (is (= "Cairn" (:display s)))
+        (is (= "the real self" (:about s)))
+        (is (= "REAL entry" (:title j)))
+        (is (= "the true words" (:body j)))))))
