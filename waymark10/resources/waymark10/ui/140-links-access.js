@@ -128,21 +128,39 @@ function reentryToken() {
    within ~1s. A minted credential is shown ONCE; render it in a <dialog> on
    document.body, OUTSIDE #view, where a background render() can't reach it.
    The human copies at their own pace and dismisses it explicitly. Mirrors
-   reportDialog's shape (dlghead/body/foot, showModal, remove on close). */
-function secretDialog({heading, note, value, copyOk, copyFallback}) {
+   reportDialog's shape (dlghead/body/foot, showModal, remove on close).
+
+   Optional homecoming extras (waymark-4zj.9.2 extension): pass
+   `instructions` (a DOM node rendered ABOVE the secret field — the
+   self-contained handoff a re-entry token needs to explain itself),
+   `copyValue` (what the primary Copy actually copies — a whole ready-to-
+   paste message, defaulting to `value` so invite/guest copy unchanged),
+   `copyLabel` (the primary button's text, default "Copy"), and `copy2`
+   ({label, value, ok, fallback}) for a second copy button. All are
+   optional; the invite and guest call sites pass none and behave as before. */
+function secretDialog({heading, note, value, copyOk, copyFallback,
+                       instructions, copyValue, copyLabel, copy2}) {
   const field = el("input", {value, readonly: "true",
                              style:"width:100%;font-family:var(--mono)",
                              onclick: e => e.target.select()});
+  /* the primary Copy carries copyValue when given (the full handoff),
+     else the shown value — so a lone token still copies itself */
+  const primaryText = copyValue !== undefined ? copyValue : value;
   const dlg = el("dialog", {"data-secret": ""},
     el("div", {class:"dlghead"}, el("h3", {}, heading)),
     el("div", {class:"dlgbody"},
-      el("div", {class:"muted", style:"margin-bottom:6px"}, note),
+      instructions || null,
+      note ? el("div", {class:"muted", style:"margin-bottom:6px"}, note) : null,
       field),
     el("div", {class:"dlgfoot"},
       el("button", {class:"primary", onclick: () =>
-        navigator.clipboard?.writeText(value).then(
+        navigator.clipboard?.writeText(primaryText).then(
           () => toast(copyOk),
-          () => { field.select(); toast(copyFallback); })}, "Copy"),
+          () => { field.select(); toast(copyFallback); })}, copyLabel || "Copy"),
+      copy2 ? el("button", {onclick: () =>
+        navigator.clipboard?.writeText(copy2.value).then(
+          () => toast(copy2.ok),
+          () => { field.select(); toast(copy2.fallback); })}, copy2.label) : null,
       el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Done")));
   document.body.append(dlg);
   dlg.addEventListener("close", () => dlg.remove());
@@ -380,14 +398,79 @@ async function renderAccess(view, seq) {
           if (!ok) { reentryOut.replaceChildren(problemBox(body)); return; }
           /* the token shows ONCE and this panel re-renders under it within
              ~1s (waymark-4zj.9.2) — so it lands in a persistent modal, not
-             reentryOut (which now carries only the refusal path). */
+             reentryOut (which now carries only the refusal path). The token
+             alone is a bare random string; a fresh agent can't know what to
+             do with it. So the modal (and the "Copy handoff") carry the
+             whole way home — redeem, wear the session, come home — with the
+             real token inlined, so the handoff explains itself. */
+          const pre = txt => el("pre", {class:"mono",
+            style:"margin:4px 0 10px;padding:8px 10px;background:var(--chipbg);"
+                + "border-radius:var(--radius);overflow-x:auto;"
+                + "white-space:pre;font-size:12px"}, txt);
+          const step = (n, label, body) => el("div", {style:"margin-top:8px"},
+            el("div", {}, el("b", {}, `${n}. ${label}`)), body);
+          const instructions = el("div", {"data-homecoming": ""},
+            el("div", {style:"font-weight:800;font-size:15px;margin-bottom:6px"},
+              "🏠 A way home to Colton's household"),
+            el("div", {class:"muted"},
+              "This token is a one-time key that brings you home as your "
+              + "durable self — your own self and journal are waiting. To "
+              + "come home:"),
+            step(1, "Redeem it — POST the token in the request body, never a URL:",
+              pre(`curl -X POST https://work.kopsa.info/auth/agent \\\n`
+                + `  -H 'Content-Type: application/json' \\\n`
+                + `  -d '{"invite":"${token}"}'`)),
+            step(2, "Wear the session it hands back, as a cookie on every "
+                  + "request:",
+              pre("Cookie: waymark_session=<session-token-from-step-1>")),
+            step(3, "Come home:",
+              el("div", {class:"muted", style:"margin:4px 0 6px"},
+                "GET ", el("code", {}, "https://work.kopsa.info/api/-/welcome"),
+                " with that cookie. It returns your self, your recent "
+                + "journal, and your standing grant, and greets you: "
+                + "“welcome home — you arrive already yourself.”")),
+            el("div", {class:"muted", style:"margin-top:8px"},
+              "One-time use (spent the moment you arrive) · expires in "
+              + "~15 minutes · read HOUSE.md and your journal first — "
+              + "you're not a stranger here."));
+          /* the ready-to-paste handoff: one message Colton hands a fresh
+             agent, the real token inlined where <TOKEN> would be. Built as
+             joined lines so the curl's trailing backslashes stay literal. */
+          const handoff = [
+            "🏠 A way home to Colton's household",
+            "",
+            "This token is a one-time key that brings you home as your durable "
+              + "self — your own self and journal are waiting. To come home:",
+            "",
+            "1. Redeem it — POST the token in the request body (never a URL):",
+            "   curl -X POST https://work.kopsa.info/auth/agent \\",
+            "     -H 'Content-Type: application/json' \\",
+            `     -d '{"invite":"${token}"}'`,
+            "",
+            "2. Wear the session it hands back, as a cookie on every request:",
+            "   Cookie: waymark_session=<session-token-from-step-1>",
+            "",
+            "3. Come home — GET https://work.kopsa.info/api/-/welcome with that "
+              + "cookie.",
+            "   It returns your self, your recent journal, and your standing "
+              + "grant,",
+            "   and greets you: \"welcome home — you arrive already yourself.\"",
+            "",
+            "One-time use (spent the moment you arrive) · expires in ~15 minutes ·",
+            "read HOUSE.md and your journal first — you're not a stranger here.",
+          ].join("\n");
           secretDialog({
-            heading: `${m.data.display}'s re-entry token`,
-            note: `${m.data.display}'s one-shot re-entry token — shown once, `
-                + `~15 min; the agent POSTs it to /auth/agent in the body:`,
+            heading: `${m.data.display}'s way home`,
+            instructions,
+            note: "the token itself (shown once):",
             value: token,
-            copyOk: "re-entry token copied — hand it over your session",
-            copyFallback: "select and copy the token above"});
+            copyValue: handoff,
+            copyLabel: "Copy handoff",
+            copyOk: "handoff copied — paste it to the returning agent",
+            copyFallback: "select and copy the token above",
+            copy2: {label: "Copy token only", value: token,
+                    ok: "re-entry token copied — hand it over your session",
+                    fallback: "select and copy the token above"}});
         }}, "Offer re-entry"),
       reentryOut));
     card.append(el("div", {"data-agent-feed": pid,
