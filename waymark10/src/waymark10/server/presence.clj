@@ -32,6 +32,28 @@
   is BYTE-LEVEL ABSENT, never narrated. An unscoped viewer sees all.
   A scoped principal's own reporting is always accepted (where it
   looks is its own to say; who gets to watch is the grant's).
+  One widening (waymark-tti.4): a self that is EXACTLY /api/{plural}
+  — a collection screen — shows to a scoped viewer iff its grant
+  sees the WHOLE kind (grants/visibility :whole-kind?, no ids or
+  filter narrowing); everything else stays concealed as before.
+
+  THE CURTAIN (waymark-tti.4): a principal whose member row carries
+  :curtain true (members.clj draw_curtain) is NOT PUBLISHED — all
+  three doors refuse its entries at publish time (nothing stored,
+  nothing notified, so no process, local or remote, ever holds a
+  frame), and merged-view/snapshot filter as belt and braces. The
+  curtain is durable BECAUSE it is a member field; presence itself
+  stays ephemeral — the registry only ever READS the row, through
+  the SHARED curtain component (server/curtain.clj — one reader, one
+  cache, the intents surface asking the same question), and never
+  writes anything anywhere. The honest bound on a drawn curtain,
+  post-review: the draw is REFUSED at publish time from the moment
+  the transition's invalidation lands (the committed draw travels
+  the events log to every process, which forgets the pid and evicts
+  its live entries — that eviction's diff IS the leave frame), a
+  cached stale open survives at most :curtain-ttl-ms (the engine
+  passes 2s), and the sweep's fresh read clears the board within one
+  heartbeat even if both wires were lost.
 
   CROSS-PROCESS: every local report notifies {origin, pid, entry}
   (drops notify {origin, pid}); each process re-asserts its local
@@ -59,6 +81,7 @@
   (:require [clojure.string :as str]
             [next.jdbc :as jdbc]
             [org.httpkit.server :as http]
+            [waymark10.server.curtain :as curtain]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
@@ -95,6 +118,73 @@
    :display (let [d (:display principal)]
               (if (str/blank? (str d)) (:id principal) d))})
 
+;; ── the curtain (a member field, read-only here) ────────────────────
+;;
+;; The ONE durable thing presence consults: the member row's :curtain
+;; (members.clj waymark-tti.4), asked through the SHARED component in
+;; server/curtain.clj — one lookup, one cache, one invalidation wire
+;; for presence and intents alike. This registry never writes it —
+;; the draw/open member actions are the only hands — and it never
+;; gains a table to honor it: the curtain is enforced by REFUSING to
+;; store or announce, not by remembering.
+
+(defn- curtained?
+  "This pid's curtain, through the shared component. fresh? bypasses
+  the cache (the sweep's spelling)."
+  ([reg pid] (curtain/curtained? (:curtain reg) pid false))
+  ([reg pid fresh?] (curtain/curtained? (:curtain reg) pid fresh?)))
+
+(defn- curtain-view
+  "The curtain verdict for every pid this publish round could judge —
+  resolved BEFORE the lock is taken, because a cache miss reads the
+  store and a store read under (:lock reg) would park every door
+  behind the database (the skeptic's F5). also names pids the caller
+  is about to add (its own beat's); fresh? bypasses the cache for the
+  whole round (the sweep's ≤-one-heartbeat promise). Anything not in
+  the map reads as CURTAINED downstream — fail closed, and the next
+  publish (the caller's own, or the sweep's) corrects the rare race."
+  ([reg] (curtain-view reg nil false))
+  ([reg also] (curtain-view reg also false))
+  ([reg also fresh?]
+   (curtain/verdicts
+    (:curtain reg)
+    (concat also
+            (keys @(:local reg))
+            (keys @(:published reg))
+            ;; a remote entry is judged by the identity it PUBLISHES,
+            ;; not by the key its origin notified under, so the round
+            ;; resolves both spellings — they are the same string in
+            ;; every honest frame, and distinct makes the overlap free
+            (for [[_ entries] @(:remotes reg)
+                  [pid {:keys [entry]}] entries
+                  id [pid (get-in entry [:principal :id])]
+                  :when (string? id)]
+              id))
+    fresh?)))
+
+(defn- verdict
+  "One pid's curtain INSIDE a publish round: the prefetched view
+  first, and for a pid the view could not have named — one that
+  arrived during the prefetch→lock window, so it was in none of the
+  maps curtain-view walked — this process's already-warmed cache
+  (curtain/cached-verdict: a deref, no store read, safe under the
+  lock; the arriving thread's own door filled it).
+
+  `default` is what UNKNOWN means to THIS caller, and the two callers
+  mean opposite things by it:
+    • publishing (merged-view) passes true — fail closed, we do not
+      announce a principal we cannot vouch for;
+    • evicting (sweep!) passes nil and acts only on a KNOWN true —
+      throwing a live principal off the board and telling every peer
+      to drop it is not a safe default, and the publish side is
+      already the wall.
+  Before this, both read a missing key as `true` and ordinary
+  concurrency evicted live, un-curtained principals."
+  [reg cv pid default]
+  (if (contains? cv pid)
+    (get cv pid)
+    (curtain/cached-verdict (:curtain reg) pid default)))
+
 ;; ── the registry ────────────────────────────────────────────────────
 ;;
 ;; :local    pid → {:entry public-entry :streams {self n} :hb-at ms}
@@ -127,11 +217,26 @@
 
 (defn- merged-view
   "The one truth: per principal, the freshest entry across this
-  process's live locals and every remote origin's."
-  [reg now]
+  process's live locals and every remote origin's. Curtained pids
+  are filtered HERE, belt and braces over the doors' own refusals:
+  publish! diffs this view, so no join/move frame can fan for a
+  curtained principal and no snapshot can serve one — not even in
+  the race between a draw and the sweep, and not from a remote
+  origin whose own sweep has not caught up yet. cv is the caller's
+  prefetched curtain-view (no store reads down here, under the
+  lock); a pid it cannot name falls back to the warm cache and, past
+  that, reads as curtained.
+
+  A REMOTE entry is judged by the identity it publishes —
+  (:principal entry), the id that rides the frame — and not by the
+  key its origin notified under: the wire's key is bookkeeping, the
+  frame's principal is who subscribers see (intents judges the same
+  way)."
+  [reg now cv]
   (let [locals (into {}
                      (keep (fn [[pid st]]
-                             (when (live-local? st now (:hb-ms reg))
+                             (when (and (live-local? st now (:hb-ms reg))
+                                        (not (verdict reg cv pid true)))
                                [pid (:entry st)])))
                      @(:local reg))]
     (reduce (fn [m [pid e]]
@@ -141,22 +246,30 @@
                 (assoc m pid e)))
             locals
             (for [[_ entries] @(:remotes reg)
-                  [pid {:keys [entry]}] entries]
+                  [pid {:keys [entry]}] entries
+                  :when (not (verdict reg cv (get-in entry [:principal :id])
+                                      true))]
               [pid entry]))))
 
 (defn- publish!
   "Re-merge, diff against the last announced truth, fan the
-  difference as join/move/leave frames. Reentrant under :lock."
-  [reg]
+  difference as join/move/leave frames. Reentrant under :lock; cv is
+  the curtain-view its caller resolved OUTSIDE the lock."
+  [reg cv]
   (locking (:lock reg)
     (let [now (System/currentTimeMillis)
-          m (merged-view reg now)
+          m (merged-view reg now cv)
           old @(:published reg)]
       (doseq [[pid e] m
               :let [o (get old pid)]]
         (cond
           (nil? o) (fan! reg (frame-of "join" e))
           (not= (:self o) (:self e)) (fan! reg (frame-of "move" e))))
+      ;; a LEAVE is whatever merged-view dropped. That is why the
+      ;; curtain verdict is resolved there and not here: a pid missing
+      ;; from cv used to be filtered out as "curtained" and left the
+      ;; board with a fanned leave — a live principal, invisible until
+      ;; some later publisher's prefetch happened to include it
       (doseq [[pid o] old
               :when (not (contains? m pid))]
         (fan! reg (frame-of "leave" o)))
@@ -178,21 +291,47 @@
 (defn- on-notification! [reg ^String payload]
   (let [msg (try (wire/read-json payload) (catch Exception _ nil))]
     (when (and (map? msg) (not= (:origin reg) (:origin msg)))
-      (locking (:lock reg)
-        (case (:event msg)
-          "report" (when (and (string? (:pid msg)) (map? (:entry msg)))
-                     (swap! (:remotes reg) assoc-in [(:origin msg) (:pid msg)]
-                            {:entry (:entry msg)
-                             :seen (System/currentTimeMillis)}))
-          "drop" (swap! (:remotes reg) update (:origin msg) dissoc (:pid msg))
-          nil)
-        (publish! reg)))))
+      ;; the arriving principal rides `also`: it is not in any map
+      ;; yet, and the prefetch happens before the lock (F5). It is the
+      ;; entry's PUBLISHED identity, not the notify key, because that
+      ;; is the id merged-view will judge and the frame will carry
+      ;; (intents' spelling)
+      (let [rid (get-in msg [:entry :principal :id])
+            cv (curtain-view reg (when (string? rid) [rid]))]
+        (locking (:lock reg)
+          (case (:event msg)
+            "report" (when (and (string? (:pid msg)) (map? (:entry msg)))
+                       (swap! (:remotes reg) assoc-in [(:origin msg) (:pid msg)]
+                              {:entry (:entry msg)
+                               :seen (System/currentTimeMillis)}))
+            "drop" (swap! (:remotes reg) update (:origin msg) dissoc (:pid msg))
+            nil)
+          (publish! reg cv))))))
+
+(defn- evict-local!
+  "Curtain enforcement's eviction: drop a pid's local entry whole
+  (stream refcounts included — an unpublishable presence holds no
+  claim), tell the peers, re-publish. The publish!'s diff is where
+  the LEAVE frame subscribers observe comes from when a curtain
+  draws over a live entry."
+  [reg pid]
+  (let [cv (curtain-view reg [pid])]
+    (locking (:lock reg)
+      (when (contains? @(:local reg) pid)
+        (swap! (:local reg) dissoc pid)
+        (notify! reg {:event "drop" :pid pid}))
+      (publish! reg cv)))
+  nil)
 
 (defn- reassert!
   "Every hb tick: re-report each local entry so peers keep its :seen
-  fresh — the entry itself is unchanged (no phantom moves)."
+  fresh — the entry itself is unchanged (no phantom moves). A
+  curtained pid is never re-taught to peers: the sweep is about to
+  evict it, and a re-assertion would hand remote processes the very
+  frame the doors refused to publish."
   [reg]
-  (doseq [[pid {:keys [entry]}] @(:local reg)]
+  (doseq [[pid {:keys [entry]}] @(:local reg)
+          :when (not (curtained? reg pid))]
     (notify! reg {:event "report" :pid pid :entry entry})))
 
 (defn- sweep!
@@ -200,35 +339,61 @@
   quiet (three missed) and no stream holds them, and remote entries
   whose origin stopped re-asserting."
   [reg]
-  (locking (:lock reg)
-    (let [now (System/currentTimeMillis)
-          cutoff (- now (* 3 (long (:hb-ms reg))))
-          dead (into [] (keep (fn [[pid st]]
-                                (when-not (live-local? st now (:hb-ms reg))
-                                  pid)))
-                     @(:local reg))]
-      (when (seq dead)
-        (swap! (:local reg) #(apply dissoc % dead))
-        (doseq [pid dead] (notify! reg {:event "drop" :pid pid})))
-      (swap! (:remotes reg)
-             (fn [rs]
-               (into {}
-                     (keep (fn [[org entries]]
-                             (let [live (into {}
-                                             (filter (fn [[_ {:keys [seen]}]]
-                                                       (<= cutoff (long seen))))
-                                             entries)]
-                               (when (seq live) [org live]))))
-                     rs)))
-      (publish! reg))))
+  ;; the curtain, read FRESH (cache bypassed and refreshed) and read
+  ;; BEFORE the lock: this is the ≤-one-heartbeat backstop — a drawn
+  ;; curtain whose invalidation never arrived still clears the board
+  ;; on the next sweep, whatever the cache believes. One store read
+  ;; per present pid per interval; the board is a household, not a
+  ;; city.
+  (let [cv (curtain-view reg nil true)]
+    (locking (:lock reg)
+      (let [now (System/currentTimeMillis)
+            cutoff (- now (* 3 (long (:hb-ms reg))))
+            ;; eviction acts on a KNOWN curtain only (verdict's nil
+            ;; default): the fresh prefetch above names every pid
+            ;; that was local when it ran, so a pid missing from cv
+            ;; joined DURING the prefetch→lock window — live, and
+            ;; almost certainly un-curtained. Reading that absence as
+            ;; "curtained" evicted it and told every peer to drop it.
+            ;; Publishing still fails closed (merged-view), so the
+            ;; worst an unknown verdict costs here is one more
+            ;; heartbeat before the board settles.
+            dead (into [] (keep (fn [[pid st]]
+                                  (when (or (not (live-local? st now (:hb-ms reg)))
+                                            (true? (verdict reg cv pid nil)))
+                                    pid)))
+                       @(:local reg))]
+        (when (seq dead)
+          (swap! (:local reg) #(apply dissoc % dead))
+          (doseq [pid dead] (notify! reg {:event "drop" :pid pid})))
+        (swap! (:remotes reg)
+               (fn [rs]
+                 (into {}
+                       (keep (fn [[org entries]]
+                               (let [live (into {}
+                                                (filter (fn [[_ {:keys [seen]}]]
+                                                          (<= cutoff (long seen))))
+                                                entries)]
+                                 (when (seq live) [org live]))))
+                       rs)))
+        (publish! reg cv)))))
 
 ;; ── reporting (the two doors) ───────────────────────────────────────
 
-(defn- normalize-self
+(defn normalize-self
   "Accept a full URL where an href was meant — a raw-HTTP agent's
   natural spelling: the origin strips, the path (query and all)
   stays. Anything else passes through untouched for check-self! to
-  judge."
+  judge.
+
+  PUBLIC because it is a SECURITY SEAM, not a convenience: this is
+  the answer to \"what will this door actually store for that self?\",
+  and the router's private-row gate (reportable-self?, waymark-tti.3
+  L7) must judge THAT value, not the caller's raw spelling. It once
+  judged the raw one, and a full-URL spelling of a private letter
+  therefore walked past a gate that could not recognise it. One
+  spelling of the stripping, here, read by both the gate and report!
+  — never copied into the router."
   [self]
   (if (and (string? self) (re-find #"^https?://" self))
     (let [path (str/replace-first self #"^https?://[^/]*" "")]
@@ -258,14 +423,24 @@
     (when (= (:id principal) (:id t/anonymous))
       (throw (p/problem :presence-anonymous 422 "Presence names its principal"
                         {:detail "An anonymous heartbeat would mark nobody; present a principal."})))
-    (let [pid (:id principal)
-          e (entry-of reg principal self "heartbeat")]
-      (locking (:lock reg)
-        (swap! (:local reg) update pid
-               (fn [st] (-> (or st {:streams {}})
-                            (assoc :entry e :hb-at (:at-ms e)))))
-        (notify! reg {:event "report" :pid pid :entry e})
-        (publish! reg))
+    (let [pid (:id principal)]
+      ;; the curtain: a curtained principal's beat is ACCEPTED — the
+      ;; response shape never changes, so the wire does not narrate
+      ;; the curtain to whoever sent the beat — but it publishes
+      ;; NOTHING: not stored, not notified, so no process ever holds
+      ;; a frame. Any entry that predates the draw drops right now
+      ;; (its own beat is the earliest messenger) instead of waiting
+      ;; for the sweep.
+      (if (curtained? reg pid)
+        (evict-local! reg pid)
+        (let [e (entry-of reg principal self "heartbeat")
+              cv (curtain-view reg [pid])]
+          (locking (:lock reg)
+            (swap! (:local reg) update pid
+                   (fn [st] (-> (or st {:streams {}})
+                                (assoc :entry e :hb-at (:at-ms e)))))
+            (notify! reg {:event "report" :pid pid :entry e})
+            (publish! reg cv))))
       nil)))
 
 (def read-beat-ms
@@ -283,7 +458,12 @@
   [reg principal self]
   (let [self (normalize-self self)]
     (when (and (valid-self? self)
-               (not= (:id principal) (:id t/anonymous)))
+               (not= (:id principal) (:id t/anonymous))
+               ;; the curtain: a curtained principal's reads stamp
+               ;; nothing — judged before the throttle bookkeeping,
+               ;; so the first read after an open_curtain reports
+               ;; immediately instead of hiding in a stale window
+               (not (curtained? reg (:id principal))))
       (let [pid (:id principal)
             now (System/currentTimeMillis)
             [prev at] (get @(:read-at reg) pid [nil 0])]
@@ -294,28 +474,34 @@
                   (not= prev self)
                   (< (+ (long at) read-beat-ms) now))
           (swap! (:read-at reg) assoc pid [self now])
-          (let [e (entry-of reg principal self "read")]
+          (let [e (entry-of reg principal self "read")
+                cv (curtain-view reg [pid])]
             (locking (:lock reg)
               (swap! (:local reg) update pid
                      (fn [st] (-> (or st {:streams {}})
                                   (assoc :entry e :hb-at (:at-ms e)))))
               (notify! reg {:event "report" :pid pid :entry e})
-              (publish! reg))))))
+              (publish! reg cv))))))
     nil))
 
 (defn stream-open!
   "The implicit door, opening half: a per-resource SSE subscription
-  IS presence — the router's hook calls this on subscribe."
+  IS presence — the router's hook calls this on subscribe. A
+  curtained principal's subscription still OPENS (watching was never
+  the curtain's business — being watched is); only the presence
+  registration is refused: nothing stored, nothing notified."
   [reg principal self]
-  (let [pid (:id principal)
-        e (entry-of reg principal self "stream")]
-    (locking (:lock reg)
-      (swap! (:local reg) update pid
-             (fn [st] (-> (or st {:streams {}})
-                          (update-in [:streams self] (fnil inc 0))
-                          (assoc :entry e))))
-      (notify! reg {:event "report" :pid pid :entry e})
-      (publish! reg))
+  (let [pid (:id principal)]
+    (when-not (curtained? reg pid)
+      (let [e (entry-of reg principal self "stream")
+            cv (curtain-view reg [pid])]
+        (locking (:lock reg)
+          (swap! (:local reg) update pid
+                 (fn [st] (-> (or st {:streams {}})
+                              (update-in [:streams self] (fnil inc 0))
+                              (assoc :entry e))))
+          (notify! reg {:event "report" :pid pid :entry e})
+          (publish! reg cv))))
     nil))
 
 (defn stream-closed!
@@ -324,26 +510,37 @@
   survives — its self moves back to a held stream if the closed one
   was the announced screen."
   [reg principal self]
-  (let [pid (:id principal)]
+  (let [pid (:id principal)
+        ;; both branches below publish; the verdict and the whole
+        ;; round's view are resolved before the lock (F5)
+        drawn? (curtained? reg pid)
+        cv (curtain-view reg [pid])]
     (locking (:lock reg)
       (let [st (get @(:local reg) pid)]
         (when st
-          (let [n (dec (long (get-in st [:streams self] 1)))
-                streams (if (pos? n)
-                          (assoc (:streams st) self n)
-                          (dissoc (:streams st) self))
-                st' (assoc st :streams streams)]
-            (if (live-local? st' (System/currentTimeMillis) (:hb-ms reg))
-              (let [st' (if (and (= self (get-in st' [:entry :self]))
-                                 (not (contains? streams self))
-                                 (seq streams))
-                          (update st' :entry assoc :self (first (keys streams)))
-                          st')]
-                (swap! (:local reg) assoc pid st')
-                (notify! reg {:event "report" :pid pid :entry (:entry st')}))
-              (do (swap! (:local reg) dissoc pid)
-                  (notify! reg {:event "drop" :pid pid}))))))
-      (publish! reg))
+          (if drawn?
+            ;; the curtain drew while streams were open and the sweep
+            ;; has not passed yet: whatever remains is unpublishable —
+            ;; drop it whole rather than re-notify an entry (the else
+            ;; branch's move-back re-report) the doors would refuse
+            (do (swap! (:local reg) dissoc pid)
+                (notify! reg {:event "drop" :pid pid}))
+            (let [n (dec (long (get-in st [:streams self] 1)))
+                  streams (if (pos? n)
+                            (assoc (:streams st) self n)
+                            (dissoc (:streams st) self))
+                  st' (assoc st :streams streams)]
+              (if (live-local? st' (System/currentTimeMillis) (:hb-ms reg))
+                (let [st' (if (and (= self (get-in st' [:entry :self]))
+                                   (not (contains? streams self))
+                                   (seq streams))
+                            (update st' :entry assoc :self (first (keys streams)))
+                            st')]
+                  (swap! (:local reg) assoc pid st')
+                  (notify! reg {:event "report" :pid pid :entry (:entry st')}))
+                (do (swap! (:local reg) dissoc pid)
+                    (notify! reg {:event "drop" :pid pid})))))))
+      (publish! reg cv))
     nil))
 
 ;; ── subscriptions ───────────────────────────────────────────────────
@@ -373,14 +570,23 @@
 
 (defn snapshot
   "The merged truth as last announced, filtered by visible? — the
-  stream's first frame."
+  stream's first frame. Curtained pids are filtered here TOO
+  (merged-view already refused them into :published; this is the
+  last brace): a join snapshot must never serve a curtained
+  principal, however the draw races the publish. Through `verdict`,
+  so a pid that joined during the prefetch→lock window is judged by
+  the warm cache and not by its absence — the first frame is the only
+  one a new subscriber gets for an already-published principal, so
+  dropping a live one here hid it until it moved."
   [reg visible?]
-  (locking (:lock reg)
-    (into []
-          (comp (map val)
-                (filter #(visible? (:self %)))
-                (map #(select-keys % [:principal :self :source :at])))
-          (sort-by key @(:published reg)))))
+  (let [cv (curtain-view reg)]
+    (locking (:lock reg)
+      (into []
+            (comp (remove (fn [[pid _]] (verdict reg cv pid true)))
+                  (map val)
+                  (filter #(visible? (:self %)))
+                  (map #(select-keys % [:principal :self :source :at])))
+            (sort-by key @(:published reg))))))
 
 ;; ── visibility (the concealment predicate) ──────────────────────────
 
@@ -388,21 +594,40 @@
   "The stream's concealment predicate for one request: nil visibility
   (an unscoped viewer) sees all; a scoped viewer sees a presence iff
   it could GET the self it names — the row? closure the request
-  already resolved. A self that names no known row shape (a
-  collection screen, the workspace) is concealed from scoped viewers:
-  what cannot be GETed row-wise cannot be watched."
+  already resolved. One widening (waymark-tti.4, symmetric presence):
+  a self that is EXACTLY /api/{plural} — a collection screen — shows
+  iff the grant sees the WHOLE kind, judged by the visibility's own
+  :whole-kind? (no ids, no filter narrowing; grants.clj), never by
+  sampling :row? — ids-narrowed sight of SOME rows is not sight of
+  the collection. Everything else (non-/api/ selves, the workspace,
+  door selves like /api/-/events — their \"plural\" names no rdef)
+  stays concealed from scoped viewers, exactly as before."
   [eng vis]
   (if (nil? vis)
     (constantly true)
     (fn [self]
       (boolean
-       (let [parts (str/split (str self) #"/")]
-         (when (and (= 4 (count parts)) (= "api" (nth parts 1)))
-           (let [plural (nth parts 2)
-                 id (nth parts 3)]
-             (when-some [rdef (some (fn [[_ r]] (when (= plural (:plural r)) r))
-                                    (inv/resources eng))]
-               ((:row? vis) (:kind rdef) id)))))))))
+       (let [self (str self)
+             parts (str/split self #"/")
+             rdef-by-plural (fn [plural]
+                              (some (fn [[_ r]] (when (= plural (:plural r)) r))
+                                    (inv/resources eng)))]
+         (cond
+           ;; a row self /api/{plural}/{id}: unchanged — the row?
+           ;; closure the request already resolved is the judge
+           (and (= 4 (count parts)) (= "api" (nth parts 1)))
+           (when-some [rdef (rdef-by-plural (nth parts 2))]
+             ((:row? vis) (:kind rdef) (nth parts 3)))
+           ;; a collection self, exactly /api/{plural}: str/split
+           ;; drops trailing empties, so /api/tasks/ would count 3 —
+           ;; the ends-with guard keeps EXACTLY exact. A self with a
+           ;; query string fails the rdef lookup and stays concealed.
+           (and (= 3 (count parts)) (= "api" (nth parts 1))
+                (not (str/ends-with? self "/")))
+           (when-some [rdef (rdef-by-plural (nth parts 2))]
+             (when-some [whole-kind? (:whole-kind? vis)]
+               (whole-kind? (:kind rdef))))
+           :else nil))))))
 
 ;; ── lifecycle ───────────────────────────────────────────────────────
 
@@ -420,8 +645,17 @@
   "The engine's presence registry: one LISTEN thread (frames in,
   re-assertions out, TTL sweeps on the clock). opts {:hb-ms} —
   default the engine's :presence-heartbeat-ms (15s); eviction is
-  three missed intervals. Returns the registry; stop! ends it."
-  [eng {:keys [hb-ms]}]
+  three missed intervals. The curtain arrives as :curtain — the
+  SHARED component (curtain/start!) the engine hands presence and
+  intents alike, so one member-row read serves both; without it the
+  registry starts a private one from :curtained? (a fn pid → truthy,
+  tests' seam; default reads the member row) and :curtain-ttl-ms
+  (default 2s — the shared component's own, since a private curtain
+  has no invalidation wire and its TTL is all a draw gets). Presence
+  also WATCHES the shared curtain: a committed draw evicts that pid's
+  entries at once, and the eviction's diff is the leave frame.
+  Returns the registry; stop! ends it."
+  [eng {:keys [hb-ms curtained? curtain-ttl-ms curtain]}]
   (let [storage (:storage eng)
         hb-ms (long (or hb-ms (:presence-heartbeat-ms eng) 15000))
         pg? (pg-storage? storage)
@@ -435,6 +669,19 @@
                              "); presence stays process-local")
                       nil)))
         pg-conn (some-> ^Connection conn (.unwrap PGConnection))
+        ;; the curtain consult (waymark-tti.4): the engine's shared
+        ;; component, or a private one for a standalone registry — a
+        ;; read-only lookup and its per-pid TTL cache; presence stays
+        ;; ephemeral and no table is ever gained
+        ;; the standalone TTL is the SHARED component's (2s), not the
+        ;; heartbeat's 15s: with no dispatcher there is no
+        ;; invalidation wire, so the TTL is the only thing that ever
+        ;; honors a draw — a quarter-minute of it was the widest gap
+        ;; in the house, and it differed from production for no
+        ;; reason. curtain/start! says so out loud now too
+        own-curtain (when (nil? curtain)
+                      (curtain/start! eng {:lookup curtained?
+                                           :ttl-ms (or curtain-ttl-ms 2000)}))
         reg {:eng eng
              :storage storage
              :origin (str (random-uuid))
@@ -444,6 +691,8 @@
              :remotes (atom {})
              ;; the read door's throttle: pid → [self at-ms]
              :read-at (atom {})
+             :curtain (or curtain own-curtain)
+             :own-curtain own-curtain
              :published (atom {})
              :subs (atom #{})
              :running (atom true)
@@ -472,12 +721,25 @@
                      (warn! "loop: " (ex-message e))
                      (try (Thread/sleep 1000)
                           (catch InterruptedException _ nil))))))))
-         "waymark10-presence")]
+         "waymark10-presence")
+        ;; a DRAWN curtain is an event, not just a fact: the shared
+        ;; component hears the committed transition (its own process's
+        ;; and every peer's) and calls this — the entry goes, the
+        ;; peers hear the drop, and publish!'s diff is the leave frame
+        ;; subscribers observe. The sweep's fresh read stays the
+        ;; backstop for a lost invalidation, never the mechanism.
+        watch (curtain/watch! (:curtain reg)
+                              (fn [pid] (evict-local! reg pid)))]
     (doto ^Thread thread (.setDaemon true) (.start))
-    (assoc reg :thread thread)))
+    (assoc reg :thread thread :curtain-watch watch)))
 
 (defn stop! [reg]
   (reset! (:running reg) false)
+  (when-some [w (:curtain-watch reg)]
+    (curtain/unwatch! (:curtain reg) w))
+  ;; only a registry that STARTED its own curtain stops one — the
+  ;; engine's shared component outlives every surface that reads it
+  (some-> (:own-curtain reg) curtain/stop!)
   (some-> ^Connection (:conn reg) .close)
   (some-> ^Thread (:thread reg) .interrupt)
   nil)

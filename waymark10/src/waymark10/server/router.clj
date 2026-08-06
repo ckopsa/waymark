@@ -79,13 +79,14 @@
             [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
+            [waymark10.server.seasons :as seasons]
             [waymark10.server.store :as store]
             [waymark10.server.surface :as surface]
             [waymark10.server.ui-assembly :as ui-assembly]
             [waymark10.server.worksheet :as worksheet]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.net URLDecoder)
+  (:import (java.net URLDecoder URLEncoder)
            (java.nio.charset StandardCharsets)))
 
 (set! *warn-on-reflection* true)
@@ -246,7 +247,10 @@
   valid FULL rehearsal is a considering, best-effort, named
   principals on a started engine only. The partial rehearsal is
   deliberately mute here: it fires at typing cadence, and company
-  must never cost the work (§23, recorded)."
+  must never cost the work (§23, recorded). The presence curtain is
+  judged at the registry, not here — the dry-run itself must run
+  identically whether or not its actor is behind one, so this seam
+  announces the same way and intents.clj refuses to publish."
   [eng req self action result]
   (when-some [reg (intents-running eng)]
     (let [principal (principal-of req)]
@@ -347,7 +351,9 @@
                          :presence {:href "/api/-/presence"
                                     :note "who is looking where (SSE / POST)"}
                          :events {:href "/api/-/events"
-                                  :note "the firehose (SSE; unscoped only — a recorded punt)"}}
+                                  :note "the firehose (SSE; unscoped only — a recorded punt)"}
+                         :seasons {:href "/api/-/seasons"
+                                   :note "the last weeks as a shape — what moved, what ages"}}
                   (get-in eng [:oidc :rp])
                   (assoc :agent_session
                          {:href "/auth/agent" :method "POST"
@@ -984,7 +990,89 @@
                                  :since (last-event-id req)}
                           req))))
 
+;; ── seasons (the rhythm door, waymark-tti.2) ────────────────────────
+
+(defn- seasons-doc
+  "GET /api/-/seasons?weeks=4&include_system=0 — the transition log
+  as weekly rhythm buckets plus the aging read over current rows
+  (waymark10.server.seasons). The firehose above 404s every
+  grant-scoped caller as a recorded punt (firehose-events); seasons
+  supersedes that posture for history: it PROJECTS — a scoped caller
+  gets exactly the kinds its grant sees whole, everything else
+  byte-level absent. Anonymous gets the same concealment 404 as the
+  other doors."
+  [eng]
+  (fn [req]
+    (let [principal (principal-of req)]
+      (when (or (nil? principal)
+                (= (:id principal) (:id t/anonymous)))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."})))
+      (let [q (query-params req)]
+        (json-response
+         200
+         (seasons/report eng (visibility-of req)
+                         {:weeks (seasons/clamp-weeks (get q "weeks"))
+                          :include-system? (contains? #{"1" "true"}
+                                                      (get q "include_system"))}))))))
+
 ;; ── presence (ephemeral, never law) ─────────────────────────────────
+
+;; The reported self must pass the REPORTER's own sight (waymark-tti.3
+;; L7). Both ephemeral doors take a caller-supplied self and validate
+;; it for SHAPE only, then the registry publishes the frame to
+;; everyone whose visibility can GET that self — so a stranger could
+;; post `{self: "/api/letters/<id>"}` and have "someone is opening
+;; your letter" delivered to exactly the two people who can read that
+;; letter, from a principal that 404s the row. The frame carries no
+;; letter CONTENT, but it is an unearned knock on a private door, and
+;; on the private trio (self, journal, letter) that is the whole
+;; surface being protected.
+;;
+;; So: for a self naming a row of a private own-surface kind, the
+;; reporter must be able to see that row. Everything else is
+;; untouched — an ordinary kind's self, a collection self, the
+;; workspace, a door self. An unscoped viewer (human, system) has no
+;; :row? to consult and passes, exactly as it passes everywhere else:
+;; it really can see every letter.
+;;
+;; The refusal is SILENT — the report is accepted and publishes
+;; nothing, the same 204 either way. That is the curtain's own
+;; discipline (intents.clj): the wire must not narrate to a reporter
+;; what its own frame's fate was, or the door becomes the row-probe
+;; the 404 already refuses to be. Selves too long for the registries'
+;; own cap fall through to report! and meet its 422 there, so
+;; validation is still the registry's, never guessed at here.
+;;
+;; THE GATE JUDGES WHAT THE DOOR WILL STORE, not what the caller
+;; typed. presence/report! strips an http(s)://origin off a self
+;; before it stores it — a raw-HTTP agent's natural spelling — and
+;; this gate used to run against the RAW string: a full URL split
+;; into six parts, failed the four-part row shape, and was waved
+;; through as "not a row self" moments before report! turned it back
+;; into exactly the private row self this gate exists to refuse. So
+;; the door's own normalizer comes in as `normalize` and runs FIRST;
+;; every check below reads the normalized value, which is the value
+;; that will be published. Each door passes ITS OWN spelling
+;; (presence/normalize-self, intents/normalize-self — the intents
+;; surface stores what it is given and refuses a full URL outright),
+;; because assuming the two agree is how this gap opened. What we
+;; hand onward to report! is still the caller's own string: the
+;; registries normalize as they always did, and the gate only judges
+;; where that lands.
+(defn- reportable-self?
+  [eng req normalize self]
+  (let [s (str (normalize self))
+        parts (str/split s #"/")]
+    (or (not (and (string? self)
+                  (<= (count s) presence/self-max-chars)
+                  (= 4 (count parts))
+                  (= "api" (nth parts 1))))
+        (let [rdef (some (fn [[_ r]] (when (= (nth parts 2) (:plural r)) r))
+                         (inv/resources eng))]
+          (or (nil? rdef)
+              (not (grants/private-kind? (:kind rdef)))
+              (boolean ((presence/self-visible? eng (visibility-of req)) s)))))))
 
 (defn- presence-registry
   "The engine's running presence registry — 503 on an engine that
@@ -1010,11 +1098,15 @@
 (defn- presence-report
   "POST /api/-/presence {self}: the explicit heartbeat for clients
   that only hold the firehose (the ported UI's case). A scoped
-  principal's own reporting is always accepted."
+  principal's own reporting is always accepted — and a beat on a
+  private row the reporter cannot itself see is accepted too and
+  publishes nothing (reportable-self? above)."
   [eng]
   (fn [req]
-    (let [reg (presence-registry eng)]
-      (presence/report! reg (principal-of req) (:self (read-body req)))
+    (let [reg (presence-registry eng)
+          self (:self (read-body req))]
+      (when (reportable-self? eng req presence/normalize-self self)
+        (presence/report! reg (principal-of req) self))
       {:status 204 :headers {}})))
 
 ;; ── intents (ephemeral, never law) ──────────────────────────────────
@@ -1044,13 +1136,21 @@
   "POST /api/-/intents {self, action, question?}: the explicit door —
   a client surfacing a considering the router cannot see (or its own
   confirm gate as an ask, question = the consequence sentence). A
-  principal's own reporting is always accepted, scoped or not."
+  principal's own reporting is always accepted, scoped or not — and
+  a CURTAINED one's is accepted too and publishes nothing (the
+  curtain lives at the registry's publish point, intents.clj): the
+  204 is the same 204 either way, so the wire never narrates the
+  curtain to whoever sent the report. A frame naming a PRIVATE row
+  the reporter cannot itself see is dropped the same silent way
+  (reportable-self?, waymark-tti.3 L7) — one more reason the 204 says
+  nothing."
   [eng]
   (fn [req]
     (let [reg (intents-registry eng)
           body (read-body req)]
-      (intents/report! reg (principal-of req)
-                       (select-keys body [:self :action :question]))
+      (when (reportable-self? eng req intents/normalize-self (:self body))
+        (intents/report! reg (principal-of req)
+                         (select-keys body [:self :action :question])))
       {:status 204 :headers {}})))
 
 (defn- intents-abandon
@@ -1096,6 +1196,15 @@
 
 (def ^:private home-journal-recent 5)
 
+(defn- enc
+  "One query-parameter value, URL-encoded. The homecoming's :all hrefs
+  carry a PRINCIPAL id, and a principal id is an OIDC subject — it may
+  hold a '+', an '&' or a space, any of which would silently re-cut
+  the query string a client pasted back. collections.clj keeps the
+  same one-liner for its page hrefs."
+  ^String [s]
+  (URLEncoder/encode (str s) StandardCharsets/UTF_8))
+
 (defn- home-self
   "The returning agent's own :self row (data.owner == pid), the profile
   it kept across sessions — nil when this engine keeps no selves or the
@@ -1122,18 +1231,19 @@
                    (:working_notes d) (assoc :working_notes (:working_notes d))))))))
 
 (defn- home-journal
-  "The agent's recent journal entries, newest-first. The store orders
-  oldest-first with no DESC (standing-grant-for's recorded shape), so
-  this reads a bounded window and reverses; an agent with more than the
-  window's entries still sees its newest WITHIN the window — the true
-  newest past that needs a newest-first store read (recorded, deferred:
-  reuse the collection sort rather than a raw query)."
+  "The agent's recent journal entries, newest-first — the store's own
+  :newest-first, so the LIMIT bites the fresh end. It once read the
+  OLDEST 200 and reversed them, which is newest-first only until the
+  201st entry exists; past that the window sat on the far end of the
+  history and a returning agent's homecoming showed it the same old
+  page forever (the punt this docstring used to record — no longer
+  deferred, and the collection sort was never needed)."
   [eng pid]
   (when-some [rdef (get (inv/resources eng) :journal)]
     (->> (store/with-tx (:storage eng)
            (fn [tx] (store/query-rows (:storage eng) tx :journal
-                                      {:owner pid} {:limit 200})))
-         reverse
+                                      {:owner pid}
+                                      {:limit 200 :newest-first true})))
          (take home-journal-recent)
          (mapv (fn [r]
                  (let [d (:data (inv/decode-row rdef r))]
@@ -1160,26 +1270,92 @@
               :note (str "send this on every request — it selects your "
                          "standing scope, already yours")}})))
 
+(def ^:private home-letters-opened-recent 3)
+
+(def ^:private home-letters-waiting-recent
+  "How many WAITING letters ride the welcome document itself. The
+  first cut spliced every waiting letter in, unbounded, while :opened
+  was capped at 3 — so anyone who may write to you could make every
+  arrival of yours carry a hundred entries (waymark-tti.3 L5). Ten is
+  a shelf you read at the door; the rest are a :more count and the
+  :all href, and :discard is how the shelf gets shorter."
+  10)
+
+(defn- home-letters
+  "The letters on this principal's shelf (data.to == pid): the newest
+  :waiting ones up to 10 (with a :more count for the remainder), then
+  the most recent :opened up to 3 — the recipient half of the
+  two-party own-surface (waymark-tti.3), the SAME predicate
+  waymark10.server.grants enforces, so the shelf can only ever hand a
+  principal its OWN mail. Discarded letters are not on the shelf at
+  all: the state filter never names them.
+
+  The window is :newest-first, like home-journal's. It once read the
+  OLDEST 200 and reversed them, and that defeated the L5 flood cap it
+  was written beside: past 200 waiting letters the shelf froze on the
+  oldest end and genuinely new mail never surfaced, while
+  /api/letters?to= (own-ids, newest-first) showed the fresh end — two
+  doors onto one shelf, disagreeing about what had just arrived."
+  [eng pid]
+  (when-some [rdef (get (inv/resources eng) :letter)]
+    (let [entry (fn [r]
+                  (let [d (:data (inv/decode-row rdef r))]
+                    (cond-> {:href (str "/api/letters/" (:id r))
+                             :from (:owner d)
+                             :written_at (str (:created-at r))
+                             :state (name (:state r))}
+                      (:title d) (assoc :title (:title d)))))
+          shelf (fn [state]
+                  (->> (store/with-tx (:storage eng)
+                         (fn [tx] (store/query-rows (:storage eng) tx :letter
+                                                    {:to pid :state state}
+                                                    {:limit 200
+                                                     :newest-first true})))
+                       (mapv entry)))
+          all-waiting (shelf "waiting")
+          waiting (vec (take home-letters-waiting-recent all-waiting))
+          more (- (count all-waiting) (count waiting))
+          opened (vec (take home-letters-opened-recent (shelf "opened")))]
+      (when (or (seq waiting) (seq opened))
+        (cond-> {:all (str "/api/letters?to=" (enc pid))}
+          (seq waiting) (assoc :waiting waiting)
+          (pos? more)   (assoc :more more)
+          (seq opened)  (assoc :opened opened))))))
+
 (defn- welcome-home
-  "The returning-inhabitant payload: a NAMED AGENT's own self, recent
-  journal, and standing grant, keyed entirely on the authenticated
-  principal id. nil for humans (they own no self/journal and run
-  unscoped) and for an agent that has yet to author anything — a first
-  arrival still gets the joining manual, not an empty homecoming."
+  "The returning-inhabitant payload: a NAMED principal's own self,
+  recent journal, standing grant, and letter shelf, keyed entirely on
+  the authenticated principal id. HUMANS get a :home too
+  (waymark-tti.3 — letters go to people as much as to agents); their
+  self/journal readers simply return nil/empty, so a human's home is
+  usually letters alone. nil for a principal that owns nothing yet —
+  a first arrival still gets the joining manual, not an empty
+  homecoming."
   [eng principal]
   (when (and (some? principal)
-             (= :agent (:type principal))
+             (contains? #{:agent :human} (:type principal))
              (not= (:id principal) (:id t/anonymous)))
     (let [pid (:id principal)
           self (home-self eng pid)
           journal (home-journal eng pid)
-          grant (home-grant eng pid)]
-      (when (or self (seq journal) grant)
-        (cond-> {:note "welcome home — you arrive already yourself"}
+          grant (home-grant eng pid)
+          letters (home-letters eng pid)
+          ;; the greeting counts the WHOLE shelf, not the ten that fit
+          ;; in the document — a capped list must not shrink the news
+          waiting (+ (count (:waiting letters)) (long (:more letters 0)))]
+      (when (or self (seq journal) grant letters)
+        (cond-> {:note (if (pos? waiting)
+                         (str "welcome home — " waiting
+                              (if (= 1 waiting)
+                                " letter waits" " letters wait")
+                              " on the shelf")
+                         "welcome home — you arrive already yourself")}
           self          (assoc :self self)
           (seq journal) (assoc :journal {:recent journal
-                                         :all (str "/api/journals?owner=" pid)})
-          grant         (assoc :grant grant))))))
+                                         :all (str "/api/journals?owner="
+                                                   (enc pid))})
+          grant         (assoc :grant grant)
+          letters       (assoc :letters letters))))))
 
 ;; ── the welcome document (the invite link's destination) ───────────
 
@@ -1250,13 +1426,14 @@
                    :note "your stable agent id — every act is recorded under it"
                    :actor_type "agent"})
 
-        ;; welcome home (waymark-4zj.2): a returning agent's own self,
-        ;; recent journal, and standing grant — keyed on the resolved
-        ;; principal id, so it leaks nothing to an agent that is not
-        ;; that identity. Rides for a named agent whether or not an
+        ;; welcome home (waymark-4zj.2): a returning inhabitant's own
+        ;; self, recent journal, standing grant, and letter shelf
+        ;; (waymark-tti.3) — keyed on the resolved principal id, so it
+        ;; leaks nothing to a principal that is not that identity.
+        ;; Rides for a named agent OR human whether or not an
         ;; invitation stands (a returning inhabitant holds a session,
-        ;; not a fresh invite); absent for a first arrival and for
-        ;; humans (who own no self/journal and see all unscoped).
+        ;; not a fresh invite); absent for a first arrival that owns
+        ;; nothing yet.
         home
         (assoc :home home)
 
@@ -1662,6 +1839,7 @@
            ["/api/openapi.json" {:get (openapi-doc eng)}]
            ["/api/schemas/:kind" {:get (kind-schema eng)}]
            ["/api/-/events" {:get (firehose-events eng)}]
+           ["/api/-/seasons" {:get (seasons-doc eng)}]
            ["/api/-/presence" {:get (presence-stream eng)
                                :post (presence-report eng)}]
            ["/api/-/intents" {:get (intents-stream eng)

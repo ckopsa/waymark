@@ -18,7 +18,9 @@
   descriptions of one table."
   (:require [clojure.string :as str]
             [waymark10.schema :as schema]
-            [waymark10.types :as t]))
+            [waymark10.types :as t])
+  (:import (java.time DayOfWeek Instant LocalDate ZoneOffset)
+           (java.time.temporal TemporalAdjusters)))
 
 (defprotocol Storage
   (with-tx* [st f]
@@ -38,7 +40,11 @@
     moved.")
   (query-rows [st tx kind where opts]
     "Rows matching a {field value} equality map (phase-2 grammar;
-    collections widen it in phase 7). opts: {:limit n :order-by kw}.")
+    collections widen it in phase 7). opts: {:limit n :order-by kw
+    :newest-first bool}. Ordering is ASCENDING by created_at (or
+    :order-by) unless :newest-first flips it — the spelling
+    `transitions` already uses, so a bounded window can hold the
+    fresh end of a long table instead of its oldest rows.")
   (external-ids [st tx kind]
     "Every stored row's external_id (nil-free, unordered) — the
     discovery diff's ONE set-based read. A per-id probe loop here
@@ -49,6 +55,13 @@
     transaction. Returns the record with its assigned :id.")
   (transitions [st tx where opts]
     "Log rows: where {:kind … :resource-id … :since id}, newest-last.")
+  (transition-stats [st tx since include-system?]
+    "Weekly rhythm buckets over the log — the seasons door's one
+    aggregate read: rows {:week-start inst :kind str :action str
+    :actor-type str :n long}, grouped by UTC ISO week (utc-week-start)
+    × kind × action × actor type, at >= since only. include-system?
+    false drops rows whose actor type is system — the mirror-sync
+    beat would otherwise dominate every count.")
   (idempotency-lookup [st tx key kind]
     "→ {:status :response :media-type :request-digest} or nil.")
   (idempotency-store! [st tx key kind action digest status response media-type])
@@ -138,6 +151,17 @@
   "Sugar: (with-tx st [tx] …)."
   [st f]
   (with-tx* st f))
+
+(defn utc-week-start
+  "The UTC ISO week bucket an instant falls in — Monday 00:00 UTC, as
+  an Instant. The ONE truncation transition-stats' buckets share
+  across backends: Postgres spells it date_trunc('week', at AT TIME
+  ZONE 'UTC'); the memory twin and the seasons reader call this."
+  ^Instant [^Instant at]
+  (-> (LocalDate/ofInstant at ZoneOffset/UTC)
+      (.with (TemporalAdjusters/previousOrSame DayOfWeek/MONDAY))
+      (.atStartOfDay ZoneOffset/UTC)
+      (.toInstant)))
 
 (defn migratable?
   "Does this storage expose a live SQL schema the migrate planner can

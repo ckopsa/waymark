@@ -24,6 +24,11 @@
   The presence registry (the follow-me surface, ephemeral state —
   waymark10.server.presence) starts and stops beside the dispatcher;
   :presence-heartbeat-ms (default 15s) paces its heartbeats and TTL.
+  The presence curtain (waymark10.server.curtain) starts once there
+  too and is handed to BOTH watching surfaces — presence and intents
+  read one member row through one cache, invalidated by the
+  dispatcher on every committed draw/open; :curtain-ttl-ms (default
+  2s) bounds a stale verdict when that wire is lost.
 
   Phase 9a: every engine enrolls the identity-and-access kinds beside
   the definition — member, role, grant, attachment — so well-known
@@ -45,6 +50,7 @@
             [org.httpkit.server :as http]
             [waymark10.registry :as registry]
             [waymark10.server.attachments :as attachments]
+            [waymark10.server.curtain :as curtain]
             [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
@@ -155,7 +161,8 @@
                                       :presence-heartbeat-ms
                                       :collab-ticket-ttl-ms
                                       :intents-heartbeat-ms
-                                      :intent-ttl-ms :intent-ask-ttl-ms])
+                                      :intent-ttl-ms :intent-ask-ttl-ms
+                                      :curtain-ttl-ms])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)
@@ -211,19 +218,33 @@
   [eng port & [{:keys [wrap-handler]}]]
   (when-some [rt (:runtime eng)]
     (let [dispatcher (events/dispatcher
-                      eng {:poll-ms (:events-poll-ms eng 2000)})]
+                      eng {:poll-ms (:events-poll-ms eng 2000)})
+          ;; the presence curtain (waymark-tti.4), started ONCE and
+          ;; handed to both watching surfaces: one member-row read,
+          ;; one cache, one invalidation. :curtain-ttl-ms 2s — a
+          ;; household's member row is cheap, and the honest bound on
+          ;; a stale verdict should be seconds, not the beat cadence
+          ;; (the 15s window the skeptic found). The dispatcher is
+          ;; the invalidation wire: every committed draw/open, this
+          ;; process's and every peer's, lands here at once
+          curtain (curtain/start! eng {:ttl-ms (:curtain-ttl-ms eng 2000)
+                                       :dispatcher dispatcher})]
       (reset! rt {:dispatcher dispatcher
+                  :curtain curtain
                   ;; presence (the follow-me surface): ephemeral state,
                   ;; never law — an in-process registry fanned over
                   ;; pg_notify, TTL-evicted; an engine that never
                   ;; starts answers 503 on its routes, like SSE
                   :presence (presence/start!
-                             eng {:hb-ms (:presence-heartbeat-ms eng 15000)})
+                             eng {:hb-ms (:presence-heartbeat-ms eng 15000)
+                                  :curtain curtain})
                   ;; intent frames (the considering/asking surface):
                   ;; the presence discipline again — ephemeral, never
                   ;; law; the dispatcher hands it the committed acts
-                  ;; that resolve a card
-                  :intents (intents/start! eng {:dispatcher dispatcher})
+                  ;; that resolve a card, and the curtain the ones
+                  ;; that silence a principal
+                  :intents (intents/start! eng {:dispatcher dispatcher
+                                                :curtain curtain})
                   ;; mirror kinds get their declared discovery cadence
                   ;; (phase 8); an engine without mirrors pays nothing
                   :discovery (when (seq (mirror/mirror-kinds eng))
@@ -257,13 +278,15 @@
    (when-some [rt (:runtime eng)]
      (when-some [{:keys [dispatcher coherence discovery jobs
                          orphan-sweeper purge-sweeper presence
-                         intents]} @rt]
+                         intents curtain]} @rt]
        (some-> orphan-sweeper coherence/stop-role!)
        (some-> purge-sweeper coherence/stop-role!)
        (some-> jobs jobs/stop-worker!)
        (some-> coherence coherence/stop!)
        (some-> intents intents/stop!)
        (some-> presence presence/stop!)
+       ;; after its readers, before the dispatcher it subscribes to
+       (some-> curtain curtain/stop!)
        (some-> dispatcher events/stop!)
        (some-> discovery mirror/stop-discovery!))
      (reset! rt nil))))

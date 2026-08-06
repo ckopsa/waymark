@@ -79,7 +79,11 @@ function principalId() { return $who.value.trim(); }
    box holds a value, it stays the visible identity — the box's whole
    point is switching principals in dev. */
 function reflectIdentity(principal) {
-  if (!principal || principalId()) return;
+  if (!principal) return;
+  /* the curtain toggle (220-boot.js) needs the member id even when
+     the dev box is empty and identity rides a session cookie */
+  window.signedinPrincipal = principal;
+  if (principalId()) return;
   $who.style.display = "none";
   if ($("#signedin")) return;
   $who.after(el("span", {id: "signedin",

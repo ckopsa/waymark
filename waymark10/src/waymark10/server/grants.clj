@@ -309,14 +309,15 @@
 
 ;; ── private, own-surface-only kinds (waymark-4zj.1): never grantable ─
 ;;
-;; :self and :journal are OWN-SURFACE-ONLY private kinds — an agent
-;; sees and edits ONLY the rows it OWNS (data.owner == its principal
-;; id), unscoped humans see all, and there is NO grant path in
-;; between. A grant (or an ask, which MINTS a grant on approval) whose
-;; scope named one of these would BYPASS own-surface: row?/ids-of
-;; consult the grant surface — which carries no owner filter — and
-;; would expose EVERY agent's private rows. Privacy here is
-;; STRUCTURAL, not a human remembering to hand-craft an {:filter
+;; :self, :journal and :letter are OWN-SURFACE-ONLY private kinds — an
+;; agent sees and edits ONLY the rows that are ITS OWN (data.owner ==
+;; its principal id; a letter from EITHER end — data.owner or
+;; data.to, waymark-tti.3), unscoped humans see all, and there is NO
+;; grant path in between. A grant (or an ask, which MINTS a grant on
+;; approval) whose scope named one of these would BYPASS own-surface:
+;; row?/ids-of consult the grant surface — which carries no owner
+;; filter — and would expose EVERY agent's private rows. Privacy here
+;; is STRUCTURAL, not a human remembering to hand-craft an {:filter
 ;; {:owner …}}: these kinds are simply not shareable, so the scope
 ;; validator refuses any entry naming them at BOTH doors (grant create
 ;; AND approval_request create; the trio is shared, so the guard rides
@@ -325,13 +326,22 @@
 ;; grant.
 (def ^:private private-own-surface-kinds
   "Kinds that live ONLY on the own-surface and can never be granted."
-  #{"self" "journal"})
+  #{"self" "journal" "letter"})
+
+(defn private-kind?
+  "Is this kind one of the private own-surface trio? The ephemeral
+  surfaces ask (waymark-tti.3 L7): a reported presence/intent self
+  naming one of these rows must pass the REPORTER's own sight, or a
+  stranger could name a letter it 404s and have the frame delivered
+  to exactly the two people who can read it."
+  [kind]
+  (contains? private-own-surface-kinds (name kind)))
 
 (g/defguard scope-omits-private-kinds
   {:judges [:scope]
    :vars [:kind]
-   :open "The private kinds are the own-surface-only pair (self, journal); enumerating them into every scope form would duplicate a house rule the refusal already spells."
-   :explain "self and journal are private to their owner and cannot be granted; the {kind} entry is refused (these kinds ride the own-surface, where owner sees own, with no grant path)."}
+   :open "The private kinds are the own-surface-only trio (self, journal, letter); enumerating them into every scope form would duplicate a house rule the refusal already spells."
+   :explain "self, journal and letter are private to their own members and cannot be granted; the {kind} entry is refused (these kinds ride the own-surface, where owner sees own, with no grant path)."}
   [_row inp _ctx]
   (if-some [bad (some (fn [e]
                         (let [k (str (:kind e))]
@@ -917,19 +927,43 @@
   by the same default-deny wall sees NOTHING of another agent's. The
   ownership is the row's data.owner (own-row? / own-ids below), so
   these two need no grant to be lived in and stay private from other
-  agents by construction. Humans run unscoped and see every row."
-  #{"grant" "approval_request" "job" "capability" "self" "journal"})
+  agents by construction. Humans run unscoped and see every row.
+
+  :letter rides too (waymark-tti.3), the TWO-PARTY own-surface kind:
+  a letter is yours as its AUTHOR (data.owner == pid) OR as its
+  RECIPIENT (data.to == pid) — sender and addressee each see the row
+  with no grant, a third agent 404s it by the same default-deny wall.
+  Same one-party machinery, a two-cond row test."
+  #{"grant" "approval_request" "job" "capability" "self" "journal"
+    "letter"})
 
 (defn- own-ids
   "The principal's own rows of one negotiation kind, as the id cond
-  the collection pushes down. Never empty — an impossible id keeps an
-  empty surface's total honestly zero (an empty IN would not parse)."
+  the collection pushes down. `where` is one cond map — or a VECTOR
+  of cond maps for the two-party kinds (waymark-tti.3: a letter is
+  yours as its author OR its recipient; the store's cond map is a
+  conjunction with no OR, so each branch queries separately and the
+  id sets UNION, deduped). Never empty — an impossible id keeps an
+  empty surface's total honestly zero (an empty IN would not parse).
+
+  The window takes the NEWEST 200 per branch (:newest-first), not the
+  oldest: the stores' default ordering is created_at ASC, so a
+  principal past 200 own rows was silently losing its FRESHEST ones
+  out of every listing and total while row GETs still succeeded —
+  listing and row disagreeing about the same row (waymark-tti.3 L6).
+  It always failed closed (no foreign id can enter either way), but
+  mail accumulates and journals do not shrink. The window is still a
+  window; what changed is which end of the rope it holds."
   [eng kind where]
   (let [ids (store/with-tx (:storage eng)
               (fn [tx]
-                (mapv :id (store/query-rows (:storage eng) tx kind where
-                                            {:limit 200}))))]
-    (if (seq ids) (vec (sort ids)) ["-none-"])))
+                (into (sorted-set)
+                      (mapcat (fn [w]
+                                (map :id (store/query-rows
+                                          (:storage eng) tx kind w
+                                          {:limit 200 :newest-first true}))))
+                      (if (map? where) [where] where))))]
+    (if (seq ids) (vec ids) ["-none-"])))
 
 (defn- own-job-ids
   "The jobs this principal asked for, own-ids' sibling: requested_by
@@ -1024,9 +1058,25 @@
         row (when grant-id (load-decoded eng :grant grant-id))
         own? (boolean (and row (= (get-in row [:data :audience]) pid)))
         named? (and (some? pid) (not= pid (:id t/anonymous)))
-        surface (if (and own? (active? row ((:now-fn eng))))
-                  (prune-unusable eng (surface-of row))
-                  dead)
+        live? (boolean (and own? (active? row ((:now-fn eng)))))
+        surface (if live? (prune-unusable eng (surface-of row)) dead)
+        ;; whole-kind sight is a PER-ENTRY question, judged on the
+        ;; SCOPE, never on surface-of's output: surface-of absorbs
+        ;; :ids and :filters INDEPENDENTLY (openness in one entry
+        ;; erases a sibling's narrowing of that dimension), so an
+        ;; ids-narrowed entry beside a filter-narrowed one leaves
+        ;; both nil there and would read as the whole kind while
+        ;; neither entry ever conferred it. One entry with neither
+        ;; narrowing is whole-kind sight; two half-narrowed ones are
+        ;; not.
+        whole-kinds (if live?
+                      (into #{}
+                            (keep (fn [e]
+                                    (when (and (nil? (:ids e))
+                                               (nil? (:filter e)))
+                                      (name (:kind e)))))
+                            (get-in row [:data :scope]))
+                      #{})
         own-kind? (fn [k] (and named? (contains? own-kinds k)))
         own-row? (fn [k id]
                    (when (own-kind? k)
@@ -1055,13 +1105,31 @@
                                       (get-in [:data :owner])))
                        "journal"
                        (= pid (some-> (load-decoded eng :journal id)
-                                      (get-in [:data :owner]))))))]
+                                      (get-in [:data :owner])))
+                       ;; the letter kind (waymark-tti.3) is TWO-PARTY:
+                       ;; yours as its author (data.owner) OR as its
+                       ;; recipient (data.to) — either end sees the
+                       ;; row; a third agent's foreign letter falls
+                       ;; out of :row? and 404s like any un-granted one
+                       "letter"
+                       (when-some [row (load-decoded eng :letter id)]
+                         (or (= pid (get-in row [:data :owner]))
+                             (= pid (get-in row [:data :to])))))))]
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
      :kind? (fn [kind]
               (let [k (name kind)]
                 (or (contains? surface k) (own-kind? k))))
+     ;; the honest KIND-LEVEL sight (waymark-tti.4 — presence's
+     ;; collection-frame widening, the intents widening and seasons'
+     ;; projection all consult THIS one closure): true only when SOME
+     ;; single scope entry admits the WHOLE kind, neither :ids nor
+     ;; :filter narrowing it. Deliberately NOT :kind? (which also
+     ;; answers for narrowed entries and the own-kinds courtesy
+     ;; surface) and never a :row?-sampling approximation — granted
+     ;; sight of SOME rows is not sight of the collection.
+     :whole-kind? (fn [kind] (contains? whole-kinds (name kind)))
      :row? (fn [kind id]
              (let [k (name kind)]
                (boolean
@@ -1102,7 +1170,17 @@
                                     (contains? #{"create" "update"
                                                  "retire" "restore"} a))
                                (and (= k "journal")
-                                    (contains? #{"create" "amend"} a)))))))
+                                    (contains? #{"create" "amend"} a))
+                               ;; the letter kind (waymark-tti.3): send,
+                               ;; open and discard — each is row-gated
+                               ;; to a row the principal SEES (own-row?
+                               ;; above), and the recipient guards
+                               ;; narrow open/discard further to the
+                               ;; addressee alone (a shelf with no
+                               ;; floor is a flood, so the recipient
+                               ;; keeps a broom of its own)
+                               (and (= k "letter")
+                                    (contains? #{"create" "open" "discard"} a)))))))
      :field? (fn [kind field]
                (let [k (name kind)]
                  (if-some [e (get surface k)]
@@ -1154,7 +1232,11 @@
                                   ;; the dwelling kinds: an agent's own
                                   ;; rows are the ones it owns (filterable
                                   ;; data.owner, pushed down as a cond)
-                                  ("self" "journal") {:owner pid})))))))}))
+                                  ("self" "journal") {:owner pid}
+                                  ;; a letter is yours from EITHER end
+                                  ;; (waymark-tti.3) — the vector unions
+                                  ;; the author and recipient branches
+                                  "letter" [{:owner pid} {:to pid}])))))))}))
 
 (defn bootstrap-visibility
   "The agent default (waymark-rci): a named agent that presents NO

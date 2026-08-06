@@ -88,7 +88,12 @@
               {:name "idempotency_key" :type "text" :ddl "idempotency_key text"}
               {:name "summary" :type "text" :ddl "summary text"}]
     :indexes {"ix_wm10_t_resource"
-              "CREATE INDEX IF NOT EXISTS ix_wm10_t_resource ON waymark10_transitions (kind, resource_id, id)"}}
+              "CREATE INDEX IF NOT EXISTS ix_wm10_t_resource ON waymark10_transitions (kind, resource_id, id)"
+              ;; the time axis (seasons, waymark-tti.2): transition-stats
+              ;; walks `at >= ?`, which the (kind, resource_id, id)
+              ;; index cannot serve
+              "ix_wm10_t_at"
+              "CREATE INDEX IF NOT EXISTS ix_wm10_t_at ON waymark10_transitions (at)"}}
    {:table "waymark10_idempotency"
     :columns [{:name "key" :type "text" :ddl "key text NOT NULL"}
               {:name "kind" :type "text" :ddl "kind text NOT NULL"}
@@ -403,6 +408,12 @@
                    " ORDER BY " (if-some [o (:order-by opts)]
                                   (store/definition-checked-name o)
                                   "created_at")
+                   ;; :newest-first — the LIMIT must bite the fresh
+                   ;; end of a long table, not its oldest rows (the
+                   ;; own-surface window, waymark-tti.3 L6). The
+                   ;; keyword is the caller's, never the client's, and
+                   ;; contributes no SQL text beyond this literal.
+                   (when (:newest-first opts) " DESC")
                    " LIMIT " (long (:limit opts 100)))]
       (mapv row->map (jdbc/execute! tx (into [sql] params) jdbc-opts))))
 
@@ -455,6 +466,30 @@
                    " LIMIT " (long (:limit opts 500)))]
       (mapv transition->map
             (jdbc/execute! tx (into [sql] (map second clauses)) jdbc-opts))))
+
+  (transition-stats [_ tx since include-system?]
+    ;; the double AT TIME ZONE round-trip pins the bucket to the UTC
+    ;; ISO week (store/utc-week-start's truncation) whatever the
+    ;; session TimeZone says — desired and memory-twin buckets must
+    ;; be the same instants
+    (let [sql (str "SELECT date_trunc('week', at AT TIME ZONE 'UTC')"
+                   " AT TIME ZONE 'UTC' AS week_start,"
+                   " kind, action, actor->>'type' AS actor_type,"
+                   " count(*) AS n"
+                   " FROM waymark10_transitions"
+                   " WHERE at >= ?"
+                   (when-not include-system?
+                     " AND coalesce(actor->>'type', '') <> 'system'")
+                   " GROUP BY 1, 2, 3, 4"
+                   " ORDER BY 1, 2, 3, 4")]
+      (mapv (fn [r]
+              {:week-start (->inst (:week_start r))
+               :kind (:kind r)
+               :action (:action r)
+               :actor-type (:actor_type r)
+               :n (long (:n r))})
+            (jdbc/execute! tx [sql (Timestamp/from ^java.time.Instant since)]
+                           jdbc-opts))))
 
   (idempotency-lookup [_ tx key kind]
     (when-some [r (jdbc/execute-one!

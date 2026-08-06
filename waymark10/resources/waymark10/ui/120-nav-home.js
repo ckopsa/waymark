@@ -223,10 +223,146 @@ async function renderHome(view, seq) {
                     : " connections are dark — sources have stopped answering.")));
       }).catch(() => {}));
 
+  /* the letter shelf (waymark-tti.3): a waiting letter meets its
+     recipient at the front door; opening happens on the row itself
+     (the generated open action), so each item just links there. The
+     shelf also carries the "leave a letter" door — the generated
+     create dialog; :to is typed as a raw member id for now. */
+  const letterHref = collectionHref(w, "letter");
+  const shelf = el("div", {class:"chips"});
+  strip.after(shelf);
+  if (letterHref && principalId())
+    settling.push(api(mergeParams(letterHref,
+                                  {to: principalId(), state: "waiting"}))
+      .then(({ok, body}) => {
+        if (!ok) return;
+        for (const it of (body.data?.items || [])) {
+          const f = it.fields || {};
+          attention.push(el("div", {class:"item"},
+            el("a", {href: "#" + it.self},
+              "a letter from " + (f.owner || "someone") + " waits"
+              + (f.title ? " — " + f.title : "") + ".")));
+        }
+        const create = body.actions?.create;
+        if (create) {
+          const btn = actionButton({name: "create", entry: create, doc: body,
+            label: "Leave a letter", small: true,
+            onDone: b => { if (b?.self) go(b.self); }});
+          shelf.append(btn);
+        }
+      }).catch(() => {}));
+
+  /* the weather panel (waymark-tti.1): today's sky per inhabitant and
+     a one-touch setter for the viewer's own. Rows are append-only —
+     the newest per owner wins, so a wrong tap is corrected by tapping
+     again; no report today is simply absent. meta.updated_at stands
+     in for created_at on the wire: a weather row is never edited. */
+  const skyDot = {quiet: "#4A6B8A", steady: "var(--verdigris)",
+                  loud: "var(--warn)"};
+  const weatherHref = collectionHref(w, "weather");
+  if (weatherHref) {
+    const box = el("div");
+    strip.after(box);
+    const fill = async () => {
+      let env;
+      try {
+        const r = await api(mergeParams(weatherHref,
+          {sort: "-created_at", "page[size]": "30"}));
+        if (!r.ok) return box.remove();   // degrade silently
+        env = r.body;
+      } catch { return box.remove(); }
+      const today = new Date().toDateString();
+      const latest = new Map();           // owner → its newest row TODAY
+      for (const it of env.data?.items || []) {
+        const o = it.fields?.owner, at = it.meta?.updated_at;
+        if (o && !latest.has(o) && at
+            && new Date(at).toDateString() === today)
+          latest.set(o, it.fields);
+      }
+      const create = env.actions?.create;
+      if (!latest.size && !create) return box.remove();
+      box.textContent = "";
+      box.append(el("h3", {class:"sect"}, "Weather"));
+      if (latest.size)
+        box.append(el("div", {class:"chips"}, [...latest].map(([o, f]) =>
+          el("span", {class:"chip static", title: f.note || ""},
+            el("span", {style: "color:" + (skyDot[f.sky] || "inherit")}, "● "),
+            `${o} — ${f.sky}`))));
+      /* one-touch: no owner in the body — the server stamps the caller */
+      if (create)
+        box.append(el("div", {class:"chips"},
+          ["quiet", "steady", "loud"].map(sky =>
+            el("button", {style: "font-size:12px;padding:3px 8px",
+                          onclick: async () => {
+              await api(create.href, {method: create.method || "POST",
+                                      body: JSON.stringify({sky})});
+              fill();                     // re-render this block only
+            }}, sky))));
+    };
+    settling.push(fill());
+  }
+
+  /* seasons (waymark-tti.2): the last weeks as a shape — the rhythm
+     door's weekly buckets as one compact line per moving kind (tiny
+     text bars scaled off completed counts, no chart machinery), and
+     the quietly aging kinds into the attention strip */
+  const seasons = el("div");
+  view.append(seasons);
+  settling.push(api("/api/-/seasons?weeks=4").then(({ok, body}) => {
+    if (!ok) { seasons.remove(); return; }           // degrade silently
+    const wks = body.weeks || [], aging = body.aging || [];
+    const rows = new Map();                          // kind → tallies
+    const of = kind => {
+      if (!rows.has(kind))
+        rows.set(kind, {bars: wks.map(() => 0), done: 0, fresh: 0});
+      return rows.get(kind);
+    };
+    wks.forEach((wk, i) => {
+      for (const [kind, c] of Object.entries(wk.kinds || {})) {
+        const t = of(kind);
+        t.bars[i] = c.completed || 0;
+        t.done += c.completed || 0;
+        t.fresh += c.created || 0;
+      }
+    });
+    const old = new Map(aging.map(a => [a.kind, a]));
+    for (const a of aging) of(a.kind);   // an aging-only kind still gets a line
+    if (!rows.size) { seasons.remove(); return; }
+    const glyphs = "▁▂▃▄▅▆▇";
+    seasons.append(el("h3", {class: "sect"}, "Seasons"));
+    for (const [kind, t] of rows) {
+      const max = Math.max(1, ...t.bars);
+      const spark = t.bars.map(n =>
+        glyphs[Math.round(n / max * (glyphs.length - 1))]).join("");
+      const a = old.get(kind);
+      const href = collectionHref(w, kind);
+      seasons.append(el("div", {},
+        href ? el("a", {href: "#" + href}, title(kind))
+             : el("span", {}, title(kind)),
+        " ",
+        el("span", {class: "mono", title: "completed per week"}, spark),
+        " ",
+        el("span", {class: "mono"},
+          `${t.done} done / ${t.fresh} new`
+          + (a ? ` · ${a.open_older_than_14d} aging (oldest ${a.oldest_days}d)`
+               : ""))));
+    }
+    for (const a of aging) {
+      if (!(a.open_older_than_14d > 0)) continue;
+      const href = collectionHref(w, a.kind);
+      attention.push(el("div", {class: "item"},
+        el("a", href ? {href: "#" + href} : {},
+          el("span", {class: "mono"}, String(a.open_older_than_14d)),
+          ` ${title(a.kind).toLowerCase()}${a.open_older_than_14d === 1 ? "" : "s"}`
+          + ` open for over two weeks (oldest ${a.oldest_days}d).`)));
+    }
+  }).catch(() => { seasons.remove(); }));
+
   await Promise.allSettled(settling);
   if (seq !== renderSeq) return;
   if (attention.length) strip.append(el("div", {class:"attention"}, attention));
   else strip.remove();
+  if (!shelf.childNodes.length) shelf.remove();
 
   const chipRow = (label, list) => {
     if (!list.length) return;

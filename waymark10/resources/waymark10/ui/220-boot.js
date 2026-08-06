@@ -60,6 +60,11 @@ sse("/api/-/presence", ({event, data: f}) => {
   }
 });
 async function presenceBeat() {
+  /* the curtain (wm10.curtain, set by the toggle below): a drawn
+     curtain stops the client beating as COURTESY traffic reduction
+     only — the SERVER's suppression (presence.clj, the member row's
+     :curtain) is the law, and holds for clients that ignore this */
+  if (localStorage.getItem("wm10.curtain")) return;
   const here = hereHref();
   if (!principalId() || !here.startsWith("/api/")) return;
   try {
@@ -72,6 +77,100 @@ async function presenceBeat() {
 setInterval(presenceBeat, 10000);
 window.addEventListener("hashchange", presenceBeat);
 presenceBeat();
+
+/* ── the curtain toggle (waymark-tti.4): one press by your own
+   identity draws/opens YOUR member row's curtain through the normal
+   action path (POST /api/members/<id>/-/draw_curtain|open_curtain —
+   the server is the law).
+
+   THE CHIP'S TRUTH IS THE ROW, never this browser: the curtain can be
+   drawn from another device, another client, or the household's
+   recovery-admin valve, so we READ the member row on boot, on an
+   identity switch and after every toggle, and paint from that. The
+   localStorage flag is DERIVED from what we read and keeps its old
+   job — quieting the beat above, courtesy only, never the law. When
+   the row cannot be read we paint nothing: a chip that guesses about
+   a privacy switch is worse than a blank one. ───────────────────── */
+const $curtain = $("#curtainbtn");
+function curtainId() {
+  return principalId()
+      || (window.signedinPrincipal && window.signedinPrincipal.id) || "";
+}
+function curtainChip(drawn) {
+  if (drawn !== true && drawn !== false) {   /* unknown: do not guess */
+    $curtain.textContent = "⛨ ?";
+    $curtain.removeAttribute("aria-pressed");
+    $curtain.title = "the house did not say whether your curtain is drawn"
+                   + " — click to ask again";
+    return;
+  }
+  $curtain.textContent = drawn ? "⛨ curtained" : "⛨";
+  $curtain.setAttribute("aria-pressed", String(drawn));
+  $curtain.title = drawn
+    ? "your curtain is drawn — the house stops publishing your presence."
+      + " Drawing it is itself visible, like curtains seen from the street."
+      + " Click to open"
+    : "draw your presence curtain — the house stops publishing where you look";
+}
+/* MY member row, whatever it is called: /api/members/<principal id>
+   when the row id IS the principal id (provision!'s shape), else the
+   row a :bind wrote — whose id is a minted uuid, NOT the principal id,
+   so the by-id read 404s. That 404 used to end the story and a bound
+   member's chip sat at "⛨ ?" forever, its toggle posting to a row that
+   does not exist. members?subject= is the same second resolution the
+   server does (gate!, followRequester above); the href it hands back
+   is what both the read and the toggle must use.
+   → {href, body} | null when the house cannot say */
+async function curtainRow() {
+  const me = curtainId();
+  if (!me) return null;
+  const byId = `/api/members/${encodeURIComponent(me)}`;
+  try {
+    const r = await api(byId);
+    if (r.ok) return {href: byId, body: r.body};
+    if (r.status !== 404) return null;
+    const col = await api(`/api/members?subject=${encodeURIComponent(me)}`);
+    const hit = (col.ok && (col.body.data?.items || [])[0]) || null;
+    if (!hit || !hit.self) return null;
+    const env = await api(hit.self);
+    return env.ok ? {href: hit.self, body: env.body} : null;
+  } catch (_e) { return null; }   /* engine restarting, or offline */
+}
+/* → true | false from the member row, null when it cannot be read */
+function curtainDrawn(row) {
+  if (!row) return null;
+  const drawn = !!(row.body && row.body.data && row.body.data.curtain === true);
+  if (drawn) localStorage.setItem("wm10.curtain", "1");
+  else localStorage.removeItem("wm10.curtain");
+  return drawn;
+}
+async function curtainState() { return curtainDrawn(await curtainRow()); }
+async function refreshCurtain() { curtainChip(await curtainState()); }
+$curtain.addEventListener("click", async () => {
+  const me = curtainId();
+  if (!me) { toast("no principal — set an identity first"); return; }
+  const row = await curtainRow();
+  const drawn = curtainDrawn(row);
+  if (drawn === null) {
+    curtainChip(null);
+    toast("could not read your curtain — nothing was changed");
+    return;
+  }
+  const act = drawn ? "open_curtain" : "draw_curtain";
+  try {
+    const {ok, status} = await api(`${row.href}/-/${act}`, {method: "POST"});
+    if (!ok) toast(`${act.replace("_", " ")} refused (${status})`);
+  } catch (_e) {
+    toast(`${act.replace("_", " ")} failed — the house did not answer`);
+  }
+  /* whatever the click hoped, the ROW says what happened */
+  const now = await curtainState();
+  curtainChip(now);
+  if (now === false) presenceBeat();   /* opened: announce yourself again now */
+});
+/* a dev-box identity switch is a different person's curtain */
+$("#who").addEventListener("change", refreshCurtain);
+refreshCurtain();
 
 /* ── intents: the considering/asking stream (GET /api/-/intents,
    ephemeral like presence — never law). An agent's dry-run arrives as

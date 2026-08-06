@@ -13,6 +13,7 @@
             [next.jdbc :as jdbc]
             [waymark10.fixtures :as fx]
             [waymark10.server.engine :as engine]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
@@ -224,3 +225,152 @@
                                             nil admin))
                              [:data :provenance]))
           "provenance is untouched — no edit path can forge a durable identity"))))
+
+;; ── the gate heals what it finds (waymark-tti.10) ────────────────────
+;;
+;; provision! stamps the rows it MINTS; a row that predates the stamp
+;; had no door to gain one (:bind is :from #{:invited} and stays
+;; there), so letters' deliverability read a real inhabitant as
+;; nobody. The gate now stamps what it FINDS — but ONLY the by-id
+;; branch, only :active, only once, and never at the cost of a
+;; request.
+
+(defn- member-row [id]
+  (store/with-tx (:storage *eng*)
+    (fn [tx] (store/load-row (:storage *eng*) tx :member id {}))))
+
+(defn- member-transitions [id]
+  (store/with-tx (:storage *eng*)
+    (fn [tx] (store/transitions (:storage *eng*) tx
+                                {:kind :member :resource-id id} {}))))
+
+(defn- legacy-row!
+  "The roster row as prod holds them: :active, minted with an explicit
+  id, and NO :subject — the shape a human's hand-added member wears,
+  and the shape every first-sight row wore before provision! stamped
+  itself. Created straight through the engine because no door mints
+  one any more."
+  [id display]
+  (inv/create! *eng* :member {:display display :actor_type "human"}
+               {:principal members/registrar :id id})
+  (is (nil? (get-in (member-row id) [:data :subject]))
+      "the fixture starts unstamped, or it proves nothing")
+  id)
+
+(deftest gate-heals-a-legacy-active-row-once
+  (let [id (legacy-row! "legacy-colton" "Legacy Colton")]
+    (testing "first sight stamps the subject — the row's own id, which IS
+              the principal id that resolved it; the write is the
+              registrar's, through the engine, and audited"
+      (is (= 200 (:status (default :get "/api/meals" nil (headers-for id)))))
+      (is (= id (get-in (member-row id) [:data :subject])))
+      (let [stamp (first (filter #(= :stamp_subject (:action %))
+                                 (member-transitions id)))]
+        (is (some? stamp) "the heal is a transition, not a silent write")
+        (is (= (:id members/registrar) (get-in stamp [:actor :id])))))
+    (testing "and it never writes again — gate! runs on EVERY request, so a
+              per-request write would be the regression this must not be"
+      (let [before (count (member-transitions id))
+            version (:version (member-row id))]
+        (dotimes [_ 3]
+          (is (= 200 (:status (default :get "/api/meals" nil (headers-for id))))))
+        (is (= before (count (member-transitions id)))
+            "three more requests, not one more transition")
+        (is (= version (:version (member-row id)))
+            "…and not one more row version")))))
+
+(deftest the-heal-is-the-gates-alone-never-a-hand
+  ;; :stamp_subject wears registrar-binds, the guard :bind wears: system
+  ;; principals only, :hide true. So it is not an affordance anyone can
+  ;; see or spend — a human, and a human wearing recovery-admin, meet
+  ;; the same 404 the concealed :bind gives.
+  (let [id (legacy-row! "conceal-probe" "Conceal Probe")
+        env (json (default :get (str "/api/members/" id) nil (headers-for "root")))]
+    (is (= "active" (:state env)))
+    (is (not (contains? (:actions env) :stamp_subject))
+        "absent from the envelope's actions")
+    (is (not (contains? (:unavailable env) :stamp_subject))
+        "…and absent from unavailable too: concealed, not refused")
+    (is (= 404 (:status (default :post (str "/api/members/" id "/-/stamp_subject")
+                                 nil (headers-for "root")))))
+    (is (= 404 (:status (default :post (str "/api/members/" id "/-/stamp_subject")
+                                 nil (headers-for "root"
+                                                  {"x-waymark-roles" "recovery-admin"}))))
+        "the household's recovery lever is not a door onto identity either")
+    (is (nil? (get-in (member-row id) [:data :subject]))
+        "and nothing was written by either attempt")))
+
+(deftest the-gate-does-not-heal-an-invited-row
+  ;; an :invited row's subject belongs to the BINDING, which spends a
+  ;; token; a heal there would weld an invitation to a principal that
+  ;; never presented one
+  (let [mid (invite! "Heal Invitee" "tok-heal-inv-01" nil)]
+    (is (= 200 (:status (default :get "/api/meals" nil (headers-for mid))))
+        "a principal whose id IS the invited row's resolves BY ID")
+    (let [row (member-row mid)]
+      (is (= :invited (:state row)) "still invited")
+      (is (nil? (get-in row [:data :subject])) "still unbound")
+      (is (empty? (filter #(= :stamp_subject (:action %))
+                          (member-transitions mid)))))))
+
+(deftest a-row-resolved-by-subject-is-untouched
+  ;; a bound row already answers the deliverability question, and its
+  ;; subject is the PRINCIPAL's id, not the row's — a heal that ran here
+  ;; would overwrite a real binding with the row's uuid
+  (let [mid (invite! "Bound Bea" "tok-heal-bound-01" nil)]
+    (is (= 200 (:status (default :get "/api/meals" nil
+                                 (headers-for "bea-oidc-sub"
+                                              {"x-waymark-invite" "tok-heal-bound-01"})))))
+    (let [before (count (member-transitions mid))]
+      (is (= 200 (:status (default :get "/api/meals" nil
+                                   (headers-for "bea-oidc-sub")))))
+      (is (= "bea-oidc-sub" (get-in (member-row mid) [:data :subject]))
+          "the binding stands; the row id never overwrote it")
+      (is (= before (count (member-transitions mid)))))))
+
+(deftest a-phantom-row-is-never-healed
+  ;; an engine uuid no principal answers to: gate! resolves to it by
+  ;; neither id nor subject, so the heal never sees it. It stays
+  ;; unaddressable at the letters door, which is the truth about it —
+  ;; nobody is there to open the mail.
+  (let [phantom (legacy-row! (str (random-uuid)) "Phantom Roster Row")]
+    (is (= 200 (:status (default :get "/api/meals" nil
+                                 (headers-for "someone-else-entirely")))))
+    (is (nil? (get-in (member-row phantom) [:data :subject])))
+    (is (= 1 (count (member-transitions phantom)))
+        "its create, and nothing since")))
+
+(deftest a-suspended-row-waits-for-its-reinstate
+  ;; the decision, recorded: a suspended row is NOT healed. It is
+  ;; refused 403 one line after the gate resolves it, so the write
+  ;; would buy nothing on a request that goes nowhere — and the
+  ;; reinstate is followed by a sign-in, which heals it then.
+  (let [id (legacy-row! "legacy-suspended" "Legacy Suspended")]
+    (is (= 200 (:status (default :post (str "/api/members/" id "/-/suspend")
+                                 nil admin))))
+    (let [resp (default :get "/api/meals" nil (headers-for id))]
+      (is (= 403 (:status resp)))
+      (is (str/ends-with? (str (:type (json resp))) "member-suspended")))
+    (is (nil? (get-in (member-row id) [:data :subject]))
+        "refused, and unwritten")
+    (is (= 200 (:status (default :post (str "/api/members/" id "/-/reinstate")
+                                 nil admin))))
+    (is (= 200 (:status (default :get "/api/meals" nil (headers-for id)))))
+    (is (= id (get-in (member-row id) [:data :subject]))
+        "the next sight after the reinstate heals it")))
+
+(deftest a-failed-stamp-never-refuses-the-request
+  ;; the heal is REPAIR, not authentication: whatever goes wrong in it,
+  ;; the request proceeds exactly as it does today, with one *err* line
+  (let [id (legacy-row! "heal-throws" "Heal Throws")
+        err (java.io.StringWriter.)]
+    (binding [*err* err]
+      (with-redefs [inv/invoke! (fn [& _] (throw (ex-info "the store said no" {})))]
+        (is (= 200 (:status (default :get "/api/meals" nil (headers-for id))))
+            "the stamp threw; the request still authenticated")))
+    (is (str/includes? (str err) id) "and warned, naming the row")
+    (is (nil? (get-in (member-row id) [:data :subject]))
+        "nothing was written")
+    (testing "the next request heals it — an unhealed row is not a stuck one"
+      (is (= 200 (:status (default :get "/api/meals" nil (headers-for id)))))
+      (is (= id (get-in (member-row id) [:data :subject]))))))

@@ -35,6 +35,26 @@
     absent (the default)       → auto-provisioned on first sight, as
                                  before (a logged system-actor create)
 
+  ── the gate heals what it finds (waymark-tti.10) ───────────────────
+
+  provision! stamps a minted row's :subject with its own id, which is
+  what lets a reader outside this file (workqueue10's letters door)
+  ask 'does a principal answer to this row?' without re-deriving the
+  birth paths. But it only stamps what it MINTS: an :active row that
+  predates the stamp — someone a human added to the roster by hand,
+  a legacy first-sight row — had no door to gain one, because :bind
+  is :from #{:invited} and must stay there. So the GATE stamps what
+  it FINDS: when a principal resolves to a row BY ID and that row's
+  :subject is blank, the concealed registrar :stamp_subject writes
+  the row's own id. Resolving by id IS the proof of the fact being
+  recorded — the row id is the principal id — so the write is a
+  semantic no-op that makes a true thing readable. Only the by-id
+  branch, only :active, only when blank (so it fires once in a row's
+  life, never per request), and never fatal: a failed stamp warns and
+  the request proceeds. A PHANTOM row (an id no principal answers to)
+  is resolved by no branch, so it is never healed — correctly, since
+  nobody is there.
+
   ── re-entry: the homecoming credential (waymark-4zj.8) ─────────────
 
   An ACTIVE agent member whose durable credential is unreachable can
@@ -359,6 +379,64 @@
         (t/allow))
       (t/allow))))
 
+;; ── the presence curtain (waymark-tti.4) ────────────────────────────
+
+;; the curtain is your own hand: drawing or opening a presence
+;; curtain is SELF-SERVICE — the caller must BE the member row (its
+;; principal id is the row's id, or the subject a :bind wrote:
+;; gate!'s own two resolutions, so a bound member is not locked out
+;; of its own curtain). One valve: a recovery-admin HUMAN may also
+;; draw or open (the household recovery lever — e.g. a member whose
+;; only client is wedged BEHIND its curtain), with the role AND the
+;; type both read from the admin's own durable MEMBER ROW, never the
+;; token (the reentry-minters precedent: an absent actor_type claim
+;; fails open toward :human, so a claim is no wall on a privacy
+;; switch). :system principals are refused even wearing the role —
+;; the engine's own actors must not reach through a member's privacy
+;; switch: a system path would be one ctx :invoke away from any
+;; handler. Not hidden: a stranger's refusal should read as an
+;; honest no, and absence from the presence board stays legible as
+;; "curtained or away — the member row says which".
+(g/defguard curtain-is-your-own-hand
+  {:reads [:principal :member]
+   :explain "The curtain is its member's own to draw or open; only that member themself (or a recovery-admin human, the household valve) may touch it."}
+  [row _inp ctx]
+  (let [p (:principal ctx)
+        pid (:id p)
+        read' (:read ctx)
+        find' (:find ctx)]
+    (cond
+      ;; never the engine's own actors, whatever roles they carry —
+      ;; and judged FIRST, so a system principal whose id happens to
+      ;; collide with a member row id gains nothing from the
+      ;; own-hand branch below
+      (= :system (:type p)) (t/deny)
+      ;; your own row: by id, or by the subject a binding wrote
+      (and (some? pid)
+           (or (= pid (:id row))
+               (= pid (get-in row [:data :subject])))) (t/allow)
+      ;; the pure render probe carries no read hooks — advertise
+      ;; optimistically there (reentry-minters' precedent); the real
+      ;; invoke, which DOES carry them, is the wall
+      (or (nil? read') (nil? find')) (t/allow)
+      :else
+      ;; the recovery valve: role + type from the caller's own
+      ;; durable member row (by id, or by bound subject)
+      (let [own (or (read' :member pid)
+                    (first (find' :member {:subject pid} {:limit 1})))]
+        (if (and own
+                 (= "human" (get-in own [:data :actor_type]))
+                 (contains? (set (get-in own [:data :roles]))
+                            "recovery-admin"))
+          (t/allow)
+          (t/deny))))))
+
+(defhandler draw-curtain [row _inp _ctx]
+  (assoc-in row [:data :curtain] true))
+
+(defhandler open-curtain [row _inp _ctx]
+  (assoc-in row [:data :curtain] false))
+
 (defhandler set-reentry [row inp ctx]
   ;; re-minting overwrites: at most ONE live re-entry credential per
   ;; member — the prior token dies the moment a fresh one lands
@@ -377,6 +455,19 @@
 
 (defhandler set-subject [row inp _ctx]
   (assoc-in row [:data :subject] (:subject inp)))
+
+;; the gate's heal (waymark-tti.10): the same stamp provision! makes at
+;; birth, reachable for a row that PREDATES it. It takes NO INPUT on
+;; purpose — the value written is the row's OWN id, never a caller's
+;; word — which makes this handler strictly narrower than set-subject
+;; (whose subject comes from the principal presenting a token): there
+;; is no spelling of this action, by any actor, that writes a FOREIGN
+;; subject. Semantically a no-op, exactly as provision!'s stamp is:
+;; gate! reaches it only for a row it resolved BY ID, where the row id
+;; already IS the principal id, so the write records a fact that was
+;; already true and makes it readable outside this namespace.
+(defhandler stamp-own-subject [row _inp _ctx]
+  (assoc-in row [:data :subject] (:id row)))
 
 (defhandler set-handle [row inp _ctx]
   (assoc-in row [:data :handle] (:handle inp)))
@@ -417,6 +508,26 @@
             ;; hand. Durable? ≡ provenance == "idp".
             [:provenance {:optional true :x-display {:raw true}}
              [:enum "idp" "invite" "knock"]]
+            ;; the presence curtain (waymark-tti.4): a durable,
+            ;; self-service "do not publish my presence". The durable
+            ;; promise is read by ONE component (server/curtain.clj)
+            ;; and honored at PUBLISH time by every ephemeral door
+            ;; that could name you: presence's three reporting doors
+            ;; (report!, read!, stream-open!/closed!), its snapshot,
+            ;; its heartbeat re-assertion and its sweep; and the
+            ;; intents stream — report!, its snapshot, its
+            ;; re-assertion, and answer!, where a curtained answerer's
+            ;; ANSWER still lands (answering is a legible act) with
+            ;; its :by omitted, so the resolution is public and the
+            ;; answerer is not. A visible FIELD and not :secret on purpose: the
+            ;; whole point is that the no is legible state ("curtained,
+            ;; not away"), never a silent disappearance. Absent = open.
+            ;; Written by :draw_curtain/:open_curtain under the
+            ;; own-hand guard; a create may pre-draw its own (privacy
+            ;; only ever increases by hand), and no edit door exists on
+            ;; this kind to flip another's off.
+            [:curtain {:optional true :x-display {:raw true}}
+             [:maybe :boolean]]
             [:roles {:optional true}
              [:vector [:string {:min 1 :max 40}]]]
             ;; the invite's credential: presented once (X-Waymark-Invite)
@@ -491,6 +602,37 @@
                     :one-way "Binding welds the invitation to the principal that presented its token; a different account is a fresh invite."}
            :handler set-subject
            :display {:label "Bind" :order 5}}
+    ;; the gate's heal (waymark-tti.10). :bind cannot do this work —
+    ;; it is :from #{:invited} by design (that from-set IS how a token
+    ;; is spent exactly once) and must not be widened — so a
+    ;; pre-existing :active row with no :subject had no door at all,
+    ;; and letters' deliverability read it as nobody. This is that
+    ;; door, and it is the identity gate's ALONE:
+    ;;   • registrar-binds, the SAME guard :bind wears — system
+    ;;     principals only, and :hide true, so the action is concealed
+    ;;     from every wire affordance (absent from :actions AND from
+    ;;     :unavailable) and answers 404 to a POST by hand. A human,
+    ;;     an agent, a recovery-admin: all 404. Exactly the
+    ;;     bind/spend_reentry posture.
+    ;;   • no :input, so the handler writes the row's own id and
+    ;;     nothing else — even the registrar cannot stamp a foreign
+    ;;     subject here. Not :record for the same reason it has no
+    ;;     input (resource.clj refuses :record without one); the
+    ;;     transition row — registrar, action, when — IS the audit.
+    ;; :from #{:active} deliberately: an :invited row's subject is the
+    ;; binding's to write (a heal there would spend the invite without
+    ;; the token), and a SUSPENDED row is refused 403 one line after
+    ;; the gate resolves it — writing on a refused request buys
+    ;; nothing, and a reinstate is followed by a sign-in that heals it
+    ;; then. Idempotent because the gate only calls it on a BLANK
+    ;; subject; :idempotent true so the machine's natural replay is a
+    ;; second wall under a race.
+    :stamp_subject {:from #{:active} :to :active
+                    :guards [registrar-binds]
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "The stamp records a fact already true — this row's id IS its principal's; there is no un-stamp, and none is wanted."}
+                    :handler stamp-own-subject
+                    :display {:label "Stamp subject" :order 10}}
     :assign_roles {:from #{:active} :to :active
                    :input [:map [:roles [:vector [:string {:min 1 :max 40}]]]]
                    :record true
@@ -514,6 +656,22 @@
                  :safety {:idempotent true :reversible true :confirm false}
                  :handler set-handle
                  :display {:label "Set handle" :order 3}}
+    ;; the presence curtain's two touches (waymark-tti.4):
+    ;; self-service, durable, one press each way. No :input on
+    ;; purpose — and therefore no :record (resource.clj refuses
+    ;; :record without :input): the transition rows themselves are
+    ;; the audit that a curtain was drawn or opened, by whom, when —
+    ;; and nothing more. NO gaze history rides this kind, by design.
+    :draw_curtain {:from #{:active} :to :active
+                   :guards [curtain-is-your-own-hand]
+                   :safety {:idempotent true :reversible true :confirm false}
+                   :handler draw-curtain
+                   :display {:label "Draw curtain" :order 7}}
+    :open_curtain {:from #{:active} :to :active
+                   :guards [curtain-is-your-own-hand]
+                   :safety {:idempotent true :reversible true :confirm false}
+                   :handler open-curtain
+                   :display {:label "Open curtain" :order 8}}
     ;; the homecoming mint (waymark-4zj.8). The token is
     ;; MINTER-SUPPLIED, the bind_token precedent: the row render
     ;; conceals :secret fields, so the engine could never hand a
@@ -587,6 +745,14 @@
                            "here is invited — ask an administrator for an "
                            "invitation.")}))
 
+(defn- warn!
+  "One *err* line (the presence/collab idiom). Nothing in the identity
+  gate may take a request down: what fails here is repair, not
+  authentication."
+  [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 members: " parts))))
+
 (defn- load-member [eng id]
   (store/with-tx (:storage eng)
     (fn [tx] (store/load-row (:storage eng) tx :member id {}))))
@@ -617,7 +783,11 @@
   window): the ACTIVE member a presented token names — but only when
   the row bound to ITSELF, the credential-less door's own signature;
   a header-bound agent's spent token re-admits nobody, its principal
-  lives elsewhere. Whether re-entry is WELCOME is the standing
+  lives elsewhere. (Self-bound is no longer that signature ON ITS OWN:
+  provision! stamps a first-sight row with its own id too, for
+  letters' deliverability. The BIND TOKEN is what still separates
+  them — a provisioned row never carries one, so it is never a
+  candidate here.) Whether re-entry is WELCOME is the standing
   grant's question, not this one's. nil is the same 404 as a spent
   link."
   [eng token]
@@ -743,7 +913,19 @@
 
 (defn- provision!
   "First sight: mint the member through the engine — system actor,
-  logged like any create. A losing race reloads the winner's row."
+  logged like any create. A losing race reloads the winner's row.
+
+  The row is stamped with its own :subject. Semantically that is a
+  no-op — the row id IS the principal id here, which is why gate!
+  finds it by id forever after — but it makes ONE question decidable
+  from the row alone: does a principal answer to this row? A reader
+  outside this namespace (workqueue10's letters door, which must
+  refuse mail no principal could ever open) could otherwise only
+  GUESS, and its guess was \"any row that is not :invited\" — which
+  quietly minted permanent, unopenable mail for every roster row a
+  human added by hand. Subject-present now means deliverable, in
+  every namespace, without any of them re-deriving this file's
+  birth paths."
   [eng principal]
   (try
     (:row (inv/create! eng :member
@@ -752,10 +934,61 @@
                                    ;; the declared budget, not a 422 on
                                    ;; every request an IdP's long name makes
                                    (subs d 0 (min (count d) 80)))
-                        :actor_type (name (:type principal))}
+                        :actor_type (name (:type principal))
+                        :subject (:id principal)}
                        {:principal registrar :id (:id principal)}))
     (catch Exception e
       (or (load-member eng (:id principal)) (throw e)))))
+
+(defn- heal-subject!
+  "The gate's heal (waymark-tti.10): a row the gate resolved BY ID
+  whose :subject is blank gains one — its own id, which is the
+  principal id, or the lookup that found it could not have matched.
+  provision! stamps what it MINTS; this stamps what it FINDS, on the
+  same reasoning and by the same actor, so a row that predates the
+  stamp stops reading as 'nobody answers to this' at the letters door.
+
+  Only the BY-ID branch calls this, and only for an :active row:
+    • a row found by SUBJECT already carries one, by definition;
+    • an :invited row's subject belongs to the binding, which spends a
+      token — the gate must never write it without one;
+    • a PHANTOM row (an engine uuid no principal answers to) is never
+      resolved by id at all, so it is never touched: it stays
+      unaddressable, which is the truth about it.
+
+  A row still holding a BIND_TOKEN is left alone too, and the reason
+  is re-enterable-by-token: that lookup admits an :active row whose
+  token matches AND whose subject is its own id, so healing a
+  token-bearing row would have MADE it a re-entry candidate — a
+  widening of a credential door by a repair pass, which is exactly
+  the shape a repair pass must never have. No live path produces such
+  a row (an :active row that carries a token was bound, and every
+  bind writes a subject), so nothing legitimate is refused here; a
+  hand-edited one wants a human's eye, not an automatic stamp.
+
+  Cheap and idempotent: the guard is the blank subject itself, so a
+  healed row never writes again — gate! runs on EVERY request and a
+  per-request write would be a regression. (:stamp_subject is declared
+  idempotent too, so the machine's natural replay is a second wall if
+  two requests race the same blank row.)
+
+  Failure is NEVER fatal: the stamp is repair, not authentication. A
+  refusal, a lost connection, a row someone suspended in between — all
+  warn on *err* and hand back the row unchanged, and the request
+  proceeds exactly as it does today."
+  [eng row]
+  (if (and (= :active (:state row))
+           (str/blank? (str (get-in row [:data :subject])))
+           (str/blank? (str (get-in row [:data :bind_token]))))
+    (try
+      (inv/invoke! eng :member (:id row) :stamp_subject nil
+                   {:principal registrar})
+      (assoc-in row [:data :subject] (:id row))
+      (catch Exception e
+        (warn! "subject stamp failed for member " (pr-str (:id row))
+               " — " (ex-message e) "; the request proceeds unhealed")
+        row))
+    row))
 
 (def knock-shelf-cap
   "Unclaimed self-requested invitations that may stand at once — the
@@ -931,7 +1164,13 @@
   by binding a presented invite token, or (default mode only) by
   auto-provision — is refused 403 while suspended or (invited-only
   mode) unknown, and carries the member's held roles unioned onto the
-  credential's. Engines without the member kind gate nothing."
+  credential's. Engines without the member kind gate nothing.
+
+  The gate also HEALS what it finds (waymark-tti.10): an :active row
+  resolved BY ID with no :subject gains one — its own id — so a row
+  that predates provision!'s stamp becomes readable as a real
+  principal's. See heal-subject!; it never writes twice, and its
+  failure never refuses a request."
   ([eng principal] (gate! eng principal nil))
   ([eng principal invite-token]
    (if (or (nil? principal)
@@ -940,7 +1179,12 @@
            (nil? (get (inv/resources eng) :member)))
      principal
      (let [invited-only? (= :invited-only (:members eng))
-           row (or (load-member eng (:id principal))
+           ;; by id FIRST, and the by-id branch alone heals a blank
+           ;; :subject (heal-subject!, waymark-tti.10) — resolving by
+           ;; id is itself the proof that this row's id is a principal
+           ;; id, which is the only fact the stamp records
+           row (or (some->> (load-member eng (:id principal))
+                            (heal-subject! eng))
                    (member-by-subject eng (:id principal))
                    (bind! eng principal invite-token)
                    (when-not invited-only? (provision! eng principal)))]
@@ -975,11 +1219,15 @@
   a planted self would poison the classifier and mis-propose a hollow
   guest as durable. The signals instead:
 
-    • never bound to a subject, and no invite/knock origin (no
-      invited_by, no bind_token) → \"idp\"  (durable — a first-sight /
-      admin-minted IdP identity)
-    • self-bound (subject == its own id — the :bind signature of a
-      knock or a self-claimed invite): a guest. invited_by == the
+    • no invite/knock origin (no invited_by, no bind_token) and no
+      FOREIGN subject — the field is either absent (every row that
+      predates this) or the row's own id (provision!'s deliverability
+      stamp, which is not a bind) → \"idp\"  (durable — a first-sight
+      / admin-minted IdP identity)
+    • self-bound WITH a credential origin (subject == its own id — the
+      :bind signature of a knock or a self-claimed invite; the
+      origin-less spelling was already claimed by the rule above, so
+      provision!'s stamp never lands here): a guest. invited_by == the
       registrar tells a self-service knock from an admin's invite; where
       the origin is post-hoc indistinguishable, the guest defaults to
       \"invite\" (noted in :because — a reviewer can promote it).
@@ -1005,9 +1253,18 @@
              self-invited? (= invited-by (:id registrar))
              subject-is-self? (boolean (and subject (= subject id)))
              provenance (cond
-                          ;; never bound, no invite/knock credential
-                          ;; origin → a durable IdP identity
-                          (and (nil? subject) (nil? invited-by)
+                          ;; no invite/knock credential origin → a
+                          ;; durable IdP identity. The subject is
+                          ;; nil on every row that predates the
+                          ;; backfill and equal to the row's OWN id
+                          ;; on one provision! minted since (the
+                          ;; letters-deliverability stamp; it is not
+                          ;; a bind and must not read as one) —
+                          ;; either way the ORIGIN fields are what
+                          ;; separate a durable identity from a
+                          ;; guest, and a guest always carries one
+                          (and (or (nil? subject) (= subject id))
+                               (nil? invited-by)
                                (not bind-token?)) "idp"
                           ;; self-bound (subject == its own id): a guest;
                           ;; the registrar inviter tells knock from

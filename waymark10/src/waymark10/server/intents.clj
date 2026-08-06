@@ -53,6 +53,22 @@
   who gets to watch is the grant's). Answering a concealed intent is
   the same 404 as answering none.
 
+  THE CURTAIN (waymark-tti.4, closed by the skeptic's F1): an intent
+  frame names its principal exactly as a presence frame does —
+  {principal, self, action} IS presence-of-intent — so the curtain
+  binds here too, through the SAME shared component presence reads
+  (server/curtain.clj: one member-row read, one cache, one
+  invalidation wire). A curtained principal's report is ACCEPTED and
+  publishes NOTHING: nothing stored, nothing notified, so no process
+  ever holds the card — and the dry-run or confirm that occasioned it
+  still runs untouched, because the curtain suppresses the
+  ANNOUNCEMENT, never the work. merged-view and snapshot filter
+  curtained principals as belt and braces, and a draw closes the
+  cards already dealt (the invalidation's watcher re-publishes at
+  once; the TTL sweep is the backstop). The ANSWER door is
+  deliberately unshaded: answering is an act on someone else's card,
+  legible like the curtain transition itself.
+
   CROSS-PROCESS: every local report notifies {origin, id, entry};
   each process re-asserts its live local entries every
   :intents-heartbeat-ms and evicts a remote entry silent for three
@@ -82,6 +98,7 @@
   (:require [clojure.string :as str]
             [next.jdbc :as jdbc]
             [org.httpkit.server :as http]
+            [waymark10.server.curtain :as curtain]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
@@ -178,13 +195,67 @@
         (warn! "subscriber queue full; dropping a frame — the snapshot"
                " on reconnect is the recovery")))))
 
+;; ── the curtain (waymark-tti.4) ─────────────────────────────────────
+
+(defn- curtained?
+  "This principal's curtain, through the shared component (one cache
+  for presence and intents both)."
+  [reg pid]
+  (curtain/curtained? (:curtain reg) pid))
+
+(defn- curtain-view
+  "The curtain verdict for every principal this publish round could
+  name — resolved BEFORE the lock, because a cache miss reads the
+  store and a store read under (:lock reg) would park every door
+  behind the database (presence's F5 discipline, same shape). A
+  principal absent from the map falls back to the warm cache and,
+  past that, reads as CURTAINED downstream: fail closed, and the next
+  publish corrects the rare race."
+  ([reg] (curtain-view reg nil))
+  ([reg also]
+   (curtain/verdicts
+    (:curtain reg)
+    (concat also
+            (keep (fn [[_ {:keys [entry]}]] (get-in entry [:principal :id]))
+                  @(:local reg))
+            (keep (fn [[_ e]] (get-in e [:principal :id]))
+                  @(:published reg))
+            (for [[_ entries] @(:remotes reg)
+                  [_ {:keys [entry]}] entries]
+              (get-in entry [:principal :id])))
+    false)))
+
+(defn- verdict
+  "One principal's curtain INSIDE a publish round: the prefetched
+  view first, and for a principal the view could not have named — one
+  whose card arrived during the prefetch→lock window, so it was in
+  none of the maps curtain-view walked — this process's already-warmed
+  cache (curtain/cached-verdict: a deref, no store read, safe under
+  the lock; the reporting thread's own door filled it). Only a
+  principal this process has never asked about reads as curtained,
+  which is the fail-closed answer we want; a KNOWN-open one no longer
+  has its card closed by the race (presence carried the same bug, and
+  the same fix)."
+  [reg cv pid]
+  (if (contains? cv pid)
+    (get cv pid)
+    (curtain/cached-verdict (:curtain reg) pid true)))
+
 (defn- merged-view
   "The one truth: per intent id, the freshest entry across this
-  process's unexpired locals and every remote origin's."
-  [reg now]
-  (let [locals (into {}
+  process's unexpired locals and every remote origin's. Curtained
+  principals are filtered HERE, belt and braces over report!'s own
+  refusal: publish! diffs this view, so no open/update frame can fan
+  for a curtained actor and no snapshot can serve one — not in the
+  race between a draw and the invalidation, and not from a remote
+  origin that has not caught up. cv is the caller's prefetched
+  curtain-view; an unknown principal reads as curtained."
+  [reg now cv]
+  (let [shown? (fn [e] (not (verdict reg cv (get-in e [:principal :id]))))
+        locals (into {}
                      (keep (fn [[iid {:keys [entry expires-at]}]]
-                             (when (< (long now) (long expires-at))
+                             (when (and (< (long now) (long expires-at))
+                                        (shown? entry))
                                [iid entry])))
                      @(:local reg))]
     (reduce (fn [m [iid e]]
@@ -194,18 +265,20 @@
                 (assoc m iid e)))
             locals
             (for [[_ entries] @(:remotes reg)
-                  [iid {:keys [entry]}] entries]
+                  [iid {:keys [entry]}] entries
+                  :when (shown? entry)]
               [iid entry]))))
 
 (defn- publish!
   "Re-merge, diff against the last announced truth, fan the
   difference as open/update/close frames — a close names its outcome
   (:outcomes, consumed here; the default is \"expired\"). Reentrant
-  under :lock."
-  [reg]
+  under :lock; cv is the curtain-view its caller resolved OUTSIDE
+  the lock."
+  [reg cv]
   (locking (:lock reg)
     (let [now (System/currentTimeMillis)
-          m (merged-view reg now)
+          m (merged-view reg now cv)
           old @(:published reg)
           outcomes @(:outcomes reg)]
       (doseq [[iid e] m
@@ -249,28 +322,35 @@
 (defn- on-notification! [reg ^String payload]
   (let [msg (try (wire/read-json payload) (catch Exception _ nil))]
     (when (and (map? msg) (not= (:origin reg) (:origin msg)))
-      (locking (:lock reg)
-        (case (:event msg)
-          "report" (when (and (string? (:id msg)) (map? (:entry msg)))
-                     (swap! (:remotes reg) assoc-in [(:origin msg) (:id msg)]
-                            {:entry (:entry msg)
-                             :seen (System/currentTimeMillis)}))
-          "drop" (let [iid (:id msg) outcome (:outcome msg "expired")]
-                   (when (string? iid)
-                     (swap! (:outcomes reg) assoc iid outcome)
-                     (if (contains? #{"resolved" "abandoned"} outcome)
-                       (purge! reg iid outcome)
-                       (swap! (:remotes reg) update (:origin msg) dissoc iid))))
-          nil)
-        (publish! reg)))))
+      ;; the arriving entry's principal rides `also`: it is in no map
+      ;; yet, and the prefetch happens before the lock
+      (let [cv (curtain-view reg [(get-in msg [:entry :principal :id])])]
+        (locking (:lock reg)
+          (case (:event msg)
+            "report" (when (and (string? (:id msg)) (map? (:entry msg)))
+                       (swap! (:remotes reg) assoc-in [(:origin msg) (:id msg)]
+                              {:entry (:entry msg)
+                               :seen (System/currentTimeMillis)}))
+            "drop" (let [iid (:id msg) outcome (:outcome msg "expired")]
+                     (when (string? iid)
+                       (swap! (:outcomes reg) assoc iid outcome)
+                       (if (contains? #{"resolved" "abandoned"} outcome)
+                         (purge! reg iid outcome)
+                         (swap! (:remotes reg) update (:origin msg) dissoc iid))))
+            nil)
+          (publish! reg cv))))))
 
 (defn- reassert!
   "Every hb tick: re-report each live local entry so peers keep its
-  :seen fresh — the entry itself is unchanged (no phantom updates)."
+  :seen fresh — the entry itself is unchanged (no phantom updates).
+  A curtained actor's card is never re-taught to peers: it is about
+  to close here, and a re-assertion would hand remote processes the
+  very frame report! refused to publish."
   [reg]
   (let [now (System/currentTimeMillis)]
     (doseq [[iid {:keys [entry expires-at]}] @(:local reg)
-            :when (< now (long expires-at))]
+            :when (and (< now (long expires-at))
+                       (not (curtained? reg (get-in entry [:principal :id]))))]
       (notify! reg {:event "report" :id iid :entry entry}))))
 
 (defn- sweep!
@@ -278,30 +358,47 @@
   (dropped with outcome \"expired\") and remote entries whose origin
   stopped re-asserting."
   [reg]
-  (locking (:lock reg)
-    (let [now (System/currentTimeMillis)
-          cutoff (- now (* 3 (long (:hb-ms reg))))
-          dead (into [] (keep (fn [[iid {:keys [expires-at]}]]
-                                (when (<= (long expires-at) now) iid)))
-                     @(:local reg))]
-      (when (seq dead)
-        (swap! (:local reg) #(apply dissoc % dead))
-        (doseq [iid dead]
-          (swap! (:outcomes reg) assoc iid "expired")
-          (notify! reg {:event "drop" :id iid :outcome "expired"})))
-      (swap! (:remotes reg)
-             (fn [rs]
-               (into {}
-                     (keep (fn [[org entries]]
-                             (let [live (into {}
-                                             (filter (fn [[_ {:keys [seen]}]]
-                                                       (<= cutoff (long seen))))
-                                             entries)]
-                               (when (seq live) [org live]))))
-                     rs)))
-      (publish! reg))))
+  (let [cv (curtain-view reg)]
+    (locking (:lock reg)
+      (let [now (System/currentTimeMillis)
+            cutoff (- now (* 3 (long (:hb-ms reg))))
+            dead (into [] (keep (fn [[iid {:keys [expires-at]}]]
+                                  (when (<= (long expires-at) now) iid)))
+                       @(:local reg))]
+        (when (seq dead)
+          (swap! (:local reg) #(apply dissoc % dead))
+          (doseq [iid dead]
+            (swap! (:outcomes reg) assoc iid "expired")
+            (notify! reg {:event "drop" :id iid :outcome "expired"})))
+        (swap! (:remotes reg)
+               (fn [rs]
+                 (into {}
+                       (keep (fn [[org entries]]
+                               (let [live (into {}
+                                                (filter (fn [[_ {:keys [seen]}]]
+                                                          (<= cutoff (long seen))))
+                                                entries)]
+                                 (when (seq live) [org live]))))
+                       rs)))
+        (publish! reg cv)))))
 
 ;; ── reporting (the doors) ───────────────────────────────────────────
+
+(defn normalize-self
+  "What this door would STORE for a caller's self: exactly what it was
+  handed. Unlike presence, the intents door does not accept a full URL
+  where an href was meant — check-self! below refuses anything that
+  does not start with /api/, so there is no origin to strip and no
+  rewriting to do.
+
+  It exists as a named seam anyway, and it is PUBLIC for one reason:
+  the router's private-row gate (reportable-self?, waymark-tti.3 L7)
+  must judge the value the door will actually store, and it must ask
+  each door in that door's own spelling rather than assume the two
+  doors agree. If this surface ever grows a normalization, the gate
+  follows it here instead of quietly falling behind it."
+  [self]
+  self)
 
 (defn- check-self! [self]
   (when-not (and (string? self)
@@ -332,7 +429,11 @@
   shadow, short TTL) or asking (a pending gate, the lingering TTL —
   question present, or :status \"asking\" with the wall's warnings
   and acknowledge names riding along). A re-report refreshes the same
-  card. Always accepted from any named principal, scoped or not."
+  card. Always accepted from any named principal, scoped or not —
+  and a CURTAINED one's is accepted too and publishes nothing: no
+  entry, no notify, so no process (local or remote) ever holds the
+  card. The dry-run or confirm behind it ran and answered normally;
+  only the announcement is suppressed."
   [reg principal {:keys [self action question warnings acknowledge status]}]
   (check-self! self)
   (check-action! action)
@@ -349,18 +450,24 @@
               :intent
               {:question [(str "must be one sentence of at most "
                                question-max-chars " chars")]})))
-    (let [iid (intent-id principal self action)
-          e (entry-of reg iid principal
-                      {:self self :action action :status status
-                       :question question :warnings warnings
-                       :acknowledge acknowledge})
-          ttl (if (= "asking" status) (:ask-ttl-ms reg) (:ttl-ms reg))]
-      (locking (:lock reg)
-        (swap! (:local reg) assoc iid
-               {:entry e :expires-at (+ (long (:at-ms e)) (long ttl))})
-        (notify! reg {:event "report" :id iid :entry e})
-        (publish! reg))
-      nil)))
+    ;; the curtain, judged AFTER validation (a malformed intent still
+    ;; meets its 422 — the curtain changes what is published, never
+    ;; what a caller is told about its own request) and BEFORE any
+    ;; write: nothing stored, nothing notified
+    (when-not (curtained? reg (:id principal))
+      (let [iid (intent-id principal self action)
+            e (entry-of reg iid principal
+                        {:self self :action action :status status
+                         :question question :warnings warnings
+                         :acknowledge acknowledge})
+            ttl (if (= "asking" status) (:ask-ttl-ms reg) (:ttl-ms reg))
+            cv (curtain-view reg [(:id principal)])]
+        (locking (:lock reg)
+          (swap! (:local reg) assoc iid
+                 {:entry e :expires-at (+ (long (:at-ms e)) (long ttl))})
+          (notify! reg {:event "report" :id iid :entry e})
+          (publish! reg cv))))
+    nil))
 
 (defn abandon!
   "The explicit clear: the caller's own card (the id derives from its
@@ -371,11 +478,12 @@
   (check-self! self)
   (check-action! action)
   (check-named! principal "abandon")
-  (let [iid (intent-id principal self action)]
+  (let [iid (intent-id principal self action)
+        cv (curtain-view reg)]
     (locking (:lock reg)
       (purge! reg iid "abandoned")
       (notify! reg {:event "drop" :id iid :outcome "abandoned"})
-      (publish! reg))
+      (publish! reg cv))
     nil))
 
 (defn answer!
@@ -384,34 +492,47 @@
   The answer only DELIVERS; the actor's retry still passes the guard
   through the E1 header (no second acknowledgement path). visible? is
   the caller's concealment predicate: an intent it may not see is the
-  same 404 as no intent at all."
+  same 404 as no intent at all.
+
+  A CURTAINED answerer answers anyway — answering is a legible act,
+  and the ask must resolve — but ANONYMOUSLY: :by is omitted. The
+  carve-out was ever about the answer being visible, never about the
+  curtained principal's id, type, display and a freshly-stamped
+  liveness clock riding a repeating ephemeral stream to every
+  watcher. Everything else in the frame stands, so the actor's retry
+  loop and the card's close are untouched."
   [reg answerer {:keys [id names]} visible?]
   (check-named! answerer "answer")
   (when-not (string? id)
     (throw (p/schema-invalid :intent {:id ["required — the asking intent's id"]})))
-  (locking (:lock reg)
-    (let [e (get @(:published reg) id)
-          visible? (or visible? (constantly true))]
-      (when (or (nil? e) (not (visible? (:self e))))
-        (throw (p/problem :not-found 404 "Not found"
-                          {:detail (str "No intent " (pr-str id) ".")})))
-      (when-not (contains? #{"asking" "answered"} (:status e))
-        (throw (p/problem :intent-not-asking 409 "Nothing to answer"
-                          {:detail "This intent is a considering, not a pending ask."})))
-      (let [now-ms (System/currentTimeMillis)
-            e' (-> e
-                   (assoc :status "answered"
-                          :answer (p/prune
-                                   {:by (author-of answerer)
-                                    :names (or (some->> (seq names) (mapv name))
-                                               (get-in e [:acknowledge :names]))
-                                    :at (now-str reg)})
-                          :at (now-str reg)
-                          :at-ms now-ms))]
-        (swap! (:local reg) assoc id
-               {:entry e' :expires-at (+ now-ms (long (:ask-ttl-ms reg)))})
-        (notify! reg {:event "report" :id id :entry e'})
-        (publish! reg))))
+  ;; both resolved before the lock — curtained? can read the store
+  (let [drawn? (curtained? reg (:id answerer))
+        cv (curtain-view reg)]
+    (locking (:lock reg)
+      (let [e (get @(:published reg) id)
+            visible? (or visible? (constantly true))]
+        (when (or (nil? e) (not (visible? (:self e))))
+          (throw (p/problem :not-found 404 "Not found"
+                            {:detail (str "No intent " (pr-str id) ".")})))
+        (when-not (contains? #{"asking" "answered"} (:status e))
+          (throw (p/problem :intent-not-asking 409 "Nothing to answer"
+                            {:detail "This intent is a considering, not a pending ask."})))
+        (let [now-ms (System/currentTimeMillis)
+              e' (-> e
+                     (assoc :status "answered"
+                            ;; p/prune drops the nil: a curtained
+                            ;; answerer's :by is ABSENT, not blank
+                            :answer (p/prune
+                                     {:by (when-not drawn? (author-of answerer))
+                                      :names (or (some->> (seq names) (mapv name))
+                                                 (get-in e [:acknowledge :names]))
+                                      :at (now-str reg)})
+                            :at (now-str reg)
+                            :at-ms now-ms))]
+          (swap! (:local reg) assoc id
+                 {:entry e' :expires-at (+ now-ms (long (:ask-ttl-ms reg)))})
+          (notify! reg {:event "report" :id id :entry e'})
+          (publish! reg cv)))))
   nil)
 
 ;; ── resolution (the real act clears the card) ───────────────────────
@@ -433,11 +554,12 @@
                                  iid)))
                        @(:local reg))]
         (when (seq hits)
-          (locking (:lock reg)
-            (doseq [iid hits]
-              (purge! reg iid "resolved")
-              (notify! reg {:event "drop" :id iid :outcome "resolved"}))
-            (publish! reg)))))))
+          (let [cv (curtain-view reg)]
+            (locking (:lock reg)
+              (doseq [iid hits]
+                (purge! reg iid "resolved")
+                (notify! reg {:event "drop" :id iid :outcome "resolved"}))
+              (publish! reg cv))))))))
 
 ;; ── subscriptions ───────────────────────────────────────────────────
 
@@ -466,14 +588,22 @@
 
 (defn snapshot
   "The merged truth as last announced, filtered by visible? — the
-  stream's first frame."
+  stream's first frame. Curtained actors are filtered here TOO
+  (merged-view already refused them into :published; this is the last
+  brace): a join snapshot must never deal a curtained principal's
+  card, however the draw races the publish. Through `verdict`, so a
+  card reported during the prefetch→lock window is judged by the warm
+  cache and not by its absence — the first frame is the only one a
+  new subscriber gets for an already-published card."
   [reg visible?]
-  (locking (:lock reg)
-    (into []
-          (comp (map val)
-                (filter #(visible? (:self %)))
-                (map #(dissoc % :at-ms)))
-          (sort-by key @(:published reg)))))
+  (let [cv (curtain-view reg)]
+    (locking (:lock reg)
+      (into []
+            (comp (map val)
+                  (remove #(verdict reg cv (get-in % [:principal :id])))
+                  (filter #(visible? (:self %)))
+                  (map #(dissoc % :at-ms)))
+            (sort-by key @(:published reg))))))
 
 ;; ── lifecycle ───────────────────────────────────────────────────────
 
@@ -492,10 +622,15 @@
   re-assertions out, TTL sweeps on the clock) and — when the caller
   hands it the engine's events dispatcher — the resolution consumer
   that clears a card when its real act lands. opts {:hb-ms :ttl-ms
-  :ask-ttl-ms :dispatcher} — defaults :intents-heartbeat-ms (15s),
-  :intent-ttl-ms (30s), :intent-ask-ttl-ms (10 min). Returns the
-  registry; stop! ends it."
-  [eng {:keys [hb-ms ttl-ms ask-ttl-ms dispatcher]}]
+  :ask-ttl-ms :dispatcher :curtain} — defaults :intents-heartbeat-ms
+  (15s), :intent-ttl-ms (30s), :intent-ask-ttl-ms (10 min). :curtain
+  is the SHARED component presence reads too (curtain/start!);
+  without it the registry starts a private one, so a standalone
+  intents surface still honors the member row. A committed DRAW
+  re-publishes at once through the component's watcher — the cards
+  already dealt for that principal close on the spot rather than
+  lingering to their TTL. Returns the registry; stop! ends it."
+  [eng {:keys [hb-ms ttl-ms ask-ttl-ms dispatcher curtain]}]
   (let [storage (:storage eng)
         hb-ms (long (or hb-ms (:intents-heartbeat-ms eng) 15000))
         ttl-ms (long (or ttl-ms (:intent-ttl-ms eng) 30000))
@@ -512,12 +647,18 @@
                       nil)))
         pg-conn (some-> ^Connection conn (.unwrap PGConnection))
         sub (when dispatcher (events/subscribe dispatcher {}))
+        ;; the curtain consult (waymark-tti.4): the engine's shared
+        ;; component, or a private one for a standalone registry
+        own-curtain (when (nil? curtain)
+                      (curtain/start! eng {:dispatcher dispatcher}))
         reg {:eng eng
              :storage storage
              :origin (str (random-uuid))
              :hb-ms hb-ms
              :ttl-ms ttl-ms
              :ask-ttl-ms ask-ttl-ms
+             :curtain (or curtain own-curtain)
+             :own-curtain own-curtain
              :lock (Object.)
              :local (atom {})
              :remotes (atom {})
@@ -569,15 +710,30 @@
                               (catch Exception e
                                 (warn! "resolve: " (ex-message e)))))
                        (when @(:running reg) (recur)))))))
-           "waymark10-intents-resolve"))]
+           "waymark10-intents-resolve"))
+        ;; a DRAWN curtain closes the cards already dealt: re-publish
+        ;; and the merged view (which now refuses that principal)
+        ;; fans the closes itself — no second purge path to keep
+        ;; honest
+        watch (curtain/watch! (:curtain reg)
+                              (fn [_pid]
+                                (let [cv (curtain-view reg)]
+                                  (locking (:lock reg)
+                                    (publish! reg cv)))))]
     (doto ^Thread listen-t (.setDaemon true) (.start))
     (some-> ^Thread resolve-t (doto (.setDaemon true) (.start)))
-    (assoc reg :thread listen-t :resolve-thread resolve-t)))
+    (assoc reg :thread listen-t :resolve-thread resolve-t
+           :curtain-watch watch)))
 
 (defn stop! [reg]
   (reset! (:running reg) false)
   (when-some [sub (:sub reg)]
     (events/unsubscribe (:dispatcher reg) sub))
+  (when-some [w (:curtain-watch reg)]
+    (curtain/unwatch! (:curtain reg) w))
+  ;; only a registry that STARTED its own curtain stops one — the
+  ;; engine's shared component outlives every surface that reads it
+  (some-> (:own-curtain reg) curtain/stop!)
   (some-> ^Connection (:conn reg) .close)
   (some-> ^Thread (:thread reg) .interrupt)
   nil)

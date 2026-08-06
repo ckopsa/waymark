@@ -248,10 +248,17 @@
                   "created_at" :created-at
                   "updated_at" :updated-at
                   "id" :id
-                  (fn [row] (json-text (get-in row [:data (:order-by opts)]))))]
+                  (fn [row] (json-text (get-in row [:data (:order-by opts)]))))
+          ;; :newest-first flips the comparator, not the sorted seq:
+          ;; the LIMIT must bite the fresh end (the own-surface
+          ;; window's whole point), so the order has to be right
+          ;; before `take` runs
+          cmp (if (:newest-first opts)
+                #(compare %2 %1)
+                #(compare %1 %2))]
       (into []
             (take (:limit opts 100))
-            (sort-by keyfn #(compare %1 %2) (filter match? rows)))))
+            (sort-by keyfn cmp (filter match? rows)))))
 
   (external-ids [_ _tx kind]
     (into []
@@ -279,6 +286,22 @@
                  (:since where) (filter #(> (:id %) (:since where))))
           rows (if (:newest-first opts) (reverse rows) rows)]
       (into [] (take (:limit opts 500)) rows)))
+
+  (transition-stats [_ _tx since include-system?]
+    ;; the same buckets Postgres's date_trunc-at-UTC answers: the one
+    ;; truncation lives in store/utc-week-start
+    (->> (:transitions @state [])
+         (filter #(not (.isBefore ^Instant (:at %) ^Instant since)))
+         (map (fn [rec]
+                {:week-start (store/utc-week-start (:at rec))
+                 :kind (name (:kind rec))
+                 :action (name (:action rec))
+                 :actor-type (get-in rec [:actor :type])}))
+         (remove #(and (not include-system?) (= "system" (:actor-type %))))
+         frequencies
+         (map (fn [[k n]] (assoc k :n n)))
+         (sort-by (juxt :week-start :kind :action :actor-type))
+         vec))
 
   (idempotency-lookup [_ _tx key kind]
     (get-in @state [:idempotency [key kind]]))
