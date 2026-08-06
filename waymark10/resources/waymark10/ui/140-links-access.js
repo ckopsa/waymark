@@ -122,6 +122,34 @@ function reentryToken() {
   for (const b of bytes) bin += String.fromCharCode(b);
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
+/* a shown-once secret belongs in a modal, not the panel (waymark-4zj.9.2):
+   the Access panel re-renders on every firehose tick — liveness rides its
+   branch (watchScope below) — so anything built INSIDE #view is torn down
+   within ~1s. A minted credential is shown ONCE; render it in a <dialog> on
+   document.body, OUTSIDE #view, where a background render() can't reach it.
+   The human copies at their own pace and dismisses it explicitly. Mirrors
+   reportDialog's shape (dlghead/body/foot, showModal, remove on close). */
+function secretDialog({heading, note, value, copyOk, copyFallback}) {
+  const field = el("input", {value, readonly: "true",
+                             style:"width:100%;font-family:var(--mono)",
+                             onclick: e => e.target.select()});
+  const dlg = el("dialog", {"data-secret": ""},
+    el("div", {class:"dlghead"}, el("h3", {}, heading)),
+    el("div", {class:"dlgbody"},
+      el("div", {class:"muted", style:"margin-bottom:6px"}, note),
+      field),
+    el("div", {class:"dlgfoot"},
+      el("button", {class:"primary", onclick: () =>
+        navigator.clipboard?.writeText(value).then(
+          () => toast(copyOk),
+          () => { field.select(); toast(copyFallback); })}, "Copy"),
+      el("button", {onclick: () => { dlg.close(); dlg.remove(); }}, "Done")));
+  document.body.append(dlg);
+  dlg.addEventListener("close", () => dlg.remove());
+  dlg.showModal();
+  field.select();     /* selected on open — Ctrl-C works before the first tick */
+  return dlg;
+}
 async function renderAccess(view, seq) {
   const [members, asks, grants, powers] = await Promise.all([
     fullItems("/api/members"), fullItems("/api/approval_requests"),
@@ -157,17 +185,17 @@ async function renderAccess(view, seq) {
   const linkBox = el("div", {});
   const mintLink = token =>
     `${location.origin}/api/-/welcome?invite=${encodeURIComponent(token)}`;
+  /* shown ONCE, and the panel re-renders under it — so the link lands in a
+     persistent modal, not linkBox (which the next firehose tick would wipe;
+     linkBox now carries only the mint error path). Same fix as the re-entry
+     token, waymark-4zj.9.2. */
   const showLink = (display, token) => {
-    const url = mintLink(token);
-    linkBox.replaceChildren(el("div", {class:"field", style:"margin-top:8px"},
-      el("div", {class:"muted"}, `${display}'s invitation — one use:`),
-      el("input", {value: url, readonly: "true",
-                   style:"width:100%;font-family:var(--mono)",
-                   onclick: e => e.target.select()}),
-      el("button", {style:"margin-top:4px", onclick: () =>
-        navigator.clipboard?.writeText(url).then(
-          () => toast("link copied — hand it to the agent"),
-          () => toast("select and copy the link above"))}, "Copy link")));
+    secretDialog({
+      heading: `${display}'s invitation`,
+      note: `${display}'s invitation — one use; hand the link to the agent:`,
+      value: mintLink(token),
+      copyOk: "link copied — hand it to the agent",
+      copyFallback: "select and copy the link above"});
   };
   invite.append(el("div", {}, nameIn,
     el("button", {class:"primary", onclick: async () => {
@@ -245,17 +273,15 @@ async function renderAccess(view, seq) {
         if (!g.ok) { gOut.replaceChildren(problemBox(g.body)); return; }
         const url = `${location.origin}/auth/guest?invite=${encodeURIComponent(tok)}`;
         gName.value = "";
-        gOut.replaceChildren(el("div", {class:"field", style:"margin-top:8px"},
-          el("div", {class:"muted"},
-            `${display}'s link — lives ${days} day(s), scoped; revoke the `
-            + `grant to kill it early:`),
-          el("input", {value: url, readonly: "true",
-                       style:"width:100%;font-family:var(--mono)",
-                       onclick: e => e.target.select()}),
-          el("button", {style:"margin-top:4px", onclick: () =>
-            navigator.clipboard?.writeText(url).then(
-              () => toast("guest link copied — text it over"),
-              () => toast("select and copy the link above"))}, "Copy link")));
+        /* the link shows once and the panel re-renders under it — persist it
+           in a modal, not gOut (which keeps only the error path). */
+        secretDialog({
+          heading: `${display}'s guest link`,
+          note: `${display}'s link — lives ${days} day(s), scoped; revoke the `
+              + `grant to kill it early:`,
+          value: url,
+          copyOk: "guest link copied — text it over",
+          copyFallback: "select and copy the link above"});
       }}, "Mint guest link"),
     gOut);
   view.append(guest);
@@ -352,19 +378,16 @@ async function renderAccess(view, seq) {
           const {ok, body} = await api(m.self + "/-/offer_reentry",
             {method: "POST", body: JSON.stringify({token})});
           if (!ok) { reentryOut.replaceChildren(problemBox(body)); return; }
-          reentryOut.replaceChildren(el("div", {class:"field",
-              style:"margin-top:6px"},
-            el("div", {class:"muted"},
-              `${m.data.display}'s one-shot re-entry token — shown once, `
-              + `~15 min; the agent POSTs it to /auth/agent in the body:`),
-            el("input", {value: token, readonly: "true",
-                         style:"width:100%;font-family:var(--mono)",
-                         onclick: e => e.target.select()}),
-            el("button", {style:"margin-top:4px", onclick: () =>
-              navigator.clipboard?.writeText(token).then(
-                () => toast("re-entry token copied — hand it over your session"),
-                () => toast("select and copy the token above"))},
-              "Copy token")));
+          /* the token shows ONCE and this panel re-renders under it within
+             ~1s (waymark-4zj.9.2) — so it lands in a persistent modal, not
+             reentryOut (which now carries only the refusal path). */
+          secretDialog({
+            heading: `${m.data.display}'s re-entry token`,
+            note: `${m.data.display}'s one-shot re-entry token — shown once, `
+                + `~15 min; the agent POSTs it to /auth/agent in the body:`,
+            value: token,
+            copyOk: "re-entry token copied — hand it over your session",
+            copyFallback: "select and copy the token above"});
         }}, "Offer re-entry"),
       reentryOut));
     card.append(el("div", {"data-agent-feed": pid,
