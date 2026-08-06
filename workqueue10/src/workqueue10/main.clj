@@ -53,9 +53,11 @@
             [workqueue10.confluence :as conf]
             [workqueue10.reconsent :as reconsent]
             [workqueue10.resources.dwelling :refer [self journal]]
+            [workqueue10.resources.letters :refer [letter]]
             [workqueue10.resources.media :refer [media-resource]]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
+            [workqueue10.resources.weather :refer [weather]]
             [workqueue10.sources.choreplan :as chores]
             [workqueue10.sources.flickr :as flickr]
             [workqueue10.sources.gtasks :as gtasks]
@@ -280,7 +282,15 @@
        ;; privacy is the framework's own: humans unscoped see all,
        ;; agents default-deny see nothing but their OWN (the
        ;; own-surface addition in waymark10.server.grants).
-       (into (into [saved-view capability connection self journal]
+       ;; :weather (waymark-tti.1) sits beside them, domainless for the
+       ;; same reason — the hearth thermometer is the house's inner
+       ;; life, not a domain of family logistics. Household-SHARED,
+       ;; not own-surface: humans see all, agents read via the normal
+       ;; grant machinery.
+       ;; :letter rides beside them (waymark-tti.3): the doorstep
+       ;; shelf — addressed notes between inhabitants, two-party
+       ;; own-surface (author OR recipient), never grantable.
+       (into (into [saved-view capability connection self journal weather letter]
                    dashboard/resources)))))
 
 (def surfaces
