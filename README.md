@@ -23,20 +23,16 @@ live in `waymark10/`. Design record with the 9→10 wire divergence table:
 vocabulary (all three dialects):
 [`docs/waymark10-vocabulary.md`](docs/waymark10-vocabulary.md).
 
-Earlier generations (Python, waymark v0.1 through waymark9) live on the
-`history` branch; `main` carries the standalone waymark7 package.
+Earlier generations (Python, waymark v0.1 through waymark9) are not part
+of this repository; `main`'s history records the Clojure lineage.
 
 ## The dogfood apps
 
-Three applications drive the framework, each a directory of declarations:
+Applications drive the framework, each a directory of declarations:
 
 - **`mealplan10/`** — the family meal planner (Tue→Tue themed weeks,
   grocery lists, prep tasks, rotations).
 - **`eveningplan10/`** — evening plans.
-- **`paydesk/`** — the assignment/employee/fund/team mirror over an external
-  warehouse: discovery, pull-through sync, push-on-write, conflict states,
-  and the assignment worksheet (download a filtered subset as xlsx,
-  hand-edit, upload → staged worksheet row → apply).
 
 ## Quickstart
 
@@ -47,14 +43,12 @@ Everything runs against one dockerized Postgres on `:5433`
 make test10                # waymark10 framework tests
 make test-mealplan10       # mealplan10 conformance + the family-week story
 make test-eveningplan10    # eveningplan10 conformance suite
-make test-paydesk              # paydesk conformance suite
 
 make check10               # declaration-time checks + usability warnings
-make check-eveningplan10   #   (no database; also check-paydesk)
+make check-eveningplan10   #   (no database)
 
 make dev10                 # serve mealplan10 on :8010 (UI at /api/-/ui)
 make dev-eveningplan10     # :8011
-make dev-paydesk               # :8012
 
 make migrate10             # print the schema plan; APPLY=1 executes
 ```

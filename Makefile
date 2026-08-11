@@ -16,23 +16,7 @@ INFRA_SECRETS ?= $(HOME)/dev/home-infrastructure/terraform/secrets.local.json
 NOMAD_ADDR    ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_address'])" 2>/dev/null)
 NOMAD_TOKEN   ?= $(shell python3 -c "import json;print(json.load(open('$(INFRA_SECRETS)'))['nomad_token'])" 2>/dev/null)
 
-# paydesk's dev warehouse mirror, over the standard `ssh -fN paydesk-db-dev`
-# tunnel (:5432); credential is the paydesk_app_dev Proton Pass item.
-# Unset (tunnel down / pass-cli unavailable) ⇒ paydesk falls back to its
-# in-memory fake mirrors.
-PAYDESK_WAREHOUSE_PORT ?= 5432
-PAYDESK_WAREHOUSE_DSN  ?= $(shell scripts/paydesk-warehouse-dsn.sh $(PAYDESK_WAREHOUSE_PORT) 2>/dev/null)
-
-# paydesk-prod runs on the laptop: its own database is the local paydesk_prod
-# on :5433 (created host-side — the docker publish is shadowed by a
-# native Postgres on this port, so createdb must run against whatever
-# actually answers), and the mirror boundary is the PROD warehouse
-# (`ssh -fN paydesk-db-prod` → :15435, db_readwrite — read/write on
-# client_assignment per the push posture).
-PAYDESK_PROD_DSN           ?= jdbc:postgresql://localhost:$(PG_PORT)/paydesk_prod?user=$(PG_USER)
-PAYDESK_PROD_WAREHOUSE_DSN ?= $(shell scripts/paydesk-warehouse-dsn.sh 15435 db_readwrite devdb 2>/dev/null)
-
-.PHONY: migrate-queue-prod test-calendar probe-calendar db db10 test10 check10 test-mealplan10 paydesk-guard migrate-paydesk-prod paydesk-prod db-paydesk-prod dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-paydesk dev-paydesk migrate-paydesk check-paydesk test-chores dev-chores migrate-chores check-chores image-chores deploy-chores test-queue dev-queue migrate-queue check-queue image-queue deploy-queue image10 deploy10
+.PHONY: migrate-queue-prod test-calendar probe-calendar db db10 test10 check10 test-mealplan10 dev10 migrate10 test-eveningplan10 dev-eveningplan10 migrate-eveningplan10 check-eveningplan10 test-chores dev-chores migrate-chores check-chores image-chores deploy-chores test-queue dev-queue migrate-queue check-queue image-queue deploy-queue image10 deploy10
 
 db:  ## start dockerized Postgres
 	@docker start $(PG_CONTAINER) >/dev/null 2>&1 || \
@@ -53,9 +37,6 @@ db10: db  ## waymark10 databases on the shared :5433 container
 	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
 		"SELECT 1 FROM pg_database WHERE datname='eveningplan10_dev'" | grep -q 1 || \
 		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE eveningplan10_dev"
-	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
-		"SELECT 1 FROM pg_database WHERE datname='paydesk_dev'" | grep -q 1 || \
-		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE paydesk_dev"
 	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
 		"SELECT 1 FROM pg_database WHERE datname='choreplan10_dev'" | grep -q 1 || \
 		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE choreplan10_dev"
@@ -99,41 +80,6 @@ dev-eveningplan10: db10  ## serve eveningplan10 on :8011 against eveningplan10_d
 migrate-eveningplan10: db10  ## print eveningplan10's schema plan against eveningplan10_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
 	cd eveningplan10 && EVENINGPLAN10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/eveningplan10_dev?user=$(PG_USER)" \
 		clojure -M:migrate
-
-# paydesk is not on main — the payouts app lives on the plan-day
-# branch. Its targets still work there, so they are guarded rather
-# than retired: on main they say where paydesk went instead of failing
-# with a bare "cd: paydesk: No such file or directory".
-paydesk-guard:
-	@test -d paydesk || { echo "paydesk/ is not in this working tree — the payouts app lives on the 'plan-day' branch (git switch plan-day)." >&2; exit 1; }
-
-check-paydesk: paydesk-guard  ## paydesk declaration-time checks + usability warnings (no database)
-	cd paydesk && clojure -M:check
-
-test-paydesk: paydesk-guard db10  ## paydesk conformance suite
-	cd paydesk && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
-
-dev-paydesk: paydesk-guard db10  ## serve paydesk on :8012 against paydesk_dev; mirrors the dev warehouse over :5432 if PAYDESK_WAREHOUSE_DSN resolves (see PAYDESK_WAREHOUSE_PORT), else fake adapters
-	@cd paydesk && PAYDESK_DSN="jdbc:postgresql://localhost:$(PG_PORT)/paydesk_dev?user=$(PG_USER)" \
-		PAYDESK_WAREHOUSE_DSN="$(PAYDESK_WAREHOUSE_DSN)" \
-		WAYMARK10_AUTO_MIGRATE=1 clojure -M:dev
-
-migrate-paydesk: paydesk-guard db10  ## print paydesk's schema plan against paydesk_dev; APPLY=1 executes, DESTRUCTIVE=1 includes state renames
-	cd paydesk && PAYDESK_DSN="jdbc:postgresql://localhost:$(PG_PORT)/paydesk_dev?user=$(PG_USER)" \
-		clojure -M:migrate
-
-db-paydesk-prod:  ## the paydesk_prod database on the host-reachable :5433
-	@psql -h localhost -p $(PG_PORT) -U $(PG_USER) -d postgres -tc \
-		"SELECT 1 FROM pg_database WHERE datname='paydesk_prod'" | grep -q 1 || \
-		createdb -h localhost -p $(PG_PORT) -U $(PG_USER) paydesk_prod
-
-migrate-paydesk-prod: paydesk-guard db-paydesk-prod  ## print paydesk's schema plan against the local paydesk_prod; APPLY=1 executes
-	@cd paydesk && PAYDESK_DSN="$(PAYDESK_PROD_DSN)" clojure -M:migrate
-
-paydesk-prod: paydesk-guard db-paydesk-prod  ## serve paydesk on :8013 against local paydesk_prod + the PROD warehouse (needs `ssh -fN paydesk-db-prod`); refuses on schema drift — migrate-paydesk-prod first
-	@cd paydesk && PAYDESK_DSN="$(PAYDESK_PROD_DSN)" \
-		PAYDESK_WAREHOUSE_DSN="$(PAYDESK_PROD_WAREHOUSE_DSN)" \
-		PAYDESK_PORT=8013 clojure -M:dev
 
 check-chores:  ## choreplan10 declaration-time checks + usability warnings (no database)
 	cd choreplan10 && clojure -M:check
