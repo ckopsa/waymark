@@ -26,13 +26,16 @@ vocabulary (all three dialects):
 Earlier generations (Python, waymark v0.1 through waymark9) are not part
 of this repository; `main`'s history records the Clojure lineage.
 
-## The dogfood apps
+## The application
 
-Applications drive the framework, each a directory of declarations:
-
-- **`mealplan10/`** — the family meal planner (Tue→Tue themed weeks,
-  grocery lists, prep tasks, rotations).
-- **`eveningplan10/`** — evening plans.
+**`workqueue10/`** is the household app — one engine serving every
+domain of family life, each a module of declarations under its
+`src/`: the unified work queue (`workqueue10.*` — tasks from every
+authority, media, the breaker panel, the dwelling kinds), the meal
+plan (`mealplan10.*` — Tue→Tue themed weeks, grocery lists, prep
+tasks, rotations, the pantry), chores (`choreplan10.*`), and evening
+plans (`eveningplan10.*`). The calendar (`calendar10/`) stays its own
+module — a writable domain the queue and the meal plan both cite.
 
 ## Quickstart
 
@@ -41,16 +44,14 @@ Everything runs against one dockerized Postgres on `:5433`
 
 ```bash
 make test10                # waymark10 framework tests
-make test-mealplan10       # mealplan10 conformance + the family-week story
-make test-eveningplan10    # eveningplan10 conformance suite
+make test-queue            # the household suite: queue + chores + meals + evenings
+make test-calendar         # calendar transport tests
 
-make check10               # declaration-time checks + usability warnings
-make check-eveningplan10   #   (no database)
+make check-queue           # declaration-time checks + usability warnings (no database)
 
-make dev10                 # serve mealplan10 on :8010 (UI at /api/-/ui)
-make dev-eveningplan10     # :8011
+make dev-queue             # serve the household engine on :8014 (UI at /api/-/ui)
 
-make migrate10             # print the schema plan; APPLY=1 executes
+make migrate-queue         # print the schema plan; APPLY=1 executes
 ```
 
 REPL entry point: `waymark10.dev/scratch!` (see

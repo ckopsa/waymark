@@ -48,6 +48,10 @@
             [choreplan10.resources.chore :refer [chore]]
             [choreplan10.resources.chore-run :refer [chore-run]]
             [choreplan10.resources.day :refer [day day-board]]
+            [eveningplan10.consumers :as evening-consumers]
+            [eveningplan10.resources.activity :refer [activity]]
+            [eveningplan10.resources.evening-plan :refer [evening-plan]]
+            [eveningplan10.resources.evening-session :refer [evening-session]]
             [mealplan10.main :as mealplan]
             [mealplan10.scraper :as scraper]
             [workqueue10.confluence :as conf]
@@ -208,10 +212,12 @@
       fake-calendar))
 
 (defn resources
-  "One domestic economics (waymark-bwu), across three domains: the
-  queue's kind, the folded chore registry (chore, chore_run, day —
-  bwu.1), the folded meal registry (bwu.2), and the calendar
-  (waymark-6k5.2).
+  "One domestic economics (waymark-bwu), across the household's
+  domains: the queue's kind, the folded chore registry (chore,
+  chore_run, day — bwu.1), the folded meal registry (bwu.2), the
+  calendar (waymark-6k5.2), and the folded evening registry
+  (activity, evening_plan, evening_session — waymark-26j, the last
+  standalone app).
 
   The calendar's event kind comes from calendar10, NOT from
   mealplan/resources: it stopped being a meals concern when it became
@@ -252,6 +258,11 @@
                                  (conf/confluence media-srcs report-fn))]))
        (into (in-domain :chores [chore chore-run day]))
        (into (in-domain :meals (mealplan/meal-resources)))
+       ;; the evening fold (waymark-26j): the last standalone app's
+       ;; three kinds join the one engine — the activity shelf, the
+       ;; plan, and its sessions; the plan-sessions consumer registers
+       ;; in start!, against the running dispatcher
+       (into (in-domain :evenings [activity evening-plan evening-session]))
        ;; the kind self-declares :domain :calendar; in-domain would
        ;; stamp the same token, and saying it here keeps the domains
        ;; legible in one place
@@ -483,20 +494,31 @@
         server (engine/start! eng port
                               {:wrap-handler
                                (comp (reconsent/wrap eng)
-                                     (oidc-rp/wrap-handler eng))})]
-    (reset! dev {:engine eng :server server :storage storage})
+                                     (oidc-rp/wrap-handler eng))})
+        ;; the evening fold's durable consumer (waymark-26j): a plan's
+        ;; sessions appear no matter who created the plan — registered
+        ;; against the RUNNING engine, like eveningplan10's own boot did
+        consumer (evening-consumers/register! eng)]
+    (reset! dev {:engine eng :server server :storage storage
+                 :consumer consumer})
     (println (str "workqueue10: http://localhost:" port
                   "/api/.well-known/waymark"))
     eng))
 
 (defn stop! []
-  (when-some [{:keys [engine server storage]} @dev]
+  (when-some [{:keys [engine server storage consumer]} @dev]
+    (when consumer (evening-consumers/stop! consumer))
     (engine/stop! engine server)
     (pg/close! storage)
     (reset! dev nil)))
 
 (defn -main [& _]
   (start!)
+  ;; WAYMARK10_WATCH=1 (make dev-queue): reload-on-save — changed
+  ;; sources under src/ load-file, then stop!/start!
+  (when (= "1" (System/getenv "WAYMARK10_WATCH"))
+    ((requiring-resolve 'waymark10.dev/watch!)
+     {:restart! (fn [] (stop!) (start!))}))
   @(promise))
 
 ;; ── the migrate CLI (make migrate-queue) ────────────────────────────

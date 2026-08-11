@@ -30,7 +30,8 @@
   Lives in src/, not a dev/ alias path, so an app that depends on
   waymark10 via :local/root reaches it from a bare REPL — the
   waymark10.test.* precedent."
-  (:require [clojure.string :as str]
+  (:require [clojure.main :as cm]
+            [clojure.string :as str]
             [waymark10.declaration :as declaration]
             [waymark10.expr :as expr]
             [waymark10.fingerprint :as fp]
@@ -99,6 +100,110 @@
   [handle]
   (engine/stop! (:engine handle) (:server handle))
   (pg/close! (:storage handle)))
+
+;; ── watch!: the save-to-reload loop (waymark-6ba) ───────────────────
+
+(defn- watched-sources
+  "Every .clj/.cljc under the roots (dotfiles and editor droppings
+  skipped), as {canonical-path [mtime-ms length]} — length rides
+  along because some filesystems stamp mtime coarsely."
+  [paths]
+  (into {}
+        (for [p paths
+              :let [root (java.io.File. (str p))]
+              :when (.isDirectory root)
+              ^java.io.File f (file-seq root)
+              :let [n (.getName f)]
+              :when (and (.isFile f)
+                         (not (str/starts-with? n "."))
+                         (or (str/ends-with? n ".clj")
+                             (str/ends-with? n ".cljc")))]
+          [(.getCanonicalPath f) [(.lastModified f) (.length f)]])))
+
+(defn- err-lines [^Throwable t]
+  (-> t Throwable->map cm/ex-triage cm/ex-str))
+
+(defn- reload-and-restart!
+  "One watch cycle: load-file every changed source FIRST — a typo or
+  a law refused at the def site is printed and the running server is
+  left untouched — and only when all of them compile hand control to
+  reboot (the app's own stop-then-start)."
+  [changed reboot]
+  (let [errs (into []
+                   (keep (fn [path]
+                           (try (load-file path) nil
+                                (catch Throwable t [path t]))))
+                   changed)]
+    (if (seq errs)
+      (doseq [[path t] errs]
+        (println (str "watch: " path " REFUSED — still serving the previous law:"))
+        (println (err-lines t)))
+      (do
+        (doseq [path changed] (println (str "watch: reloaded " path)))
+        (try
+          (reboot)
+          (catch Throwable t
+            (println "watch: RESTART FAILED — the server may be down until the next good save:")
+            (println (err-lines t))))))))
+
+(defn watch!
+  "The save-to-reload dev loop — `uvicorn --reload`'s feel without
+  the JVM reboot. Polls :paths (default [\"src\"]) for .clj/.cljc
+  changes on a daemon thread; a change load-files the touched
+  sources first, and only when every one compiles calls :restart! —
+  the app's own stop-then-start, so consumers re-register and dev
+  auto-migrate reruns (schema edits included). A file that refuses
+  is printed and the server keeps serving the previous law; the next
+  good save heals it. New files load too; a deleted file just stops
+  being watched (its namespace stays in the JVM until the next real
+  boot).
+
+  The app wiring, guarded by WAYMARK10_WATCH=1 in the make dev-*
+  targets:
+
+      (when (= \"1\" (System/getenv \"WAYMARK10_WATCH\"))
+        ((requiring-resolve 'waymark10.dev/watch!)
+         {:restart! (fn [] (stop!) (start!))}))
+
+  Returns {:stop! fn}. Dev-tool honesty, said aloud when it
+  happens: only the files that changed are re-evaluated (a macro's
+  downstream users re-cook on their own next save), and a failure
+  inside :restart! itself leaves the server down until the next
+  good save.
+
+  opts: :restart! (required, zero-arg), :paths, :interval-ms."
+  [{reboot :restart! :keys [paths interval-ms]
+    :or {paths ["src"] interval-ms 300}}]
+  (assert (fn? reboot)
+          "watch! needs :restart! — the app's zero-arg stop-then-start")
+  (let [running (atom true)
+        snapshot (atom (watched-sources paths))
+        step (fn []
+               (let [cur (watched-sources paths)
+                     changed (into []
+                                   (comp (remove (fn [[path stamp]]
+                                                   (= stamp (get @snapshot path))))
+                                         (map key))
+                                   cur)]
+                 (reset! snapshot cur)
+                 (when (seq changed)
+                   (reload-and-restart! (sort changed) reboot))))
+        ;; bound-fn: the watcher narrates into its caller's *out*
+        ;; (the REPL's, the test's), not the root binding's
+        ^Runnable work (bound-fn []
+                         (while @running
+                           (Thread/sleep (long interval-ms))
+                           (try (step)
+                                (catch Throwable t
+                                  (println "watch: watcher error:")
+                                  (println (err-lines t))))))
+        t (Thread. work)]
+    (.setDaemon t true)
+    (.setName t "waymark10-watch")
+    (.start t)
+    (println (str "watch: reload-on-save over " (vec paths)
+                  " every " interval-ms "ms"))
+    {:stop! (fn [] (reset! running false))}))
 
 (defn- rdef-of [eng kind]
   (or (get (inv/resources eng) kind)

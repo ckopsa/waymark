@@ -4,7 +4,12 @@
    over CDP. Zero deps beyond node >= 22. Two drives share one
    harness:
 
-   DEFAULT (the family-week story, against a mealplan10 dev engine):
+   DEFAULT (the family-week story, against a mealplan10 dev engine —
+   HISTORICAL: the standalone mealplan10 boot retired with the
+   consolidation cleanup (waymark-26j); the meal kinds are served by
+   workqueue10 now (`make dev-queue`), and this recipe's event-source
+   seeding predates even that, so treat it as the story's record, not
+   a runnable script):
    1. a FRESH dev database + seeded world per run — the story retires
       meals it later relies on, so re-runs need fresh bytes. The seed
       is the family-week test's, § by §: boot with the Piano recital
