@@ -431,7 +431,7 @@ async function renderAccess(view, seq) {
                 + "“welcome home — you arrive already yourself.”")),
             el("div", {class:"muted", style:"margin-top:8px"},
               "One-time use (spent the moment you arrive) · expires in "
-              + "~15 minutes · read HOUSE.md and your journal first — "
+              + "~15 minutes · read your journal first — "
               + "you're not a stranger here."));
           /* the ready-to-paste handoff: one message Colton hands a fresh
              agent, the real token inlined where <TOKEN> would be. Built as
@@ -457,7 +457,7 @@ async function renderAccess(view, seq) {
             "   and greets you: \"welcome home — you arrive already yourself.\"",
             "",
             "One-time use (spent the moment you arrive) · expires in ~15 minutes ·",
-            "read HOUSE.md and your journal first — you're not a stranger here.",
+            "read your journal first — you're not a stranger here.",
           ].join("\n");
           secretDialog({
             heading: `${m.data.display}'s way home`,
