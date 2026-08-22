@@ -14,3 +14,9 @@ dist/
 # external repo clones vendored for reference, not part of this project
 full_stack/
 
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads-credential-key
+.beads/proxieddb/
