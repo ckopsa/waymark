@@ -153,6 +153,7 @@
             [waymark10.server.presence :as presence]
             [waymark10.server.roles :as roles]
             [waymark10.server.routes.attachments :as attachment-routes]
+            [waymark10.server.routes.mcp :as mcp-routes]
             [waymark10.server.routes.mirror :as mirror-routes]
             [waymark10.server.routes.openapi :as openapi-routes]
             [waymark10.server.routes.realtime :as realtime-routes]
@@ -341,6 +342,14 @@
     :pack packs/mirror}
    {:module :openapi :routes openapi-routes/routes :pack packs/openapi}
    {:module :ui :routes ui-routes/routes :pack packs/ui}
+
+   ;; the MCP surface (waymark-4mk): six fixed tools over whatever the
+   ;; caller's grant projects, and the first module built on these
+   ;; seams rather than retrofitted onto them. It enrols no kind and
+   ;; starts nothing — an engine that leaves it out simply has no
+   ;; /api/-/mcp, which is what a deployment that does not want to be
+   ;; agent-drivable should look like.
+   {:module :mcp :routes mcp-routes/routes :pack packs/mcp}
 
    ;; named, contributing nothing through this seam
    {:module :postgres-store}

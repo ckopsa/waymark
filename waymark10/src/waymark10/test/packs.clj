@@ -896,6 +896,224 @@
 (def openapi  {:module :openapi  :obligations [(routes-mounted :openapi)]})
 (def ui       {:module :ui       :obligations [(routes-mounted :ui)]})
 
+;; ── mcp ─────────────────────────────────────────────────────────────
+;;
+;; The MCP surface owes four promises beyond its routes being mounted,
+;; and every one of them is proved END TO END: a JSON-RPC message goes
+;; in at /api/-/mcp and a tool result comes out, because a unit test of
+;; the tool layer would prove the half that was never in doubt. The
+;; grant this pack mints, accepts and revokes is core's own kind, so
+;; these obligations hold on an engine with no application kinds at all
+;; — which is exactly the engine an integrator assembles first.
+
+(def ^:private mcp-tool-names
+  #{"waymark_discover" "waymark_schema" "waymark_query"
+    "waymark_get" "waymark_invoke" "waymark_history"})
+
+(defn- mcp-rpc
+  "One JSON-RPC message at the MCP door, as whichever principal the
+  headers name. → the parsed body."
+  [ctx headers method params]
+  (json ctx (req ctx :post "/api/-/mcp"
+                 (cond-> {:jsonrpc "2.0" :id 1 :method method}
+                   params (assoc :params params))
+                 headers)))
+
+(defn- mcp-call
+  "One tools/call, unwrapped to what the MODEL would see: whether the
+  tool refused, and the JSON it handed back."
+  [ctx headers tool args]
+  (let [body (mcp-rpc ctx headers "tools/call"
+                      {:name tool :arguments (or args {})})
+        out (:result body)
+        text (get-in out [:content 0 :text])]
+    {:refused? (boolean (:isError out))
+     :rpc-error (:error body)
+     :text text
+     :value (when text (try (wire/read-json text) (catch Exception _ nil)))}))
+
+(defn- id-of [self] (last (str/split (str self) #"/")))
+
+(defn- mint-grant!
+  "A grant over one kind, offered to one audience — core's own door,
+  used as a fixture. → its id, or nil when the mint refused (which is
+  itself reported by the obligation that asked)."
+  [ctx audience kind]
+  (let [made (req ctx :post "/api/grants"
+                  {:audience audience
+                   :scope [{:kind (name kind) :actions []}]})]
+    (when (= 201 (:status made))
+      (id-of (:self (json ctx made))))))
+
+(defn- mcp-handshake-violations
+  "initialize answers a protocol version, declares the tools
+  capability, and hands over instructions that say the untrusted-input
+  sentence out loud — the spec's prompt-injection punt is a punt about
+  MITIGATION, never about saying so."
+  [ctx]
+  (let [r (:result (mcp-rpc ctx nil "initialize"
+                            {:protocolVersion "2025-06-18"
+                             :capabilities {}
+                             :clientInfo {:name "conformance" :version "1"}}))
+        instructions (str (:instructions r))]
+    (cond-> []
+      (not= "2025-06-18" (:protocolVersion r))
+      (conj (str "initialize: a version this server supports must be echoed, got "
+                 (pr-str (:protocolVersion r))))
+      (nil? (:tools (:capabilities r)))
+      (conj "initialize: the tools capability is not declared")
+      (nil? (:serverInfo r))
+      (conj "initialize: no serverInfo — a client cannot name what it connected to")
+      (not (str/includes? (str/lower-case instructions) "untrusted"))
+      (conj (str "initialize: the instructions never call row data untrusted "
+                 "input — the one sentence the spec asks this surface to carry"))
+      ;; an unknown revision must not be a refusal: MCP's next release
+      ;; would otherwise be a waymark outage
+      (nil? (:protocolVersion
+             (:result (mcp-rpc ctx nil "initialize"
+                               {:protocolVersion "2099-01-01"}))))
+      (conj "initialize: an unknown protocol version was refused rather than negotiated"))))
+
+(defn- mcp-six-tools-violations
+  "tools/list is the six, and stays the six. The whole design decision
+  is here: the tool list does NOT grow with the law, so an engine with
+  fifty kinds advertises exactly what an engine with one does."
+  [ctx]
+  (let [tools (:tools (:result (mcp-rpc ctx nil "tools/list" nil)))
+        names (into #{} (map :name) tools)]
+    (cond-> []
+      (not= mcp-tool-names names)
+      (conj (str "tools/list: expected exactly " (vec (sort mcp-tool-names))
+                 ", got " (vec (sort names))))
+      (some #(not= "object" (get-in % [:inputSchema :type])) tools)
+      (conj "tools/list: every tool needs an object inputSchema a client can fill")
+      (not= (count tools) (count names))
+      (conj "tools/list: a tool name is advertised twice"))))
+
+(defn- mcp-concealment-violations
+  "The product thesis, checked: the surface an agent discovers is its
+  GRANT'S PROJECTION. A leash over one kind is minted, accepted by its
+  audience, and worn — and the kinds that leash never named are not
+  refused to the agent, they are ABSENT from discover, which is
+  router.clj's posture inherited rather than re-implemented."
+  [ctx]
+  (let [own #{:grant :approval_request :job :capability :self :journal :letter}
+        granted (or (first (app-kinds ctx)) :role)
+        hidden (first (sort (remove #(or (= granted %) (own %))
+                                    (:registry-kinds ctx))))
+        audience "mcp-scope-probe"]
+    (if (nil? hidden)
+      []
+      (if-some [gid (mint-grant! ctx audience granted)]
+        (let [as-audience {"x-waymark-principal" audience
+                           "x-waymark-actor-type" "agent"}
+              accepted ((:invoke ctx) :grant gid :accept {} {:headers as-audience})
+              scoped (assoc as-audience "x-waymark-grant" gid)]
+          (if (not= 200 (:status accepted))
+            [(str "mcp: the audience could not accept its own grant ("
+                  (:status accepted) ") — the concealment probe never got a leash")]
+            (let [{:keys [refused? value]} (mcp-call ctx scoped "waymark_discover" {})
+                  kinds (set (:kinds value))]
+              (cond-> []
+                refused?
+                (conj (str "waymark_discover refused a scoped agent: " (:text value)))
+                (not (contains? kinds (name granted)))
+                (conj (str "waymark_discover: the granted kind " (name granted)
+                           " is missing from a leash that names it — got "
+                           (vec (sort kinds))))
+                (contains? kinds (name hidden))
+                (conj (str "waymark_discover: " (name hidden)
+                           " is not in this grant and must be ABSENT, not"
+                           " refused — concealment is the router's posture"
+                           " and MCP inherits it"))))))
+        [(str "mcp: minting a grant over " (name granted)
+              " refused — the concealment probe has no leash to wear")]))))
+
+(defn- mcp-confirm-violations
+  "The dangerous verb's price. `grant.revoke` declares safety.confirm
+  with a consequence sentence, so the sentence is read off the row's
+  own envelope — through waymark_get, as an agent would — and echoing
+  it is what makes the call run. Echoing something else does not, and
+  neither does echoing nothing: the gate compares exactly, because a
+  gate that accepts a paraphrase is a gate a model talks its way
+  through."
+  [ctx]
+  (if-some [gid (mint-grant! ctx "mcp-confirm-probe"
+                             (or (first (app-kinds ctx)) :role))]
+    (let [env (:value (mcp-call ctx nil "waymark_get" {:kind "grant" :id gid}))
+          sentence (get-in env [:actions :revoke :display :description])
+          invoke (fn [args] (mcp-call ctx nil "waymark_invoke"
+                                      (merge {:kind "grant" :id gid
+                                              :action "revoke"} args)))]
+      (if (str/blank? (str sentence))
+        [(str "mcp: grant " gid " advertises no consequence sentence for revoke"
+              " — there is no confirm gate to prove")]
+        (let [bare (invoke {})
+              wrong (invoke {:acknowledge "yes, do it"})
+              echoed (invoke {:acknowledge sentence})]
+          (cond-> []
+            (not (:refused? bare))
+            (conj "waymark_invoke ran a safety.confirm action with no acknowledge")
+            (not (str/includes? (str (:text bare)) sentence))
+            (conj (str "waymark_invoke's confirm refusal does not carry the "
+                       "sentence it is asking for — an agent cannot echo what "
+                       "it was not told: " (:text bare)))
+            (not (:refused? wrong))
+            (conj (str "waymark_invoke accepted " (pr-str "yes, do it")
+                       " for a consequence sentence — the gate must compare"
+                       " exactly, or it is decoration"))
+            (:refused? echoed)
+            (conj (str "waymark_invoke refused the exact consequence sentence: "
+                       (:text echoed)))
+            (and (not (:refused? echoed))
+                 (not= "revoked" (:state (:value echoed))))
+            (conj (str "waymark_invoke echoed the sentence but the row is "
+                       (pr-str (:state (:value echoed))) ", not revoked"))))))
+    ["mcp: minting a grant refused — the confirm gate has nothing to prove on"]))
+
+(defn- mcp-refusal-violations
+  "A refusal is TOOL OUTPUT, and it is the ENGINE'S refusal. The guard
+  narrated on the envelope as unavailable must be the guard's sentence
+  the tool hands the model — same words, not a re-narration, and never
+  a bare protocol error, because an agent learns from the first and
+  nothing from the second."
+  [ctx]
+  (if-some [gid (mint-grant! ctx "mcp-refusal-probe"
+                             (or (first (app-kinds ctx)) :role))]
+    (let [env (:value (mcp-call ctx nil "waymark_get" {:kind "grant" :id gid}))
+          narrated (get-in env [:unavailable :expire :reason])
+          {:keys [refused? value rpc-error]}
+          (mcp-call ctx nil "waymark_invoke"
+                    {:kind "grant" :id gid :action "expire"})]
+      (cond-> []
+        (str/blank? (str narrated))
+        (conj (str "grant " gid " narrates no unavailable expire — the "
+                   "refusal obligation has nothing to compare against"))
+        rpc-error
+        (conj (str "waymark_invoke answered a JSON-RPC error where a refusal "
+                   "belonged: " (pr-str rpc-error)))
+        (not refused?)
+        (conj "waymark_invoke ran a guard-refused action and called it success")
+        (and (seq (str narrated)) (not= narrated (:detail value)))
+        (conj (str "the tool's refusal " (pr-str (:detail value))
+                   " is not the guard's own sentence " (pr-str narrated)))
+        (nil? (:status value))
+        (conj "the tool's refusal is not a problem document — no status")))
+    ["mcp: minting a grant refused — the refusal obligation has no row"]))
+
+(defn- mcp-obligation [name' run]
+  {:name name' :needs #{[:route :mcp]} :run run})
+
+(def mcp
+  {:module :mcp
+   :obligations
+   [(routes-mounted :mcp)
+    (mcp-obligation :mcp/handshake mcp-handshake-violations)
+    (mcp-obligation :mcp/six-tools mcp-six-tools-violations)
+    (mcp-obligation :mcp/grant-projected-discovery mcp-concealment-violations)
+    (mcp-obligation :mcp/confirm-gate mcp-confirm-violations)
+    (mcp-obligation :mcp/refusals-are-the-engines mcp-refusal-violations)]})
+
 ;; ── realtime ────────────────────────────────────────────────────────
 
 (defn- presence-ttl-violations

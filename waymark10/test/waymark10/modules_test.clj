@@ -155,7 +155,7 @@
                "/api/schemas/:kind" "/api/-/events" "/api/-/seasons"
                "/api/-/presence" "/api/-/intents" "/api/-/intents/abandon"
                "/api/-/intents/answer" "/api/-/collab-ticket"
-               "/api/-/mirrors/:plural/:action" "/api/-/welcome"
+               "/api/-/mirrors/:plural/:action" "/api/-/welcome" "/api/-/mcp"
                "/api/-/grant-check" "/agentInvite" "/api/-/agent-invite"
                "/api/-/ui" "/api/-/ui-lite" "/api/attachments/:id/bytes"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
@@ -197,6 +197,23 @@
       (is (= 404 (get! core "/api/-/seasons")))
       (is (= 404 (get! core "/api/openapi.json")))
       (is (= 404 (get! core "/"))))
+    ;; the MCP door answers POST; its GET is the deliberate 405 that
+    ;; says this server pushes nothing (the streaming punt, on the
+    ;; wire). So it is asked the way it is meant to be asked — and
+    ;; core-only, the address is nobody's, which is what a deployment
+    ;; that does not want to be agent-drivable should look like.
+    (let [post! (fn [h]
+                  (:status (h {:request-method :post :uri "/api/-/mcp"
+                               :headers {"x-waymark-principal" "someone"}
+                               :body (wire/write-json
+                                      {:jsonrpc "2.0" :id 1
+                                       :method "tools/list"})})))]
+      (testing "assembled, the MCP door answers JSON-RPC"
+        (is (= 200 (post! full)))
+        (is (= 405 (get! full "/api/-/mcp"))))
+      (testing "left out, it is an address nobody mounted"
+        (is (= 404 (post! core)))
+        (is (= 404 (get! core "/api/-/mcp")))))
     (testing "and core answers the same either way"
       (is (= 200 (get! full "/api/.well-known/waymark")))
       (is (= 200 (get! core "/api/.well-known/waymark"))))))
@@ -335,7 +352,7 @@
 (deftest packs-read-the-same-selection-everything-else-reads
   (testing "every module that owes obligations offers a pack"
     (is (= [:core :attachments :webhooks :jobs :worksheet :capabilities
-            :dashboard :seasons :realtime :mirror :openapi :ui]
+            :dashboard :seasons :realtime :mirror :openapi :ui :mcp]
            (mapv :module (modules/packs nil)))))
   (testing "a named selection keeps core and nothing it did not name"
     (is (= [:core :jobs] (mapv :module (modules/packs [:jobs])))))

@@ -251,10 +251,16 @@
 
 ;; ── entries ─────────────────────────────────────────────────────────
 
-(defn- project-input-js
+(defn project-input-js
   "The batch-B argument projection of one advertised input schema:
   denied properties drop (their folded enums with them), required
-  shrinks to match. arg-ok? nil = no projection."
+  shrinks to match. arg-ok? nil = no projection.
+
+  Public since waymark-4mk: `waymark_schema` advertises a kind's
+  action inputs with no row in hand, and an argument a grant denies
+  must be absent there for the same reason it is absent from an
+  envelope's entry. Two projections of one rule is a leak waiting to
+  happen."
   [js arg-ok?]
   (if (nil? arg-ok?)
     js
