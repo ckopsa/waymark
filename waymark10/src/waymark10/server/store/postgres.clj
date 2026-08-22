@@ -10,7 +10,9 @@
             [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (com.zaxxer.hikari HikariConfig HikariDataSource)
-           (java.sql Timestamp)
+           (java.nio.charset StandardCharsets)
+           (java.sql Connection DriverManager Timestamp)
+           (java.util.zip CRC32)
            (org.postgresql.util PGobject)))
 
 (set! *warn-on-reflection* true)
@@ -314,6 +316,118 @@
                            (throw (ex-info (str "unknown cond op " op) {:op op})))
               " " rval)
          [value]]))))
+
+;; ── elected singletons (pg_advisory_lock) ───────────────────────────
+;; Lived in server/coherence.clj until waymark-db9.4. It moved here
+;; because election is a STORAGE capability, not a module's: a
+;; lifecycle hook declares `:elected <role>` and the engine asks the
+;; storage to elect, so the in-memory twin degrades the same hook to a
+;; plain start instead of the engine learning which backend it has.
+;; coherence keeps start-role!/stop-role! as the named primitive, now
+;; delegating here.
+
+(defn- warn! [& parts]
+  (binding [*out* *err*]
+    (println (apply str "waymark10 postgres: " parts))))
+
+(def lock-namespace
+  "The high 32 bits of every waymark10 advisory-lock key: the ASCII
+  bytes \"WM10\". Documented so no other tenant of the database claims
+  the word by accident."
+  0x574D3130)
+
+(defn role-lock-key
+  "role name → the pg advisory-lock bigint: (\"WM10\" << 32) |
+  crc32(utf-8 name). Deterministic across JVMs, collision-free for the
+  four names in use (webhooks-deliverer, clock-sweeper,
+  jobs-orphan-sweeper, attachments-purge), and disjoint from any other
+  application's advisory keys unless it also claims the WM10 word.
+
+  The NAME is the keyspace, which is why waymark10.modules spells
+  `:elected` as a role keyword rather than a bare true: a hook
+  renamed is a lock renamed, and two versions of this artifact in a
+  rolling deploy would both think themselves the only holder."
+  ^long [role-name]
+  (let [crc (doto (CRC32.)
+              (.update (.getBytes (name role-name) StandardCharsets/UTF_8)))]
+    (bit-or (bit-shift-left (long lock-namespace) 32) (.getValue crc))))
+
+(defn- lock-connection
+  "A dedicated raw JDBC connection for one role's lock — deliberately
+  NOT from the Hikari pool (the listen-connection discipline): the
+  advisory lock is session-scoped, and the pool recycling the session
+  would drop it silently."
+  ^Connection [^HikariDataSource ds]
+  (DriverManager/getConnection (.getJdbcUrl ds)))
+
+(defn- try-lock? [conn ^long key]
+  (boolean (:locked (jdbc/execute-one!
+                     conn ["SELECT pg_try_advisory_lock(?) AS locked" key]
+                     jdbc-opts))))
+
+(defn- elect!
+  "The election loop: acquire pg_try_advisory_lock(role-lock-key
+  role-name) on a dedicated connection, retrying every :retry-ms; the
+  holder calls (start-fn) and holds until released or the session dies
+  (checked every retry interval), then (stop-fn handle) runs and the
+  session closes — releasing the lock, so the peer's next try takes
+  over."
+  [^HikariDataSource ds role-name {:keys [retry-ms start-fn stop-fn]
+                                   :or {retry-ms 5000}}]
+  (let [key (role-lock-key role-name)
+        running (atom true)
+        held? (atom false)
+        starts (atom 0)
+        t (Thread.
+           ^Runnable
+           (fn []
+             (while @running
+               (let [conn (try (lock-connection ds)
+                               (catch Exception e
+                                 (when @running
+                                   (warn! "role " (name role-name)
+                                          ": no lock connection ("
+                                          (ex-message e) "); retrying"))
+                                 nil))]
+                 (if (nil? conn)
+                   (try (Thread/sleep (long retry-ms))
+                        (catch InterruptedException _ nil))
+                   (try
+                     ;; contend
+                     (loop []
+                       (when (and @running (not (try-lock? conn key)))
+                         (Thread/sleep (long retry-ms))
+                         (recur)))
+                     ;; hold
+                     (when @running
+                       (swap! starts inc)
+                       (reset! held? true)
+                       (let [handle (start-fn)]
+                         (try
+                           (loop []
+                             (when (and @running (.isValid ^Connection conn 2))
+                               (Thread/sleep (long retry-ms))
+                               (recur)))
+                           (finally
+                             (reset! held? false)
+                             (try (when stop-fn (stop-fn handle))
+                                  (catch Exception e
+                                    (warn! "role " (name role-name)
+                                           " stop-fn: " (ex-message e))))))))
+                     (catch InterruptedException _ nil)
+                     (catch Exception e
+                       (when @running
+                         (warn! "role " (name role-name) " loop: "
+                                (ex-message e))
+                         (try (Thread/sleep (long retry-ms))
+                              (catch InterruptedException _ nil))))
+                     (finally
+                       ;; closing the session releases the lock
+                       (try (.close ^Connection conn)
+                            (catch Exception _ nil))))))))
+           (str "waymark10-role-" (name role-name)))]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:role role-name :thread t :running running :held? held? :starts starts}))
 
 ;; ── the storage ─────────────────────────────────────────────────────
 
@@ -688,6 +802,15 @@
                    jdbc-opts)]
       {:holder (:holder r)
        :expires-at (->inst (:expires_at r))}))
+
+  (elect-role! [_ role-name opts]
+    (elect! ds role-name opts))
+
+  (release-role! [_ {:keys [running ^Thread thread]}]
+    (reset! running false)
+    (some-> thread .interrupt)
+    (some-> thread (.join 5000))
+    nil)
 
   (restamp-law! [_ tx kind where to-revision]
     (let [table (get @tables kind)

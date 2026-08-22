@@ -1,6 +1,7 @@
 (ns waymark10.batch-a-envelope-test
   "Batch A acceptance: parts, links, depth and effort — the envelope
-  obligations (waymark10.test.envelope-obligations) driven as ring
+  obligations (waymark10.test.conformance, where waymark-db9.5
+  folded them) driven as ring
   requests through the real handler, over the phase-1 fixtures plus
   the link-bearing batch-a trio and one suite-local placed kind whose
   acceptance set actually excludes items (the fixtures' date guard
@@ -18,7 +19,7 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.test.envelope-obligations :as ob]
+            [waymark10.test.conformance :as ob]
             [waymark10.wire :as wire]))
 
 ;; ── the suite-local placed kind: an acceptance set with teeth ───────

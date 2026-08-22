@@ -138,6 +138,7 @@
             [waymark10.schema :as schema]
             [waymark10.server.invoke :as inv]
             [waymark10.server.jobs :as jobs]
+            [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Duration Instant LocalDate ZoneOffset)
@@ -709,6 +710,27 @@
                   "write moves between " (vec (sort writable))
                   " (domain state lives in data)"))))))
 
+(declare refresh!)
+
+(defrecord Spec []
+  ;; The pull-through, as CORE knocks on it (waymark-db9.7). The
+  ;; router's GET used to require this namespace to refresh a stale
+  ;; mirrored row; the refresh is not a route and — unlike presence
+  ;; and intents — not a running surface either. Every conformance
+  ;; fixture in the tree GETs mirrored rows through a bare
+  ;; engine/handler that never started, so asking the runtime for it
+  ;; would have turned the pull-through quietly off in exactly the
+  ;; suites that prove it.
+  ;;
+  ;; What it IS is a property of the DECLARATION: a kind that
+  ;; declares :mirror declares a read-through. So the spec value
+  ;; `declaration` mints below is the implementation, and core's GET
+  ;; asks the value it already holds on the rdef. Field-less like
+  ;; the two registries: the keys are the ones declaration writes,
+  ;; and fingerprint/authority-fp reads them by name.
+  seams/ReadThrough
+  (pull-through [_ eng rdef row] (refresh! eng rdef row)))
+
 (defn declaration
   "Weave the sync machine into an application declaration map:
 
@@ -861,15 +883,18 @@
                :states sync-states
                :initial :fresh
                :terminal #{}
-               :mirror (cond-> {:adapter adapter
-                                :ttl-seconds (or ttl-seconds 300)
-                                :discover-every (or discover-every 300)
-                                :document mode
-                                :push-on-write (boolean push-on-write)
-                                :create-push (boolean create-push)
-                                :local-rows (boolean local-rows)
-                                :priority (or priority 50)
-                                :on-gone (if gone-patch {:set gone-patch} :keep)}
+               :mirror (cond-> (map->Spec
+                                {:adapter adapter
+                                 :ttl-seconds (or ttl-seconds 300)
+                                 :discover-every (or discover-every 300)
+                                 :document mode
+                                 :push-on-write (boolean push-on-write)
+                                 :create-push (boolean create-push)
+                                 :local-rows (boolean local-rows)
+                                 :priority (or priority 50)
+                                 :on-gone (if gone-patch
+                                            {:set gone-patch}
+                                            :keep)})
                          resync-every (assoc :resync-every resync-every))
                :actions
                (merge

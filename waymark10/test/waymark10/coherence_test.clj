@@ -5,8 +5,16 @@
   sharing Postgres. The stale-law window is demonstrated, then closed
   by the refresh (directly, and through the outbox-riding consumer);
   the mixed-code boundary is proved recorded (a refresh never mints
-  law); the webhook deliverer and the clock sweeper are elected by
-  advisory lock — one holder, clean takeover.
+  law); the webhook deliverer and the clock sweeper are elected — one
+  holder, clean takeover.
+
+  The election tests drive the LIFECYCLE SEAM, not this namespace:
+  since waymark-db9.4 `:elected` is a property of a module's runtime
+  hook and the engine walks the hooks (engine/start-runtime!), so the
+  faithful simulation of two processes is two started runtimes. That
+  is also what they prove has not weakened — coherence no longer
+  reaches into webhooks and maintainer to start them, and the roles
+  are held exactly as they were.
 
   Collab locality is documented, not tested: rooms are process-local
   by design — edits persist through the shared draft rows so joiners
@@ -27,6 +35,7 @@
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.render :as render]
+            [waymark10.server.runtime :as runtime]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -332,74 +341,79 @@
   (count (filter #(= (str event-id) (get (:headers %) "x-waymark-event-id"))
                  @(:hits rcv))))
 
-(defn- role-starts [& cohs]
-  (reduce + (map #(deref (get-in % [:webhooks-role :starts])) cohs)))
+(defn- started
+  "Two processes, both runtimes walked — the shape engine/start! puts
+  a deployed process in, minus the http server."
+  [engs]
+  (doseq [eng engs] (engine/start-runtime! eng))
+  nil)
 
 (deftest webhook-deliverer-election-and-takeover
   (fresh!)
   (with-two [gizmo]
     {:webhook-attempts 2 :webhook-backoff-ms 5 :webhooks-poll-ms 200
-     :events-poll-ms 100}
+     :events-poll-ms 100 :role-retry-ms 200 :law-refresh-debounce-ms 150}
     (fn [eng-a eng-b]
-      (let [rcv (receiver!)
-            d-a (events/dispatcher eng-a {:poll-ms 100})
-            d-b (events/dispatcher eng-b {:poll-ms 100})
-            coh-a (coherence/start! eng-a d-a {:debounce-ms 150
-                                               :role-retry-ms 200})
-            coh-b (coherence/start! eng-b d-b {:debounce-ms 150
-                                               :role-retry-ms 200})
-            held? (fn [coh] @(get-in coh [:webhooks-role :held?]))]
-        (try
-          (testing "exactly one process holds the deliverer role"
-            (is (await-pred #(= 1 (count (filter held? [coh-a coh-b]))) 5000))
-            (is (= 1 (role-starts coh-a coh-b))))
-          (let [{sub :row} (inv/create! eng-a :subscription
-                                        {:url (:url rcv)
-                                         :kinds ["coh_gizmo"]}
-                                        {:principal elena})
-                {g1 :row} (inv/create! eng-b :coh_gizmo {:name "g1"}
-                                       {:principal elena})
-                spin1 (get-in (inv/invoke! eng-b :coh_gizmo (:id g1) :spin nil
-                                           {:principal elena})
-                              [:transition :id])
-                consumer (str "webhook:" (:id sub))]
-            (testing "the holder delivers; the other never doubles"
-              (is (await-pred #(pos? (delivery-count rcv spin1)) 10000))
-              ;; the cursor persisted past the delivery — the takeover
-              ;; will replay nothing
-              (is (await-pred
-                   #(<= spin1 (or (store/with-tx (:storage eng-a)
-                                    (fn [tx] (store/cursor-get
-                                              (:storage eng-a) tx consumer)))
-                                  0))
-                   5000))
-              (Thread/sleep 300)
-              (is (= 1 (delivery-count rcv spin1))))
-            (testing "kill the holder; the other acquires and resumes"
-              (let [[dead survivor] (if (held? coh-a)
-                                      [coh-a coh-b] [coh-b coh-a])]
-                (coherence/stop! dead)
-                (is (await-pred #(held? survivor) 5000)
-                    "takeover within the retry interval")
-                (is (= 2 (role-starts coh-a coh-b))
-                    "one initial start, one takeover — never two at once"))
-              (let [{g2 :row} (inv/create! eng-a :coh_gizmo {:name "g2"}
-                                           {:principal elena})
-                    spin2 (get-in (inv/invoke! eng-a :coh_gizmo (:id g2)
-                                               :spin nil {:principal elena})
-                                  [:transition :id])]
-                (is (await-pred #(pos? (delivery-count rcv spin2)) 10000)
-                    "delivery resumed under the new holder")
+      (let [rcv (receiver!)]
+        (started [eng-a eng-b])
+        ;; hold the role handles: a stopped runtime empties its atom,
+        ;; and the takeover assertion has to keep counting starts
+        ;; across the process it just killed
+        (let [role (fn [eng] (runtime/surface eng :webhooks-deliverer))
+              role-a (role eng-a)
+              role-b (role eng-b)
+              held? (fn [r] @(:held? r))
+              role-starts #(+ @(:starts role-a) @(:starts role-b))]
+          (try
+            (testing "exactly one process holds the deliverer role"
+              (is (await-pred #(= 1 (count (filter held? [role-a role-b])))
+                              5000))
+              (is (= 1 (role-starts))))
+            (let [{sub :row} (inv/create! eng-a :subscription
+                                          {:url (:url rcv)
+                                           :kinds ["coh_gizmo"]}
+                                          {:principal elena})
+                  {g1 :row} (inv/create! eng-b :coh_gizmo {:name "g1"}
+                                         {:principal elena})
+                  spin1 (get-in (inv/invoke! eng-b :coh_gizmo (:id g1) :spin nil
+                                             {:principal elena})
+                                [:transition :id])
+                  consumer (str "webhook:" (:id sub))]
+              (testing "the holder delivers; the other never doubles"
+                (is (await-pred #(pos? (delivery-count rcv spin1)) 10000))
+                ;; the cursor persisted past the delivery — the takeover
+                ;; will replay nothing
+                (is (await-pred
+                     #(<= spin1 (or (store/with-tx (:storage eng-a)
+                                      (fn [tx] (store/cursor-get
+                                                (:storage eng-a) tx consumer)))
+                                    0))
+                     5000))
                 (Thread/sleep 300)
-                (is (= 1 (delivery-count rcv spin2)))
-                (is (= 1 (delivery-count rcv spin1))
-                    "the takeover replayed nothing"))))
-          (finally
-            (coherence/stop! coh-a)
-            (coherence/stop! coh-b)
-            (events/stop! d-a)
-            (events/stop! d-b)
-            (http/server-stop! (:server rcv))))))))
+                (is (= 1 (delivery-count rcv spin1))))
+              (testing "kill the holder; the other acquires and resumes"
+                (let [[dead survivor] (if (held? role-a)
+                                        [eng-a role-b] [eng-b role-a])]
+                  (engine/stop-runtime! dead)
+                  (is (await-pred #(held? survivor) 5000)
+                      "takeover within the retry interval")
+                  (is (= 2 (role-starts))
+                      "one initial start, one takeover — never two at once"))
+                (let [{g2 :row} (inv/create! eng-a :coh_gizmo {:name "g2"}
+                                             {:principal elena})
+                      spin2 (get-in (inv/invoke! eng-a :coh_gizmo (:id g2)
+                                                 :spin nil {:principal elena})
+                                    [:transition :id])]
+                  (is (await-pred #(pos? (delivery-count rcv spin2)) 10000)
+                      "delivery resumed under the new holder")
+                  (Thread/sleep 300)
+                  (is (= 1 (delivery-count rcv spin2)))
+                  (is (= 1 (delivery-count rcv spin1))
+                      "the takeover replayed nothing"))))
+            (finally
+              (engine/stop-runtime! eng-a)
+              (engine/stop-runtime! eng-b)
+              (http/server-stop! (:server rcv)))))))))
 
 ;; ── 5. the clock sweeper: one holder sweeps the due flip ───────────
 
@@ -407,20 +421,17 @@
   (fresh!)
   (let [clock (atom (Instant/parse "2026-07-10T12:00:00Z"))]
     (with-two [reminder]
-      {:now-fn (fn [] @clock) :sweep-interval-ms 100 :events-poll-ms 100}
+      {:now-fn (fn [] @clock) :sweep-interval-ms 100 :events-poll-ms 100
+       :role-retry-ms 200 :law-refresh-debounce-ms 150}
       (fn [eng-a eng-b]
-        (let [d-a (events/dispatcher eng-a {:poll-ms 100})
-              d-b (events/dispatcher eng-b {:poll-ms 100})
-              coh-a (coherence/start! eng-a d-a {:debounce-ms 150
-                                                 :role-retry-ms 200})
-              coh-b (coherence/start! eng-b d-b {:debounce-ms 150
-                                                 :role-retry-ms 200})
-              held? (fn [coh] @(get-in coh [:sweeper-role :held?]))
-              starts #(+ @(get-in coh-a [:sweeper-role :starts])
-                         @(get-in coh-b [:sweeper-role :starts]))]
+        (started [eng-a eng-b])
+        (let [role-a (runtime/surface eng-a :clock-sweeper)
+              role-b (runtime/surface eng-b :clock-sweeper)
+              held? (fn [r] @(:held? r))
+              starts #(+ @(:starts role-a) @(:starts role-b))]
           (try
             (testing "exactly one process runs a sweeper"
-              (is (await-pred #(= 1 (count (filter held? [coh-a coh-b])))
+              (is (await-pred #(= 1 (count (filter held? [role-a role-b])))
                               5000))
               (is (= 1 (starts))))
             (let [{row :row} (inv/create! eng-a :coh_reminder
@@ -445,9 +456,7 @@
                       maintainer's recorded discipline)"))
                 (is (= 1 (starts))
                     "still exactly one sweeper ever started")
-                (is (= 1 (count (filter held? [coh-a coh-b]))))))
+                (is (= 1 (count (filter held? [role-a role-b]))))))
             (finally
-              (coherence/stop! coh-a)
-              (coherence/stop! coh-b)
-              (events/stop! d-a)
-              (events/stop! d-b))))))))
+              (engine/stop-runtime! eng-a)
+              (engine/stop-runtime! eng-b))))))))

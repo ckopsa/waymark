@@ -13,7 +13,8 @@
   a Mirror adapter) or a bare namespace, whose public defresource'd
   values are collected. Exit 0 with a warning count; exit 1 on the
   first definition error; exit 2 when nothing checkable was named."
-  (:require [waymark10.server.engine :as engine])
+  (:require [waymark10.modules :as modules]
+            [waymark10.server.engine :as engine])
   (:gen-class))
 
 (set! *warn-on-reflection* true)
@@ -46,9 +47,19 @@
 
 (defn report
   "Assemble and report. Returns {:kinds n :warnings n} or throws the
-  first definition error (the caller owns the exit code)."
+  first definition error (the caller owns the exit code).
+
+  Enrollment goes first, and deliberately: a resources vector that
+  fights the enrollment table (waymark10.modules) usually dies in the
+  registry a breath later with `one law per kind`, which names the
+  collision but not the module that owns the other half. Saying it
+  before the assembly runs means the author reads the explanation
+  first."
   [resources]
-  (let [reg (engine/full-registry resources)
+  (let [enrollment-warnings (modules/warnings resources nil)
+        _ (doseq [w enrollment-warnings]
+            (println (str "  [enrollment] " w)))
+        reg (engine/full-registry resources)
         assembly-warnings (:waymark10/warnings (meta reg))
         rows (for [r resources]
                {:kind (:kind r)
@@ -68,7 +79,8 @@
       (println (str "  [assembly] " w)))
     {:kinds (count rows)
      :warnings (+ (reduce + 0 (map (comp count :warnings) rows))
-                  (count assembly-warnings))}))
+                  (count assembly-warnings)
+                  (count enrollment-warnings))}))
 
 (defn -main [& args]
   (when (empty? args)

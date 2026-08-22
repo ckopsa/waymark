@@ -28,9 +28,10 @@
     running progress.
   - The orphan sweep: sweep-orphans! re-queues :running jobs whose
     lease is absent or expired (no live claimant — the worker died
-    between renewals); start-orphan-sweeper! elects ONE sweeper across
-    processes via coherence/start-role! (the advisory-lock election),
-    the same discipline as the webhook deliverer. The lease steal
+    between renewals); start-orphan-sweeper! is the loop, and the
+    module's lifecycle hook carries `:elected :jobs-orphan-sweeper`
+    so ONE process per database runs it (waymark-db9.4 — the
+    election used to be wired in here, by name). The lease steal
     still resumes too — the sweep just makes the orphan VISIBLE as
     queued instead of leaving it wearing a dead worker's :running.
 
@@ -53,11 +54,11 @@
   daemon that dies mid-pass leaves its job re-queued for the next
   lease holder, the same visibility the bulk jobs get."
   (:require [waymark10.guards :as g]
-            [waymark10.resource :refer [defresource]]
+            [waymark10.resource :as r]
             [waymark10.schema :as schema]
-            [waymark10.server.coherence :as coherence]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
+            [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
             [waymark10.types :as t])
   (:import (java.time Instant)
@@ -109,8 +110,23 @@
             :hide true
             :check (fn [_ _ ctx] (if (system? ctx) (t/allow) (t/deny)))}))
 
-(defresource job
-  {:kind :job
+(declare enqueue!)
+
+(def ^:private deferral-door
+  "The door core's bulk grammar walks through when a call exceeds its
+  declared :defer-over (waymark-db9.7). It stamps the rdef below, so
+  the ONE thing core needs from this module rides the kind the module
+  ENROLLED — the same enrollment that makes the 202's envelope
+  renderable. Before this, router.clj required this namespace by name
+  for a single call, which is what kept `waymark10.server.jobs` on
+  the classpath of an engine assembled without the jobs module."
+  (reify seams/Deferring
+    (defer! [_ eng deferred principal] (enqueue! eng deferred principal))))
+
+(def job
+  (seams/with-deferral
+   (r/resource
+    {:kind :job
    :plural "jobs"
    :states [:queued :running :completed :cancelled]
    :initial :queued
@@ -159,13 +175,19 @@
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "The worker's bookkeeping: the items are already done when this fires."}
                :display {:label "Complete" :order 9}}}})
+   deferral-door))
 
-;; ── minting (the router's defer seam) ───────────────────────────────
+;; ── minting (the deferral door) ─────────────────────────────────────
 
 (defn enqueue!
   "One deferred bulk call becomes one job row: created through the
   ordinary engine path (system actor — jobs are never wire-created),
-  the requesting principal recorded in data. → the create! result."
+  the requesting principal recorded in data. → the create! result.
+
+  Reached from core through `deferral-door` above, never by name:
+  the document shape and the worker actor are this module's, and a
+  copy of either in the router would be exactly the drift this
+  framework exists to make impossible."
   [eng {:keys [kind action ids input]} principal]
   (inv/create! eng :job
                (cond-> {:action (name action)
@@ -401,30 +423,32 @@
      running)))
 
 (defn start-orphan-sweeper!
-  "The orphan sweep as an ELECTED singleton (coherence/start-role!'s
-  advisory-lock election, role :jobs-orphan-sweeper): one process per
-  database sweeps every :interval-ms (default 30s); a crashed holder's
-  lock session dies and a peer takes over within one retry interval.
-  Returns the role handle; stop with coherence/stop-role!."
-  [eng {:keys [interval-ms retry-ms] :or {interval-ms 30000}}]
-  (coherence/start-role!
-   (:storage eng) :jobs-orphan-sweeper
-   {:retry-ms (or retry-ms 5000)
-    :start-fn
-    (fn []
-      (let [stop (CountDownLatch. 1)
-            t (Thread. ^Runnable
-                       (fn []
-                         (loop []
-                           (when-not (.await stop (long interval-ms)
-                                             TimeUnit/MILLISECONDS)
-                             (try (sweep-orphans! eng)
-                                  (catch Exception e
-                                    (warn! "orphan sweep failed: "
-                                           (ex-message e))))
-                             (recur))))
-                       "waymark10-jobs-orphans")]
-        (doto ^Thread t (.setDaemon true) (.start))
-        {:thread t :stop stop}))
-    :stop-fn (fn [{:keys [^CountDownLatch stop]}]
-               (some-> stop .countDown))}))
+  "The orphan sweep's loop: every :interval-ms (default 30s),
+  sweep-orphans! re-queues the running jobs no live worker claims.
+  Returns the handle stop-orphan-sweeper! takes.
+
+  ONE process per database should run this, and that is no longer
+  decided here: the jobs module's lifecycle hook carries `:elected
+  :jobs-orphan-sweeper` and the engine elects the holder through the
+  storage (waymark10.modules, store/elect-role!). Election used to be
+  baked into this function, which meant a plain start — the shape a
+  test wants — did not exist."
+  [eng {:keys [interval-ms] :or {interval-ms 30000}}]
+  (let [stop (CountDownLatch. 1)
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop (long interval-ms)
+                                         TimeUnit/MILLISECONDS)
+                         (try (sweep-orphans! eng)
+                              (catch Exception e
+                                (warn! "orphan sweep failed: "
+                                       (ex-message e))))
+                         (recur))))
+                   "waymark10-jobs-orphans")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn stop-orphan-sweeper! [{:keys [^CountDownLatch stop]}]
+  (some-> stop .countDown)
+  nil)

@@ -1,7 +1,15 @@
 (ns waymark10.server.coherence
   "Multi-process coherence — retiring the bus.py punt ('single-process
   engines'). Two mechanisms, one namespace: the law-refresh consumer
-  and advisory-lock-elected singleton roles.
+  and the elected singleton role.
+
+  Neither is WIRED here any more (waymark-db9.4). Both are lifecycle
+  hooks on waymark10.modules/inventory, walked by
+  waymark10.server.runtime — the refresh as a core hook, election as
+  a `:elected` flag any module's hook may carry. What is left in this
+  file is the law-refresh consumer's guarded body, which was always
+  ours, and start-role!/stop-role! as the election primitive's named
+  spelling over the Storage protocol's elect-role!.
 
   THE PROBLEM. The law slots (:current-law, :judgment-laws, the
   proposed/piloted overlays, the judgment caches) live in each
@@ -61,22 +69,27 @@
     the resident code where the stamp is unknown (judgment.clj's
     recorded fallback).
 
-  2. SINGLETON ROLES BY ADVISORY LOCK. start-role! elects one holder
-  per role name across every process sharing the database:
-  pg_try_advisory_lock on a well-known bigint, held on a DEDICATED
-  raw connection (never from the Hikari pool — the lock is
-  session-scoped and a recycled session would drop it silently; the
-  same discipline as the dispatcher's LISTEN connection). The holder
-  runs the role's start-fn and holds until stopped or the session
-  dies; non-holders retry acquisition every :retry-ms. Closing the
-  session releases the lock, so a clean stop OR a crashed process
-  hands the role over within one retry interval. The LOCK KEYSPACE:
-  the key's high 32 bits are the fixed namespace 0x574D3130 (the
-  ASCII bytes \"WM10\"), the low 32 bits are the CRC32 of the role
-  name's UTF-8 bytes — deterministic across JVMs, collision-free for
-  the two names in use (webhooks-deliverer, clock-sweeper), and
-  disjoint from any other application's advisory keys unless it also
-  claims the WM10 word.
+  2. SINGLETON ROLES BY ELECTION. start-role! elects one holder per
+  role name across every process sharing the storage. The holder runs
+  the role's start-fn and holds until stopped or its session dies;
+  non-holders retry acquisition every :retry-ms, so a clean stop OR a
+  crashed process hands the role over within one retry interval.
+
+  The MECHANISM is no longer here (waymark-db9.4). It is
+  store/elect-role!, a method on the Storage protocol — pg_advisory_
+  lock on a dedicated session in server/store/postgres.clj, and an
+  immediate self-election on the in-memory twin, which has no peers
+  to contend with. Two things follow, and both were the point. A
+  lifecycle hook can now declare `:elected <role>` as a PROPERTY of
+  the running surface (waymark10.modules) instead of this namespace
+  reaching out and starting two other modules by name. And the twin
+  degrades that flag to a plain start rather than dropping the
+  surface, because the engine asks the storage to elect and never
+  learns which backend it has — the same posture as the boot's
+  migrate gate, which asks store/migratable? instead of guessing.
+
+  start-role!/stop-role! stay here as the named primitive, and the
+  lock keyspace is documented at store/postgres/role-lock-key.
 
   WHAT STAYS PROCESS-LOCAL, recorded:
   - SSE subscribers: correct — each process serves its own
@@ -95,29 +108,20 @@
     already multi-process safe — the worker stays a per-process
     start, NOT a role.
 
-  INTEGRATION (engine/start!, applied post-merge by the maintainer):
-  coherence owns the deliverer and the sweeper — start! here REPLACES
-  the direct webhooks/start-deliverer! and maintainer/start-sweeper!
-  calls. In engine/start!'s runtime map, drop the :sweeper and
-  :webhooks entries and add
-      :coherence (coherence/start! eng dispatcher {})
-  and in engine/stop!, before stopping the dispatcher,
-      (some-> coherence coherence/stop!)
-  (requiring [waymark10.server.coherence :as coherence]; the
-  destructuring gains :coherence and loses :sweeper/:webhooks). The
-  jobs worker and mirror discovery entries stay as they are."
-  (:require [next.jdbc :as jdbc]
-            [next.jdbc.result-set :as rs]
-            [waymark10.server.definitions :as defs]
+  INTEGRATION. Neither half is wired from here any more. Both are
+  entries in waymark10.modules/inventory's `:hooks` column, which
+  engine/start! walks (waymark-db9.4): the law refresh is a CORE hook
+  ordered `:after [:dispatcher]`, and the webhook deliverer and the
+  clock sweeper are their own modules' hooks carrying `:elected`.
+  Until db9.4 this namespace started those two itself, by name — a
+  core namespace reaching into two module namespaces, which is
+  exactly the coupling the module seam exists to remove. What is left
+  here is what was always ours: the guarded refresh, and the election
+  primitive's public spelling."
+  (:require [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.maintainer :as maintainer]
-            [waymark10.server.store :as store]
-            [waymark10.server.webhooks :as webhooks])
-  (:import (com.zaxxer.hikari HikariDataSource)
-           (java.nio.charset StandardCharsets)
-           (java.sql Connection DriverManager)
-           (java.util.zip CRC32)))
+            [waymark10.server.store :as store]))
 
 (set! *warn-on-reflection* true)
 
@@ -242,146 +246,31 @@
   (some-> thread (.join 5000))
   nil)
 
-;; ── singleton roles by advisory lock ────────────────────────────────
-
-(def lock-namespace
-  "The high 32 bits of every waymark10 advisory-lock key: the ASCII
-  bytes \"WM10\". Documented so no other tenant of the database
-  claims the word by accident."
-  0x574D3130)
-
-(defn role-lock-key
-  "role name → the pg advisory-lock bigint: (\"WM10\" << 32) |
-  crc32(utf-8 name). Deterministic across JVMs."
-  ^long [role-name]
-  (let [crc (doto (CRC32.)
-              (.update (.getBytes (name role-name) StandardCharsets/UTF_8)))]
-    (bit-or (bit-shift-left (long lock-namespace) 32) (.getValue crc))))
-
-(defn- raw-connection
-  "A dedicated raw JDBC connection for one role's lock — deliberately
-  NOT from the Hikari pool (the listen-connection discipline): the
-  advisory lock is session-scoped, and the pool recycling the session
-  would drop it silently."
-  ^Connection [storage]
-  (DriverManager/getConnection (.getJdbcUrl ^HikariDataSource (:ds storage))))
-
-(defn- try-lock? [conn ^long key]
-  (boolean (:locked (jdbc/execute-one!
-                     conn ["SELECT pg_try_advisory_lock(?) AS locked" key]
-                     {:builder-fn rs/as-unqualified-maps}))))
+;; ── singleton roles: the election primitive ────────────────────────
+;; The mechanism moved to the Storage protocol at waymark-db9.4
+;; (store/elect-role!, pg_advisory_lock on Postgres and an immediate
+;; self-election on the in-memory twin). These two stay as the named
+;; primitive — the spelling jobs, attachments and the batch suites
+;; already read — and as the place the discipline is written down.
 
 (defn start-role!
   "Elect-and-run one singleton role across every process sharing the
-  database: acquire pg_try_advisory_lock(role-lock-key role-name) on
-  a dedicated connection, retrying every :retry-ms (default 5000);
-  the holder calls (start-fn) and holds until stop-role! or the
-  session dies (checked every retry interval), then (stop-fn handle)
-  runs and the session closes — releasing the lock, so the peer's
-  next try takes over. A crashed process releases the same way: its
-  sessions die with it. Returns the role handle; :held? and :starts
-  are readable state."
-  [storage role-name {:keys [retry-ms start-fn stop-fn]
-                      :or {retry-ms 5000}}]
-  (let [key (role-lock-key role-name)
-        running (atom true)
-        held? (atom false)
-        starts (atom 0)
-        t (Thread.
-           ^Runnable
-           (fn []
-             (while @running
-               (let [conn (try (raw-connection storage)
-                               (catch Exception e
-                                 (when @running
-                                   (warn! "role " (name role-name)
-                                          ": no lock connection ("
-                                          (ex-message e) "); retrying"))
-                                 nil))]
-                 (if (nil? conn)
-                   (try (Thread/sleep (long retry-ms))
-                        (catch InterruptedException _ nil))
-                   (try
-                     ;; contend
-                     (loop []
-                       (when (and @running (not (try-lock? conn key)))
-                         (Thread/sleep (long retry-ms))
-                         (recur)))
-                     ;; hold
-                     (when @running
-                       (swap! starts inc)
-                       (reset! held? true)
-                       (let [handle (start-fn)]
-                         (try
-                           (loop []
-                             (when (and @running (.isValid ^Connection conn 2))
-                               (Thread/sleep (long retry-ms))
-                               (recur)))
-                           (finally
-                             (reset! held? false)
-                             (try (stop-fn handle)
-                                  (catch Exception e
-                                    (warn! "role " (name role-name)
-                                           " stop-fn: " (ex-message e))))))))
-                     (catch InterruptedException _ nil)
-                     (catch Exception e
-                       (when @running
-                         (warn! "role " (name role-name) " loop: "
-                                (ex-message e))
-                         (try (Thread/sleep (long retry-ms))
-                              (catch InterruptedException _ nil))))
-                     (finally
-                       ;; closing the session releases the lock
-                       (try (.close ^Connection conn) (catch Exception _ nil))))))))
-           (str "waymark10-role-" (name role-name)))]
-    (doto ^Thread t (.setDaemon true) (.start))
-    {:role role-name :thread t :running running :held? held? :starts starts}))
+  storage: the holder calls (start-fn) and holds until stop-role! or
+  its election session dies, then (stop-fn handle) runs and the
+  session closes — releasing the role, so a peer takes over within
+  one :retry-ms (default 5000). A crashed process releases the same
+  way. Returns the role handle; :held? and :starts are readable
+  state, and :storage rides along so stop-role! stays one-armed.
+
+  Prefer `:elected` on a lifecycle hook (waymark10.modules) to
+  calling this: a surface that must be a singleton says so where it
+  is declared, and the engine does the electing."
+  [storage role-name opts]
+  (assoc (store/elect-role! storage role-name opts) :storage storage))
 
 (defn stop-role!
-  "Stop the role: the holder's stop-fn runs and its lock session
-  closes before this returns, so a peer acquires within one retry
-  interval."
-  [{:keys [running ^Thread thread]}]
-  (reset! running false)
-  (some-> thread .interrupt)
-  (some-> thread (.join 5000))
-  nil)
-
-;; ── the coherence lifecycle ─────────────────────────────────────────
-
-(defn start!
-  "Start multi-process coherence for a booted engine and its running
-  dispatcher: the law-refresh consumer, plus the two singleton roles
-  — the webhook deliverer and the clock sweeper, each elected by
-  advisory lock (their direct starts in engine/start! are what this
-  replaces; see the ns docstring's integration note). opts:
-  :debounce-ms (refresh burst collapse, default 1000), :role-retry-ms
-  (lock acquisition/hold cadence, default 5000). Returns the handle
-  stop! takes."
-  ([eng dispatcher] (start! eng dispatcher {}))
-  ([eng dispatcher {:keys [debounce-ms role-retry-ms]}]
-   (let [retry (or role-retry-ms 5000)]
-     {:refresh (start-refresh! eng dispatcher
-                               {:debounce-ms (or debounce-ms 1000)})
-      :webhooks-role
-      (start-role! (:storage eng) :webhooks-deliverer
-                   {:retry-ms retry
-                    :start-fn #(webhooks/start-deliverer!
-                                eng dispatcher
-                                {:poll-ms (:webhooks-poll-ms eng 2000)})
-                    :stop-fn webhooks/stop-deliverer!})
-      :sweeper-role
-      (start-role! (:storage eng) :clock-sweeper
-                   {:retry-ms retry
-                    :start-fn #(maintainer/start-sweeper!
-                                eng {:interval-ms (:sweep-interval-ms eng 30000)})
-                    :stop-fn maintainer/stop-sweeper!})})))
-
-(defn stop!
-  "Stop the coherence surfaces: roles first (their held locks release,
-  a peer takes over), then the refresh consumer."
-  [{:keys [refresh webhooks-role sweeper-role]}]
-  (some-> webhooks-role stop-role!)
-  (some-> sweeper-role stop-role!)
-  (some-> refresh stop-refresh!)
+  "Stop an elected role: the holder's stop-fn runs and its election
+  session closes before this returns."
+  [{:keys [storage] :as handle}]
+  (when handle (store/release-role! storage handle))
   nil)

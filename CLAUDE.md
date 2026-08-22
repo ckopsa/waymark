@@ -9,9 +9,9 @@ Everything runs against one dockerized Postgres on `:5433`
 
 ```bash
 make test10                # waymark10 framework tests
-make test-mealplan10       # mealplan10 conformance + the family-week story
-make test-eveningplan10    # eveningplan10 conformance suite
-make check10               # declaration-time checks + usability warnings (no database)
+make test-queue            # the household suite: queue + chores + meals + evenings
+make test-calendar         # calendar transport tests
+make check-queue           # declaration-time checks + usability warnings (no database)
 ```
 
 ## Architecture Overview
@@ -32,7 +32,7 @@ suite are mechanically projected. The application directories
   workarounds.
 
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
 ## Beads Issue Tracker
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
@@ -76,6 +76,7 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 
    # Team-maintainer opt-in only, unless current instructions forbid it:
    git pull --rebase
+   bd dolt push
    git push
    git status
    ```

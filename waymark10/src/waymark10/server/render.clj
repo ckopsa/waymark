@@ -648,7 +648,7 @@
   so the vector check unwraps it first the same way
   schema/field-schema does — otherwise an optional vector field
   would wrongly read as a column. Public: the same rule envelope's
-  :fields uses is what waymark10.test.envelope-obligations checks
+  :fields uses is what waymark10.test.conformance checks
   summary items against, so there is one rule, never two that could
   drift."
   [rdef]

@@ -46,8 +46,9 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table
                                       " CASCADE")]))))
-        ;; full-registry auto-enrolls member, role, grant,
-        ;; approval-request, job — so a standing grant is mintable here
+        ;; the enrollment table (waymark10.modules) auto-enrolls
+        ;; member, role, grant, approval-request, job — so a standing
+        ;; grant is mintable here
         (let [eng (engine/engine {:storage st :resources [self journal]})]
           (binding [*eng* eng
                     *h* (engine/handler eng)]

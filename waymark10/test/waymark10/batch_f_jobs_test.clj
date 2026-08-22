@@ -187,8 +187,19 @@
 
 (deftest orphan-sweeper-is-an-elected-role
   (let [job-id (orphan!)
-        role (jobs/start-orphan-sweeper! *eng* {:interval-ms 100
-                                                :retry-ms 100})]
+        ;; bind the engine HERE: start-fn runs on the election
+        ;; thread, which carries no dynamic bindings from this one
+        eng *eng*
+        ;; the election is the MODULE'S, declared on its lifecycle
+        ;; hook (:elected :jobs-orphan-sweeper) since waymark-db9.4 —
+        ;; start-orphan-sweeper! is the plain loop now. This is that
+        ;; hook's two halves wired by hand, so the claim under test
+        ;; is still 'one holder per database sweeps'.
+        role (coherence/start-role!
+              (:storage eng) :jobs-orphan-sweeper
+              {:retry-ms 100
+               :start-fn #(jobs/start-orphan-sweeper! eng {:interval-ms 100})
+               :stop-fn jobs/stop-orphan-sweeper!})]
     (try
       (testing "the elected sweeper re-queues within a few intervals"
         (let [deadline (+ (System/currentTimeMillis) 10000)]

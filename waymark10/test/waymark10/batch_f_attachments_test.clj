@@ -120,8 +120,18 @@
     (put! aid "bytes for the elected sweeper")
     (req :post (str "/api/attachments/" aid "/-/delete"))
     (is (.isFile (file-of aid)))
-    (let [role (attachments/start-purge-sweeper! *eng* {:interval-ms 100
-                                                        :retry-ms 100})]
+    ;; bind the engine HERE: start-fn runs on the election thread,
+    ;; which carries no dynamic bindings from this one.
+    ;; The election is the module's, declared on its lifecycle hook
+    ;; (:elected :attachments-purge) since waymark-db9.4 —
+    ;; start-purge-sweeper! is the plain loop now
+    (let [eng *eng*
+          role (coherence/start-role!
+                (:storage eng) :attachments-purge
+                {:retry-ms 100
+                 :start-fn #(attachments/start-purge-sweeper!
+                             eng {:interval-ms 100})
+                 :stop-fn attachments/stop-purge-sweeper!})]
       (try
         (let [deadline (+ (System/currentTimeMillis) 10000)]
           (loop []

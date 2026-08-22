@@ -17,7 +17,8 @@
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
-            [waymark10.types :as t])
+            [waymark10.types :as t]
+            [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
 ;; ── the world ───────────────────────────────────────────────────────
@@ -565,6 +566,24 @@
                 (let [served (mirror/refresh! eng rdef
                                               (decoded eng :p8_feed_item id))]
                   (is (= :fresh (:state served)))))
+              ;; the GET door pulls through too, and since
+              ;; waymark-db9.7 it does so WITHOUT naming this
+              ;; namespace: the value under :mirror on the rdef is
+              ;; the read-through (seams/ReadThrough), so the
+              ;; declaration serves its own row. The engine here
+              ;; never started, which is the whole reason the seam
+              ;; could not be a runtime lookup.
+              (testing "and the GET door serves what the feed says now"
+                (seed! feed "uid-1@2026-07-14" "Recital (again)" "2026-07-16")
+                (reset! clock (Instant/parse "2026-07-10T19:00:00Z"))
+                (let [resp ((engine/handler eng)
+                            {:request-method :get
+                             :uri (str "/api/p8_feed_items/" id)
+                             :headers {"x-waymark-principal" "someone"}})]
+                  (is (= 200 (:status resp)))
+                  (is (= "Recital (again)"
+                         (get-in (wire/read-json (:body resp))
+                                 [:data :title])))))
               (testing "sync actions are concealed from humans, offered to system"
                 (let [row (decoded eng :p8_feed_item id)
                       human-env (render/envelope rdef row

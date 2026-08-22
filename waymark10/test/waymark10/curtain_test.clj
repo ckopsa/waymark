@@ -45,7 +45,8 @@
 
 (defn- eng!
   "A fresh memory engine — the built-in kinds (member, role, grant …)
-  ride full-registry, so nothing app-shaped is needed."
+  ride full-registry's enrollment table, so nothing app-shaped is
+  needed."
   []
   (engine/engine {:storage (memory/storage) :resources []}))
 

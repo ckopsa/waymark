@@ -440,7 +440,27 @@
     nil)
 
   (job-lease [_ _tx job-id]
-    (get-in @state [:leases job-id])))
+    (get-in @state [:leases job-id]))
+
+  ;; The twin's election (waymark-db9.4): there are no peers to
+  ;; contend with — one process, one heap — so the role is won at
+  ;; once and a lifecycle hook's `:elected` degrades to a plain
+  ;; start. That degradation is the whole reason the method lives on
+  ;; the protocol: the engine asks the storage to elect and never
+  ;; learns which backend it has, and the twin keeps running every
+  ;; surface a Postgres engine runs rather than quietly serving one
+  ;; fewer.
+  (elect-role! [_ role-name {:keys [start-fn stop-fn]}]
+    {:role role-name
+     :held? (atom true)
+     :starts (atom 1)
+     :handle (start-fn)
+     :stop-fn stop-fn})
+
+  (release-role! [_ {:keys [held? handle stop-fn]}]
+    (when (compare-and-set! held? true false)
+      (when stop-fn (stop-fn handle)))
+    nil))
 
 (defn subscribe-notify!
   "Register an in-process callback for committed transition ids — the

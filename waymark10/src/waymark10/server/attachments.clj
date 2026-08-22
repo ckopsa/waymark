@@ -24,9 +24,10 @@
   - The purge sweep (waymark9's BlobJanitor, resized): purge-deleted!
     removes the stored bytes of :deleted attachments from the
     directory (metadata rows stay, the audited record);
-    start-purge-sweeper! elects ONE sweeper per database via
-    coherence/start-role! — the advisory-lock election, the webhook
-    deliverer's discipline.
+    start-purge-sweeper! is the loop, and the module's lifecycle
+    hook carries `:elected :attachments-purge` so ONE process per
+    database runs it (waymark-db9.4 — the election used to be wired
+    in here, by name).
 
   Recorded deviations and named punts (each a sentence):
   - No presigned URLs, no S3, no BlobStore protocol: the local
@@ -45,7 +46,6 @@
             [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
-            [waymark10.server.coherence :as coherence]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.store :as store]
@@ -223,6 +223,22 @@
 
 ;; ── the purge sweep (batch F — waymark9's BlobJanitor, resized) ─────
 
+(defn stored-bytes?
+  "Does this attachment still have BYTES on disk? The metadata row is
+  no answer — the purge leaves it standing as the audited record —
+  so the sweep's only observable is the file, and this predicate is
+  the one honest way to look at it from outside.
+
+  PUBLIC for the module's conformance obligation
+  (waymark10.test.packs :attachments/purge-sweep, waymark-db9.8): a
+  running-surface obligation must watch a promise come TRUE on a
+  schedule, and 'the deleted attachment's bytes are gone' is not a
+  sentence the wire can say — a deleted row's bytes 404 either way.
+  The File itself stays private; what leaves this namespace is the
+  question, not the path."
+  [eng id]
+  (.isFile (file-of eng id)))
+
 (defn- warn! [& parts]
   (binding [*out* *err*]
     (println (apply str "waymark10 attachments: " parts))))
@@ -247,30 +263,30 @@
      rows)))
 
 (defn start-purge-sweeper!
-  "The purge sweep as an ELECTED singleton (coherence/start-role!'s
-  advisory-lock election, role :attachments-purge): one process per
-  database sweeps every :interval-ms (default 60s); a crashed holder's
-  lock session dies and a peer takes over within one retry interval.
-  Returns the role handle; stop with coherence/stop-role!."
-  [eng {:keys [interval-ms retry-ms] :or {interval-ms 60000}}]
-  (coherence/start-role!
-   (:storage eng) :attachments-purge
-   {:retry-ms (or retry-ms 5000)
-    :start-fn
-    (fn []
-      (let [stop (CountDownLatch. 1)
-            t (Thread. ^Runnable
-                       (fn []
-                         (loop []
-                           (when-not (.await stop (long interval-ms)
-                                             TimeUnit/MILLISECONDS)
-                             (try (purge-deleted! eng)
-                                  (catch Exception e
-                                    (warn! "purge sweep failed: "
-                                           (ex-message e))))
-                             (recur))))
-                       "waymark10-attachments-purge")]
-        (doto ^Thread t (.setDaemon true) (.start))
-        {:thread t :stop stop}))
-    :stop-fn (fn [{:keys [^CountDownLatch stop]}]
-               (some-> stop .countDown))}))
+  "The purge sweep's loop: every :interval-ms (default 60s),
+  purge-deleted! removes the stored bytes of :deleted attachments.
+  Returns the handle stop-purge-sweeper! takes.
+
+  ONE process per database should run this, and that is no longer
+  decided here: the attachments module's lifecycle hook carries
+  `:elected :attachments-purge` and the engine elects the holder
+  through the storage (waymark10.modules, store/elect-role!)."
+  [eng {:keys [interval-ms] :or {interval-ms 60000}}]
+  (let [stop (CountDownLatch. 1)
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop (long interval-ms)
+                                         TimeUnit/MILLISECONDS)
+                         (try (purge-deleted! eng)
+                              (catch Exception e
+                                (warn! "purge sweep failed: "
+                                       (ex-message e))))
+                         (recur))))
+                   "waymark10-attachments-purge")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn stop-purge-sweeper! [{:keys [^CountDownLatch stop]}]
+  (some-> stop .countDown)
+  nil)

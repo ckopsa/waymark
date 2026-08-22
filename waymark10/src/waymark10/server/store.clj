@@ -145,7 +145,34 @@
   (job-lease [st tx job-id]
     "The job's lease row, {:holder … :expires-at inst} or nil — the
     orphan sweep's read (batch F): a :running job whose lease is
-    absent or expired has no live claimant."))
+    absent or expired has no live claimant.")
+
+  ;; ── waymark-db9.4: the elected singleton ───────────────────────────
+
+  (elect-role! [st role-name opts]
+    "Elect ONE holder of a named singleton role across every process
+    sharing this storage, and run the role there. opts: :start-fn
+    (run on the holder → an opaque handle), :stop-fn (called with
+    that handle when the role is released or the hold is lost), and
+    :retry-ms (the contention/liveness cadence). Returns the role
+    handle release-role! takes; :held? and :starts are readable atoms.
+
+    THIS METHOD IS WHY THE LIFECYCLE SEAM'S `:elected` FLAG IS
+    HONEST. Election is 'one holder per database', and only the
+    storage knows whether there IS a database with peers: Postgres
+    spells it pg_advisory_lock on a dedicated session, and the
+    in-memory twin has nobody to contend with, so it elects itself at
+    once and `:elected` degrades to a plain start. The alternative —
+    a core namespace asking `migratable?` and no-op'ing — leaves the
+    twin advertising a surface it never runs. Same precedent as the
+    boot's migrate gate, one level up: ask the storage what it can
+    do, do not guess from its type.")
+
+  (release-role! [st handle]
+    "Release an elected role: the holder's stop-fn runs and its
+    election session closes before this returns, so a peer acquires
+    within one retry interval. A crashed process releases the same
+    way — its sessions die with it."))
 
 (defn with-tx
   "Sugar: (with-tx st [tx] …)."

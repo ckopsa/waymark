@@ -522,7 +522,7 @@ the standing truth, and each row names the section that moved it.
 | drafts.py | `server/drafts.clj` | per-field revs/authors/op logs persist in the draft document (§18); pre-envelope rows read as rev-0, no migration |
 | subscriptions.py | `server/webhooks.clj` | per-subscription `:delivery_policy` — "fail" (parked cursor) default, waymark9's "skip" opt-in; revoked terminal state landed (§16) |
 | migrate.py | `server/store/migrate.clj` | plan/apply from ONE projection (§11); expression drift invisible (name+type compare); engine tables additive-only; state renames the sole destructive class; GIN entries reconciled by name (§16) |
-| bus.py | `server/coherence.clj` | law refresh rides the outbox (guarded boot-revise!, never mints); deliverer + sweepers elected by advisory lock (WM10 keyspace) (§12); SSE per-process off the shared log; cross-process collab relay landed later (§18) |
+| bus.py | `server/coherence.clj` | law refresh rides the outbox (guarded boot-revise!, never mints); deliverer + sweepers elected by advisory lock (WM10 keyspace, moved to the Storage protocol at `waymark-db9.4`) (§12); SSE per-process off the shared log; cross-process collab relay landed later (§18) |
 | members.py | `server/members.clj` | auto-provision or `{:members :invited-only}`; invite→bind landed (§17); unbind, SECRET_FIELDS owner-gating, token uniqueness under race punted |
 | judgment.py | `server/judgment.clj` | stored-tree overlay for actions AND (via `derived/specs-under`, §19) derivations; `fn=` facts stay resident |
 | jobs.py | `server/jobs.clj` | queued state, artifacts (the report), orphan sweep landed (§16); lease steal still resumes; whole-call idempotency skipped (recorded) |
@@ -1035,6 +1035,13 @@ The concurrency reading of boot-revise! (the coherence finding):
 
 ## Singleton roles by advisory lock
 
+*(`waymark-db9.4` moved the mechanism onto the Storage protocol —
+`store/elect-role!`, implemented in `store/postgres.clj` and
+self-electing on the memory twin — and turned "this surface is a
+singleton" into `:elected <role>` on a module's lifecycle hook. The
+keyspace below is unchanged, and lives at
+`store/postgres/role-lock-key`.)*
+
 `start-role!` elects one holder per role name across every process
 sharing the database: `pg_try_advisory_lock` on a well-known bigint,
 held on a DEDICATED raw connection — never from the Hikari pool; the
@@ -1267,7 +1274,8 @@ Six new obligations extend the conformance suite (parts truth, parts
 enforcement, links truth + wire, depth, rows=none, effort truth);
 `:parts` joins the envelope's reserved keys as optional. Home:
 `demand.clj`, `server/render.clj`, `server/router.clj`,
-`test/envelope_obligations.clj`, `batch_a_envelope_test.clj`. Still
+`test/envelope_obligations.clj` (folded into `test/conformance.clj` by
+`waymark-db9.5`), `batch_a_envelope_test.clj`. Still
 open after this batch: waymark9's `depth=expanded` embed profiles and
 declared collection columns/table hints.
 
@@ -1486,7 +1494,10 @@ Boundaries, each a sentence:
   queued instead of leaving it wearing a dead worker's `:running`.
 
 `engine/start!` now starts the orphan sweeper in its `:runtime` map
-(the one-liner landed post-merge). Two existing assertions
+(the one-liner landed post-merge; since `waymark-db9.4` it is a row in
+`waymark10.modules/inventory`'s `:hooks` column, and
+`start-orphan-sweeper!` is the plain loop with the election on the
+hook). Two existing assertions
 (`jobs_test.clj:106`, `bulk_batch_test.clj:178`) were updated
 `"running"` → `"queued"` — the minimal tracking of the restored
 state; nothing else in either suite moved.
@@ -1521,7 +1532,8 @@ state; nothing else in either suite moved.
   idempotent re-runs); `start-purge-sweeper!` elects one sweeper per
   database via `coherence/start-role!` (role `:attachments-purge`).
   Like the orphan sweeper, it is wired into `engine/start!`
-  (landed post-merge).
+  (landed post-merge; a `:hooks` row carrying `:elected` since
+  `waymark-db9.4`).
 
 ## Consumers-as-API (`server/consumers.clj`, new)
 

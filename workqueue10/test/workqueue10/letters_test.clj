@@ -49,9 +49,10 @@
             (doseq [table tables]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table
                                       " CASCADE")]))))
-        ;; full-registry auto-enrolls member, role, grant,
-        ;; approval-request, job — so the to-is-a-member guard has a
-        ;; roster and the grant wall has both doors
+        ;; the enrollment table (waymark10.modules) auto-enrolls
+        ;; member, role, grant, approval-request, job — so the
+        ;; to-is-a-member guard has a roster and the grant wall has
+        ;; both doors
         (let [eng (engine/engine {:storage st :resources [letter]})]
           (binding [*eng* eng
                     *h* (engine/handler eng)]

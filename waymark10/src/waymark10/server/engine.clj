@@ -15,20 +15,32 @@
 
   Phase 6: the engine carries the :maintain hook (the derivation
   maintainer rides invoke's after-write! seam on every engine), and
-  start!/stop! own the running surfaces — the events dispatcher and
-  the clock sweeper live in the engine's :runtime atom, so an engine
-  that never starts (a test handler) pays nothing and its SSE routes
-  answer 503. opts: :sweep-interval-ms (clock sweep, default 30s),
-  :events-poll-ms (dispatcher backstop, default 2s),
-  :sse-heartbeat-ms (default 15s), :maintainer-fan-out (default 200).
-  The presence registry (the follow-me surface, ephemeral state —
-  waymark10.server.presence) starts and stops beside the dispatcher;
-  :presence-heartbeat-ms (default 15s) paces its heartbeats and TTL.
-  The presence curtain (waymark10.server.curtain) starts once there
-  too and is handed to BOTH watching surfaces — presence and intents
-  read one member row through one cache, invalidated by the
-  dispatcher on every committed draw/open; :curtain-ttl-ms (default
-  2s) bounds a stale verdict when that wire is lost.
+  start!/stop! own the running surfaces, which live in the engine's
+  :runtime atom — so an engine that never starts (a test handler)
+  pays nothing and its SSE routes answer 503.
+
+  THE RUNNING SURFACES ARE NO LONGER ENUMERATED HERE. This docstring
+  used to list them in prose while start! listed them again in a map
+  literal and stop! a third time in a teardown; three enumerations
+  drift, and the prose one drifted first. They are now the `:hooks`
+  column of waymark10.modules/inventory — one entry per surface,
+  saying which module owns it, what it starts after, whether it is an
+  elected singleton, and how it stops — walked by
+  waymark10.server.runtime (waymark-db9.4). Read the table.
+
+  What stays here is the OPTS, because they are the engine's and
+  every hook reads them off it: :sweep-interval-ms (clock sweep,
+  default 30s), :events-poll-ms (dispatcher backstop, 2s),
+  :sse-heartbeat-ms (15s), :maintainer-fan-out (200),
+  :presence-heartbeat-ms (15s — paces the registry's heartbeats and
+  TTL), :curtain-ttl-ms (2s — the honest bound on a stale verdict
+  when the invalidation wire is lost), :webhook-attempts (3),
+  :webhook-backoff-ms (250), :webhook-timeout-ms (10s),
+  :webhooks-poll-ms (deliverer backstop, 2s), :jobs-poll-ms (worker
+  cadence, 1s), :jobs-batch-size (progress granularity, 10),
+  :orphan-sweep-ms (30s), :purge-sweep-ms (60s), :role-retry-ms (the
+  election's contention/liveness cadence, 5s) and
+  :law-refresh-debounce-ms (the refresh burst collapse, 1s).
 
   Phase 9a: every engine enrolls the identity-and-access kinds beside
   the definition — member, role, grant, attachment — so well-known
@@ -39,38 +51,23 @@
 
   Phase 9b: the engine also enrolls :subscription (webhooks) and :job
   (deferred bulk), assembles declared :surfaces against the registry,
-  and carries the collab rooms atom. start!/stop! gain two more
-  running surfaces — the webhook deliverer (riding the dispatcher as
-  its wake signal) and the jobs worker. opts: :surfaces (surface
-  declarations), :webhook-attempts (default 3), :webhook-backoff-ms
-  (default 250), :webhook-timeout-ms (default 10s), :webhooks-poll-ms
-  (deliverer backstop, default 2s), :jobs-poll-ms (worker cadence,
-  default 1s), :jobs-batch-size (progress granularity, default 10)."
+  and carries the collab rooms atom. opts gain :surfaces (surface
+  declarations)."
   (:require [clojure.string :as str]
             [org.httpkit.server :as http]
+            [waymark10.modules :as modules]
             [waymark10.registry :as registry]
-            [waymark10.server.attachments :as attachments]
-            [waymark10.server.curtain :as curtain]
             [waymark10.server.definitions :as defs]
-            [waymark10.server.events :as events]
-            [waymark10.server.grants :as grants]
-            [waymark10.server.intents :as intents]
-            [waymark10.server.jobs :as jobs]
             [waymark10.server.maintainer :as maintainer]
-            [waymark10.server.members :as members]
-            [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
-            [waymark10.server.presence :as presence]
             [waymark10.server.render :as render]
-            [waymark10.server.roles :as roles]
             [waymark10.server.router :as router]
+            [waymark10.server.runtime :as runtime]
             [waymark10.server.store :as store]
             [waymark10.server.store.migrate :as migrate]
             [waymark10.server.store.postgres :as pg]
             [waymark10.server.surface :as surface]
             [waymark10.server.worksheet :as worksheet]
-            [waymark10.server.coherence :as coherence]
-            [waymark10.server.webhooks :as webhooks]
             [waymark10.types :as t]
             [waymark10.wire :as wire]))
 
@@ -78,16 +75,21 @@
 
 (defn full-registry
   "The application's resources plus every kind the engine itself
-  enrolls — the one list, shared with the migrate CLI so a plan
-  covers exactly the kinds a boot would serve. The worksheet kind
-  enrolls only when some application kind declares :worksheet."
-  [resources]
-  (registry/registry (into (vec resources)
-                           (concat [defs/definition members/member
-                                    roles/role grants/grant grants/approval-request
-                                    attachments/attachment
-                                    webhooks/subscription jobs/job]
-                                   (worksheet/kinds resources)))))
+  enrolls — the one list, shared with the declaration-time check and
+  the migrate CLI so a plan covers exactly the kinds a boot would
+  serve.
+
+  The list is no longer a literal here: it is
+  waymark10.modules/inventory, a plain readable table saying which
+  module owns each kind and whether the engine enrols it always, only
+  when some application kind asks for it (the worksheet's rule), or
+  never — the app naming the rdef in its own resources vector. Pass
+  `modules` to assemble a named subset; nil, the spelling every
+  caller uses today, means the whole table."
+  ([resources] (full-registry resources nil))
+  ([resources modules]
+   (registry/registry (into (vec resources)
+                            (modules/enrolled resources modules)))))
 
 (defn- migrate-gate!
   "The boot's schema gate (migrate): plan the drift; a non-empty plan
@@ -141,14 +143,25 @@
   advertises optimistically; the follow-up GET tells the folded
   truth.
 
+  :modules names the inventory's subset this engine assembles
+  (waymark10.modules); absent — every caller today — means the whole
+  table, and the engine serves exactly the kinds and the routes it
+  always has. Core is never droppable. The selection rides ON the
+  engine, because it governs two seams now: the kinds `full-registry`
+  enrols above, and the routes `handler` mounts below — an engine
+  assembled without :seasons has no /api/-/seasons to answer with.
+  It governs the THIRD seam too, since db9.4: the running surfaces
+  start! walks are the selection's `:hooks`, so an engine assembled
+  without :realtime runs no curtain and no presence registry.
+
   Migrate (the schema gate): after every kind's storage is ensured,
   the boot plans declared-vs-live drift and REFUSES to serve on a
   non-empty plan — unless opts carry :auto-migrate true (dev
   posture, passed explicitly; never a default), which applies the
   non-destructive steps in place. Rows in state tokens no declaration
   maps refuse the boot either way (waymark9's check_state_tokens)."
-  [{:keys [storage resources services now-fn deploy-mode] :as opts}]
-  (let [reg (full-registry resources)
+  [{:keys [storage resources services now-fn deploy-mode modules] :as opts}]
+  (let [reg (full-registry resources modules)
         eng (merge (select-keys opts [:sweep-interval-ms :events-poll-ms
                                       :sse-heartbeat-ms :maintainer-fan-out
                                       :suppress-mirror-refresh :probe-reads
@@ -156,6 +169,8 @@
                                       :webhook-attempts :webhook-backoff-ms
                                       :webhook-timeout-ms :webhooks-poll-ms
                                       :jobs-poll-ms :jobs-batch-size
+                                      :orphan-sweep-ms :purge-sweep-ms
+                                      :role-retry-ms :law-refresh-debounce-ms
                                       :report-pass
                                       :members :collab-heartbeat-ms
                                       :presence-heartbeat-ms
@@ -166,6 +181,10 @@
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)
+                    ;; the assembled selection, kept because the
+                    ;; router seam asks for it again at handler time
+                    ;; (nil = the whole inventory, every caller today)
+                    :modules modules
                     :services services
                     :now-fn (or now-fn (fn [] (java.time.Instant/now)))
                     :deploy-mode (or deploy-mode :promote)
@@ -201,95 +220,66 @@
     eng))
 
 (defn handler
-  "The ring handler for an engine."
+  "The ring handler for an engine: core's routes plus the assembled
+  modules'. THIS is where the two halves of the module table meet —
+  the router knows no module by name and the modules know no router
+  by name; this line hands one to the other."
   [eng]
-  (router/handler eng))
+  (router/handler eng (modules/route-sets eng (:modules eng))))
+
+(defn start-runtime!
+  "Start the engine's running surfaces into its :runtime atom, and
+  return the {hook-key handle} map that landed there.
+
+  There is no literal here any more. The surfaces are the `:hooks` of
+  the modules this engine assembled (waymark10.modules/hooks reads the
+  same `selected` the kinds and the routes read), and
+  runtime/start-hooks! walks them in the order their `:after` implies,
+  electing the ones that declared themselves singletons. Adding a
+  running surface is a row in a table a reviewer can read; it is no
+  longer an edit to this function and a second edit to stop!.
+
+  Idempotent in the only way that matters: an engine with no :runtime
+  atom — nothing builds one, but the shape allows it — starts
+  nothing."
+  [eng]
+  (when-some [rt (:runtime eng)]
+    (reset! rt (runtime/start-hooks! eng (modules/hooks (:modules eng))))))
+
+(defn stop-runtime!
+  "Stop every surface start-runtime! started, in the reverse of the
+  order it started them, and empty the :runtime atom. The hook seq is
+  recomputed from the same table rather than remembered, so the two
+  walks cannot disagree about what is running."
+  [eng]
+  (when-some [rt (:runtime eng)]
+    (when-some [started @rt]
+      (runtime/stop-hooks! eng (modules/hooks (:modules eng)) started))
+    (reset! rt nil))
+  nil)
 
 (defn start!
   "Serve the engine on port via http-kit and start its running
-  surfaces — the events dispatcher (SSE's feed) and the clock
-  sweeper — in the engine's :runtime atom. Returns the server; pass
-  BOTH engine and server to stop!.
+  surfaces (start-runtime!). Returns the server; pass BOTH engine and
+  server to stop!.
 
   opts: :wrap-handler — a ring middleware the embedding composes
   around the engine's handler (an app-level route that needs the
   engine alive, e.g. a byte-store redirect, mounts here without
   forking the boot)."
   [eng port & [{:keys [wrap-handler]}]]
-  (when-some [rt (:runtime eng)]
-    (let [dispatcher (events/dispatcher
-                      eng {:poll-ms (:events-poll-ms eng 2000)})
-          ;; the presence curtain (waymark-tti.4), started ONCE and
-          ;; handed to both watching surfaces: one member-row read,
-          ;; one cache, one invalidation. :curtain-ttl-ms 2s — a
-          ;; household's member row is cheap, and the honest bound on
-          ;; a stale verdict should be seconds, not the beat cadence
-          ;; (the 15s window the skeptic found). The dispatcher is
-          ;; the invalidation wire: every committed draw/open, this
-          ;; process's and every peer's, lands here at once
-          curtain (curtain/start! eng {:ttl-ms (:curtain-ttl-ms eng 2000)
-                                       :dispatcher dispatcher})]
-      (reset! rt {:dispatcher dispatcher
-                  :curtain curtain
-                  ;; presence (the follow-me surface): ephemeral state,
-                  ;; never law — an in-process registry fanned over
-                  ;; pg_notify, TTL-evicted; an engine that never
-                  ;; starts answers 503 on its routes, like SSE
-                  :presence (presence/start!
-                             eng {:hb-ms (:presence-heartbeat-ms eng 15000)
-                                  :curtain curtain})
-                  ;; intent frames (the considering/asking surface):
-                  ;; the presence discipline again — ephemeral, never
-                  ;; law; the dispatcher hands it the committed acts
-                  ;; that resolve a card, and the curtain the ones
-                  ;; that silence a principal
-                  :intents (intents/start! eng {:dispatcher dispatcher
-                                                :curtain curtain})
-                  ;; mirror kinds get their declared discovery cadence
-                  ;; (phase 8); an engine without mirrors pays nothing
-                  :discovery (when (seq (mirror/mirror-kinds eng))
-                               (mirror/start-discovery! eng))
-                  ;; multi-process coherence owns the singleton roles:
-                  ;; the law-refresh consumer rides the dispatcher, and
-                  ;; the webhook deliverer + clock sweeper run under
-                  ;; advisory-lock election — one holder per database,
-                  ;; takeover on stop or crash
-                  :coherence (coherence/start! eng dispatcher {})
-                  :jobs (jobs/start-worker!
-                         eng {:poll-ms (:jobs-poll-ms eng 1000)
-                              :batch-size (:jobs-batch-size eng 10)})
-                  ;; batch F's elected singletons: orphaned running
-                  ;; jobs re-queue; deleted attachments' bytes purge
-                  :orphan-sweeper (jobs/start-orphan-sweeper!
-                                   eng {:interval-ms (:orphan-sweep-ms eng 30000)})
-                  :purge-sweeper (attachments/start-purge-sweeper!
-                                  eng {:interval-ms (:purge-sweep-ms eng 60000)})})))
+  (start-runtime! eng)
   (http/run-server ((or wrap-handler identity) (handler eng))
                    {:port port :legacy-return-value? false}))
 
 (defn stop!
   "Stop the server; the two-arity form also stops the engine's
-  runtime (dispatcher, sweeper, discovery, webhook deliverer, jobs
-  worker)."
+  runtime (stop-runtime!)."
   ([server]
    (when server (http/server-stop! server)))
   ([eng server]
    (when server (http/server-stop! server))
-   (when-some [rt (:runtime eng)]
-     (when-some [{:keys [dispatcher coherence discovery jobs
-                         orphan-sweeper purge-sweeper presence
-                         intents curtain]} @rt]
-       (some-> orphan-sweeper coherence/stop-role!)
-       (some-> purge-sweeper coherence/stop-role!)
-       (some-> jobs jobs/stop-worker!)
-       (some-> coherence coherence/stop!)
-       (some-> intents intents/stop!)
-       (some-> presence presence/stop!)
-       ;; after its readers, before the dispatcher it subscribes to
-       (some-> curtain curtain/stop!)
-       (some-> dispatcher events/stop!)
-       (some-> discovery mirror/stop-discovery!))
-     (reset! rt nil))))
+   (stop-runtime! eng)))
 
 ;; ── the dev server (scripts/smoke10.sh) ─────────────────────────────
 

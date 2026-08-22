@@ -57,33 +57,59 @@
     own input, never silent), but a STORAGE failure once the query is
     valid stays best-effort: a *err* warning, never the GET.
   - render ctx-opts gain :resources (the engine's kind map) so link
-    targets resolve their declared plurals."
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]
+    targets resolve their declared plurals.
+
+  waymark-db9.3 draws the MOUNTING SEAM (docs/spec-modularization.md
+  § 'Routes — the mounting seam'). This namespace used to require nine
+  extension namespaces and sew their routes into one literal vector;
+  now it publishes core's routes in three ordered pieces (core-static,
+  core-plural-head, core-plural-tail) and `assemble-routes` mounts the
+  enrolled modules' contributions between them, TWO BUCKETS deep —
+  see its docstring for why a concat would silently lose the worksheet.
+  Core keeps the law's own addresses: the well-known document, the
+  schemas, the SSE firehose, the welcome and grant-check doors, the
+  agent's knock, the declared surfaces, and the whole /api/{plural}
+  grammar including the draft sub-resource (a declared :draft policy
+  on an :edit action is LAW; live collab is a websocket on top of a
+  draft row, and it went out with the realtime module).
+
+  waymark-db9.3 left four module namespaces required above for calls
+  that were not routes: presence's read mark and stream hooks, the
+  intents announcement at the dry-run doors, the mirror's
+  pull-through on GET, and the job the bulk door mints when it
+  defers. waymark-db9.7 dissolves all four, and THIS NAMESPACE NOW
+  REQUIRES NO MODULE AT ALL — the two OIDC resolvers excepted, and
+  they are not an exception: wrap-identity IS the identity boundary,
+  which the spec files under core.
+
+  Each of the four is now a protocol core names
+  (waymark10.server.seams) answered by a value the assembly already
+  put in core's hand. Two are RUNNING surfaces, found by hook key
+  with runtime/surface: presence and intents. Two are DECLARED, and
+  had to be — every mirror fixture and every deferred-bulk test runs
+  through a handler whose engine never started, so a runtime lookup
+  would have turned both off where they are proved: the pull-through
+  is the `:mirror` spec on the rdef, and the deferral rides the
+  `:job` rdef the jobs module enrolled. Absence degrades rather than
+  crashes at all four doors: no gaze marked, no considering card, a
+  stored row served, and a 503 that names the missing module."
+  (:require [clojure.string :as str]
             [reitit.ring :as ring]
             [waymark10.schema :as schema]
-            [waymark10.server.attachments :as attachments]
-            [waymark10.server.collab :as collab]
             [waymark10.server.collections :as collections]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
-            [waymark10.server.intents :as intents]
             [waymark10.server.invoke :as inv]
-            [waymark10.server.jobs :as jobs]
             [waymark10.server.members :as members]
-            [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
-            [waymark10.server.openapi :as openapi]
-            [waymark10.server.presence :as presence]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
-            [waymark10.server.seasons :as seasons]
+            [waymark10.server.runtime :as runtime]
+            [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
             [waymark10.server.surface :as surface]
-            [waymark10.server.ui-assembly :as ui-assembly]
-            [waymark10.server.worksheet :as worksheet]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
@@ -93,9 +119,20 @@
 
 (def media-type "application/waymark+json")
 
-;; ── request parsing ─────────────────────────────────────────────────
+;; ── request parsing, and the chrome a module's routes speak ─────────
+;;
+;; A handful of the helpers below are public, and they are the HTTP
+;; vocabulary every route handler needs whoever wrote it: the body
+;; reader, the query params, the resolved principal and visibility,
+;; the three concealment checks, the two response shapes, the plural
+;; lookup. They are public because the modules' route sets live
+;; OUTSIDE this namespace now (waymark10.server.routes.*, mounted
+;; through waymark10.modules), and the alternative — a private copy of
+;; check-row! per module — is how concealment drifts. The dependency
+;; runs one way only: a module's routes require the router, the router
+;; requires no module.
 
-(defn- read-body
+(defn read-body
   "Parsed JSON body (keyword keys); empty/absent body → nil; broken
   JSON → 400 problem."
   [req]
@@ -121,17 +158,17 @@
                           (if (contains? t/actor-types at) at :human))})
     t/anonymous))
 
-(defn- principal-of
+(defn principal-of
   "The request's principal, resolved once by wrap-identity; the dev
   headers remain the fallback for a bare handler in tests."
   [req]
   (or (:waymark10/principal req) (dev-principal (:headers req))))
 
-(defn- visibility-of [req] (:waymark10/visibility req))
+(defn visibility-of [req] (:waymark10/visibility req))
 
 ;; ── the visibility checks (phase 9a, concealment) ───────────────────
 
-(defn- check-kind!
+(defn check-kind!
   "A scoped request addressing a non-granted kind: the collection does
   not exist."
   [req rdef]
@@ -139,7 +176,7 @@
     (when-not ((:kind? vis) (:kind rdef))
       (throw (p/not-found "collection" (:plural rdef))))))
 
-(defn- check-row!
+(defn check-row!
   "A scoped request addressing a non-granted kind or un-granted id:
   the row does not exist."
   [req rdef id]
@@ -147,7 +184,7 @@
     (when-not ((:row? vis) (:kind rdef) id)
       (throw (p/not-found (:kind rdef) id)))))
 
-(defn- check-action!
+(defn check-action!
   "A scoped request invoking a non-granted action: the action does not
   exist (never a 403 — a refusal that names the gate would leak what
   concealment hides)."
@@ -159,7 +196,7 @@
 (defn- url-decode ^String [^String s]
   (URLDecoder/decode s StandardCharsets/UTF_8))
 
-(defn- query-params [req]
+(defn query-params [req]
   (into {}
         (keep (fn [kv]
                 (let [[k v] (str/split kv #"=" 2)]
@@ -183,7 +220,7 @@
 
 ;; ── responses ───────────────────────────────────────────────────────
 
-(defn- json-response
+(defn json-response
   ([status body] (json-response status body "application/json" nil))
   ([status body ctype extra-headers]
    {:status status
@@ -204,14 +241,19 @@
            :resources (inv/resources eng)}
     (:probe-reads eng) (merge (inv/render-hooks eng))))
 
-(defn- envelope-response [eng rdef row req status extra-headers]
+(defn envelope-response
+  "The one envelope answer: rendered through the shared ctx-opts, sent
+  as waymark+json with its ETag. A module's route that answers with a
+  row answers with THIS — the envelope is the wire's promise, not each
+  handler's."
+  [eng rdef row req status extra-headers]
   (let [env (render/envelope rdef row (render-opts eng req))]
     (json-response status env media-type
                    (merge {"ETag" (get-in env ["meta" "etag"])} extra-headers))))
 
 ;; ── lookups ─────────────────────────────────────────────────────────
 
-(defn- rdef-by-plural [eng plural]
+(defn rdef-by-plural [eng plural]
   (or (some (fn [[_ r]] (when (= plural (:plural r)) r)) (inv/resources eng))
       (throw (p/not-found "collection" plural))))
 
@@ -227,9 +269,11 @@
 (defn- intents-running
   "The engine's intents registry when one is running — the automatic
   doors (dry-run, warning wall) report through it and never fail a
-  request over its absence."
+  request over its absence. An engine assembled without the realtime
+  module, and an engine that never started, both answer nil, and
+  every caller below has an answer for nil: no card, same response."
   [eng]
-  (some-> (:runtime eng) deref :intents))
+  (runtime/surface eng :intents))
 
 (defn- report-intent!
   "Best-effort: an intent frame is ephemeral company, never the
@@ -237,7 +281,7 @@
   answers untouched."
   [reg principal intent]
   (try
-    (intents/report! reg principal intent)
+    (seams/announce! reg principal intent)
     (catch Exception e
       (binding [*out* *err*]
         (println "waymark10 intent report failed -" (ex-message e))))))
@@ -409,9 +453,9 @@
   paints no gaze."
   [eng req self]
   (when (visibility-of req)
-    (when-some [reg (some-> (:runtime eng) deref :presence)]
+    (when-some [reg (runtime/surface eng :presence)]
       (try
-        (presence/read! reg (principal-of req) self)
+        (seams/mark-read! reg (principal-of req) self)
         (catch Exception e
           (binding [*out* *err*]
             (println "waymark10 presence read-mark failed:"
@@ -629,8 +673,16 @@
           ;; seam (waymark9's _suppress_mirror_refresh): a Mirror breaks
           ;; the walker's reads-are-pure assumption, so ONLY a
           ;; conformance fixture sets it — production reads pull through
+          ;;
+          ;; The SPEC serves the row (waymark-db9.7): a kind that
+          ;; declares :mirror declares a read-through, and the value
+          ;; the declaration carries is the one that knows how to
+          ;; perform it (seams/ReadThrough). A kind that declares none
+          ;; — every kind in an engine that never met the mirror
+          ;; module — serves what is stored, which is what it always
+          ;; did.
           row (if (and (:mirror rdef) (not (:suppress-mirror-refresh eng)))
-                (mirror/refresh! eng rdef row)
+                (seams/pull-through (:mirror rdef) eng rdef row)
                 row)
           opts (render-opts eng req)
           env (if (= :summary depth)
@@ -736,11 +788,30 @@
         (:deferred result)
         ;; the phase-7 punt closes (phase 9b): an over-threshold call
         ;; mints a job and answers 202 — the envelope is the body, the
-        ;; Location is where to watch it
-        (let [{job :row} (jobs/enqueue! eng (:deferred result)
-                                        (:principal opts))]
-          (envelope-response eng (get (inv/resources eng) :job) job req 202
-                             {"Location" (str "/api/jobs/" (:id job))}))
+        ;; Location is where to watch it.
+        ;;
+        ;; The MINT is the job kind's own (waymark-db9.7). Core names
+        ;; the :job kind here — it must, to render the envelope it is
+        ;; about to serve — and the door rides that same rdef
+        ;; (seams/deferral), so the document shape and the worker
+        ;; actor stay in one place. An engine assembled without the
+        ;; jobs module enrols no :job kind and therefore carries no
+        ;; door: the call that asked to be deferred is told so, 503,
+        ;; rather than dying inside a create! for a kind nobody
+        ;; registered.
+        (let [job-rdef (get (inv/resources eng) :job)]
+          (if-some [door (seams/deferral job-rdef)]
+            (let [{job :row} (seams/defer! door eng (:deferred result)
+                                           (:principal opts))]
+              (envelope-response eng job-rdef job req 202
+                                 {"Location" (str "/api/" (:plural job-rdef)
+                                                  "/" (:id job))}))
+            (throw (p/problem
+                    :deferral-unavailable 503 "Deferral unavailable"
+                    {:detail (str "This call is over its declared "
+                                  ":defer-over threshold, but this engine "
+                                  "was assembled without the jobs module — "
+                                  "there is nothing to defer it to.")}))))
 
         ;; the bulk door's rehearsal (§23): per-item verdicts, and —
         ;; full mode, all-ok only — ONE considering card naming the
@@ -804,99 +875,13 @@
       (drafts/discard! eng rdef id (keyword action) (principal-of req))
       {:status 204 :headers {}})))
 
-;; ── live collab (websockets, phase 9b) ──────────────────────────────
-
-(defn- draft-collab [eng]
-  (fn [{{:keys [plural id action]} :path-params :as req}]
-    (let [rdef (rdef-by-plural eng plural)]
-      (check-row! req rdef id)
-      (check-action! req rdef (keyword action))
-      ;; identity over the socket: a browser WS cannot send the
-      ;; headers wrap-identity reads, so a ?ticket= (minted by the
-      ;; authenticated POST /api/-/collab-ticket) names the joiner. A
-      ;; presented ticket that does not redeem refuses BEFORE the
-      ;; upgrade — plain HTTP, never a half-open socket; no ticket
-      ;; keeps the header/anonymous path exactly as before.
-      (let [principal (if-some [tk (get (query-params req) "ticket")]
-                        (or (collab/redeem-ticket! eng tk)
-                            (throw (p/problem
-                                    :collab-ticket-invalid 401 "Ticket invalid"
-                                    {:detail (str "The ticket is unknown, expired or"
-                                                  " already spent; mint a fresh one"
-                                                  " (POST /api/-/collab-ticket).")})))
-                        (principal-of req))]
-        (collab/join eng rdef (keyword action) id principal req)))))
-
-(defn- collab-ticket-mint
-  "POST /api/-/collab-ticket: the authenticated session mints the
-  one-time voucher its WebSocket join will present — the socket's
-  identity rides the SAME resolved principal every other request
-  carries."
-  [eng]
-  (fn [req]
-    (json-response 200
-                   (p/wire-value (collab/mint-ticket! eng (principal-of req)))
-                   media-type nil)))
-
-;; ── the mirror sync trigger (the operator's door) ───────────────────
-
-(defn- mirror-sync-trigger
-  "POST /api/-/mirrors/{plural}/{resync|discover}: the manual sync
-  trigger. Mints the sync job the discovery daemon services on its
-  next beat (mirror/request-sync!) and answers 202 with the job
-  envelope and its Location — the defer seam's own shape; a job for
-  this kind and flavor already queued or running answers 200 with
-  ITS envelope instead (one pending pass per kind and flavor).
-  Identity: anonymous gets no operational lever — the job records
-  who asked. A SCOPED request is no longer turned away at the
-  threshold (waymark-rci widened): it passes when its grant names
-  the flavor as an action on the mirror kind — the flavors ride the
-  kind's vocabulary (invoke/action-names), so an ask can name them —
-  and EVERY scoped miss (unknown collection, ungranted kind,
-  ungranted flavor, a kind that is no mirror) answers the ONE
-  route-shaped 404, so a probing leash cannot tell 'denied to you'
-  from 'never existed'. The requester watches the minted job through
-  the grants own-surface."
-  [eng]
-  (fn [{{:keys [plural action]} :path-params :as req}]
-    (let [principal (principal-of req)
-          flavor (keyword action)
-          route-404 (fn []
-                      (throw (p/problem :not-found 404 "Not found"
-                                        {:detail "No such route."})))
-          mint (fn [rdef]
-                 (let [{:keys [job existing?]}
-                       (mirror/request-sync! eng (:kind rdef) flavor principal)]
-                   (envelope-response eng (get (inv/resources eng) :job) job req
-                                      (if existing? 200 202)
-                                      (if existing?
-                                        {}
-                                        {"Location" (str "/api/jobs/" (:id job))}))))]
-      (if-some [vis (visibility-of req)]
-        ;; the leashed door: judge everything, answer one way
-        (let [rdef (some (fn [[_ r]] (when (= plural (:plural r)) r))
-                         (inv/resources eng))]
-          (if (and (contains? #{:resync :discover} flavor)
-                   rdef (:mirror rdef)
-                   ((:kind? vis) (:kind rdef))
-                   ((:action? vis) (:kind rdef) flavor))
-            (mint rdef)
-            (route-404)))
-        (do
-          (when (= (:id principal) (:id t/anonymous))
-            (throw (p/problem :authentication-required 401
-                              "Authentication required"
-                              {:detail (str "A sync trigger records who asked; "
-                                            "authenticate and retry.")})))
-          (when-not (contains? #{:resync :discover} flavor)
-            (route-404))
-          (let [rdef (rdef-by-plural eng plural)]
-            (when-not (:mirror rdef)
-              (throw (p/problem
-                      :not-a-mirror 404 "Not a mirror"
-                      {:detail (str "Sync passes belong to mirror kinds — "
-                                    plural " holds its own truth.")})))
-            (mint rdef)))))))
+;; Live collab's websocket (…/draft/collab) and the collab ticket door
+;; moved out with the realtime module's other routes
+;; (waymark10.server.routes.realtime); the mirror's operator door went
+;; with the mirror module (waymark10.server.routes.mirror). Drafts
+;; stayed: a declared :draft policy on an :edit action is law, and
+;; collab is a websocket ON TOP of a draft row — the dependency runs
+;; one way only.
 
 ;; ── surfaces (phase 9b) ─────────────────────────────────────────────
 
@@ -927,16 +912,6 @@
                                         :services (:services eng)})
                      media-type nil))))
 
-;; ── the OpenAPI overlay (phase 9b) ──────────────────────────────────
-
-(defn- openapi-doc [eng]
-  (fn [req]
-    ;; the document names every kind; a scoped request gets the
-    ;; concealment answer
-    (when (visibility-of req)
-      (throw (p/problem :not-found 404 "Not found" {:detail "No such route."})))
-    (json-response 200 (openapi/document eng))))
-
 ;; ── events (SSE, phase 6) ───────────────────────────────────────────
 
 (defn- events-dispatcher
@@ -944,7 +919,7 @@
   started (documented pick over lazy-start: the operator owns the
   lifecycle; a test handler pays nothing)."
   [eng]
-  (or (some-> (:runtime eng) deref :dispatcher)
+  (or (runtime/surface eng :dispatcher)
       (throw (p/problem :events-unavailable 503 "Event stream unavailable"
                         {:detail (str "This engine is not started; the events "
                                       "dispatcher is not running.")}))))
@@ -966,12 +941,15 @@
       ;; presence — the engine already knows the principal and the
       ;; resource, so the stream registers on subscribe and drops on
       ;; disconnect (source \"stream\"). Anonymous streams mark nobody.
+      ;; No registry — no realtime module, or an engine that never
+      ;; started — means no hooks at all, and the stream is the plain
+      ;; SSE feed it was before presence existed.
       (let [principal (principal-of req)
-            reg (some-> (:runtime eng) deref :presence)
+            reg (runtime/surface eng :presence)
             self (str "/api/" plural "/" id)
             hooks (when (and reg (not= (:id principal) (:id t/anonymous)))
-                    {:on-subscribe #(presence/stream-open! reg principal self)
-                     :on-unsubscribe #(presence/stream-closed! reg principal self)})]
+                    {:on-subscribe #(seams/watch-opened! reg principal self)
+                     :on-unsubscribe #(seams/watch-closed! reg principal self)})]
         (events/sse-handler eng d (merge {:resource [(:kind rdef) id]
                                           :since (last-event-id req)}
                                          hooks)
@@ -989,195 +967,6 @@
       (events/sse-handler eng d {:kinds kinds
                                  :since (last-event-id req)}
                           req))))
-
-;; ── seasons (the rhythm door, waymark-tti.2) ────────────────────────
-
-(defn- seasons-doc
-  "GET /api/-/seasons?weeks=4&include_system=0 — the transition log
-  as weekly rhythm buckets plus the aging read over current rows
-  (waymark10.server.seasons). The firehose above 404s every
-  grant-scoped caller as a recorded punt (firehose-events); seasons
-  supersedes that posture for history: it PROJECTS — a scoped caller
-  gets exactly the kinds its grant sees whole, everything else
-  byte-level absent. Anonymous gets the same concealment 404 as the
-  other doors."
-  [eng]
-  (fn [req]
-    (let [principal (principal-of req)]
-      (when (or (nil? principal)
-                (= (:id principal) (:id t/anonymous)))
-        (throw (p/problem :not-found 404 "Not found"
-                          {:detail "No such route."})))
-      (let [q (query-params req)]
-        (json-response
-         200
-         (seasons/report eng (visibility-of req)
-                         {:weeks (seasons/clamp-weeks (get q "weeks"))
-                          :include-system? (contains? #{"1" "true"}
-                                                      (get q "include_system"))}))))))
-
-;; ── presence (ephemeral, never law) ─────────────────────────────────
-
-;; The reported self must pass the REPORTER's own sight (waymark-tti.3
-;; L7). Both ephemeral doors take a caller-supplied self and validate
-;; it for SHAPE only, then the registry publishes the frame to
-;; everyone whose visibility can GET that self — so a stranger could
-;; post `{self: "/api/letters/<id>"}` and have "someone is opening
-;; your letter" delivered to exactly the two people who can read that
-;; letter, from a principal that 404s the row. The frame carries no
-;; letter CONTENT, but it is an unearned knock on a private door, and
-;; on the private trio (self, journal, letter) that is the whole
-;; surface being protected.
-;;
-;; So: for a self naming a row of a private own-surface kind, the
-;; reporter must be able to see that row. Everything else is
-;; untouched — an ordinary kind's self, a collection self, the
-;; workspace, a door self. An unscoped viewer (human, system) has no
-;; :row? to consult and passes, exactly as it passes everywhere else:
-;; it really can see every letter.
-;;
-;; The refusal is SILENT — the report is accepted and publishes
-;; nothing, the same 204 either way. That is the curtain's own
-;; discipline (intents.clj): the wire must not narrate to a reporter
-;; what its own frame's fate was, or the door becomes the row-probe
-;; the 404 already refuses to be. Selves too long for the registries'
-;; own cap fall through to report! and meet its 422 there, so
-;; validation is still the registry's, never guessed at here.
-;;
-;; THE GATE JUDGES WHAT THE DOOR WILL STORE, not what the caller
-;; typed. presence/report! strips an http(s)://origin off a self
-;; before it stores it — a raw-HTTP agent's natural spelling — and
-;; this gate used to run against the RAW string: a full URL split
-;; into six parts, failed the four-part row shape, and was waved
-;; through as "not a row self" moments before report! turned it back
-;; into exactly the private row self this gate exists to refuse. So
-;; the door's own normalizer comes in as `normalize` and runs FIRST;
-;; every check below reads the normalized value, which is the value
-;; that will be published. Each door passes ITS OWN spelling
-;; (presence/normalize-self, intents/normalize-self — the intents
-;; surface stores what it is given and refuses a full URL outright),
-;; because assuming the two agree is how this gap opened. What we
-;; hand onward to report! is still the caller's own string: the
-;; registries normalize as they always did, and the gate only judges
-;; where that lands.
-(defn- reportable-self?
-  [eng req normalize self]
-  (let [s (str (normalize self))
-        parts (str/split s #"/")]
-    (or (not (and (string? self)
-                  (<= (count s) presence/self-max-chars)
-                  (= 4 (count parts))
-                  (= "api" (nth parts 1))))
-        (let [rdef (some (fn [[_ r]] (when (= (nth parts 2) (:plural r)) r))
-                         (inv/resources eng))]
-          (or (nil? rdef)
-              (not (grants/private-kind? (:kind rdef)))
-              (boolean ((presence/self-visible? eng (visibility-of req)) s)))))))
-
-(defn- presence-registry
-  "The engine's running presence registry — 503 on an engine that
-  never started (the dispatcher's discipline)."
-  [eng]
-  (or (some-> (:runtime eng) deref :presence)
-      (throw (p/problem :presence-unavailable 503 "Presence unavailable"
-                        {:detail (str "This engine is not started; the "
-                                      "presence registry is not running.")}))))
-
-(defn- presence-stream
-  "GET /api/-/presence: the where-they-look stream. Unlike the
-  firehose, a scoped request is not 404'd — it gets the stream
-  PROJECTED: only presences on selves its visibility could GET, the
-  frames it may not see byte-level absent."
-  [eng]
-  (fn [req]
-    (let [reg (presence-registry eng)]
-      (presence/sse-handler eng reg
-                            (presence/self-visible? eng (visibility-of req))
-                            req))))
-
-(defn- presence-report
-  "POST /api/-/presence {self}: the explicit heartbeat for clients
-  that only hold the firehose (the ported UI's case). A scoped
-  principal's own reporting is always accepted — and a beat on a
-  private row the reporter cannot itself see is accepted too and
-  publishes nothing (reportable-self? above)."
-  [eng]
-  (fn [req]
-    (let [reg (presence-registry eng)
-          self (:self (read-body req))]
-      (when (reportable-self? eng req presence/normalize-self self)
-        (presence/report! reg (principal-of req) self))
-      {:status 204 :headers {}})))
-
-;; ── intents (ephemeral, never law) ──────────────────────────────────
-
-(defn- intents-registry
-  "The engine's running intents registry — 503 on an engine that
-  never started (the dispatcher's discipline)."
-  [eng]
-  (or (some-> (:runtime eng) deref :intents)
-      (throw (p/problem :intents-unavailable 503 "Intents unavailable"
-                        {:detail (str "This engine is not started; the "
-                                      "intents registry is not running.")}))))
-
-(defn- intents-stream
-  "GET /api/-/intents: the considering/asking stream. Like presence
-  (and unlike the firehose), a scoped request is not 404'd — it gets
-  the stream PROJECTED: only intents on selves its visibility could
-  GET, the frames it may not see byte-level absent."
-  [eng]
-  (fn [req]
-    (let [reg (intents-registry eng)]
-      (intents/sse-handler eng reg
-                           (presence/self-visible? eng (visibility-of req))
-                           req))))
-
-(defn- intents-report
-  "POST /api/-/intents {self, action, question?}: the explicit door —
-  a client surfacing a considering the router cannot see (or its own
-  confirm gate as an ask, question = the consequence sentence). A
-  principal's own reporting is always accepted, scoped or not — and
-  a CURTAINED one's is accepted too and publishes nothing (the
-  curtain lives at the registry's publish point, intents.clj): the
-  204 is the same 204 either way, so the wire never narrates the
-  curtain to whoever sent the report. A frame naming a PRIVATE row
-  the reporter cannot itself see is dropped the same silent way
-  (reportable-self?, waymark-tti.3 L7) — one more reason the 204 says
-  nothing."
-  [eng]
-  (fn [req]
-    (let [reg (intents-registry eng)
-          body (read-body req)]
-      (when (reportable-self? eng req intents/normalize-self (:self body))
-        (intents/report! reg (principal-of req)
-                         (select-keys body [:self :action :question])))
-      {:status 204 :headers {}})))
-
-(defn- intents-abandon
-  "POST /api/-/intents/abandon {self, action}: the caller clears its
-  own card — the considering that came to nothing, the ask it no
-  longer stands behind."
-  [eng]
-  (fn [req]
-    (let [reg (intents-registry eng)
-          body (read-body req)]
-      (intents/abandon! reg (principal-of req)
-                        (select-keys body [:self :action]))
-      {:status 204 :headers {}})))
-
-(defn- intents-answer
-  "POST /api/-/intents/answer {id, names?}: the human's yes on a
-  pending ask — delivered back down the stream; the asker's retry
-  still passes the guard through the E1 header. Concealment holds:
-  an intent the answerer may not see is the same 404 as none."
-  [eng]
-  (fn [req]
-    (let [reg (intents-registry eng)
-          body (read-body req)]
-      (intents/answer! reg (principal-of req)
-                       (select-keys body [:id :names])
-                       (presence/self-visible? eng (visibility-of req)))
-      {:status 204 :headers {}})))
 
 ;; ── welcome home: the returning-inhabitant payload (waymark-4zj.2) ──
 ;;
@@ -1647,115 +1436,6 @@
                    "approve link, and work under the granted leash — "
                    "every act you take is what they are watching")}))))
 
-;; ── the generic UI (phase 10) ───────────────────────────────────────
-
-(defn- mobile-ua?
-  "A phone-shaped User-Agent. `Mobi` is the token every mobile
-  browser ships (Android Chrome, iOS Safari, Firefox Mobile);
-  iPad/Android keep tablets in the net."
-  [req]
-  (boolean (re-find #"(?i)mobi|android|iphone|ipad"
-                    (get-in req [:headers "user-agent"] ""))))
-
-(defn- ui-page
-  "GET / and /api/-/ui (and /api/-/ui-lite): the envelope-driven
-  generic UI — the root is its canonical address; /api/-/ui stays
-  as the back-compat spelling existing deep links (source_ui_href,
-  bookmarks) already carry. One self-contained page (vanilla JS, no
-  external hosts) that renders whatever the wire declares: kinds
-  from well-known,
-  collections from the query grammar, envelopes as forms. A static
-  asset, served to anyone — a scoped request's DATA stays projected
-  by the API it drives. The full client (the waymark9 generic UI,
-  ported to wire 10) assembles from resources/waymark10/ui/;
-  ui_lite.html preserves the original phase-10 page.
-
-  A mobile User-Agent gets the SAME page stamped <html data-ui=
-  \"mobile\"> — one client, two shells; the page's own CSS/JS key the
-  mobile chrome (bottom tab nav, card rows, sheet dialogs) off the
-  stamp. ?ui=mobile|desktop overrides the sniff, and the page's ⋯
-  menu links the switch.
-
-  Takes the page as a STRING (or nil → 404) — the full client arrives
-  pre-assembled from fragments by ui-assembly/assemble; ui_lite.html
-  is still slurped whole at the call site."
-  [_eng page]
-  (let [mobile (some-> page
-                       (str/replace-first
-                        "<html lang=\"en\">"
-                        "<html lang=\"en\" data-ui=\"mobile\">"))]
-    (fn [req]
-      (if page
-        {:status 200
-         :headers {"Content-Type" "text/html; charset=utf-8"}
-         :body (if (case (get (query-params req) "ui")
-                     "mobile"  true
-                     "desktop" false
-                     (mobile-ua? req))
-                 mobile
-                 page)}
-        (throw (p/problem :not-found 404 "Not found"
-                          {:detail "The UI asset is not on the classpath."}))))))
-
-;; ── the worksheet round-trip ────────────────────────────────────────
-
-(defn- worksheet-get
-  "GET /api/:plural/-/worksheet?<filters> — the filtered view as an
-  xlsx download, for kinds declaring :worksheet. The same query
-  grammar as the collection; pagination params are ignored (a
-  worksheet is the whole subset)."
-  [eng]
-  (fn [{{:keys [plural]} :path-params :as req}]
-    (let [rdef (rdef-by-plural eng plural)]
-      (check-kind! req rdef)
-      ;; the export projects (waymark-ecq closed): the visibility
-      ;; rides into the query and the columns exactly as it rides
-      ;; the collection envelope
-      (worksheet/export eng rdef (query-params req) (visibility-of req)))))
-
-(defn- worksheet-post
-  "POST /api/:plural/-/worksheet — the edited workbook back, raw
-  bytes in the body. The upload STAGES: it lands as a worksheet row
-  (the engine's own kind) whose post-commit pass plans every line,
-  so the 201 already carries the full report; revalidate / apply /
-  discard are the row's own actions from there. ?filename= names the
-  file for the record."
-  [eng]
-  (fn [{{:keys [plural]} :path-params :as req}]
-    (let [rdef (rdef-by-plural eng plural)
-          _ (check-kind! req rdef)
-          ;; staging writes rows the scoped uploader then cannot see
-          ;; (worksheet is outside every grant surface) — refuse at
-          ;; the door instead of after the file has landed
-          _ (when (visibility-of req)
-              (throw (p/not-found "collection" plural)))
-          result (worksheet/stage!
-                  eng rdef (:body req)
-                  {:principal (principal-of req)
-                   :filename (get (query-params req) "filename")})
-          row (:row result)
-          ws-rdef (get (inv/resources eng) :worksheet)]
-      (envelope-response eng ws-rdef row req 201
-                         {"Location" (str "/api/worksheets/" (:id row))}))))
-
-;; ── attachment bytes (phase 9a) ─────────────────────────────────────
-
-(defn- attachment-rdef [eng id]
-  (or (get (inv/resources eng) :attachment)
-      (throw (p/not-found :attachment id))))
-
-(defn- bytes-put [eng]
-  (fn [{{:keys [id]} :path-params :as req}]
-    (let [rdef (attachment-rdef eng id)]
-      (check-row! req rdef id)
-      (let [result (attachments/put-bytes! eng id (:body req))]
-        (envelope-response eng rdef (:row result) req 200 nil)))))
-
-(defn- bytes-get [eng]
-  (fn [{{:keys [id]} :path-params :as req}]
-    (check-row! req (attachment-rdef eng id) id)
-    (attachments/get-bytes eng id)))
-
 ;; ── the handler ─────────────────────────────────────────────────────
 
 (defn- wrap-problems
@@ -1826,54 +1506,96 @@
       (handler (cond-> (assoc req :waymark10/principal principal)
                  vis (assoc :waymark10/visibility vis))))))
 
+(defn core-static
+  "The static routes core answers whatever modules are assembled: the
+  well-known document, the per-kind JSON schema, the SSE firehose, the
+  welcome payload, the grant check, the agent's knock (both
+  spellings), and the declared surfaces. Every one of them is the law
+  or the identity boundary talking about itself."
+  [eng]
+  [["/api/.well-known/waymark" {:get (well-known eng)}]
+   ["/api/schemas/:kind" {:get (kind-schema eng)}]
+   ["/api/-/events" {:get (firehose-events eng)}]
+   ["/api/-/welcome" {:get (welcome-doc eng)}]
+   ["/api/-/grant-check" {:get (grant-check eng)}]
+   ["/agentInvite" {:get (agent-invite-doc eng)
+                    :post (agent-invite-mint eng)}]
+   ["/api/-/agent-invite" {:get (agent-invite-doc eng)
+                           :post (agent-invite-mint eng)}]
+   ["/api/surfaces/:name" {:get (surface-view eng)}]
+   ["/api/surfaces/:name/:id" {:get (surface-view eng)}]])
+
+(defn core-plural-head
+  "The plural grammar's own front door — the collection and the
+  create. It is mounted BEFORE the modules' plural routes so that the
+  two-segment address stays core's, and nothing a module contributes
+  can quietly become /api/{plural}."
+  [eng]
+  [["/api/:plural" {:get (collection eng) :post (create eng)}]])
+
+(defn core-plural-tail
+  "The plural grammar's catch-alls: the bulk door, the row, its event
+  stream, invoke, batch, and the draft sub-resource. These are LAST on
+  purpose — each one ends in a wildcard segment, so anything mounted
+  after them is shadowed by position and never answers."
+  [eng]
+  [["/api/:plural/-/:action" {:post (bulk-action eng)}]
+   ["/api/:plural/:id" {:get (get-one eng)}]
+   ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
+   ["/api/:plural/:id/-/:action" {:post (invoke-action eng)}]
+   ["/api/:plural/:id/-/:action/batch" {:post (batch-action eng)}]
+   ["/api/:plural/:id/-/:action/draft" {:get (draft-get eng)
+                                        :put (draft-put eng)
+                                        :delete (draft-delete eng)}]])
+
+(defn assemble-routes
+  "Core's routes plus the enrolled modules', in the ONE order that
+  serves them all. A route set is {:module label :static [route …]
+  :plural [route …]}, and the two buckets are the whole reason this is
+  not a concat:
+
+    :static — mounted before the plural grammar, where an address with
+              a literal second segment (/api/-/seasons,
+              /api/attachments/{id}/bytes) has to sit or /api/{plural}
+              swallows it.
+    :plural — mounted INSIDE the plural grammar, after its front door
+              and before its catch-alls. /api/{plural}/-/worksheet
+              lives here: mounted a line later, the bulk-action
+              grammar /api/{plural}/-/{action} would match it first
+              and the worksheet would be gone. Not with an error —
+              silently, forever, because the router runs
+              {:conflicts nil} and position IS the routing rule.
+
+  Within a bucket the order is the module table's, and it is not
+  load-bearing: no two module routes today can match the same address.
+  The buckets are."
+  [eng route-sets]
+  (into []
+        cat
+        [(core-static eng)
+         (mapcat :static route-sets)
+         (core-plural-head eng)
+         (mapcat :plural route-sets)
+         (core-plural-tail eng)]))
+
 (defn handler
   "The ring handler: linear router (static routes shadow the plural
   grammar), identity boundary inside the problem boundary, problem
-  boundary outermost."
-  [eng]
-  (let [ui (ui-page eng (ui-assembly/assemble))]
-    (-> (ring/ring-handler
-         (ring/router
-          [["/" {:get ui}]
-           ["/api/.well-known/waymark" {:get (well-known eng)}]
-           ["/api/openapi.json" {:get (openapi-doc eng)}]
-           ["/api/schemas/:kind" {:get (kind-schema eng)}]
-           ["/api/-/events" {:get (firehose-events eng)}]
-           ["/api/-/seasons" {:get (seasons-doc eng)}]
-           ["/api/-/presence" {:get (presence-stream eng)
-                               :post (presence-report eng)}]
-           ["/api/-/intents" {:get (intents-stream eng)
-                              :post (intents-report eng)}]
-           ["/api/-/intents/abandon" {:post (intents-abandon eng)}]
-           ["/api/-/intents/answer" {:post (intents-answer eng)}]
-           ["/api/-/collab-ticket" {:post (collab-ticket-mint eng)}]
-           ["/api/-/mirrors/:plural/:action" {:post (mirror-sync-trigger eng)}]
-           ["/api/-/welcome" {:get (welcome-doc eng)}]
-           ["/api/-/grant-check" {:get (grant-check eng)}]
-           ["/agentInvite" {:get (agent-invite-doc eng)
-                            :post (agent-invite-mint eng)}]
-           ["/api/-/agent-invite" {:get (agent-invite-doc eng)
-                                   :post (agent-invite-mint eng)}]
-           ["/api/-/ui" {:get ui}]
-           ["/api/-/ui-lite" {:get (ui-page eng (some-> (io/resource "waymark10/ui_lite.html")
-                                                        slurp))}]
-           ["/api/attachments/:id/bytes" {:put (bytes-put eng)
-                                          :get (bytes-get eng)}]
-           ["/api/surfaces/:name" {:get (surface-view eng)}]
-           ["/api/surfaces/:name/:id" {:get (surface-view eng)}]
-           ["/api/:plural" {:get (collection eng) :post (create eng)}]
-           ["/api/:plural/-/worksheet" {:get (worksheet-get eng)
-                                        :post (worksheet-post eng)}]
-           ["/api/:plural/-/:action" {:post (bulk-action eng)}]
-           ["/api/:plural/:id" {:get (get-one eng)}]
-           ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
-           ["/api/:plural/:id/-/:action" {:post (invoke-action eng)}]
-           ["/api/:plural/:id/-/:action/batch" {:post (batch-action eng)}]
-           ["/api/:plural/:id/-/:action/draft" {:get (draft-get eng)
-                                                :put (draft-put eng)
-                                                :delete (draft-delete eng)}]
-           ["/api/:plural/:id/-/:action/draft/collab" {:get (draft-collab eng)}]]
-          {:conflicts nil})
-         not-found-handler)
-        (wrap-identity eng)
-        wrap-problems)))
+  boundary outermost.
+
+  `route-sets` are the assembled modules' contributions, handed in by
+  waymark10.server.engine (which reads waymark10.modules) — this
+  namespace requires no module and knows none by name. The one-arity
+  call is the CORE-ONLY handler: no seasons door, no presence stream,
+  no generic UI, no worksheet round-trip; those addresses 404 exactly
+  as an unmounted address should. Every real boot goes through
+  engine/handler and gets the modules the engine was assembled with."
+  ([eng] (handler eng nil))
+  ([eng route-sets]
+   (-> (ring/ring-handler
+        (ring/router
+         (assemble-routes eng route-sets)
+         {:conflicts nil})
+        not-found-handler)
+       (wrap-identity eng)
+       wrap-problems)))

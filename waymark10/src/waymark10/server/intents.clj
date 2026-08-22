@@ -102,6 +102,7 @@
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
+            [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
             ;; loaded for the PostgresStorage record class alone
             [waymark10.server.store.postgres]
@@ -617,6 +618,19 @@
       (.execute stmt (str "LISTEN " intents-channel)))
     conn))
 
+(defrecord Registry []
+  ;; The announcement, as CORE knocks on it (waymark-db9.7). The
+  ;; router used to require this namespace so a dry-run door could
+  ;; deal its considering card; the card is not a route, it is this
+  ;; running surface being asked to do its own work. Core already
+  ;; holds the registry (runtime/surface eng :intents, the handle the
+  ;; realtime module's own lifecycle hook published), so the reach-in
+  ;; dissolves into type dispatch. Field-less for the same reason
+  ;; presence's is: the map's shape is start!'s, and one home for it
+  ;; is better than two that can drift.
+  seams/Considering
+  (announce! [reg principal intent] (report! reg principal intent)))
+
 (defn start!
   "The engine's intents registry: one LISTEN thread (frames in,
   re-assertions out, TTL sweeps on the clock) and — when the caller
@@ -651,24 +665,25 @@
         ;; component, or a private one for a standalone registry
         own-curtain (when (nil? curtain)
                       (curtain/start! eng {:dispatcher dispatcher}))
-        reg {:eng eng
-             :storage storage
-             :origin (str (random-uuid))
-             :hb-ms hb-ms
-             :ttl-ms ttl-ms
-             :ask-ttl-ms ask-ttl-ms
-             :curtain (or curtain own-curtain)
-             :own-curtain own-curtain
-             :lock (Object.)
-             :local (atom {})
-             :remotes (atom {})
-             :published (atom {})
-             :outcomes (atom {})
-             :subs (atom #{})
-             :running (atom true)
-             :conn conn
-             :dispatcher dispatcher
-             :sub sub}
+        reg (map->Registry
+             {:eng eng
+              :storage storage
+              :origin (str (random-uuid))
+              :hb-ms hb-ms
+              :ttl-ms ttl-ms
+              :ask-ttl-ms ask-ttl-ms
+              :curtain (or curtain own-curtain)
+              :own-curtain own-curtain
+              :lock (Object.)
+              :local (atom {})
+              :remotes (atom {})
+              :published (atom {})
+              :outcomes (atom {})
+              :subs (atom #{})
+              :running (atom true)
+              :conn conn
+              :dispatcher dispatcher
+              :sub sub})
         listen-t
         (Thread.
          ^Runnable

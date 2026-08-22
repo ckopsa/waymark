@@ -85,6 +85,7 @@
             [waymark10.server.events :as events]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
+            [waymark10.server.seams :as seams]
             [waymark10.server.store :as store]
             ;; loaded for the PostgresStorage record class alone
             [waymark10.server.store.postgres]
@@ -641,6 +642,26 @@
       (.execute stmt (str "LISTEN " presence-channel)))
     conn))
 
+(defrecord Registry []
+  ;; The three implicit doors, as CORE knocks on them
+  ;; (waymark-db9.7). The router used to require this namespace for
+  ;; them: a GET marks a gaze, an SSE subscription opens and closes
+  ;; one, and none of the three is a route. They are the same three
+  ;; fns above, reachable now by TYPE — core holds this registry
+  ;; already (runtime/surface eng :presence, the handle the realtime
+  ;; module's own lifecycle hook published) and asks it to do its
+  ;; own work.
+  ;;
+  ;; No fields: the registry is a map that has always known its own
+  ;; shape, built by start! below and read by keyword everywhere in
+  ;; this namespace. The record adds a NAME for that map and nothing
+  ;; else — the price of protocol dispatch, and cheaper than
+  ;; re-declaring fifteen keys in two places that could drift.
+  seams/Gaze
+  (mark-read! [reg principal self] (read! reg principal self))
+  (watch-opened! [reg principal self] (stream-open! reg principal self))
+  (watch-closed! [reg principal self] (stream-closed! reg principal self)))
+
 (defn start!
   "The engine's presence registry: one LISTEN thread (frames in,
   re-assertions out, TTL sweeps on the clock). opts {:hb-ms} —
@@ -682,21 +703,22 @@
         own-curtain (when (nil? curtain)
                       (curtain/start! eng {:lookup curtained?
                                            :ttl-ms (or curtain-ttl-ms 2000)}))
-        reg {:eng eng
-             :storage storage
-             :origin (str (random-uuid))
-             :hb-ms hb-ms
-             :lock (Object.)
-             :local (atom {})
-             :remotes (atom {})
-             ;; the read door's throttle: pid → [self at-ms]
-             :read-at (atom {})
-             :curtain (or curtain own-curtain)
-             :own-curtain own-curtain
-             :published (atom {})
-             :subs (atom #{})
-             :running (atom true)
-             :conn conn}
+        reg (map->Registry
+             {:eng eng
+              :storage storage
+              :origin (str (random-uuid))
+              :hb-ms hb-ms
+              :lock (Object.)
+              :local (atom {})
+              :remotes (atom {})
+              ;; the read door's throttle: pid → [self at-ms]
+              :read-at (atom {})
+              :curtain (or curtain own-curtain)
+              :own-curtain own-curtain
+              :published (atom {})
+              :subs (atom #{})
+              :running (atom true)
+              :conn conn})
         thread
         (Thread.
          ^Runnable
