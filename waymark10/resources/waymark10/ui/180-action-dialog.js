@@ -12,12 +12,18 @@ function dryRunnable(href) {
 const dlgStamp = t => new Date(t || Date.now())
   .toTimeString().slice(0, 8);
 
-async function actionDialog({name, entry, doc, bulkIds, prefill, onDone}) {
+async function actionDialog({name, entry, doc, bulkIds, prefill, onDone,
+                             idemKey: callerKey}) {
   const safety = entry.safety || {};
   const input = entry.input || null;
   /* rule 3 (Part IV): a non-idempotent action gets its key at dialog
-     open — one logical attempt, one key, however many retries */
-  const idemKey = safety.idempotent ? null : uuid();
+     open — one logical attempt, one key, however many retries.
+     A CALLER may hand one in instead, and one does: a feed card's
+     verb rides feed/origin-key whether it lands in one tap or through
+     this form, because a door counted only when it was tapped
+     directly would be a metric that flattered the screen
+     (waymark-iqa.7). */
+  const idemKey = callerKey || (safety.idempotent ? null : uuid());
   let acknowledged = [];
 
   /* drafts: half-written effort is server state. Wire 10: GET 404s

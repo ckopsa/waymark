@@ -114,6 +114,17 @@
   html[data-ui="mobile"] .feed-kv { max-width: none; }
   html[data-ui="mobile"] .feed-actions button { font-size: 13px; }
 
+  /* --- feed SCREEN (mobile): the surface it was designed for -------
+     the cards go full-bleed and the verbs grow: this is the one
+     screen in the building meant to be read standing up, one thumb */
+  html[data-ui="mobile"] .fcard { border-radius: 0; border-left-width: 4px;
+    margin: 0 -10px; padding: 13px 14px 12px; }
+  html[data-ui="mobile"] .fcard-title { font-size: 18px; }
+  html[data-ui="mobile"] .feed-verbs button.chip.verb { min-height: 42px;
+    font-size: 15.5px; flex: 1 1 auto; }
+  html[data-ui="mobile"] .feed-head h2 { font-size: 20px; }
+  html[data-ui="mobile"] .feed-seam-say { font-size: 16px; }
+
   /* ── dashboard screen (mobile): one column, tighter panels ──────── */
   html[data-ui="mobile"] .slot-grid { grid-template-columns: 1fr; gap: 10px; }
   html[data-ui="mobile"] .slot-panel { min-height: 0; padding: 10px 12px; }

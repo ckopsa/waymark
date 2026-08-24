@@ -50,14 +50,26 @@
    2. the same chromium
    3. node waymark10/scripts/ui-drive.mjs batch-a
 
+   FEED (the day's scroll-first face, waymark-iqa.7 — against a
+   workqueue10 dev engine, which serves every kind the recipe's
+   populations name):
+   1. make dev-queue                       (:8014, dockerized pg :5433)
+   2. the same chromium
+   3. BASE=http://localhost:8014 node waymark10/scripts/ui-drive.mjs feed
+   or all three, plus the audit-trail half node cannot see:
+      waymark10/scripts/feed-smoke.sh
+
    The story's plan checks stay self-normalizing (a partial re-run
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = process.argv[2] === "batch-a" ? "batch-a" : "story";
+const MODE = ["batch-a", "feed"].includes(process.argv[2])
+  ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
-  (MODE === "batch-a" ? "http://localhost:8123" : "http://localhost:8010");
+  (MODE === "batch-a" ? "http://localhost:8123"
+   : MODE === "feed" ? "http://localhost:8014"
+   : "http://localhost:8010");
 
 const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json();
 const page = list.find(t => t.type === "page");
@@ -753,7 +765,229 @@ async function batchAStory() {
   ok("the embedded rows visibly reordered (ascending points first)", true);
 }
 
+/* ════ feed: the day's scroll-first face (waymark-iqa.7) ══════════════
+   Against a workqueue10 dev engine (`make dev-queue`, :8014 — or any
+   port, with BASE). It seeds its own world through the API — every
+   population the recipe names that a single day can be made to hold —
+   then reads the screen the way a person would: scroll the sections in
+   census order, cross the seam, tap a verb, watch the card settle.
+
+   `scripts/feed-smoke.sh` is this drive plus the half node cannot see:
+   the Idempotency-Key the tap left on the transition row. */
+async function feedStory() {
+  const tag = String(Date.now()).slice(-6);
+  const H = pid => ({"x-waymark-principal": pid,
+                     "Content-Type": "application/json"});
+  const post = async (path, body, pid = "colton") => {
+    const res = await fetch(BASE + path,
+      {method: "POST", headers: H(pid),
+       body: body ? JSON.stringify(body) : null});
+    return await res.json().catch(() => null);
+  };
+
+  console.log("· seeding a day through the API");
+  /* do-now: open rows of front-door kinds, each with a light verb */
+  const t1 = await post("/api/tasks",
+    {title: `Call the dentist ${tag}`, detail: "the one on Maple street"});
+  const t2 = await post("/api/tasks", {title: `Return the library books ${tag}`});
+  /* an activity carries a COMPOSITION verb (set_duration) beside its
+     assent one — the heavier half of the partition, which must render
+     as a link and never as a button */
+  await post("/api/activities", {title: `Sketch the porch ${tag}`,
+    physical_energy: "low", mental_energy: "low", location: "anywhere"});
+  /* fuel + the archive: chores can END, so retiring them empties the
+     kind (a `cleared` card) and leaves the rest as memories */
+  for (const name of ["Wipe the baseboards", "Descale the kettle",
+                      "Flip the mattress"]) {
+    const c = await post("/api/chores", {name: `${name} ${tag}`,
+                                         cadence: "monthly"});
+    if (c && c.self) await post(c.self + "/-/retire");
+  }
+  /* decide: a tickler over a real row, and a finding published by
+     SOMEBODY ELSE (the four-eyes wall means a finding never cards to
+     its own author) that offers a light action on that tickler */
+  const tick = await post("/api/ticklers",
+    {what: `Sort the garage shelves ${tag}`, subject_kind: "task",
+     subject_id: String(t2.self).split("/").pop(), subject_href: t2.self});
+  await post("/api/insights",
+    {finding: `The garage shelves have not moved since June ${tag}`,
+     evidence: [t2.self, tick.self], offer_kind: "tickler",
+     offer_id: String(tick.self).split("/").pop(),
+     offer_action: "take_it_back", offer_href: tick.self}, "sous");
+
+  console.log("· boot + principal");
+  await send("Page.navigate", {url: BASE + "/api/-/ui"});
+  await sleep(1200);
+  await evaljs(`localStorage.setItem("wm10.principal", "colton");
+                location.reload(); true`);
+  await sleep(1500);
+
+  /* ── the door: the feed cannot advertise itself on .well-known, so
+     the page probes the address it knows ─────────────────────────── */
+  await waitFor(`[...document.querySelectorAll("nav a")]
+                 .some(a => a.textContent === "Feed")`, "the feed's nav door");
+  ok("the nav offers the feed (probed, not advertised)", true);
+  await evaljs(`[...document.querySelectorAll("nav a")]
+                .find(a => a.textContent === "Feed").click(); true`);
+  await waitFor(`document.querySelectorAll(".feedcards .fcard").length > 3`,
+                "the feed's cards");
+  ok("the feed screen renders from the document's own kind",
+     await evaljs(`location.hash === "#/api/-/feed" &&
+                   !!document.querySelector(".feed-head")`));
+
+  /* ── the census, top to bottom, and the seam in the middle ─────── */
+  const order = await evaljs(`[...document.querySelectorAll(
+      ".feedcards .fcard, .feedcards .feed-seam")]
+    .map(n => n.dataset.section || "seam")`);
+  ok("sections arrive in census order with the seam among them",
+     JSON.stringify(order) === JSON.stringify(
+       [...order].sort((a, b) => ["do_now", "decide", "fuel", "seam", "archive"]
+         .indexOf(a) - ["do_now", "decide", "fuel", "seam", "archive"]
+         .indexOf(b))) && order.includes("seam"));
+  ok("every section the answer carries wears a heading",
+     await evaljs(`(() => {
+       const heads = [...document.querySelectorAll(".feed-sect b")]
+         .map(b => b.textContent);
+       const secs = new Set([...document.querySelectorAll(".fcard")]
+         .map(c => c.dataset.section));
+       const want = {do_now: "Do now", decide: "Decide", fuel: "Fuel",
+                     archive: "Archive"};
+       return [...secs].every(s => heads.includes(want[s]));
+     })()`));
+  ok("the seam is one quiet element, not a card, and says the sentence",
+     await evaljs(`document.querySelectorAll(".feed-seam").length === 1 &&
+       document.querySelector(".feed-seam-say").textContent
+         .includes("caught up")`));
+
+  /* ── the populations, one line each ────────────────────────────── */
+  ok("a do-now card offers its verb as a TAP CHIP, labeled as declared",
+     await evaljs(`[...document.querySelectorAll(
+        '.fcard[data-population="next_actions"] .feed-verbs button.chip.verb')]
+       .some(b => b.textContent.trim() === "Done")`));
+  ok("nothing on this screen binds a swipe (a sequential read takes none)",
+     await evaljs(`!document.querySelector("[data-gesture]") &&
+                   !document.querySelector(".deck-card")`));
+  ok("a composition verb rides as a LINK to the row's screen, never a button",
+     await evaljs(`(() => {
+       const a = [...document.querySelectorAll(".feed-verbs a.link-chip")]
+         .find(x => x.textContent.includes("Set duration"));
+       return !!a && a.getAttribute("href").startsWith("#/api/activities/") &&
+              !a.getAttribute("href").includes("/-/");
+     })()`));
+  ok("a tickler offers all three verdicts and a way back to the row",
+     await evaljs(`(() => {
+       const c = document.querySelector('.fcard[data-kind="tickler"]');
+       const labels = [...c.querySelectorAll(".feed-verbs button")]
+         .map(b => b.textContent.trim());
+       return ["Not now", "Let it go", "Take it back"]
+                .every(l => labels.includes(l)) &&
+              !!c.querySelector('.feed-verbs a[href^="#/api/tasks/"]');
+     })()`));
+  ok("an insight is a decide card with the offer PRIMARY, both verdicts, " +
+     "and a byline that stays a principal id",
+     await evaljs(`(() => {
+       const c = document.querySelector('.fcard[data-kind="insight"]');
+       const primary = c.querySelector(".feed-verbs button.chip.verb.primary");
+       const labels = [...c.querySelectorAll(".feed-verbs button")]
+         .map(b => b.textContent.trim());
+       return !!primary && primary.dataset.offer === "take_it_back" &&
+              labels.includes("Do it") && labels.includes("Not useful") &&
+              c.querySelector(".fcard-by").textContent.includes("sous") &&
+              !!c.querySelector('.feed-verbs a[href^="#/api/ticklers/"]');
+     })()`));
+  await waitFor(`document.querySelector(".fcard-evidence a")`,
+                "the finding's evidence, read late");
+  ok("the finding names what it read (two rows, each a live link)",
+     await evaljs(`document.querySelector(".fcard-evidence").textContent
+                   .includes("read 2 rows")`));
+  ok("a fuel card is READ-ONLY and wears the server's own sentence",
+     await evaljs(`(() => {
+       const c = document.querySelector('.fcard[data-section="fuel"]');
+       return !!c && !c.querySelector("button") &&
+              c.querySelector(".fcard-say").textContent
+                .includes("Nothing is left in chores");
+     })()`));
+  ok("archive cards are read-only too, and each links its own row",
+     await evaljs(`[...document.querySelectorAll('.fcard[data-section="archive"]')]
+       .every(c => !c.querySelector("button") &&
+                   !!c.querySelector('a[href^="#/api/"]'))`));
+  /* the bottomless half, walked to its end: the observer takes the
+     next page when the sentinel comes within a screenful, and the
+     tail's own button is the same door for a thumb that got there
+     first. */
+  let pages = 0;
+  while (pages < 8 &&
+         await evaljs(`!!document.querySelector(".feed-endbox button")`)) {
+    const had = await evaljs(`document.querySelectorAll(".fcard").length`);
+    await evaljs(`document.querySelector(".feed-endbox button").click(); true`);
+    await waitFor(`document.querySelectorAll(".fcard").length > ${had} ||
+                   !document.querySelector(".feed-endbox button")`,
+                  "the next archive page", 10000);
+    pages++;
+  }
+  ok(`the archive walks: ${pages} page(s) followed off links.next`,
+     pages > 0);
+  ok("no card_id repeats, however many pages have landed",
+     await evaljs(`(() => {
+       const ids = [...document.querySelectorAll("[data-card-id]")]
+         .map(n => n.dataset.cardId);
+       return new Set(ids).size === ids.length;
+     })()`));
+  /* and the tail says one of two TRUE things — that there is more to
+     walk (the offer, which the observer also takes when the sentinel
+     scrolls into the margin), or that there is not. It never pretends
+     to be infinite: a surface that lies once, at the bottom, lies to
+     whoever scrolled the furthest. */
+  ok("the tail is honest — more to walk, or the end said out loud",
+     await evaljs(`(() => {
+       const t = document.querySelector(".feed-endbox").textContent;
+       return t.includes("Further back") || t.includes("archive") ||
+              t.includes("quiet") || t.includes("reading");
+     })()`));
+
+  /* ── the tap: one chip, one origin key, one settled card ───────── */
+  console.log("· a verb, from the card");
+  await evaljs(`window.__keys = [];
+    const f = window.fetch;
+    window.fetch = (u, o) => { const k = (o && o.headers || {})["Idempotency-Key"];
+      if (k) window.__keys.push([String(u), k]); return f(u, o); };
+    true`);
+  const cardId = await evaljs(`(() => {
+    const c = [...document.querySelectorAll('.fcard[data-population="next_actions"]')]
+      .find(c => [...c.querySelectorAll("button")].some(b => b.textContent.trim() === "Done"));
+    [...c.querySelectorAll("button")].find(b => b.textContent.trim() === "Done").click();
+    return c.dataset.cardId; })()`);
+  await waitFor(`document.querySelector(".fcard.done .feed-settled")`,
+                "the card settles on the fresh envelope");
+  ok("the tapped card settles where it is — the envelope answers, " +
+     "the feed never guesses", true);
+  const keys = await evaljs(`window.__keys`);
+  ok("the invoke carried feed/<day>/<card_id>/<nonce> as its Idempotency-Key",
+     keys.length === 1 && keys[0][0].includes("/-/complete") &&
+     keys[0][1] === "feed/" + (await evaljs(`document.querySelector(".feed-head").dataset.day`))
+       + "/" + encodeURIComponent(cardId) + "/" + keys[0][1].split("/").pop() &&
+     /^[0-9a-f]{12}$/.test(keys[0][1].split("/").pop()));
+  console.log("    key sent: " + keys[0][1]);
+
+  /* ── a refusal speaks in the engine's own words, on the card ──── */
+  console.log("· a refusal, on the card that asked for it");
+  await evaljs(`location.hash = "#/api/-/feed"; true`);
+  await waitFor(`document.querySelector('.fcard[data-kind="insight"]')`,
+                "the feed again");
+  /* the finder cannot answer its own finding — so read the feed as
+     the AUTHOR and watch the door refuse from the card */
+  await evaljs(`localStorage.setItem("wm10.principal", "sous");
+                location.reload(); true`);
+  await sleep(1500);
+  await evaljs(`location.hash = "#/api/-/feed"; true`);
+  await waitFor(`document.querySelector(".feedcards .fcard")`, "sous's own feed");
+  ok("a finding never cards to its own author (the four-eyes wall, " +
+     "read off the wire)",
+     await evaljs(`!document.querySelector('.fcard[data-kind="insight"]')`));
+}
+
 if (MODE === "batch-a") await batchAStory();
+else if (MODE === "feed") await feedStory();
 else await mealplanStory();
 
 console.log(`\nUI drive (${MODE}): ${passed} checks passed` +

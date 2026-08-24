@@ -114,7 +114,10 @@ async function render() {
   }
   const {ok, body} = await api(href);
   let hints = {};
-  if (ok && body && body.kind)
+  /* "feed" names a DOCUMENT, not a resource kind (waymark-iqa.2), so
+     there is no published schema to read and the screen learns its
+     hints per CARD kind instead */
+  if (ok && body && body.kind && body.kind !== "feed")
     hints = await kindSchema(String(body.kind).replace(/_collection$/, ""));
   if (seq !== renderSeq) return;
   clearLiveTimers();
@@ -132,6 +135,11 @@ async function render() {
     if (renderer) renderer(view, body, hints, decl);
     else renderCollection(view, body, hints);
   }
+  /* the feed fork (waymark-iqa.7), the same tradition one document
+     later: GET /api/-/feed answers a document that NAMES ITSELF, and
+     a card census has no collection to be a view of */
+  else if (body.kind === "feed" && Array.isArray(body.cards))
+    renderFeedScreen(view, body);
   /* the dashboard fork (waymark-ggw), the deploy-history tradition:
      kind picks the renderer — but only when the envelope carries the
      framework kind's render contract (the embedded :slots link), so

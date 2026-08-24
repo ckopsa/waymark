@@ -306,6 +306,80 @@
   .feed-fin { font-family: var(--serif); color: var(--muted);
               font-size: 15px; margin-bottom: 12px; }
 
+  /* --- the feed screen (135-feed-screen.js): the day, thumb-first ---
+     A LIST, not a stack of full-screen panels: cards are as tall as
+     what they have to say (a memory is two lines, a finding is six),
+     and the seam has to be scrolled PAST rather than dismissed. The
+     verbs are chips sized for a thumb — 15px of sans on a 38px box,
+     not the 11px mono a chip wears when it is only a label. */
+  .feed-head { padding-bottom: 10px; }
+  .feed-head h2 { margin: 0 0 4px; font-size: 22px; }
+  .feed-head .metaline { display: flex; align-items: center; gap: 10px;
+                         flex-wrap: wrap; }
+  .feed-head .metaline .chip { cursor: pointer; margin-left: auto; }
+  .feed-why { margin-top: 8px; font-size: 12.5px; }
+  .feed-why summary { color: var(--muted); cursor: pointer; }
+  .feed-why p { margin: 6px 0 0; font-size: 13px; line-height: 1.45; }
+  .feedcards { display: flex; flex-direction: column; gap: 10px; }
+  /* the section heading is painted from the CARD STREAM, never from
+     the census: an empty population contributes nothing */
+  .feed-sect { display: flex; align-items: baseline; gap: 8px;
+               margin: 14px 2px 0; font-size: 12px;
+               text-transform: uppercase; letter-spacing: .06em; }
+  .feed-sect .muted { text-transform: none; letter-spacing: 0;
+                      font-size: 12px; font-family: var(--serif); }
+  .fcard { background: var(--panel); border: 1px solid var(--line);
+           border-radius: var(--radius); box-shadow: var(--shadow);
+           padding: 14px 16px 12px; }
+  /* the census wears colour: do-now is the one under the thumb,
+     decide is waiting on a person, fuel and the archive are quiet */
+  .fcard[data-section="do_now"] { border-left: 3px solid var(--verdigris); }
+  .fcard[data-section="decide"] { border-left: 3px solid var(--warn); }
+  .fcard[data-section="fuel"], .fcard[data-section="archive"] {
+    background: var(--paper); box-shadow: none; }
+  .fcard.done { opacity: .62; }
+  .fcard-top { display: flex; align-items: baseline; gap: 8px;
+               flex-wrap: wrap; margin-bottom: 6px; }
+  .fcard-kind { font-size: 11px; color: var(--muted);
+                text-transform: uppercase; letter-spacing: .05em; }
+  .fcard-top .version { margin-left: auto; }
+  .fcard-by { background: var(--law-wash); color: var(--law); }
+  .fcard-title { margin: 0 0 4px; font-size: 19px; font-weight: 700;
+                 line-height: 1.3; letter-spacing: -.01em; }
+  .fcard-title a { color: var(--ink); }
+  /* the server's own sentence — the seam has one, a cleared queue has
+     one, a memory usually has one; prose, because it is prose */
+  .fcard-say { font-family: var(--serif); font-size: 16px; line-height: 1.4;
+               margin: 2px 0 6px; }
+  .fcard-sub { font-size: 13px; }
+  /* the declaration's own teaser line — the same quiet second line
+     the collection table gives a :teaser prose field */
+  .fcard-teaser { font-size: 13.5px; color: var(--muted); margin: 4px 0 0;
+                  line-height: 1.4; }
+  .fcard-evidence { font-size: 12px; margin: 4px 0 2px; }
+  .feed-verbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
+                align-items: center; }
+  .feed-verbs button.chip.verb { font-family: var(--sans); font-size: 15px;
+    min-height: 38px; padding: 7px 14px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); }
+  .feed-verbs button.chip.verb:hover { border-color: var(--verdigris);
+                                       background: var(--verdigris-wash); }
+  .feed-verbs button.chip.verb.primary { background: var(--verdigris);
+    border-color: var(--verdigris); color: #fff; font-weight: 600; }
+  .feed-verbs button.chip.verb:disabled { opacity: .5; cursor: default; }
+  .feed-verbs a.link-chip { font-size: 12px; padding: 6px 10px; }
+  .feed-settled { font-size: 13.5px; color: var(--muted); }
+  .feed-settled .ok { color: var(--verdigris); font-weight: 700; }
+  .fcard .problem { margin-top: 10px; }
+  /* the seam: the one structural element, and it says so quietly */
+  .feed-seam { margin: 22px 0 6px; text-align: center; }
+  .feed-seam-rule { border-top: 1px solid var(--line); margin-bottom: 10px; }
+  .feed-seam-say { font-family: var(--serif); font-size: 17px;
+                   color: var(--ink); }
+  .feed-seam-sub { font-size: 11.5px; margin-top: 2px; }
+  .feed-endbox { margin: 16px 0 8px; text-align: center; }
+  .feed-endbox button { font-size: 13px; }
+
   /* ── the dashboard screen (waymark-ggw): the user-composed grid ─── */
   .slot-grid { display: grid; gap: 12px; margin: 12px 0 16px;
                grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }

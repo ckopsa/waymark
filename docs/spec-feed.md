@@ -1482,3 +1482,189 @@ than the test being clever:
   fresh fingerprint; the sugar was not touched, so `approval_request`,
   `permission_slip` and `tickler` are byte-identical, and `feed.clj`/`packs.clj`
   are engine-side and carry no declarations.
+
+## Built — `.7`, the screen (2026-08-24, waymark-iqa.7)
+
+Fork (c) landed as decided and the epic's last implementation bead with it:
+`waymark10/resources/waymark10/ui/135-feed-screen.js` is a **dedicated screen**,
+reached by a `render()` fork on the document's own `kind` —
+`110-discovery-routing.js` gained four lines beside the dashboard's, the
+deploy-history tradition one document later. No saved view, no `:target` to lie
+about, no gesture bound anywhere.
+
+**What a reader sees, top to bottom.** A head that says *The feed* and carries
+the server's own summary sentence (`Feed · 2026-08-24 · 17 cards`) with the
+document's `notes` folded behind a *Why this order* disclosure — the seed
+sentence, the grant sentence when one applies, the archive's cap note when it
+was reached. Then the census, painted **from the card stream and never from
+`sections`**: a quiet heading when the section changes (*DO NOW · one physical
+next step, under the thumb*), the cards of that section, and so on down. The
+seam is its own element — a rule, the sentence, and *n above · everything below
+is history* — and everything under it reads quieter by declaration
+(`.fcard[data-section="archive"]` drops its panel background). The tail is a
+sentinel: an `IntersectionObserver` takes `links.next` when it comes within a
+screenful, the same door stands as a *Further back ↓* button for a thumb that
+got there first, and when the archive runs out the page says *— that's the whole
+archive —* rather than spinning.
+
+**Each population, one line.** *do-now* — the row's title, its teaser line, and
+its light verbs as tap chips. *decide/ticklers* — the three verdicts as three
+chips plus the declared `subject` link back to the work. *decide/insights* — the
+finding, the evidence it read (fetched late, see below), the **offer as the
+primary affordance**, then both verdict chips and the byline. *fuel* and
+*archive* — a read-only panel: the server's `sentence` in prose, the row's own
+summary as a link under it, and no chips at all, because a done row has no verbs
+left and that is the point rather than a gap. An unknown card degrades into the
+row shape; a card that throws becomes a problem panel wearing its own refusal,
+never its neighbours' problem.
+
+### The dispatch is on the card's SHAPE, not on its kind
+
+The bead's design said *"a small dispatch map on `card.kind`"*. That is the one
+place the plan could not survive contact: `tickler` and `insight` are
+**application** kinds, and the generic UI is the framework's — a renderer keyed
+on those names would put workqueue10's vocabulary inside waymark10's page, which
+is the coupling this repo refuses everywhere else. What the screen keys on
+instead is what the WIRE says: a card carrying a `links.offer` is a finding with
+a next step attached; a card with no verb of any weight below the seam is
+something to read; everything else is a row speaking for itself. `section`,
+`population` and `kind` ride as `data-` attributes, which is exactly the styling
+job the spec gives them and no more — nothing reorders on them.
+
+### The verbs are chips, and every one of them carries the origin
+
+`feedOriginKey(day, card_id)` is `feed/origin-key`'s spelling in JavaScript —
+`feed/<day>/<encodeURIComponent(card_id)>/<12 hex>` — and it is minted per TAP,
+so two taps of one verb on one card are two attempts and never a collision.
+
+- A verb with no input and no confirmation is **one tap**: a bare POST to the
+  action's own href, `If-Match` when the declaration fences it, the key always.
+- A verb that wants a form or a confirmation is not a tap and opens the ordinary
+  `actionDialog` — which grew ONE optional argument, `idemKey`, so a card verb
+  rides the same origin whichever door it opened. A metric that counted only the
+  one-tap half would be a metric that flattered the screen.
+- After it lands, the row's own fresh envelope decides what the card says: the
+  chips are replaced by *✓ Done · now retired* and the summary is repainted from
+  the answer. **The verbs do not come back**, and that is deliberate: a fresh
+  envelope carries every effort, and re-deriving the ≤-selection partition in the
+  client would be a second opinion about what fits under a thumb. The card that
+  was answered is answered; the next read of the day will not carry it.
+- A refusal renders **on the card that asked for it**, through `problemBox` —
+  the engine's own sentence, where the thing it is about still is.
+- `heavier` renders as a LINK, `.3`'s rule kept: `/#/api/…` with the leading
+  slash dropped so the same address costs no page load.
+
+### The offer is two affordances, and they are different things
+
+`.6` recorded that accepting a finding does not fire its offer. The card says so
+by carrying both: a **primary chip** that POSTs the offered action's own door
+(`offer_href` + `/-/` + `offer_action`, under the origin key, gated at the router
+by the reader's own grant — better than any handler ctx could manage), and the
+declared `offer` **link** to the row's screen. The verdict chips sit beside them
+and answer the finding rather than doing the work; the offer chip settles alone
+when it lands, because the house has still not said yes. The byline is the
+principal id in a badge whose title says exactly what it is — no display name is
+invented for it, per this document's own punt.
+
+An insight's `evidence` is a vector, and a vector does not ride `:fields`
+(`render/grid-fields` — a flat cell cannot hold one), so the count is not on the
+card. The screen fetches the finding's own envelope once, late, and appends
+*read 2 rows: 77041f15, a4238126* with each address a live link. It degrades to
+nothing at all. **No document gap was opened for it and `feed.clj` was not
+touched.**
+
+### Three things the card does NOT do
+
+1. **No field table.** A saved view names a deck's card fields and a table has
+   the query grammar's grid columns; a feed card has neither, its kinds are
+   mixed, and nothing declared which three fields matter here — so any three the
+   page picked would be three it guessed. What it shows instead is the one line
+   the declaration already marked for this: a prose field with `:x-display
+   {:teaser true}`, the same quiet second line the collection table gives it.
+2. **No external byte is fetched.** A media card's `origin` rides as a link chip
+   and never as an `<img src>`: this page is self-contained by declaration
+   (`020-base.css`), and an image element pointed at a third party is a beacon
+   wearing a picture's clothes.
+3. **No collection link.** A card renders a declared link only when it is a
+   PLACE TO GO — a screen the declaration spelled with `/#`, a download, or a
+   door out of the house. A link naming a collection is a query, and a card has
+   no room for a query.
+
+### Two departures from the bead's design, both recorded
+
+**A card LIST, not snapping panels.** The bead asked for `134-feed.js`'s panel
+snapping and `Escape` to leave. Neither survives the move from an overlay to a
+screen: the feed is a hash destination, so `Escape` has nowhere honest to go
+(the browser's own Back is the way out), and one-card-per-viewport would put a
+two-line memory alone on a phone screen and make the seam a page you must
+dismiss rather than one you scroll past. The cards are as tall as what they have
+to say. The IntersectionObserver's margin moved with it — 100% of the viewport
+rather than 200% of a panel-sized scroller, because 200% of a page swallows ten
+cards at a time and the archive stops being something you walk.
+
+**The nav door is a probe.** The recorded punt stands — a module cannot
+contribute a line to `.well-known` — so the page knows the address and asks,
+once per load, with a cursor this engine could not have minted: mounted answers
+422 before reading a single row, an engine without the module answers 404, and
+so does an anonymous reader, who has no feed either. `feedDoor()` caches the
+promise the way `wellKnown()` caches its own, and the nav's two awaits both
+happen before the bar is cleared, so a late probe can never append to a bar a
+newer render already emptied.
+
+### Verified by hand, and the walk is written down
+
+`make check-queue` is unmoved at **32 kinds, 11 warnings, 16 scenarios** — this
+bead ships JavaScript, and the battery has nothing of its own to judge, which is
+what the bead said to expect. The screen was verified the way this repo verifies
+screens (`waymark10-design.md` §10), and the walk is now a script rather than a
+memory: **`waymark10/scripts/feed-smoke.sh`** boots headless chromium if needed,
+runs `ui-drive.mjs feed` — a new third mode beside the family-week story and
+batch A, which seeds its own day through the API and then reads the screen — and
+finishes with the half a browser cannot see:
+
+```
+· actions from the feed, off the audit trail:
+ feed/2026-08-24/do_now%2Ftask%2Fad5595df-…/7a2bd47f2323 | task | complete
+```
+
+Nineteen checks, no console errors: the nav door, the fork, the census order and
+the seam, a tap chip labelled as declared, no gesture bound anywhere, a
+composition verb rendered as a link to a screen and not as a POST target, the
+tickler's three verdicts, the insight's offer/verdicts/byline/evidence, the
+read-only fuel and archive cards, an archive page followed off `links.next` with
+no `card_id` repeated, the honest tail, a verb tapped and settled on the fresh
+envelope, the `Idempotency-Key` it sent, and the four-eyes wall read off the
+author's own feed. Screenshots of both shells (desktop and `?ui=mobile`) were
+read by eye; two defects found that way were fixed here rather than filed — a
+stray `null` beside the evidence line, and a tail that kept saying *reading
+further back…* after the page had landed because `paintEnd` ran while the flag
+still stood.
+
+**One hazard found and NOT fixed here, because it is not this bead's and it is
+not new** (waymark-iqa.20): the page holds three SSE streams — `/api/-/events`,
+`/api/-/intents`, `/api/-/presence` — and HTTP/1.1 gives a browser six sockets
+per origin, shared across TABS. Two tabs of the generic UI therefore exhaust the
+pool and every later fetch stalls forever: a cold deep link renders a blank
+page, and an archive page never lands. It reproduces identically with this
+bead's changes reverted, and it is why the drive wants a clean browser.
+
+### Recorded here, for whoever comes next
+
+- **`ui_lite.html` has no feed and none was added.** The waymark-6ey precedent
+  is that a lite-client upgrade is its own bead; filed as waymark-iqa.21. The
+  lite page carries no dashboard and no seasons either, so the feed is in
+  company.
+- **Nothing in `feed.clj` moved.** The one document gap a renderer might have
+  claimed — an evidence count on the card — is answered by one late read of the
+  finding's own envelope instead, which costs the wire nothing and keeps
+  `grid-fields`' rule (a vector does not fit a flat cell) unbent.
+- **Four framework files changed beside the new one**: the render fork
+  (`110`), the nav door (`120`), the dialog's optional caller key (`180`), and
+  the two stylesheets; `ui_assembly.clj` grew the fragment's slot, which is the
+  only Clojure line this bead wrote. **No declaration was touched and no
+  fingerprint could move.**
+- **An undo tapped from the toast rides its own key, not the card's.**
+  `maybeUndoToast` is the deck's own affordance and the third gesture duty's
+  *way back*; it mints a fresh key inside `invokeBare`, so an undo does not
+  count as an action-from-the-feed. Named rather than fixed: the toast is not
+  the card.

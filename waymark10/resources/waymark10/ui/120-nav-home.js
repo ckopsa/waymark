@@ -57,6 +57,9 @@ function fillDrawer(w, current, active) {
 async function renderNav(current) {
   let w;
   try { w = await wellKnown(); } catch { return; }
+  /* both awaits happen BEFORE the bar is cleared: a probe resolving
+     late must never append to a bar a newer render already emptied */
+  const hasFeed = await feedDoor();
   const nav = $("#kinds"); nav.textContent = "";
   const entries = Object.entries(w.resources || {});
   const domains = w.domains || [];
@@ -79,6 +82,15 @@ async function renderNav(current) {
     if (navTier(r) === "primary" && (!r.domain || r.domain === active))
       nav.append(el("a", {href: "#" + r.href,
         style: current === r.href ? "font-weight:700" : ""}, title(kind) + "s"));
+  /* the day's own read (waymark-iqa.7). The feed cannot advertise
+     itself on .well-known — the contribution table is closed at four
+     — so the page knows the address and asks whether it is mounted
+     for this reader (feedDoor, one probe a load). */
+  if (hasFeed)
+    nav.append(el("a", {href: "#/api/-/feed",
+      style: current === "/api/-/feed" ? "font-weight:700" : "",
+      title: "the day's feed — what to do now, what to answer, what "
+           + "the house already finished"}, "Feed"));
   /* the hand-in-hand door: invite an agent, judge its ask, follow it */
   if (w.resources && w.resources.member && w.resources.approval_request)
     nav.append(el("a", {href: "#access",
