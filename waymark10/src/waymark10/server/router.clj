@@ -1612,9 +1612,11 @@
                 ;; NEVER runs unscoped — no grant presented means the
                 ;; bootstrap surface (the asking door and the
                 ;; vocabulary to ask with), not full sight. Humans
-                ;; and system actors are unchanged.
-                (when (= :agent (:type principal))
-                  (grants/bootstrap-visibility eng principal)))]
+                ;; and system actors are unchanged. The expression is
+                ;; grants/unscoped-visibility since waymark-iqa.23,
+                ;; because the feed's preview must build exactly this
+                ;; for the PREVIEWED member and a copy would rot.
+                (grants/unscoped-visibility eng principal))]
       (handler (cond-> (assoc req :waymark10/principal principal)
                  vis (assoc :waymark10/visibility vis))))))
 

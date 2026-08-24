@@ -75,7 +75,7 @@
             [workqueue10.connections :as connections :refer [connection]]
             [waymark10.dsl :refer [in-domain]]
             [waymark10.saved-view :refer [saved-view]]
-            [waymark10.server.capabilities :refer [capability]]
+            [waymark10.server.capabilities :as cap :refer [capability]]
             [waymark10.server.engine :as engine]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
@@ -404,7 +404,14 @@
               :enforced_by gate}
              {:token "amazon.cart"
               :description "Change the Amazon cart through Gate — add items, reset. Never places orders."
-              :enforced_by gate}])]
+              :enforced_by gate}
+             ;; the one row here Gate does not stand in front of
+             ;; (waymark-iqa.23): the power granted is THIS engine's
+             ;; feed route, so waymark holds the data and the law
+             ;; both. Seeded like the rest because a capability is a
+             ;; ROW and an ask naming a token no row carries refuses
+             ;; at the door — the registry is the vocabulary's clock.
+             cap/feed-preview-as])]
     (when (empty? (store/with-tx (:storage eng)
                     (fn [tx] (store/query-rows (:storage eng) tx :capability
                                                {:token token} {:limit 1}))))

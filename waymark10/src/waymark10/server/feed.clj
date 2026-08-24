@@ -1401,8 +1401,20 @@
   recipe order. An empty population contributes nothing and the seam
   moves up; a placeholder card saying 'nothing here' would be the
   manufactured engagement the third law forbids, in its politest
-  disguise."
-  [eng recipe {:keys [principal visibility offset]}]
+  disguise.
+
+  `:preview` (waymark-iqa.23) is the ONE opt that changes nothing
+  about how the document is computed and everything about how it must
+  be read. When present, `:principal` and `:visibility` are the
+  PREVIEWED member's, not the caller's — the door built them through
+  the member gate and the unscoped-visibility expression, so every
+  line below runs the member's own read, unaltered — and this key is
+  what keeps that from being a silent impersonation: it says whose
+  feed and who is looking, in the document, in the summary, and in the
+  first note. A preview is never quiet. `{:of {…} :by {…} :grant id}`;
+  the grant id is there because the grant IS the durable record of
+  this reading (the read itself writes nothing — the feed is a GET)."
+  [eng recipe {:keys [principal visibility offset preview]}]
   (let [day (today eng recipe)
         pid (:id principal)
         seed (seed-of recipe pid day)
@@ -1444,15 +1456,40 @@
         bottomless (some :bottomless (:order recipe))
         next-offset (+ (long (or offset 0)) (long walked))
         sections (into [] (distinct) (map #(get % "section") cards))
+        of (get-in preview [:of :display])
+        by (get-in preview [:by :display])
+        ;; the preview's address rides every link this document hands
+        ;; out, or page two of an archive walk would silently become
+        ;; the PREVIEWER's own feed — the one place a stamp could be
+        ;; told the truth and the hrefs a lie
+        base (if preview
+               (str "/api/-/feed?preview_as=" (url-encode (str (get-in preview [:of :id]))))
+               "/api/-/feed")
         notes (into []
                     (remove nil?)
-                    [(str "One order, seeded by (you, " day ") — stable until"
-                          " midnight and stored nowhere. Two members read two"
-                          " different feeds on the same day.")
-                     (when visibility
+                    [(when preview
+                       (str "A PREVIEW, and not your own feed: this is " of
+                            "'s, computed for " of " through " of "'s own"
+                            " sight, and read by " by " under a "
+                            "feed.preview_as grant. The verbs below are "
+                            of "'s — each action href is " of "'s door, and"
+                            " a request " by " sends there is judged as " by
+                            " and refused. Nothing was written by this read;"
+                            " the lasting record of it is the grant itself ("
+                            (:grant preview) ") — its ask, its approval, its"
+                            " expiry and the door that revokes it."))
+                     (str "One order, seeded by (" (or of "you") ", " day
+                          ") — stable until midnight and stored nowhere. Two"
+                          " members read two different feeds on the same day.")
+                     (when (and visibility (not preview))
                        (str "Read through your grant: a row your leash does not"
                             " confer is ABSENT here, never narrowed and never"
                             " refused — one endpoint, per-member worlds."))
+                     (when (and visibility preview)
+                       (str "Read through " of "'s OWN sight, whatever your"
+                            " grant confers: a preview that projected through"
+                            " the previewer's leash would answer a feed"
+                            " nobody has."))
                      (when capped
                        (str "The archive read to its cap and stopped — the"
                             " newest " log-scan-cap " transitions for what"
@@ -1463,16 +1500,21 @@
     (assoc (p/wire-value
             (cond-> {:waymark "10"
                      :kind "feed"
-                     :self "/api/-/feed"
+                     :self base
                      :day day
                      :seed seed
                      :summary (str "Feed · " day " · " (count cards)
-                                   " card" (when (not= 1 (count cards)) "s"))
+                                   " card" (when (not= 1 (count cards)) "s")
+                                   (when preview
+                                     (str " · PREVIEW of " of " · read by "
+                                          by)))
                      :sections sections
                      :notes notes}
+              preview (assoc :preview preview)
               (and bottomless more?)
               (assoc :links
-                     {:next {:href (str "/api/-/feed?cursor="
+                     {:next {:href (str base
+                                        (if preview "&" "?") "cursor="
                                         (encode-cursor
                                          {:day day :seed seed
                                           :offset next-offset}))}})))

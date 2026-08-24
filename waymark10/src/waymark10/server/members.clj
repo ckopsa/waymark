@@ -1243,6 +1243,48 @@
        ;; bind lands here in :invited → impossible, but honest anyway
        (update principal :roles into (get-in row [:data :roles]))))))
 
+(defn principal-for
+  "The principal a member ARRIVES as — the gate's own resolution, run
+  for somebody who is not the caller (waymark-iqa.23,
+  `feed.preview_as`). nil when nothing named `who` is a member of this
+  house.
+
+  `who` is a member row id OR the subject a binding wrote, the same
+  two-step `gate!` walks, because those are the two spellings a human
+  filling in a grant's filter can have in front of them: the id off
+  the roster screen, and the id an agent knows itself by.
+
+  The principal is then handed to `gate!` rather than assembled here.
+  That is the whole point of the function: the display, the true actor
+  type and the DURABLY HELD roles all have to be the ones this member
+  would authenticate with, and one hand-built map that forgot to union
+  the roles would silently answer a preview through a smaller world
+  than the member lives in — which is the one failure a preview may
+  not have, because it looks like a correct answer.
+
+  It never binds and never provisions: the row was resolved by id or
+  subject before `gate!` is called, so the gate's own lookup finds the
+  same row and re-treads its path rather than minting anything.
+
+  A SUSPENDED row is handed to the gate deliberately, so it refuses
+  out loud with the 403 the member's own request would meet rather
+  than reading as 'no such member'. Concealment has nothing to do
+  here: the caller holds a grant explicitly naming this member, so it
+  already knows they exist, and a mute 404 would make a suspension
+  indistinguishable from a typo. Every OTHER state is nil — an
+  :invited row is unbound plumbing and nobody answers to it yet."
+  [eng who]
+  (when-not (str/blank? (str who))
+    (when-some [row (or (load-member eng (str who))
+                        (member-by-subject eng (str who)))]
+      (when (contains? #{:active :suspended} (:state row))
+        (gate! eng (t/principal
+                    {:id (let [s (str (get-in row [:data :subject]))]
+                           (if (str/blank? s) (str (:id row)) s))
+                     :type (if (= "agent" (get-in row [:data :actor_type]))
+                             :agent :human)
+                     :display (str (get-in row [:data :display]))}))))))
+
 ;; ── the provenance backfill (waymark-4zj.9.1, READ-ONLY) ─────────────
 ;;
 ;; The 48 rows that predate the provenance field need one classified,

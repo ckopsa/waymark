@@ -16,6 +16,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.resource :as r]
+            [waymark10.server.capabilities :as caps]
             [waymark10.server.engine :as engine]
             [waymark10.server.feed :as feed]
             [waymark10.server.store :as store]
@@ -59,7 +60,10 @@
 
 (defn- boot [& [opts]]
   (engine/engine (merge {:storage (memory/storage)
-                         :resources [errand parcel]}
+                         ;; the capability registry rides the app's own
+                         ;; resources (:app-opt-in), and feed.preview_as
+                         ;; is the one capability THIS engine enforces
+                         :resources [errand parcel caps/capability]}
                         opts)))
 
 (defn- call!
@@ -604,3 +608,140 @@
     (is (= 404 (:status ((engine/handler eng)
                          {:request-method :get :uri "/api/-/feed"
                           :headers {}}))))))
+
+;; ── feed.preview_as (waymark-iqa.23) ────────────────────────────────
+;;
+;; The lawful way to read somebody else's feed, and the only one. The
+;; conformance pack proves it against whatever an application
+;; declared; what belongs HERE is the thing a driver with one world
+;; cannot arrange — THREE identities built to disagree, so that "the
+;; preview is the member's own read" is a comparison rather than a
+;; shape check, and so the previewer's own feed is demonstrably a
+;; different document from the one the preview answers.
+
+(defn- preview-world
+  "A house with rows, a member to be previewed, the capability row,
+  and an accepted grant filtered to that member. → the ids and the
+  headers three principals arrive with."
+  [eng & [{:keys [member-in-filter]}]]
+  (doseq [t ["e1" "e2" "e3"]] (make! eng :fd_errand t))
+  (doseq [t ["p1" "p2" "p3"]] (make! eng :fd_parcel t))
+  (let [mid (last (str/split (get-in (call! eng :post "/api/members"
+                                            :body {:display "Jack"
+                                                   :actor_type "human"})
+                                     [:doc :self])
+                             #"/"))
+        cap (call! eng :post "/api/capabilities" :body caps/feed-preview-as)
+        minted (call! eng :post "/api/grants"
+                      :body {:audience "claude"
+                             :scope [(cond-> {:kind caps/feed-preview-as-token
+                                              :actions []}
+                                       (not= :none member-in-filter)
+                                       (assoc :filter
+                                              {:member (or member-in-filter
+                                                           mid)}))]})
+        gid (last (str/split (str (get-in minted [:doc :self])) #"/"))
+        as-claude {"x-waymark-principal" "claude"
+                   "x-waymark-actor-type" "agent"}
+        accepted (call! eng :post (str "/api/grants/" gid "/-/accept")
+                        :headers as-claude)]
+    {:member mid
+     :cap-status (:status cap)
+     :mint-status (:status minted)
+     :mint-doc (:doc minted)
+     :accept-status (:status accepted)
+     :as-member {"x-waymark-principal" mid}
+     :as-claude as-claude
+     :worn (assoc as-claude "x-waymark-grant" gid)}))
+
+(deftest a-preview-is-the-members-own-feed-computed-through-their-own-sight
+  (let [eng (boot)
+        {:keys [member cap-status mint-status accept-status
+                as-member as-claude worn]} (preview-world eng)]
+    (is (= 201 cap-status) "the capability is a ROW, and it is created once")
+    (is (= 201 mint-status) "a dotted token the registry carries mints")
+    (is (= 200 accept-status))
+
+    (let [theirs (feed! eng :headers as-member)
+          preview (feed! eng :headers worn :query (str "preview_as=" member))
+          mine (feed! eng :headers worn)]
+      (testing "the previewer's OWN feed is not the member's — one narrow
+                capability grant and no kind at all"
+        (is (= 200 (:status mine)))
+        (is (empty? (rows-of (:doc mine)))
+            "if this were ever non-empty the comparison below would prove
+             nothing"))
+
+      (testing "the preview is what the member reads, card for card"
+        (is (= 200 (:status preview)) (pr-str (:doc preview)))
+        (is (seq (rows-of (:doc theirs)))
+            "a member with an empty feed would make the equality free")
+        (is (= (card-ids (:doc theirs)) (card-ids (:doc preview))))
+        (is (= (:seed (:doc theirs)) (:seed (:doc preview)))
+            "the seed is (salt, THE MEMBER, today) — a preview seeded by
+             the caller would be a fourth member's order, belonging to
+             nobody"))
+
+      (testing "and it is never silent about being one"
+        (let [doc (:doc preview)]
+          (is (= member (get-in doc [:preview :of :id])))
+          (is (= "Jack" (get-in doc [:preview :of :display])))
+          (is (= "claude" (get-in doc [:preview :by :id])))
+          (is (str/includes? (str (:summary doc)) "PREVIEW"))
+          (is (some #(str/includes? % "feed.preview_as") (:notes doc)))
+          (is (str/includes? (str (:self doc)) "preview_as=")
+              "the address a client would re-fetch keeps the preview, or
+               a reload would quietly become the caller's own feed")))
+
+      (testing "the verbs render and they are the MEMBER's — a previewer
+                who fires one is judged as themselves"
+        (let [card (first (remove #(= "seam" (:card_id %))
+                                  (:cards (:doc preview))))
+              verb (first (keys (:actions card)))]
+          (is (some? verb) "a card with no verb proves nothing here")
+          (is (= 404 (:status (call! eng :post
+                                     (str (:self card) "/-/" (name verb))
+                                     :headers worn)))
+              "the router judges the ACTUAL caller at the row's own door,
+               and this one's leash names one capability and no kind"))))))
+
+(deftest the-capability-is-the-door-and-the-filter-is-the-constraint
+  (let [eng (boot)
+        {:keys [member as-claude worn]} (preview-world eng)
+        q (str "preview_as=" member)]
+    (testing "no grant presented, no preview — and the refusal says what
+              to ask for, because capabilities are words"
+      (let [r (feed! eng :headers as-claude :query q)]
+        (is (= 403 (:status r)))
+        (is (str/includes? (str (get-in r [:doc :detail])) "feed.preview_as"))
+        (is (seq (get-in r [:doc :remedies])))))
+
+    (testing "an unscoped human is not excused either — a capability is
+              worn, never inherited from being trusted"
+      (is (= 403 (:status (feed! eng :query q)))))
+
+    (testing "the grant admits ONE member, and a request for another is
+              refused by name"
+      (let [r (feed! eng :headers worn
+                     :query "preview_as=01HZZZZZZZZZZZZZZZZZZZZZZZ")]
+        (is (= 403 (:status r)))
+        (is (str/includes? (str (get-in r [:doc :detail])) member))))
+
+    (testing "and no preview_as at all is the caller's own feed, unstamped"
+      (let [r (feed! eng :headers worn)]
+        (is (= 200 (:status r)))
+        (is (nil? (:preview (:doc r))))
+        (is (= "/api/-/feed" (:self (:doc r))))))))
+
+(deftest an-unfiltered-preview-grant-is-refused-at-the-door
+  (let [eng (boot)
+        {:keys [member mint-status worn]} (preview-world
+                                           eng {:member-in-filter :none})]
+    (is (= 201 mint-status)
+        "the MINT succeeds — waymark validates a filter's shape and never
+         its meaning, so 'unfiltered is too wide' is a decision only the
+         enforcement point can make")
+    (let [r (feed! eng :headers worn :query (str "preview_as=" member))]
+      (is (= 403 (:status r)))
+      (is (str/includes? (str (get-in r [:doc :detail])) "no filter")
+          (pr-str (:doc r))))))

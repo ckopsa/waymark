@@ -24,13 +24,61 @@
     is granted whole; per-verb vocabularies are the registry's to
     grow.
   - downstream usage audit is coarse until the usage-report ping
-    exists (waymark-44h.3 carries the punt)."
+    exists (waymark-44h.3 carries the punt).
+
+  THE ONE INVERSION (waymark-iqa.23). `feed.preview_as` is a
+  capability whose enforcement point is THIS ENGINE: the power being
+  granted is waymark's own feed route, so the first trade above —
+  enforcement is cooperative, own the enforcement point — is not a
+  trade here at all. We own it. The registry still NAMES the power
+  (so the ask, the four-eyes approval, the leash, the expiry and the
+  revoke door are the ordinary ones, unchanged), and the feed route
+  reads the presented grant's surface entry for the token and refuses
+  with its own hands. A capability whose :enforced_by names a file in
+  this repository is the shape to expect of the others that follow;
+  it is not a special case of the machinery, only of who holds the
+  data."
   (:require [clojure.string :as str]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource]]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
+
+;; ── the one capability this engine enforces itself ──────────────────
+
+(def feed-preview-as-token
+  "The dotted token the feed route judges (waymark-iqa.23). Named
+  here rather than spelled as a literal at the door, because the
+  route, the boot seed that creates the row, and the obligation that
+  proves the refusal must all say the same eleven characters."
+  "feed.preview_as")
+
+(def feed-preview-as
+  "The registry ROW for that token, as data — a deployment's boot seed
+  ensures it (workqueue10.main/ensure-capabilities!), a test mints it
+  through POST /api/capabilities, and neither retypes the sentence a
+  human weighs before approving an ask.
+
+  :enforced_by names a file in this repository on purpose. Every other
+  capability points at the system standing in front of somebody else's
+  data; this one points at us, and that sentence is how a person
+  reading the grant form learns that approving it moves real sight
+  inside this house rather than authority outside it."
+  ;; both sentences are at the schema's ceiling (240 and 120) on
+  ;; purpose — this is the one capability whose approval moves sight
+  ;; INSIDE the house, and a person weighing it deserves every
+  ;; character the form allows
+  {:token feed-preview-as-token
+   :description
+   (str "Read another member's feed exactly as they see it — their "
+        "order, their letters and ticklers, their verbs. The grant's "
+        "filter names whose feed ({member: <id>}); the document is "
+        "stamped with it, and the previewer still acts as "
+        "themselves.")
+   :enforced_by
+   (str "this engine's own feed route — waymark holds the data AND "
+        "the law here, unlike every other capability in the registry")})
 
 (g/defguard token-wears-a-dot
   {:judges [:token]

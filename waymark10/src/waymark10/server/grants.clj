@@ -1367,6 +1367,39 @@
   [eng principal]
   (assoc (visibility eng nil principal) :vocabulary-open? true))
 
+(defn unscoped-visibility
+  "The visibility a principal arrives with when it presents NO grant —
+  nil for a human or a system actor (unscoped sight, the router's
+  `visibility-of` answering nothing), the bootstrap surface for a
+  named agent, which never runs unscoped.
+
+  This is `wrap-identity`'s own else-branch, and it lives here rather
+  than inline there because a SECOND door now needs it for somebody
+  other than the caller: `feed.preview_as` must build the visibility
+  the previewed member would arrive with, and the only honest way to
+  do that is to call the same expression the gate calls. A preview
+  that re-derived 'what a member can see' would be a second definition
+  of sight, correct on the day it was written and wrong on the day the
+  agent default changes."
+  [eng principal]
+  (when (= :agent (:type principal))
+    (bootstrap-visibility eng principal)))
+
+(defn capability-entry
+  "The live surface entry a PRESENTED grant confers for one dotted
+  capability token, or nil (waymark-iqa.23 — the in-house enforcement
+  point's own read of the law it is about to apply).
+
+  `visibility` has already judged audience, acceptance, expiry and
+  revocation, so every one of those refusals has collapsed into this
+  single nil by the time an enforcement point looks; and nil is also
+  what an unscoped human gets, because a capability is worn, never
+  inherited from being trusted. The entry's `:filters` is the
+  CONSTRAINT — waymark validated its shape and carried it, and the
+  meaning is the reader's, exactly as for an external capability."
+  [vis token]
+  (when vis (get (:surface vis) (str token))))
+
 ;; ── enforcement helpers (the router's consults) ─────────────────────
 
 (defn plain-field?

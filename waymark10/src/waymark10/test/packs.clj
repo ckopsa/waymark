@@ -97,6 +97,7 @@
             [waymark10.machine :as machine]
             [waymark10.scenario :as scenario]
             [waymark10.server.attachments :as attachments]
+            [waymark10.server.capabilities :as cap]
             [waymark10.server.curtain :as curtain]
             [waymark10.server.feed :as feed]
             [waymark10.server.jobs :as jobs]
@@ -2577,6 +2578,237 @@
                       " taken and dismissed are terminal, so an answered"
                       " insight leaves by construction")))}))))
 
+;; ── the preview (waymark-iqa.23) ────────────────────────────────────
+;;
+;; The capability whose enforcement point is this engine, judged the
+;; only way it can be: from THREE identities through one door. A
+;; member to be previewed, a previewer holding the grant, and the
+;; previewed member reading their own feed as the answer key — because
+;; "the preview shows exactly what the member sees" is not a claim one
+;; principal can check, and a preview computed for the CALLER would
+;; pass every single-principal assertion anybody would think to write.
+
+(defn- get-with-query
+  "One GET carrying a query string. `req` has no query half — it never
+  needed one — and `feed-doc` has been reaching past it into
+  `(:handler ctx)` since waymark-iqa.2; this is that same reach, named
+  once so the third caller does not open it a third time."
+  [ctx uri query]
+  ((:handler ctx) {:request-method :get :uri uri :query-string query
+                   :headers (:walker-headers ctx)}))
+
+(defn- ensure-preview-capability!
+  "The registry row, ensured. A capability is a ROW — the ask machinery
+  judges a dotted token against the ACTIVE registry — so an obligation
+  that minted the grant without minting the row would be watching the
+  scope guard refuse and calling it the feed's answer. Idempotent by
+  the same query the deployment's boot seed uses, so a suite run twice
+  against one database does not accumulate rows."
+  [ctx]
+  (let [existing (json ctx (get-with-query ctx "/api/capabilities"
+                                           (str "token="
+                                                cap/feed-preview-as-token)))]
+    (if (pos? (long (get-in existing [:data :total] 0)))
+      true
+      (= 201 (:status (req ctx :post "/api/capabilities"
+                           cap/feed-preview-as))))))
+
+(defn- mint-preview-grant!
+  "One `feed.preview_as` grant, offered to `audience` and accepted by
+  it. `member` nil is the UNFILTERED grant the door refuses — minted
+  on purpose, because 'an unfiltered grant is refused at the door' is
+  a claim about the door and not about the mint, and the mint has to
+  succeed for the door to get its turn."
+  [ctx audience member]
+  (let [made (req ctx :post "/api/grants"
+                  {:audience audience
+                   :scope [(cond-> {:kind cap/feed-preview-as-token
+                                    :actions []}
+                             member (assoc :filter {:member member}))]})]
+    (when (= 201 (:status made))
+      (let [gid (id-of (:self (json ctx made)))
+            hs {"x-waymark-principal" audience
+                "x-waymark-actor-type" "agent"}]
+        (when (= 200 (:status ((:invoke ctx) :grant gid :accept {}
+                               {:headers hs})))
+          {:gid gid :headers (assoc hs "x-waymark-grant" gid)})))))
+
+(defn- feed-preview-violations
+  "waymark-iqa.23, whole: the grant opens the door, the door answers
+  the MEMBER's feed, the document says so out loud, and the previewer
+  is still only themselves.
+
+  Five claims, and the third is the one the other four exist to
+  protect:
+
+  1. **The capability is the door.** The same previewer, same member,
+     with the grant header dropped, is refused — and the refusal NAMES
+     `feed.preview_as`, because capabilities are words and an agent
+     that reads the sentence knows how to ask.
+  2. **The filter is the constraint.** A grant naming the token with
+     no filter is refused (absent-means-any is not this door's
+     reading), and a grant filtered to one member refuses a request
+     for another.
+  3. **The preview is the member's own read, card for card.** Asserted
+     against the member reading their own feed through the same door,
+     in the same second — not against a shape, not against a count.
+     The previewer's OWN feed is compared too: it holds one narrow
+     capability grant and nothing else, so if the preview ever turned
+     out to be the caller's feed wearing a stamp, these two would
+     match and the member's would not.
+  4. **It is never silent.** `preview.of`, `preview.by`, the summary
+     and a note, all four.
+  5. **The verbs are the member's, and only the member's.** A verb
+     rendered on a previewed card is invoked BY THE PREVIEWER at the
+     member's own door, and must not land: the router judges the
+     actual caller, whose leash names one capability and no kind at
+     all. This is the reason the verbs may render at all, so it is
+     proved rather than asserted in a docstring.
+
+  It reports `:covered`, because an engine whose previewed member has
+  no card carrying a verb has not watched claim 5 happen and should
+  say so rather than pass quietly."
+  [ctx]
+  (if-not (ensure-preview-capability! ctx)
+    [(str "feed: the " cap/feed-preview-as-token " capability row could not"
+          " be created — a dotted token no active registry row carries"
+          " refuses at the ask, so the preview obligation has no power to"
+          " grant")]
+    (let [tag (subs (str (random-uuid)) 0 8)
+          made (req ctx :post (str "/api/" (:plural (rdef ctx :member)))
+                    {:display (str "preview-subject-" tag)
+                     :actor_type "human"})
+          member (some-> (:self (json ctx made)) id-of)
+          as-member {"x-waymark-principal" member}
+          previewer (str "feed-preview-probe-" tag)
+          unfiltered-probe (str "feed-preview-wide-" tag)
+          held (when member (mint-preview-grant! ctx previewer member))
+          wide (mint-preview-grant! ctx unfiltered-probe nil)
+          q (str "preview_as=" member)
+          ;; the answer key and the answer, read in that order
+          theirs (when member (feed-doc ctx as-member))
+          preview (when held (feed-doc ctx (:headers held) q))
+          own (when held (feed-doc ctx (:headers held)))
+          bare (when held (feed-doc ctx (dissoc (:headers held)
+                                                "x-waymark-grant") q))
+          stranger (when held
+                     (feed-doc ctx (:headers held)
+                               "preview_as=01HZZZZZZZZZZZZZZZZZZZZZZZ"))
+          too-wide (when wide
+                     (feed-doc ctx (:headers wide) q))
+          ids (fn [r] (mapv :card_id (feed-cards (:doc r))))
+          doc (:doc preview)
+          notes (str/join " " (map str (:notes doc)))
+          ;; claim 5: a verb off a previewed card, fired by the previewer
+          verb (first (for [c (feed-row-cards doc)
+                            [aname _] (:actions c)]
+                        [c aname]))
+          poked (when verb
+                  (let [[c aname] verb]
+                    (invoke-http ctx (keyword (:kind c)) (id-of (:self c))
+                                 (declared-name ctx (keyword (:kind c)) aname)
+                                 nil {:headers (:headers held)})))]
+      {:covered (if poked 1 0)
+       :violations
+       (cond-> []
+         (nil? member)
+         (conj (str "feed: the preview obligation could not mint a member to"
+                    " preview (" (:status made) "): " (pr-str (json ctx made))))
+
+         (and member (nil? held))
+         (conj (str "feed: a " cap/feed-preview-as-token " grant filtered to"
+                    " {member " (pr-str member) "} could not be minted and"
+                    " accepted — the registry row exists, so what refused is"
+                    " the scope machinery the capability rides"))
+
+         (nil? wide)
+         (conj (str "feed: an UNFILTERED " cap/feed-preview-as-token
+                    " grant could not be minted — it must mint and be"
+                    " refused at the DOOR, which is where the decision"
+                    "'absent does not mean any member' actually lives"))
+
+         (and preview (not= 200 (:status preview)))
+         (conj (str "feed: a previewer wearing an accepted, correctly"
+                    " filtered grant was answered " (:status preview) ": "
+                    (pr-str (:doc preview))))
+
+         (and preview (= 200 (:status preview)) theirs
+              (not= (ids preview) (ids theirs)))
+         (conj (str "feed: the preview is not the member's own feed.\n  "
+                    "preview: " (pr-str (ids preview)) "\n  theirs:  "
+                    (pr-str (ids theirs))
+                    "\nThe preview must be computed FOR the member, through"
+                    " the member's own sight, by the same code path — a"
+                    " second definition of what a member can see is correct"
+                    " on the day it is written and wrong ever after"))
+
+         (and preview (= 200 (:status preview)) own theirs
+              (not= (ids preview) (ids theirs))
+              (= (ids preview) (ids own)))
+         (conj (str "feed: the preview is the PREVIEWER's own feed wearing"
+                    " a stamp — every card matches the caller's and none"
+                    " matches the member's"))
+
+         (and doc (not= member (str (get-in doc [:preview :of :id]))))
+         (conj (str "feed: the document says it previews "
+                    (pr-str (get-in doc [:preview :of])) " and the request"
+                    " named " (pr-str member) " — a preview that will not"
+                    " say whose feed it is is an impersonation with better"
+                    " manners"))
+
+         (and doc (not= previewer (str (get-in doc [:preview :by :id]))))
+         (conj (str "feed: the document says it is read by "
+                    (pr-str (get-in doc [:preview :by])) ", not by "
+                    (pr-str previewer)))
+
+         (and doc (not (str/includes? (str (:summary doc)) "PREVIEW")))
+         (conj (str "feed: the summary does not say PREVIEW: "
+                    (pr-str (:summary doc)) " — the stamp has to survive a"
+                    " client that renders one line"))
+
+         (and doc (not (str/includes? notes cap/feed-preview-as-token)))
+         (conj (str "feed: no note names " cap/feed-preview-as-token
+                    " — the reader of a previewed document must be able to"
+                    " learn what it is from the document: " (pr-str notes)))
+
+         (and bare (not= 403 (:status bare)))
+         (conj (str "feed: the same previewer with no grant presented was"
+                    " answered " (:status bare) ", not 403 — the capability"
+                    " IS the door, and a preview that worked without one"
+                    " would make the grant decoration"))
+
+         (and bare (= 403 (:status bare))
+              (not (str/includes? (str (get-in bare [:doc :detail]))
+                                  cap/feed-preview-as-token)))
+         (conj (str "feed: the refusal never names the capability: "
+                    (pr-str (get-in bare [:doc :detail]))
+                    " — an agent that cannot learn what to ask for cannot"
+                    " ask"))
+
+         (and stranger (not= 403 (:status stranger)))
+         (conj (str "feed: a grant filtered to " (pr-str member)
+                    " previewed a DIFFERENT member and was answered "
+                    (:status stranger) " — the filter is the constraint this"
+                    " enforcement point interprets, and a constraint that"
+                    " admits everybody is not one"))
+
+         (and too-wide (not= 403 (:status too-wide)))
+         (conj (str "feed: an UNFILTERED " cap/feed-preview-as-token
+                    " grant previewed a member and was answered "
+                    (:status too-wide) " — absent-means-any is exactly the"
+                    " grant a tired human approves without reading, and the"
+                    " whole value of a capability over a role is that the"
+                    " approval names the thing"))
+
+         (and poked (= 200 (:status poked)))
+         (conj (str "feed: the previewer invoked " (name (second verb))
+                    " on the previewed card " (pr-str (:card_id (first verb)))
+                    " and it LANDED — a previewed card's verbs are the"
+                    " member's doors rendered for truth, and the router"
+                    " judges the actual caller at every one of them; a"
+                    " preview that could also ACT would be impersonation"
+                    " with a stamp on it")))})))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -2609,7 +2841,16 @@
     ;; ticklers above would have had to share with them.
     {:name :feed/insights
      :needs #{[:route :feed] [:kind :insight]}
-     :run feed-insight-violations}]
+     :run feed-insight-violations}
+    ;; …and the preview LAST, for the third reason in the same
+    ;; sequence: it is the only obligation that mints a MEMBER, and a
+    ;; new member is a new row on a nav kind — one more card every
+    ;; obligation above would have had to share its deck with. It also
+    ;; reads a feed as somebody who has never read one, which is a
+    ;; cleaner answer key at the bottom of the run than the top.
+    {:name :feed/preview-as
+     :needs #{[:route :feed] [:kind :capability] [:kind :member]}
+     :run feed-preview-violations}]
    ;; Every obligation spec-feed § 'Where the law is proved' names is
    ;; here now, each having landed with the bead that landed the
    ;; mechanism it judges rather than ahead of it.

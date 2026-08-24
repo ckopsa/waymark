@@ -1668,3 +1668,221 @@ bead's changes reverted, and it is why the drive wants a clean browser.
   *way back*; it mints a fresh key inside `invokeBare`, so an undo does not
   count as an action-from-the-feed. Named rather than fixed: the toast is not
   the card.
+
+## Built — `.23`, `feed.preview_as` (2026-08-24, waymark-iqa.23)
+
+The feed is per-member by construction and the wire rightly refuses
+impersonation. *"See my feed as I see it"* is nevertheless a real want — an
+agent debugging card order, the insight compiler previewing what its audience
+will actually read before it publishes — and the deterministic workaround (a
+replica plus the dev-posture header) is a workaround: it lives below auth,
+which is exactly why it is not the answer.
+
+The answer is a **capability**, `feed.preview_as`, granted like any other
+capability and judged at the feed door.
+
+### The one inversion, and why it is not a special case
+
+`server/capabilities.clj`'s own docstring says what a capability is for:
+waymark holds the law about access and never the credential, so the registry
+NAMES an external power and the system fronting the data — Gate, a telemetry
+proxy — asks `/api/-/grant-check` and forwards or refuses with its own hands.
+It names the trade that follows in one sentence: *enforcement is cooperative —
+waymark cannot see whether the enforcement point honors the leash; own the
+enforcement point.*
+
+`feed.preview_as` is that sentence's own answer. **We own this enforcement
+point.** The power granted is waymark's own feed route, so the data and the law
+are in one process and there is nothing cooperative about it. That inversion is
+recorded in three places so it cannot be discovered later: the capability
+row's `:enforced_by` (*"this engine's own feed route — waymark holds the data
+AND the law here, unlike every other capability in the registry"*), the
+namespace docstring, and this section.
+
+What did **not** change is everything else. The ask is an ordinary
+`approval_request` with a dotted token in its scope; `scope-names-real-kinds`
+judges it against the ACTIVE registry exactly as it judges `telegram.send`
+(verified, not assumed — the guard's dotted branch was already there);
+four-eyes approval, attenuated delegation, the expiry, the revoke door and the
+magic links are untouched. A capability whose `:enforced_by` names a file in
+this repository is the shape to expect of the ones that follow. It is a special
+case of *who holds the data*, never of the machinery.
+
+### The door
+
+```
+GET /api/-/feed?preview_as=<member-id>
+X-Waymark-Grant: <grant-id>
+```
+
+`preview_as`, snake, beside `cursor` — the wire's own field spelling. The
+member is named by row id **or** by the subject a binding wrote, because those
+are the two spellings a human filling in a grant filter can have in front of
+them (the roster's id, and the id an agent knows itself by); it is
+`gate!`'s own two-step, not a new lookup.
+
+The grant that opens it, verbatim:
+
+```json
+{"audience": "claude-code",
+ "scope": [{"kind": "feed.preview_as",
+            "actions": [],
+            "filter": {"member": "<member-id>"}}],
+ "expires_at": "2026-09-24T00:00:00Z"}
+```
+
+`"actions": []` is the read-only ask and is the honest shape here: capability
+`:actions` are uninterpreted in v1 (the registry's recorded trade), and there
+is exactly one thing this power does.
+
+### The filter vocabulary, decided
+
+**One member id, required.** `{"member": "<id>"}` — one key, one value.
+
+*Absent means any* was weighed and refused. An unfiltered `feed.preview_as`
+grant MINTS fine (waymark validates a filter's shape and never its meaning —
+that is the registry's own recorded trade, and this door does not get to bend
+it at the mint) and is **refused at the door** with a sentence: *"an unfiltered
+preview grant is refused here: the filter is WHOSE feed may be read, and a
+grant that names nobody would name everybody."* The reason is not caution, it
+is the whole value proposition: absent-means-any is exactly the grant a tired
+human approves without reading, and the point of a capability over a role is
+that the approval names the thing.
+
+**A list was not added, and the guard is why.** `scope-filters-are-filterable`
+already refuses two filtered entries of one kind — a rule about grants in
+general, written long before this — so one grant previews one member and a
+second member is a second ask. The shape is the guard's; this door simply did
+not fight it. If the two-member case ever bites, the honest fix is a filter
+grammar for capability entries, not a comma in a string.
+
+An unrecognised filter key refuses too, naming what it found. A door that
+honoured a constraint it had not understood would be honouring nothing.
+
+### The crux: whose sight
+
+The preview must see **exactly** what the member sees, through the same code
+path, never a re-implementation. Two expressions carry that, and both are
+*called*, not copied:
+
+- **`members/principal-for`** — resolves the row (by id, then by subject),
+  refuses anything not `:active`, and hands a bare principal to **`gate!`**,
+  which unions the member's durably held roles and re-applies the suspension
+  refusal. A hand-built principal that forgot the roles union would answer a
+  preview through a smaller world than the member lives in, and that is the one
+  failure a preview may not have, because it looks like a correct answer.
+- **`grants/unscoped-visibility`** — `wrap-identity`'s own else-branch, lifted
+  out of the router and now called from both places: `nil` for a human or
+  system actor, `bootstrap-visibility` for an agent, which never runs unscoped.
+  `wrap-identity` was rewritten to call it, so there is one expression and it
+  cannot rot.
+
+`feed/document` is then called unchanged with the member's principal and the
+member's visibility. The seed is `(salt, THE MEMBER, today)` for free, because
+`document` derives it from `(:id principal)` — a preview seeded by the caller
+would be a fourth member's order, belonging to nobody.
+
+### The stamp — never silent
+
+```json
+"preview": {"of":    {"id": "…", "display": "Jack"},
+            "by":    {"id": "…", "display": "claude-code"},
+            "grant": "…"},
+"summary": "Feed · 2026-08-24 · 7 cards · PREVIEW of Jack · read by claude-code",
+"self":    "/api/-/feed?preview_as=…"
+```
+
+Four surfaces, because a client that renders one line must still see it: the
+`preview` key, the summary, a note that leads the `notes` list, and the `self`
+address. `links.next` carries `preview_as` too — the one place a stamp could
+tell the truth while the hrefs quietly lied, and page two of an archive walk
+would have become the previewer's own feed.
+
+The first note also replaces the day-seed sentence's *"seeded by (you, …)"*
+with the member's name, because under a preview "you" is a lie.
+
+### The verbs render, and they are the member's
+
+The bead left this open between *render disabled with a sentence* and *strip
+them*. **They render**, and the refusal to strip has two independent reasons:
+
+1. **Honesty.** The stated use is *"preview what my audience will actually
+   see."* A preview with the affordances removed is a preview of a different
+   surface, and the compiler use — does this finding offer something tappable
+   to the person I am publishing it to — evaporates entirely.
+2. **Arithmetic.** `do_now` keeps only cards that `offers-something?`. Stripping
+   verbs *before* the mixer would change **which cards appear**; stripping them
+   *after* would leave a section whose whole rule is *a verb under the thumb*
+   full of rows with none. Either way the preview stops being the member's feed.
+
+They are **disabled by truth**, not by a flag: every href is the member's own
+door, `wrap-identity` resolves the ACTUAL caller at it, and a previewer whose
+leash names one capability and no kind at all is answered 404 by
+`check-kind!`. Nothing was added to make that true — it was already true — but
+"already true" is not proof, so it is asserted from the wire in two places (see
+below). The document says it in prose as well: *"the verbs below are Jack's —
+each action href is Jack's door, and a request you send there is judged as you
+and refused."*
+
+### Audit — the honest answer, and the recorded punt
+
+**Nothing durable records the READ.** The feed is a `GET`, and this epic's
+laws forbid writes-on-read (`:feed/day-stable` would be the first casualty: a
+surface that logged its own reads would have per-read state, and the badge
+count is one refactor away). So the audit rides what already exists, and the
+document says which artifact that is: **the grant** — its `approval_request`,
+its four-eyes verdict, its expiry, its revoke door, and the fact that it is
+scoped to one named member — is the record, and its id is in the stamp.
+
+That is a real and honest limitation, stated rather than papered over: **you
+can prove who was ALLOWED to preview whom and when, and you cannot prove from
+waymark's own rows that they DID.** The remedy is not a write-on-read invented
+here; it is the usage-report ping the capabilities docstring already carries as
+a punt (`waymark-44h.3`), which is a capability-wide answer and not a feed one.
+Filed as **waymark-iqa.23.1** so the punt has an address.
+
+### Where the law is proved
+
+- **`:feed/preview-as`** (`test/packs.clj`, `:needs #{[:route :feed] [:kind
+  :capability] [:kind :member]}`) — **three identities through one door**,
+  because *"the preview is the member's own read"* is not a claim one principal
+  can check, and a preview computed for the CALLER would pass every
+  single-principal assertion anybody would think to write. It ensures the
+  capability row, mints a member to preview, mints and accepts a filtered grant
+  for a probe agent, and asserts: card-for-card equality against **the member
+  reading their own feed**; that the previewer's own feed is a *different*
+  document (so the equality is not free); the four stamp surfaces; 403 with the
+  capability named when the grant header is dropped; 403 for a different
+  member; 403 for the unfiltered grant; and — reporting `:covered` — a verb off
+  a previewed card **invoked by the previewer**, which must not land. It runs
+  LAST in the feed pack, because it is the only obligation that mints a MEMBER
+  and a new member is a new row every obligation above would have had to share
+  its deck with.
+- **`feed_test.clj`**, three deftests over the in-memory twin, for the half a
+  driver with one world cannot arrange: a house with rows, a member built to
+  have a feed, and a previewer built to have none.
+
+### Recorded here, for whoever comes next
+
+- **The refusal is a 403 that NAMES the capability**, which is a departure from
+  the feed's usual concealing 404 and is deliberate. The registry already took
+  the vocabulary posture — capabilities are WORDS, readable by every named
+  principal without a grant, because *an agent that cannot read what powers
+  exist cannot compose its ask* — so the sentence discloses nothing a `GET
+  /api/capabilities` would not, and it buys the thing concealment costs: the
+  refusal carries the exact `approval_request` body to send.
+- **The wrong-member refusal names the member the grant admits.** That is the
+  caller's OWN grant, readable on their own surface, so it leaks nothing they
+  do not hold — and a refusal that would not say which member is admitted makes
+  a typo indistinguishable from a revocation.
+- **The MCP surface has no feed tool**, so an agent at the MCP door reads this
+  over plain HTTP with its grant header. Six tools is a design decision the MCP
+  spec defends and this bead did not reopen it; filed as **waymark-iqa.23.2**.
+- **No declaration moved and no fingerprint could.** The `capability` kind
+  gained two `def`s of DATA in its namespace (the token and the row a boot seed
+  ensures) and prose in its docstring; its schema, states, guards and actions
+  are untouched. The feed route is a handler, not law.
+- **The suspended member refuses out loud**, with the same 403 their own
+  request would meet, rather than reading as *no such member*. A grant
+  explicitly naming them is the reason: the previewer already knows the member
+  exists, so concealing the suspension would only make the refusal confusing.
