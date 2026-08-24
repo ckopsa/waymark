@@ -467,6 +467,86 @@
               :hide hide
               :name (keyword (str "four-eyes:" (clojure.core/name of)))}))
 
+;; ── field-named principals (the decider's walls) ────────────────────
+;; four-eyes above is a TRANSITION-HISTORY wall: it asks (:actor-of
+;; ctx) who performed some earlier edge. A standalone decision has no
+;; such edge — its requester is stamped by :on-create, before any
+;; transition exists to be the actor of — so the wall it needs reads
+;; the ROW'S OWN FIELD instead. grants.clj drew that line by hand
+;; first (someone-else-decides); these two factories are that hand
+;; drawing, generalized, so the :decision sugar and the hand-written
+;; guard are one law with two spellings.
+;;
+;; Both mint their :check's canonical form EXPLICITLY. Every other
+;; factory here (role, owner, feature-flag, unless) hands the
+;; fingerprint a bare fn, which hashes by printed object identity and
+;; therefore moves every JVM run — the recorded stopgap in
+;; callable-hash. A guard the sugar mints is the one place that
+;; stopgap would be intolerable: a declaration key whose hash drifts
+;; is a declaration key that mints a revision for nothing. So the form
+;; is data here, built to print exactly as the equivalent defguard
+;; body would — which is also what lets grants.clj's own
+;; someone-else-decides become a call to this factory without moving
+;; approval_request's fingerprint by one byte.
+
+(defn not-the-field
+  "The field four-eyes wall: whoever this row names in `field` cannot
+  be the principal acting now. \"Not you\", where you is written down
+  in the document rather than remembered from the log."
+  [field & [{:keys [explain hide name]}]]
+  (guard
+   (cond-> {:name (clojure.core/or name
+                                   (keyword (str "not-the-" (clojure.core/name field))))
+            :reads [:principal]
+            :explain (clojure.core/or
+                      explain
+                      (str "The "
+                           (str/replace (clojure.core/name field) "_" " ")
+                           " of this row cannot be the one to decide it; "
+                           "another principal must."))
+            :check (with-meta
+                     (fn [row _inp ctx]
+                       (if (= (:id (:principal ctx)) (get-in row [:data field]))
+                         (t/deny) (t/allow)))
+                     {:waymark10/form
+                      (list 'fn '[row _inp ctx]
+                            (list 'if
+                                  (list '= '(:id (:principal ctx))
+                                        (list 'get-in 'row [:data field]))
+                                  '(t/deny) '(t/allow)))})}
+     hide (assoc :hide true))))
+
+(defn is-the-field
+  "The named-decider wall: only the principal this row names in
+  `field` may act. \"The person this row names decides it\" — the
+  shape a household means by a guardian, an assignee, an addressee,
+  and the one neither four-eyes nor role can say. A row naming
+  nobody names no decider, and the wall refuses rather than opening:
+  an unassigned verdict waits for an assignment."
+  [field & [{:keys [explain hide name]}]]
+  (guard
+   (cond-> {:name (clojure.core/or name
+                                   (keyword (str "is-the-" (clojure.core/name field))))
+            :reads [:principal]
+            :explain (clojure.core/or
+                      explain
+                      (str "Only this row's "
+                           (str/replace (clojure.core/name field) "_" " ")
+                           " may decide it."))
+            :check (with-meta
+                     (fn [row _inp ctx]
+                       (let [named (get-in row [:data field])]
+                         (if (clojure.core/and (some? named)
+                                               (= (:id (:principal ctx)) named))
+                           (t/allow) (t/deny))))
+                     {:waymark10/form
+                      (list 'fn '[row _inp ctx]
+                            (list 'let ['named (list 'get-in 'row [:data field])]
+                                  (list 'if (list 'and '(some? named)
+                                                  '(= (:id (:principal ctx)) named))
+                                        '(t/allow) '(t/deny))))})}
+     hide (assoc :hide true))))
+
 ;; ── the code-guard macro ────────────────────────────────────────────
 
 (defmacro defguard

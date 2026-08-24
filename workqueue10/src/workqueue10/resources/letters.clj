@@ -367,6 +367,15 @@
    :nav :system
    :summary "{data.title} · {state}"
    :label-template "{data.title}"
+   ;; the TWO-PARTY own-surface (waymark-tti.3): a letter is yours as
+   ;; its AUTHOR or as its RECIPIENT — sender and addressee each see
+   ;; the row with no grant, a third agent 404s it by the same
+   ;; default-deny wall. The two branches query separately and their
+   ;; id sets union; the recipient guards narrow open/discard further
+   ;; to the addressee alone, because a shelf with no floor is a flood
+   ;; and the recipient keeps a broom of its own.
+   :own-surface {:by [:owner :to]
+                 :actions #{"create" "open" "discard"}}
    :schema [:map
             ;; the AUTHOR — stamped by the engine (on-create); a
             ;; persisted row always carries it. Filterable so own-ids

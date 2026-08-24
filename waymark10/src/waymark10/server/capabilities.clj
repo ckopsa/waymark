@@ -48,6 +48,12 @@
    :nav :system
    :summary "{data.token} · {state}"
    :label-template "{data.token}"
+   ;; the vocabulary posture (hospitality audit, agent walk #3): the
+   ;; registry is WORDS, not anyone's data. An agent that cannot read
+   ;; what powers exist cannot compose its ask — the same argument
+   ;; :vocabulary-open? already won — so every named principal reads
+   ;; every row here without a grant, and none of them is owned
+   :own-surface {:all true}
    :schema [:map
             [:token [:string {:min 3 :max 80}]]
             [:description [:string {:min 1 :max 240}]]

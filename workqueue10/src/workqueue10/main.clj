@@ -58,6 +58,7 @@
             [workqueue10.reconsent :as reconsent]
             [workqueue10.resources.dwelling :refer [self journal]]
             [workqueue10.resources.letters :refer [letter]]
+            [workqueue10.resources.permission-slip :refer [permission-slip]]
             [workqueue10.resources.media :refer [media-resource]]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
@@ -301,7 +302,17 @@
        ;; :letter rides beside them (waymark-tti.3): the doorstep
        ;; shelf — addressed notes between inhabitants, two-party
        ;; own-surface (author OR recipient), never grantable.
-       (into (into [saved-view capability connection self journal weather letter]
+       ;; :permission_slip rides last (waymark-442.6): the house's own
+       ;; governance — somebody asks for leave, a grown-up answers,
+       ;; and the answer is the row. Domainless for the family reason
+       ;; the others are: asking permission is not a domain of family
+       ;; logistics beside queue/chores/meals, it is how the house
+       ;; decides. Own-surface (the asker reads their own answers)
+       ;; and the framework's first declared decision kind — every
+       ;; state, action and wall it has is projected from one
+       ;; :decision key.
+       (into (into [saved-view capability connection self journal weather letter
+                    permission-slip]
                    dashboard/resources)))))
 
 (def surfaces

@@ -310,6 +310,83 @@ evidence. `:retain` is not law — `fingerprint-of` does not name it, so
 declaring it mints no revision — but it IS bytes on every transition of
 this kind forever, which is why it is off until an author says otherwise.
 
+`:decision` is one key that projects a whole verdict machine
+([spec](spec-decision-kind.md)) — for a decision that is not a transition on
+a domain row, where the decision IS the thing:
+
+```clojure
+:decision
+{:asks    :for_what              ; the question's field
+ :by      :asked_by              ; stamped from the principal at birth
+ :decider {:not  {:field :asked_by :name :the-asker-does-not-sign
+                  :explain "The person who asked cannot be the one to sign it."}
+           :role {:name "parent" :as :a-grown-up-signs
+                  :explain "A grown-up signs a permission slip."}}
+ :stamps  {:decided-by :signed_by}
+ :expires {:field :good_until :default 43200 :max 604800}
+ :pacing  {:limit 12 :per :hour :open-cap 4}
+ :own-surface true
+ :verdicts [{:name :allow  :to :allowed :label "Yes" :note :answer}
+            {:name :refuse :to :refused :label "Not this time" :note :answer}]}
+```
+
+It desugars FIRST in `normalize-resource`'s thread, ahead of `:flow` (a
+decision *is* a flow), and projects `:states`, `:initial`, `:terminal`, the
+verdict actions with their guards and note editors, the schema entries the
+engine owns, the `:create-schema` that omits the stamped ones, `:on-create`,
+the create guards for the leash and the pacing, `:filterable` over state and
+the asker, `:default-filters {:state "offered"}`, `:sortable "-created_at"`
+and `:nav :system`. Everything projected is an ordinary declaration value;
+nothing downstream — router, render, collections, OpenAPI, MCP, conformance
+— learns a new noun. It is a **spelling, not a mechanism**, and the proof is
+`approval_request`: it was respelled through this key and its fingerprint
+hash did not move one byte (`waymark10.decision-sugar-test`).
+
+Every projection fills a blank and never overwrites, so a kind declares the
+extra law only it has beside the sugar. Three refusals: an action also named
+in `:actions` (*one home per action*), an `:on-create` beside a `:decision`
+that already stamps at birth (*one home per hook* — composing would mint a
+wrapper fn, and a wrapper fn is a hash that moves for nothing), and a
+verdict list under two, or one that never leaves the open state (a
+single-verdict decision is a task with a checkbox; a decision that lands
+nowhere is a queue that never drains).
+
+`:decider` is the eligibility dimension. `{:not <field>}` is a FIELD
+four-eyes wall (`guards/not-the-field`), not `guards/four-eyes` — the latter
+is a transition-history wall over `(:actor-of ctx)`, and a decision row's
+asker is stamped at birth, before any transition exists to be the actor of.
+`{:field <field>}` is `guards/is-the-field`, "the person this row names
+decides it". `{:role …}` composes with either. The walls land as SEPARATE
+guards in the verdict's `:guards` vector, never folded under `g/and`: an
+action's guard list is already a conjunction, and a composite records
+`opaque` in the decision record — a folded wall would leave the log a name
+with nothing behind it. Each wall carries its own `:name`/`:explain`; a
+sentence spelled at the `:decider` level is shorthand for the one-wall case
+and refuses beside a second wall.
+
+`:own-surface` says who sees their OWN rows of a kind with **no grant at
+all** — the courtesy that used to be a literal set of seven kind names
+inside `waymark10.server.grants`:
+
+```clojure
+:own-surface {:by [:owner :to] :actions #{"create" "open" "discard"}}
+```
+
+`:by` is a vector of branches, because ownership is not always one-party (a
+letter is yours as its AUTHOR or its RECIPIENT, and the branches union — the
+store's cond map is a conjunction with no OR). A branch is a field keyword,
+pushed down as a query cond, or a PATH vector into the document, filtered in
+memory (`:job`'s requester rides as an object). A bare keyword spells the
+one-branch case, and `:decision {:own-surface true}` spells "by the
+decision's own `:by` field, with the verdict doors". `:all true` is the
+vocabulary posture — every row is everyone's words, not anyone's data (the
+`:capability` registry) — deliberately a separate key from an empty `:by`,
+so *owned by nobody* and *owned by everybody* are not one typo apart.
+`:actions` names what the courtesy makes VISIBLE; the guards still judge
+every invoke, so a self-judging asker meets the wall's honest 409 rather
+than a mute 404. Neither key is law: `fingerprint-of` names neither, so
+declaring either mints no revision.
+
 ## 9 · `:touches` — the declared cross-write set
 
 An action that advances OTHER rows says so on its declaration:

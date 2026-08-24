@@ -34,6 +34,16 @@
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
    :flow :actions :create-guards :create-action-names :allow-dead :renames
+   ;; the standalone verdict (spec-decision-kind): one key desugaring
+   ;; into states, verdict actions, decider walls, the leash and the
+   ;; pacing — a spelling, never a mechanism, resolved before the
+   ;; check battery and before the fingerprint
+   :decision
+   ;; who sees their OWN rows of this kind with no grant at all
+   ;; (spec-decision-kind seam 2): the negotiation courtesy that used
+   ;; to be a literal set of kind names in grants.clj, relocated to
+   ;; the seven declarations that always owned it
+   :own-surface
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; collection surface

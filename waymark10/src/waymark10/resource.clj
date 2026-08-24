@@ -843,6 +843,437 @@
       (:unless opts) (assoc :unless (:unless opts))
       (:touches opts) (assoc :touches (:touches opts)))))
 
+;; — :decision, the standalone verdict (spec-decision-kind) ──────────
+;;
+;; Some decisions are not transitions on a domain row: "may I bike to
+;; the park", "approve this purchase". The decision IS the thing, and
+;; before this key an app that wanted one either bolted a
+;; pending_approval state onto a noun that existed for another reason
+;; or copied grants.clj wholesale.
+;;
+;; The claim this sugar makes is the modest one — IT IS NOT A NEW
+;; MECHANISM. :decision desugars into ordinary :states, :actions,
+;; :guards, :schema and :on-create, ahead of :flow (a decision IS a
+;; flow), before the check battery, before the fingerprint. The
+;; router, the render probe, collections, OpenAPI, MCP and the
+;; conformance driver learn no new noun; nothing downstream can tell
+;; a desugared decision from a hand-written one, which is precisely
+;; the property that makes the key safe to add.
+;;
+;; The proof is batch G's invariant turned on its own author: after
+;; approval_request was respelled through this key, its fingerprint
+;; hash did not move by one byte (waymark10.decision-sugar-test). Two
+;; spellings, one law — if the hash had moved, the sugar would have
+;; changed the law and the generalization would have failed.
+
+(def ^:private decision-keys
+  #{:asks :by :decider :verdicts :stamps :expires :pacing :offered
+    :own-surface})
+
+(def ^:private verdict-keys
+  #{:name :to :label :style :order :note :guards :handler :safety
+    :display :edit :input})
+
+(defn- map-form-keys
+  "The field keywords a [:map …] form already spells — the sugar adds
+  an entry only where the author wrote none, so a hand-spelled field
+  always wins over its generated twin."
+  [form]
+  (if (and (vector? form) (= :map (first form)))
+    (into #{} (comp (filter vector?) (map first)) (rest form))
+    #{}))
+
+(defn- add-entries [form entries]
+  (let [have (map-form-keys form)]
+    (into (or form [:map])
+          (remove #(contains? have (first %)))
+          entries)))
+
+(defn- keep-entries
+  "The create model: this [:map …] form minus the named fields — what
+  the engine stamps and what a verdict writes are not the author's to
+  supply."
+  [form drop-fields]
+  (into [:map]
+        (remove #(and (vector? %) (contains? drop-fields (first %))))
+        (rest form)))
+
+(defn- ttl-seconds
+  "A leash length, resolved at write time: a plain number of seconds,
+  or {:service :some-key :seconds <fallback>} — the deployment's own
+  configured default, with an honest number when it configured none."
+  [spec ctx]
+  (long (if (map? spec)
+          (get (:services ctx) (:service spec) (:seconds spec))
+          spec)))
+
+(defn- decision-on-create
+  "The birth stamps: the requester is written from the acting
+  principal (never supplied by hand — an ask that could name someone
+  else as its asker is an ask that can frame them), and a leash the
+  author left blank gets the declared default, stamped AT CREATE so
+  the decider judges the expiry that will actually exist rather than
+  one computed later."
+  [by expires]
+  (let [field (:field expires)
+        default (:default expires)]
+    (fn [row ctx]
+      (cond-> (assoc-in row [:data by] (get-in ctx [:principal :id]))
+        (and field (some? default))
+        (update-in [:data field]
+                   #(or % (.plusSeconds ^java.time.Instant (:now ctx)
+                                        (ttl-seconds default ctx))))))))
+
+(defn- leash-guard
+  "The declared ceiling on a leash: an ask may propose longer than the
+  default, up to the cap, and never past it. Ask for less — an
+  answered ask can always be followed by another."
+  [expires]
+  (let [field (:field expires)
+        max-spec (:max expires)]
+    (g/guard {:name :the-leash-is-short
+              :judges [field]
+              :reads [:now]
+              :vars [:max_hours :asked]
+              :explain (or (:explain expires)
+                           (str "A leash is short — at most {max_hours} hours; "
+                                "this ask runs to {asked}. Ask for less; an "
+                                "answered ask can always be followed by another."))
+              :check (fn [_row inp ctx]
+                       (if-some [^java.time.Instant exp (get inp field)]
+                         (let [max-s (ttl-seconds max-spec ctx)
+                               cap (.plusSeconds ^java.time.Instant (:now ctx)
+                                                 max-s)]
+                           (if (pos? (compare exp cap))
+                             (t/deny {:vars {:max_hours (quot max-s 3600)
+                                             :asked (str exp)}})
+                             (t/allow)))
+                         (t/allow)))})))
+
+(defn- pacing-guards
+  "Two walls on the ASKING, not the deciding: a rolling-hour rate and
+  a cap on how many of this principal's asks may sit unanswered at
+  once. The second is the one a household actually feels — a verdict
+  on what is already waiting comes before a new ask.
+
+  Both ride ctx :find, per-process and unshared, inheriting
+  grants.clj's own recorded punt about the unwired :rate hook.
+  Declaring pacing does not make it distributed."
+  [kind by offered {:keys [limit per open-cap]}]
+  (let [window (long (case (or per :hour) :hour 3600 :day 86400 :minute 60))]
+    (cond-> []
+      limit
+      (conj (g/guard
+             {:name :asks-are-paced
+              :reads [:principal :now kind]
+              :vars [:limit :retry_at]
+              :explain "Asks are paced to {limit} an hour; the window reopens at {retry_at}."
+              :check (fn [_row _inp ctx]
+                       (if (nil? (:find ctx))
+                         (t/allow)
+                         (let [pid (:id (:principal ctx))
+                               ^java.time.Instant now (:now ctx)
+                               cutoff (.minusSeconds now window)
+                               fresh (into []
+                                           (filter
+                                            (fn [r]
+                                              (and (some? (:created-at r))
+                                                   (neg? (compare cutoff
+                                                                  (:created-at r))))))
+                                           ((:find ctx) kind {by pid} {:limit 500}))]
+                           (if (< (count fresh) (long limit))
+                             (t/allow)
+                             (let [retry (.plusSeconds
+                                          ^java.time.Instant
+                                          (reduce (fn [a b]
+                                                    (if (neg? (compare a b)) a b))
+                                                  (mapv :created-at fresh))
+                                          window)]
+                               (t/deny {:vars {:limit limit :retry_at (str retry)}
+                                        :retry-at retry}))))))}))
+      open-cap
+      (conj (g/guard
+             {:name :asks-are-few
+              :reads [:principal kind]
+              :vars [:cap :pending]
+              :explain "Open asks are capped at {cap}; yours awaiting a verdict: {pending}."
+              :check (fn [_row _inp ctx]
+                       (if (nil? (:find ctx))
+                         (t/allow)
+                         (let [pid (:id (:principal ctx))
+                               open ((:find ctx) kind {by pid :state offered}
+                                     {:limit (inc (long open-cap))})]
+                           (if (< (count open) (long open-cap))
+                             (t/allow)
+                             (t/deny {:vars {:cap open-cap
+                                             :pending (str/join ", "
+                                                                (sort (map :id open)))}})))))})))))
+
+(defn- verdict-handler
+  "The generic stamp: who decided, and (when the verdict takes one)
+  what they wrote. Its canonical form is built as data, so the hash
+  is a function of the FIELD NAMES the declaration chose rather than
+  of a closure's object identity.
+
+  A verdict that spells its own :handler keeps it whole — the sugar
+  never wraps, because a wrapper is a new fn and a new fn is a new
+  law. Such a verdict owns its own stamping, which is what lets
+  approval_request's stamp-approver (it stamps the minted grant's id
+  beside the approver) ride this key without moving its fingerprint."
+  [decided-by note-field]
+  (with-meta
+    (fn [row inp ctx]
+      (cond-> row
+        decided-by (assoc-in [:data decided-by] (:id (:principal ctx)))
+        note-field (assoc-in [:data note-field] (get inp note-field))))
+    {:waymark10/form
+     (list 'fn '[row inp ctx]
+           (list 'cond-> 'row
+                 (boolean decided-by)
+                 (list 'assoc-in [:data decided-by] '(:id (:principal ctx)))
+                 (boolean note-field)
+                 (list 'assoc-in [:data note-field]
+                       (list 'get 'inp note-field))))}))
+
+(defn- decider-guards
+  "The decider's eligibility, as a VECTOR of walls rather than one
+  folded composite. g/and would read the same at the door, but a
+  composite records opaque — the decision record (spec-decision-record)
+  keeps per-guard evidence, and a folded four-eyes wall would leave
+  the log a name with nothing behind it. An action's guard list is
+  already a conjunction; keeping the arms apart costs nothing and
+  keeps the record honest.
+
+  Order is evaluation order and therefore refusal order: the field
+  wall first (\"not you\" is the sentence the asker most needs), then
+  the named decider, then the role."
+  [kind {:keys [not role field] :as decider}]
+  (when-not (or not role field)
+    (sugar-err kind ":decision"
+               ":decider says nothing — spell :not, :field or :role"))
+  ;; each wall is either a bare value (:not :requested_by) or a map
+  ;; carrying its own sentence ({:field :asked_by :explain "…"}). A
+  ;; :name/:explain spelled at the :decider level is the shorthand for
+  ;; the ONE-WALL case and refuses beside a second wall, because a
+  ;; sentence that would land on two different refusals is a sentence
+  ;; that is wrong on one of them.
+  (let [walls (remove nil? [not field role])
+        shared (select-keys decider [:name :explain :hide])
+        _ (when (and (seq (dissoc shared :hide)) (< 1 (count walls)))
+            (sugar-err kind ":decision"
+                       (str ":decider spells " (count walls)
+                            " walls and one shared :name/:explain — give "
+                            "each wall its own {:field/:name … :explain …}, "
+                            "so each refusal says the true thing")))
+        opt-of (fn [w extra]
+                 (merge (when (= 1 (count walls)) shared)
+                        (select-keys decider [:hide])
+                        ;; :field / :name is the wall's VALUE slot and
+                        ;; :as its rename; everything else is guard opts
+                        (when (map? w) (dissoc w :field :as))
+                        extra))
+        val-of (fn [w k] (if (map? w) (get w k) w))]
+    (cond-> []
+      not   (conj (g/not-the-field (val-of not :field) (opt-of not nil)))
+      field (conj (g/is-the-field (val-of field :field) (opt-of field nil)))
+      role  (conj (let [g (g/role (val-of role :name)
+                                  (opt-of role nil))]
+                    ;; g/role names itself role:<token>; a decision may
+                    ;; want the household's own word for the wall
+                    (if-some [nm (and (map? role) (:as role))]
+                      (assoc g :name nm)
+                      g))))))
+
+(defn- verdict-action
+  "One verdict → one ordinary action. Everything the author spells
+  wins whole; the sugar only fills blanks."
+  [kind offered decider-gs stamps v]
+  (let [{:keys [name to note guards handler safety display edit input
+                label style order]} v
+        note-field (when note (if (map? note) (:field note) note))
+        note-max (if (map? note) (:max note 240) 240)]
+    (when-not (keyword? name)
+      (sugar-err kind ":decision" "each verdict declares a keyword :name"))
+    (when-not (keyword? to)
+      (sugar-err kind ":decision"
+                 (str (clojure.core/name name) " declares no :to state")))
+    (when-some [unknown (seq (sort (remove verdict-keys (keys v))))]
+      (sugar-err kind ":decision"
+                 (str (clojure.core/name name) " declares unknown key(s) "
+                      (vec unknown) "; a verdict speaks "
+                      (vec (sort verdict-keys)))))
+    (cond-> {:from #{offered}
+             :to to
+             :guards (into (vec decider-gs) (or guards []))
+             :safety (or safety
+                         {:idempotent true :reversible false :confirm false
+                          :one-way (str "A verdict stays on record; asking "
+                                        "again is a new ask.")})
+             :handler (or handler
+                          (verdict-handler (:decided-by stamps) note-field))
+             :display (or display
+                          (cond-> {:label (or label (str/capitalize
+                                                     (clojure.core/name name)))}
+                            style (assoc :style style)
+                            order (assoc :order order)))}
+      note-field
+      (assoc :input (or input
+                        [:map [note-field {:optional true}
+                               [:maybe [:string {:max note-max}]]]]))
+      (and note-field edit) (assoc :edit edit)
+      (and note-field (nil? edit))
+      (assoc :edit {:prefill [note-field] :fence false
+                    :unfenced-reason (str "A verdict's note is written once "
+                                          "with the verdict; there is nothing "
+                                          "here to clobber.")}))))
+
+(defn- desugar-decision
+  "The :decision key → ordinary states, actions, guards, schema and
+  hooks. Runs FIRST in normalize-resource's thread, ahead of :flow.
+
+  What it projects, and from what:
+
+  | declared              | projected                                    |
+  |-----------------------|----------------------------------------------|
+  | :verdicts             | :states, :initial, :terminal, the verdict     |
+  |                       | actions with :from/:to/:display and the       |
+  |                       | optional note input and editor                |
+  | :asks :by :stamps     | the schema entries each owns, the             |
+  |                       | :create-schema that omits the stamped ones,   |
+  |                       | :on-create's requester stamp                  |
+  | :decider              | every verdict action's :guards, walls first   |
+  | :expires              | the leash field, its create default, and      |
+  |                       | (when :max is spelled) the ceiling guard      |
+  | :pacing               | the two create guards                         |
+  | always                | :filterable over state and the requester,     |
+  |                       | :default-filters to the open queue,           |
+  |                       | :sortable newest-first, :nav :system          |
+
+  Every projection fills a blank and never overwrites: a key the
+  author also spells wins, exactly as :flow lets a directly declared
+  action win — with one refusal, the same one :flow makes. An action
+  also named by :actions is the double-declaration error (\"one home
+  per action\"), and so is an :on-create spelled beside a :decision
+  that already stamps at birth. The second refusal is the sugar's own
+  recorded limit: a decision kind that needs an extra birth stamp has
+  no spelling yet, because composing the two hooks would mint a
+  wrapper fn and a wrapper fn is a hash that moves for nothing.
+
+  Verdict arity is two or more, never one, and at least one verdict
+  must leave the open state: a single-verdict decision is a task with
+  a checkbox, and a decision with nowhere to land is a queue that
+  never drains."
+  [rmap]
+  (let [d (:decision rmap)
+        kind (:kind rmap)]
+    (if (nil? d)
+      rmap
+      (do
+        (when-not (map? d)
+          (sugar-err kind ":decision" "is a map"))
+        (when-some [unknown (seq (sort (remove decision-keys (keys d))))]
+          (sugar-err kind ":decision"
+                     (str "unknown key(s) " (vec unknown) "; a decision speaks "
+                          (vec (sort decision-keys)))))
+        (let [{:keys [asks by decider verdicts stamps expires pacing]} d
+              offered (:offered d :offered)
+              ask-field (if (map? asks) (:field asks) asks)
+              ask-max (if (map? asks) (:max asks 240) 240)]
+          (when-not (keyword? ask-field)
+            (sugar-err kind ":decision" ":asks names the question's field"))
+          (when-not (keyword? by)
+            (sugar-err kind ":decision"
+                       ":by names the field the requester is stamped into"))
+          (when-not (and (vector? verdicts) (<= 2 (count verdicts)))
+            (sugar-err kind ":decision"
+                       (str ":verdicts is two or more — a single-verdict "
+                            "decision is a task with a checkbox")))
+          (when-not (some #(not= offered (:to %)) verdicts)
+            (sugar-err kind ":decision"
+                       (str "no verdict leaves " offered
+                            " — a decision must be able to land somewhere")))
+          (when (:on-create rmap)
+            (sugar-err kind ":decision"
+                       (str ":on-create is also spelled — the decision already "
+                            "stamps " (name by) " at birth; one home per hook")))
+          (let [decider-gs (decider-guards kind (or decider {}))
+                actions (into {}
+                              (map (fn [v]
+                                     [(:name v)
+                                      (verdict-action kind offered decider-gs
+                                                      stamps v)]))
+                              verdicts)
+                _ (doseq [aname (keys actions)]
+                    (when (contains? (:actions rmap) aname)
+                      (sugar-err kind ":decision"
+                                 (str (name aname) " is also declared in "
+                                      ":actions — one home per action"))))
+                note-fields (into #{}
+                                  (keep (fn [v]
+                                          (when-some [n (:note v)]
+                                            (if (map? n) (:field n) n))))
+                                  verdicts)
+                decided-by (:decided-by stamps)
+                exp-field (:field expires)
+                ;; the entries the ENGINE owns. The question is
+                ;; required (a decision with no question is a button);
+                ;; the stamped names are optional and :raw, because
+                ;; they are principal ids and a display layer must not
+                ;; dress them up as words
+                entries (cond-> [[ask-field [:string {:min 1 :max ask-max}]]
+                                 [by {:optional true :x-display {:raw true}}
+                                  [:maybe [:string {:max 128}]]]]
+                          exp-field
+                          (conj [exp-field {:optional true}
+                                 [:maybe :waymark/instant]])
+                          decided-by
+                          (conj [decided-by {:optional true
+                                             :x-display {:raw true}}
+                                 [:maybe [:string {:max 128}]]]))
+                entries (into entries
+                              (map (fn [n]
+                                     [n {:optional true}
+                                      [:maybe [:string {:max 240}]]]))
+                              (sort note-fields))
+                schema (add-entries (:schema rmap) entries)
+                stamped (cond-> (into #{} note-fields)
+                          by (conj by)
+                          decided-by (conj decided-by))]
+            (-> rmap
+                (dissoc :decision)
+                (assoc :schema schema)
+                (update :create-schema #(or % (keep-entries schema stamped)))
+                (update :states
+                        #(or % (vec (distinct (cons offered (map :to verdicts))))))
+                (update :initial #(or % offered))
+                (update :terminal
+                        #(or % (into #{} (comp (map :to) (remove #{offered}))
+                                     verdicts)))
+                (update :actions #(merge actions (or % {})))
+                (assoc :on-create (decision-on-create by expires))
+                (update :create-guards
+                        (fn [gs]
+                          (cond-> (vec gs)
+                            (:max expires) (conj (leash-guard expires))
+                            pacing (into (pacing-guards kind by offered pacing)))))
+                (update :filterable
+                        #(merge {:state #{:eq :in} by #{:eq}} %))
+                (update :default-filters #(or % {:state (name offered)}))
+                (update :sortable #(or % {:fields [:created_at]
+                                          :default "-created_at"}))
+                (update :nav #(or % :system))
+                (update :summary
+                        #(or % (str "{data." (name ask-field) "} · asked by "
+                                    "{data." (name by) "} · {state}")))
+                (cond-> (:own-surface d)
+                  (update :own-surface
+                          #(or % (if (map? (:own-surface d))
+                                   (:own-surface d)
+                                   {:by by
+                                    :actions (into #{"create"}
+                                                   (map (comp name :name))
+                                                   verdicts)})))))))))))
+
 (defn- desugar-flow
   "The :flow rows → today's :actions map, merged beside any directly
   declared actions (name collisions refuse — one home per action).
@@ -1156,11 +1587,69 @@
                  views))
     rmap))
 
+(def ^:private own-surface-keys #{:by :actions :all})
+
+(defn- normalize-own-surface
+  "The own-surface declaration, canonicalized (spec-decision-kind seam
+  2). Before this key, 'the kinds a named principal sees its own rows
+  of' was a literal set of seven strings in grants.clj, read through
+  three hand-written case blocks and copied a fourth time into the
+  test packs — so a NEW decision kind was invisible to its own
+  requester until all four were edited, and the failure was silent.
+  The set is not removed here, it is relocated: each of the seven
+  declarations grows the sentence that always described it.
+
+  :by is a VECTOR of branches, because ownership is not always
+  one-party — a letter is yours as its author OR its recipient, and
+  the branches union. A branch is either a field keyword (a promoted
+  column, so the id set pushes down as a query cond) or a PATH vector
+  into the document (a nested requester, filtered in memory: the
+  recorded window, not a new store grammar). A bare keyword spells
+  the one-branch case.
+
+  :all true is the vocabulary posture — every row of this kind is
+  everyone's words, not anyone's data (the capability registry). It
+  is deliberately a separate key from an empty :by, because 'owned by
+  nobody' and 'owned by everybody' must not be one typo apart.
+
+  :actions names what the courtesy confers WITHOUT a grant. The
+  guards still judge every invoke; this only decides which doors are
+  visible enough to be knocked on."
+  [rmap]
+  (if-some [os (:own-surface rmap)]
+    (let [kind (:kind rmap)]
+      (when-not (map? os)
+        (sugar-err kind ":own-surface" "is a map"))
+      (when-some [unknown (seq (sort (remove own-surface-keys (keys os))))]
+        (sugar-err kind ":own-surface"
+                   (str "unknown key(s) " (vec unknown) "; it speaks "
+                        (vec (sort own-surface-keys)))))
+      (when-not (or (:by os) (:all os))
+        (sugar-err kind ":own-surface"
+                   (str "names neither :by (whose id the row carries) nor "
+                        ":all (every row is everyone's words)")))
+      (let [branches (cond
+                       (nil? (:by os)) []
+                       (keyword? (:by os)) [[(:by os)]]
+                       (vector? (:by os)) (mapv #(if (keyword? %) [%] (vec %))
+                                                (:by os))
+                       :else (sugar-err kind ":own-surface"
+                                        ":by is a field, or a vector of fields and paths"))]
+        (assoc rmap :own-surface
+               {:by branches
+                :all (boolean (:all os))
+                :actions (into #{} (map name) (:actions os))})))
+    rmap))
+
 (defn normalize-resource
   [rmap]
-  ;; flow first: a :flow declaration may derive :states, which the
-  ;; :fields groups read (open-state validation, support editors)
-  (let [rmap (-> rmap desugar-flow desugar-fields)
+  ;; decision first, then flow: a :decision IS a flow (it projects the
+  ;; states and the verdict actions a :flow row would have spelled by
+  ;; hand), so it must land before :flow can read what it left. Flow
+  ;; before fields, in turn, because a :flow declaration may derive
+  ;; :states, which the :fields groups read (open-state validation,
+  ;; support editors)
+  (let [rmap (-> rmap desugar-decision desugar-flow desugar-fields)
         {:keys [kind states initial summary]} rmap]
     (doseq [[k v] {:kind kind :states states :initial initial :summary summary
                    :schema (:schema rmap)}]
@@ -1237,6 +1726,7 @@
         (update :deviations #(vec (or % [])))
         normalize-default-filters
         normalize-views
+        normalize-own-surface
         ;; the continuity map (migrate): retired tokens → their current
         ;; spellings; boot refuses rows in states neither declared nor
         ;; mapped, and replay-history reads the log through the chain

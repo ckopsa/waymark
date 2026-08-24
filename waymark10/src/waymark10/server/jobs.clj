@@ -133,6 +133,15 @@
    :terminal #{:completed :cancelled}
    :nav :system
    :summary "Deferred {data.action} on {data.kind} · {state}"
+   ;; the job the principal asked for is the principal's to watch: the
+   ;; sync trigger's 202 hands the requester a job, and the record of
+   ;; who asked IS the sight — a leash that may mint a pass may watch
+   ;; it run. requested_by rides as an OBJECT ({:id :type :display},
+   ;; enqueue!'s pattern), so the branch is a PATH out of cond-sql's
+   ;; top-level reach and its window filters in memory — the recorded
+   ;; seam: the orphan sweep keeps the table small, and a deployment
+   ;; that outgrows the window promotes the id to its own field
+   :own-surface {:by [[:requested_by :id]]}
    :schema [:map
             [:action [:string {:min 1 :max 64}]]
             ;; showcased: the kind filter stands above the jobs table

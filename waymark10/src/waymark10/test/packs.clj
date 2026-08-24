@@ -1253,7 +1253,11 @@
   refused to the agent, they are ABSENT from discover, which is
   router.clj's posture inherited rather than re-implemented."
   [ctx]
-  (let [own #{:grant :approval_request :job :capability :self :journal :letter}
+  ;; `own` is READ OFF THE REGISTRY (spec-decision-kind seam 2), never
+  ;; enumerated here: a kind whose own-surface rides every named
+  ;; principal's request is not concealed by a narrow leash and would
+  ;; make this probe test nothing.
+  (let [own (:own-surface-kinds ctx #{})
         granted (or (first (app-kinds ctx)) :role)
         hidden (first (sort (remove #(or (= granted %) (own %))
                                     (:registry-kinds ctx))))

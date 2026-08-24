@@ -213,6 +213,18 @@
            (fn [tx] (store/transitions st tx {:kind kind :resource-id id} {})))))
 
      :registry-kinds (set (keys (inv/resources engine)))
+     ;; the kinds a named principal sees its OWN rows of with no grant
+     ;; — read off the registry, exactly as grants/visibility reads it
+     ;; (spec-decision-kind seam 2). The concealment packs need it to
+     ;; pick a kind that really IS hidden from a narrow leash, and
+     ;; before this key they carried a fourth hand-written copy of
+     ;; core's literal set: a decision kind declared by an app made
+     ;; that copy quietly wrong, and the pack passed by testing the
+     ;; wrong kind
+     :own-surface-kinds (into #{}
+                              (keep (fn [[k rdef]]
+                                      (when (:own-surface rdef) k)))
+                              (inv/resources engine))
      ;; what is actually TURNING on this engine — empty for the
      ;; unstarted handler every app suite hands over, which is why a
      ;; [:surface k] need skips there instead of failing

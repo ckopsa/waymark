@@ -43,7 +43,13 @@
 
   THE NEGOTIATION MACHINE (waymark9's request_access, resized to the
   v10 grant): an :approval_request resource — {grant_id?, task,
-  scope, expires_at} through offered → approved/denied. ANY named
+  scope, expires_at} through offered → approved/denied. Since
+  waymark-442.6 it is the first INSTANCE of the :decision declaration
+  key (spec-decision-kind) rather than a machine written by hand: the
+  states, the two verdict actions, the four-eyes wall, the requester
+  stamp, the default leash and the queue's own filter and sort are
+  projected from that one key. It kept its fingerprint hash to the
+  byte, which is the proof the key is a spelling and not a mechanism. ANY named
   (non-anonymous) principal may file one — the grant anchor is
   optional, because the machine's original purpose is bootstrap: an
   agent asks for the access it needs, a human approves, and the
@@ -424,6 +430,13 @@
    :terminal #{:revoked :expired}
    :nav :system
    :summary "Grant to {data.audience} · {state}"
+   ;; a grant is its AUDIENCE'S, with no grant needed to see it: the
+   ;; asking door is never concealed, because it is how access starts
+   ;; and how a dead grant's holder asks again. ACCEPTING rides the
+   ;; courtesy too — since the agent default (waymark-rci) leaves no
+   ;; unscoped moment in which to accept, and an offer its audience
+   ;; cannot take is dead law. The guards still judge every invoke
+   :own-surface {:by :audience :actions #{"accept" "revoke"}}
    :schema [:map
             [:audience [:string {:min 1 :max 128}]]
             [:scope scope-schema]
@@ -590,12 +603,19 @@
         (t/allow)))
     (t/allow)))
 
-(g/defguard someone-else-decides
-  {:reads [:principal]
-   :explain "The requester cannot judge its own ask; another principal decides."}
-  [row _inp ctx]
-  (if (= (:id (:principal ctx)) (get-in row [:data :requested_by]))
-    (t/deny) (t/allow)))
+;; The four-eyes wall, no longer written by hand. g/not-the-field IS
+;; this guard generalized — same :reads, same explain, and a :check
+;; whose canonical form is built to print exactly as the defguard body
+;; that stood here did, so approval_request's fingerprint does not
+;; move. The var stays because the codebase names it in twelve places
+;; and because "someone else decides" is the sentence this particular
+;; wall means; what changed is that the household's own decision kinds
+;; now get the same wall from a declaration instead of a copy.
+(def someone-else-decides
+  (g/not-the-field
+   :requested_by
+   {:name :someone-else-decides
+    :explain "The requester cannot judge its own ask; another principal decides."}))
 
 (g/defguard grant-still-accepting
   {:reads [:grant]
@@ -656,44 +676,86 @@
 (defresource approval-request
   {:kind :approval_request
    :plural "approval_requests"
-   :states [:offered :approved :denied]
-   :initial :offered
-   :terminal #{:approved :denied}
    :nav :system
    :summary "Access request by {data.requested_by} · {state} · until {data.expires_at}"
-   ;; grant_id is OPTIONAL: an anchorless ask is the bootstrap path —
-   ;; its approval mints the grant and stamps the id here
+   ;; THE FIRST INSTANCE OF THE DECISION PATTERN (spec-decision-kind).
+   ;; Everything below the :decision key used to be spelled by hand
+   ;; here: the three states, the initial and the terminal pair, the
+   ;; two verdict actions with their four-eyes wall, the requester
+   ;; stamp and the default leash at birth, the schema entries the
+   ;; engine owns, the create model that omits them, the decision
+   ;; queue's own filter and sort. None of it was ever
+   ;; grant-specific — it was the shape of a verdict, written once
+   ;; because there was only one.
+   ;;
+   ;; The proof that respelling it changed nothing:
+   ;; approval_request's fingerprint hash is pinned as a literal in
+   ;; waymark10.decision-sugar-test and did not move by one byte. Two
+   ;; spellings, one law.
+   :decision
+   {:asks    :task                       ; the question
+    :by      :requested_by               ; stamped from the principal
+    :decider {:not :requested_by         ; the field wall, not four-eyes:
+              ;; a decision row's requester is stamped by :on-create,
+              ;; before any transition exists to be the actor of
+              :name :someone-else-decides
+              :explain "The requester cannot judge its own ask; another principal decides."}
+    :stamps  {:decided-by :approved_by}
+    ;; short-lived is the DEFAULT, not an opt-in: an ask naming no
+    ;; expiry gets the engine's configured TTL (1h), stamped AT
+    ;; CREATE so the approver approves the leash that will actually
+    ;; exist. An agent proposes longer at will up to the cap; the
+    ;; approver sees the number either way.
+    :expires {:field :expires_at
+              :default {:service :grant-default-ttl-seconds :seconds 3600}}
+    ;; the ceiling (asks-are-short) and the pacing pair stay
+    ;; hand-written below rather than riding :expires :max and
+    ;; :pacing: both need the ANCHORED-ASK EXEMPTION — an ask that
+    ;; names a grant its requester already holds is not a fresh ask
+    ;; and is neither paced nor capped — and that exemption is
+    ;; grant law, not decision law. The sugar offers both; this
+    ;; instance declines both, which is the floor-not-ceiling rule
+    ;; working rather than failing.
+    :verdicts
+    [{:name :approve :to :approved
+      :label "Approve" :style :primary :order 1
+      :guards [grant-still-accepting]
+      :safety {:idempotent true :reversible false :confirm true
+               :consequence "The requester's grant gains exactly the scope shown, immediately."}
+      ;; stamp-approver stamps the approver AND the id of the grant
+      ;; the verdict will mint — a decision-specific stamp, so the
+      ;; verdict keeps its own handler whole and the sugar does not
+      ;; wrap it
+      :handler stamp-approver}
+     {:name :deny :to :denied
+      :label "Deny" :style :danger :order 9
+      :note :note
+      :edit {:prefill [:note] :fence false
+             :unfenced-reason "A denial's note is written once with the verdict; a frozen offered ask has nothing to clobber."}
+      :safety {:idempotent true :reversible false :confirm false
+               :one-way "A denied ask stays on record; asking differently is a new request."}
+      :handler record-verdict-note}]
+    ;; the asking door is never concealed: it is how access starts
+    :own-surface {:by :requested_by
+                  :actions #{"create" "approve" "deny"}}}
+   ;; the extra law THIS decision declares, over the pattern's floor:
+   ;; grant_id (an anchorless ask is the bootstrap path — its approval
+   ;; mints the grant and stamps the id here) and the scope it asks for
    :schema [:map
             [:grant_id {:optional true :kind :grant} [:maybe :waymark/ref]]
-            [:task [:string {:min 1 :max 240}]]
-            [:scope scope-schema]
-            [:expires_at {:optional true} [:maybe :waymark/instant]]
-            ;; stamped by the engine (on-create / the approve handler);
-            ;; never supplied by hand — the create schema omits them
-            [:requested_by {:optional true :x-display {:raw true}}
-             [:maybe [:string {:max 128}]]]
-            [:approved_by {:optional true :x-display {:raw true}}
-             [:maybe [:string {:max 128}]]]
-            [:note {:optional true} [:maybe [:string {:max 240}]]]]
-   :create-schema [:map
-                   [:grant_id {:optional true :kind :grant}
-                    [:maybe :waymark/ref]]
-                   [:task [:string {:min 1 :max 240}]]
-                   [:scope scope-schema]
-                   [:expires_at {:optional true} [:maybe :waymark/instant]]]
-   :filterable {:state #{:eq :in}
-                :grant_id #{:eq}
-                :requested_by #{:eq}}
+            [:scope scope-schema]]
+   :filterable {:grant_id #{:eq}}
    ;; the approval page opens on the decision queue: newest ask first,
-   ;; and only the ones still waiting on a person. Every judged ask
-   ;; stays on record forever, so recency alone would bury the three
-   ;; rows that need a verdict under a year of verdicts already given.
-   ;; The filter is allowed to hide rows here only because it cannot
-   ;; hide QUIETLY — it rides the self href, the summary's "filtered:"
-   ;; echo and a removable chip, so a requester looking for their own
-   ;; denied ask is one chip click, or one empty state=, away.
-   :sortable {:fields [:created_at] :default "-created_at"}
-   :default-filters {:state "offered"}
+   ;; and only the ones still waiting on a person — both projected by
+   ;; the sugar (:default-filters {:state "offered"}, :sortable
+   ;; "-created_at"). Every judged ask stays on record forever, so
+   ;; recency alone would bury the three rows that need a verdict
+   ;; under a year of verdicts already given. The filter is allowed to
+   ;; hide rows there only because it cannot hide QUIETLY — it rides
+   ;; the self href, the summary's "filtered:" echo and a removable
+   ;; chip, so a requester looking for their own denied ask is one
+   ;; chip click, or one empty state=, away.
+   ;;
    ;; the grant this ask anchors or (once approved) minted; a nil
    ;; grant_id omits the link — an unjudged bootstrap ask points at
    ;; nothing yet
@@ -713,40 +775,7 @@
                    scope-names-real-actions
                    scope-filters-are-filterable
                    scope-omits-private-kinds]
-   :scenarios [the-asker-does-not-decide another-principal-may-deny]
-   :on-create (fn [row ctx]
-                (-> row
-                    (assoc-in [:data :requested_by]
-                              (get-in ctx [:principal :id]))
-                    ;; short-lived is the DEFAULT, not an opt-in: an ask
-                    ;; naming no expiry gets the engine's default TTL
-                    ;; (1h; :grant-default-ttl-seconds) — stamped at
-                    ;; create, so the approver approves the leash that
-                    ;; will actually exist. An agent proposes longer at
-                    ;; will up to the cap (asks-are-short,
-                    ;; :grant-max-ttl-seconds, 24h); the approver sees
-                    ;; the number either way.
-                    (update-in [:data :expires_at]
-                               #(or % (.plusSeconds
-                                       ^java.time.Instant (:now ctx)
-                                       (long (:grant-default-ttl-seconds
-                                              (:services ctx) 3600)))))))
-   :actions
-   {:approve {:from #{:offered} :to :approved
-              :guards [someone-else-decides grant-still-accepting]
-              :safety {:idempotent true :reversible false :confirm true
-                       :consequence "The requester's grant gains exactly the scope shown, immediately."}
-              :handler stamp-approver
-              :display {:label "Approve" :style :primary :order 1}}
-    :deny {:from #{:offered} :to :denied
-           :input [:map [:note {:optional true} [:maybe [:string {:max 240}]]]]
-           :edit {:prefill [:note] :fence false
-                  :unfenced-reason "A denial's note is written once with the verdict; a frozen offered ask has nothing to clobber."}
-           :guards [someone-else-decides]
-           :safety {:idempotent true :reversible false :confirm false
-                    :one-way "A denied ask stays on record; asking differently is a new request."}
-           :handler record-verdict-note
-           :display {:label "Deny" :style :danger :order 9}}}})
+   :scenarios [the-asker-does-not-decide another-principal-may-deny]})
 
 ;; ── the approve effect (the router's one grants seam) ───────────────
 
@@ -942,77 +971,85 @@
                                 actions)))]))
         surface))
 
-(def ^:private own-kinds
-  "The kinds every named principal sees its OWN rows of, riding every
-  scoped request whatever the presented grant's fate: the negotiation
-  kinds (the asking door is never concealed, because it is how access
-  starts) and the jobs it asked for (the sync trigger's 202 hands the
-  requester a job — the record of who asked IS the sight; a leash
-  that may mint a pass may watch it run). :capability rides too
-  (hospitality audit, agent walk #3): the registry is VOCABULARY —
-  an agent that cannot read what powers exist cannot compose its
-  ask, the same argument :vocabulary-open? already won — and its
-  rows are public words, not anyone's data.
+(defn- own-surfaces
+  "Every kind on THIS engine that declares an own-surface, as
+  {\"kind\" <normalized :own-surface>} — read off the registry, never
+  a literal.
 
-  :self and :journal ride too (waymark-4zj.1): an agent's profile and
-  the shared history are OWN-SURFACE — an agent sees and edits the
-  rows it OWNS (data.owner == its principal id) without a grant, and
-  by the same default-deny wall sees NOTHING of another agent's. The
-  ownership is the row's data.owner (own-row? / own-ids below), so
-  these two need no grant to be lived in and stay private from other
-  agents by construction. Humans run unscoped and see every row.
+  It used to be a literal: a set of seven kind-name strings sitting in
+  this file, consulted by three hand-written case blocks below and
+  copied a fourth time into the test packs and a fifth into the
+  clj-kondo hook. THREE of those seven kinds — :self, :journal and
+  :letter — are declared in an APP this namespace has no business
+  naming, and a decision kind an app declared was invisible to its own
+  requester no matter what it said, until every copy was edited. The
+  failure was silent: the rows simply were not there. The set is not
+  gone, it is where it always belonged — on the declarations that each
+  describe their own ownership (waymark10.resource's :own-surface).
 
-  :letter rides too (waymark-tti.3), the TWO-PARTY own-surface kind:
-  a letter is yours as its AUTHOR (data.owner == pid) OR as its
-  RECIPIENT (data.to == pid) — sender and addressee each see the row
-  with no grant, a third agent 404s it by the same default-deny wall.
-  Same one-party machinery, a two-cond row test."
-  #{"grant" "approval_request" "job" "capability" "self" "journal"
-    "letter"})
+  An engine serving none of them gets an empty map and the whole
+  courtesy costs one registry read."
+  [eng]
+  (into {}
+        (keep (fn [[k rdef]]
+                (when-some [os (:own-surface rdef)]
+                  [(name k) os])))
+        (inv/resources eng)))
+
+(defn- branch-owns?
+  "Does this row's `branch` name the principal? A branch is a PATH
+  into the document — [:requested_by] for a promoted column,
+  [:requested_by :id] for a requester riding as an object."
+  [row branch pid]
+  (= pid (get-in row (into [:data] branch))))
+
+(defn- own-branch-ids
+  "The principal's own ids for one branch of one kind, inside the
+  caller's transaction. A single-field branch is a query cond the
+  store pushes down; a deeper PATH sits out of cond-sql's top-level
+  reach, so that window filters in memory — a recorded seam (the
+  orphan sweep keeps such tables small; a deployment that outgrows the
+  window promotes the id to its own field).
+
+  The window takes the NEWEST 200 (:newest-first), not the oldest: the
+  stores' default ordering is created_at ASC, so a principal past 200
+  own rows was silently losing its FRESHEST ones out of every listing
+  and total while row GETs still succeeded — listing and row
+  disagreeing about the same row (waymark-tti.3 L6). It always failed
+  closed (no foreign id can enter either way), but mail accumulates
+  and journals do not shrink. The window is still a window; what
+  changed is which end of the rope it holds."
+  [eng tx kind branch pid]
+  (let [st (:storage eng)
+        opts {:limit 200 :newest-first true}]
+    (if (= 1 (count branch))
+      (into #{} (map :id)
+            (store/query-rows st tx kind {(first branch) pid} opts))
+      (into #{}
+            (comp (filter #(branch-owns? % branch pid)) (map :id))
+            (store/query-rows st tx kind {} opts)))))
 
 (defn- own-ids
-  "The principal's own rows of one negotiation kind, as the id cond
-  the collection pushes down. `where` is one cond map — or a VECTOR
-  of cond maps for the two-party kinds (waymark-tti.3: a letter is
-  yours as its author OR its recipient; the store's cond map is a
-  conjunction with no OR, so each branch queries separately and the
-  id sets UNION, deduped). Never empty — an impossible id keeps an
-  empty surface's total honestly zero (an empty IN would not parse).
+  "The principal's own rows of one own-surface kind, as the id cond
+  the collection pushes down. Every declared branch queries
+  separately and the id sets UNION, deduped — because ownership is
+  not always one-party (a letter is yours as its author OR as its
+  recipient; the store's cond map is a conjunction with no OR). One
+  transaction covers every branch, so a listing cannot see one end of
+  a row and miss the other.
 
-  The window takes the NEWEST 200 per branch (:newest-first), not the
-  oldest: the stores' default ordering is created_at ASC, so a
-  principal past 200 own rows was silently losing its FRESHEST ones
-  out of every listing and total while row GETs still succeeded —
-  listing and row disagreeing about the same row (waymark-tti.3 L6).
-  It always failed closed (no foreign id can enter either way), but
-  mail accumulates and journals do not shrink. The window is still a
-  window; what changed is which end of the rope it holds."
-  [eng kind where]
-  (let [ids (store/with-tx (:storage eng)
-              (fn [tx]
-                (into (sorted-set)
-                      (mapcat (fn [w]
-                                (map :id (store/query-rows
-                                          (:storage eng) tx kind w
-                                          {:limit 200 :newest-first true}))))
-                      (if (map? where) [where] where))))]
-    (if (seq ids) (vec ids) ["-none-"])))
-
-(defn- own-job-ids
-  "The jobs this principal asked for, own-ids' sibling: requested_by
-  rides as an OBJECT in data ({:id :type :display}), out of cond-sql's
-  top-level reach, so the window filters in memory — a recorded seam
-  (the orphan sweep keeps the table small; a deployment that outgrows
-  the window promotes the id to its own field). Same never-empty rule."
-  [eng pid]
-  (let [ids (store/with-tx (:storage eng)
-              (fn [tx]
-                (into []
-                      (comp (filter #(= pid (get-in % [:data :requested_by :id])))
-                            (map :id))
-                      (store/query-rows (:storage eng) tx :job {}
-                                        {:limit 200}))))]
-    (if (seq ids) (vec (sort ids)) ["-none-"])))
+  nil = unrestricted, the :all posture: the whole kind lists.
+  Otherwise never empty — an impossible id keeps an empty surface's
+  total honestly zero (an empty IN would not parse)."
+  [eng kind os pid]
+  (when-not (:all os)
+    (let [ids (store/with-tx
+                (:storage eng)
+                (fn [tx]
+                  (into (sorted-set)
+                        (mapcat #(own-branch-ids eng tx kind % pid))
+                        (:by os))))]
+      (if (seq ids) (vec ids) ["-none-"]))))
 
 (defn check-capability
   "The introspection answer (waymark-44h, the grant-check door): does
@@ -1110,44 +1147,31 @@
                                       (name (:kind e)))))
                             (get-in row [:data :scope]))
                       #{})
-        own-kind? (fn [k] (and named? (contains? own-kinds k)))
+        ;; the own-surface, read off the registry (spec-decision-kind
+        ;; seam 2). Three hand-written case blocks used to stand here,
+        ;; each enumerating the same seven kind names in a different
+        ;; order, and a fourth copy lived in the test packs. They are
+        ;; now one lookup and one path walk, so a kind that declares
+        ;; :own-surface — core or app, decision or not — is visible to
+        ;; its own principal on the day it is declared
+        surfaces (own-surfaces eng)
+        own-of (fn [k] (when named? (get surfaces k)))
+        own-kind? (fn [k] (some? (own-of k)))
         own-row? (fn [k id]
-                   (when (own-kind? k)
-                     (case k
-                       "grant"
-                       (= pid (some-> (load-decoded eng :grant id)
-                                      (get-in [:data :audience])))
-                       "approval_request"
-                       (= pid (some-> (load-decoded eng :approval_request id)
-                                      (get-in [:data :requested_by])))
-                       ;; the job the principal asked for — jobs record
-                       ;; the requester as an object (jobs/enqueue!'s
-                       ;; pattern, the sync trigger's too)
-                       "job"
-                       (= pid (some-> (load-decoded eng :job id)
-                                      (get-in [:data :requested_by :id])))
-                       ;; the registry's rows are everyone's words
-                       "capability"
-                       (some? (load-decoded eng :capability id))
-                       ;; the dwelling kinds (waymark-4zj.1): an agent
-                       ;; owns the self and the journal entries whose
-                       ;; data.owner is its own id — a foreign row 404s
-                       ;; like any un-granted one
-                       "self"
-                       (= pid (some-> (load-decoded eng :self id)
-                                      (get-in [:data :owner])))
-                       "journal"
-                       (= pid (some-> (load-decoded eng :journal id)
-                                      (get-in [:data :owner])))
-                       ;; the letter kind (waymark-tti.3) is TWO-PARTY:
-                       ;; yours as its author (data.owner) OR as its
-                       ;; recipient (data.to) — either end sees the
-                       ;; row; a third agent's foreign letter falls
-                       ;; out of :row? and 404s like any un-granted one
-                       "letter"
-                       (when-some [row (load-decoded eng :letter id)]
-                         (or (= pid (get-in row [:data :owner]))
-                             (= pid (get-in row [:data :to])))))))]
+                   (when-some [os (own-of k)]
+                     (if (:all os)
+                       ;; the vocabulary posture: the registry's rows
+                       ;; are everyone's words, so existing is owning
+                       (some? (load-decoded eng (keyword k) id))
+                       ;; a row is yours if ANY declared branch names
+                       ;; you — one-party for a grant or an ask, two
+                       ;; for a letter (yours as its author OR as its
+                       ;; recipient; a third agent's foreign letter
+                       ;; falls out of :row? and 404s like any
+                       ;; un-granted one)
+                       (when-some [row (load-decoded eng (keyword k) id)]
+                         (boolean (some #(branch-owns? row % pid)
+                                        (:by os)))))))]
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
@@ -1179,41 +1203,24 @@
      :action? (fn [kind action]
                 (let [k (name kind) a (name action)]
                   (or (contains? (get-in surface [k :actions] #{}) a)
-                      ;; the own-surface affordances: filing an ask,
-                      ;; its verdict doors (row-gated to OWN asks —
-                      ;; a self-judging requester meets the four-eyes
-                      ;; guard's honest 409, never a mute 404), and
-                      ;; ACCEPTING an offered grant — since the agent
-                      ;; default (waymark-rci) no unscoped moment
-                      ;; exists in which to accept, and an offer its
-                      ;; audience cannot take is dead law; the guards
-                      ;; still judge every invoke
-                      (and (own-kind? k)
-                           (or (and (= k "approval_request")
-                                    (contains? #{"create" "approve" "deny"} a))
-                               (and (= k "grant")
-                                    (contains? #{"accept" "revoke"} a))
-                               ;; the dwelling kinds (waymark-4zj.1): an
-                               ;; agent may create and edit its OWN self
-                               ;; and journal entries — row-gated to its
-                               ;; own rows by own-row? above, and the
-                               ;; create/edit guards stamp and enforce
-                               ;; the owner so no cross-owner write lands
-                               (and (= k "self")
-                                    (contains? #{"create" "update"
-                                                 "retire" "restore"} a))
-                               (and (= k "journal")
-                                    (contains? #{"create" "amend"} a))
-                               ;; the letter kind (waymark-tti.3): send,
-                               ;; open and discard — each is row-gated
-                               ;; to a row the principal SEES (own-row?
-                               ;; above), and the recipient guards
-                               ;; narrow open/discard further to the
-                               ;; addressee alone (a shelf with no
-                               ;; floor is a flood, so the recipient
-                               ;; keeps a broom of its own)
-                               (and (= k "letter")
-                                    (contains? #{"create" "open" "discard"} a)))))))
+                      ;; the own-surface affordances: filing an ask
+                      ;; and its verdict doors, ACCEPTING an offered
+                      ;; grant (since the agent default, waymark-rci,
+                      ;; leaves no unscoped moment in which to accept,
+                      ;; and an offer its audience cannot take is dead
+                      ;; law), writing one's own dwelling rows, posting
+                      ;; and opening a letter. Each is row-gated to a
+                      ;; row the principal SEES (own-row? above) and
+                      ;; each kind's own guards narrow further where
+                      ;; they must — a self-judging requester meets the
+                      ;; four-eyes guard's honest 409, never a mute
+                      ;; 404; a letter's recipient guards keep
+                      ;; open/discard to the addressee alone. The list
+                      ;; used to be a per-kind case block here; it is
+                      ;; now each kind's own :own-surface :actions, so
+                      ;; the affordance and the law it opens live in
+                      ;; one file
+                      (contains? (:actions (own-of k) #{}) a))))
      :field? (fn [kind field]
                (let [k (name kind)]
                  (if-some [e (get surface k)]
@@ -1253,23 +1260,12 @@
                (let [k (name kind)]
                  (if-some [e (get surface k)]
                    (some-> (:ids e) sort vec)
-                   (when (own-kind? k)
-                     (case k
-                       "job" (own-job-ids eng pid)
-                       ;; nil = unrestricted: the whole registry lists
-                       "capability" nil
-                       (own-ids eng (keyword k)
-                                (case k
-                                  "grant" {:audience pid}
-                                  "approval_request" {:requested_by pid}
-                                  ;; the dwelling kinds: an agent's own
-                                  ;; rows are the ones it owns (filterable
-                                  ;; data.owner, pushed down as a cond)
-                                  ("self" "journal") {:owner pid}
-                                  ;; a letter is yours from EITHER end
-                                  ;; (waymark-tti.3) — the vector unions
-                                  ;; the author and recipient branches
-                                  "letter" [{:owner pid} {:to pid}])))))))}))
+                   ;; the third and last of the case blocks, gone the
+                   ;; same way: each kind's declared branches ARE the
+                   ;; query, unioned. nil (the :all posture) is
+                   ;; unrestricted — the whole registry lists
+                   (when-some [os (own-of k)]
+                     (own-ids eng (keyword k) os pid)))))}))
 
 (defn bootstrap-visibility
   "The agent default (waymark-rci): a named agent that presents NO

@@ -21,6 +21,7 @@
     :display :label-template :summary :deviations
     :on-create :mirror
     :retain
+    :decision :own-surface
     :scenarios})
 
 (def action-keys

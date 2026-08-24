@@ -48,9 +48,12 @@
                               :one-way "Spun is history."}}}}))
 
 ;; the private own-surface's own kind, borrowed by name (waymark-tti.3
-;; L7): grants/private-kind? and the own-surface machinery key on the
-;; kind NAME, so a :letter declared here wears the real walls — a row
-;; is yours as its data.owner or its data.to, and nobody else's.
+;; L7): grants/private-kind? keys on the kind NAME, so a :letter
+;; declared here wears the real privacy walls. The OWN-SURFACE half
+;; is no longer borrowed at all — since waymark-442.6 it is declared,
+;; here as in the app, and this fixture says the same two-party
+;; sentence workqueue10's letter says: a row is yours as its
+;; data.owner or its data.to, and nobody else's.
 (def ^:private letter
   (r/resource
    {:kind :letter
@@ -60,6 +63,7 @@
     :terminal #{}
     :allow-dead #{:opened}
     :summary "{data.title} · {state}"
+    :own-surface {:by [:owner :to] :actions #{"create" "open"}}
     :schema [:map
              [:owner [:string {:min 1 :max 128}]]
              [:to [:string {:min 1 :max 128}]]

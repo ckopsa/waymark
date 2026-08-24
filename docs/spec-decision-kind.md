@@ -223,3 +223,121 @@ effect into the handler is the risky third: it changes when a grant is minted,
 and it is guarded only by suites that already exist. Do it last, alone, with
 `approval_request`'s scenarios (see [law scenarios](spec-law-scenarios.md))
 written first.
+
+## Built (2026-08-24, waymark-442.6)
+
+Landed as specified for two of the three seams, with the third deferred on a
+finding the spec did not have. `:decision` and `:own-surface` are the two new
+declaration keys; no new namespace, no new noun downstream.
+
+### The acceptance criterion held
+
+`approval_request`'s fingerprint hash after the respelling:
+
+```
+01ca868b7440b6c13c9e10260904eb82a18217f79b439134369fdb337496d9f3
+```
+
+— byte-identical to the hash it carried before the `:decision` key existed.
+`waymark10.decision-sugar-test` keeps the pre-sugar spelling alive, asserts it
+normalizes to the very map the sugared one declares, and pins that hash as a
+literal so no future respelling can move it. The two four-eyes scenarios
+`waymark-442.2` wrote pass unchanged; they were the regression harness and
+they never noticed.
+
+The one thing that made this possible is worth recording, because it is the
+technique any future sugar will need: a guard minted by a factory hands the
+fingerprint a bare closure, which hashes by printed object identity and drifts
+every run. `guards/not-the-field` and `guards/is-the-field` build their
+`:waymark10/form` **as data**, constructed to print exactly as the equivalent
+`defguard` body would. So `grants/someone-else-decides` could become a call to
+the factory — one definition of the field wall instead of two — without moving
+a byte. Every other factory in `guards.clj` (`role`, `owner`, `feature-flag`,
+`unless`) still hands over a bare fn; that is `callable-hash`'s recorded
+stopgap, and it is wider than recorded (see waymark-j82: a `#()` inside a
+`defguard` body carries a reader gensym into the canonical form, so
+`:grant`'s hash moved during this bead for no change to its law).
+
+### `:decision`, as landed
+
+Close to the spec's shape. Four differences, each with a reason:
+
+- **`:decider` walls are a VECTOR, not one `g/and` composite.** The spec said
+  compose under `g/and`. A composite guard records opaque, and
+  `spec-decision-record` keeps per-guard evidence — a folded four-eyes wall
+  would leave the log a name with nothing behind it. An action's guard list is
+  already a conjunction, so keeping the arms apart costs nothing.
+- **Each wall carries its own sentence.** `{:not {:field :asked_by :name … 
+  :explain …}}`; a `:name`/`:explain` spelled at the `:decider` level is
+  shorthand for the one-wall case and refuses beside a second wall, because a
+  sentence that would land on two different refusals is wrong on one of them.
+- **`:expires :default` accepts `{:service :some-key :seconds <fallback>}`,**
+  so a deployment-configured TTL rides the declaration rather than forcing a
+  hand-written `:on-create` (which is what `approval_request` needed).
+- **An `:on-create` spelled beside a `:decision` REFUSES** ("one home per
+  hook"), rather than composing. Composing would mint a wrapper fn, and a
+  wrapper fn is a hash that moves for nothing. Recorded as the sugar's own
+  limit: a decision kind needing an extra birth stamp has no spelling yet.
+
+`approval_request` rides the key for the states, the terminal pair, both
+verdict actions, the four-eyes wall, the requester stamp, the default leash,
+the schema entries the engine owns, the create model that omits them, the
+queue's filter and sort, and its own-surface. It declines `:pacing` and
+`:expires :max` and keeps those four create guards hand-written, because all
+four need the ANCHORED-ASK EXEMPTION and that exemption is grant law, not
+decision law — the floor-not-ceiling rule working rather than failing.
+
+### The first house-read verdict
+
+`workqueue10 :permission_slip` — somebody asks for leave, a grown-up answers,
+the answer is the row. The spec's own recorded doubt drove the choice: screen
+time wants a capability grant because a machine enforces it; a permission slip
+has no enforcement point anywhere and never will, so the record IS the whole
+mechanism. It is also the one household verdict with no domain row to smuggle
+itself onto — every other one (a meal accepted, a substitution accepted, a
+plan finalized, a product's match confirmed) rides a noun that already existed
+for another reason.
+
+Its whole law is one `:decision` key and three scenarios, all check-tier —
+`make check-queue` judges them with no database. It is the first declaration
+to use the eligibility dimension the spec named as missing: `{:not :asked_by}`
+composed with `{:role "parent"}`, so a sibling is refused by the second wall
+after passing the first.
+
+### The own-surface
+
+`grants/own-kinds` and its three `case` blocks are gone, along with the fourth
+copy in `test/packs.clj` (which now reads `:own-surface-kinds` off the driver
+ctx) and a fifth in the clj-kondo hook's key set. The seven kinds each grew
+the sentence that always described them — including `:self`, `:journal` and
+`:letter`, which are declared in **workqueue10**, so core stopped naming three
+app kinds by string. `waymark10.presence-test`'s `:letter` fixture grew the
+same sentence, which is exactly the failure mode the de-literalization was
+supposed to expose: it used to inherit the walls by borrowing a name.
+
+`:own-surface {:by […] :actions #{…} :all bool}`. `:by` is a vector of
+branches because ownership is not always one-party; a branch is a field
+keyword (pushed down as a query cond) or a PATH vector (filtered in memory —
+`:job`'s requester rides as an object). `:all true` is the vocabulary posture
+(`:capability`), kept as a separate key from an empty `:by` so that "owned by
+nobody" and "owned by everybody" are not one typo apart.
+
+### The effect seam was NOT opened — waymark-442.14
+
+The spec's third seam is deferred, and the reason is a finding it did not
+have: **the handler door cannot express the effect today.** `approval-effects!`
+acts as a system actor and mints under a deterministic id; `ctx :invoke`
+hardcodes the outer principal (and `grant`'s `:extend` carries
+`approval-route-only`, whose whole check is `(= :system (:type principal))`),
+and `ctx :create` takes no `:id`. Two widenings of the authored surface are
+required, one of them a principal override — a security-surface change that
+wants its own review, and the sibling of the door
+[spec-modularization](spec-modularization.md) refuses.
+
+Two further reasons to keep it separate, both recorded in the bead: folding
+the effect into `stamp-approver` **moves approval_request's fingerprint**,
+which would have made this bead's one clean proof unreadable; and no declared
+decision kind is blocked by the wrapper, since it already no-ops for every
+other kind and the first household instance needs no post-commit effect by
+design. The spec's own instruction was "do it last, alone" — it gets its own
+bead and its own commit.
