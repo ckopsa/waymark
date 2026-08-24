@@ -2158,8 +2158,11 @@ GET re-reads; waymark9's answer carried a job id, same shape of
 honesty). Guards are input-free and probe-able: `data-law-measures`
 (expr over `diff_class`) and `redefines-derived-facts` (a
 judgment-only data-law diff has no blast radius — waymark9's exact
-refusal sentence). Judgment blast radius (newly-refused rows) stays
-punted, named.
+refusal sentence). Judgment blast radius (newly-refused rows) is no
+longer punted: the LAW SWEEP answers it
+(`server/law_sweep.clj`, `GET /api/definitions/{id}/sweep`,
+docs/spec-law-sweep.md), and it calls this meter for the derivation
+half rather than growing a second recomputation.
 
 ## Population grammar
 
@@ -2338,8 +2341,10 @@ list:
   memory twin's consumers drain by hand); no Last-Event-ID replay
   for derivations; ordering across event classes unpromised; the
   maintainer's SUM SQL awaits a `sum-matching` protocol op.
-- Judgment blast radius (newly-refused rows) unmeasured; the measure
-  runs synchronous (no meter job).
+- Judgment blast radius (newly-refused rows) is measured by the law
+  sweep (waymark-442.3); the measure still runs synchronous (no meter
+  job), and so does the sweep — it scans to a cap and announces the
+  remainder.
 - The webhook deliverer's unification onto consumers-as-API —
   deferred until a third consumer of the pattern exists.
 - The memory twin runs no dispatcher: SSE/webhook/observation

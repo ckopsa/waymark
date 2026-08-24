@@ -153,6 +153,7 @@
             [waymark10.server.presence :as presence]
             [waymark10.server.roles :as roles]
             [waymark10.server.routes.attachments :as attachment-routes]
+            [waymark10.server.routes.law-sweep :as law-sweep-routes]
             [waymark10.server.routes.mcp :as mcp-routes]
             [waymark10.server.routes.mirror :as mirror-routes]
             [waymark10.server.routes.openapi :as openapi-routes]
@@ -350,6 +351,18 @@
    ;; /api/-/mcp, which is what a deployment that does not want to be
    ;; agent-drivable should look like.
    {:module :mcp :routes mcp-routes/routes :pack packs/mcp}
+
+   ;; the law sweep (waymark-442.3): one GET that answers "which live
+   ;; rows does this proposal re-judge differently" before anybody
+   ;; promotes it. The spec's original asked for a kind enrolled "only
+   ;; on engines running :propose mode" — a verb this table does not
+   ;; have and must not grow, because enrollment is what `check` and
+   ;; the conformance driver select on and a runtime env var deciding
+   ;; it is the exact silent drift the no-discovery paragraph forbids.
+   ;; So: a module, propose-only as the DOOR's own state constraint
+   ;; (`law-sweep/swept-from`), and an engine that does not want the
+   ;; surface simply does not assemble it.
+   {:module :law-sweep :routes law-sweep-routes/routes :pack packs/law-sweep}
 
    ;; named, contributing nothing through this seam
    {:module :postgres-store}

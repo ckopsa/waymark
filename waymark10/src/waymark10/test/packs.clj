@@ -1367,3 +1367,124 @@
    ;; and the seam says why they must: a running surface is a fact
    ;; about a process, and collab is not one.
    })
+
+;; ── law sweep (waymark-442.3) ───────────────────────────────────────
+;;
+;; What this obligation can prove and what it cannot, said plainly. It
+;; cannot stage a HOLD: a hold is two boots of two different codebases
+;; against one database, and a conformance driver has one process and
+;; one classpath. So the availability-drift proof — a guard tree that
+;; moved, a row that flips — lives in waymark10.law-sweep-test, which
+;; boots twice on purpose (the batch-C overlay suite's own shape).
+;;
+;; What lives HERE is the door's contract, which is exactly the half
+;; that must hold on every engine that assembles the module: a row
+;; that is not a proposal REFUSES rather than reporting nonsense, a
+;; row that is one reports a well-formed sweep, and a definition that
+;; does not exist is a 404 like any other row. Every app suite runs in
+;; :promote mode, so the refusal branch is the one they exercise —
+;; and that branch is the one a proposer hits by mistake.
+
+(defn- sweep-report-violations
+  "One sweep document, graded against its own promises: the header
+  agrees with the row it swept, the totals agree with the findings,
+  every finding names one of the four classes, and an availability
+  finding names an action the kind actually declares."
+  [ctx self b]
+  (let [d (:data b)
+        findings (:findings d)
+        by-class (frequencies (map :class findings))
+        kind (keyword (:target_kind d))
+        declared (into #{} (map (comp name key))
+                       (:actions (rdef ctx kind)))]
+    (into []
+          (remove nil?)
+          (concat
+           [(when (not= "law_sweep" (:kind b))
+              (str "law-sweep: " self "/sweep answered kind "
+                   (pr-str (:kind b)) ", not law_sweep"))
+            (when-not (seq (:notes d))
+              (str "law-sweep: " self "/sweep reported no notes — the"
+                   " snapshot, the principal and the adoption posture are"
+                   " what keep the findings from being read as totality"))
+            (when (< (:of d 0) (:scanned d 0))
+              (str "law-sweep: " self "/sweep scanned " (:scanned d)
+                   " of " (:of d) " rows, which is more than there are"))
+            (when-not (= (boolean (:truncated d))
+                         (< (:scanned d 0) (:of d 0)))
+              (str "law-sweep: " self "/sweep says truncated="
+                   (pr-str (:truncated d)) " over " (:scanned d) " of "
+                   (:of d) " rows"))
+            (when (not= (count findings)
+                        (reduce + 0 (vals (:totals d))))
+              (str "law-sweep: " self "/sweep totals " (pr-str (:totals d))
+                   " do not add up to " (count findings) " findings"))]
+           (map (fn [[c n]]
+                  (when (not= n (get-in d [:totals (keyword c)]))
+                    (str "law-sweep: " self "/sweep counted " n " "
+                         c " findings but totalled "
+                         (pr-str (get-in d [:totals (keyword c)])))))
+                by-class)
+           (map (fn [f]
+                  (cond
+                    (not (contains? #{"schema" "availability" "state" "derivation"}
+                                    (str (:class f))))
+                    (str "law-sweep: a finding of class " (pr-str (:class f))
+                         " — the report's classes are schema, availability,"
+                         " state and derivation")
+
+                    (and (= "availability" (str (:class f)))
+                         (not (contains? declared
+                                         (str (get-in f [:detail :action])))))
+                    (str "law-sweep: an availability finding names action "
+                         (pr-str (get-in f [:detail :action])) " on "
+                         (:target_kind d) ", which declares "
+                         (pr-str (vec (sort declared))))))
+                findings)))))
+
+(defn- law-sweep-violations
+  "Every definition row this engine holds, asked what promoting it
+  would do."
+  [ctx]
+  ;; the first page, and deliberately no query string: the driver's
+  ;; `req` puts the uri where reitit reads a PATH, so a `?` here would
+  ;; not narrow the page — it would stop matching the route. One page
+  ;; of definition rows is enough for a door contract; every row on it
+  ;; owes the same answer.
+  (let [coll (json ctx (req ctx :get "/api/definitions"))
+        items (get-in coll [:data :items])
+        missing (req ctx :get "/api/definitions/no-such-definition/sweep")]
+    (into (if (= 404 (:status missing))
+            []
+            [(str "law-sweep: the sweep door answered " (:status missing)
+                  " for a definition that does not exist, not 404")])
+          (mapcat
+           (fn [item]
+             (let [self (:self item)
+                   row (json ctx (req ctx :get self))
+                   proposal? (contains? #{"proposed" "piloted"} (str (:state row)))
+                   resp (req ctx :get (str self "/sweep"))
+                   b (json ctx resp)]
+               (cond
+                 (and (not proposal?) (not= 409 (:status resp)))
+                 [(str "law-sweep: " self " is in state " (pr-str (:state row))
+                       " and its sweep door answered " (:status resp)
+                       ", not 409 — a sweep compares a PROPOSAL to the served"
+                       " law, and there is no proposal here")]
+
+                 (not proposal?) []
+
+                 (not= 200 (:status resp))
+                 [(str "law-sweep: " self " is a proposal and its sweep door"
+                       " answered " (:status resp) ": " (pr-str ((:text ctx) resp)))]
+
+                 :else (sweep-report-violations ctx self b))))
+           items))))
+
+(def law-sweep
+  {:module :law-sweep
+   :obligations
+   [(routes-mounted :law-sweep)
+    {:name :law-sweep/proposal-or-refusal
+     :needs #{[:route :law-sweep] [:kind :definition]}
+     :run law-sweep-violations}]})

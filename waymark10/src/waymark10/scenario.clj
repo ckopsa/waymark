@@ -287,12 +287,20 @@
 
 ;; ── the check-tier judge ────────────────────────────────────────────
 
-(defn- verdict
-  "The enforcement loop's own grading, storage-free: guards in
-  declaration order, a warning collects (it is acknowledgable, not a
-  refusal), the first refusing deny is the verdict — the same shape
-  invoke's run-guards and create-guard-pass share, so the three
-  judgments cannot drift."
+(defn verdict
+  "The enforcement loop's own grading: guards in declaration order, a
+  warning collects (it is acknowledgable, not a refusal), the first
+  refusing deny is the verdict — the same shape invoke's run-guards
+  and create-guard-pass share, so the three judgments cannot drift.
+
+  Public because a scenario is not the only caller that wants \"what
+  does THIS guard tree say about THIS row\". The law sweep
+  (waymark10.server.law-sweep) hands it a guard vector rebuilt from a
+  stored revision and then the resident one, over the same row and
+  the same ctx, and reads the difference: one evaluator, two callers,
+  and a sweep finding's `because` is a scenario's refusal rendered by
+  this very line. The ctx is the caller's to build — storage-free
+  here (offline-ctx), hooked and live there."
   [guards row inp ctx]
   (reduce
    (fn [acc gd]

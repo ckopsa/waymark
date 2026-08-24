@@ -158,6 +158,7 @@
                "/api/-/mirrors/:plural/:action" "/api/-/welcome" "/api/-/mcp"
                "/api/-/grant-check" "/agentInvite" "/api/-/agent-invite"
                "/api/-/ui" "/api/-/ui-lite" "/api/attachments/:id/bytes"
+               "/api/definitions/:id/sweep"
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
                "/api/:plural/-/:action" "/api/:plural/:id"
@@ -177,6 +178,10 @@
     (testing "every static module route precedes the plural grammar"
       (doseq [p ["/api/-/seasons" "/api/-/presence" "/api/openapi.json"
                  "/api/attachments/:id/bytes"
+                 ;; four segments, and still static: /api/:plural/:id
+                 ;; would not match it, but /api/definitions/{id} is a
+                 ;; row address and the sweep is not a field of it
+                 "/api/definitions/:id/sweep"
                  "/api/-/mirrors/:plural/:action"]]
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))
@@ -352,7 +357,8 @@
 (deftest packs-read-the-same-selection-everything-else-reads
   (testing "every module that owes obligations offers a pack"
     (is (= [:core :attachments :webhooks :jobs :worksheet :capabilities
-            :dashboard :seasons :realtime :mirror :openapi :ui :mcp]
+            :dashboard :seasons :realtime :mirror :openapi :ui :mcp
+            :law-sweep]
            (mapv :module (modules/packs nil)))))
   (testing "a named selection keeps core and nothing it did not name"
     (is (= [:core :jobs] (mapv :module (modules/packs [:jobs])))))
