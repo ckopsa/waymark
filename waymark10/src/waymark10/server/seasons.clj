@@ -84,12 +84,18 @@
             (.get d IsoFields/WEEK_BASED_YEAR)
             (.get d IsoFields/WEEK_OF_WEEK_BASED_YEAR))))
 
-(defn- classify
+(defn classify
   "action-name string → :created | :completed | :other for one kind,
   from its declaration: create births; an action whose declared :to
   lands in a terminal state — or one wearing a conventional closing
   name — completes; everything else (unknown names included: the log
-  outlives declarations) is :other."
+  outlives declarations) is :other.
+
+  Public for its second consumer, exactly as `demand/heavier?` is:
+  the feed's fuel populations (waymark-iqa.5) fold the same
+  `transition-stats` aggregate into 'the queue you cleared' and 'the
+  streak you are on', and a second opinion about which action FINISHES
+  something would make one week's bar and one week's card disagree."
   [rdef]
   (let [terminal (set (:terminal rdef))
         closing (into #{"complete" "close" "accept"}

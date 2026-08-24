@@ -1007,3 +1007,247 @@ It is the pack's new LAST obligation, below `:feed/verbs-are-light`, and
 deliberately rather than by append: it is the only obligation that MINTS rows,
 and a minted marker is a card the counting obligations above would have to
 count.
+
+## Built — `.5`, fuel and the archive (2026-08-24, waymark-iqa.5)
+
+Fork (a) landed as decided and the whole bead is what that verdict promised:
+**four populations, no job, no hook, no column, no store method.**
+`waymark10.server.feed` grew `cleared`, `streaks`, `finished` and `memories`;
+`default-recipe` grew three fuel lines and swapped its archive entry; nothing
+else in the engine moved except one `defn-` that became a `defn`
+(`seasons/classify`, public for its second consumer exactly as
+`demand/heavier?` is).
+
+```clojure
+{:section :fuel    :population :cleared  :take 1}
+{:section :fuel    :population :streaks  :take 1}
+{:section :fuel    :population :finished :take 2}
+{:seam true :sentence "That's the house, caught up."}
+{:section :archive :population :memories :take 6 :bottomless true}
+```
+
+### A fuel card is a ROW card with a sentence
+
+The spec's own card law says a card names its origin row and never invents an
+identity — *`section/kind/id`, or the literal `"seam"`* — and a cleared queue
+is not a row. The resolution is that **it is**: the card is the row that
+emptied the list, and the thing the row cannot say about itself rides a
+`sentence`, which is the seam's own key. The seam is already the one element of
+this document that is prose rather than a projection; a second one costs the
+client nothing and the card shape nothing.
+
+```json
+{ "card_id": "fuel/fd_errand/303be824-…",
+  "section": "fuel", "population": "cleared",
+  "kind": "fd_errand", "self": "/api/fd_errands/303be824-…",
+  "state": "done", "summary": "Fold the laundry · Done",
+  "sentence": "Nothing is left in fd_errands — 3 finished in the last 12 weeks, and this was the last of them.",
+  "display": {"title": "Fold the laundry"},
+  "fields": {"title": "Fold the laundry"},
+  "actions": {}, "heavier": [],
+  "at": "2026-08-24T19:42:20.975473659Z",
+  "links": {}, "meta": {…} }
+```
+
+**`actions` is empty and that is correct.** A done row has no verbs left, so
+`split-verbs` partitions two empties and the card is something to read rather
+than something to tap. It is the one section of the census where that is the
+point: do-now drops a card with no verb, and fuel is made of them.
+
+### The aggregate half is gated differently from the row half
+
+`cleared` and `streaks` say a number about a KIND, so they speak only about
+kinds this reader sees WHOLE — `seasons/whole-kind-sight?`, the one definition,
+the same seam the seasons door projects through, failing toward concealment.
+`finished` claims nothing about rows the reader cannot see, so it needs
+`card`'s `:row?` and nothing more and reads the wider kind list. That line —
+*a count over a partly-seen kind is a disclosure with a number on it* — is the
+fourth law read carefully rather than a new rule.
+
+The aggregate itself is `seasons/report`'s minus the aging read the feed does
+not need: `store/transition-stats` bucketed weekly at the store,
+`seasons/classify` deciding from the DECLARATION which action names close
+something, `include-system? false` dropping the mirror's sync beat. **No store
+protocol method was added and none is admissible** — the protocol is closed,
+four stores implement it, and a bespoke aggregate for a fuel card would be a
+core change wearing a module's clothes.
+
+- **`cleared`** — three cheap facts have to line up: the kind CAN end (it
+  declares terminal states), nothing of it is open right now (one `LIMIT 1`
+  over the open states), and something of it actually finished inside the
+  twelve-week window, so a kind that has been empty since it was declared is
+  not a daily achievement. A mirror kind never clears, and that is right rather
+  than a gap: its machine is the sync machine, so it has no state in which its
+  work is over.
+- **`streaks`** — consecutive weeks with at least one completion, floor of two
+  because one week is not a run. An empty CURRENT week is skipped rather than
+  counted against the run: on a Monday morning every streak in the house would
+  otherwise read as broken, which is a calendar artefact and not a fact about
+  anybody. The sentence names the week it started, so the number is checkable
+  against the household's own memory instead of being a badge.
+- **`finished`** — the last terminal row of each kind, inside
+  `fuel-window-days` (7), through the ORDINARY collection query grammar:
+  `collections/parse-query` over `state=` (which every kind's grammar speaks)
+  and then `search-rows` over the conds it compiled — the same path `law_sweep`
+  hands a caller's filters to, never a bespoke SQL query. `:defaults? false`,
+  because a declared `:default-filters` is a collection's opening view and the
+  fuel section is asking a different question of the same rows.
+
+### There is still no scoring function, and `:order-by` is not one
+
+`finished` asks for the newest terminal row and `events` asks for the newest
+transitions, so recency chooses the CANDIDATE SET — a bounded window over rows
+that already exist, which is what `rows-of`'s `:newest-first` has always been.
+What orders the cards inside a population is `hash(seed ‖ card_id)` and nothing
+else, exactly as it was before this bead. The distinction is worth stating
+because it is the one a ranking model would blur: a window says *these are the
+rows worth considering today*, a score says *this one is better than that one*,
+and only the second is the thing the third law forbids. Nothing here ranks two
+cards against each other by any property of either.
+
+### One candidate per kind, and that is a load-bearing restraint
+
+The mixer's claim is TOTAL: every candidate a population NAMES is that
+population's for the day, shown or not, which is what keeps a do-now row out of
+the archive on page four. So a fuel population that named a hundred finished
+rows in order to show two would have barred ninety-eight of them from the
+archive to do it. Each fuel population therefore names **at most one candidate
+per kind**. Fuel is the last thing the house finished; everything before it is
+a memory, and the archive is where memories live.
+
+`fuel-window-days` is the same line drawn in time: inside the window a finished
+row is *what you got done*, outside it the archive has it.
+
+### The archive: `:memories`, and the `:events` reconciliation (waymark-iqa.8)
+
+**Verdict: `:memories` replaces `:events` in the recipe and READS it.** Check
+(3) admits exactly one bottomless entry, so the reconciliation could not have
+been *both entries, one under the other* — but nothing about the interleave
+wanted to be two entries. It is one population with two ways of remembering:
+
+1. **`anniversaries`** — what the house was doing a year ago this week, through
+   `history/collection-as-of` at the anniversary instant, keeping the items
+   whose last move before it falls inside that week. Not *rows that existed a
+   year ago* (which is most of them) but *rows somebody was working on a year
+   ago this week*, which is the only version that reads like a memory. 52 weeks
+   rather than one calendar year, so the weekday lines up and
+   `store/utc-week-start` picks the week out whole.
+2. **`events`** — `.2`'s stand-in, unchanged and unshrunk: every row that has
+   moved, newest move first, one card per row. It stays in the registry on its
+   own account too, because a household that wants a plain log of what moved
+   should be able to say so in a recipe.
+
+`anniversaries` first and `events` behind it, `dedupe-by` across both: a row
+that carries a story from a year ago keeps the story, and the order is what
+decides a tie rather than a ranking.
+
+```json
+{ "card_id": "archive/fd_errand/88dfe943-…",
+  "section": "archive", "population": "memories",
+  "kind": "fd_errand", "self": "/api/fd_errands/88dfe943-…",
+  "state": "done", "summary": "Repaint the porch · Done",
+  "sentence": "A year ago this week: Repaint the porch · Done",
+  "at": "2025-08-25T19:42:21.680621239Z",
+  "actions": {}, "heavier": [], "links": {}, "meta": {…} }
+```
+
+**The sentence is the transition's own stored summary** — what `invoke`
+rendered on the day — and never a re-render of today's row against yesterday's
+law. That is the first of the two inherited departures, and the second is
+inherited by not existing: a transition's `inputs` are not read here and have
+no field projection of their own. The card BODY is the row as of now, which is
+the departure `card` already documents and the reason following a card's own
+href stays correct.
+
+**One query gates the expensive half.** Each kind's fold costs up to
+`history/fold-cap` transitions, so the oldest transition in the log is read
+first — one row, ascending, `LIMIT 1`. A house younger than the window has no
+anniversary of any kind and pays for exactly that one read. Any fold reporting
+`complete` false raises the document's cap note, `history/fold-cap`'s posture
+inherited whole.
+
+### The cursor now counts CANDIDATES, not cards
+
+This is the bug `:feed/archive-pages` was always going to find, and it was
+real. `entry-cards` advanced the offset by the cards it emitted; a candidate
+that renders no card — a row retired between the population's scan and the
+read, **or one this reader's grant conceals** — is walked but not shown, so the
+next page started before the end of this one and re-served its tail. A
+grant-scoped reader paging an archive of mixed kinds hits it on page two.
+
+`entry-cards` now answers `:consumed` beside `:cards`: the index of the last
+card on the page, plus one — or the whole remaining ordering when the page ran
+short. `document` walks the offset by that. Deep paging is unchanged for an
+unscoped reader with no vanished rows, which is why `.2`'s hand-run smoke test
+did not see it.
+
+### The obligation
+
+`:feed/archive-pages` sits between `:feed/cursor-rolls` and the two writing
+obligations — the counting obligations still read above `:feed/verbs-are-light`
+and `:feed/ticklers`, exactly as `.3` and `.4` arranged. It walks up to eight
+pages and claims four things:
+
+1. **No `card_id` repeats, however deep the walk** — the claim the offset fix
+   exists for.
+2. **The walk is deterministic**: the same cursor, followed twice, answers the
+   same cards. If it ever does not, what failed is the seed, and the archive
+   was a live scan re-rolled per request.
+3. **The tail is honest**: a walk that runs out drops `links.next`.
+4. **The fuel section is day-stable**: two reads, identical `card_id`s.
+   `:feed/day-stable` asserts it for the document whole; this asserts it where
+   the aggregate populations live, because a `cleared` card is a fold over the
+   log and a fold that drifted would drift here first.
+
+It reports `:covered`, because an engine whose archive fits on one page has
+proved nothing about depth and should say so rather than pass quietly.
+
+`waymark10/test/waymark10/feed_test.clj` holds the four things a conformance
+driver cannot arrange, because all four are TIME: a queue driven to zero, four
+weekly finishes in a row, a transition backdated 52 weeks, and a two-principal
+deep walk where the concealed candidates are what move the offset. The twin's
+log is rewritten in place for the first three — both stores stamp `at` and
+`updated_at` themselves rather than taking the engine's clock — and that helper
+is the one thing in the file that reaches past a door.
+
+### Recorded here, for `.6` and `.7`
+
+- **Every window is anchored on the feed's DAY, never on `(:now ctx)`.** A
+  window that moved with the clock would answer two candidate sets to two reads
+  of one day, and the cursor's offset would be walking a set that shifted under
+  it. `day-start` is the one spelling; `.6`'s insight populations should use
+  it.
+- **`.7` renders `sentence` wherever it appears.** The seam has one, a `cleared`
+  card has one, a memory usually has one, and a `finished` card has none — the
+  row's own summary is already the sentence, which is the whole reason a card
+  is `envelope-summary` and not a rendering of its own.
+- **A fuel card is usually verb-less**, so the panel `.7` draws for it needs a
+  read-only shape. It still carries `self`, and the row's own screen is still
+  one tap away.
+- **A cursor page re-runs the fuel populations for their claims** (`:render?
+  false`), and `cleared` and `streaks` fold the aggregate separately, so a deep
+  walk pays two `transition-stats` queries and a `LIMIT 1` per kind per page.
+  That is the price of the seen-set being page-independent, and it is the same
+  price `.2` set. Left unoptimized on purpose: a per-read memo in the ctx is the
+  obvious first move and it should be made when somebody has MEASURED the cost
+  (waymark-iqa.16), not before, because the population registry is still the
+  seam fork (a) named and a memo is the smaller of the two changes it invites.
+- **The archive's candidate set is a bounded newest-first window over the log**,
+  so a write landing between two pages can shift it. Within a day and a quiet
+  log the order holds, and the day boundary is the cursor's own 409. Named
+  rather than fixed (waymark-iqa.17): the honest fix is a job for that
+  population alone, which is fork (a)'s recorded punt.
+- **Media memories are not a population of their own.** A finished work reaches
+  the archive through `events` like every other row, carrying its `origin` link
+  because the card is the row's own envelope — a feed card that links a photo
+  needs no bespoke reader. What actually keeps such works out of today's
+  archive is that `next_actions` claims every OPEN row of a front-door kind,
+  and a mirror row whose domain `status` says the work is over is still
+  framework-open. That is do-now's bug rather than the archive's
+  (waymark-iqa.15); `feed/set-aside?` is already the one spelling of the
+  question it needs to ask. When it lands, `media.clj`'s own healable punt arrives with it
+  and is still a punt: one work under two authorities is two rows, so it will
+  be two archive cards. Visible, not resolved, and no merge belongs here.
+- **No hash moved.** `feed.clj`, `seasons.clj` and `packs.clj` are engine-side
+  and carry no declarations; the twenty deterministic kinds are byte-identical
+  and the nine waymark-j82 names are as unstable as they were.

@@ -1852,6 +1852,111 @@
                  " — above the seam the feed is finite and done, and"
                  " re-serving it is the duplication the epic forbids")))))
 
+(def ^:private archive-walk-pages
+  "How deep the archive walk goes. 'Bottomless' means stateless and
+  LONG, never infinite, so a walk that must terminate is the honest
+  shape of this obligation: eight pages is far past anything a person
+  scrolls in one sitting and still a bound, which is the same trade
+  every cap in this engine makes."
+  8)
+
+(defn- feed-archive-page
+  "One archive page, by the cursor a `links.next` href carries."
+  [ctx href]
+  (feed-doc ctx nil (second (str/split (str href) #"\?" 2))))
+
+(defn- feed-archive-pages-violations
+  "waymark-iqa.5's own obligation: the archive pages ARBITRARILY DEEP
+  without serving one card twice within a day.
+
+  Three claims, and the middle one is the reason this obligation
+  exists rather than the first:
+
+  1. **No card_id repeats, however deep the walk.** The cursor is an
+     `:offset` into a seeded ordering, and the offset counts
+     CANDIDATES WALKED rather than cards shown. Those differ exactly
+     when a candidate renders no card — a row retired between the
+     population's scan and the read, or one this reader's grant
+     conceals — and an offset that counted cards would re-serve the
+     head of the next page as the tail of this one. That is the one
+     thing an archive may not do, and it is invisible until somebody
+     pages past a concealed row.
+  2. **The walk is deterministic.** The same cursor, followed twice,
+     answers the same cards. If it ever does not, what failed is the
+     seed — the archive would be a live scan re-rolled per request,
+     and every page boundary would be a coin flip.
+  3. **The tail is honest.** A walk that runs out drops `links.next`,
+     because a surface that pretends to be infinite lies once, at the
+     bottom, to whoever scrolled the furthest.
+
+  And the fuel half, which is stateless for the same reason: two reads
+  of one day answer the same fuel cards. `:feed/day-stable` asserts it
+  for the document as a whole; this asserts it where the aggregate
+  populations live, because a `cleared` card is a fold over the log and
+  a fold that drifted would drift here first.
+
+  It reports `:covered`, because an engine whose archive fits on one
+  page has proved nothing about depth and should say so."
+  [ctx]
+  (let [{:keys [doc]} (feed-doc ctx nil)
+        first-next (get-in doc [:links :next :href])
+        walk (loop [href first-next pages [doc] n 0]
+               (if (or (nil? href) (>= n archive-walk-pages))
+                 {:pages pages :stopped-early (some? href)}
+                 (let [{:keys [status doc]} (feed-archive-page ctx href)]
+                   (if (not= 200 status)
+                     {:pages pages :bad status}
+                     (recur (get-in doc [:links :next :href])
+                            (conj pages doc) (inc n))))))
+        pages (:pages walk)
+        walked (dec (count pages))
+        ids (into [] (comp (mapcat feed-cards) (map :card_id)) pages)
+        dupes (into [] (comp (remove #(= "seam" (key %)))
+                             (keep (fn [[id n]] (when (> (long n) 1) id))))
+                    (frequencies ids))
+        twice (when first-next (:doc (feed-archive-page ctx first-next)))
+        fuel (fn [d] (mapv :card_id
+                           (filterv #(= "fuel" (str (:section %)))
+                                    (feed-cards d))))
+        again (:doc (feed-doc ctx nil))]
+    {:covered (if (pos? walked) 1 0)
+     :violations
+     (cond-> []
+       (:bad walk)
+       (conj (str "feed: page " (inc walked) " of the archive answered "
+                  (:bad walk) " — links.next is the door's own href and"
+                  " following it is the only way down"))
+
+       (seq dupes)
+       (conj (str "feed: the archive served " (pr-str (vec (take 5 dupes)))
+                  " more than once inside one day, across " (count pages)
+                  " page(s) — the cursor's offset counts CANDIDATES walked,"
+                  " not cards shown, precisely so a candidate that renders"
+                  " no card (retired, or concealed from this reader) does"
+                  " not push the next page back over this one"))
+
+       (and (some? twice) (not= (mapv :card_id (feed-cards twice))
+                                (mapv :card_id (feed-cards (second pages)))))
+       (conj (str "feed: one cursor followed twice answered two pages —"
+                  " the archive is a SEEDED ordering over a bounded set,"
+                  " and a page that is a live scan re-rolled per request"
+                  " makes every boundary a coin flip"))
+
+       (and (not (:stopped-early walk)) (not (:bad walk))
+            (get-in (last pages) [:links :next]))
+       (conj (str "feed: the walk ran out of cards and the last page still"
+                  " carries links.next — bottomless means stateless and"
+                  " LONG, never infinite, and a surface that pretends"
+                  " otherwise lies once, at the bottom, to whoever"
+                  " scrolled the furthest"))
+
+       (not= (fuel doc) (fuel again))
+       (conj (str "feed: two reads of one day answered two fuel sections, "
+                  (pr-str (fuel doc)) " and " (pr-str (fuel again))
+                  " — the cleared queue and the streak are folds over the"
+                  " log, and a fold that drifted within a day would make"
+                  " the whole recipe something other than static data")))}))
+
 (defn- feed-row-cards
   "Every card of one feed answer that stands for a row — the seam has
   no verbs and no screen, and it is the one element here that is not a
@@ -2087,10 +2192,14 @@
   "A dropped thing comes back, backs off when it is put off, and stops
   for good when it is let go — from the wire, in that order.
 
-  The subject is read off the feed's OWN first card, so the marker
-  points at a row this engine really serves and really has not
-  finished: `set-aside?` is the retirement rule and a fixture that
-  ignored it would be a fixture testing nothing. The second marker
+  The subject is read off the feed's own first card ABOVE THE SEAM, so
+  the marker points at a row this engine really serves and really has
+  not finished: `set-aside?` is the retirement rule and a fixture that
+  ignored it would be a fixture testing nothing. do-now and decide are
+  the sections whose rows are still open by construction — waymark-
+  iqa.5's fuel and archive cards are finished work, and a marker over
+  one of those would retire at offer time exactly as it should, which
+  would make this obligation fail for being right. The second marker
   names a row that does not exist, which is the same rule from the
   other side — a marker may outlive its subject, and when it does it
   says nothing rather than carding a ghost.
@@ -2100,7 +2209,9 @@
   quietly."
   [ctx]
   (let [{:keys [doc]} (feed-doc ctx nil)
-        subject (first (remove #(= "tickler" (str (:kind %)))
+        above-seam #{"do_now" "decide"}
+        subject (first (remove #(or (= "tickler" (str (:kind %)))
+                                    (not (above-seam (str (:section %)))))
                                (feed-row-cards doc)))]
     (if-not subject
       {:covered 0 :violations []}
@@ -2222,6 +2333,7 @@
     (feed-obligation :feed/day-stable feed-day-stable-violations)
     (feed-obligation :feed/projection feed-projection-violations)
     (feed-obligation :feed/cursor-rolls feed-cursor-violations)
+    (feed-obligation :feed/archive-pages feed-archive-pages-violations)
     ;; THE WRITERS GO LAST, and in this order for one reason each.
     ;; :verbs-are-light invokes a card verb for real, so the origin
     ;; convention is proved by the audit trail rather than by a
@@ -2235,8 +2347,8 @@
     {:name :feed/ticklers
      :needs #{[:route :feed] [:kind :tickler]}
      :run feed-tickler-violations}]
-   ;; NOT here, and named rather than pending: :feed/archive-pages
-   ;; (waymark-iqa.5 brings the populations that make deep paging
-   ;; worth walking). A spec-feed § 'Where the law is proved'
-   ;; obligation, belonging to the bead that lands the mechanism.
+   ;; The five obligations spec-feed § 'Where the law is proved' names
+   ;; are all here now, each having landed with the bead that landed
+   ;; the mechanism it judges rather than ahead of it. What .6 adds is
+   ;; the insight's own refusals, and it will add them the same way.
    })

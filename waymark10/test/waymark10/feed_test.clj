@@ -397,6 +397,165 @@
                heavier; a concealed door may not reappear there as a
                link, or concealment has become narration"))))))
 
+;; ── fuel and the archive (waymark-iqa.5) ────────────────────────────
+;;
+;; The two stateless halves: fuel between decide and the seam, the
+;; archive below it. Both are READ-TIME SEEDED QUERIES over the log and
+;; the rows — no job, no column, nothing stored — so what has to be
+;; arranged here is TIME, which is the one thing a conformance driver
+;; with one world cannot arrange either.
+
+(defn- rewind!
+  "Move part of the twin's world back in time.
+
+  A streak is consecutive WEEKS and 'a year ago this week' is a year
+  ago; neither can be lived in a test, and both stores stamp `at` and
+  `updated_at` themselves rather than taking the engine's clock. So the
+  memory twin's log (and, when `rows?`, its tables) is rewritten in
+  place. It is the one thing in this file that reaches past a door, and
+  it reaches only for the clock."
+  [eng days {:keys [rows? of]}]
+  (let [back (fn [t] (some-> ^java.time.Instant t
+                             (.minus (long days)
+                                     java.time.temporal.ChronoUnit/DAYS)))
+        hit? (or of (constantly true))]
+    (swap! (:state (:storage eng))
+           (fn [s]
+             (cond-> (update s :transitions
+                             (fn [ts] (mapv #(if (hit? %) (update % :at back) %)
+                                            ts)))
+               rows?
+               (update :tables
+                       (fn [tables]
+                         (reduce-kv
+                          (fn [acc kind rows]
+                            (assoc acc kind
+                                   (reduce-kv (fn [a id row]
+                                                (assoc a id
+                                                       (-> row
+                                                           (update :created-at back)
+                                                           (update :updated-at back))))
+                                              {} rows)))
+                          {} tables))))))))
+
+(defn- section-cards [doc s]
+  (filterv #(= s (str (:section %))) (:cards doc)))
+
+(deftest a-queue-that-went-to-zero-is-fuel-and-says-so
+  (let [eng (boot)]
+    (doseq [t ["one" "two" "three"]]
+      (call! eng :post (str (make! eng :fd_errand t) "/-/finish")))
+    ;; one parcel finished, one still open — a kind with work left in
+    ;; it has not cleared anything, and that is what makes the other
+    ;; card `finished` rather than `cleared`
+    (call! eng :post (str (make! eng :fd_parcel "posted") "/-/finish"))
+    (make! eng :fd_parcel "still waiting")
+    (let [doc (:doc (feed! eng))
+          fuel (section-cards doc "fuel")
+          cleared (first (filter #(= "cleared" (str (:population %))) fuel))
+          finished (first (filter #(= "finished" (str (:population %))) fuel))]
+      (testing "the cleared card is the row that emptied the list, plus the
+                sentence the row itself cannot say"
+        (is (some? cleared))
+        (is (= "fd_errand" (str (:kind cleared))))
+        (is (str/includes? (str (:sentence cleared)) "Nothing is left in fd_errands"))
+        (is (str/includes? (str (:sentence cleared)) "3 finished"))
+        (is (str/starts-with? (str (:card_id cleared)) "fuel/fd_errand/")
+            "a fuel card is a ROW card: it names its origin row and
+             invents no identity"))
+      (testing "a kind with work left in it clears nothing"
+        (is (empty? (filter #(= "fd_parcel" (str (:kind %)))
+                            (filter #(= "cleared" (str (:population %))) fuel)))))
+      (testing "what the house finished this week is fuel, with no sentence —
+                the row's own summary is already the sentence"
+        (is (some? finished))
+        (is (= "fd_parcel" (str (:kind finished))))
+        (is (nil? (:sentence finished))))
+      (testing "and the census holds: fuel is below decide and above the seam"
+        (is (= ["do_now" "fuel" "seam" "archive"] (:sections doc)))))))
+
+(deftest a-streak-is-weeks-in-a-row-and-two-is-the-floor
+  (let [eng (boot)
+        selves (mapv #(make! eng :fd_errand (str "week " %)) (range 4))]
+    ;; one errand finished per week for four weeks — and one left open,
+    ;; so the queue never clears and the streak card is the one under test
+    (make! eng :fd_errand "the one still going")
+    (doseq [[i self] (map-indexed vector selves)]
+      (call! eng :post (str self "/-/finish"))
+      (let [id (last (str/split self #"/"))]
+        (rewind! eng (* 7 i) {:of #(= id (:resource-id %))})))
+    (let [doc (:doc (feed! eng))
+          streak (first (filter #(= "streaks" (str (:population %)))
+                                (section-cards doc "fuel")))]
+      (is (some? streak))
+      (is (str/includes? (str (:sentence streak)) "4 weeks running"))
+      (is (str/includes? (str (:sentence streak)) "every week since"))
+      (testing "and a single week is not a run"
+        (let [eng2 (boot)]
+          (call! eng2 :post (str (make! eng2 :fd_errand "just the one")
+                                 "/-/finish"))
+          (make! eng2 :fd_errand "and one open")
+          (is (empty? (filter #(= "streaks" (str (:population %)))
+                              (:cards (:doc (feed! eng2)))))))))))
+
+(deftest a-year-ago-this-week-is-an-archive-card-that-quotes-the-day
+  (let [eng (boot)]
+    (call! eng :post (str (make! eng :fd_errand "Repaint the porch") "/-/finish"))
+    ;; 52 weeks, so the weekday lines up and the fold lands in the
+    ;; anniversary week rather than beside it
+    (rewind! eng 364 {:rows? true})
+    (let [doc (:doc (feed! eng))
+          memory (first (section-cards doc "archive"))]
+      (is (some? memory))
+      (is (= "memories" (str (:population memory))))
+      (is (str/starts-with? (str (:sentence memory)) "A year ago this week: ")
+          "the transition's own stored summary — what invoke rendered on
+           the day, never a re-render of today's row against yesterday's
+           law")
+      (is (str/includes? (str (:sentence memory)) "Repaint the porch"))
+      (testing "and a row whose work is a year old is nobody's fuel"
+        (is (empty? (section-cards doc "fuel")))))))
+
+(deftest the-archive-pages-deep-without-serving-a-card-twice
+  (testing "a concealed candidate consumes the cursor's offset without
+            producing a card — advance by the CARDS and page two
+            re-serves the tail of page one"
+    (let [eng (boot)]
+      (dotimes [i 8]
+        (call! eng :post (str (make! eng :fd_errand (str "errand " i))
+                              "/-/finish"))
+        (call! eng :post (str (make! eng :fd_parcel (str "parcel " i))
+                              "/-/finish")))
+      (let [minted (call! eng :post "/api/grants"
+                          :body {:audience "nanny"
+                                 :scope [{:kind "fd_errand" :actions []}]})
+            gid (last (str/split (get-in minted [:doc :self]) #"/"))
+            as-nanny {"x-waymark-principal" "nanny"
+                      "x-waymark-actor-type" "agent"
+                      "x-waymark-grant" gid}]
+        (call! eng :post (str "/api/grants/" gid "/-/accept")
+               :headers {"x-waymark-principal" "nanny"
+                         "x-waymark-actor-type" "agent"})
+        (let [pages (loop [q nil acc []]
+                      (let [doc (:doc (feed! eng :headers as-nanny :query q))
+                            acc (conj acc doc)
+                            href (get-in doc [:links :next :href])]
+                        (if (or (nil? href) (> (count acc) 10))
+                          acc
+                          (recur (second (str/split (str href) #"\?" 2)) acc))))
+              archive (mapcat #(section-cards % "archive") pages)]
+          (is (< 1 (count pages)) "one page proves nothing about paging")
+          (is (= (count archive) (count (set (map :card_id archive))))
+              "no card_id repeats within a day, however deep the walk goes")
+          (is (= #{"fd_errand"} (set (map (comp str :kind) archive)))
+              "the parcels are concealed, and a concealed candidate is
+               absent rather than a hole in the page")
+          (is (= 7 (count archive))
+              "eight finished errands, one of them claimed by the fuel
+               section's cleared card")
+          (is (nil? (get-in (last pages) [:links :next]))
+              "the tail is honest: the walk runs out and says so"))))))
+
 ;; ── the cursor ──────────────────────────────────────────────────────
 
 (deftest the-cursor-serves-the-archive-and-rolls-at-midnight
