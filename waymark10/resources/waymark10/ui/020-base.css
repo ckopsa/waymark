@@ -195,6 +195,12 @@
   .opt-chips button.chip:hover { background: var(--verdigris-wash);
                                  border-color: var(--verdigris); }
   .opt-chips .muted { font-size: 11px; }
+  /* a list of ENTRIES (waymark-7rw): one chip row per annotated field
+     of the item, stacked, because "kind" and "actions" are different
+     questions and a single run of chips would read as one */
+  .opt-chips:has(> .opt-row) { display: block; }
+  .opt-row { display: flex; gap: 5px; flex-wrap: wrap; align-items: center;
+             margin: 0 0 4px; }
 
   table.kv { border-collapse: collapse; width: 100%; }
   table.kv td { padding: 6px 10px 6px 0; vertical-align: top;

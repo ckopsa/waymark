@@ -468,14 +468,32 @@
   target kind with no `:of` naming the sibling field that carries it,
   and an `:of` naming a field the SAME form does not declare (the
   client interpolates the recipe from sibling values; a field on
-  another surface is not in the form)."
+  another surface is not in the form).
+
+  Item maps are surfaces too (waymark-7rw). A grant's `:scope` is a
+  vector of entries and the vocabulary belongs to the entry's parts —
+  the kind it names, that kind's actions and fields — so the
+  annotation lands INSIDE the item, where the fields it interpolates
+  from are each other's siblings. The `:of` refusal is what makes that
+  honest rather than convenient: an item field naming a sibling one
+  level UP is refused here, because no client could fill a hole from
+  outside the entry in front of the person. `check-long-text`'s
+  `data.{field}[]` naming is reused so a refusal points at the right
+  box."
   [r]
-  (doseq [[where form] (cons ["the create door" (or (:create-schema r) (:schema r))]
-                             (concat [["data" (:schema r)]]
-                                     (for [a (machine/actions-seq r)
-                                           :when (:input a)]
-                                       [(str "action " (name (:name a)))
-                                        (:input a)])))
+  (doseq [[where form] (mapcat
+                        (fn [[where form]]
+                          (cons [where form]
+                                (keep (fn [k]
+                                        (when-some [item (item-map-form form k)]
+                                          [(str where ", " (name k) "[]") item]))
+                                      (schema/entry-keys form))))
+                        (cons ["the create door" (or (:create-schema r) (:schema r))]
+                              (concat [["data" (:schema r)]]
+                                      (for [a (machine/actions-seq r)
+                                            :when (:input a)]
+                                        [(str "action " (name (:name a)))
+                                         (:input a)]))))
           :let [entries (schema/entry-map form)
                 declared (set (keys entries))]
           [k {:keys [properties]}] entries

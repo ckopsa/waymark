@@ -83,7 +83,14 @@ function fieldWidget(name, rawProp, value) {
       return el("input", {type: "text", name, "data-array": "csv",
         placeholder: "comma-separated",
         value: Array.isArray(value) ? value.join(", ") : (value ?? "")});
-    return el("textarea", {name, "data-array": "json", placeholder: "JSON array"},
+    /* scaffolding, never a value (waymark-7rw): a declared :examples
+       rides as the placeholder here for the same reason it does on a
+       prose box — a grant's scope is the last form in the building
+       that should open as a blank rectangle */
+    const ex = (prop.examples || rawProp.examples || [])[0];
+    return el("textarea", {name, "data-array": "json",
+                           placeholder: ex !== undefined
+                             ? JSON.stringify(ex, null, 1) : "JSON array"},
       value !== undefined && value !== null ? JSON.stringify(value, null, 1) : "");
   }
   if (prop.type === "object")
@@ -382,12 +389,93 @@ function attachOptions(form, input, xo) {
                sib.addEventListener("input", refresh); }
   }
 }
+/* ── vocabularies inside a list of entries (waymark-7rw) ────────────
+   A grant's scope is a LIST OF ENTRIES — a kind, its actions, the
+   fields and filter that narrow them — and the vocabulary belongs to
+   the entry's parts, not to the list. x-options needed no new
+   capability to say so: an item's fields are each other's siblings,
+   so the annotation rides items.properties and {of} resolves inside
+   the entry a person is filling in.
+
+   This client draws such a list as a JSON textarea, where there is no
+   DOM sibling to read a hole from. So the recipe is resolved against
+   the entries ALREADY TYPED — the kinds this scope names so far — and
+   the chips offer the union of what each admits. A chip inserts its
+   token, quoted, at the caret: an offer of the right WORDS, not a
+   form that pretends to know where they go. The whole surface is
+   still advertisement — the textarea stays free text, and the guard
+   is still the refusal. */
+function itemOptionFields(rawProp) {
+  const items = schemaProp(schemaProp(rawProp).items || {});
+  return Object.entries(items.properties || {})
+    .map(([name, p]) => [name, xoptionsOf(p)])
+    .filter(([, xo]) => xo && xo.href);
+}
+function typedEntries(textarea) {
+  try {
+    const v = JSON.parse(textarea.value);
+    return Array.isArray(v) ? v.filter(e => e && typeof e === "object") : [];
+  } catch (_e) { return []; }        /* half-typed JSON is the normal case */
+}
+function attachItemOptions(form, textarea, fields) {
+  const panel = el("div", {class: "opt-chips"});
+  textarea.after(panel);
+  const insert = tok => {
+    const s = JSON.stringify(tok);
+    const at = textarea.selectionStart ?? textarea.value.length;
+    textarea.value = textarea.value.slice(0, at) + s + textarea.value.slice(at);
+    textarea.selectionStart = textarea.selectionEnd = at + s.length;
+    textarea.dispatchEvent(new Event("input", {bubbles: true}));
+    textarea.focus();
+  };
+  const CAP = 24;
+  let seq = 0;
+  const refresh = async () => {
+    const mine = ++seq;
+    const entries = typedEntries(textarea);
+    const rows = [];
+    for (const [name, xo] of fields) {
+      const holes = optHoles(xo);
+      /* hole-free: one fetch. With a hole: one per entry that has
+         already answered it, unioned — "the actions of the kinds you
+         have named so far", which is the only honest answer here */
+      const ctxs = holes.length
+        ? entries.filter(e => holes.every(h => e[h]))
+        : [{}];
+      const seen = new Set();
+      for (const c of ctxs)
+        for (const t of (await optionTokens(xo, c)) || []) seen.add(t);
+      rows.push([name, xo, [...seen], ctxs.length]);
+    }
+    if (mine !== seq) return;          /* a later keystroke won the race */
+    panel.replaceChildren(...rows.map(([name, xo, toks, n]) =>
+      el("div", {class: "opt-row"},
+        el("span", {class: "muted"}, name + " · "),
+        ...(toks.length
+          ? toks.slice(0, CAP).map(t => {
+              const c = el("button", {type: "button", class: "chip",
+                                      title: xo.note}, t);
+              c.addEventListener("click", e => { e.preventDefault(); insert(t); });
+              return c;
+            })
+          : [el("span", {class: "muted"},
+                n ? "nothing offered — " + xo.note
+                  : "name " + xo.of + " in an entry first — the options are "
+                    + xo.note)]),
+        ...(toks.length > CAP
+          ? [el("span", {class: "muted"}, " … " + (toks.length - CAP) + " more")]
+          : []))));
+  };
+  refresh();
+  textarea.addEventListener("input", refresh);
+}
 function buildForm(schema, prefill, kind) {
   const form = el("div", {});
   const required = new Set((schema.required || []).map(String));
   /* x-options wiring waits for the whole form: a recipe interpolates
      SIBLING values, and a sibling declared later is not in the DOM yet */
   const pendingOptions = [];
+  const pendingItemOptions = [];
   for (const [name, rawProp] of Object.entries(schema.properties || {})) {
     if (name === "ids") continue;           /* bulk ids ride the selection */
     const prop = schemaProp(rawProp);
@@ -443,8 +531,13 @@ function buildForm(schema, prefill, kind) {
     const xo = xoptionsOf(rawProp);
     if (xo && xo.href && widget.tagName === "INPUT")
       pendingOptions.push([widget, xo]);
+    else if (widget.dataset && widget.dataset.array === "json") {
+      const fields = itemOptionFields(rawProp);
+      if (fields.length) pendingItemOptions.push([widget, fields]);
+    }
   }
   for (const [widget, xo] of pendingOptions) attachOptions(form, widget, xo);
+  for (const [widget, fs] of pendingItemOptions) attachItemOptions(form, widget, fs);
   return form;
 }
 function collectValues(form, schema) {

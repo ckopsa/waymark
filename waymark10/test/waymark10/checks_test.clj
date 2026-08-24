@@ -459,6 +459,53 @@
                                            :help "Which of the target's fields."}}
                         [:string {:max 100}]]]))))))
 
+;; ── item maps are surfaces of their own (waymark-7rw) ────────────────
+;; A grant's scope is a vector of entries and the vocabulary belongs to
+;; the entry's parts, so the recipe rides INSIDE the item map — where
+;; the fields it interpolates from are each other's siblings. The :of
+;; refusal is what keeps that honest: a hole naming a field one level
+;; UP is one no client could fill from the entry in front of the
+;; person, and it is refused exactly like any other stray :of.
+
+(deftest options-inside-a-list-of-entries
+  (testing "an item field may name a sibling of its own map"
+    (is (= [] (warnings-of
+               (assoc base :schema
+                      [:map
+                       [:name [:string {:max 100}]]
+                       [:entries
+                        [:vector
+                         [:map
+                          [:kind {:x-options {:from :kinds}
+                                  :x-display {:label "Kind" :help "One kind."}}
+                           [:string {:max 60}]]
+                          [:actions {:x-options {:from :actions :of :kind
+                                                 :each true}
+                                     :x-display {:label "Actions"
+                                                 :help "Its actions."}}
+                           [:vector [:string {:max 60}]]]]]]])))))
+
+  (testing "…and may not reach out of it"
+    (breaks :options
+            (assoc base :schema
+                   [:map
+                    [:kind [:string {:max 60}]]
+                    [:entries
+                     [:vector
+                      [:map
+                       [:names {:x-options {:from :fields :of :kind}}
+                        [:vector [:string {:max 60}]]]]]]])))
+
+  (testing "a misspelled source inside an item is refused like any other"
+    (breaks :options
+            (assoc base :schema
+                   [:map
+                    [:name [:string {:max 100}]]
+                    [:entries
+                     [:vector
+                      [:map [:kind {:x-options {:from :everything}}
+                             [:string {:max 60}]]]]]]))))
+
 ;; ── the acceptance: the real fixtures are green ─────────────────────
 
 (deftest the-fixtures-load-with-zero-warnings

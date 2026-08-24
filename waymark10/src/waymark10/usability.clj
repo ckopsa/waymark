@@ -110,6 +110,42 @@
 
 ;; ── 1 · effort honesty ──────────────────────────────────────────────
 
+(def declaration-reads
+  "The `:reads` a guard may declare that are answered by the WORLD —
+  the clock, the caller, the wiring — rather than by rows. Everything
+  else a guard reads is `:storage` or a kind keyword (guards.clj's own
+  vocabulary), which means the judgment is against DATA.
+
+  scenario/offline-reads draws a nearby line for a nearby reason (what
+  a storage-free judgment can honestly supply); this one is about what
+  a published SCHEMA could honestly enumerate, and `:services` sits on
+  the near side of it here — the registry a service hook answers from
+  is a projection of declarations, which is exactly what well-known
+  publishes."
+  #{:now :principal :services :services.features :transitions})
+
+(defn- reads-rows?
+  "Does this guard judge against rows rather than against the
+  declaration? See `effort-honesty`'s docstring for why the answer
+  decides whether policy 1 asks its question."
+  [lg]
+  (boolean (some (complement declaration-reads) (:reads lg))))
+
+(defn- options-advertised?
+  "Does this projected property name where its tokens come from?
+
+  Two places to look, because a field is not always a token. `:scope`
+  is a LIST OF ENTRIES — a kind, its actions, the fields and filter
+  that narrow them — and the vocabulary belongs to the entry's parts,
+  not to the list. `:x-options` needed no new capability to say so
+  (waymark-7rw): an item's fields are each other's siblings, so `:of`
+  resolves inside the entry a person is filling in, and the annotation
+  lands in the item schema where a client meets it. A list whose ITEMS
+  advertise has advertised."
+  [prop]
+  (boolean (or (:x-options prop)
+               (some :x-options (vals (get-in prop [:items :properties]))))))
+
 (defn effort-honesty
   "No recall where selection is possible.
 
@@ -140,7 +176,29 @@
   `demand/field-class`, deliberately: the class on the wire stays
   honest (a `:where` a person still composes by hand is composition,
   picker or no picker), while the OPINION is satisfied, because what
-  the opinion objects to is the engine hiding a vocabulary it holds."
+  the opinion objects to is the engine hiding a vocabulary it holds.
+
+  NARROWED by waymark-7rw: the policy asks its question of guards that
+  judge against the DECLARATION, and stays quiet about guards that
+  judge against ROWS (`reads-rows?` — a `:storage` or kind keyword in
+  the guard's own `:reads`). Every one of `:x-options`' sources is a
+  projection of declarations answering out of a document a client
+  already holds; rows are the collection's business and no published
+  schema can enumerate them. The two shapes the access kinds put in
+  front of this policy are the argument:
+
+  - the COLLISION test (`role`'s one-spelling). The rows it could list
+    are the names already TAKEN — a chip row of them would offer
+    exactly the tokens the guard is about to refuse, which is a worse
+    form than a blank box, not a better one.
+  - the REGISTRY test (`member`'s roles-registered). The rows ARE the
+    legal answers, but they live behind a scoped, paged collection GET
+    that a one-hop recipe cannot honestly promise; the guard already
+    names the door where a missing one is MADE (`:remedies`), and that
+    door plus a sentence is the affordance, not a fake picker.
+
+  What those fields still owe is prose — which policy 2 demands and,
+  since waymark-7rw, gets. A row-backed source is filed, not faked."
   [r]
   (let [seen (volatile! #{})]
     (into []
@@ -150,14 +208,15 @@
                (let [props (:properties (schema/json-schema (:input door)))
                      entries (schema/entry-map (:input door))]
                  (for [lg (leaf-guards door)
-                       :when (and (:open lg) (seq (:judges lg)))
+                       :when (and (:open lg) (seq (:judges lg))
+                                  (not (reads-rows? lg)))
                        f (:judges lg)
                        :when (contains? entries f)
                        :let [prop (get props f)
                              cls (demand/field-class f prop #{})
                              token [(:name door) f]]
                        :when (and (#{"recall" "composition"} cls)
-                                  (nil? (:x-options prop))
+                                  (not (options-advertised? prop))
                                   (not (contains? @seen token)))]
                    (do (vswap! seen conj token)
                        (str "[effort-honesty] " (where-of door) " field " f

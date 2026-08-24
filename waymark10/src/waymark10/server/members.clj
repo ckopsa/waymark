@@ -485,15 +485,23 @@
    :summary "{data.display} · {state}"
    :label-template "{data.display}"
    :schema [:map
-            [:display [:string {:min 1 :max 80}]]
+            [:display {:x-display {:label "Name"
+                                   :help "What the house calls this person or agent — the words that appear on a card, a roster row and a letter's from-line."}}
+             [:string {:min 1 :max 80}]]
             ;; the short name the household's OTHER systems already say.
             ;; :display is the human label an identity provider hands
             ;; over ("Colton Kopsa"); a chore feed says "colton". A
             ;; mirror's external-keyed ref matches THIS field, so a
             ;; synced assignee lands on a person instead of a string.
-            [:handle {:optional true}
+            [:handle {:optional true
+                      :x-display {:raw true
+                                  :label "Handle"
+                                  :help "The short name the household's OTHER systems already say — the token a chore feed or a synced assignee arrives as (\"colton\"), lowercase and unspaced."}}
              [:maybe [:string {:min 1 :max 40}]]]
-            [:actor_type [:enum "human" "agent"]]
+            [:actor_type {:x-display {:label "Person or agent"
+                                      :choices {"human" "A person — signs in, reads pages, decides"
+                                                "agent" "An agent — holds a leash, acts on somebody's behalf"}}}
+             [:enum "human" "agent"]]
             ;; the honest identity key (waymark-4zj.9.1): where this row
             ;; was BORN — "idp" (Bearer/IdP first-sight, durable),
             ;; "invite" (an admin's invite token), "knock" (a
@@ -506,7 +514,12 @@
             ;; NEW row gets one, the 48 existing rows are classified by
             ;; the read-only provenance-backfill-proposal below and set by
             ;; hand. Durable? ≡ provenance == "idp".
-            [:provenance {:optional true :x-display {:raw true}}
+            [:provenance {:optional true
+                          :x-display {:raw true
+                                      :label "How they got here"
+                                      :choices {"idp" "Signed in — a durable identity the provider vouches for"
+                                                "invite" "Invited — an admin minted a token and handed it over"
+                                                "knock" "Knocked — a self-service arrival at the agent door"}}}
              [:enum "idp" "invite" "knock"]]
             ;; the presence curtain (waymark-tti.4): a durable,
             ;; self-service "do not publish my presence". The durable
@@ -526,9 +539,24 @@
             ;; own-hand guard; a create may pre-draw its own (privacy
             ;; only ever increases by hand), and no edit door exists on
             ;; this kind to flip another's off.
-            [:curtain {:optional true :x-display {:raw true}}
+            [:curtain {:optional true
+                       :x-display {:raw true
+                                   :label "Presence curtain drawn"}}
              [:maybe :boolean]]
-            [:roles {:optional true}
+            ;; No :x-options, and the reasoning is roles.clj's twin
+            ;; (waymark-7rw): roles-registered judges these against the
+            ;; role REGISTRY, which is rows in a collection, not a
+            ;; projection of any declaration — none of the five sources
+            ;; can reach it without a scoped, paged data read, and the
+            ;; guard already names the door where a missing role is MADE
+            ;; (:remedies [:role/create]). So the sentence says where
+            ;; the words come from and the refusal names the ones that
+            ;; are not there yet. waymark-90k holds the row-backed source
+            [:roles {:optional true
+                     :examples [["recovery-admin"]]
+                     :x-display {:raw true
+                                 :label "Roles held"
+                                 :help "Role names from the roles registry, exactly as spelled there. A name no active role carries is refused — register the role first; an assignment naming it would grant nobody."}}
              [:vector [:string {:min 1 :max 40}]]]
             ;; the invite's credential: presented once (X-Waymark-Invite)
             ;; by the principal the row will bind to
@@ -551,9 +579,15 @@
             [:reentry_expires_at {:optional true :secret true}
              [:maybe :waymark/instant]]
             ;; the bound principal id — written by :bind, never by hand
-            [:subject {:optional true :x-display {:raw true}}
+            [:subject {:optional true
+                       :x-display {:raw true
+                                   :label "Bound principal"
+                                   :help "The identity this row is welded to, written by the identity gate at first sight and never by hand."}}
              [:maybe [:string {:max 256}]]]
-            [:invited_by {:optional true :x-display {:raw true}}
+            [:invited_by {:optional true
+                          :x-display {:raw true
+                                      :label "Invited by"
+                                      :help "The member id of whoever minted the invite — stamped at birth by the create path, not typed."}}
              [:maybe [:string {:max 128}]]]]
    :filterable {:state #{:eq :in}
                 :actor_type #{:eq}
@@ -634,7 +668,12 @@
                     :handler stamp-own-subject
                     :display {:label "Stamp subject" :order 10}}
     :assign_roles {:from #{:active} :to :active
-                   :input [:map [:roles [:vector [:string {:min 1 :max 40}]]]]
+                   :input [:map
+                           [:roles {:examples [["recovery-admin"]]
+                                    :x-display {:raw true
+                                                :label "Roles held"
+                                                :help "The COMPLETE list this member should hold afterwards — the assignment replaces what is there, it does not add to it. Names come from the roles registry, spelled exactly as registered."}}
+                            [:vector [:string {:min 1 :max 40}]]]]
                    :record true
                    :edit {:prefill [:roles]}   ; the fence rides along
                    ;; two questions, both answered: WHO may assign
@@ -649,8 +688,11 @@
     ;; chore board. Without this door a synced assignee could only ever
     ;; resolve for members born of an invite, so the door exists.
     :set_handle {:from #{:active} :to :active
-                 :input [:map [:handle {:x-display {:label "Handle (what other systems call them)"}}
-                               [:string {:min 1 :max 40}]]]
+                 :input [:map
+                         [:handle {:x-display {:raw true
+                                               :label "Handle (what other systems call them)"
+                                               :help "The short unspaced name a chore feed or a synced assignee arrives as. Set it to the spelling those systems already use, or the ref lands on a string instead of a person."}}
+                          [:string {:min 1 :max 40}]]]
                  :record true
                  :edit {:prefill [:handle]}
                  :safety {:idempotent true :reversible true :confirm false}
@@ -684,8 +726,13 @@
     ;; door, and a non-admin earns an honest refusal.
     :offer_reentry {:from #{:active} :to :active
                     :input [:map
-                            [:token [:string {:min 22 :max 128}]]
-                            [:expires_at {:optional true}
+                            [:token {:x-display {:raw true
+                                                 :label "Re-entry token"
+                                                 :help "The one-shot credential you are about to hand over, minted by YOU — at least 22 characters of real randomness. The engine never generates it and never shows it again."}}
+                             [:string {:min 22 :max 128}]]
+                            [:expires_at {:optional true
+                                          :x-display {:label "Good until"
+                                                      :help "When the link goes stale. Leave it empty for the short default — long enough to hand across a live session, short enough that a mislaid handoff dies before it is found."}}
                              [:maybe :waymark/instant]]]
                     :guards [reentry-minters-are-recovery-admin-humans
                              reentry-targets-agents

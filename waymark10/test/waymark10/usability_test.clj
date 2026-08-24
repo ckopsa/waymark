@@ -11,6 +11,9 @@
             [waymark10.guards :as g]
             [waymark10.saved-view :as sv]
             [waymark10.resource :as r]
+            [waymark10.server.grants :as grants]
+            [waymark10.server.members :as members]
+            [waymark10.server.roles :as roles]
             [waymark10.schema :as schema]
             [waymark10.types :as t]
             [waymark10.usability :as u]))
@@ -165,6 +168,111 @@
                                [:actions :retitle :input]))
                       [:properties :token])
               #{}))))))
+
+;; ── the vocabulary inside a list of entries (waymark-7rw) ────────────
+;; A grant's scope is a LIST of entries, and the vocabulary belongs to
+;; the entry's parts. The spelling needed nothing new — an item's
+;; fields are each other's siblings — but the POLICY had to learn to
+;; look one level in, or every annotated list stayed a warning.
+
+(g/defguard names-declared-things-in-entries
+  {:judges [:entries]
+   :vars []
+   :open "The legal tokens are the registry's, one GET away."
+   :explain "One of those entries names something this engine does not serve."}
+  [_row _inp _ctx]
+  (t/allow))
+
+(defn- with-entries [item-map]
+  (assoc-in compliant [:actions :retitle]
+            {:from #{:pending} :to :pending
+             :input [:map
+                     [:entries {:x-display {:label "Entries"
+                                            :help "One per collection."}}
+                      [:vector item-map]]]
+             :guards [names-declared-things-in-entries]
+             :safety {:idempotent true :reversible false :confirm false
+                      :one-way "A retitle is a retitle."}
+             :display {:label "Retitle"}}))
+
+(deftest a-list-whose-ITEMS-advertise-has-advertised
+  (let [bare (with-entries [:map
+                            [:target [:string {:max 60}]]
+                            [:verbs [:vector [:string {:max 60}]]]])
+        annotated (with-entries
+                    [:map
+                     [:target {:x-options {:from :kinds}} [:string {:max 60}]]
+                     ;; :of resolves INSIDE the entry — target is this
+                     ;; field's sibling, in the item a person is filling
+                     [:verbs {:x-options {:from :actions :of :target :each true}}
+                      [:vector [:string {:max 60}]]]])]
+    (is (= 1 (count (warns bare "effort-honesty")))
+        "a list of blank entries is still a blank rectangle")
+    (is (= [] (warns annotated "effort-honesty"))
+        "and the same list, with its item fields named, owes nothing")
+
+    (testing "the recipe rides items.properties, where a client meets it"
+      (let [items (get-in (schema/json-schema
+                           (get-in (r/resource annotated)
+                                   [:actions :retitle :input]))
+                          [:properties :entries :items :properties])]
+        (is (= {:from "kinds"
+                :href "/api/.well-known/waymark"
+                :at ["kinds"]
+                :note "every kind name this engine serves"}
+               (get-in items [:target :x-options])))
+        (is (= ["resources" "{target}" "actions"]
+               (get-in items [:verbs :x-options :at])))))))
+
+;; ── the narrowing: a guard that reads ROWS (waymark-7rw) ─────────────
+
+(g/defguard the-name-is-not-taken
+  {:judges [:token]
+   :reads [:errand]                    ; its OWN kind: a collision test
+   :open "The taken spellings are the collection, one query away."
+   :explain "Something is already called that."}
+  [_row _inp _ctx]
+  (t/allow))
+
+(deftest a-guard-that-judges-against-rows-is-not-withholding-a-schema
+  ;; role's one-spelling and member's roles-registered, in miniature.
+  ;; The rows behind such a guard are either the ILLEGAL answers (a
+  ;; collision test) or answers no published schema can enumerate; in
+  ;; neither case is there a picker to ask for, so the policy asks for
+  ;; prose instead — which policy 2 already does.
+  (is (= [] (warns (assoc-in compliant [:actions :retitle]
+                             {:from #{:pending} :to :pending
+                              :input [:map
+                                      [:token {:x-display {:label "Name"
+                                                           :help "A fresh one."}}
+                                       [:string {:max 60}]]]
+                              :guards [the-name-is-not-taken]
+                              :safety {:idempotent true :reversible false
+                                       :confirm false
+                                       :one-way "A retitle is a retitle."}
+                              :display {:label "Retitle"}})
+                   "effort-honesty")))
+
+  (testing "…while a guard reading only the world still owes a picker"
+    (is (= 1 (count (warns (assoc-in compliant [:actions :retitle]
+                                     {:from #{:pending} :to :pending
+                                      :input [:map [:token [:string {:max 60}]]]
+                                      :guards [names-a-declared-thing]
+                                      :safety {:idempotent true :reversible false
+                                               :confirm false
+                                               :one-way "A retitle is a retitle."}
+                                      :display {:label "Retitle"}})
+                           "effort-honesty"))))))
+
+(deftest the-access-kinds-owe-nothing
+  ;; waymark-7rw's own pin, the composition kinds' precedent above: the
+  ;; four kinds carrying the access story were 13 warnings on forms no
+  ;; application author wrote, and the scope form is the one a person
+  ;; meets while deciding whether to trust an agent.
+  (doseq [rdef [grants/grant grants/approval-request
+                roles/role members/member]]
+    (is (= [] (u/warnings rdef))
+        (str (name (:kind rdef)) " must have nothing owing"))))
 
 ;; ── 2 · mandatory display prose ─────────────────────────────────────
 

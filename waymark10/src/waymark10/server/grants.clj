@@ -160,23 +160,61 @@
 (def field-spec-schema
   "One mode spec: allow renders only :names, deny renders all but."
   [:map
-   [:mode [:enum "allow" "deny"]]
-   [:names [:vector [:string {:min 1 :max 64}]]]])
+   [:mode {:x-display {:label "Allow or deny"
+                       :choices {"allow" "Allow — only the fields named here are readable"
+                                 "deny" "Deny — every field except the ones named here"}}}
+    [:enum "allow" "deny"]]
+   ;; no :x-options here, deliberately: the vocabulary IS this kind's
+   ;; data fields, but :of names a SIBLING and the kind is spelled one
+   ;; level up, on the scope entry this spec hangs off. A recipe
+   ;; reaching out of its own map is a hole no client could fill from
+   ;; the form in front of it, so the sentence says where to look
+   [:names {:x-display {:label "Field names"
+                        :help "Data field names of the kind this entry names — the same names its published schema lists."}}
+    [:vector [:string {:min 1 :max 64}]]]])
 
+(def scope-example
+  "Something in the textarea instead of a blank page (waymark-0ee's
+  composition policy, waymark-7rw's turn at it). An example is offered
+  and never applied: the shape of the smallest honest leash — one
+  kind, one action, nothing else."
+  [{:kind "task" :actions ["claim" "complete"]}])
+
+;; The scope form is where a person decides whether to trust an agent,
+;; so it is the last form in this codebase that should have been a
+;; blank JSON textarea. Since waymark-8sg the two vocabularies it is
+;; judged against can be named out loud (:x-options), and waymark-7rw
+;; discovered that the spelling reaches INSIDE an array's item map with
+;; no new capability at all: an item's fields are each other's
+;; siblings, so :of resolves within the entry a person is filling in.
 (def scope-schema
   [:vector
    [:map
-    [:kind [:string {:min 1 :max 64}]]
-    [:ids {:optional true}
+    [:kind {:x-options {:from :kinds}
+            :x-display {:label "Kind"
+                        :help "The collection this entry opens — one kind name this engine serves."}}
+     [:string {:min 1 :max 64}]]
+    [:ids {:optional true
+           :x-display {:label "Only these rows"
+                       :help "Row ids, when the leash is a handful of documents rather than a collection. Omit it and the entry covers the whole kind (narrowed by any filter below)."}}
      [:maybe [:vector [:string {:min 1 :max 64}]]]]
-    [:actions [:vector [:string {:min 1 :max 64}]]]
-    [:fields {:optional true} [:maybe field-spec-schema]]
+    [:actions {:x-options {:from :actions :of :kind :each true}
+               :x-display {:label "Actions"
+                           :help "What may be done to those rows, by name. An empty list is the read-only ask — sight without a single lever."}}
+     [:vector [:string {:min 1 :max 64}]]]
+    [:fields {:optional true
+              :x-display {:label "Field disposition"
+                          :help "Which of the kind's data fields are readable at all — allow-list or deny-list. Omit it and every field the kind publishes is readable."}}
+     [:maybe field-spec-schema]]
     ;; the third disposition (waymark-rci): a field named here renders
     ;; as a stable opaque token — correlate and reference, never read.
     ;; hidden = not admitted at all; hashed = admitted-as-token; read =
     ;; admitted plain. Hashing DOMINATES its kind's sibling entries —
     ;; a restriction is never absorbed the way openness absorbs.
-    [:hashed {:optional true}
+    [:hashed {:optional true
+              :x-options {:from :fields :of :kind :each true}
+              :x-display {:label "Tokenised fields"
+                          :help "Fields the holder may correlate but never read — each value crosses as a stable opaque token."}}
      [:maybe [:vector [:string {:min 1 :max 64}]]]]
     ;; the filter-scoped entry (waymark: pools as first-class): the
     ;; rows this entry admits are the ones MATCHING, judged at render
@@ -185,14 +223,34 @@
     ;; only; the field must be one the kind declares filterable (the
     ;; scope-filters guard), so the promise is enforceable at the
     ;; query AND the row. Keys arrive keywordized off the wire.
-    [:filter {:optional true}
+    ;; no :x-options: the vocabulary here is the legal KEYS of an
+    ;; object, and the recipe's two composition words (:each for a
+    ;; token list, :composes :query for a field=value string) both
+    ;; describe a value BUILT from tokens. Calling a map one or the
+    ;; other would be a lie about the grammar, so the help sentence
+    ;; carries it and waymark-3ox holds the honest spelling
+    [:filter {:optional true
+              :x-display {:label "Only rows matching"
+                          :help "One field=value pair, judged at render — rows minted later land inside the leash the moment they match. The field must be one the kind declares filterable with eq; one filtered entry per kind."}}
      [:maybe [:map-of :keyword [:string {:min 1 :max 200}]]]]
-    [:args {:optional true}
+    [:args {:optional true
+            :x-display {:label "Argument limits"
+                        :help "Per-action limits on WHICH arguments may be sent — {action, allow|deny, names}. Omit it and an admitted action takes any argument its schema accepts."}}
      [:maybe [:vector
               [:map
-               [:action [:string {:min 1 :max 64}]]
-               [:mode [:enum "allow" "deny"]]
-               [:names [:vector [:string {:min 1 :max 64}]]]]]]]]])
+               ;; :of would have to reach the scope entry one level up
+               ;; for the action vocabulary, the same wall
+               ;; field-spec-schema's :names meets
+               [:action {:x-display {:label "Action"
+                                     :help "One of the action names this entry admits above."}}
+                [:string {:min 1 :max 64}]]
+               [:mode {:x-display {:label "Allow or deny"
+                                   :choices {"allow" "Allow — only the arguments named here"
+                                             "deny" "Deny — every argument except the ones named here"}}}
+                [:enum "allow" "deny"]]
+               [:names {:x-display {:label "Argument names"
+                                    :help "Input field names of that action, as its published schema lists them."}}
+                [:vector [:string {:min 1 :max 64}]]]]]]]]])
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
@@ -438,9 +496,21 @@
    ;; cannot take is dead law. The guards still judge every invoke
    :own-surface {:by :audience :actions #{"accept" "revoke"}}
    :schema [:map
-            [:audience [:string {:min 1 :max 128}]]
-            [:scope scope-schema]
-            [:expires_at {:optional true} [:maybe :waymark/instant]]]
+            ;; :raw, like every other principal id in this codebase: an
+            ;; audience is an opaque member id and a display layer that
+            ;; title-cased it would be dressing up a key as a word
+            [:audience {:x-display {:raw true
+                                    :label "Who holds it"
+                                    :help "The member id this grant empowers — the principal that will present it, not a display name."}}
+             [:string {:min 1 :max 128}]]
+            [:scope {:examples [scope-example]
+                     :x-display {:label "What it opens"
+                                 :help "The leash, entry by entry: a kind, the actions allowed on it, and optionally the rows, fields and filter that narrow it. Everything not named here stays shut."}}
+             scope-schema]
+            [:expires_at {:optional true
+                          :x-display {:label "Good until"
+                                      :help "When the leash goes dead on its own. Leave it empty for a grant that lasts until somebody revokes it."}}
+             [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in}
                 :audience #{:eq}}
    ;; the agent behind the leash — audience IS the member id for
@@ -693,7 +763,15 @@
    ;; waymark10.decision-sugar-test and did not move by one byte. Two
    ;; spellings, one law.
    :decision
-   {:asks    :task                       ; the question
+   ;; the question — and its own words for it. The sugar writes generic
+   ;; prose for the entries it owns (waymark-7rw); an access ask has a
+   ;; better sentence available, so it spells one HERE rather than
+   ;; re-declaring :task in :schema, which would move the entry order
+   ;; and with it a fingerprint, to say a sentence
+   {:asks    {:field :task
+              :x-display
+              {:label "What you need it for"
+               :help "The work this access is for, in one sentence. The approver is deciding about the TASK as much as the scope — 'file the week's receipts' earns a yes that 'admin' does not."}}
     :by      :requested_by               ; stamped from the principal
     :decider {:not :requested_by         ; the field wall, not four-eyes:
               ;; a decision row's requester is stamped by :on-create,
@@ -707,7 +785,10 @@
     ;; exist. An agent proposes longer at will up to the cap; the
     ;; approver sees the number either way.
     :expires {:field :expires_at
-              :default {:service :grant-default-ttl-seconds :seconds 3600}}
+              :default {:service :grant-default-ttl-seconds :seconds 3600}
+              :x-display
+              {:label "Good until"
+               :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}
     ;; the ceiling (asks-are-short) and the pacing pair stay
     ;; hand-written below rather than riding :expires :max and
     ;; :pacing: both need the ANCHORED-ASK EXEMPTION — an ask that
@@ -742,8 +823,14 @@
    ;; grant_id (an anchorless ask is the bootstrap path — its approval
    ;; mints the grant and stamps the id here) and the scope it asks for
    :schema [:map
-            [:grant_id {:optional true :kind :grant} [:maybe :waymark/ref]]
-            [:scope scope-schema]]
+            [:grant_id {:optional true :kind :grant
+                        :x-display {:label "Widen this grant"
+                                    :help "The grant you already hold and want more of. Leave it empty for the bootstrap ask — an approval then mints a fresh grant in your name."}}
+             [:maybe :waymark/ref]]
+            [:scope {:examples [scope-example]
+                     :x-display {:label "What you are asking for"
+                                 :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this."}}
+             scope-schema]]
    :filterable {:grant_id #{:eq}}
    ;; the approval page opens on the decision queue: newest ask first,
    ;; and only the ones still waiting on a person — both projected by

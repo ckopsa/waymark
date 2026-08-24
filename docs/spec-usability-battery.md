@@ -431,6 +431,124 @@ the app kinds untouched. The remaining fix-lists —
 and `approval_request`'s `:scope` want `{:from :kinds}` and
 `{:from :actions}`, and `role`'s `:name` wants a source of its own.
 
+## Amendment — the access kinds, and where a vocabulary is *not* (waymark-7rw)
+
+`grant`, `approval_request`, `role` and `member` were the second fix-list,
+and the four of them are the reason this section exists: two of the four
+took the runtime-vocabulary spelling and **two of them refused it**, for
+reasons the policy had never had to say out loud. `make check-queue`
+over workqueue10: **108 → 94 warnings**, exit 0.
+
+| kind | before | after | what did it |
+|---|---|---|---|
+| `grant` | 2 | 0 | `:x-options` inside `:scope`'s item map; prose on all three fields; a `:scope` `:examples` |
+| `approval_request` | 2 | 0 | the same item map; prose on `:grant_id`/`:scope` in its own schema and on `:task`/`:expires_at` **through the decision sugar** |
+| `role` | 2 | 0 | prose + `:examples`; policy 1 narrowed — no picker, and the refusal is why |
+| `member` | 7 | 0 | prose on the create door and four actions, `:choices` for `actor_type`/`provenance`, `:examples` for `:roles`; policy 1 narrowed |
+| `permission_slip` | 1 | 0 | nothing of its own — the sugar's new prose cleared it, which is the altitude working |
+
+### `:x-options` reaches inside a list of entries, and needed nothing new
+
+A scope is not a token. It is a **list of entries**, each naming a kind,
+that kind's actions, and the rows, fields and filter that narrow them —
+so the vocabulary belongs to the entry's *parts*, not to the list. The
+question the bead was filed with was whether the spelling needed a new
+capability for that. It did not:
+
+```clojure
+(def scope-schema
+  [:vector
+   [:map
+    [:kind    {:x-options {:from :kinds}}                       [:string …]]
+    [:actions {:x-options {:from :actions :of :kind :each true}} [:vector [:string …]]]
+    [:hashed  {:x-options {:from :fields  :of :kind :each true}} [:maybe [:vector …]]]
+    …]])
+```
+
+An item's fields **are each other's siblings**, so `:of` resolves inside
+the entry a person is filling in, and `schema/annotate` already walked
+into item maps, so the recipe lands in `items.properties` where a client
+meets it. What grew is not the spelling but the two READERS:
+`checks/check-options` now validates item maps as surfaces of their own
+(reusing `check-long-text`'s `data.{field}[]` naming), and
+`usability/effort-honesty` counts a list as advertised when its ITEMS
+advertise.
+
+The `:of` refusal is what keeps this honest rather than merely
+convenient. A field one level *further* in — `:fields {:mode … :names …}`,
+or an `:args` entry's `:names` — would want the kind named two maps up,
+and `check-options` refuses that, because no client can fill a hole from
+outside the entry in front of the person. Those fields carry a help
+sentence instead. So does `:filter`: its vocabulary is the legal **keys
+of an object**, and the recipe's two composition words (`:each` for a
+token list, `:composes :query` for a `field=value&…` string) both
+describe a value *built* from tokens. Calling a map either one would be
+a lie about the grammar.
+
+### Policy 1, narrowed: a guard that reads ROWS is not withholding a schema
+
+`role`'s `:name` and `member`'s `:roles` both wanted a source, and
+giving either one would have been a fake. The narrowing is that policy 1
+asks its question of guards that judge against the **declaration**, and
+stays quiet about guards that judge against **rows** — the signal being
+a `:storage` or kind keyword in the guard's own `:reads`
+(`usability/declaration-reads`, guards.clj's own vocabulary). Every one
+of `:x-options`' five sources is a projection of declarations answering
+out of a document a client already holds; rows are the collection's
+business, and the two shapes here are the argument:
+
+- **the collision test** — `role`'s `one-spelling` reads `:role` to
+  refuse a name already taken. The rows it *could* list are exactly the
+  illegal answers; a chip row of them is a worse form than a blank box,
+  not a better one. What the field owed was the naming convention said
+  out loud, an `:examples`, and the refusal that names the collision.
+- **the registry test** — `member`'s `roles-registered` reads `:role` to
+  judge role names. Here the rows *are* the legal answers, but they live
+  behind a scoped, paged collection GET that a one-hop recipe cannot
+  honestly promise, and the guard already names the door where a missing
+  one is **made** (`:remedies [:role/create]`). That door plus a
+  sentence is the affordance.
+
+This is a narrowing and not a waiver, which is the rule the punt list
+below sets for these five: there is no `:waives` token, and a policy that
+turns out to be wrong somewhere gets a smaller question, not an escape
+hatch. What both fields still owe is prose, which policy 2 demands and
+now gets. The row-backed source is **filed** (waymark-90k), not faked.
+
+### The decision sugar says the human words for the entries it owns
+
+`approval_request` is a `:decision` kind: its `:task` and `:expires_at`
+are projected by `resource/desugar-decision`, not written by any author.
+Re-declaring them in `:schema` to add a label would move the entry ORDER
+and with it the kind's fingerprint — *to say a sentence*. So the sugar
+carries the prose itself, in the generic voice a decision of any subject
+can wear, exactly as it already did for a verdict's `:note`:
+
+```clojure
+:asks    {:field :task    :x-display {:label "What you need it for" :help "…"}}
+:expires {:field :expires_at :default {…} :x-display {:label "Good until" :help "…"}}
+```
+
+The map spelling of `:asks` and `:expires` already existed for `:max`
+and `:default`; it now takes an `:x-display` that wins key by key over
+the sugar's own. `permission_slip`, which spells neither, cleared its
+last warning without being touched — the proof that the fix landed at
+the right altitude.
+
+### The hashes, and one honest drift
+
+`approval_request`'s fingerprint is pinned as a literal in
+`decision-sugar-test` and is **byte-identical**
+(`01ca868b…`), as is `role`'s. `grant`'s and `member`'s **moved**, and
+not because of anything on this page: they carry `#()` reader-gensym
+guards (`scope-names-real-kinds`, `roles-registered`,
+`reentry-token-is-fresh`) whose `callable-hash` shifts when *any* form
+is added to a namespace loaded before them. Proved by bisection: with
+only the declaration files changed, both hashes are byte-identical;
+adding a single `(defn- probe [x] x)` to `resource.clj` and nothing else
+moves them. That is **waymark-j82**, filed before this work and not
+fixed by it.
+
 ## Recorded punts
 
 - **`effort-honesty` cannot see an unguarded free-text field.** Its whole
@@ -451,6 +569,26 @@ and `approval_request`'s `:scope` want `{:from :kinds}` and
 - **`ui_lite.html` does not draw the picker.** The single-file fallback client
   renders `:label`, `:help` and `:choices` and ignores `x-options`. It is a
   fallback; the annotation degrades to the text box it always was.
+- **No source reads ROWS.** `member`'s `:roles` wants the active role names,
+  which exist and are enumerable and live in a collection — behind a scoped,
+  paged GET whose items are envelopes, not tokens. A sixth source would need a
+  per-item pluck the recipe has no word for, and would make the picker's
+  freshness and scoping a thing the five declaration-projection sources never
+  had to think about. Filed as waymark-90k. Until then the field carries the
+  sentence and the guard carries the refusal.
+- **A list of entries is still a JSON textarea.** The generic client resolves
+  an item recipe's `{of}` hole against the entries a person has ALREADY typed
+  and offers the union as chips that insert at the caret — real help, and not
+  the per-entry form the scope deserves. `:examples` rides as the placeholder
+  so it does not open blank. A structured editor for vector-of-map fields is a
+  client bead (waymark-vz4), not a declaration one.
+- **`:x-options` cannot name the KEYS of an object, nor a hole two maps up.**
+  A scope's `:filter` and a field-spec's `:names` both have a real runtime
+  vocabulary and got a help sentence instead of a recipe — the first because
+  `:each` and `:composes :query` both describe a value *built* from tokens and
+  a map is neither, the second because `:of` names a SIBLING and the kind is
+  one map further out. Filed as waymark-3ox; both walls are deliberate, and
+  both are cheap to remove for a second field that wants them.
 - **No policy reads the registry.** Each judges one declaration alone, because
   the battery runs where `check.clj` runs — before any engine. `saved_view`'s
   `:card` cannot be validated at declaration time for that reason; it is

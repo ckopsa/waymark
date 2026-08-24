@@ -33,20 +33,26 @@
   ;; :kinds counts the APPLICATION's declarations — one here — while
   ;; :warnings is the whole report's tally, and since waymark-0ee the
   ;; report reaches the enrolled kinds too. The compliant probe is
-  ;; silent; the grant, the member and their siblings are not, and
-  ;; that is the point of widening the report rather than an accident
-  ;; of it (docs/spec-usability-battery.md).
+  ;; silent; some of the framework's own kinds are not, and that is
+  ;; the point of widening the report rather than an accident of it
+  ;; (docs/spec-usability-battery.md).
+  ;;
+  ;; The witness used to be `grant`, until waymark-7rw cleared the
+  ;; access kinds and a cleared enrolled kind stops being listed at
+  ;; all. `definition` is the witness now, and the day IT clears this
+  ;; assertion should move again rather than be deleted — an enrolled
+  ;; kind appearing in an app's report is the widening working.
   (let [out (with-out-str
               (let [{:keys [kinds warnings]} (check/report [probe])]
                 (is (= 1 kinds))
                 (is (pos? warnings))))]
     (is (re-find #"check_probe ✓" out))
-    (is (re-find #"grant \(enrolled\)" out))))
+    (is (re-find #"definition \(enrolled\)" out))))
 
 (deftest the-usability-battery-reaches-the-kinds-nobody-declared
   (let [out (with-out-str (check/report [probe]))]
-    (is (re-find #"\[effort-honesty\] .* :scope is free text" out)
-        "the framework's own grant form is visible from the app's gate")))
+    (is (re-find #"\[display-prose\] the create door renders without prose" out)
+        "the framework's own forms are visible from the app's gate")))
 
 (deftest an-assembly-refusal-surfaces-as-the-definition-error
   (is (thrown-with-msg?

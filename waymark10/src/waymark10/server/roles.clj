@@ -50,9 +50,26 @@
    :nav :system
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
+   ;; No :x-options on :name, deliberately, and this is the one place in
+   ;; the codebase where the runtime-vocabulary spelling was asked for
+   ;; and REFUSED (waymark-7rw). one-spelling reads the role collection,
+   ;; so there IS a list the engine could publish here — but it is the
+   ;; list of names already TAKEN. A chip row of it would offer exactly
+   ;; the tokens the guard is about to refuse, which is a worse form
+   ;; than a blank box, not a better one. What the field owes instead
+   ;; is the naming convention, said out loud, and something to start
+   ;; from; the refusal names the collision when one happens.
    :schema [:map
-            [:name [:string {:min 1 :max 40}]]
-            [:description {:optional true} [:maybe [:string {:max 240}]]]]
+            [:name {:examples ["dishwasher-emptier"]
+                    :x-display {:raw true
+                                :label "Role name"
+                                :help "The token guards and grants will spell — lowercase, hyphenated, one word for one authority (\"recovery-admin\", \"parent\"). One spelling per role: a name already registered is refused, because two spellings of one role split the grant surface silently."}}
+             [:string {:min 1 :max 40}]]
+            [:description {:optional true
+                           :examples ["Whoever is on for emptying the dishwasher this week."]
+                           :x-display {:label "What holding it means"
+                                       :help "A sentence for whoever reads the member list later and wonders what this role opens."}}
+             [:maybe [:string {:max 240}]]]]
    :filterable {:state #{:eq :in}
                 :name #{:eq}}
    :sortable {:fields [:name] :default "name"}

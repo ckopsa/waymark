@@ -1009,6 +1009,41 @@
                                              :pending (str/join ", "
                                                                 (sort (map :id open)))}})))))})))))
 
+;; ── the prose the sugar owes (waymark-7rw) ──────────────────────────
+;;
+;; The same argument :note already won at verdict-action: a sugar that
+;; emits a bare field emits a display-prose warning into a declaration
+;; whose author never wrote the field and cannot clear it without
+;; re-declaring the entry by hand — which would move the entry ORDER
+;; and therefore the kind's fingerprint, to say a sentence. So the
+;; entries the DECISION owns say their human words themselves, in the
+;; generic voice a decision of any subject can wear, and an instance
+;; with better words spells them in its own :asks / :expires map,
+;; where they win whole.
+(defn- humanise [f] (str/capitalize (str/replace (name f) "_" " ")))
+
+(defn- ask-display
+  "Label and hint for the question field. :asks may be the bare
+  keyword or {:field … :max … :x-display …}; the author's map wins
+  key by key, so an instance can retitle without restating the hint."
+  [asks]
+  (let [f (if (map? asks) (:field asks) asks)]
+    (merge {:label (humanise f)
+            :help (str "The ask, in your own words — enough for whoever "
+                       "decides to answer it without coming back to you.")}
+           (when (map? asks) (:x-display asks)))))
+
+(defn- leash-display
+  "Label and hint for the expiry field. The default sentence names the
+  one thing a leash form must say out loud: leaving it empty is not
+  forever, it is the engine's own default."
+  [expires]
+  (let [f (:field expires)]
+    (merge {:label (humanise f)
+            :help (str "How long the answer holds. Leave it empty to take "
+                       "the default leash; ask for less when less will do.")}
+           (:x-display expires))))
+
 (defn- verdict-handler
   "The generic stamp: who decided, and (when the verdict takes one)
   what they wrote. Its canonical form is built as data, so the hash
@@ -1234,11 +1269,13 @@
                 ;; the stamped names are optional and :raw, because
                 ;; they are principal ids and a display layer must not
                 ;; dress them up as words
-                entries (cond-> [[ask-field [:string {:min 1 :max ask-max}]]
+                entries (cond-> [[ask-field {:x-display (ask-display asks)}
+                                  [:string {:min 1 :max ask-max}]]
                                  [by {:optional true :x-display {:raw true}}
                                   [:maybe [:string {:max 128}]]]]
                           exp-field
-                          (conj [exp-field {:optional true}
+                          (conj [exp-field {:optional true
+                                            :x-display (leash-display expires)}
                                  [:maybe :waymark/instant]])
                           decided-by
                           (conj [decided-by {:optional true

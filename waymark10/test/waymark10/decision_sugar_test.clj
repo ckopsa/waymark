@@ -57,22 +57,52 @@
    :terminal #{:approved :denied}
    :nav :system
    :summary "Access request by {data.requested_by} · {state} · until {data.expires_at}"
+   ;; the prose is the sugar's too, on the same argument the :note
+   ;; comment below records (waymark-0ee, widened to :asks and :expires
+   ;; by waymark-7rw): the hand spelling carries the very words the
+   ;; sugar mints, here the ones approval_request spells for itself in
+   ;; its :asks / :expires maps
    :schema [:map
-            [:grant_id {:optional true :kind :grant} [:maybe :waymark/ref]]
-            [:task [:string {:min 1 :max 240}]]
-            [:scope grants/scope-schema]
-            [:expires_at {:optional true} [:maybe :waymark/instant]]
+            [:grant_id {:optional true :kind :grant
+                        :x-display {:label "Widen this grant"
+                                    :help "The grant you already hold and want more of. Leave it empty for the bootstrap ask — an approval then mints a fresh grant in your name."}}
+             [:maybe :waymark/ref]]
+            [:task {:x-display
+                    {:label "What you need it for"
+                     :help "The work this access is for, in one sentence. The approver is deciding about the TASK as much as the scope — 'file the week's receipts' earns a yes that 'admin' does not."}}
+             [:string {:min 1 :max 240}]]
+            [:scope {:examples [grants/scope-example]
+                     :x-display {:label "What you are asking for"
+                                 :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this."}}
+             grants/scope-schema]
+            [:expires_at {:optional true
+                          :x-display
+                          {:label "Good until"
+                           :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}
+             [:maybe :waymark/instant]]
             [:requested_by {:optional true :x-display {:raw true}}
              [:maybe [:string {:max 128}]]]
             [:approved_by {:optional true :x-display {:raw true}}
              [:maybe [:string {:max 128}]]]
             [:note {:optional true} [:maybe [:string {:max 240}]]]]
    :create-schema [:map
-                   [:grant_id {:optional true :kind :grant}
+                   [:grant_id {:optional true :kind :grant
+                               :x-display {:label "Widen this grant"
+                                           :help "The grant you already hold and want more of. Leave it empty for the bootstrap ask — an approval then mints a fresh grant in your name."}}
                     [:maybe :waymark/ref]]
-                   [:task [:string {:min 1 :max 240}]]
-                   [:scope grants/scope-schema]
-                   [:expires_at {:optional true} [:maybe :waymark/instant]]]
+                   [:task {:x-display
+                           {:label "What you need it for"
+                            :help "The work this access is for, in one sentence. The approver is deciding about the TASK as much as the scope — 'file the week's receipts' earns a yes that 'admin' does not."}}
+                    [:string {:min 1 :max 240}]]
+                   [:scope {:examples [grants/scope-example]
+                            :x-display {:label "What you are asking for"
+                                        :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this."}}
+                    grants/scope-schema]
+                   [:expires_at {:optional true
+                                 :x-display
+                                 {:label "Good until"
+                                  :help "When the access should die on its own. Leave it empty and the engine stamps its own short default at birth, so the approver approves the leash that will actually exist."}}
+                    [:maybe :waymark/instant]]]
    :filterable {:state #{:eq :in}
                 :grant_id #{:eq}
                 :requested_by #{:eq}}
