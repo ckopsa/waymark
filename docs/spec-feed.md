@@ -193,8 +193,8 @@ projected through the reader's visibility, and the client's rule 1 holds.
       "display": {"title": "Call the dentist"},
       "fields": {"due_at": "2026-08-25T06:00:00Z", "detail": "…"},
       "actions": {"complete": {"effort": "assent", "href": "…", "display": {…}}},
-      "heavier": [{"name": "prioritize", "effort": "selection",
-                   "label": "Prioritize", "href": "/api/tasks/01HZ…"}],
+      "heavier": [{"name": "rewrite", "effort": "composition",
+                   "label": "Rewrite", "href": "/#/api/tasks/01HZ…"}],
       "links": {"origin": {"href": "…", "external": true}} },
 
     { "card_id": "seam", "section": "seam",
@@ -710,3 +710,147 @@ mechanism it judges.
   compiler-assigned class id and an identity hashcode. Proved by requiring four
   unrelated `clojure.*` namespaces with the feed reverted — same move, no feed.
   The twenty kinds whose hashes ARE deterministic did not move by one byte.
+
+## Built — `.3`, the card's verbs (2026-08-24, waymark-iqa.3)
+
+The ≤-selection rule landed as what `.1` corrected it into: a **read-time
+projection**, in one function, over a map that has already been through the
+grant. `waymark10.server.feed/split-verbs` is the whole of it, and its
+argument list is the design — it takes the card **body** and the row's
+`self`, and it never sees the rdef, the machine or the visibility. `card`
+calls it third, after `:row?` and after `envelope-summary`, so the partition
+can only ever divide doors the reader already holds.
+
+Nothing was added at declaration time and nothing should be. A kind's
+composition actions are correct on the kind's own screen; a check that refused
+them would be refusing law that is right. The one declaration-time instance of
+the rule remains `insight`'s `:offer_action`, and it is still `.6`'s.
+
+```clojure
+(let [actions (get body "actions")
+      heavy? (fn [[_ entry]]
+               (demand/heavier? (get entry "effort") card-ceiling))]
+  (assoc body
+         "actions" (into {} (remove heavy?) actions)
+         "heavier" (into [] (comp (filter heavy?) (map #(heavier-entry self %)))
+                         (sort-by key actions))))
+```
+
+A card with both halves populated, off the wire:
+
+```json
+{ "card_id": "do_now/pr_task/714f17e4-…",
+  "section": "do_now", "population": "next_actions",
+  "kind": "pr_task", "self": "/api/pr_tasks/714f17e4-…",
+  "state": "open", "summary": "Call the dentist · Open",
+  "display": {"title": "Call the dentist"},
+  "fields": {"title": "Call the dentist"},
+  "actions": {
+    "complete":   {"effort": "assent",    "method": "POST",
+                   "href": "/api/pr_tasks/714f17e4-…/-/complete",
+                   "effect": {"to": "done", "terminal": true}},
+    "prioritize": {"effort": "selection", "method": "POST",
+                   "href": "/api/pr_tasks/714f17e4-…/-/prioritize",
+                   "display": {"label": "Prioritize"},
+                   "input": {"properties": {"rank": {"enum": ["high","low"]}}}}},
+  "heavier": [{"name": "annotate", "effort": "composition",
+               "label": "Add a note",
+               "href": "/#/api/pr_tasks/714f17e4-…"}],
+  "links": {}, "meta": {…} }
+```
+
+**The `href` is the row's SCREEN, and that is a deliberate departure from this
+spec's own illustrative JSON**, which sketched the API `self`. A card already
+carries `self`; naming the same address twice says nothing, and worse, it
+invites a client to read a `heavier` entry as a door it could POST to. A
+heavier entry is a place to **go**, not a verb to fire. The screen is `"/#"`
+prepended to the row's href, which is not an invention: the agent door's
+`:handoff` template already hands a human
+`/#/api/approval_requests/{ask-id}` with the note *"it opens the ask
+directly"*, and `workqueue10.sources.waymark/with-origin` derives
+`source_ui_href` as `(str base "/#" self)` for the same reason — *the URL hash
+IS the resource href*. `feed/screen-of` is the one spelling, public because the
+pack judges against it.
+
+**Labels come from the action's own `:display :label`, falling back to the
+humanized action name** — `render/no-admissible-entry`'s spelling exactly, so a
+card and a refusal call one door one thing.
+
+**do-now's filter now reads the LIGHT half.** A row whose only surviving verb
+is a composition drops out of do-now entirely, `heavier` and all. That is the
+section's bargain rather than an oversight: do-now is the one physical next
+action under the thumb, and a card there that could only send you somewhere to
+type is a link wearing a verb's clothes. The row keeps its screen, its
+collection and its place in the archive. Recorded here because it is the one
+behaviour change `.7` will see that is not visible in the card shape.
+
+### The origin convention, as spelled
+
+```
+Idempotency-Key: feed/<day>/<card_id percent-encoded>/<nonce>
+Idempotency-Key: feed/2026-08-24/do_now%2Ftask%2F01HZ…/9f3c1a
+```
+
+Four slash-separated segments, minted by `feed/origin-key` and read back by
+`feed/origin-of` — which answers `{:day :card-id :section :kind :id :nonce}`
+or **nil**, never a guess. The card id is percent-encoded because a `card_id`
+carries slashes of its own and a metric that could not tell them from the
+key's would be a metric that guessed. `.7` sends exactly this.
+
+Nothing was built server-side and nothing needed to be, which was `.1`'s claim
+and is now proved: `invoke/finish!` already stamps a present `:idempotency-key`
+into the transition row whether or not the action is idempotent, and
+`router/invoke-opts` already reads it off the header. The proof is
+`a-verb-invoked-from-a-card-lands-its-origin-on-the-transition` in
+`feed_test.clj` — a card's own `finish` href invoked under the key, and the key
+read back off `waymark10_transitions` — and the conformance obligation does the
+same thing against whatever an application declared, reporting `:covered`.
+
+`feed/actions-from-feed` is the read: `{:day :total :by-section :by-kind
+:by-action :scanned :reached-cap}`. **The trade, recorded.**
+`store/transitions` takes `{:kind :resource-id :since}` and no `LIKE`, so this
+is a bounded newest-first window (`log-scan-cap`, 500) scanned in memory rather
+than a prefix predicate pushed into Postgres. **No store protocol surface was
+added** — the alternative is a new argument on a method four stores implement,
+bought for an ad-hoc number, and the epic's posture is that this metric stays
+derived until it earns more. The bound is announced the way `history/fold-cap`
+announces its own, and `:since` is already there for a caller walking further
+back a page at a time.
+
+### The obligation
+
+`:feed/verbs-are-light` in `packs/feed`, and it is deliberately the **last**
+feed obligation because it is the only one that WRITES. Three claims, each
+proved to fail when it should:
+
+1. **Light.** No entry in any card's `actions` is heavier than `"selection"`,
+   and every `heavier` entry is well-formed — it names an action, its effort
+   really is heavier (a verb that fits belongs where it can be tapped), it
+   carries a label, its href is not an action door (`/-/`), and it equals
+   `feed/screen-of` on the card's own `self`.
+2. **Concealed appears in NEITHER list.** `mint-grant!` mints `:actions []` —
+   read-only sight of one kind — so the audience holds the kind and no verb of
+   it. Every card it reads must carry an empty `actions` **and** an empty
+   `heavier`. This is the exact place a `heavier` built from the declaration
+   would reappear as a link, and concealment would have become narration; it
+   was verified by building one that way and watching the obligation catch it.
+3. **The origin rides the audit trail.** One assent-effort card verb is invoked
+   for real under `feed/origin-key`, and the row's own transition log is read
+   for the key, with the parsed section/kind/id checked against the card.
+
+`:feed/archive-pages` is still `.5`'s, and remains named rather than pending.
+
+### Recorded here, for `.4`, `.5` and `.7`
+
+- **`feed/card-ceiling` is `"selection"`, once.** `demand/heavier?` is asked
+  here and in `waymark10.usability`; a second spelling of the ceiling would be
+  a second opinion about what fits under a thumb.
+- **A new population inherits the partition for free.** `card` is still the one
+  place a row becomes wire, and `split-verbs` is inside it. `.4` and `.5` add
+  a registry entry and a recipe line and get the rule.
+- **`.7` must send `feed/origin-key`'s spelling** and must render `heavier`
+  as a LINK, never as a button: the href is a screen, and a client that POSTed
+  to it would get the UI's index page.
+- **No hash moved.** `feed.clj` is engine-side and carries no declarations;
+  waymark-j82's fingerprint fix was not touched and the twenty deterministic
+  kinds are byte-identical.

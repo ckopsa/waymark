@@ -55,9 +55,35 @@
   reaches the wire through it. Order matters and is a security
   property: project FIRST (`envelope-summary` conceals an ungranted
   action from `actions` AND `unavailable` alike), then partition. So
-  `heavier` — waymark-iqa.3's half, empty here — can never reveal a
-  door the grant conceals; it will only ever name doors the reader
-  already holds, on a screen where they do not fit.
+  `heavier` can never reveal a door the grant conceals; it only ever
+  names doors the reader already holds, on a screen where they do not
+  fit. `split-verbs` reads the SURVIVING map and nothing else — it
+  never consults the declaration, because the one thing it must not
+  be able to do is recover an action the projection dropped.
+
+  ── THE ≤-SELECTION RULE IS A PROJECTION, NOT A CHECK ──
+
+  A card may only offer actions of effort ≤ selection; anything
+  heavier links to the row's own screen. There is NOTHING to refuse at
+  declaration time and no battery to extend: a kind's composition
+  actions are legitimate on the row's own screen, and a
+  declaration-time check would have to refuse law that is correct. So
+  the projection IS the enforcement, and its proof is a conformance
+  obligation over a live answer (`:feed/verbs-are-light`). The one
+  place the rule is enforceable at a DOOR is `insight`'s declared
+  `:offer_action` (waymark-iqa.6), because that is the one place a
+  card's verb is declared rather than inherited.
+
+  ── ACTIONS FROM THE FEED, IN THE AUDIT TRAIL ──
+
+  The success metric is written into the audit trail rather than into
+  an analytics table, and it costs no column: a client invoking FROM a
+  card sends `Idempotency-Key: feed/<day>/<card_id>/<nonce>`, and
+  `invoke/finish!` stamps that string into
+  `waymark10_transitions.idempotency_key` whenever it is present. See
+  `origin-key` for the spelling and `actions-from-feed` for the read.
+  Recorded honestly as a smuggle: the key's declared job is replay
+  identity and this reads it as provenance too.
 
   ── NO DISCOVERY, TWICE ──
 
@@ -86,13 +112,16 @@
   itself on `.well-known` — the same wall spec-mcp-surface hit, the
   contribution table being closed at four on purpose — so the feed is
   found by a client knowing it exists, exactly as the MCP door is."
-  (:require [waymark10.server.invoke :as inv]
+  (:require [clojure.string :as str]
+            [waymark10.demand :as demand]
+            [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
-  (:import (java.nio.charset StandardCharsets)
+  (:import (java.net URLDecoder URLEncoder)
+           (java.nio.charset StandardCharsets)
            (java.time Instant LocalDate ZoneId)
            (java.time.zone ZoneRulesException)
            (java.util Base64)))
@@ -493,6 +522,204 @@
             order))
   recipe)
 
+;; ── the ≤-selection partition ───────────────────────────────────────
+
+(def card-ceiling
+  "The heaviest demand a card may put under the thumb —
+  `demand.clj`'s own vocabulary, the class name as a string because
+  that is what a rendered action entry carries. assent is one tap and
+  selection is choosing rather than typing; recall and composition
+  need a keyboard, a form and a way back, which is a screen.
+
+  It is a var rather than a literal for one reason: `heavier?` is
+  asked here and in `waymark10.usability`, and a second spelling of
+  the ceiling would be a second opinion about what fits under a
+  thumb."
+  "selection")
+
+(defn screen-of
+  "The row's own SCREEN, from its API href. The generic UI's URL hash
+  IS the resource href — `routes/ui.clj` serves one page and the row
+  behind `/#/api/tasks/01HZ…` is the row behind `/api/tasks/01HZ…` —
+  so a screen is `/#` and the `self` a card already carries. Core
+  spells it this way already: the agent door's `:handoff` template
+  (`router.clj`) hands a human `/#/api/approval_requests/{ask-id}`
+  with the note *'it opens the ask directly'*, and
+  `workqueue10.sources.waymark/with-origin` derives `source_ui_href`
+  the same way for the same reason.
+
+  DELIBERATELY NOT the card's `self`, which docs/spec-feed.md's
+  illustrative JSON sketches. A card already carries `self`; naming
+  the same API address twice would say nothing, and worse, it would
+  invite a client to treat a `heavier` entry as a door it could POST
+  to. A heavier entry is a place to GO, not a verb to fire — that is
+  the whole distinction the partition exists to draw."
+  ^String [^String self]
+  (str "/#" self))
+
+(defn- heavier-entry
+  "One heavier verb, as the card names it: `{name effort label href}`.
+  The label is the action's own display label, falling back to the
+  humanized action name — `render/no-admissible-entry`'s spelling
+  exactly, so a card and a refusal call the same door the same thing.
+  The href is the ROW's screen and never the action's own href: the
+  card is saying *this door is real and it is over there*, not
+  offering it."
+  [self [aname entry]]
+  {"name" aname
+   "effort" (get entry "effort")
+   "label" (or (get-in entry ["display" "label"])
+               (str/replace (str aname) "_" " "))
+   "href" (screen-of self)})
+
+(defn split-verbs
+  "The ≤-selection partition (waymark-iqa.3), over the ALREADY
+  PROJECTED body: the survivors of effort ≤ `card-ceiling` stay in
+  `actions`, the rest become `heavier` entries pointing at the row's
+  own screen.
+
+  It reads `(get body \"actions\")` and NOTHING ELSE — not the rdef,
+  not the machine, not the visibility. That is the design, not a
+  convenience: `card` has already dropped every action this reader's
+  grant conceals from `actions` and `unavailable` alike, so a
+  partition that can only see what survived structurally cannot name
+  a door the grant hid. The moment this function needed the
+  declaration to answer a question about an action, the concealment
+  would be one bug away from narration.
+
+  `heavier` exists so the card does not lie. Silently dropping an
+  action a reader HOLDS is `router.clj`'s own *'a surface that
+  silently stopped existing'* in another register — and it is a
+  different failure from concealment, which is the grant's answer and
+  is supposed to be silent.
+
+  Entries are name-ordered so two reads of one day answer one wire."
+  [body self]
+  (let [actions (get body "actions")
+        heavy? (fn [[_ entry]]
+                 (demand/heavier? (get entry "effort") card-ceiling))]
+    (assoc body
+           "actions" (into {} (remove heavy?) actions)
+           "heavier" (into []
+                           (comp (filter heavy?)
+                                 (map #(heavier-entry self %)))
+                           (sort-by key actions)))))
+
+;; ── the origin convention ───────────────────────────────────────────
+
+(def origin-prefix
+  "The `Idempotency-Key` prefix a card verb rides under. One string,
+  named once, because waymark-iqa.7's client must send exactly what
+  `origin-of` reads."
+  "feed")
+
+(defn- url-encode ^String [^String s] (URLEncoder/encode s "UTF-8"))
+(defn- url-decode ^String [^String s] (URLDecoder/decode s "UTF-8"))
+
+(defn origin-key
+  "The `Idempotency-Key` a client sends when it invokes FROM a card:
+
+      feed/2026-08-24/do_now%2Ftask%2F01HZ…/9f3c1a
+
+  Four slash-separated segments — the prefix, the feed's day, the
+  card's id percent-encoded (a `card_id` carries slashes of its own,
+  and a metric that could not tell them from the key's would be a
+  metric that guessed), and a nonce.
+
+  NO NEW COLUMN, and that is the point. `invoke/finish!` stamps a
+  present idempotency key into the transition row whether or not the
+  action is idempotent, so actions-from-the-feed is one prefix away —
+  per day, per section, per kind, forever, and RETROACTIVE to the day
+  the convention lands. Two alternatives were weighed and rejected in
+  docs/spec-feed.md: a new `origin` column (a migration and the
+  store's four-edit, for a metric) and `correlation_id` (engine-minted
+  for cascade parentage; the router never lets a caller set it, and
+  one column meaning two things is the failure a sibling spec refuses
+  in another register).
+
+  THE NONCE IS LOAD-BEARING. `idempotency-lookup` is scoped (key,
+  kind) and `p/idempotency-key-reuse` throws when one key returns with
+  a different digest, so two taps of one verb on one card on one day
+  must not collide — and a replayed tap that SHOULD collide is the
+  client resending the same nonce, which is the header's declared job
+  working normally."
+  ^String [^String day ^String card-id ^String nonce]
+  (str origin-prefix "/" day "/" (url-encode card-id) "/" nonce))
+
+(defn origin-of
+  "The feed origin a key names, or nil for every key that is not one —
+  `{:day :card-id :section :kind :id :nonce}`. A key of any other
+  shape is somebody else's idempotency key and this reader says so by
+  answering nil rather than by guessing.
+
+  The `card_id` is `section/kind/id` (`card-id` above), so the three
+  names the recipe declared come back out of the audit trail without
+  a join. A seam has no verb, so no key ever names one."
+  [k]
+  (when (string? k)
+    (let [segs (str/split k #"/")]
+      (when (and (= 4 (count segs)) (= origin-prefix (first segs)))
+        (let [cid (url-decode (nth segs 2))
+              [section kind id] (str/split cid #"/" 3)]
+          (when (and (not-empty section) (not-empty kind) (not-empty id))
+            {:day (nth segs 1)
+             :card-id cid
+             :section section
+             :kind kind
+             :id id
+             :nonce (nth segs 3)}))))))
+
+(defn actions-from-feed
+  "The success metric, made queryable: how many writes a day's feed
+  produced, by section, kind and action.
+
+  It folds the newest `:limit` transitions (`log-scan-cap` by default)
+  and keeps the ones whose `idempotency_key` `origin-of` recognizes,
+  optionally narrowed to one `:day`. → `{:day :total :by-section
+  :by-kind :by-action :scanned :reached-cap}`.
+
+  THE TRADE, RECORDED. `store/transitions` takes `{:kind :resource-id
+  :since}` and no LIKE, so this is a bounded newest-first window
+  scanned in memory rather than a prefix predicate pushed into
+  Postgres. That is deliberate: the alternative is a new argument on a
+  protocol method four stores implement, bought for an ad-hoc number,
+  and the epic's own posture is that this metric is derived until it
+  earns more. The bound is announced the way `history/fold-cap`
+  announces its own — `:reached-cap` says the window filled, because
+  truncation announced beats totality implied — and `:since` is
+  already there for a caller walking further back a page at a time. If
+  actions-from-the-feed ever becomes a first-class report rather than
+  a question somebody asks at a REPL, the predicate (and then the
+  column) earns its place then.
+
+  Time-on-feed is NOT measured, on purpose. If this surface works,
+  people close it sooner."
+  ([eng] (actions-from-feed eng {}))
+  ([eng {:keys [day limit since]}]
+   (let [st (:storage eng)
+         n (long (or limit log-scan-cap))
+         log (store/with-tx st
+               (fn [tx] (store/transitions st tx (cond-> {} since (assoc :since since))
+                                           {:limit n :newest-first true})))
+         hits (into []
+                    (keep (fn [tr]
+                            (when-some [o (origin-of (:idempotency-key tr))]
+                              (when (or (nil? day) (= day (:day o)))
+                                (assoc o :action (name (:action tr))
+                                       ;; the transition's OWN kind is the
+                                       ;; authority; the card id's is the
+                                       ;; client's claim about itself
+                                       :kind (name (:kind tr)))))))
+                    log)]
+     {:day day
+      :total (count hits)
+      :by-section (frequencies (map :section hits))
+      :by-kind (frequencies (map :kind hits))
+      :by-action (frequencies (map (fn [h] (str (:kind h) "." (:action h)))
+                                   hits))
+      :scanned (count log)
+      :reached-cap (= (count log) n)})))
+
 ;; ── one card ────────────────────────────────────────────────────────
 
 (defn- ctx-opts
@@ -516,14 +743,13 @@
   "One card, or nil — the ONE place a row becomes wire, so the fourth
   law is enforced once and inherited by every population.
 
-  The order of the two gates is the security property. `:row?` first:
-  a row this grant does not confer is not narrowed, it is ABSENT, the
-  same concealment the router answers a scoped collection with. Then
-  `envelope-summary` with `:visibility`, which drops every ungranted
-  action from `actions` and `unavailable` alike. Only what survives
-  both is a card, and `heavier` (waymark-iqa.3's half, empty here) will
-  be split off AFTER that — never before, or it would name doors the
-  projection just concealed.
+  The order of the three gates is the security property. `:row?`
+  first: a row this grant does not confer is not narrowed, it is
+  ABSENT, the same concealment the router answers a scoped collection
+  with. Then `envelope-summary` with `:visibility`, which drops every
+  ungranted action from `actions` and `unavailable` alike. Only THEN
+  `split-verbs`, over what survived — never before, or the partition
+  would name doors the projection just concealed.
 
   A candidate whose row has vanished between the population's scan and
   this read is simply no card: the feed is a read, and a read that
@@ -534,8 +760,8 @@
   `waymark`, because a card is an element of a document rather than a
   document, and `unavailable`, because a card has no room for the
   narration of doors that are shut. What a reader HOLDS is never
-  dropped — that is `actions` plus (from .3) `heavier`, and the whole
-  point of `heavier` is that a card does not lie about a door it has."
+  dropped — it is `actions` plus `heavier`, and the whole point of
+  `heavier` is that a card does not lie about a door it has."
   [ctx section population {:keys [kind id row at]}]
   (let [rdef (get (resources ctx) kind)
         vis (:visibility ctx)]
@@ -544,21 +770,24 @@
                               (load-decoded ctx rdef id))]
         (let [body (dissoc (render/envelope-summary rdef decoded (ctx-opts ctx))
                            "waymark" "unavailable")]
-          (cond-> (assoc body
+          (cond-> (assoc (split-verbs body (get body "self"))
                          "card_id" (card-id section kind id)
                          "section" (name section)
-                         "population" (name population)
-                         ;; .3 partitions the row's own verbs on
-                         ;; (demand/heavier? effort "selection") and
-                         ;; fills this; until then a card offers what
-                         ;; the projection left it and claims nothing
-                         ;; is elsewhere
-                         "heavier" [])
+                         "population" (name population))
             at (assoc "at" (str at))))))))
 
 (defn- offers-something?
   "Does this card put a verb under the thumb? do-now's own filter: a
-  next action with no available action is a row on a list."
+  next action with no available action is a row on a list.
+
+  It reads `actions` AFTER the ≤-selection partition, so a row whose
+  only surviving verb is a composition drops out of do-now with its
+  `heavier` link. That is the section's own bargain rather than an
+  oversight — do-now is the one physical next action under the thumb,
+  and a card there that could only send you somewhere else to type is
+  a link wearing a verb's clothes. The row is still the household's:
+  it keeps its own screen, its collection and (once its last move is
+  its latest) the archive."
   [c]
   (seq (get c "actions")))
 

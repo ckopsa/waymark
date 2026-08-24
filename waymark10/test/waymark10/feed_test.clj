@@ -18,6 +18,7 @@
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.feed :as feed]
+            [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
             [waymark10.wire :as wire]))
 
@@ -32,11 +33,26 @@
     :terminal #{:done}
     :summary "{data.title} · {state}"
     :display {:title "{data.title}"}
-    :schema [:map [:title [:string {:min 1 :max 60}]]]
+    :schema [:map
+             [:title [:string {:min 1 :max 60}]]
+             [:note {:optional true :x-display {:widget "prose"}}
+              [:string {:max 400}]]]
     :actions
     {:finish {:from #{:open} :to :done
               :safety {:idempotent true :reversible false :confirm false
-                       :one-way "Done is done."}}}}))
+                       :one-way "Done is done."}}
+     ;; a selection — choosing, not typing. It STAYS under the thumb.
+     :prioritize {:from #{:open} :to :open
+                  :input [:map [:rank [:enum "high" "low"]]]
+                  :display {:label "Prioritize"}
+                  :safety {:idempotent false :reversible true :confirm false}}
+     ;; a composition — prose, a keyboard and a way back. It is a
+     ;; SCREEN, and the card says so rather than dropping it
+     :annotate {:from #{:open} :to :open
+                :input [:map [:note {:x-display {:widget "prose"}}
+                              [:string {:max 400}]]]
+                :edit {:prefill [:note]}
+                :safety {:idempotent false :reversible true :confirm false}}}}))
 
 (def ^:private errand (kind-of :fd_errand "fd_errands"))
 (def ^:private parcel (kind-of :fd_parcel "fd_parcels"))
@@ -186,7 +202,6 @@
                                            (count "do_now/fd_errand/"))))
           (is (= "do_now" (:section c)))
           (is (= "next_actions" (:population c)))
-          (is (= [] (:heavier c)) "the ≤-selection partition is .3's")
           (is (str/starts-with? (str (:self c)) "/api/fd_errands/"))
           (is (= "Call the dentist" (get-in c [:display :title])))
           (is (some? (get-in c [:actions :finish :href]))
@@ -215,6 +230,131 @@
       (is (not= (card-ids (:doc (feed! eng)))
                 (card-ids (:doc (feed! eng :headers
                                        {"x-waymark-principal" "dad"}))))))))
+
+;; ── the ≤-selection partition (waymark-iqa.3) ───────────────────────
+
+(deftest a-card-offers-what-fits-under-a-thumb-and-points-at-the-rest
+  (let [eng (boot)]
+    (make! eng :fd_errand "Call the dentist")
+    (let [c (first (:cards (:doc (feed! eng))))]
+      (testing "assent and selection stay — one tap, or choosing"
+        (is (= #{:finish :prioritize} (set (keys (:actions c)))))
+        (is (= #{"assent" "selection"}
+               (set (map :effort (vals (:actions c)))))))
+      (testing "the composition becomes a heavier entry, not a silence"
+        (is (= 1 (count (:heavier c))))
+        (let [h (first (:heavier c))]
+          (is (= "annotate" (:name h)))
+          (is (= "composition" (:effort h)))
+          (is (= "annotate" (:label h))
+              "no declared label falls back to the humanized action name,
+               render/no-admissible-entry's own spelling")))
+      (testing "and it points at the ROW's screen, never the action's door"
+        (let [h (first (:heavier c))]
+          (is (= (str "/#" (:self c)) (:href h)))
+          (is (not (str/includes? (str (:href h)) "/-/"))
+              "a heavier entry is a place to GO, not a verb to fire"))))))
+
+(deftest the-partition-reads-the-projected-map-and-nothing-else
+  (testing "it is a pure function of the body it is handed — hand it a
+            body with one action and one action is all it can see"
+    (let [body {"self" "/api/fd_errands/1"
+                "actions" {"finish" {"effort" "assent"}
+                           "compose" {"effort" "composition"}}}
+          out (feed/split-verbs body (get body "self"))]
+      (is (= ["finish"] (keys (get out "actions"))))
+      (is (= [{"name" "compose" "effort" "composition" "label" "compose"
+               "href" "/#/api/fd_errands/1"}]
+             (get out "heavier")))))
+  (testing "a declared label is the one the card shows"
+    (is (= "Add a note"
+           (get-in (feed/split-verbs
+                    {"actions" {"annotate" {"effort" "composition"
+                                            "display" {"label" "Add a note"}}}}
+                    "/api/fd_errands/1")
+                   ["heavier" 0 "label"]))))
+  (testing "an empty actions map partitions into two empties, never nil"
+    (let [out (feed/split-verbs {"self" "/api/fd_errands/1" "actions" {}} "x")]
+      (is (= {} (get out "actions")))
+      (is (= [] (get out "heavier"))))))
+
+(deftest a-card-whose-only-verb-is-heavy-is-not-a-do-now
+  (testing "do-now is the one physical next action under the thumb, so a
+            card that could only send you somewhere to type is not one"
+    (let [only-heavy (r/resource
+                      {:kind :fd_essay :plural "fd_essays"
+                       :states [:open :done] :initial :open :terminal #{:done}
+                       :summary "{data.title}"
+                       :schema [:map [:title [:string {:min 1 :max 60}]]]
+                       :actions
+                       {:write {:from #{:open} :to :done
+                                :input [:map
+                                        [:body {:x-display {:widget "prose"}}
+                                         [:string {:max 400}]]]
+                                :safety {:idempotent false :reversible false
+                                         :confirm false
+                                         :one-way "Written is written."}}}})
+          eng (engine/engine {:storage (memory/storage)
+                              :resources [errand only-heavy]})]
+      (call! eng :post "/api/fd_essays" :body {:title "The long one"})
+      (is (empty? (filter #(= "fd_essay" (:kind %))
+                          (:cards (:doc (feed! eng)))))))))
+
+;; ── the origin convention ───────────────────────────────────────────
+
+(deftest the-origin-key-round-trips-and-names-the-recipe-back
+  (let [k (feed/origin-key "2026-08-24" "do_now/task/01HZ" "9f3c1a")]
+    (is (= "feed/2026-08-24/do_now%2Ftask%2F01HZ/9f3c1a" k)
+        "the card id is percent-encoded: a card_id carries slashes of its
+         own, and a metric that could not tell them from the key's would
+         be a metric that guessed")
+    (is (= {:day "2026-08-24" :card-id "do_now/task/01HZ"
+            :section "do_now" :kind "task" :id "01HZ" :nonce "9f3c1a"}
+           (feed/origin-of k))
+        "section, kind and id come back out of the audit trail with no join"))
+  (testing "and every other key is somebody else's — nil, never a guess"
+    (is (nil? (feed/origin-of nil)))
+    (is (nil? (feed/origin-of "")))
+    (is (nil? (feed/origin-of (str (random-uuid)))))
+    (is (nil? (feed/origin-of "feed/2026-08-24/do_now%2Ftask%2F01HZ")))
+    (is (nil? (feed/origin-of "deck/2026-08-24/do_now%2Ftask%2F01HZ/9f"))
+        "the prefix is the whole of the claim")
+    (is (nil? (feed/origin-of "feed/2026-08-24/notacardid/9f3c1a"))
+        "a card id that is not section/kind/id names no card")))
+
+(deftest a-verb-invoked-from-a-card-lands-its-origin-on-the-transition
+  (let [eng (boot)
+        _ (make! eng :fd_errand "Call the dentist")
+        doc (:doc (feed! eng))
+        c (first (:cards doc))
+        id (last (str/split (str (:self c)) #"/"))
+        key' (feed/origin-key (:day doc) (:card_id c) "9f3c1a")
+        done (call! eng :post (get-in c [:actions :finish :href])
+                    :headers {"idempotency-key" key'})]
+    (is (= 200 (:status done)))
+    (testing "invoke/finish! stamps a present key whether or not the
+              action is idempotent — finish declares :idempotent true,
+              and that is the case a new column would have been bought for"
+      (let [log (store/with-tx (:storage eng)
+                  (fn [tx] (store/transitions (:storage eng) tx
+                                              {:kind :fd_errand
+                                               :resource-id id}
+                                              {})))
+            moved (first (filter #(= :finish (:action %)) log))]
+        (is (= key' (:idempotency-key moved)))
+        (is (= "do_now" (:section (feed/origin-of (:idempotency-key moved)))))))
+    (testing "and the metric reads it back — no column, no analytics table"
+      (let [m (feed/actions-from-feed eng {:day (:day doc)})]
+        (is (= 1 (:total m)))
+        (is (= {"do_now" 1} (:by-section m)))
+        (is (= {"fd_errand" 1} (:by-kind m)))
+        (is (= {"fd_errand.finish" 1} (:by-action m)))
+        (is (false? (:reached-cap m)))))
+    (testing "a day that is not the feed's counts nothing"
+      (is (= 0 (:total (feed/actions-from-feed eng {:day "1999-01-01"})))))
+    (testing "and an ordinary write is not a feed action"
+      (make! eng :fd_errand "not from a card")
+      (is (= 1 (:total (feed/actions-from-feed eng {:day (:day doc)})))))))
 
 ;; ── the fourth law: two principals, one door ────────────────────────
 
@@ -245,7 +385,17 @@
             "concealment that concealed everything would prove nothing"))
       (testing "the document says out loud that it was read through a grant"
         (is (some #(str/includes? % "Read through your grant")
-                  (:notes (:doc scoped))))))))
+                  (:notes (:doc scoped)))))
+      (testing "and an action the leash conceals is in NEITHER list —
+                the whole reason heavier is drawn from the SURVIVORS"
+        (let [cards (remove #(= "seam" (:card_id %)) (:cards (:doc scoped)))]
+          (is (seq cards))
+          (is (every? #(= [:finish] (keys (:actions %))) cards)
+              "the leash names finish and nothing else")
+          (is (every? #(empty? (:heavier %)) cards)
+              "annotate is a composition the unscoped reader sees in
+               heavier; a concealed door may not reappear there as a
+               link, or concealment has become narration"))))))
 
 ;; ── the cursor ──────────────────────────────────────────────────────
 

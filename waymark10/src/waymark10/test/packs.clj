@@ -93,6 +93,7 @@
   of its module is only ever its module's own vocabulary — the
   worker's actor id, the curtain's verdict — never another's."
   (:require [clojure.string :as str]
+            [waymark10.demand :as demand]
             [waymark10.machine :as machine]
             [waymark10.scenario :as scenario]
             [waymark10.server.attachments :as attachments]
@@ -1851,6 +1852,195 @@
                  " — above the seam the feed is finite and done, and"
                  " re-serving it is the duplication the epic forbids")))))
 
+(defn- feed-row-cards
+  "Every card of one feed answer that stands for a row — the seam has
+  no verbs and no screen, and it is the one element here that is not a
+  projection of anything."
+  [doc]
+  (into [] (remove #(= "seam" (:card_id %))) (feed-cards doc)))
+
+(defn- feed-light-violations
+  "The first law, read off the wire: no entry in any card's `actions`
+  demands more than a selection, and every `heavier` entry is a
+  well-formed pointer at the ROW's own screen.
+
+  A card that offered a composition would be a keyboard where the
+  epic promised a thumb; a `heavier` entry pointing at the action's
+  own href would be the door the partition exists to move, wearing a
+  link's clothes."
+  [cards]
+  (into []
+        (mapcat
+         (fn [c]
+           (concat
+            (keep (fn [[aname e]]
+                    (when (demand/heavier? (str (:effort e)) feed/card-ceiling)
+                      (str "feed: card " (:card_id c) " offers "
+                           (name aname) " at effort " (pr-str (:effort e))
+                           " — a card may only offer ≤ " feed/card-ceiling
+                           ", and anything heavier links to the row's own"
+                           " screen instead")))
+                  (:actions c))
+            (mapcat
+             (fn [h]
+               (cond
+                 (str/blank? (str (:name h)))
+                 [(str "feed: card " (:card_id c) " carries a heavier entry"
+                       " naming no action: " (pr-str h))]
+
+                 (not (demand/heavier? (str (:effort h)) feed/card-ceiling))
+                 [(str "feed: card " (:card_id c) " put " (:name h)
+                       " (effort " (pr-str (:effort h)) ") in heavier —"
+                       " a verb that FITS under the thumb belongs in actions,"
+                       " where it can be tapped")]
+
+                 (str/blank? (str (:label h)))
+                 [(str "feed: card " (:card_id c) "'s heavier entry "
+                       (:name h) " carries no label — a link a person"
+                       " cannot read is a link they will not follow")]
+
+                 (str/includes? (str (:href h)) "/-/")
+                 [(str "feed: card " (:card_id c) "'s heavier entry "
+                       (:name h) " points at " (pr-str (:href h))
+                       " — that is the ACTION's door, and a heavier entry is"
+                       " a place to GO rather than a verb to fire")]
+
+                 (not= (feed/screen-of (str (:self c))) (:href h))
+                 [(str "feed: card " (:card_id c) "'s heavier entry "
+                       (:name h) " points at " (pr-str (:href h))
+                       " rather than the row's own screen "
+                       (pr-str (feed/screen-of (str (:self c)))))]
+
+                 :else nil))
+             (:heavier c))))
+         cards)))
+
+(defn- feed-concealed-violations
+  "The two-principal half, and the one the ORDER of the projection
+  buys: an action a grant conceals appears in NEITHER list.
+
+  `mint-grant!` mints `:actions []` — read-only sight of one kind, the
+  leash core's own door hands out — so the audience holds the kind and
+  no verb of it at all. Every card it reads must therefore carry an
+  empty `actions` AND an empty `heavier`. If `heavier` were built from
+  the declaration rather than from the surviving map, this is exactly
+  where a concealed door would reappear as a link, and concealment
+  would have become narration."
+  [ctx]
+  (let [granted (or (first (app-kinds ctx)) :role)
+        audience "feed-verb-probe"]
+    (if-some [gid (mint-grant! ctx audience granted)]
+      (let [as-audience {"x-waymark-principal" audience
+                         "x-waymark-actor-type" "agent"}
+            accepted ((:invoke ctx) :grant gid :accept {} {:headers as-audience})
+            scoped (feed-doc ctx (assoc as-audience "x-waymark-grant" gid))
+            cards (feed-row-cards (:doc scoped))]
+        (cond-> []
+          (not= 200 (:status accepted))
+          (conj (str "feed: the audience could not accept its own grant ("
+                     (:status accepted) ") — the concealment probe never"
+                     " got a leash"))
+
+          (some #(seq (:actions %)) cards)
+          (conj (str "feed: a reader whose leash names no action was shown "
+                     (pr-str (into [] (comp (mapcat (comp keys :actions))
+                                            (map name) (distinct))
+                                   cards))
+                     " in actions — a sight-only grant confers sight, not"
+                     " doors"))
+
+          (some #(seq (:heavier %)) cards)
+          (conj (str "feed: a reader whose leash names no action was shown "
+                     (pr-str (into [] (comp (mapcat :heavier) (map :name)
+                                            (distinct))
+                                   cards))
+                     " in heavier — heavier is drawn from the SURVIVORS of"
+                     " the projection, so a concealed door may not reappear"
+                     " there as a link"))))
+      [(str "feed: minting a grant over " (name granted)
+            " refused — the concealment obligation has no leash to wear")])))
+
+(defn- feed-origin-violations
+  "The third half: a verb invoked FROM a card carries the feed's origin
+  into the audit trail, with no new column.
+
+  One assent-effort card verb is invoked for real under
+  `Idempotency-Key: feed/<day>/<card_id>/<nonce>`, and the row's own
+  transition log is then read for the key. `invoke/finish!` stamps a
+  present key whether or not the action is idempotent, which is the
+  whole mechanism — so if this fails, what failed is the convention's
+  spelling or that stamp, and the metric behind it (`feed/
+  actions-from-feed`) is reading a column that nothing fills.
+
+  It reports `:covered`, because an engine whose feed happens to offer
+  no one-tap verb proves nothing here and should say so rather than
+  pass quietly."
+  [ctx cards day]
+  (let [nonce (subs (str (random-uuid)) 0 8)
+        candidate (first (for [c cards
+                               [wname e] (:actions c)
+                               :when (= "assent" (str (:effort e)))]
+                           [c wname]))]
+    (if-not candidate
+      {:covered 0 :violations []}
+      (let [[c wname] candidate
+            kind (keyword (:kind c))
+            id (id-of (:self c))
+            aname (declared-name ctx kind wname)
+            key' (feed/origin-key day (str (:card_id c)) nonce)
+            resp (invoke-http ctx kind id aname nil
+                              {:headers {"idempotency-key" key'}})
+            landed (when (= 200 (:status resp))
+                     (some #(when (= key' (:idempotency-key %)) %)
+                           (transitions ctx kind id)))
+            parsed (feed/origin-of key')]
+        {:covered (if landed 1 0)
+         :violations
+         (cond-> []
+           (not= 200 (:status resp))
+           (conj (str "feed: invoking " (name aname) " from card "
+                      (:card_id c) " answered " (:status resp)
+                      " — a card verb is an ordinary invoke through the"
+                      " row's own action href: " (pr-str (json ctx resp))))
+
+           (and (= 200 (:status resp)) (nil? landed))
+           (conj (str "feed: a verb invoked with " (pr-str key')
+                      " left no transition carrying that key — the origin"
+                      " rides the Idempotency-Key column, and"
+                      " actions-from-the-feed is reading a column nothing"
+                      " filled"))
+
+           (nil? parsed)
+           (conj (str "feed: " (pr-str key') " is the convention's own"
+                      " spelling and feed/origin-of does not recognize it"))
+
+           (and parsed (not= [(str (:section c)) (str (:kind c)) id]
+                             [(:section parsed) (:kind parsed) (:id parsed)]))
+           (conj (str "feed: the origin key parses to " (pr-str parsed)
+                      " but the card is " (pr-str [(:section c) (:kind c) id])
+                      " — section, kind and id come back out of the audit"
+                      " trail with no join, or they come back wrong")))}))))
+
+(defn- feed-verbs-are-light-violations
+  "waymark-iqa.3, whole: the ≤-selection rule as the READ-TIME
+  PROJECTION it is, plus the origin convention that makes
+  actions-from-the-feed a number somebody can ask for.
+
+  There is nothing to prove at declaration time and no battery to
+  extend — a kind's composition actions are legitimate on the row's
+  own screen, so a declaration-time check would have to refuse law
+  that is correct. The projection IS the enforcement, and this is
+  where it is judged: on a live answer, from the wire, through two
+  principals."
+  [ctx]
+  (let [{:keys [doc]} (feed-doc ctx nil)
+        cards (feed-row-cards doc)
+        origin (feed-origin-violations ctx cards (str (:day doc)))]
+    {:covered (:covered origin)
+     :violations (into (feed-light-violations cards)
+                       (concat (feed-concealed-violations ctx)
+                               (:violations origin)))}))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -1861,11 +2051,15 @@
     (feed-obligation :feed/recipe-order feed-recipe-order-violations)
     (feed-obligation :feed/day-stable feed-day-stable-violations)
     (feed-obligation :feed/projection feed-projection-violations)
-    (feed-obligation :feed/cursor-rolls feed-cursor-violations)]
-   ;; NOT here, and named rather than pending: :feed/verbs-are-light
-   ;; (waymark-iqa.3 writes the ≤-selection partition this pack would
-   ;; be judging) and :feed/archive-pages (waymark-iqa.5 brings the
-   ;; populations that make deep paging worth walking). Both are
-   ;; spec-feed § 'Where the law is proved' obligations, and both
-   ;; belong to the bead that lands the mechanism.
+    (feed-obligation :feed/cursor-rolls feed-cursor-violations)
+    ;; LAST on purpose: it is the one feed obligation that WRITES —
+    ;; a card verb invoked for real, so the origin convention is
+    ;; proved by the audit trail rather than by a docstring. Every
+    ;; obligation whose answer a finished row would move reads above
+    ;; it.
+    (feed-obligation :feed/verbs-are-light feed-verbs-are-light-violations)]
+   ;; NOT here, and named rather than pending: :feed/archive-pages
+   ;; (waymark-iqa.5 brings the populations that make deep paging
+   ;; worth walking). A spec-feed § 'Where the law is proved'
+   ;; obligation, belonging to the bead that lands the mechanism.
    })
