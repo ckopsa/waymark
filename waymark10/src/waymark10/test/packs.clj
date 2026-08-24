@@ -1974,12 +1974,22 @@
 
   It reports `:covered`, because an engine whose feed happens to offer
   no one-tap verb proves nothing here and should say so rather than
-  pass quietly."
+  pass quietly.
+
+  The candidate must MOVE the row: an idempotent verb whose declared
+  :to is the row's current state natural-replays — 200, envelope
+  unchanged, no transition appended — so the key would land nowhere
+  and the probe would blame the convention for the replay door doing
+  its job (waymark-iqa.12). Only a verb whose effect leaves the
+  card's own state proves the stamp."
   [ctx cards day]
   (let [nonce (subs (str (random-uuid)) 0 8)
         candidate (first (for [c cards
                                [wname e] (:actions c)
-                               :when (= "assent" (str (:effort e)))]
+                               :when (and (= "assent" (str (:effort e)))
+                                          (some? (get-in e [:effect :to]))
+                                          (not= (str (get-in e [:effect :to]))
+                                                (str (:state c))))]
                            [c wname]))]
     (if-not candidate
       {:covered 0 :violations []}
