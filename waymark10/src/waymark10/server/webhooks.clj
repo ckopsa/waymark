@@ -109,19 +109,43 @@
    :nav :system
    :summary "{data.url} · {state}"
    :schema [:map
-            [:url [:string {:min 1 :max 250}]]
-            [:kinds {:optional true}
+            [:url {:x-display
+                   {:label "Where to POST"
+                    :help "The endpoint that will receive each event as a JSON POST — https, and reachable from this engine, or nothing arrives."}}
+             [:string {:min 1 :max 250}]]
+            [:kinds {:optional true
+                     :examples [["task" "chore"]]
+                     :x-display
+                     {:label "Which kinds to hear about"
+                      :help "The resource kinds whose transitions this endpoint wants — task, meal, chore. Left blank it hears about all of them."}}
              [:maybe [:vector [:string {:min 1 :max 64}]]]]
-            [:description {:optional true} [:maybe [:string {:max 200}]]]
+            [:description {:optional true
+                           :x-display
+                           {:label "What this endpoint is for"
+                            :help "A line for whoever finds this subscription later — whose integration it feeds, and who to ask when it starts failing."}}
+             [:maybe [:string {:max 200}]]]
             ;; the HMAC key for X-Waymark-Signature; absent = unsigned
-            [:secret {:optional true :x-display {:raw true}}
+            [:secret {:optional true
+                      :x-display
+                      {:raw true
+                       :label "Signing secret"
+                       :help "The shared key each delivery is HMAC-signed with, so the receiver can prove the POST came from here. Leave it blank and the deliveries go unsigned."}}
              [:maybe [:string {:min 8 :max 120}]]]
             ;; what an exhausted delivery does (batch F): "fail" (the
             ;; default — mark the subscription failed, park the cursor)
             ;; or "skip" (log to *err*, advance the cursor, stay active)
-            [:delivery_policy {:optional true}
+            [:delivery_policy {:optional true
+                               :x-display
+                               {:label "When an endpoint stops answering"
+                                :choices
+                                {"fail" "Stop and wait — the subscription goes failed and the cursor parks where it was, so nothing is lost when someone resumes it"
+                                 "skip" "Keep going — log the miss, advance past it, stay active; the event is gone but the stream is not"}}}
              [:maybe [:enum "fail" "skip"]]]
-            [:failure_reason {:optional true} [:maybe [:string {:max 200}]]]]
+            [:failure_reason {:optional true
+                              :x-display
+                              {:label "Why deliveries stopped"
+                               :help "Written by the deliverer when it gives up — the last error it saw. Not yours to fill in."}}
+             [:maybe [:string {:max 200}]]]]
    :filterable {:state #{:eq :in}}
    :actions
    {:pause {:from #{:active} :to :paused
@@ -136,7 +160,10 @@
                       :consequence "The endpoint never hears another event; a new subscription starts from its own creation, not from here."}
              :display {:label "Revoke" :style :danger :order 8}}
     :mark_failed {:from #{:active} :to :failed
-                  :input [:map [:reason {:optional true}
+                  :input [:map [:reason {:optional true
+                                         :x-display
+                                         {:label "What went wrong"
+                                          :help "The last error the deliverer saw before it gave up — a status code, a timeout, a refused connection."}}
                                 [:maybe [:string {:max 200}]]]]
                   :record true
                   :guards [deliverer-only]

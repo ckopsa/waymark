@@ -253,20 +253,50 @@
    :nav :system
    :summary "Law of {data.target_kind} · revision {data.revision} · {state}"
    :schema [:map
-            [:target_kind [:string {:min 1 :max 64}]]
-            [:revision [:int {:min 1}]]
-            [:fingerprint_hash [:string {:min 64 :max 64}]]
+            [:target_kind {:x-display
+                           {:label "The kind this law governs"
+                            :help "One resource kind's own name — task, meal, chore — spelled exactly as its declaration spells it. A definition governs one kind and never two."}}
+             [:string {:min 1 :max 64}]]
+            [:revision {:x-display {:label "Revision number"}}
+             [:int {:min 1}]]
+            [:fingerprint_hash {:x-display
+                                {:label "Fingerprint hash"
+                                 :help "The sha256 of the canonical projection below — the whole reason a revision can be recognised rather than described."}}
+             [:string {:min 64 :max 64}]]
             ;; the canonical projection, verbatim — the record IS the law
-            [:fingerprint :any]
-            [:diff {:optional true} :any]
-            [:diff_class [:enum "initial" "data_law" "code_or_shape"]]
-            [:change_summary {:optional true} [:maybe [:string {:max 120}]]]
-            [:population {:optional true} :any]
-            [:deploy_note {:optional true} [:maybe [:string {:max 120}]]]
-            [:held {:optional true} [:maybe :boolean]]
+            [:fingerprint {:x-display {:label "The law itself, canonically"}}
+             :any]
+            [:diff {:optional true
+                    :x-display {:label "What moved since the last revision"}}
+             :any]
+            [:diff_class {:x-display
+                          {:label "What kind of change this is"
+                           :choices
+                           {"initial" "The first law this kind ever had — there was nothing to diff it against"
+                            "data_law" "Only overlayable law moved — a derivation, a threshold, an edge's where — so it can be piloted and measured before it governs"
+                            "code_or_shape" "Code or storage shape moved — this one deploys whole; there is no partial population to pilot it on"}}}
+             [:enum "initial" "data_law" "code_or_shape"]]
+            [:change_summary {:optional true
+                              :x-display
+                              {:label "What changed, in a sentence"
+                               :help "The line a reviewer reads first — what moved and why, not how. The diff below says how."}}
+             [:maybe [:string {:max 120}]]]
+            [:population {:optional true
+                          :x-display {:label "The rows a pilot governs"}}
+             :any]
+            [:deploy_note {:optional true
+                           :x-display
+                           {:label "Note for the deploy record"
+                            :help "Why this revision was pushed when it was — the ticket, the incident, the person who asked. Read months later by whoever is wondering."}}
+             [:maybe [:string {:max 120}]]]
+            [:held {:optional true
+                    :x-display {:label "Hold as a proposal instead of deploying"}}
+             [:maybe :boolean]]
             ;; the blast-radius report (batch C) — written by the
             ;; measure lifecycle as maintenance, never by a handler
-            [:measure {:optional true} :any]]
+            [:measure {:optional true
+                       :x-display {:label "Blast-radius report"}}
+             :any]]
    :filterable {:state #{:eq :in}
                 :target_kind #{:eq :in}}
    :create-guards [deploy-only]
@@ -278,8 +308,16 @@
    :actions
    {:pilot {:from #{:proposed} :to :piloted
             :input [:map
-                    [:where {:optional true} :any]
-                    [:after {:optional true} [:maybe :boolean]]]
+                    [:where {:optional true
+                             :x-display
+                             {:label "Which rows the pilot governs"
+                              :help "A filter over the kind's own fields — the slice that lives under the new law while everything else keeps the current one."}}
+                     :any]
+                    [:after {:optional true
+                             :x-display
+                             {:label "Or: every row created from now on"
+                              :help "Set this instead of a filter to pilot forward only — existing rows keep the current law, new ones are born under this revision."}}
+                     [:maybe :boolean]]]
             :record true
             :guards [population-shape data-law-only]
             :safety {:idempotent false :reversible false :confirm true

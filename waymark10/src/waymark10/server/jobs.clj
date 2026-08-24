@@ -143,23 +143,42 @@
    ;; that outgrows the window promotes the id to its own field
    :own-surface {:by [[:requested_by :id]]}
    :schema [:map
-            [:action [:string {:min 1 :max 64}]]
+            [:action {:x-display
+                      {:label "The action to run on each row"
+                       :help "One action name from the target kind's own vocabulary — complete, retire, mark_stored. Every row in the batch takes the same door."}}
+             [:string {:min 1 :max 64}]]
             ;; showcased: the kind filter stands above the jobs table
             ;; as a select of observed kinds (the facet counts ride
             ;; the options) — the queue is usually read one kind at a
             ;; time
-            [:kind {:x-display {:showcase true}} [:string {:min 1 :max 64}]]
-            [:ids [:vector [:string {:min 1}]]]
+            [:kind {:x-display
+                    {:showcase true
+                     :label "The kind whose rows these are"
+                     :help "One resource kind's own name — a job never spans two."}}
+             [:string {:min 1 :max 64}]]
+            [:ids {:x-display
+                   {:label "The rows to work through"
+                    :help "The row ids, in the order the worker should take them; refusals are recorded per row and never stop the rest."}}
+             [:vector [:string {:min 1}]]]
             ;; the per-item action input, wire-shaped, verbatim
-            [:input {:optional true} :any]
-            [:requested_by :any]
-            [:progress [:map
-                        [:done :int]
-                        [:total :int]
-                        [:refusals [:vector :any]]]]
+            [:input {:optional true
+                     :x-display
+                     {:label "The input every row gets"}}
+             :any]
+            [:requested_by {:x-display {:label "Who asked for it"}}
+             :any]
+            [:progress {:x-display
+                        {:label "How far along"
+                         :help "Written by the worker as it goes — done, total, and the rows that refused with their reasons."}}
+             [:map
+              [:done :int]
+              [:total :int]
+              [:refusals [:vector :any]]]]
             ;; the job artifact (batch F): the final per-item report,
             ;; persisted by the worker just before :complete fires
-            [:report {:optional true} :any]]
+            [:report {:optional true
+                      :x-display {:label "The finished report"}}
+             :any]]
    :filterable {:state #{:eq :in}
                 :kind #{:eq}}
    :faceted [:kind]

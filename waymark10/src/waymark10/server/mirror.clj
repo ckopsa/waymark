@@ -111,6 +111,18 @@
     identity (a :local-rows row, below) was set by a deliberate local
     write and no key could ever re-derive it — clearing it would
     erase the engine's own fact.
+  - THE CREATE DOOR OMITS THE SYNC'S OWN WRITING (waymark-9va, the
+    usability battery's finding): the weave adds bookkeeping to the
+    data schema, and a kind that spells no :create-schema offers its
+    data schema at create — so external_etag, synced_at and
+    conflict_reason were arriving on a form a person meets. The
+    weave now declares that exclusion once (sync-written-fields) and
+    every mirrored kind inherits it; an author's own :create-schema
+    still wins, and may not name those three either. external_id
+    STAYS on the door, because identity is a claim a local birth
+    makes (the native-XOR-mirrored pairing law is spelled exactly
+    there) rather than a record only a pass can write. Discovery
+    mints never noticed: a mint validates against the full :schema.
   - LOCAL ROWS (workqueue10's native task lists demanded it): a kind
     declared {:local-rows true} may birth rows that live HERE alone —
     no external identity, ever. The sync machinery already treats a
@@ -213,6 +225,23 @@
 
 (def ^:private bookkeeping-fields
   #{:external_id :external_etag :synced_at :conflict_reason})
+
+(def ^:private sync-written-fields
+  "The bookkeeping THE SYNC WRITES, and nobody else ever does: the
+  etag it stamps, the moment it stamped it, and the adapter's own
+  sentence about why the two sides disagree. These three leave the
+  CREATE DOOR (see `declaration`) — a woven field is still a field,
+  and a create form that asks a person for the etag it is about to
+  fetch is asking a question with no answer.
+
+  :external_id is deliberately NOT here, and the omission is the
+  whole distinction: identity is a CLAIM a local birth may honestly
+  make (task_list's native-XOR-mirrored pairing law is spelled at
+  exactly that door), while sync state is a RECORD only a sync pass
+  can write. The usability battery found the difference the way a
+  person would — task_list's create door demanding composition in
+  :conflict_reason, a blank textarea nobody could fill (waymark-9va)."
+  #{:external_etag :synced_at :conflict_reason})
 
 (defn- bookkeeping-schema
   ;; external_id renders nowhere (machine plumbing — the row's own
@@ -833,6 +862,17 @@
             (str (some-> (:kind rmap) name)
                  ": :create-schema never carries sync bookkeeping — the "
                  "authority mints external_id; claim_external stamps it"))))
+  ;; and the same refusal, narrowed, for every OTHER mirror that
+  ;; spells its own birth door: the sync's three written facts are
+  ;; never a caller's to supply, so a declaration that asks for one is
+  ;; a form nobody could fill rather than a law
+  (when-some [f (when (:create-schema rmap)
+                  (first (filter sync-written-fields
+                                 (schema/entry-keys (:create-schema rmap)))))]
+    (throw (t/definition-error
+            (str (some-> (:kind rmap) name) ": :create-schema never carries "
+                 f " — the sync writes it and no caller ever does; the "
+                 "woven create door omits it already"))))
   (when-not (contains? #{nil :whole :partial} document)
     (throw (t/definition-error
             (str (some-> (:kind rmap) name)
@@ -860,6 +900,25 @@
         _ (check-external-refs! (:kind rmap) data-schema)
         _ (check-authority-windows! (:kind rmap) data-schema)
         _ (check-expectations! (:kind rmap) data-schema)
+        ;; THE CREATE DOOR IS NOT THE ROW (waymark-9va). A kind that
+        ;; spells no :create-schema offers its whole data schema at
+        ;; create, and for a mirror that schema is the author's
+        ;; declaration plus the weave — so the sync's own bookkeeping
+        ;; arrived on a form a person meets. The weave declares the
+        ;; exclusion ONCE, here, and every kind inherits it: the
+        ;; birth door is the woven schema minus sync-written-fields.
+        ;; An author's own :create-schema still wins outright (the
+        ;; fill-a-blank rule the decision sugar's create-schema
+        ;; follows), and DISCOVERY MINTS are untouched — a mint
+        ;; validates against the full :schema by construction
+        ;; (invoke/create! :mint? true), which is what made this safe
+        ;; to do at the sugar rather than in each declaration.
+        create-schema (or (:create-schema rmap)
+                          (into [:map]
+                                (remove (every-pred
+                                         vector?
+                                         (comp sync-written-fields first)))
+                                (rest data-schema)))
         mode (or document :whole)
         gone-patch (when (map? on-gone)
                      (:set on-gone))
@@ -893,6 +952,7 @@
                   :adapter adapter}]
     (-> rmap
         (assoc :schema data-schema
+               :create-schema create-schema
                :states sync-states
                :initial :fresh
                :terminal #{}

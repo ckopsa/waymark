@@ -265,8 +265,10 @@ framework's own forms *is* this spec's proof; clearing the list in the same
 change would delete the evidence and hide which policy earned which warning.
 The fix-list is filed as follow-up beads, one per kind-cluster:
 `waymark-8sg` (the composition kinds, 27), `waymark-7rw` (the access kinds,
-12), `waymark-ts2` (the household kinds, 88), `waymark-9va` (mirror's
-bookkeeping in create forms).
+12), `waymark-ts2` (the household kinds, 88), `waymark-0y7` (the enrolled
+stragglers, 7), `waymark-9va` (mirror's bookkeeping in create forms, 1).
+All five have landed; the tally reached **135 → 0** and the final
+amendment below carries the accounting.
 
 Every effort-honesty warning on that list wants the *same* missing spelling —
 "the options for this field come from **there**, at runtime" — which is why
@@ -666,6 +668,175 @@ The style-invariance suite needed the prose carried into its *old*
 spellings too, and that is correct rather than a chore: the suite pins
 that two spellings are one declaration, and a declaration that says
 something in one spelling and not the other is genuinely two.
+
+## Amendment — the create door is not the row (waymark-9va), and the last seven words (waymark-0y7)
+
+The two beads that close the burndown. One is structural and one is
+prose, and they land together because between them `make check-queue`
+reads:
+
+```
+✓ 30 kinds, 0 warnings, 11 scenarios judged
+```
+
+### waymark-9va — the mirror declares its own exclusion, once
+
+The battery's sentence was true and its subject should not have existed:
+
+```
+task_list — 1 warning
+[composition-scaffolding] the create door demands composition in
+[:conflict_reason] with nothing to start from
+```
+
+`:conflict_reason` is written by the sync, read by a person, and asked
+of nobody. It reached the create door by the plainest route in the
+framework: a kind that spells no `:create-schema` offers its whole data
+schema at create (`collections.clj`, `invoke.clj`), and a mirror's data
+schema is the author's declaration **plus the weave**. So the weave had
+put a field on a form and then the form asked for it.
+
+The fix is at the sugar, where the fields come from, rather than in
+the declaration that inherited them — the altitude argument the
+decision sugar won in waymark-7rw. `mirror/declaration` now names its
+own bookkeeping in two halves and synthesizes the birth door from the
+second:
+
+```clojure
+(def ^:private sync-written-fields
+  #{:external_etag :synced_at :conflict_reason})
+
+;; in declaration's let, beside the woven data-schema:
+create-schema (or (:create-schema rmap)
+                  (into [:map]
+                        (remove (every-pred
+                                 vector?
+                                 (comp sync-written-fields first)))
+                        (rest data-schema)))
+```
+
+and then `(assoc :schema data-schema :create-schema create-schema …)`.
+
+**`:external_id` is deliberately not in that set, and the omission is
+the whole distinction.** Identity is a **claim a local birth may
+honestly make** — `task_list`'s native-XOR-mirrored pairing law
+(`identity_paired`) is spelled at exactly that door, and a `:local-rows`
+kind's mirrored births name the upstream they mirror there or nowhere.
+Sync state is a **record only a pass can write**. Dropping all four
+would have been the tidier set and the wrong one: it would have deleted
+a birth law to satisfy a display warning.
+
+Three things made this safe to do at the sugar rather than kind by kind:
+
+- **Discovery mints never noticed.** A mint validates against the full
+  `:schema` by construction (`invoke/create!` with `:mint? true`, whose
+  docstring already said why), so `{:external_id id}` alone still lands.
+  This was the open question on the bead; the answer was already law.
+- **An author's `:create-schema` still wins outright** — the fill-a-blank
+  rule the decision sugar's own synthesized create model follows.
+- **The create facet is `defaults` only** (`fingerprint.clj`), and none
+  of the three carries a default, so the exclusion is hash-silent. The
+  three mirrors whose door actually changed — `task_list`, `event`,
+  `prep_task` — hold their fingerprints byte-for-byte.
+
+The refusal grew a matching half: a mirror that spells its own
+`:create-schema` may not name the three either (`:create-push` keeps
+the stricter rule that bars all four). The convention is now total —
+**no mirror's create door carries sync state, synthesized or
+declared** — which is the trade this bead was asked to record: one set
+and one `or` in the weave, in exchange for a rule that can no longer be
+forgotten in a declaration.
+
+### waymark-0y7 — the four framework kinds nobody had claimed
+
+`definition` 3, `subscription` 2, `attachment` 1, `job` 1: the warnings
+left over when waymark-ts2 cleared the household, on enrolled forms no
+application declares and every application serves. Pure prose — 31
+`:label`s, 19 `:help` sentences, `:choices` on two enums
+(`definition`'s `:diff_class`, and `subscription`'s `:delivery_policy`,
+which the battery **cannot see** for waymark-0ee.1's reason and which
+got its prose anyway), one `:examples`. No new defn, in any of the four
+files.
+
+Two of these kinds hold engine-stamped fields on a human create door —
+`attachment`'s `:size` and `:sha256` (the upload route writes them),
+`subscription`'s `:failure_reason` (the deliverer does). Their prose
+**says so** rather than pretending the form is asking, which is the
+line waymark-0ee drew for `synced_at`. The structural fix that
+waymark-9va just made for mirrors — a `:create-schema` that omits what
+only the engine writes — applies to them word for word and is filed as
+**waymark-0y7.1**; it is a create-facet change on enrolled kinds and
+deserves its own revision rather than a ride on a prose bead.
+
+### The burndown, end to end
+
+| bead | fix-list | warnings |
+|---|---|---|
+| `waymark-8sg` | the composition kinds — and `:x-options`, the spelling policy 1 was asking for | 27 |
+| `waymark-7rw` | the access kinds — and the decision sugar's own words | 12 |
+| `waymark-ts2` | the household kinds — and `declare/described`, the word a `:fields` row lacked | 88 |
+| `waymark-0y7` | the enrolled stragglers | 7 |
+| `waymark-9va` | mirror bookkeeping on the create door | 1 |
+| | **135 → 0** | |
+
+Every policy is at zero, including the two that were zero on the first
+run (`gesture-duties`) and the two that took framework growth to reach
+it. Three of the five beads grew a spelling rather than writing prose,
+which is the ratio the house rule predicts and the reason the fix-list
+was worth publishing before it was worked.
+
+### The hashes: the same ten movers, and a sharper reason
+
+`make check-queue` (0), `make test10` twice, `make test-queue`: green,
+203 + 695 tests.
+
+**waymark-0y7 moved nothing at all** — all 30 kinds byte-identical,
+which is the third independent confirmation that `:x-display` and
+`:examples` sit in no facet.
+
+**waymark-9va moved ten**, and they are *precisely* waymark-ts2's ten:
+`grocery_list`, `ingredient`, `meal_line`, `media`, `permission_slip`,
+`plan`, `plan_day`, `product`, `rotation`, `task`. Bisected by
+neutering the patch in place — the exclusion set emptied to `#{}`,
+every added form and docstring left standing, so the law is a no-op and
+the bytes are not. **The same ten moved.** The mirrors whose create
+door the real patch actually changed moved in neither run.
+
+The mechanism is one step sharper than waymark-j82 records. That bead
+blames the **reader** gensym counter for `#()` inside a `defguard` body,
+which is true. But these ten hash by `callable-hash` over a **bare
+`fn`**, and a bare fn's `pr-str` is
+
+```
+#object[mealplan10.resources.plan$fn__12873 0x7698a3d9 "…@7698a3d9"]
+```
+
+— a compiler-assigned class number and a JVM identity hash, *both* of
+them functions of everything compiled before them. That is why the
+sensitivity is to **bytes anywhere earlier in the load order**, not to
+lambdas: `mirror.clj` is required by the app resource namespaces and so
+compiles ahead of them, while `definitions.clj`, `jobs.clj`,
+`webhooks.clj` and `attachments.clj` are pulled in by the engine
+afterwards and could not move an app kind if they tried. waymark-j82's
+fix (canonicalizing the captured form) closes the `#()` half; the bare-fn
+half needs the `defhandler`/`defguard` conversion its own audit note
+already names.
+
+### The witness that had to move
+
+`waymark10.check-test` asserted, since waymark-0ee, that *some*
+enrolled kind still warns — `grant` first, then `definition`. Clearing
+the last one turns that into a red test, which is exactly right and
+exactly why the assertion should not simply be re-pointed: it had made
+a passing test out of an unfixed fix-list, and it re-filed itself every
+time the list drained. It now asserts the two things it was always
+about:
+
+- **the tally is zero** and no enrolled kind takes a row — the standing
+  guard that goes red the day a framework form lands unkind again;
+- **the reach** is read off a wordless probe enrolled by fiat
+  (`with-redefs` over `modules/enrolled`), so what is under test is the
+  widening machinery rather than somebody's unfinished prose.
 
 ## Recorded punts
 

@@ -88,15 +88,27 @@
    :summary "{data.name} · {data.media_type} · {state}"
    :label-template "{data.name}"
    :schema [:map
-            [:name [:string {:min 1 :max 160}]]
-            [:media_type [:string {:min 3 :max 100}]]
+            [:name {:x-display
+                    {:label "File name"
+                     :help "What the file should be called when someone downloads it again — the name, not the path."}}
+             [:string {:min 1 :max 160}]]
+            [:media_type {:x-display
+                          {:label "Content type"
+                           :help "The IANA media type the bytes will be served with — \"image/png\", \"application/pdf\". Get it wrong and the browser guesses."}}
+             [:string {:min 3 :max 100}]]
             ;; stamped by the bytes route's system transition; never
-            ;; supplied by hand
-            [:size {:optional true :x-display {:raw true}}
+            ;; supplied by hand — the prose says so rather than
+            ;; pretending the form is asking (waymark-0y7)
+            [:size {:optional true
+                    :x-display {:raw true
+                                :label "Size in bytes"}}
              [:maybe [:int {:min 0}]]]
             ;; the content's sha256 hex, stamped with the size (batch
             ;; F) — the duplicate-content anchor, envelope-visible
-            [:sha256 {:optional true :x-display {:raw true}}
+            [:sha256 {:optional true
+                      :x-display {:raw true
+                                  :label "Content fingerprint"
+                                  :help "The sha256 of the stored bytes, written by the upload route when they land — two rows carrying the same one hold the same file."}}
              [:maybe [:string {:min 64 :max 64}]]]]
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:name] :default "name"}
