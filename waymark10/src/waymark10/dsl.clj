@@ -85,6 +85,11 @@
 (defmacro defguard [name clause & [law]]
   `(d/defguard ~name ~clause ~law))
 
+;; the declared policy test beside the law it judges — the same
+;; sentence-first shape, one turn outward
+(defmacro defscenario [name sentence smap]
+  `(d/defscenario ~name ~sentence ~smap))
+
 (defmacro defguardfn [name opts params & body]
   `(g/defguard ~name ~opts ~params ~@body))
 
@@ -94,5 +99,6 @@
                #'defaction   #'d/defaction
                #'defderived  #'d/defderived
                #'defguard    #'d/defguard
+               #'defscenario #'d/defscenario
                #'defguardfn  #'g/defguard}]
   (alter-meta! w merge (select-keys (meta o) [:doc :arglists])))

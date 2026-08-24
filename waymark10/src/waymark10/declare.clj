@@ -40,6 +40,7 @@
             [waymark10.expr :as expr]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
+            [waymark10.scenario :as scenario]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -377,3 +378,33 @@
   remains the CODE-guard macro; this one speaks sentences and trees.)"
   [name clause & [law]]
   `(def ~name (sentence-guard ~(keyword name) ~clause ~law)))
+
+;; ── sentence-first scenarios (waymark-442.2) ────────────────────────
+;; The same shape as defguard, one turn outward: a guard's sentence
+;; explains a refusal, a scenario's sentence IS the violation string
+;; when the law stops keeping it. The def'd value is the plain map the
+;; inline :scenarios spelling writes, construction-validated at the
+;; def line — and since fingerprint-of is a whitelist that never names
+;; :scenarios, adding one mints no law revision.
+
+(defmacro defscenario
+  "A declared policy test, sentence-first:
+
+     (defscenario only-the-recipient-opens
+       \"A letter addressed to someone else does not open for a
+        curious sibling, and the refusal says which wall it hit.\"
+       {:kind    :letter
+        :attempt :open
+        :row     {:state :waiting :data {:owner \"mom\" :to \"iris\"}}
+        :as      {:id \"otto\" :type :person}
+        :expect  {:refused :opener-is-recipient
+                  :because \"Only the letter's recipient may open it.\"}})
+
+  :expect names the GUARD, not the prose — a guard swapped for a
+  different guard with the same words still fails. Drop the value into
+  the declaration's :scenarios vector; waymark10.scenario decides,
+  from the declaration alone, whether it is judged with no storage at
+  all (`make check-…`) or through the HTTP door as the
+  :core/law-scenarios conformance obligation."
+  [name sentence smap]
+  `(def ~name (scenario/scenario ~(keyword name) ~sentence ~smap)))

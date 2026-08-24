@@ -93,6 +93,7 @@
   worker's actor id, the curtain's verdict — never another's."
   (:require [clojure.string :as str]
             [waymark10.machine :as machine]
+            [waymark10.scenario :as scenario]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.curtain :as curtain]
             [waymark10.server.jobs :as jobs]
@@ -491,6 +492,138 @@
   [ctx]
   (mapv pr-str (conf/touches-violations (:engine ctx))))
 
+;; ── the declared policy tests (waymark-442.2) ───────────────────────
+
+(defn- scenario-headers
+  "The scenario's declared principal, as the wire spells it. Roles
+  ride the CSV header the router already reads, so a scenario about a
+  role-gated door needs no member row staged for it."
+  [s]
+  (let [p (:as s)]
+    (cond-> {"x-waymark-principal" (str (:id p))
+             "x-waymark-actor-type" (name (:type p))}
+      (seq (:roles p))
+      (assoc "x-waymark-roles" (str/join "," (sort (:roles p)))))))
+
+(defn- token->keyword
+  "One affordance token back off the wire: \"approval_request.create\"
+  → :approval_request/create (problems/wire-value renders a
+  namespaced keyword with a dot)."
+  [tok]
+  (let [s (str tok)
+        i (.indexOf s ".")]
+    (if (neg? i) (keyword s) (keyword (subs s 0 i) (subs s (inc i))))))
+
+(defn- stage-declared-row
+  "One row a scenario WROTE DOWN, made real: created through its own
+  plural door as the walker, then driven along the machine's shortest
+  path to the state the scenario named. → {:id …} or {:error …}.
+
+  The walker stages; the scenario's own principal only ever ATTEMPTS.
+  Staging as the declared principal would prove a different sentence
+  (that this person may create the setup), and a scenario that wants
+  to say that says it as its own attempt."
+  [ctx kind state data]
+  (if-some [rd (rdef ctx kind)]
+    (let [made (req ctx :post (str "/api/" (:plural rd)) (or data {}))]
+      (if-not (#{200 201} (:status made))
+        {:error (str "the " (name kind) " it names could not be created ("
+                     (:status made) ": " (pr-str ((:text ctx) made)) ")")}
+        (let [id (last (str/split (str (:self (json ctx made))) #"/"))]
+          (if-some [path (machine/path-to rd state)]
+            (loop [steps path]
+              (if-some [step (first steps)]
+                (let [r (invoke-http ctx kind id (:name step) nil)]
+                  (if-not (= 200 (:status r))
+                    {:error (str "walking that " (name kind) " to " (name state)
+                                 " stopped at " (name (:name step)) " ("
+                                 (:status r) ": " (pr-str ((:text ctx) r)) ")")}
+                    (recur (rest steps))))
+                {:id id}))
+            {:error (str (name state) " is unreachable from "
+                         (name (:initial rd)) " by declared transitions")}))))
+    {:error (str "this engine serves no kind " kind)}))
+
+(defn- wire-verdict
+  "The verdict a CLIENT sees, read off the envelope — which is the
+  whole reason this tier exists. 2xx is the allowance; a 409
+  guard-refused names its guard, its reason and its remedies; a 409
+  wrong-state is the reserved :out-of-state denier. Anything else is
+  unreadable as a verdict and says so, concealment included: a
+  hide-flagged guard answers 404 and never names itself, so no
+  scenario can pin one through the door."
+  [ctx resp]
+  (let [b (json ctx resp)
+        status (:status resp)
+        type' (str (:type b))]
+    (cond
+      (<= 200 status 299) {:warned []}
+
+      (str/ends-with? type' "guard-refused")
+      {:refused (keyword (:guard b))
+       :reason (:detail b)
+       :remedies (mapv token->keyword (:remedies b))}
+
+      (str/ends-with? type' "wrong-state")
+      {:refused scenario/out-of-state
+       :reason (:detail b)
+       :remedies []}
+
+      (= 404 status)
+      {:unreadable (str "the door answered 404 — a hide-flagged guard conceals"
+                        " rather than narrates, so no scenario can name it here")}
+
+      :else
+      {:unreadable (str "the door answered " status " ("
+                        (or (:title b) "no problem document") "), which is"
+                        " neither an allowance nor a refusal")})))
+
+(defn- run-scenario
+  "One conformance-tier scenario, staged and attempted through the
+  real HTTP door."
+  [ctx rdef' s]
+  (let [staged (reduce (fn [_ gv]
+                         (let [out (stage-declared-row ctx (:kind gv) (:state gv)
+                                                       (:data gv))]
+                           (if (:error out) (reduced out) nil)))
+                       nil (:given s))]
+    (if (:error staged)
+      (scenario/violation s {:unreadable (str "could not be staged: " (:error staged))})
+      (let [hs (scenario-headers s)
+            resp (if (scenario/create-door? rdef' (:attempt s))
+                   (req ctx :post (str "/api/" (:plural rdef')) (or (:input s) {}) hs)
+                   (let [subject (stage-declared-row ctx (:kind s)
+                                                     (get-in s [:row :state])
+                                                     (get-in s [:row :data]))]
+                     (if (:error subject)
+                       ::unstaged
+                       (invoke-http ctx (:kind s) (:id subject) (:attempt s)
+                                    (:input s) {:headers hs}))))]
+        (if (= ::unstaged resp)
+          (scenario/violation
+           s {:unreadable "the row it describes could not be staged through its own door"})
+          (scenario/violation s (wire-verdict ctx resp)))))))
+
+(defn- law-scenario-violations
+  "The declared policy, proved through the door: every scenario the
+  registry's kinds declare that the check tier could NOT judge for
+  free — one that stages :given rows, or one whose law reaches for
+  storage. The check tier already paid for the rest (waymark10.check),
+  and re-running them here would be the same evaluator answering the
+  same question twice.
+
+  Reports :covered, so an application can tell zero-scenarios-declared
+  from zero-scenarios-run: which of those is honest is the app's claim
+  to make, not the framework's."
+  [ctx]
+  (let [work (for [kind (sort (:registry-kinds ctx))
+                   :let [rd (rdef ctx kind)]
+                   s (:scenarios rd)
+                   :when (not (scenario/check-tier? rd s))]
+               [rd s])]
+    {:violations (into [] (keep (fn [[rd s]] (run-scenario ctx rd s))) work)
+     :covered (count work)}))
+
 (def core
   "Core's pack: the obligations every waymark engine owes for its own
   resources, whatever modules ride along. These are the eight deftests
@@ -508,6 +641,12 @@
     {:name :core/collections :run collection-honesty-violations}
     {:name :core/replay-history :run replay-history-violations}
     {:name :core/touches :run touches-violations}
+    ;; the POLICY's own obligation: the packs above prove the
+    ;; machinery, this one proves what the household actually
+    ;; declared. Core, not a module — a scenario judges core's law
+    ;; with core's evaluator, and there is no fifth column on the
+    ;; inventory for it
+    {:name :core/law-scenarios :run law-scenario-violations}
     ;; the law's own vocabulary answers its own doors: member, role,
     ;; grant and approval_request are core kinds because core guards
     ;; mint tokens naming them (guards/role, guards/owner), so an

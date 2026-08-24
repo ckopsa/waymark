@@ -23,7 +23,7 @@
   not even for a recovery-admin human. Nobody reports the sky for
   you."
   (:require [clojure.string :as str]
-            [waymark10.dsl :refer [defguardfn defresource]]
+            [waymark10.dsl :refer [defguardfn defresource defscenario]]
             [waymark10.types :as t]))
 
 (defn- supplied-owner [inp]
@@ -49,6 +49,31 @@
 ;; even a body that lies about :owner cannot report another's sky.
 (defn- stamp-owner [row ctx]
   (assoc-in row [:data :owner] (:id (:principal ctx))))
+
+;; the file's one rule, written down as a sentence the house can
+;; check. The create door judges the BODY (row nil, before the
+;; stamp), so the scenario names an :input and no :row — and since
+;; the only create guard declares :reads [:principal], it is judged
+;; with no database at all.
+
+(defscenario nobody-reports-the-sky-for-you
+  "A weather report signed with someone else's name is refused at the
+   door — there is no on-behalf path here, not even for a curator."
+  {:kind    :weather
+   :attempt :create
+   :input   {:owner "iris" :sky "loud"}
+   :as      {:id "otto" :type :person :roles #{:recovery-admin}}
+   :expect  {:refused :weather-is-first-person
+             :because "Weather is first-person"}})
+
+(defscenario your-own-sky-passes
+  "Reporting your own weather is free for anyone in the house, named
+   or unnamed — the engine stamps the owner either way."
+  {:kind    :weather
+   :attempt :create
+   :input   {:sky "quiet"}
+   :as      {:id "otto" :type :person}
+   :expect  {:allowed true}})
 
 (defresource weather
   {:kind :weather
@@ -82,6 +107,7 @@
    ;; current weather = newest row per owner; newest-first is the law
    :sortable {:fields [:created_at] :default "-created_at"}
    :create-guards [weather-is-first-person]
+   :scenarios [nobody-reports-the-sky-for-you your-own-sky-passes]
    :on-create stamp-owner
    ;; no actions beyond create: a wrong tap is corrected by tapping
    ;; again (latest row wins) — weather passes, it is not edited

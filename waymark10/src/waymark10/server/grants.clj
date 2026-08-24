@@ -137,6 +137,7 @@
     (waymark-ecq closed); the upload half still refuses scoped
     requests — staging lands rows the uploader cannot see."
   (:require [clojure.string :as str]
+            [waymark10.declare :refer [defscenario]]
             [waymark10.guards :as g]
             [waymark10.resource :refer [defresource defhandler]]
             [waymark10.schema :as schema]
@@ -621,6 +622,37 @@
 (defhandler record-verdict-note [row inp _ctx]
   (assoc-in row [:data :note] (:note inp)))
 
+;; ── the four-eyes rule, written down ────────────────────────────────
+;; The one sentence core's own law most wants checked, and the reason
+;; it can be checked for free: :deny carries exactly one guard, and
+;; that guard declares :reads [:principal]. (:approve carries
+;; grant-still-accepting beside it, which reads :grant — so an
+;; approve scenario would declare :given and drop to the suite. The
+;; tier rule doing its job, not a gap.)
+
+(defscenario the-asker-does-not-decide
+  "Nobody judges their own ask: the principal who requested the
+   access cannot be the one who denies it."
+  {:kind    :approval_request
+   :attempt :deny
+   :row     {:state :offered
+             :data {:task "read the pantry" :requested_by "agent-ari"}}
+   :input   {:note "changed my mind"}
+   :as      {:id "agent-ari" :type :agent}
+   :expect  {:refused :someone-else-decides
+             :because "The requester cannot judge its own ask"}})
+
+(defscenario another-principal-may-deny
+  "Somebody else in the house can say no — the four-eyes wall bars
+   the requester, not the household."
+  {:kind    :approval_request
+   :attempt :deny
+   :row     {:state :offered
+             :data {:task "read the pantry" :requested_by "agent-ari"}}
+   :input   {:note "not this week"}
+   :as      {:id "mom" :type :person}
+   :expect  {:allowed true}})
+
 (defresource approval-request
   {:kind :approval_request
    :plural "approval_requests"
@@ -681,6 +713,7 @@
                    scope-names-real-actions
                    scope-filters-are-filterable
                    scope-omits-private-kinds]
+   :scenarios [the-asker-does-not-decide another-principal-may-deny]
    :on-create (fn [row ctx]
                 (-> row
                     (assoc-in [:data :requested_by]

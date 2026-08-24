@@ -19,7 +19,8 @@
     :filterable :sortable :faceted :worksheet :default-filters :views
     :owns :links :related
     :display :label-template :summary :deviations
-    :on-create :mirror})
+    :on-create :mirror
+    :scenarios})
 
 (def action-keys
   #{:from :to :input :guards :safety :display :handler :emits :edit

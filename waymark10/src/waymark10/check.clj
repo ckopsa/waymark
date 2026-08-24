@@ -12,8 +12,16 @@
   returning either — the spelling for kinds built by a wrapper, like
   a Mirror adapter) or a bare namespace, whose public defresource'd
   values are collected. Exit 0 with a warning count; exit 1 on the
-  first definition error; exit 2 when nothing checkable was named."
-  (:require [waymark10.modules :as modules]
+  first definition error OR a broken law scenario; exit 2 when
+  nothing checkable was named.
+
+  A broken scenario exits 1 and a usability warning does not, and the
+  difference is the whole point of the distinction: a warning is an
+  opinion about how a declaration reads, a scenario is a promise the
+  household wrote down and the law stopped keeping."
+  (:require [clojure.string :as str]
+            [waymark10.modules :as modules]
+            [waymark10.scenario :as scenario]
             [waymark10.server.engine :as engine])
   (:gen-class))
 
@@ -54,7 +62,14 @@
   registry a breath later with `one law per kind`, which names the
   collision but not the module that owns the other half. Saying it
   before the assembly runs means the author reads the explanation
-  first."
+  first.
+
+  Law scenarios (waymark-442.2) print under their kind with the tier
+  split named: the ones this battery judged for free, and the ones
+  waiting for the suite with the reason they wait. Nothing here opens
+  a store — a check-tier scenario is judged by g/evaluate over a row
+  the author wrote down, which is this namespace's whole posture and
+  the reason the tier rule exists at all."
   [resources]
   (let [enrollment-warnings (modules/warnings resources nil)
         _ (doseq [w enrollment-warnings]
@@ -64,8 +79,11 @@
         rows (for [r resources]
                {:kind (:kind r)
                 :warnings (vec (:waymark10/warnings (meta r)))
-                :deviations (vec (:deviations r))})]
-    (doseq [{:keys [kind warnings deviations]} (sort-by :kind rows)]
+                :deviations (vec (:deviations r))
+                :scenarios (scenario/report r)
+                :coverage (scenario/coverage r)})]
+    (doseq [{:keys [kind warnings deviations scenarios coverage]}
+            (sort-by :kind rows)]
       (println (str "  " (name kind)
                     (if (seq warnings)
                       (str " — " (count warnings) " warning"
@@ -74,13 +92,34 @@
       (doseq [w warnings]
         (println (str "      " w)))
       (doseq [d deviations]
-        (println (str "      deviation: " d))))
+        (println (str "      deviation: " d)))
+      (let [{:keys [total checked deferred violations]} scenarios
+            [named walls] coverage]
+        (when (pos? total)
+          (println (str "      " checked " scenario"
+                        (when (not= 1 checked) "s")
+                        (if (seq violations)
+                          (str " — " (count violations) " broken")
+                          " ✓")
+                        (when (seq deferred)
+                          (str "  (" (count deferred) " deferred to the suite: "
+                               (str/join "; " (distinct (keep :why deferred))) ")"))))
+          ;; counted, never enforced: a usability warning here would
+          ;; fire on every action in the tree the day it landed, and a
+          ;; warning nobody can clear is a warning nobody reads
+          (println (str "      " walls " refusing guard"
+                        (when (not= 1 walls) "s") ", " named
+                        " named by a scenario"))
+          (doseq [v violations]
+            (println (str "      ✗ " v))))))
     (doseq [w assembly-warnings]
       (println (str "  [assembly] " w)))
     {:kinds (count rows)
      :warnings (+ (reduce + 0 (map (comp count :warnings) rows))
                   (count assembly-warnings)
-                  (count enrollment-warnings))}))
+                  (count enrollment-warnings))
+     :scenarios (reduce + 0 (map (comp :checked :scenarios) rows))
+     :broken (reduce + 0 (map (comp count :violations :scenarios) rows))}))
 
 (defn -main [& args]
   (when (empty? args)
@@ -94,11 +133,18 @@
                       (vec args))))
       (System/exit 2))
     (try
-      (let [{:keys [kinds warnings]} (report resources)]
-        (println (str (if (zero? warnings) "✓ " "△ ") kinds " kind"
-                      (when (not= 1 kinds) "s") ", " warnings " warning"
-                      (when (not= 1 warnings) "s")))
-        (System/exit 0))
+      (let [{:keys [kinds warnings scenarios broken]} (report resources)]
+        (println (str (cond (pos? broken) "✗ "
+                            (zero? warnings) "✓ "
+                            :else "△ ")
+                      kinds " kind" (when (not= 1 kinds) "s")
+                      ", " warnings " warning" (when (not= 1 warnings) "s")
+                      (when (pos? scenarios)
+                        (str ", " scenarios " scenario"
+                             (when (not= 1 scenarios) "s") " judged"))
+                      (when (pos? broken)
+                        (str ", " broken " BROKEN"))))
+        (System/exit (if (pos? broken) 1 0)))
       (catch clojure.lang.ExceptionInfo e
         (when-not (:waymark10/definition-error (ex-data e))
           (throw e))

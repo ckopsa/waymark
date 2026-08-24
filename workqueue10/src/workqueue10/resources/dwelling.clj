@@ -34,7 +34,8 @@
   guarded to the owning agent or a person. The default-deny wall does
   the concealing."
   (:require [clojure.string :as str]
-            [waymark10.dsl :refer [defguardfn defhandler defresource]]
+            [waymark10.dsl :refer [defguardfn defhandler defresource
+                                   defscenario]]
             [waymark10.types :as t]))
 
 ;; ── ownership: the one security concern this file owns ───────────────
@@ -205,6 +206,36 @@
   filterable or sortable — sentiment is not a query."
   {:optional true :x-display {:widget "prose"}})
 
+;; the edit wall, written down. Judged with no database: the wall
+;; declares :reads [:principal] and the scenario writes the row down
+;; rather than walking to it. The CREATE wall next door cannot be —
+;; owner-is-self-or-on-behalf reads :member and self-is-singleton
+;; reads :self — which is exactly the tier rule doing its job rather
+;; than a gap: a scenario over the singleton would declare :given and
+;; the suite would pay for it.
+
+(defscenario another-agents-words-are-not-yours-to-edit
+  "One agent does not rewrite another agent's self; touching someone
+   else's words needs a recovery-admin human, and the refusal says
+   so."
+  {:kind    :self
+   :attempt :update
+   :row     {:state :active :data {:owner "ari" :display "Ari"}}
+   :input   {:display "Not Ari"}
+   :as      {:id "bo" :type :agent}
+   :expect  {:refused :edit-is-owner-or-human
+             :because "The owner may edit these words"}})
+
+(defscenario an-agent-edits-its-own-self
+  "The owner edits its own words freely — a room you cannot write in
+   is not a room."
+  {:kind    :self
+   :attempt :update
+   :row     {:state :active :data {:owner "ari" :display "Ari"}}
+   :input   {:display "Ari, revised"}
+   :as      {:id "ari" :type :agent}
+   :expect  {:allowed true}})
+
 (defresource self
   {:kind :self
    :plural "selves"
@@ -241,6 +272,8 @@
    :filterable {:state #{:eq} :owner #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
    :create-guards [owner-is-self-or-on-behalf self-is-singleton]
+   :scenarios [another-agents-words-are-not-yours-to-edit
+               an-agent-edits-its-own-self]
    :on-create stamp-owner
    :actions
    {:update {:from #{:active} :to :active

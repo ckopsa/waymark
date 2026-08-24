@@ -43,7 +43,12 @@
    ;; advertisement
    :display :label-template :summary :deviations
    ;; hooks & engine weaves
-   :on-create :mirror])
+   :on-create :mirror
+   ;; proof — declared policy tests (waymark10.scenario), judged where
+   ;; they can be judged for free and by the suite where they cannot.
+   ;; Data, never law: fingerprint-of's whitelist does not name them,
+   ;; so editing a scenario mints no revision
+   :scenarios])
 
 (def ^:private action-schema
   (into [:map {:closed true}]

@@ -71,7 +71,7 @@
   visibility wall. A guard would not close it; a guard is never
   reached."
   (:require [clojure.string :as str]
-            [waymark10.dsl :refer [defguardfn defresource]]
+            [waymark10.dsl :refer [defguardfn defresource defscenario]]
             [waymark10.server.problems :as p]
             [waymark10.types :as t])
   (:import (java.time Instant)))
@@ -297,6 +297,60 @@
   [row _inp ctx]
   (if (recipient? row ctx) (t/allow) (t/deny)))
 
+;; ── the two walls, written down as scenarios ────────────────────────
+;; Sentences the house can check, judged by the framework instead of
+;; by a reader's trust in the comments above. Every one of these is
+;; check-tier — no :given rows, and both walls declare :reads
+;; [:principal] — so `make check-queue` judges them with no database
+;; at all, in the same breath as the usability warnings.
+
+(defscenario only-the-recipient-opens
+  "A letter addressed to someone else does not open for a curious
+   sibling, and the refusal names the wall it hit."
+  {:kind    :letter
+   :attempt :open
+   :row     {:state :waiting
+             :data {:owner "mom" :to "iris" :title "For Iris"
+                    :body "Proud of you today."}}
+   :as      {:id "otto" :type :person}
+   :expect  {:refused :opener-is-recipient
+             :because "Only the letter's recipient may open it."}})
+
+(defscenario the-addressed-child-opens-her-own
+  "The child a letter is addressed to opens it — that is how the
+   house knows the letter landed."
+  {:kind    :letter
+   :attempt :open
+   :row     {:state :waiting
+             :data {:owner "mom" :to "iris" :title "For Iris"
+                    :body "Proud of you today."}}
+   :as      {:id "iris" :type :person}
+   :expect  {:allowed true}})
+
+(defscenario only-the-recipient-discards
+  "A curator may not clear someone else's mail: the broom is the
+   recipient's own, recovery-admin or not."
+  {:kind    :letter
+   :attempt :discard
+   :row     {:state :waiting
+             :data {:owner "mom" :to "iris" :title "For Iris"
+                    :body "Proud of you today."}}
+   :as      {:id "dad" :type :person :roles #{:recovery-admin}}
+   :expect  {:refused :discarder-is-recipient
+             :because "Only the letter's recipient may discard it."}})
+
+(defscenario an-opened-letter-does-not-open-twice
+  "A letter, once opened, just IS opened — the second knock is
+   refused by the machine itself, with no guard behind it."
+  {:kind    :letter
+   :attempt :open
+   :row     {:state :opened
+             :data {:owner "mom" :to "iris" :title "For Iris"
+                    :body "Proud of you today."}}
+   :as      {:id "iris" :type :person}
+   :expect  {:refused :out-of-state
+             :because "Available in state(s) Waiting"}})
+
 ;; ── :letter — the addressed note ────────────────────────────────────
 
 (defresource letter
@@ -341,6 +395,11 @@
    :create-guards [letters-are-paced letter-author-is-self
                    letter-to-is-a-member]
    :on-create stamp-letter
+   ;; the policy, declared beside the law it judges
+   :scenarios [only-the-recipient-opens
+               the-addressed-child-opens-her-own
+               only-the-recipient-discards
+               an-opened-letter-does-not-open-twice]
    ;; two transitions, both the recipient's, no amend and no delete: a
    ;; letter, once sent, is sent. Neither takes input, so neither
    ;; carries :record — the transition itself is the audit

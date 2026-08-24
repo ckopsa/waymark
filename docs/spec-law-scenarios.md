@@ -196,3 +196,94 @@ is the conformance-tier obligation's staging — `:given` rows, a declared
 principal that is not the system walker, and the envelope reading — plus the
 three household scenarios that prove it and the invariance test that pins the
 fingerprint.
+
+## Built (2026-08-23, waymark-442.2)
+
+It landed as specced, and the parts that moved were small enough to name.
+
+`:scenarios` joined `declaration.clj/top-level-keys` under a new *proof*
+comment group (and the shipped clj-kondo hook's copy of that set, which
+`declaration-test` holds equal). `waymark10/scenario.clj` is the new namespace:
+the closed key sets, the construction gate, the tier rule, the check-tier
+judge, and the one narration both tiers share. `declare.clj/defscenario` is
+sentence-first beside `defguard`, aliased in `dsl.clj`; `check.clj/report`
+grew a per-kind scenarios section; `packs/core` grew one obligation,
+`:core/law-scenarios`.
+
+Eight household scenarios landed in workqueue10 — four on `letter` (the open
+wall, its allowed twin, the discard wall, and the second knock on an opened
+letter), two on `weather` (the first-person wall at the create door and the
+report that passes), two on `self` (another agent's words, and your own) — plus
+two on core's own `approval_request`, which is where the four-eyes rule finally
+became a sentence the framework checks. Every one of them is check tier: `make
+check-queue` judges all eight with no database, and prints the split.
+
+### Readings and trades
+
+- **The sentence leads, the diagnosis rides after.** A broken wall reads
+  `only-the-recipient-opens [letter/open] A letter addressed to someone else
+  does not open for a curious sibling, and the refusal names the wall it hit.
+  — the law allowed it`. The clause is the only part the framework wrote.
+- **A broken scenario exits 1; a usability warning still exits 0.** That is a
+  new exit-code meaning for `waymark10.check` and it is the right one: a
+  warning is an opinion about how a declaration reads, a scenario is a promise
+  the household wrote down and the law stopped keeping. `make check-queue`
+  goes red.
+- **Structural faults read as themselves, not as the household's sentence.**
+  An `:expect :refused` naming a guard that is not on the action, a `:row` in
+  an undeclared state, an attempt the kind does not carry — each is an
+  authoring fault and says so. The sentence is reserved for the law actually
+  breaking. This is also what makes the guard-swap case land: swapping a guard
+  for a different guard with the same words fails with *"`:expect :refused`
+  names `:curator-only`, which is not a guard on `:close`"*.
+- **`:reads` exists in exactly the shape the spec assumed**, so the tier rule
+  needed no new metadata and sniffs nothing. `check.clj` prints the deferral
+  reason in the author's terms — `stages 1 given row`, `reads :storage` — so
+  nobody has to guess which half of the rule they tripped.
+- **A missing `:at` under a clock-reading law is a refusal, not a default.**
+  The spec's table says an absent `:at` means the clock is not consulted; a
+  scenario whose action carries a `:reads [:now]` guard is told to name its
+  moment rather than being handed `Instant/now` and a plausible-looking wrong
+  answer.
+- **The conformance tier stages as the walker and attempts as the declared
+  principal.** Staging as the scenario's own principal would prove a different
+  sentence — that this person may create the setup — and a scenario that wants
+  to say that says it as its own attempt. `:given` rows and the subject row
+  both go through the plural create door and then along `machine/path-to`; the
+  verdict is read off the RFC 9457 document, so what a conformance-tier
+  scenario proves is the refusal a *client* sees.
+- **A hide-flagged guard cannot be named through the door, and the obligation
+  says so** rather than reporting a mismatch: concealment answers 404 and
+  never names itself. Such a scenario belongs to the check tier, where the
+  denier is in hand.
+- **The obligation reports `:covered`**, the folded-enums precedent, so an app
+  can tell *no scenarios declared* from *no scenarios deferred*.
+- **The invariance pin holds by construction and is tested anyway.**
+  `fingerprint-of` is a whitelist, so `:scenarios` never reaches a hash;
+  `law_scenarios_test` pins that adding, editing and deleting one leaves the
+  hash byte-identical, and asserts the projection has no `"scenarios"` key. A
+  test that minted a law revision would have triggered a propose-mode hold on
+  every scenario edit.
+
+### Punts kept, and two added
+
+Every punt above survives contact: `require-fact` still over-declares
+`:reads [:storage]` (so mealplan10's fact gates all defer, and narrowing it
+stays its own review); a cross-kind scenario still lives on the kind whose
+action it attempts; coverage is still counted and never enforced —
+`check` prints *"5 refusing guards, 2 named by a scenario"* and `checks.clj`
+stays quiet; `{:any […]}` composites can still be named only as the composite.
+Two more were added by building it:
+
+- **The check tier's world has no features enabled.** `:services.features` is
+  in the offline set because the spec put it there, and the storage-free ctx
+  serves it as empty — so a scenario over a `feature-flag` guard sees the flag
+  *off*. Honest for a declaration-time world, and a scenario that wants the
+  live answer declares `:given`. No workqueue10 scenario is affected today.
+- **`waymark10.check` judges the application's own declarations only.** Core's
+  enrolled kinds — `approval_request` among them — are assembled there but
+  their scenarios are judged by the framework's own suite instead
+  (`law_scenarios_test/core-kinds-keep-their-own-scenarios`, over
+  `engine/full-registry`). Widening `check` to the full registry would make
+  every app's gate report core's law, which is a decision about what `check`
+  is *for* and deserves its own line rather than a side effect of this one.
