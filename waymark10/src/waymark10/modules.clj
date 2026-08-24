@@ -153,6 +153,7 @@
             [waymark10.server.presence :as presence]
             [waymark10.server.roles :as roles]
             [waymark10.server.routes.attachments :as attachment-routes]
+            [waymark10.server.routes.feed :as feed-routes]
             [waymark10.server.routes.law-sweep :as law-sweep-routes]
             [waymark10.server.routes.mcp :as mcp-routes]
             [waymark10.server.routes.mirror :as mirror-routes]
@@ -363,6 +364,22 @@
    ;; (`law-sweep/swept-from`), and an engine that does not want the
    ;; surface simply does not assemble it.
    {:module :law-sweep :routes law-sweep-routes/routes :pack packs/law-sweep}
+
+   ;; the feed (waymark-iqa.2): one GET answering a mixed, seeded,
+   ;; grant-projected read of the house — do-now, decide, the caught-up
+   ;; seam, the archive. Two columns only: it enrols no kind (its
+   ;; populations are projections over rows that already exist) and
+   ;; starts nothing (fork (a): read-time seeded queries, no
+   ;; materializing job, because a daily job is a whole extra failure
+   ;; mode and the seed already delivers what it was for).
+   ;;
+   ;; Its RECIPE is an engine opt read at the route's build site with
+   ;; its default — `(:feed eng feed/default-recipe)`, the same
+   ;; spelling :events-poll-ms and :curtain-ttl-ms get — and never a
+   ;; fifth contribution column. The table is closed at four and this
+   ;; module is the first one built after that closure to want
+   ;; something; it wanted an opt, and an opt is what it took.
+   {:module :feed :routes feed-routes/routes :pack packs/feed}
 
    ;; named, contributing nothing through this seam
    {:module :postgres-store}

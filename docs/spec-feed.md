@@ -615,3 +615,98 @@ are each one `:decision` declaration, two or three scenarios and a create guard.
 verifies by hand (`waymark10-design.md` §10). The risk is not the code — it is
 that the surface ships and nobody opens it, which is why the actions-from-feed
 number is designed in from the first bead rather than added when someone asks.
+
+## Built — `.2`, the surface (2026-08-24, waymark-iqa.2)
+
+The mixer, the seam and the grant-projected card landed whole and alone, as the
+landing order asks. `waymark10/src/waymark10/server/feed.clj` is the recipe, the
+seed, the cursor, the population registry and the mixer;
+`waymark10/src/waymark10/server/routes/feed.clj` mounts `GET /api/-/feed` in the
+`:static` bucket and reads the recipe once at the build site;
+`waymark10.modules` grew the two-column `:feed` entry (routes and a pack, no
+kinds, no hooks) and `waymark10.test.packs` grew `packs/feed`.
+`waymark10/test/waymark10/feed_test.clj` holds what a conformance driver with
+one world cannot arrange: two kinds and two principals built to disagree, the
+recipe handed over as an opt, and the assembly checks read one at a time.
+
+One line of core moved, and it is the sentence `modules.clj` already writes:
+`:feed` joins `engine/engine`'s `select-keys` beside `:curtain-ttl-ms` and
+`:webhooks-poll-ms`. That list IS *'one engine, one opts map'* — an opt not
+named there does not reach the engine at all — so a module knob has to be
+admitted to it, and admitting one is not the fifth contribution column the
+table refuses.
+
+The document is a `feed`, with `kind: "feed"` — one key beyond the spec's
+sketch, and a load-bearing one: fork (c)'s verdict is *a `render()` fork by
+document kind*, and a document that cannot name itself cannot be forked on.
+
+### What shipped, and what did not
+
+**Five populations, all v1-cheap.** `next_actions` (the open rows of the
+front-door kinds), `asks` (offered `approval_request`s that are not the
+reader's own), `letters` (the reader's unopened mail, when the engine holds a
+`letter` kind — the `welcome-home` precedent), `conflicts` (mirrored rows whose
+authority and household disagree, read off `:mirror` on the rdef rather than
+through the mirror module), and `events` (the transition log as the bottomless
+archive). The recipe that names them is therefore SHORTER than the illustrative
+one above, and deliberately: check (1) refuses a recipe naming a population the
+registry does not hold, so `:ticklers` (.4), the fuel populations (.5) and
+`:insights` (.6) each add their registry entry and their recipe line together.
+That is fork (a)'s seam doing exactly what it promised.
+
+**`:nav` is the do-now question's answer.** waymark declares no vocabulary for a
+due date, and inventing one to rank by would be the scoring function the third
+law forbids. `:nav` is the only trait a declaration carries about who a kind is
+FOR — every framework kind takes `:system`, every application kind takes
+`:primary` by default — and it is not fingerprinted, so reading it costs no
+declaration a hash. do-now is the `:primary` kinds' open rows; the seed picks;
+a card with no available action is dropped, because a next action with no verb
+is a row on a list.
+
+**A row an earlier section claims is that section's for the day.** The mixer's
+`seen` set is built from every candidate a population NAMED, not from the cards
+that fit, and a cursor page re-runs the sections above the seam for their
+candidates alone (`:render? false`, one query each, no envelopes). Without that,
+page four would re-serve as a memory what page one showed as a next action.
+Which leaves the archive exactly the rows the household FINISHED — the honest
+v1 of *history as fuel*, and the shape `.5` will fill in properly.
+
+**The card is `envelope-summary` minus two keys.** `waymark`, because a card is
+an element of a document rather than a document, and `unavailable`, because a
+card has no room for the narration of doors that are shut. Neither is a
+projection: what a reader HOLDS is untouched, which is the half `heavier` exists
+to keep honest.
+
+**No seventh MCP tool**, per § 'The compiler contract': an agent reaching for
+the household wears `waymark_query` / `waymark_get` / `waymark_invoke` like any
+other leash, and the six-tool pin in `packs/mcp` did not move.
+
+### The obligations
+
+`packs/feed` carries `:feed/routes-mounted`, `:feed/recipe-order` (the census
+read off the wire, plus five bad recipes each refused by name at assembly),
+`:feed/day-stable` (two reads, one seed, one order), `:feed/projection` (the
+two-principal proof: a leash over one kind is minted, accepted and worn, and no
+card of any other kind survives) and `:feed/cursor-rolls` (a cursor from another
+day is 409, a token this engine never minted is 422, and a cursor page carries
+archive cards only — no seam, no do-now). `:feed/verbs-are-light` belongs to
+`.3` and `:feed/archive-pages` to `.5`, each with the bead that lands the
+mechanism it judges.
+
+### Recorded here, for `.3` and after
+
+- **`heavier` is `[]` on every card and the split site is `feed/card`.** Project
+  first is already the shape: the partition has only the surviving `actions` to
+  read, so it cannot name a door the grant concealed.
+- **The `Idempotency-Key` origin convention is unplanted.** `.3` owns it; no
+  card carries a prefix yet and no query counts one.
+- **`row-scan-cap` 100 and `log-scan-cap` 500** bound the read-time cost, and
+  the document's `notes` say when the archive fold reached its cap —
+  `history/fold-cap`'s posture, at a smaller number.
+- **waymark-j82 is real and it is not this bead's.** Loading any code before the
+  application's declarations moves `ingredient`'s fingerprint hash, and nine
+  other app kinds' hashes are not even stable run to run: `fingerprint/
+  callable-hash` falls back to `pr-str` on a bare fn, which prints a
+  compiler-assigned class id and an identity hashcode. Proved by requiring four
+  unrelated `clojure.*` namespaces with the feed reverted — same move, no feed.
+  The twenty kinds whose hashes ARE deterministic did not move by one byte.

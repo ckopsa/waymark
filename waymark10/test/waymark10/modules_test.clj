@@ -156,6 +156,7 @@
                "/api/-/presence" "/api/-/intents" "/api/-/intents/abandon"
                "/api/-/intents/answer" "/api/-/collab-ticket"
                "/api/-/mirrors/:plural/:action" "/api/-/welcome" "/api/-/mcp"
+               "/api/-/feed"
                "/api/-/grant-check" "/agentInvite" "/api/-/agent-invite"
                "/api/-/ui" "/api/-/ui-lite" "/api/attachments/:id/bytes"
                "/api/definitions/:id/sweep"
@@ -179,6 +180,10 @@
     (testing "every static module route precedes the plural grammar"
       (doseq [p ["/api/-/seasons" "/api/-/presence" "/api/openapi.json"
                  "/api/attachments/:id/bytes"
+                 ;; three segments under /api is /api/{plural}/{id}'s
+                 ;; own shape: mounted later, the feed would be read
+                 ;; as row "feed" of a collection named "-"
+                 "/api/-/feed"
                  ;; four segments, and still static: /api/:plural/:id
                  ;; would not match it, but /api/definitions/{id} is a
                  ;; row address and the sweep is not a field of it
@@ -202,10 +207,12 @@
     (testing "assembled, the module doors answer"
       (is (= 200 (get! full "/api/-/seasons")))
       (is (= 200 (get! full "/api/openapi.json")))
+      (is (= 200 (get! full "/api/-/feed")))
       (is (= 200 (get! full "/"))))
     (testing "left out, they are addresses nobody mounted — 404, not 405"
       (is (= 404 (get! core "/api/-/seasons")))
       (is (= 404 (get! core "/api/openapi.json")))
+      (is (= 404 (get! core "/api/-/feed")))
       (is (= 404 (get! core "/"))))
     ;; the MCP door answers POST; its GET is the deliberate 405 that
     ;; says this server pushes nothing (the streaming punt, on the
@@ -363,7 +370,7 @@
   (testing "every module that owes obligations offers a pack"
     (is (= [:core :attachments :webhooks :jobs :worksheet :capabilities
             :dashboard :seasons :realtime :mirror :openapi :ui :mcp
-            :law-sweep]
+            :law-sweep :feed]
            (mapv :module (modules/packs nil)))))
   (testing "a named selection keeps core and nothing it did not name"
     (is (= [:core :jobs] (mapv :module (modules/packs [:jobs])))))

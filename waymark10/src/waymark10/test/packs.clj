@@ -86,9 +86,10 @@
   ctx from the driver, which lives in test scope where
   malli.generator, test.check and an http-kit server belong.
 
-  The module namespaces required below (attachments, curtain, jobs,
-  presence) add nothing to that load: waymark10.modules already
-  requires every one of them for its own columns. What a pack asks
+  The module namespaces required below (attachments, curtain, feed,
+  jobs, presence) add nothing to that load: waymark10.modules already
+  requires every one of them for its own columns (the feed through
+  its routes namespace, which is the same load). What a pack asks
   of its module is only ever its module's own vocabulary — the
   worker's actor id, the curtain's verdict — never another's."
   (:require [clojure.string :as str]
@@ -96,6 +97,7 @@
             [waymark10.scenario :as scenario]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.curtain :as curtain]
+            [waymark10.server.feed :as feed]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.presence :as presence]
             [waymark10.server.router :as router]
@@ -1609,3 +1611,261 @@
     {:name :law-sweep/proposal-or-refusal
      :needs #{[:route :law-sweep] [:kind :definition]}
      :run law-sweep-violations}]})
+
+;; ── feed ────────────────────────────────────────────────────────────
+;;
+;; The feed owes four promises beyond its route being mounted, and
+;; they are the four laws of docs/spec-feed.md read as questions a
+;; wire document can answer: is the order the CENSUS's, is the seam a
+;; real element, is the day's order stable, and — the one that costs —
+;; does a reader without a grant on a kind never see its card. That
+;; last is judged from TWO principals through the same door, because a
+;; per-member world is not a claim one principal can check.
+
+(defn- feed-doc
+  "One feed read, as whichever principal the headers name."
+  [ctx headers & [query]]
+  (let [resp ((:handler ctx) (cond-> {:request-method :get
+                                      :uri "/api/-/feed"
+                                      :headers (or headers
+                                                   (:walker-headers ctx))}
+                               query (assoc :query-string query)))]
+    {:status (:status resp) :doc (json ctx resp) :resp resp}))
+
+(defn- feed-cards [doc] (vec (:cards doc)))
+
+(defn- feed-recipe-order-violations
+  "The census is law, and both halves of it are checked: what the DOOR
+  answered (sections top to bottom, one seam, every card naming its
+  origin row), and what the recipe CHECKS refuse (an unknown
+  population, a missing seam, a bottomless section that is not last).
+  The second half is pure — no engine, no rows — which is why it can
+  be asked here rather than only at a boot nobody watched."
+  [ctx]
+  (let [{:keys [status doc resp]} (feed-doc ctx nil)
+        cards (feed-cards doc)
+        seams (filterv #(= "seam" (:card_id %)) cards)
+        ranks (into [] (comp (map :section)
+                             (map (fn [s] [s (.indexOf ^java.util.List
+                                                       (mapv name feed/census)
+                                                       (str s))])))
+                    cards)
+        refuses? (fn [recipe]
+                   (try (feed/check-recipe! recipe) false
+                        (catch clojure.lang.ExceptionInfo e
+                          (boolean (:waymark10/definition-error (ex-data e))))))]
+    (cond-> []
+      (not= 200 status)
+      (conj (str "feed: the door answered " status " to a named principal: "
+                 (pr-str ((:text ctx) resp))))
+
+      (not= 1 (count seams))
+      (conj (str "feed: exactly one card is the seam, found " (count seams)
+                 " — a feed with no seam never finishes, and a feed with two"
+                 " says 'that's everything' twice"))
+
+      (and (= 1 (count seams))
+           (not= (.indexOf ^java.util.List (mapv :card_id cards) "seam")
+                 (long (:above (first seams)))))
+      (conj (str "feed: the seam says " (pr-str (:above (first seams)))
+                 " cards are above it, and " (.indexOf ^java.util.List
+                                                       (mapv :card_id cards)
+                                                       "seam")
+                 " are"))
+
+      (some (fn [[s r]] (neg? (long r))) ranks)
+      (conj (str "feed: a card names section "
+                 (pr-str (first (keep (fn [[s r]] (when (neg? (long r)) s))
+                                      ranks)))
+                 ", which is not in the census " (pr-str (mapv name feed/census))))
+
+      (not= (mapv second ranks) (vec (sort (mapv second ranks))))
+      (conj (str "feed: the sections are out of census order — "
+                 (pr-str (into [] (distinct) (mapv first ranks)))
+                 " against " (pr-str (mapv name feed/census))
+                 ". The census is law, so this is a typo, not a preference"))
+
+      (some (fn [c] (and (not= "seam" (:card_id c))
+                         (or (str/blank? (str (:self c)))
+                             (not= (:card_id c)
+                                   (str (:section c) "/" (:kind c) "/"
+                                        (last (str/split (str (:self c)) #"/")))))))
+            cards)
+      (conj (str "feed: a card's id is section/kind/id over its OWN row — a"
+                 " card that invented an identity is a card the client cannot"
+                 " key on"))
+
+      (not (refuses? (assoc feed/default-recipe :order
+                            [{:section :do_now :population :telepathy :take 1}
+                             {:seam true}])))
+      (conj "feed: a recipe naming an unregistered population was accepted")
+
+      (not (refuses? (assoc feed/default-recipe :order
+                            [{:section :do_now :population :next_actions :take 1}])))
+      (conj "feed: a recipe with no seam was accepted")
+
+      (not (refuses? (assoc feed/default-recipe :order
+                            [{:section :archive :population :events :take 1
+                              :bottomless true}
+                             {:seam true}])))
+      (conj (str "feed: a recipe whose bottomless section is not last was"
+                 " accepted — a section that never ends can have nothing"
+                 " below it"))
+
+      (not (refuses? (assoc feed/default-recipe :order
+                            [{:section :fuel :population :events :take 1}
+                             {:section :do_now :population :next_actions :take 1}
+                             {:seam true}])))
+      (conj "feed: a recipe with fuel above do-now was accepted")
+
+      (not (refuses? (assoc feed/default-recipe :order
+                            [{:section :do_now :population :next_actions :take 1}
+                             {:seam true} {:seam true}])))
+      (conj "feed: a recipe carrying two seams was accepted"))))
+
+(defn- feed-day-stable-violations
+  "Two reads, one day, one order. The seed is a hash over (salt,
+  member, local date) and nothing is stored, so this is the whole of
+  'stable within a day' — and if it ever fails, the thing that failed
+  is determinism, not caching."
+  [ctx]
+  (let [a (:doc (feed-doc ctx nil))
+        b (:doc (feed-doc ctx nil))]
+    (cond-> []
+      (str/blank? (str (:seed a)))
+      (conj "feed: the document carries no seed — the day's order came from
+             somewhere this surface will not name")
+
+      (not= (:seed a) (:seed b))
+      (conj (str "feed: two reads by one member on one day answered two seeds, "
+                 (pr-str (:seed a)) " and " (pr-str (:seed b))))
+
+      (not= (mapv :card_id (feed-cards a)) (mapv :card_id (feed-cards b)))
+      (conj (str "feed: two reads by one member on one day answered different"
+                 " cards, in this order:\n  " (pr-str (mapv :card_id (feed-cards a)))
+                 "\n  " (pr-str (mapv :card_id (feed-cards b)))))
+
+      (not= (:day a) (:day b))
+      (conj "feed: two reads straddled a day boundary — rerun"))))
+
+(defn- feed-projection-violations
+  "The fourth law, from the wire and from TWO principals: every card is
+  grant-projected through the reader's own surface. A leash over one
+  kind is minted, accepted by its audience and worn; the kinds that
+  leash never named are not refused to the reader, they are ABSENT.
+
+  This is the law the feed could have skipped — `routes/law_sweep.clj`
+  refuses a scoped caller outright and says so — and the one it may
+  not, because per-member worlds is the whole surface."
+  [ctx]
+  (let [own (:own-surface-kinds ctx #{})
+        granted (or (first (app-kinds ctx)) :role)
+        audience "feed-scope-probe"
+        allowed (into #{(name granted)} (map name) own)]
+    (if-some [gid (mint-grant! ctx audience granted)]
+      (let [as-audience {"x-waymark-principal" audience
+                         "x-waymark-actor-type" "agent"}
+            accepted ((:invoke ctx) :grant gid :accept {} {:headers as-audience})
+            unscoped (:doc (feed-doc ctx nil))
+            scoped (feed-doc ctx (assoc as-audience "x-waymark-grant" gid))
+            seen (into #{} (comp (remove #(= "seam" (:card_id %)))
+                                 (map (comp str :kind)))
+                       (feed-cards (:doc scoped)))
+            leaked (sort (remove allowed seen))]
+        (cond-> []
+          (not= 200 (:status accepted))
+          (conj (str "feed: the audience could not accept its own grant ("
+                     (:status accepted) ") — the projection probe never got"
+                     " a leash"))
+
+          (not= 200 (:status scoped))
+          (conj (str "feed: a grant-scoped reader was answered "
+                     (:status scoped) " — the feed PROJECTS for a scoped"
+                     " caller rather than refusing one; that exit is the"
+                     " sweep's, and spec-feed's fourth law takes it away"))
+
+          ;; on an engine with application kinds the feed must have
+          ;; SOMETHING to say, or this obligation is passing by having
+          ;; nothing to conceal. On a bare core engine it genuinely has
+          ;; nothing — the archive draws from the household's own kinds
+          ;; and there are none — and demanding a card there would be
+          ;; demanding that machinery be news.
+          (and (seq (app-kinds ctx))
+               (empty? (remove #(= "seam" (:card_id %)) (feed-cards unscoped))))
+          (conj (str "feed: an unscoped reader saw no card at all on an engine"
+                     " declaring " (count (app-kinds ctx)) " kinds, so the"
+                     " projection probe had nothing to conceal"))
+
+          (seq leaked)
+          (conj (str "feed: a reader whose leash names " (name granted)
+                     " was shown cards of " (vec leaked)
+                     " — an ungranted kind is ABSENT from a feed, never"
+                     " narrowed and never refused"))))
+      [(str "feed: minting a grant over " (name granted)
+            " refused — the projection obligation has no leash to wear")])))
+
+(defn- feed-cursor-violations
+  "The cursor is opaque, it serves the ARCHIVE only, and a cursor from
+  another day is refused rather than honoured. Serving yesterday's seed
+  today would be a second definition of 'stable within a day', and the
+  409's sentence is what tells a client to read from the top instead of
+  retrying forever."
+  [ctx]
+  (let [{:keys [doc]} (feed-doc ctx nil)
+        stale (feed/encode-cursor {:day "1999-01-01" :seed (:seed doc)
+                                   :offset 0})
+        rolled (feed-doc ctx nil (str "cursor=" stale))
+        garbage (feed-doc ctx nil "cursor=not-a-cursor")
+        next-href (get-in doc [:links :next :href])
+        page2 (when next-href
+                (feed-doc ctx nil (second (str/split next-href #"\?" 2))))]
+    (cond-> []
+      (not= 409 (:status rolled))
+      (conj (str "feed: a cursor from another day answered " (:status rolled)
+                 ", not 409 — the feed rolls at midnight and never serves"
+                 " yesterday's order"))
+
+      (and (= 409 (:status rolled))
+           (not (str/includes? (str (get-in rolled [:doc :detail])) "roll")))
+      (conj (str "feed: the stale-cursor refusal never says the feed rolled: "
+                 (pr-str (get-in rolled [:doc :detail]))))
+
+      (not= 422 (:status garbage))
+      (conj (str "feed: a cursor this engine never minted answered "
+                 (:status garbage) ", not 422 — a token that quietly answered"
+                 " page one would make deep paging look like a loop"))
+
+      (and page2 (not= 200 (:status page2)))
+      (conj (str "feed: following links.next answered " (:status page2)))
+
+      (and page2 (some #(= "seam" (:card_id %)) (feed-cards (:doc page2))))
+      (conj "feed: a cursor page re-served the seam — the seam happens once")
+
+      (and page2 (some #(not= "archive" (str (:section %)))
+                       (feed-cards (:doc page2))))
+      (conj (str "feed: a cursor page carried "
+                 (pr-str (into [] (comp (map (comp str :section))
+                                        (distinct)
+                                        (remove #{"archive"}))
+                               (feed-cards (:doc page2))))
+                 " — above the seam the feed is finite and done, and"
+                 " re-serving it is the duplication the epic forbids")))))
+
+(defn- feed-obligation [name' run]
+  {:name name' :needs #{[:route :feed]} :run run})
+
+(def feed
+  {:module :feed
+   :obligations
+   [(routes-mounted :feed)
+    (feed-obligation :feed/recipe-order feed-recipe-order-violations)
+    (feed-obligation :feed/day-stable feed-day-stable-violations)
+    (feed-obligation :feed/projection feed-projection-violations)
+    (feed-obligation :feed/cursor-rolls feed-cursor-violations)]
+   ;; NOT here, and named rather than pending: :feed/verbs-are-light
+   ;; (waymark-iqa.3 writes the ≤-selection partition this pack would
+   ;; be judging) and :feed/archive-pages (waymark-iqa.5 brings the
+   ;; populations that make deep paging worth walking). Both are
+   ;; spec-feed § 'Where the law is proved' obligations, and both
+   ;; belong to the bead that lands the mechanism.
+   })

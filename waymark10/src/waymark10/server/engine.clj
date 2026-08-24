@@ -177,7 +177,17 @@
                                       :collab-ticket-ttl-ms
                                       :intents-heartbeat-ms
                                       :intent-ttl-ms :intent-ask-ttl-ms
-                                      :curtain-ttl-ms])
+                                      :curtain-ttl-ms
+                                      ;; the feed's recipe (waymark-iqa.2):
+                                      ;; static data, read at the route's
+                                      ;; build site with its default and
+                                      ;; checked there. An opt rather than a
+                                      ;; fifth module column — the
+                                      ;; contribution table is closed at four
+                                      ;; and this is the spelling
+                                      ;; waymark10.modules already names for
+                                      ;; every other module's knob.
+                                      :feed])
                    (when-some [o (:oidc opts)] {:oidc (oidc/config o)})
                    {:storage storage
                     :registry (atom reg)
