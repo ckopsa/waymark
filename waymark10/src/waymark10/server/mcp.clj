@@ -253,11 +253,15 @@
    :title "Discover this engine's surface"
    :description
    (str "What this engine serves and what YOU may see of it: every "
-        "kind, its collection href, its action names, its navigation "
+        "kind, its collection href, its action names, its view names, "
+        "the field names its filters may name, its navigation "
         "tier and domain, plus the doors (welcome, knock, ask, grant "
         "check) and the principal you resolved to. Start here. The "
         "list is your grant's projection — a kind you were not granted "
-        "is absent, not refused.")
+        "is absent, not refused. This answer is also where most "
+        "x-options recipes land (see waymark_schema): when a field "
+        "says its options come from here, the tokens are in THIS "
+        "document, at the path the recipe names.")
    :input-schema {:type "object" :properties {} :additionalProperties false}})
 
 (def ^:private schema-tool
@@ -271,7 +275,20 @@
         "reversible, confirm, fence) and the consequence sentence a "
         "confirm-gated action requires. Availability is per ROW and "
         "per state; read waymark_get for what a particular row affords "
-        "right now.")
+        "right now.\n\n"
+        "A field whose legal tokens this engine enumerates only at "
+        "RUNTIME carries x-options — {from, of, href, at, each, "
+        "composes, note} — instead of an enum: fetch `href` (usually "
+        "the waymark_discover answer, sometimes another kind's schema), "
+        "walk `at` (an array's elements are the tokens, an object's "
+        "keys are), and you have the vocabulary. Where `href` or `at` "
+        "carries a hole like {target}, fill it with the value of the "
+        "SIBLING argument of that name — so answer that one first. "
+        "`each` means the field is a list of such tokens; `composes` "
+        "means the value is BUILT from them (\"query\" = a "
+        "field=value&… filter string). The options are advertisement, "
+        "not law: the guard still judges the write, and may accept a "
+        "token no source lists.")
    :input-schema {:type "object"
                   :properties {:kind {:type "string"
                                       :description "A kind name from waymark_discover."}}

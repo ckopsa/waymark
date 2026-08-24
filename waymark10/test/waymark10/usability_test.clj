@@ -6,8 +6,12 @@
   cannot be satisfied is a policy nobody can act on."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [waymark10.dashboard :as dash]
+            [waymark10.demand :as demand]
             [waymark10.guards :as g]
+            [waymark10.saved-view :as sv]
             [waymark10.resource :as r]
+            [waymark10.schema :as schema]
             [waymark10.types :as t]
             [waymark10.usability :as u]))
 
@@ -56,6 +60,15 @@
 (deftest a-compliant-declaration-passes-silently
   (is (= [] (u/warnings (r/resource compliant)))))
 
+(deftest the-composition-kinds-owe-nothing
+  ;; waymark-8sg: the three kinds a family authors at RUNTIME were the
+  ;; battery's own fix-list — 27 warnings, 16 of them effort-honesty
+  ;; waiting on a spelling that did not exist. Pinned here so the
+  ;; framework's own forms cannot quietly go back to blank rectangles.
+  (doseq [rdef [sv/saved-view dash/dashboard dash/dashboard-slot]]
+    (is (= [] (u/warnings rdef))
+        (str (name (:kind rdef)) " must have nothing owing"))))
+
 ;; ── 1 · effort honesty ──────────────────────────────────────────────
 
 (g/defguard machinery-only
@@ -96,6 +109,62 @@
                                           :one-way "A retitle is a retitle."}
                                 :display {:label "Retitle"}})
                      "effort-honesty")))))
+
+;; ── the runtime vocabulary the policy waited for (waymark-8sg) ──────
+;; The warning always offered three fixes — an :enum, a :kind ref, or
+;; "a vocabulary the schema can publish" — and the third one did not
+;; exist, which is why the policy's first run produced a fix-list
+;; nobody could clear. :x-options is that third fix: the field's legal
+;; tokens named as a place, fetched at runtime, published as a recipe.
+
+(deftest a-runtime-vocabulary-is-selection-not-recall
+  (let [with-options
+        (assoc-in compliant [:actions :retitle]
+                  {:from #{:pending} :to :pending
+                   :input [:map
+                           [:target {:x-options {:from :kinds}
+                                     :x-display {:label "Which collection"
+                                                 :help "One this engine serves."}}
+                            [:string {:max 60}]]
+                           [:token {:x-options {:from :fields :of :target}
+                                    :x-display {:label "Which field"
+                                                :help "One of the target's own."}}
+                            [:string {:max 60}]]]
+                   :guards [names-a-declared-thing]
+                   :safety {:idempotent true :reversible false :confirm false
+                            :one-way "A retitle is a retitle."}
+                   :display {:label "Retitle"}})]
+    (is (= [] (warns with-options "effort-honesty")))
+
+    (testing "and the recipe reaches the wire, one hop, resolved"
+      (let [props (:properties
+                   (schema/json-schema
+                    (get-in (r/resource with-options)
+                            [:actions :retitle :input])))]
+        (is (= {:from "kinds"
+                :href "/api/.well-known/waymark"
+                :at ["kinds"]
+                :note "every kind name this engine serves"}
+               (get-in props [:target :x-options])))
+        ;; the hole is RENAMED, never filled, at projection time: the
+        ;; client resolves {target} against the form in front of the
+        ;; person, so a recipe that arrived pre-filled would be a lie
+        (is (= {:from "fields"
+                :href "/api/schemas/{target}"
+                :at ["properties"]
+                :note "the data field names of the kind named in target"
+                :of "target"}
+               (get-in props [:token :x-options])))))
+
+    (testing "the demand class stays honest — a typed field is still typing"
+      (is (= "recall"
+             (demand/field-class
+              :token
+              (get-in (schema/json-schema
+                       (get-in (r/resource with-options)
+                               [:actions :retitle :input]))
+                      [:properties :token])
+              #{}))))))
 
 ;; ── 2 · mandatory display prose ─────────────────────────────────────
 

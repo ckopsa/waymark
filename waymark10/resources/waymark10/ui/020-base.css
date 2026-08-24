@@ -183,6 +183,18 @@
   .chips .chip.static { cursor: default; }
   .chips .chip.on { background: var(--verdigris); color: #fff;
                     border-color: var(--verdigris); }
+  /* runtime vocabularies (waymark-8sg): the tokens a field's
+     x-options source enumerates, offered as chips beside the box.
+     They OFFER — the box stays typeable, because the guard, not the
+     picker, is the law */
+  .opt-chips { display: flex; gap: 5px; flex-wrap: wrap; align-items: center;
+               margin: 4px 0 8px; }
+  .opt-chips button.chip { cursor: pointer; border: 1px solid var(--line);
+                           font-family: var(--mono); font-size: 11px;
+                           padding: 2px 8px; line-height: 1.6; }
+  .opt-chips button.chip:hover { background: var(--verdigris-wash);
+                                 border-color: var(--verdigris); }
+  .opt-chips .muted { font-size: 11px; }
 
   table.kv { border-collapse: collapse; width: 100%; }
   table.kv td { padding: 6px 10px 6px 0; vertical-align: top;

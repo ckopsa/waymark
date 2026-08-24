@@ -362,6 +362,105 @@
                                             (if (keyword? v) (name v) v))]))
                                 p))))))))
 
+;; ── runtime vocabularies (waymark-8sg) ──────────────────────────────
+;; An :enum publishes a vocabulary the DECLARATION knows. Some fields
+;; are judged against a vocabulary only the running ENGINE knows — the
+;; kinds it serves, one kind's data fields, its actions, its views. The
+;; guard for such a field escapes the closure rule with :open ("the
+;; legal tokens are the registry's, one GET away") and every client
+;; then draws a blank rectangle where a picker belongs. `:x-options`
+;; ends that: the declaration says out loud WHERE the options come
+;; from, and the published schema carries a fetch recipe any client can
+;; follow — the browser form and an MCP agent alike.
+;;
+;; It is ADVERTISEMENT, never law. The guard stays the enforcement,
+;; unchanged and unmoved in the fingerprint; the annotation only stops
+;; the engine from hiding what it already knows. So a widget built from
+;; it offers and never cages: a token the source cannot list (a slot's
+;; "sv-<id>", minted per row) must stay typeable, and the refusal that
+;; names it is the same refusal as before.
+
+(def option-sources
+  "The closed set of places a runtime vocabulary comes from, and the
+  ONE-hop recipe each becomes on the wire.
+
+  Every source answers out of a document the engine already serves and
+  every client already holds: the discovery root
+  (`/api/.well-known/waymark`, cached by the browser client, and the
+  `waymark_discover` tool's whole answer) or one kind's published
+  schema (`/api/schemas/{kind}`, which is `waymark_schema`'s answer).
+  No new route was minted for this, on purpose — a picker that costs a
+  second endpoint is a picker somebody turns off.
+
+  :href and each :at segment may carry `{of}`, replaced at PROJECTION
+  time by the name of the sibling field that names the target kind
+  (`{target}`), and at FETCH time by that field's current value. :at
+  walks the fetched document; an array's elements are the tokens, an
+  object's keys are."
+  {:kinds   {:href "/api/.well-known/waymark"
+             :at ["kinds"]
+             :note "every kind name this engine serves"}
+   :fields  {:href "/api/schemas/{of}"
+             :at ["properties"]
+             :needs-of true
+             :note "the data field names of the kind named in {of}"}
+   :actions {:href "/api/.well-known/waymark"
+             :at ["resources" "{of}" "actions"]
+             :needs-of true
+             :note "the action names of the kind named in {of}"}
+   :views   {:href "/api/.well-known/waymark"
+             :at ["resources" "{of}" "views"]
+             :needs-of true
+             :note "the view names the kind named in {of} declares"}
+   :filters {:href "/api/.well-known/waymark"
+             :at ["resources" "{of}" "filters"]
+             :needs-of true
+             :note "the field names a filter over the kind named in {of} may name"}})
+
+(defn option-props
+  "The x-options advertisement of one schema entry's properties, or nil
+  when the entry declares none (or names a source this engine has no
+  recipe for — checks/check-options refuses that at declaration time,
+  so nil here is the un-annotated case).
+
+  The declaration spelling is small on purpose:
+
+      {:from :fields :of :target :each true}
+
+  :from  which source (a key of `option-sources`)
+  :of    the sibling field naming the target kind, when the source is
+         relative to one
+  :each  the field is a LIST and every item comes from the vocabulary
+  :composes  the field's value is BUILT from the tokens rather than
+         equal to one — `:query` is a `field=value&…` filter string,
+         whose vocabulary is the legal names on the left of each `=`.
+
+  Public for the same reason `ref-props` is: the JSON-Schema
+  projection below and the check that validates the spelling read one
+  encoding, so the picker a client draws and the spelling an author
+  writes can never drift apart."
+  [props]
+  (when-some [{:keys [from of each composes]} (:x-options props)]
+    (when-some [src (get option-sources from)]
+      ;; two substitutions, because the recipe and the sentence want
+      ;; different things from {of}: the RECIPE keeps a hole, renamed
+      ;; to the sibling the client fills it from ({of} → {target}), so
+      ;; a client resolves it against the form in front of the person;
+      ;; the NOTE is prose a human reads and wears the bare name
+      (let [tmpl (fn [s] (if of
+                           (str/replace (str s) "{of}" (str "{" (name of) "}"))
+                           (str s)))
+            prose (fn [s] (if of
+                            (str/replace (str s) "{of}" (name of))
+                            (str s)))]
+        (cond-> {:from (name from)
+                 :href (tmpl (:href src))
+                 :at (mapv tmpl (:at src))
+                 :note (prose (:note src))}
+          of       (assoc :of (name of))
+          each     (assoc :each true)
+          composes (assoc :composes (name composes)))))))
+
 (defn- entry-x-props
   "Waymark declaration properties ride the JSON Schema as x-* keys —
   presentation and engine hints the generic client reads and agents
@@ -369,6 +468,10 @@
   merge point."
   [props]
   (cond-> {}
+    ;; the runtime vocabulary (waymark-8sg): where this field's legal
+    ;; tokens are enumerable from, as a recipe a client can follow
+    (option-props props)
+    (assoc :json-schema/x-options (option-props props))
     (:x-display props)
     (assoc :json-schema/x-display (:x-display props))
     (:kind props)

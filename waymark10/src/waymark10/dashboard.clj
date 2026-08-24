@@ -26,6 +26,14 @@
                    row targeting the same kind
     :seat          optional ordering int; the client sorts by it
 
+  :target, :where and :view are judged against a vocabulary only the
+  RUNNING engine enumerates — the kinds it serves, one kind's filter
+  grammar, its declared views — so each carries an `:x-options` recipe
+  (waymark-8sg) telling any client where to fetch the options in one
+  hop. Advertisement, not law: the guard below is unchanged, and the
+  widget offers rather than cages precisely because a legal
+  \"sv-<id>\" is minted per row and no source can list it.
+
   The law that holds the composition line is the write-time guard on
   slot create/revise, the same style as saved_view's
   composes-declared-primitives: the ctx :rdef-of registry consult
@@ -182,10 +190,26 @@
 
 ;; ── the kinds ───────────────────────────────────────────────────────
 
+(def dashboard-description-example
+  "The blank box's starting point (waymark-0ee's composition policy):
+  offered as a placeholder, never applied as a value."
+  "The Sunday page — what is unclaimed, what is overdue, what is thawing.")
+
+(def ^:private dashboard-prose
+  "The household's own words for the two authored fields, spelled once
+  and worn by both doors: the create form (this kind declares no
+  :create-schema, so its data schema IS the create form) and :revise."
+  {:label {:x-display {:label "Name"
+                       :help "What this page is called in the nav and on its own header."}}
+   :description {:examples [dashboard-description-example]
+                 :x-display {:widget "prose"
+                             :label "What this page is for"
+                             :help "A sentence for whoever opens it later — which corner of the week it watches."}}})
+
 (def ^:private dashboard-input
   [:map
-   [:label [:string {:min 1 :max 60}]]
-   [:description {:optional true :x-display {:widget "prose"}}
+   [:label (:label dashboard-prose) [:string {:min 1 :max 60}]]
+   [:description (assoc (:description dashboard-prose) :optional true)
     [:maybe [:string {:max 280}]]]])
 
 (defresource dashboard
@@ -198,8 +222,9 @@
    :summary "{data.label} · dashboard · {state}"
    :label-template "{data.label}"
    :schema [:map
-            [:label {:sort :default} [:string {:min 1 :max 60}]]
-            [:description {:optional true :x-display {:widget "prose"}}
+            [:label (assoc (:label dashboard-prose) :sort :default)
+             [:string {:min 1 :max 60}]]
+            [:description (assoc (:description dashboard-prose) :optional true)
              [:maybe [:string {:max 280}]]]]
    :filterable {:state #{:eq :in}}
    :owns [{:kind :dashboard_slot :via :dashboard_id}]
@@ -233,20 +258,48 @@
               :safety {:idempotent true :confirm false}
               :display {:label "Restore" :order 1}}}})
 
+(def ^:private slot-prose
+  "One panel's authored surface in the household's own words, spelled
+  ONCE and worn by all three of its forms — the row schema, the create
+  door's narrower ask, and :revise. Three copies of the same sentence
+  is three places for it to drift.
+
+  :target, :where and :view are the fields
+  `slot-composes-declared-primitives` judges against a vocabulary only
+  the running engine enumerates, so each carries its `:x-options`
+  recipe (waymark-8sg) beside its prose: the picker is advertised, the
+  guard still decides."
+  {:dashboard_id {:x-display {:label "Dashboard"
+                              :help "The page this panel sits on. A slot never moves; clone it instead."}}
+   :label {:x-display {:label "Panel name"
+                       :help "The heading over this panel — a few words read at a glance."}}
+   :target {:x-options {:from :kinds}
+            :x-display {:label "Watched collection"
+                        :help "The collection this panel shows — one of the kinds this engine serves."}}
+   :where {:x-options {:from :filters :of :target :composes :query}
+           :x-display {:label "Filter"
+                       :help "The slice, in the collection's own filter grammar — state=pending&owner=ana. Every name left of an = is a filterable field of the target."
+                       :raw true}}
+   :view {:x-options {:from :views :of :target}
+          :x-display {:label "View"
+                      :help "Optional deep link: a view the target kind declares, or sv-<id> naming an active saved view aimed at the same kind."}}
+   :seat {:x-display {:label "Order"
+                      :help "Where the panel sits on the page; lower numbers come first."}}})
+
+(defn- slot-entry
+  "One [:key props schema] entry of a slot form: the shared prose,
+  plus whatever this surface adds of its own (an optional marker, a
+  sort key, a filter grammar, a ref's target kind)."
+  [k extra form]
+  [k (merge (get slot-prose k) extra) form])
+
 (def ^:private slot-input
   [:map
-   [:label [:string {:min 1 :max 60}]]
-   [:target {:x-display {:label "Target collection (kind name)"}}
-    [:string {:min 1 :max 60}]]
-   [:where {:optional true
-            :x-display {:label "Filter (wire params, e.g. state=pending)"
-                        :raw true}}
-    [:maybe [:string {:max 500}]]]
-   [:view {:optional true
-           :x-display {:label "View (declared name or sv-<id>)"}}
-    [:maybe [:string {:max 80}]]]
-   [:seat {:optional true :x-display {:label "Order"}}
-    [:maybe [:int {:min 0}]]]])
+   (slot-entry :label {} [:string {:min 1 :max 60}])
+   (slot-entry :target {} [:string {:min 1 :max 60}])
+   (slot-entry :where {:optional true} [:maybe [:string {:max 500}]])
+   (slot-entry :view {:optional true} [:maybe [:string {:max 80}]])
+   (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])])
 
 (defresource dashboard-slot
   {:kind :dashboard_slot
@@ -256,41 +309,30 @@
    :initial :active
    :terminal #{}
    :summary "{data.label} · {data.target} · {state}"
+   ;; a panel names itself by its own heading — without this every ref
+   ;; picker, card and link badge falls back to the raw id
+   :label-template "{data.label}"
    :schema [:map
-            [:dashboard_id {:kind :dashboard :label :dashboard_label
-                            :filter #{:eq} :pick {:state "active"}}
-             :waymark/ref]
+            (slot-entry :dashboard_id {:kind :dashboard :label :dashboard_label
+                                       :filter #{:eq} :pick {:state "active"}}
+                        :waymark/ref)
             [:dashboard_label {:optional true} [:maybe [:string {:max 200}]]]
-            [:label {:sort :default} [:string {:min 1 :max 60}]]
-            [:target {:filter #{:eq}
-                      :x-display {:label "Target collection (kind name)"}}
-             [:string {:min 1 :max 60}]]
-            [:where {:optional true
-                     :x-display {:label "Filter (wire params, e.g. state=pending)"
-                                 :raw true}}
-             [:maybe [:string {:max 500}]]]
-            [:view {:optional true
-                    :x-display {:label "View (declared name or sv-<id>)"}}
-             [:maybe [:string {:max 80}]]]
-            [:seat {:optional true :x-display {:label "Order"}}
-             [:maybe [:int {:min 0}]]]]
+            (slot-entry :label {:sort :default} [:string {:min 1 :max 60}])
+            (slot-entry :target {:filter #{:eq}} [:string {:min 1 :max 60}])
+            (slot-entry :where {:optional true} [:maybe [:string {:max 500}]])
+            (slot-entry :view {:optional true} [:maybe [:string {:max 80}]])
+            (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])]
    ;; the client states the ask; the dashboard label is the engine's
    ;; ref-label pass
    :create-schema [:map
-                   [:dashboard_id {:kind :dashboard :pick {:state "active"}}
-                    :waymark/ref]
-                   [:label [:string {:min 1 :max 60}]]
-                   [:target {:x-display {:label "Target collection (kind name)"}}
-                    [:string {:min 1 :max 60}]]
-                   [:where {:optional true
-                            :x-display {:label "Filter (wire params, e.g. state=pending)"
-                                        :raw true}}
-                    [:maybe [:string {:max 500}]]]
-                   [:view {:optional true
-                           :x-display {:label "View (declared name or sv-<id>)"}}
-                    [:maybe [:string {:max 80}]]]
-                   [:seat {:optional true :x-display {:label "Order"}}
-                    [:maybe [:int {:min 0}]]]]
+                   (slot-entry :dashboard_id {:kind :dashboard
+                                              :pick {:state "active"}}
+                               :waymark/ref)
+                   (slot-entry :label {} [:string {:min 1 :max 60}])
+                   (slot-entry :target {} [:string {:min 1 :max 60}])
+                   (slot-entry :where {:optional true} [:maybe [:string {:max 500}]])
+                   (slot-entry :view {:optional true} [:maybe [:string {:max 80}]])
+                   (slot-entry :seat {:optional true} [:maybe [:int {:min 0}]])]
    :filterable {:state #{:eq :in}}
    :create-guards [slot-composes-declared-primitives]
    :actions

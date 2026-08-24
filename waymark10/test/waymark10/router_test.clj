@@ -101,7 +101,19 @@
             "meal" "member" "plan" "role" "subscription" "task"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
-    (is (= "/api/meals" (get-in b [:resources :meal :href])))))
+    (is (= "/api/meals" (get-in b [:resources :meal :href])))
+
+    ;; waymark-8sg: a resource entry carries the three vocabularies a
+    ;; composing caller is judged against — its actions, its view
+    ;; names, and the field names a filter may name. These ARE the
+    ;; path an :x-options recipe walks
+    ;; (["resources" "{of}" "actions"]), so a rename here silently
+    ;; empties every picker the schema advertises
+    (testing "the paths the x-options recipes walk"
+      (is (vector? (get-in b [:resources :plan :actions])))
+      (is (vector? (get-in b [:resources :plan :views])))
+      (is (contains? (set (get-in b [:resources :plan :filters])) "state"))
+      (is (vector? (:kinds b))))))
 
 (deftest published-schema
   (let [resp (req :get "/api/schemas/plan")

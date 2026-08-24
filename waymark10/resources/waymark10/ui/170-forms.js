@@ -256,9 +256,138 @@ async function vocabOptions(listNode, kind, field) {
   for (const [value, count] of Object.entries(prop["x-facets"] || {}))
     listNode.append(el("option", {value, label: value + " · " + count}));
 }
+/* ── runtime vocabularies (waymark-8sg): x-options ──────────────────
+   Some fields are judged against a vocabulary only the RUNNING engine
+   enumerates — the kinds it serves, one kind's data fields, its
+   actions, its declared views, its filter grammar. The guard for such
+   a field escapes the closure rule with :open, and for as long as the
+   schema kept quiet about it every client drew a blank rectangle
+   where a picker belonged. x-options is the schema saying it out
+   loud: {from, of, href, at, each, composes, note} — a ONE-HOP recipe
+   out of documents this client already holds (well-known, and one
+   kind's published schema).
+
+   What it earns is a datalist and a row of chips beside the field's
+   own box, never a cage. The annotation ADVERTISES and the guard
+   still ENFORCES, so a token the source cannot list — a slot's
+   "sv-<id>", minted per row — stays typeable, and the refusal that
+   names it is the refusal it always was. */
+function xoptionsOf(rawProp) {
+  const prop = schemaProp(rawProp);
+  return rawProp["x-options"] || prop["x-options"] || null;
+}
+const OPT_HOLE = /\{([A-Za-z_][A-Za-z_0-9]*)\}/g;
+/* {target} in an href or an :at segment is the CURRENT value of the
+   sibling field of that name — the recipe is resolved against the form
+   in front of the person, not against anything the server remembers */
+function optFill(s, values, encode) {
+  return String(s).replace(OPT_HOLE, (_m, f) =>
+    encode ? encodeURIComponent(values[f] ?? "") : String(values[f] ?? ""));
+}
+function optHoles(xo) {
+  const out = [];
+  const scan = s => String(s).replace(OPT_HOLE, (m, f) => { out.push(f); return m; });
+  scan(xo.href || "");
+  (xo.at || []).forEach(scan);
+  return out;
+}
+/* one fetch per resolved href, shared by every field that names it:
+   :right, :left and :where on the same form all read well-known */
+const optionDocCache = {};
+function optionDoc(href) {
+  if (!(href in optionDocCache))
+    optionDocCache[href] = api(href).catch(() => ({ok: false}));
+  return optionDocCache[href];
+}
+/* null (not []) when a sibling the recipe needs is still unanswered —
+   "pick a target first" is a different sentence from "no options" */
+async function optionTokens(xo, values) {
+  for (const f of optHoles(xo)) if (!values[f]) return null;
+  const {ok, body} = await optionDoc(optFill(xo.href, values, true));
+  if (!ok) return [];
+  let node = body;
+  for (const seg of xo.at || []) {
+    if (!node || typeof node !== "object") return [];
+    node = node[optFill(seg, values, false)];
+  }
+  if (Array.isArray(node)) return node.map(String);
+  if (node && typeof node === "object") return Object.keys(node).map(String);
+  return [];
+}
+let optionListSeq = 0;
+function attachOptions(form, input, xo) {
+  const listId = "opts-" + (++optionListSeq);
+  const list = el("datalist", {id: listId});
+  input.setAttribute("list", listId);
+  input.setAttribute("data-options", xo.from);
+  form.append(list);
+  const chips = el("div", {class: "opt-chips"});
+  input.after(chips);
+  const siblings = () => {
+    const out = {};
+    for (const n of form.querySelectorAll("[name]"))
+      out[n.getAttribute("name")] = n.value;
+    return out;
+  };
+  /* a chip writes the token the way THIS field spells one: a whole
+     value, one entry of a comma list, or a name= waiting for its
+     value in a filter string */
+  const put = tok => {
+    if (xo.each) {
+      const have = input.value.split(",").map(s => s.trim()).filter(Boolean);
+      const at = have.indexOf(tok);
+      if (at >= 0) have.splice(at, 1); else have.push(tok);
+      input.value = have.join(", ");
+    } else if (xo.composes === "query") {
+      if (!(new RegExp("(^|&)" + tok + "=")).test(input.value))
+        input.value += (input.value && !input.value.endsWith("&") ? "&" : "") +
+                       tok + "=";
+    } else {
+      input.value = tok;
+    }
+    input.dispatchEvent(new Event("input", {bubbles: true}));
+    input.focus();
+  };
+  const CAP = 24;
+  let seq = 0;
+  const refresh = async () => {
+    const mine = ++seq;
+    const tokens = await optionTokens(xo, siblings());
+    if (mine !== seq) return;              /* a later keystroke won the race */
+    list.replaceChildren();
+    if (tokens === null) {
+      chips.replaceChildren(el("span", {class: "muted"},
+        "answer " + xo.of + " first — the options are " + xo.note));
+      return;
+    }
+    for (const t of tokens) list.append(el("option", {value: t}));
+    chips.replaceChildren(
+      ...tokens.slice(0, CAP).map(t => {
+        const c = el("button", {type: "button", class: "chip", title: xo.note}, t);
+        c.addEventListener("click", e => { e.preventDefault(); put(t); });
+        return c;
+      }),
+      ...(tokens.length > CAP
+        ? [el("span", {class: "muted"},
+              "… " + (tokens.length - CAP) + " more — type to search")]
+        : []),
+      ...(tokens.length
+        ? []
+        : [el("span", {class: "muted"}, "nothing offered — " + xo.note)]));
+  };
+  refresh();
+  for (const f of optHoles(xo)) {
+    const sib = form.querySelector('[name="' + f + '"]');
+    if (sib) { sib.addEventListener("change", refresh);
+               sib.addEventListener("input", refresh); }
+  }
+}
 function buildForm(schema, prefill, kind) {
   const form = el("div", {});
   const required = new Set((schema.required || []).map(String));
+  /* x-options wiring waits for the whole form: a recipe interpolates
+     SIBLING values, and a sibling declared later is not in the DOM yet */
+  const pendingOptions = [];
   for (const [name, rawProp] of Object.entries(schema.properties || {})) {
     if (name === "ids") continue;           /* bulk ids ride the selection */
     const prop = schemaProp(rawProp);
@@ -311,7 +440,11 @@ function buildForm(schema, prefill, kind) {
       el("div", {class: "err srv", "data-srverr": name})));
     if (xd.help) form.append(el("div", {class:"muted",
       style:"font-size:11px;margin:-6px 0 8px"}, xd.help));
+    const xo = xoptionsOf(rawProp);
+    if (xo && xo.href && widget.tagName === "INPUT")
+      pendingOptions.push([widget, xo]);
   }
+  for (const [widget, xo] of pendingOptions) attachOptions(form, widget, xo);
   return form;
 }
 function collectValues(form, schema) {

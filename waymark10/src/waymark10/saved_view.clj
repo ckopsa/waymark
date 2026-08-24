@@ -32,6 +32,17 @@
     :right/:left  deck gestures, naming declared reversible actions
     :description  why this slice exists
 
+  Five of those are judged against a vocabulary only the RUNNING
+  engine enumerates — the kinds it serves, one kind's fields, its
+  actions, its filter grammar — and for as long as the schema kept
+  quiet about it, every client drew a blank rectangle where a picker
+  belonged and the human typed from memory. They now carry
+  `:x-options` (waymark-8sg): the recipe a client follows to fetch the
+  options, one hop, out of documents it already holds. The annotation
+  ADVERTISES; `composes-declared-primitives` below is still the whole
+  of the law, unchanged — which is why the widget offers rather than
+  cages, and a token the source cannot list stays typeable.
+
   Lifecycle: active → retired, reversible both ways (:undo pairs).
   :clone forks a copy through the ctx :create door — the copy passes
   the same create gate, so a stale view cannot propagate."
@@ -130,26 +141,54 @@
                           (subs l' 0 (min (count l') 60)))))))
   row)
 
+(def description-example
+  "Something to start from in the blank box (waymark-0ee's composition
+  policy). An example is offered, never applied — the create door has
+  no document to prefill from, so the placeholder is all a first-time
+  author gets."
+  "The chores nobody has claimed yet, so Sunday planning has one page.")
+
 (def ^:private view-input
+  ;; the authored surface, wearing the same prose the data schema wears
+  ;; — one door's spelling is not a place the other may drift from
   [:map
-   [:label [:string {:min 1 :max 60}]]
-   [:target {:x-display {:label "Target collection (kind name)"}}
+   [:label {:x-display {:label "Name"
+                        :help "The word the switcher chip wears — short enough to read on a phone."}}
     [:string {:min 1 :max 60}]]
-   [:view_kind {:x-display {:label "View kind"}} [:enum "deck" "feed"]]
+   [:target {:x-options {:from :kinds}
+             :x-display {:label "Target collection"
+                         :help "The collection this view slices — one of the kinds this engine serves."}}
+    [:string {:min 1 :max 60}]]
+   [:view_kind {:x-display {:label "How it reads"
+                            :choices {"deck" "Deck — one card at a time, swiped left or right"
+                                      "feed" "Feed — a list read top to bottom"}}}
+    [:enum "deck" "feed"]]
    [:where {:optional true
-            :x-display {:label "Filter (wire params, e.g. state=pending)"
+            :x-options {:from :filters :of :target :composes :query}
+            :x-display {:label "Filter"
+                        :help "The slice, in the collection's own filter grammar — state=pending&owner=ana. Every name left of an = is a filterable field of the target."
                         :raw true}}
     [:maybe [:string {:max 500}]]]
    [:card {:optional true
-           :x-display {:label "Card fields"}}
+           :x-options {:from :fields :of :target :each true}
+           :x-display {:label "Card fields"
+                       :help "Which of the target's own data fields a card shows, in the order given."}}
     [:maybe [:vector [:string {:min 1 :max 60}]]]]
    [:right {:optional true
-            :x-display {:label "Right gesture (deck: action name)"}}
+            :x-options {:from :actions :of :target}
+            :x-display {:label "Right gesture"
+                        :help "What a right swipe does to a deck card — one of the target's REVERSIBLE actions; a swipe is a snap judgment and owes a way back."}}
     [:maybe [:string {:min 1 :max 60}]]]
    [:left {:optional true
-           :x-display {:label "Left gesture (deck: action name)"}}
+           :x-options {:from :actions :of :target}
+           :x-display {:label "Left gesture"
+                       :help "What a left swipe does — the right gesture's twin, and reversible for the same reason."}}
     [:maybe [:string {:min 1 :max 60}]]]
-   [:description {:optional true :x-display {:widget "prose"}}
+   [:description {:optional true
+                  :examples [description-example]
+                  :x-display {:widget "prose"
+                              :label "Why this slice exists"
+                              :help "A sentence for whoever finds this view later and wonders what it was for."}}
     [:maybe [:string {:max 280}]]]])
 
 (defresource saved-view
@@ -161,26 +200,51 @@
    :terminal #{}
    :summary "{data.label} · {data.view_kind} of {data.target} · {state}"
    :label-template "{data.label}"
+   ;; no :create-schema, so THIS is the create form as well as the row
+   ;; — which is why every entry carries its own prose and, where the
+   ;; guard judges it against a vocabulary only the running engine
+   ;; enumerates, its :x-options recipe (waymark-8sg)
    :schema [:map
-            [:label {:sort :default} [:string {:min 1 :max 60}]]
-            [:target {:filter #{:eq}
-                      :x-display {:label "Target collection (kind name)"}}
+            [:label {:sort :default
+                     :x-display {:label "Name"
+                                 :help "The word the switcher chip wears — short enough to read on a phone."}}
              [:string {:min 1 :max 60}]]
-            [:view_kind {:filter #{:eq} :x-display {:label "View kind"}}
+            [:target {:filter #{:eq}
+                      :x-options {:from :kinds}
+                      :x-display {:label "Target collection"
+                                  :help "The collection this view slices — one of the kinds this engine serves."}}
+             [:string {:min 1 :max 60}]]
+            [:view_kind {:filter #{:eq}
+                         :x-display {:label "How it reads"
+                                     :choices {"deck" "Deck — one card at a time, swiped left or right"
+                                               "feed" "Feed — a list read top to bottom"}}}
              [:enum "deck" "feed"]]
             [:where {:optional true
-                     :x-display {:label "Filter (wire params, e.g. state=pending)"
+                     :x-options {:from :filters :of :target :composes :query}
+                     :x-display {:label "Filter"
+                                 :help "The slice, in the collection's own filter grammar — state=pending&owner=ana. Every name left of an = is a filterable field of the target."
                                  :raw true}}
              [:maybe [:string {:max 500}]]]
-            [:card {:optional true :x-display {:label "Card fields"}}
+            [:card {:optional true
+                    :x-options {:from :fields :of :target :each true}
+                    :x-display {:label "Card fields"
+                                :help "Which of the target's own data fields a card shows, in the order given."}}
              [:maybe [:vector [:string {:min 1 :max 60}]]]]
             [:right {:optional true
-                     :x-display {:label "Right gesture (deck: action name)"}}
+                     :x-options {:from :actions :of :target}
+                     :x-display {:label "Right gesture"
+                                 :help "What a right swipe does to a deck card — one of the target's REVERSIBLE actions; a swipe is a snap judgment and owes a way back."}}
              [:maybe [:string {:min 1 :max 60}]]]
             [:left {:optional true
-                    :x-display {:label "Left gesture (deck: action name)"}}
+                    :x-options {:from :actions :of :target}
+                    :x-display {:label "Left gesture"
+                                :help "What a left swipe does — the right gesture's twin, and reversible for the same reason."}}
              [:maybe [:string {:min 1 :max 60}]]]
-            [:description {:optional true :x-display {:widget "prose"}}
+            [:description {:optional true
+                           :examples [description-example]
+                           :x-display {:widget "prose"
+                                       :label "Why this slice exists"
+                                       :help "A sentence for whoever finds this view later and wonders what it was for."}}
              [:maybe [:string {:max 280}]]]]
    :filterable {:state #{:eq :in}}
    :create-guards [composes-declared-primitives]

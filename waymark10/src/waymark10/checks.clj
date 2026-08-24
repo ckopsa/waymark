@@ -455,6 +455,55 @@
                          inputs)]
     (into [] (mapcat (fn [[where form]] (long-text-warnings where form))) surfaces)))
 
+;; ── runtime vocabularies (waymark-8sg) ──────────────────────────────
+
+(defn- check-options
+  "The `:x-options` spelling, refused where it would publish a picker
+  that fetches nothing. A typo in `:from` is silent otherwise — the
+  projection simply omits the annotation and the field goes back to
+  being a blank rectangle, which is exactly the failure this whole
+  spelling exists to end.
+
+  Three refusals: an unknown source, a source that is relative to a
+  target kind with no `:of` naming the sibling field that carries it,
+  and an `:of` naming a field the SAME form does not declare (the
+  client interpolates the recipe from sibling values; a field on
+  another surface is not in the form)."
+  [r]
+  (doseq [[where form] (cons ["the create door" (or (:create-schema r) (:schema r))]
+                             (concat [["data" (:schema r)]]
+                                     (for [a (machine/actions-seq r)
+                                           :when (:input a)]
+                                       [(str "action " (name (:name a)))
+                                        (:input a)])))
+          :let [entries (schema/entry-map form)
+                declared (set (keys entries))]
+          [k {:keys [properties]}] entries
+          :let [{:keys [from of composes]} (:x-options properties)]
+          :when (some? (:x-options properties))]
+    (let [src (get schema/option-sources from)]
+      (when (nil? src)
+        (err r :options
+             (str where " field " k " declares :x-options {:from " (pr-str from)
+                  "}, which names no runtime vocabulary; the sources are "
+                  (vec (sort (map name (keys schema/option-sources)))))))
+      (when (and (:needs-of src) (nil? of))
+        (err r :options
+             (str where " field " k " declares :x-options {:from " from
+                  "}, whose options are relative to a target kind — name the "
+                  "sibling field that carries it with :of")))
+      (when (and of (not (contains? declared of)))
+        (err r :options
+             (str where " field " k " declares :x-options {:of " of
+                  "}, which " where " does not declare — the recipe is "
+                  "interpolated from SIBLING values, so :of must name a "
+                  "field of the same form")))
+      (when (and composes (not= :query composes))
+        (err r :options
+             (str where " field " k " declares :x-options {:composes "
+                  (pr-str composes) "}; the only composition grammar is "
+                  ":query (a field=value&… filter string)"))))))
+
 ;; ── the query surface ───────────────────────────────────────────────
 
 (defn- check-filterable [r]
@@ -537,6 +586,35 @@
 
 (def ^:private view-kinds #{:deck :feed})
 
+(defn where-field?
+  "May a view's (or a saved_view's) `:where` name this field? `:state`
+  always; an `:eq`/`:in`-filterable field, because a view's where is an
+  ordinary filter the caller could have typed; an array field, whose
+  containment filter is implicit in its shape."
+  [r f]
+  (boolean
+   (or (= :state f)
+       (let [ops (set (get (:filterable r) f))]
+         (or (:eq ops) (:in ops)))
+       (let [s (schema/field-schema (:schema r) f)]
+         (and (vector? s) (= :vector (first s)))))))
+
+(defn where-fields
+  "Every field name a `:where` may put on the left of an `=`, sorted —
+  the same question `where-field?` answers one field at a time, asked
+  of the whole kind. Published on well-known so the runtime-vocabulary
+  spelling (waymark-8sg) can offer the filter grammar as options
+  instead of leaving a hand-authored query string to memory: the
+  refusal and the picker read one list."
+  [r]
+  (into []
+        (comp (distinct)
+              (filter #(where-field? r %))
+              (map name))
+        (sort (concat [:state]
+                      (keys (:filterable r))
+                      (schema/entry-keys (:schema r))))))
+
 (defn view-where-problems
   "A view's :where is a filter the door already accepts — the
   :default-filters law read twice: each field is :state or an
@@ -554,11 +632,7 @@
                (not (keyword? f))
                [(str ":where key " (pr-str f) " is not a field keyword")]
 
-               (not (let [ops (set (get (:filterable r) f))
-                          array? (let [s (schema/field-schema (:schema r) f)]
-                                   (boolean (and (vector? s)
-                                                 (= :vector (first s)))))]
-                      (or (= :state f) (:eq ops) (:in ops) array?)))
+               (not (where-field? r f))
                [(str ":where names " f ", which is not an "
                      ":eq/:in-filterable field — a view's where is an ordinary "
                      "filter the caller could have typed")]
@@ -997,6 +1071,7 @@
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-summary-template check-waive-tokens
           check-place check-edit check-altitude check-long-text
+          check-options
           check-filterable check-sortable check-default-filters
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require

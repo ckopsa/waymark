@@ -413,6 +413,52 @@
                               [:name [:string {:max 100}]]
                               [:bio :string]])))
 
+;; ── the runtime-vocabulary spelling (waymark-8sg) ───────────────────
+;; A typo in :x-options is otherwise SILENT — the projection omits the
+;; annotation, the picker never appears, and the field goes back to
+;; being the blank rectangle the whole spelling exists to end. So the
+;; check refuses all three ways of misspelling it.
+
+(deftest options-refuse-a-source-this-engine-cannot-fetch
+  (testing "an unknown :from"
+    (breaks :options
+            (assoc base :schema [:map
+                                 [:name {:x-options {:from :everything}}
+                                  [:string {:max 100}]]])))
+
+  (testing "a relative source with nothing to be relative to"
+    (breaks :options
+            (assoc base :schema [:map
+                                 [:name {:x-options {:from :fields}}
+                                  [:string {:max 100}]]])))
+
+  (testing ":of naming a field this form does not declare"
+    (breaks :options
+            (assoc base :schema [:map
+                                 [:name {:x-options {:from :fields :of :nowhere}}
+                                  [:string {:max 100}]]])))
+
+  (testing "a composition grammar nobody speaks"
+    (breaks :options
+            (assoc base :schema [:map
+                                 [:target [:string {:max 60}]]
+                                 [:name {:x-options {:from :filters :of :target
+                                                     :composes :sql}}
+                                  [:string {:max 100}]]])))
+
+  (testing "the spelling as it is meant to be written loads clean"
+    (is (= [] (warnings-of
+               (assoc base :schema
+                      [:map
+                       [:target {:x-options {:from :kinds}
+                                 :x-display {:label "Target"
+                                             :help "One of this engine's kinds."}}
+                        [:string {:max 60}]]
+                       [:name {:x-options {:from :fields :of :target :each true}
+                               :x-display {:label "Fields"
+                                           :help "Which of the target's fields."}}
+                        [:string {:max 100}]]]))))))
+
 ;; ── the acceptance: the real fixtures are green ─────────────────────
 
 (deftest the-fixtures-load-with-zero-warnings

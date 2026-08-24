@@ -129,7 +129,18 @@
   composition, on a door whose guard escaped closure with `:open`,
   warns. A field that already carries an enum, a const or an x-ref
   (demand class selection) is silent, which is the whole point — the
-  fix clears the warning."
+  fix clears the warning.
+
+  Silent too, since waymark-8sg: a field carrying `:x-options`, the
+  RUNTIME vocabulary. The warning's own sentence always offered three
+  fixes — \"an :enum, a :kind ref, or a vocabulary the schema can
+  publish\" — and for a whole year the third one did not exist, which
+  is why this policy's first run was a fix-list nobody could clear.
+  It is read straight off the projected property rather than through
+  `demand/field-class`, deliberately: the class on the wire stays
+  honest (a `:where` a person still composes by hand is composition,
+  picker or no picker), while the OPINION is satisfied, because what
+  the opinion objects to is the engine hiding a vocabulary it holds."
   [r]
   (let [seen (volatile! #{})]
     (into []
@@ -142,9 +153,11 @@
                        :when (and (:open lg) (seq (:judges lg)))
                        f (:judges lg)
                        :when (contains? entries f)
-                       :let [cls (demand/field-class f (get props f) #{})
+                       :let [prop (get props f)
+                             cls (demand/field-class f prop #{})
                              token [(:name door) f]]
                        :when (and (#{"recall" "composition"} cls)
+                                  (nil? (:x-options prop))
                                   (not (contains? @seen token)))]
                    (do (vswap! seen conj token)
                        (str "[effort-honesty] " (where-of door) " field " f

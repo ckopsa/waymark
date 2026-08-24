@@ -270,15 +270,187 @@ bookkeeping in create forms).
 
 Every effort-honesty warning on that list wants the *same* missing spelling —
 "the options for this field come from **there**, at runtime" — which is why
-`waymark-8sg` is P1 and the rest wait behind it.
+`waymark-8sg` is P1 and the rest wait behind it. That spelling landed with
+`waymark-8sg`; see the amendment below.
+
+## Amendment — the runtime vocabulary (`:x-options`, waymark-8sg)
+
+The fix-list above named 21 effort-honesty warnings and **every one of
+them wanted the same missing spelling**. Policy 1's warning always
+offered three fixes — "an `:enum`, a `:kind` ref, or *a vocabulary the
+schema can publish*" — and the third did not exist, so the policy's
+first run was a to-do list nobody could work. This is that third fix.
+
+### The complaint, stated exactly
+
+An `:enum` publishes a vocabulary the **declaration** knows. Some
+fields are judged against a vocabulary only the **running engine**
+knows: the kinds it serves, one kind's data fields, its actions, its
+declared views, its filter grammar. The guard for such a field escapes
+`check-closure` with `:open` — *"the legal tokens are the registry's,
+one GET away"* — and every client then draws a blank rectangle, and
+the human types from memory the token the engine was about to refuse
+them for misspelling.
+
+### The spelling
+
+An entry property, beside `:x-display`:
+
+```clojure
+[:card {:optional true
+        :x-options {:from :fields :of :target :each true}
+        :x-display {:label "Card fields"
+                    :help  "Which of the target's own data fields a card shows, in the order given."}}
+ [:maybe [:vector [:string {:min 1 :max 60}]]]]
+```
+
+| key | meaning |
+|---|---|
+| `:from` | which source — a key of `schema/option-sources` |
+| `:of` | the sibling field naming the target kind, when the source is relative to one |
+| `:each` | the field is a **list** and every item comes from the vocabulary |
+| `:composes` | the value is **built** from the tokens rather than equal to one; `:query` is a `field=value&…` filter string, whose vocabulary is the legal names left of each `=` |
+
+### The five sources, and why there is no sixth endpoint
+
+`schema/option-sources` is closed, and every entry answers out of a
+document **the client already holds**: the discovery root (which the
+browser client caches and which is `waymark_discover`'s whole answer)
+or one kind's published schema (which is `waymark_schema`'s answer).
+
+| `:from` | href | `:at` |
+|---|---|---|
+| `:kinds` | `/api/.well-known/waymark` | `["kinds"]` |
+| `:fields` | `/api/schemas/{of}` | `["properties"]` |
+| `:actions` | `/api/.well-known/waymark` | `["resources" "{of}" "actions"]` |
+| `:views` | `/api/.well-known/waymark` | `["resources" "{of}" "views"]` |
+| `:filters` | `/api/.well-known/waymark` | `["resources" "{of}" "filters"]` |
+
+**No route was minted.** A picker that costs a second endpoint is a
+picker somebody turns off. The one wire change is additive and rides
+an existing precedent: well-known's per-resource entry already carried
+`actions` *"so building a grant scope needs no source read"*, and now
+carries `views` and `filters` for the same reason and beside it.
+`filters` is `checks/where-fields` — the same list `where-field?`
+refuses by, extracted so the picker and the refusal cannot drift.
+
+### What lands on the wire
+
+`{of}` is filled twice: at **projection** time the hole is *renamed*
+to the sibling field it draws from (`{of}` → `{target}`), and at
+**fetch** time the client fills `{target}` with that field's current
+value. `:at` then walks the fetched document — an array's elements are
+the tokens, an object's keys are. (`:note` is prose a person reads and
+wears the bare name instead of a hole.)
+
+```json
+"right": {
+  "oneOf": [{"type": "string", "minLength": 1, "maxLength": 60}, {"type": "null"}],
+  "x-options": {
+    "from": "actions",
+    "href": "/api/.well-known/waymark",
+    "at":   ["resources", "{target}", "actions"],
+    "of":   "target",
+    "note": "the action names of the kind named in target"
+  },
+  "x-display": {
+    "label": "Right gesture",
+    "help":  "What a right swipe does to a deck card — one of the target's REVERSIBLE actions; a swipe is a snap judgment and owes a way back."
+  }
+}
+```
+
+### Advertisement, never law
+
+The annotation says where the options are. **The guard remains the
+whole of the enforcement, unchanged** — `composes-declared-primitives`
+and `slot-composes-declared-primitives` were not touched, and nothing
+`fingerprint-of` projects moved (entry properties are not in any
+facet), so the framework kinds' hashes are byte-identical.
+
+Three consequences follow from that one sentence, and they are the
+design:
+
+1. **The widget offers; it never cages.** The browser client draws a
+   `datalist` plus a row of chips *beside the field's own text box* —
+   not a `<select>`. A slot's legal `sv-<id>` is minted per row and no
+   source can list it; a hard picker would make a legal write
+   impossible, which is a worse failure than a blank box.
+2. **The demand class stays honest.** `effort-honesty` reads
+   `:x-options` off the projected property *directly* rather than
+   teaching `demand/field-class` to call it `selection`. A `:where` a
+   person still composes by hand is `composition` on the wire, picker
+   or no picker. What the policy objects to is the engine **hiding** a
+   vocabulary it holds, and that is exactly what is fixed.
+3. **A misspelling is refused, not ignored.** `checks/check-options`
+   is a definition error for an unknown `:from`, a relative source
+   with no `:of`, an `:of` naming a field the same form does not
+   declare, or a `:composes` grammar nobody speaks. Without it a typo
+   is silent: the projection omits the annotation and the field goes
+   back to being the blank rectangle this whole spelling exists to
+   end.
+
+### How each client learns the options
+
+- **The generic browser client** (`ui/170-forms.js`): `xoptionsOf` →
+  `optionTokens` fetches `href` (memoized per resolved href, so
+  `:right`, `:left` and `:where` on one form share a single
+  well-known read), walks `at`, and fills a `datalist` and a chip row.
+  A chip writes the token *the way that field spells one* — a whole
+  value, one entry of a comma list, or a `name=` appended to a filter
+  string. Recipes with a hole re-run when the sibling changes; until
+  it is answered the chip row reads *"answer target first — the
+  options are the action names of the kind named in target"*.
+- **An MCP agent**: `waymark_schema` serves the same published schema
+  the browser reads, so the annotation arrives unchanged; its tool
+  description now spells the recipe once (fetch `href`, walk `at`,
+  fill `{holes}` from sibling arguments), and both documents a recipe
+  can name are themselves MCP tool answers — `waymark_discover` and
+  `waymark_schema`. An agent needs no route knowledge it did not
+  already have.
+- **`ui_lite.html`**, the single-file fallback, renders `:label`,
+  `:help` and `:choices` and does **not** read `x-options` yet. Filed
+  as a follow-up rather than done badly here.
+
+### The composition kinds, cleared
+
+`saved_view`, `dashboard` and `dashboard_slot` — the three kinds a
+family authors at runtime, and the 27 warnings the battery's first run
+filed against the framework's own forms — now report `✓`.
+
+| kind | before | after | what did it |
+|---|---|---|---|
+| `saved_view` | 15 | 0 | `:x-options` on `:target :where :card :right :left` (both doors); prose on all eight fields; `:choices` for deck/feed; an `:examples` for `:description` |
+| `dashboard_slot` | 9 | 0 | `:x-options` on `:target :where :view` (all three forms); prose spelled once in `slot-prose` and worn by row, create and revise; `:label-template "{data.label}"` |
+| `dashboard` | 3 | 0 | prose spelled once in `dashboard-prose`; an `:examples` for `:description` |
+
+`make check-queue` over workqueue10: **135 → 108 warnings**, exit 0,
+the app kinds untouched. The remaining fix-lists —
+`waymark-7rw` (access kinds), `waymark-ts2` (household kinds),
+`waymark-9va` (mirror's bookkeeping) — inherit the spelling: `grant`'s
+and `approval_request`'s `:scope` want `{:from :kinds}` and
+`{:from :actions}`, and `role`'s `:name` wants a source of its own.
 
 ## Recorded punts
 
 - **`effort-honesty` cannot see an unguarded free-text field.** Its whole
   signal is the `:open` acknowledgment, so a field nobody guards — a kind name
   typed into a plain string with no guard behind it — passes silently. The
-  honest fix is a declaration spelling for "the options for this field come
-  from *there*", which is a feature (a runtime vocabulary source), not a check.
+  honest fix named here — a declaration spelling for "the options for this
+  field come from *there*" — **is built** (`:x-options`, the amendment above,
+  waymark-8sg). What is still punted is the *check*: the battery reads the
+  spelling where a guard makes it ask, and still cannot ask about a field no
+  guard judges. That wants a policy of its own, not a wider policy 1.
+- **`:x-options` names DECLARED views, not saved ones.** `:views` reads
+  well-known, which is a projection of declarations and reads no storage; the
+  collection envelope's `views` merges active `saved_view` rows on top and
+  mints their `sv-<id>` wire names. So a slot's `:view` picker offers the
+  declared tokens and the help sentence names the `sv-<id>` form for the rest.
+  Closing that costs a storage read in the discovery root, which is a decision
+  about what well-known *is* and deserves its own line.
+- **`ui_lite.html` does not draw the picker.** The single-file fallback client
+  renders `:label`, `:help` and `:choices` and ignores `x-options`. It is a
+  fallback; the annotation degrades to the text box it always was.
 - **No policy reads the registry.** Each judges one declaration alone, because
   the battery runs where `check.clj` runs — before any engine. `saved_view`'s
   `:card` cannot be validated at declaration time for that reason; it is
