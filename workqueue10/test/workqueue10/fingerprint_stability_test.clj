@@ -79,7 +79,10 @@
         world (roots nses)
         before (hashes)]
     (try
-      (is (= 30 (count before)) "the whole household is under the lens")
+      ;; 31 since waymark-iqa.4 added :tickler. The count is a census,
+      ;; not a law: it moves when the house gains a kind and never
+      ;; otherwise, which is exactly the change it is here to notice.
+      (is (= 31 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)

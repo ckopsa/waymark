@@ -2041,6 +2041,166 @@
                        (concat (feed-concealed-violations ctx)
                                (:violations origin)))}))
 
+;; ── the tickler (waymark-iqa.4) ─────────────────────────────────────
+;;
+;; The epic's two sentences, proved over the wire against whatever
+;; tickler an application declared: a not-now returns LATER, NOT
+;; TOMORROW, and a let-go item NEVER RETURNS. Neither is judgeable at
+;; declaration time — the first is a handler's arithmetic and the
+;; second is a query's silence — and scenario.clj is explicit that a
+;; scenario never writes, so the writing half lives here. The check
+;; tier keeps the halves it can: workqueue10's tickler declares three
+;; scenarios and `make check-queue` judges them with no database.
+;;
+;; This obligation judges the LAW and never the schedule. How far a
+;; house pushes its first not-now is the house's to declare (a week
+;; in workqueue10); that it is further out than TOMORROW is the
+;; epic's, and that is what is asserted.
+
+(defn- tickler-row [ctx id]
+  (json ctx (get-env ctx :tickler id)))
+
+(defn- make-tickler!
+  "One tickler over a named subject, through its own create door."
+  [ctx what subject-kind subject-id]
+  (let [resp (req ctx :post (str "/api/" (:plural (rdef ctx :tickler)))
+                  {:what what
+                   :subject_kind (name subject-kind)
+                   :subject_id (str subject-id)})]
+    {:status (:status resp) :doc (json ctx resp)}))
+
+(defn- tickler-card [doc id]
+  (some #(when (= (str "decide/tickler/" id) (str (:card_id %))) %)
+        (feed-cards doc)))
+
+(defn- feed-tickler-violations
+  "A dropped thing comes back, backs off when it is put off, and stops
+  for good when it is let go — from the wire, in that order.
+
+  The subject is read off the feed's OWN first card, so the marker
+  points at a row this engine really serves and really has not
+  finished: `set-aside?` is the retirement rule and a fixture that
+  ignored it would be a fixture testing nothing. The second marker
+  names a row that does not exist, which is the same rule from the
+  other side — a marker may outlive its subject, and when it does it
+  says nothing rather than carding a ghost.
+
+  It reports `:covered`, because an engine whose feed has no row card
+  at all has nothing to set aside and should say so rather than pass
+  quietly."
+  [ctx]
+  (let [{:keys [doc]} (feed-doc ctx nil)
+        subject (first (remove #(= "tickler" (str (:kind %)))
+                               (feed-row-cards doc)))]
+    (if-not subject
+      {:covered 0 :violations []}
+      (let [day (str (:day doc))
+            skind (keyword (str (:kind subject)))
+            sid (id-of (:self subject))
+            made (make-tickler! ctx "The porch railing, one of these days"
+                                skind sid)
+            id (some-> (:self (:doc made)) id-of)
+            ghost (make-tickler! ctx "A row this house no longer has"
+                                 skind "01HZZZZZZZZZZZZZZZZZZZZZZZ")
+            ghost-id (some-> (:self (:doc ghost)) id-of)
+            offered (:doc (feed-doc ctx nil))
+            card (when id (tickler-card offered id))
+            verbs (set (map (comp name key) (:actions card)))
+            not-now (declared-name ctx :tickler :not_now)
+            let-go (declared-name ctx :tickler :let_it_go)
+            pushed (when (and id card)
+                     (invoke-http ctx :tickler id not-now nil
+                                  {:headers {"idempotency-key"
+                                             (feed/origin-key
+                                              day (str (:card_id card))
+                                              (subs (str (random-uuid)) 0 8))}}))
+            after (when (= 200 (:status pushed)) (tickler-row ctx id))
+            when-back (some-> (get-in after [:data :next_offer_at]) str)
+            tomorrow (str (.plusSeconds ^java.time.Instant
+                                        ((:now-fn (:engine ctx)))
+                                        (* 86400 1)))
+            backed-off (:doc (feed-doc ctx nil))
+            gone (when (= 200 (:status pushed))
+                   (invoke-http ctx :tickler id let-go nil))
+            after-go (when (= 200 (:status gone)) (tickler-row ctx id))
+            again (when (= 200 (:status gone))
+                    (invoke-http ctx :tickler id not-now nil))]
+        {:covered (if (= 200 (:status gone)) 1 0)
+         :violations
+         (cond-> []
+           (not= 201 (:status made))
+           (conj (str "feed: creating a tickler over " (name skind) " " sid
+                      " answered " (:status made) " — the tickler's own"
+                      " create door is how a set-aside item is born: "
+                      (pr-str (:doc made))))
+
+           (and (= 201 (:status made)) (nil? card))
+           (conj (str "feed: a tickler created with no next_offer_at did not"
+                      " reach the feed — unset means NOW, and a marker on"
+                      " the fridge that the fridge does not show is a"
+                      " someday/maybe list nobody reads. Cards: "
+                      (pr-str (mapv :card_id (feed-cards offered)))))
+
+           (and card (not= "decide" (str (:section card))))
+           (conj (str "feed: the tickler card is in section "
+                      (pr-str (:section card)) " — a tickler is something"
+                      " to DECIDE, and the census puts it there"))
+
+           (and card (not (contains? verbs (name not-now))))
+           (conj (str "feed: the tickler card offers " (pr-str (sort verbs))
+                      " and not " (pr-str (name not-now))
+                      " — 'not now' is the verdict the whole surface exists"
+                      " for, and it must be under the thumb"))
+
+           (and card (not (contains? verbs (name let-go))))
+           (conj (str "feed: the tickler card offers " (pr-str (sort verbs))
+                      " and not " (pr-str (name let-go))
+                      " — an item you cannot let go of is guilt with a"
+                      " scroll bar"))
+
+           (and ghost-id (tickler-card offered ghost-id))
+           (conj (str "feed: a tickler naming a row this engine does not"
+                      " serve was carded anyway — a marker may outlive its"
+                      " subject, and when it does it retires AT OFFER TIME"
+                      " rather than asking about a ghost"))
+
+           (and card (not= 200 (:status pushed)))
+           (conj (str "feed: 'not now' from the card answered "
+                      (:status pushed) ": " (pr-str (json ctx pushed))))
+
+           (and after (not= 1 (get-in after [:data :offer_count])))
+           (conj (str "feed: one 'not now' left offer_count "
+                      (pr-str (get-in after [:data :offer_count]))
+                      " — the household record IS the count ('I said"
+                      " not-now twice' is a fact the house keeps, not a"
+                      " thing one person half-remembers)"))
+
+           (and after (or (str/blank? when-back) (neg? (compare when-back tomorrow))))
+           (conj (str "feed: 'not now' set the next offer to "
+                      (pr-str when-back) ", which is not past " tomorrow
+                      " — a not-now returns LATER, NOT TOMORROW; a tickler"
+                      " that came back in the morning is a nag, and a"
+                      " household learns to dismiss a nag unread"))
+
+           (and after (tickler-card backed-off id))
+           (conj "feed: a tickler that was just put off is still on the feed
+                  — the backoff is the read-side query, so a pushed-out
+                  marker is simply not a candidate")
+
+           (and (= 200 (:status pushed)) (not= 200 (:status gone)))
+           (conj (str "feed: 'let it go' answered " (:status gone) ": "
+                      (pr-str (json ctx gone))))
+
+           (and after-go (not= "let_go" (str (:state after-go))))
+           (conj (str "feed: after 'let it go' the marker is in state "
+                      (pr-str (:state after-go)) " — letting go is terminal"))
+
+           (and again (not= 409 (:status again)))
+           (conj (str "feed: 'not now' on a let-go tickler answered "
+                      (:status again) ", not 409 — a let-go item never"
+                      " returns, and the machine itself is what refuses"
+                      " the question")))}))))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -2052,12 +2212,19 @@
     (feed-obligation :feed/day-stable feed-day-stable-violations)
     (feed-obligation :feed/projection feed-projection-violations)
     (feed-obligation :feed/cursor-rolls feed-cursor-violations)
-    ;; LAST on purpose: it is the one feed obligation that WRITES —
-    ;; a card verb invoked for real, so the origin convention is
-    ;; proved by the audit trail rather than by a docstring. Every
-    ;; obligation whose answer a finished row would move reads above
-    ;; it.
-    (feed-obligation :feed/verbs-are-light feed-verbs-are-light-violations)]
+    ;; THE WRITERS GO LAST, and in this order for one reason each.
+    ;; :verbs-are-light invokes a card verb for real, so the origin
+    ;; convention is proved by the audit trail rather than by a
+    ;; docstring; every obligation whose answer a finished row would
+    ;; move reads above it. :ticklers goes BELOW it — deliberately,
+    ;; not by append — because it is the only obligation that MINTS
+    ;; rows, and a minted marker is a card: run above, its two
+    ;; ticklers would be in the deck :day-stable counts, :projection
+    ;; sizes and :verbs-are-light picks a verb from.
+    (feed-obligation :feed/verbs-are-light feed-verbs-are-light-violations)
+    {:name :feed/ticklers
+     :needs #{[:route :feed] [:kind :tickler]}
+     :run feed-tickler-violations}]
    ;; NOT here, and named rather than pending: :feed/archive-pages
    ;; (waymark-iqa.5 brings the populations that make deep paging
    ;; worth walking). A spec-feed § 'Where the law is proved'

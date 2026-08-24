@@ -854,3 +854,156 @@ proved to fail when it should:
 - **No hash moved.** `feed.clj` is engine-side and carries no declarations;
   waymark-j82's fingerprint fix was not touched and the twenty deterministic
   kinds are byte-identical.
+
+## Built — `.4`, the tickler (2026-08-24, waymark-iqa.4)
+
+Fork (b) landed as written: `workqueue10/src/workqueue10/resources/tickler.clj`
+is a `:decision` kind, a marker naming `{subject_kind, subject_id}` anywhere in
+the house, with three one-tap answers and a date it comes back on. Nothing in
+it writes another kind's row, which is the whole of the fork's first reason —
+a *"not now"* must never call Google Tasks, and here it structurally cannot.
+
+```clojure
+:verdicts
+[{:name :not_now :to :offered            ; ← the non-terminal one
+  :label "Not now" :order 1
+  :handler push-the-offer-out
+  :safety {:idempotent false :reversible false :confirm false
+           :one-way "Each 'not now' pushes the next offer further out…"}}
+ {:name :let_it_go :to :let_go   :label "Let it go"   :order 2 …}
+ {:name :take_it_back :to :taken :label "Take it back" :order 3 …}]
+```
+
+`desugar-decision` took the non-terminal verdict **without a change**, exactly
+as `.1` predicted it would: `:states` distinct-conses the open state, so
+`[:offered :let_go :taken]`; `:terminal` removes it, so `#{:let_go :taken}`;
+`check-one-way` exempts a self-loop by its own rule (*"re-doing is its own
+undo"*). The one line that needed thought is `:safety :idempotent false` — two
+taps ARE two not-nows and push the date twice, so the door asks for an
+`Idempotency-Key` and a double-tap replays instead of compounding. The feed's
+own `origin-key` is that key, so a card verb pays nothing for the honesty.
+
+**The backoff is data and a pure function**, and the schedule is one vector:
+
+```clojure
+(def backoff-days [7 21 60 180])          ; a week, three weeks, two months, half a year
+(defn days-out  ^long [said] …)           ; 1-based, the last step repeats
+(defn next-offer ^Instant [now said] (.plusSeconds now (* 86400 (days-out said))))
+```
+
+`now` is HANDED in from the engine's `:now` and no clock is read anywhere in
+the file, so the same inputs answer the same instant in a test, in a scenario
+and in the house. The last step repeats rather than running out: half a year
+forever, because the only honest way to never see something again is to LET IT
+GO, which is a verdict and not a slow fade. The handler bumps `offer_count`,
+moves `next_offer_at` and stamps `answered_by` — the household record the epic
+asked for, so *"I have said not-now to this twice"* is a row and not a
+memory.
+
+### How a tickler is born, and how it retires
+
+**Born at its own create door, by whoever set the thing aside** — a person, or
+an agent at the MCP door sweeping the dropped pile, which is the dispatch-probe
+pattern this spec already blesses for the compiler. The spec was silent here
+and this is the cheapest honest mechanism: the feed is a GET and a read that
+minted rows would be a read with a side effect, `:on-gone` takes a `:set` map
+and not a hook, and the `:decision` sugar refuses an `:on-create` beside it
+("one home per hook"), so a birth-time sweep had nowhere to live that was not a
+job. **`next_offer_at` is optional and unset means NOW** — a tickler set aside
+with no date is already on the fridge — which is what lets the create door stay
+four fields wide. An automatic sweep of the dropped pile is filed, not built.
+
+**Retired at offer time, by the population, with no sweeper and no write.**
+`feed/set-aside?` is the one spelling and it is public because the pack judges
+against it: a subject that is gone, terminal, or carries the mirror
+convention's `status: "done"` gets no card. A marker may outlive its subject —
+the spec accepted that cost and this is where it is paid. The deliberate
+consequence, recorded: a dropped task somebody REOPENED and left open KEEPS its
+tickler, because *still not done* is exactly what a someday/maybe list is for.
+The household's way to say otherwise is `take_it_back`, which is a person
+answering rather than an engine inferring.
+
+**And that is all `take_it_back` does.** It retires the marker and writes
+nothing to the origin row. Two reasons, both structural: a cascade from a
+marker into a `:push-on-write` mirror is precisely the coupling fork (b)
+forbade, and there is no generic un-drop verb a household-wide marker could
+name. The way back to the work is a LINK — the marker's declared `:links
+{:rel "subject"}` over an optional `subject_href`, `/#` + the row's own
+address, `screen-of`'s spelling by hand because a declared link cannot ask the
+engine for a plural. A tickler that claimed to reopen a task while the task
+stayed dropped would be a card that lies, and `heavier` exists in this document
+precisely so cards do not.
+
+### The sugar's one give: `:decider :anyone`
+
+A tickler has no eligibility dimension. The person who set an item aside is
+exactly the person who should get to say "not now" again, so a four-eyes wall
+would be backwards and a role wall would be invented — and `decider-guards`
+refused `{}` and had no other spelling, which made `:decider` effectively
+required. So the sugar grew one keyword: **`:decider :anyone` is a wall's
+absence, said out loud.** Silence still refuses, because an omitted `:decider`
+is a typo far more often than it is a policy.
+
+The change is a two-line fork in front of the old body (`decider-walls`), and
+**no hash moved**, proved rather than argued: `approval_request` is
+`01ca868b…` before and after (its pinned literal in `decision-sugar-test`), and
+`permission_slip` is `d4af2fcf…` before and after (computed against `HEAD`'s
+`resource.clj` and against this one). That is the legitimate shape of a sugar
+change — it can only move a kind that uses the changed feature, and no kind
+used this one before today.
+
+**`.6` inherits two findings, and the second is the load-bearing one.**
+
+1. `:decider :anyone` is there if an insight ever wants it. It will not: the
+   evidence wall (`:decider {:not {:field :authored_by}}`) is the four-eyes rule
+   doing real work, and it is the one thing that keeps a compiler from
+   accepting its own proposal.
+2. **A verdict with a `:note` falls off the card.** The sugar's note input is
+   `[:maybe [:string {:max 240}]]`, which `demand/field-class` reads as
+   `recall` — heavier than `card-ceiling` — so `split-verbs` moves that verdict
+   out of `actions` and into `heavier`, and the one-tap assent becomes a link.
+   The tickler therefore takes no notes on any verdict, deliberately.
+   `permission_slip` spells `:note :answer` on both of its verdicts and is
+   right to; it is not a feed card. Any `.6` verdict meant to be tapped FROM
+   the feed must be note-free, and if an insight wants both a note and a card
+   it needs two doors, not one.
+
+### The population, the recipe line, and the obligation
+
+`feed/populations` gained `:ticklers` and `feed/default-recipe` gained
+`{:section :decide :population :ticklers :take 2}` in the same commit, which is
+check (1)'s seam working exactly as fork (a) promised — no other line moved.
+The population is the `letters` precedent (a core reader naming an OPTIONAL
+application kind, answering `[]` when the engine holds none), filters `offered`
+markers whose `next_offer_at` has passed or was never set, and drops the ones
+whose subject has moved on. The backoff needs no query of its own on the read
+side: a pushed-out marker is simply not a candidate, and nothing sweeps it.
+
+The bound is the read-time posture's: at most `row-scan-cap` markers are read,
+and only the DUE ones cost a subject read.
+
+**Where the law is proved, both tiers.** Three `defscenario`s in the
+declaration, all CHECK tier because `:decider :anyone` leaves the verdict doors
+with no guards at all — *a let-go item never returns* and *a taken-back one
+stops asking* are the reserved `:out-of-state` denier with no guard behind it,
+and *anyone in the house answers a tickler* is the positive statement of the
+sugar's give. `make check-queue` reads 31 kinds, 11 warnings (unmoved), 14
+scenarios.
+
+The backoff is not a scenario and could not be — `scenario.clj` is explicit
+that *"no scenario ever writes"* — so it is judged twice instead:
+`workqueue10/test/workqueue10/tickler_test.clj` calls the pure function and the
+handler with no database at all, and **`:feed/ticklers` in `packs/feed`** proves
+the same law over the wire against a real row: a marker is created over the
+feed's own first card, appears in `decide`, offers all three verbs, backs off on
+`not_now` (`offer_count` 1, `next_offer_at` past TOMORROW), leaves the feed,
+retires on `let_it_go`, and answers 409 to a second `not_now`. A second marker
+naming a row this engine does not serve is created beside it and never cards,
+which is retire-at-offer-time from the other side. It judges the LAW and never
+the schedule: how far a house pushes its first not-now is the house's to
+declare, that it is further out than tomorrow is the epic's.
+
+It is the pack's new LAST obligation, below `:feed/verbs-are-light`, and
+deliberately rather than by append: it is the only obligation that MINTS rows,
+and a minted marker is a card the counting obligations above would have to
+count.

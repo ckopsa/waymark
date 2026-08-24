@@ -167,19 +167,21 @@
 
   It is deliberately SHORTER than the illustrative recipe in
   docs/spec-feed.md § 'The recipe is static data', and that is the
-  landing order rather than a disagreement: `:ticklers` (waymark-iqa.4),
-  `:insights` (.6) and the fuel/memory populations (.5) name kinds and
-  queries that do not exist yet, and check (1) below refuses a recipe
-  naming a population the registry does not hold. Each of those beads
-  adds its population AND its line here, together, which is exactly
-  the seam fork (a) promised: swapping one entry changes no other
-  line."
+  landing order rather than a disagreement: `:insights` (.6) and the
+  fuel/memory populations (.5) name kinds and queries that do not
+  exist yet, and check (1) below refuses a recipe naming a population
+  the registry does not hold. Each of those beads adds its population
+  AND its line here, together, which is exactly the seam fork (a)
+  promised: swapping one entry changes no other line — `:ticklers`
+  (waymark-iqa.4) is the first bead to walk it, and it changed no
+  other line."
   {:salt "waymark-feed"
    :zone "UTC"
    :order
    [{:section :do_now  :population :next_actions :take 5}
     {:section :decide  :population :asks         :take 3}
     {:section :decide  :population :letters      :take 3}
+    {:section :decide  :population :ticklers     :take 2}
     {:section :decide  :population :conflicts    :take 2}
     {:seam true :sentence "That's the house, caught up."}
     {:section :archive :population :events :take 6 :bottomless true}]})
@@ -373,6 +375,106 @@
       []
       (candidates-of :letter (rows-of ctx :letter {:to pid :state "waiting"})))))
 
+(defn- load-raw
+  "One row of any kind, straight from the store — no decode, no
+  projection. The liveness question a tickler asks about its subject
+  needs the STATE and one field, and paying for a full decode (and a
+  render's worth of schema work) to answer it would be paying for the
+  card the population is about to decide not to build."
+  [ctx kind id]
+  (let [st (:storage (:eng ctx))]
+    (try
+      (store/with-tx st #(store/load-row st % kind (str id) {}))
+      (catch Exception _ nil))))
+
+(def set-aside-status
+  "The mirror convention's own word for finished work. `task`'s
+  docstring states the rule this reads — *'every source's own states
+  normalize to :status open|done|dropped; the machine here is the sync
+  machine'* — so a mirrored row's DOMAIN state is data and its
+  framework state is the authority's freshness. A tickler over such a
+  row must ask the data, or it would call a done task set-aside
+  forever because its sync state says `fresh`."
+  "done")
+
+(defn set-aside?
+  "Is a tickler's subject still something the house could pick up?
+  The ONE spelling of retire-at-offer-time (docs/spec-feed.md fork
+  (b)), public because the conformance pack judges against it.
+
+  Three answers, all no:
+
+  - the kind is not one this engine serves, or the row is GONE — the
+    authority deleted it, `:on-gone` retired it, somebody purged it.
+    A marker can outlive its subject; the spec accepts that and this
+    is where it is paid for.
+  - the row is TERMINAL. A finished row is history, and history is
+    the archive's business; asking whether to carry it further is
+    asking about work that is over.
+  - the row carries the mirror's `status` and it says `done`.
+
+  Everything else is still set aside, and the deliberate consequence
+  is worth saying: a dropped task somebody REOPENED and left open
+  keeps its tickler, because 'still not done' is exactly what a
+  someday/maybe list is for. The household's own way to say
+  otherwise is the `take_it_back` verdict, which is a person
+  answering rather than the engine inferring.
+
+  It never asks the reader's GRANT. The marker is its own row with
+  its own visibility and `card` projects it; whether this reader may
+  see the SUBJECT is a different question from whether the subject is
+  still waiting, and conflating them would make one household's
+  someday list flicker according to who was holding the phone."
+  [ctx kind id]
+  (boolean
+   (when-some [rdef (and kind (get (resources ctx) kind))]
+     (when-some [raw (load-raw ctx kind id)]
+       (and (open? rdef raw)
+            (not= set-aside-status (str (get-in raw [:data :status]))))))))
+
+(defn ticklers
+  "decide: the house's someday/maybe list, the items whose date has
+  come (waymark-iqa.4). The `letters` precedent exactly — a core
+  reader naming an optional application kind and answering with
+  nothing when the engine holds none.
+
+  Two filters and a retirement:
+
+  - `offered` markers only. `let_go` and `taken` are terminal, so a
+    let-go item never returns by construction rather than by a query
+    remembering to exclude it.
+  - DUE: `next_offer_at` has passed, or was never set. Unset means
+    now — a tickler set aside with no date is already on the fridge.
+    Each `not now` writes the field further out, which is the whole
+    of the backoff on the read side: a backed-off marker is simply
+    not a candidate, and nothing sweeps it.
+  - RETIRED AT OFFER TIME: a marker whose subject is finished or gone
+    says nothing, and says it at the moment it would have spoken.
+    That is the spec's own posture rather than a sweeper — a tickler
+    that quietly withdrew on a clock would be worse than one that
+    stayed on the fridge.
+
+  The cost is bounded the way every read-time population's is: at
+  most `row-scan-cap` markers are read, and only the DUE ones cost a
+  subject read. A household with a hundred ticklers due on one day
+  has a filing problem the feed cannot fix."
+  [ctx]
+  (if-some [rdef (get (resources ctx) :tickler)]
+    (let [now (:now ctx)
+          due? (fn [t] (or (nil? t) (not (pos? (compare t now)))))]
+      (into []
+            (keep (fn [raw]
+                    (let [d (inv/decode-row rdef raw)]
+                      (when (and (due? (get-in d [:data :next_offer_at]))
+                                 (set-aside?
+                                  ctx
+                                  (some-> (get-in d [:data :subject_kind])
+                                          str not-empty keyword)
+                                  (get-in d [:data :subject_id])))
+                        {:kind :tickler :id (:id raw) :row raw}))))
+            (rows-of ctx :tickler {:state "offered"})))
+    []))
+
 (defn conflicts
   "decide: mirrored rows whose authority and household disagree. A
   conflicted row takes no local writes until a person decides, which
@@ -441,12 +543,14 @@
   say so. It never renders, never projects and never sorts: the mixer
   does all three, once, so the fourth law is enforced in one place.
 
-  Later beads extend it — .4 `:ticklers`, .5 the fuel and memory
-  populations, .6 `:insights` — each adding its entry HERE and its
-  line in `default-recipe`, together."
+  Later beads extend it — .5 the fuel and memory populations, .6
+  `:insights` — each adding its entry HERE and its line in
+  `default-recipe`, together, the way `:ticklers` (waymark-iqa.4)
+  already did."
   {:next_actions next-actions
    :asks asks
    :letters letters
+   :ticklers ticklers
    :conflicts conflicts
    :events events})
 

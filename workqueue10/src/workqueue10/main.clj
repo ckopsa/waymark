@@ -61,6 +61,7 @@
             [workqueue10.resources.permission-slip :refer [permission-slip]]
             [workqueue10.resources.media :refer [media-resource]]
             [workqueue10.resources.task :refer [task-resource]]
+            [workqueue10.resources.tickler :refer [tickler]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
             [workqueue10.resources.weather :refer [weather]]
             [workqueue10.sources.choreplan :as chores]
@@ -311,8 +312,18 @@
        ;; and the framework's first declared decision kind — every
        ;; state, action and wall it has is projected from one
        ;; :decision key.
+       ;; :tickler rides last (waymark-iqa.4): the note on the dropped
+       ;; pile — a marker naming {kind, id} anywhere in the house, a
+       ;; date it comes back on, and three one-tap answers. Domainless
+       ;; for the same family reason the others are: what the
+       ;; household is putting off is not a domain of logistics beside
+       ;; queue/chores/meals, it is how the house carries what it has
+       ;; not done. A KIND and not a field on task, because task is
+       ;; :push-on-write and a "not now" must never call Google Tasks
+       ;; (docs/spec-feed.md fork (b)); household-wide, because
+       ;; abandoned media and unrun chores are the same pile.
        (into (into [saved-view capability connection self journal weather letter
-                    permission-slip]
+                    permission-slip tickler]
                    dashboard/resources)))))
 
 (def surfaces

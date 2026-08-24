@@ -1070,7 +1070,7 @@
                  (list 'assoc-in [:data note-field]
                        (list 'get 'inp note-field))))}))
 
-(defn- decider-guards
+(defn- decider-walls
   "The decider's eligibility, as a VECTOR of walls rather than one
   folded composite. g/and would read the same at the door, but a
   composite records opaque — the decision record (spec-decision-record)
@@ -1085,7 +1085,8 @@
   [kind {:keys [not role field] :as decider}]
   (when-not (or not role field)
     (sugar-err kind ":decision"
-               ":decider says nothing — spell :not, :field or :role"))
+               (str ":decider says nothing — spell :not, :field or :role,"
+                    " or :anyone when the whole house may answer")))
   ;; each wall is either a bare value (:not :requested_by) or a map
   ;; carrying its own sentence ({:field :asked_by :explain "…"}). A
   ;; :name/:explain spelled at the :decider level is the shorthand for
@@ -1118,6 +1119,30 @@
                     (if-some [nm (and (map? role) (:as role))]
                       (assoc g :name nm)
                       g))))))
+
+(defn- decider-guards
+  "The walls a verdict action carries, or none.
+
+  :anyone IS A WALL'S ABSENCE, SAID OUT LOUD (waymark-iqa.4). Some
+  decisions have no eligibility dimension at all: a tickler's verdict
+  is the household answering its own someday/maybe list, and the
+  person who set an item aside is exactly the person who should get
+  to say 'not now' again. Before this, :decider was effectively
+  REQUIRED — {} refused and nothing else was spelled — so a kind with
+  no wall had to invent one to satisfy the sugar, which is law that
+  is not true, and a guard that refuses nobody is worse than no guard:
+  it prints a wall's name into every decision record it never stopped.
+
+  Silence still refuses, because an omitted :decider is a typo far
+  more often than it is a policy; the keyword is the author saying
+  the quiet part out loud. Every walled declaration lands on
+  decider-walls and on exactly the vector it always did — no existing
+  guard list moves by one element, which is why no fingerprint moves
+  either (decision-sugar-test pins both halves)."
+  [kind decider]
+  (if (= :anyone decider)
+    []
+    (decider-walls kind decider)))
 
 (defn- verdict-action
   "One verdict → one ordinary action. Everything the author spells
@@ -1191,6 +1216,7 @@
   |                       | :create-schema that omits the stamped ones,   |
   |                       | :on-create's requester stamp                  |
   | :decider              | every verdict action's :guards, walls first   |
+  |                       | (:anyone → none, said out loud)              |
   | :expires              | the leash field, its create default, and      |
   |                       | (when :max is spelled) the ceiling guard      |
   | :pacing               | the two create guards                         |

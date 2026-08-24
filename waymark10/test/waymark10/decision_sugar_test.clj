@@ -268,7 +268,20 @@
                  (refusal (assoc minimal :on-create (fn [row _] row))))))
   (testing "a decider that says nothing"
     (is (re-find #":decider says nothing"
-                 (refusal (assoc-in minimal [:decision :decider] {})))))
+                 (refusal (assoc-in minimal [:decision :decider] {}))))
+    (is (re-find #":decider says nothing"
+                 (refusal (update-in minimal [:decision] dissoc :decider)))
+        "silence still refuses — an omitted :decider is a typo far more
+         often than it is a policy"))
+  (testing ":anyone is a wall's absence, said out loud (waymark-iqa.4)"
+    (let [r (r/normalize-resource
+             (assoc-in minimal [:decision :decider] :anyone))]
+      (is (= [] (:guards (get-in r [:actions :yes])))
+          "no wall means no guard — a guard that refuses nobody would
+           print its name into every decision record it never stopped")
+      (is (= [] (:guards (get-in r [:actions :no]))))
+      (is (= #{:yes :no} (set (keys (:actions r))))
+          "everything else the sugar projects is untouched")))
   (testing "two walls cannot share one sentence"
     (is (re-find #"give\s+each wall its own"
                  (refusal (assoc-in minimal [:decision :decider]
