@@ -111,6 +111,17 @@
     child in the child action's :from states — through invoke!, per
     child, system actor, the parent transition's correlation id.
 
+  The decision record (spec-decision-record.md, waymark-442.5):
+  step 9's guard loop no longer drops its allows. For a kind that
+  declares :retain {:judgment true}, each guard's declared :vars are
+  evaluated over the scope it judged and ride the transition's
+  `judgment` column — the refusal sentence the guard did not have to
+  give. WHICH guards judged is not stored at all: it derives from the
+  row's law_revision through waymark10.server.decision/basis, free
+  and retroactive to every transition ever logged. Secret fields are
+  subtracted at write time; :adopt records nothing; a dry run records
+  nothing.
+
   Dry-run parity (design §23, 2026-07-10), recorded:
   - create!, bulk! and batch! honor :dry-run as invoke! always did.
     create! rehearses waymark9's tiers (schema-only without create
@@ -128,6 +139,7 @@
             [waymark10.groups :as groups]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
+            [waymark10.server.decision :as decision]
             [waymark10.server.drafts :as drafts]
             [waymark10.server.judgment :as judgment]
             [waymark10.server.predecessor :as predecessor]
@@ -556,17 +568,35 @@
                :summary (summary-of rdef row)})))))
 
 (defn- run-guards
-  "→ {:warned [{:name :reason :remedies}] :overridden [names]} or
-  throws guard-refused on the first hard deny."
+  "→ {:warned [{:name :reason :remedies}] :overridden [names] :basis […]}
+  or throws guard-refused on the first hard deny.
+
+  :basis is the decision record's evidence (spec-decision-record),
+  collected in the loop that was already running — every allow this
+  reduce used to drop on the floor, kept with the values its :vars
+  saw. Only for a kind that declares :retain {:judgment true}; every
+  other kind pays one boolean and the empty vector it arrived with.
+  A hard deny throws before its entry can matter: refusals do not
+  commit, so they have no transition to hang from."
   [defn row inp ctx acknowledged rdef]
-  (reduce
-   (fn [acc guard]
-     (let [[v d] (g/evaluate guard row inp ctx)]
-       (if-not (t/deny? v)
-         acc
-         (deny-outcome acc v d row acknowledged defn rdef))))
-   {:warned [] :overridden []}
-   (:guards defn)))
+  (let [scope (when (decision/retains? rdef)
+                (decision/evidence-scope rdef row inp ctx))]
+    (reduce
+     (fn [acc guard]
+       (let [[v d] (g/evaluate guard row inp ctx)
+             deny? (t/deny? v)
+             acc (cond-> acc
+                   scope (update :basis conj
+                                 (decision/entry guard deny? d acknowledged
+                                                 scope)))]
+         (if-not deny?
+           acc
+           (deny-outcome acc v d row acknowledged defn rdef))))
+     ;; nil, not [] — "this kind retains nothing" and "this action
+     ;; declares no guards" are different sentences and the column
+     ;; must be able to tell them apart
+     {:warned [] :overridden [] :basis (when scope [])}
+     (:guards defn))))
 
 (defn- split-leaves
   "The partial rehearsal's coverage split (design §23): guard trees
@@ -617,7 +647,7 @@
   "Steps 11–15: handler, tamper refusal, materialize, advance,
   append, save, idempotency store."
   [engine tx rdef row defn inp ctx
-   {:keys [digest overridden idempotency-key principal correlation-id]}]
+   {:keys [digest overridden basis idempotency-key principal correlation-id]}]
   (let [now (:now ctx)
         handled (if-some [h (:handler defn)]
                   (let [out (h row inp ctx)]
@@ -653,6 +683,12 @@
                  :input-digest digest
                  :inputs (when (:record defn) inp)
                  :acknowledged (not-empty (vec overridden))
+                 ;; the decision record: the basis was built at
+                 ;; judgment time and threaded here — finish! receives
+                 ;; ctx, not guard-ctx, so nothing is re-evaluated and
+                 ;; the record says what the guards actually saw
+                 :judgment (decision/record (:law-revision row) basis
+                                            overridden)
                  :correlation-id correlation-id
                  :idempotency-key idempotency-key
                  :summary (:summary advanced)})
@@ -761,7 +797,12 @@
   state, terminal included, though render only advertises it on
   non-terminal rows — recorded deviation: adopting a closed row is
   the maintenance act that lets a grandfathered law finally die (the
-  sweep counts every stamped row)."
+  sweep counts every stamped row).
+
+  Writes NO decision record, whatever the kind retains: a restamp is
+  the engine moving a row's law, not a judgment of it — there are no
+  guards to record, and an empty object would make the column lie
+  about coverage."
   [engine rdef kind id {:keys [principal dry-run correlation-id]}]
   (store/with-tx (:storage engine)
     (fn [tx]
@@ -959,15 +1000,19 @@
                   (if partial?
                     (partial-verdict defn row inp guard-ctx acknowledged rdef
                                      (set (keys (or body {}))))
-                    (let [{:keys [warned overridden]}
+                    (let [{:keys [warned overridden basis]}
                           (run-guards defn row inp guard-ctx acknowledged rdef)]
                       (cond
-                        ;; 10. dry-run exits before any effect
+                        ;; 10. dry-run exits before any effect — and a
+                        ;; rehearsal RECORDS nothing either (§23): the
+                        ;; basis dies with the transaction that never
+                        ;; wrote a transition
                         dry-run {:valid? true :warnings (not-empty warned)}
                         (seq warned) (throw (p/warning-refused action-name warned))
                         :else (finish! engine tx rdef row defn inp ctx
                                        {:digest digest
                                         :overridden overridden
+                                        :basis basis
                                         :idempotency-key idempotency-key
                                         :principal principal
                                         :correlation-id correlation-id}))))))))))))
@@ -1346,26 +1391,38 @@
   path, the full rehearsal, and the partial rehearsal — so the three
   judgments cannot drift: the validated create input judged with row
   nil (no instance exists yet), warnings collect (acknowledged names
-  pass and are recorded), hard denies refuse."
-  [guards inp ctx acknowledged]
-  (reduce
-   (fn [acc guard]
-     (let [[v d] (g/evaluate guard nil inp ctx)]
-       (if-not (t/deny? v)
-         acc
-         (if (= :warning (:severity d))
-           (if (contains? acknowledged (:name d))
-             (update acc :overridden conj (:name d))
-             (update acc :warned conj {:name (:name d)
-                                       :reason (g/render-reason d v nil)
-                                       :remedies (:remedies d)}))
-           (throw (p/guard-refused :create nil
-                                   (g/render-reason d v nil)
-                                   {:guard (:name d)
-                                    :remedies (:remedies d)}
-                                   nil))))))
-   {:warned [] :overridden []}
-   guards))
+  pass and are recorded), hard denies refuse.
+
+  `scope` is the decision record's evidence scope, or nil. The two
+  rehearsals pass nil and record nothing — §23's promise that a dry
+  run neither demands, consumes, nor RECORDS, spelled at the create
+  door too."
+  ([guards inp ctx acknowledged]
+   (create-guard-pass guards inp ctx acknowledged nil))
+  ([guards inp ctx acknowledged scope]
+   (reduce
+    (fn [acc guard]
+      (let [[v d] (g/evaluate guard nil inp ctx)
+            deny? (t/deny? v)
+            acc (cond-> acc
+                  scope (update :basis conj
+                                (decision/entry guard deny? d acknowledged
+                                                scope)))]
+        (if-not deny?
+          acc
+          (if (= :warning (:severity d))
+            (if (contains? acknowledged (:name d))
+              (update acc :overridden conj (:name d))
+              (update acc :warned conj {:name (:name d)
+                                        :reason (g/render-reason d v nil)
+                                        :remedies (:remedies d)}))
+            (throw (p/guard-refused :create nil
+                                    (g/render-reason d v nil)
+                                    {:guard (:name d)
+                                     :remedies (:remedies d)}
+                                    nil))))))
+    {:warned [] :overridden [] :basis (when scope [])}
+    guards)))
 
 (defn- create-dry-run!
   "The create rehearsal (design §23; waymark9 _create_entry's tiers):
@@ -1522,10 +1579,15 @@
                 (throw (p/schema-invalid :create errors)))
             ctx (make-ctx engine tx :invoke principal
                           {:correlation-id correlation-id})
-            {:keys [warned overridden]}
+            {:keys [warned overridden basis]}
             (create-guard-pass (if mint? [] (:create-guards rdef))
                                inp (dissoc ctx :invoke :create :inner-sink)
-                               acknowledged)]
+                               acknowledged
+                               ;; the birth's evidence scope: no row
+                               ;; exists yet, so the create input IS
+                               ;; the document the guards read
+                               (when (decision/retains? rdef)
+                                 (decision/evidence-scope rdef nil inp ctx)))]
         (when (seq warned)
           (throw (p/warning-refused :create warned)))
         (let [now (:now ctx)
@@ -1586,6 +1648,10 @@
                        :law-revision (:law-revision row)
                        :input-digest digest
                        :acknowledged (not-empty (vec overridden))
+                       ;; the birth's decision record, same law as the
+                       ;; row it just stamped
+                       :judgment (decision/record (:law-revision row) basis
+                                                  overridden)
                        :correlation-id correlation-id
                        :summary (:summary row)})
               ;; drain the :on-create births: full create algorithm,

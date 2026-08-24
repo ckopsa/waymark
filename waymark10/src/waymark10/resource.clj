@@ -1176,6 +1176,17 @@
                      " — no gaps between what was stored and what serves")))))
     (when-not (contains? #{:immediate :never} (:adoption rmap :immediate))
       (throw (t/definition-error ":adoption is :immediate or :never")))
+    ;; :retain — what the log carries forward past the write. One map
+    ;; shared by two specs (decision record, time travel), closed here
+    ;; so a third entry arrives with the feature that reads it rather
+    ;; than as a silent typo that retains nothing
+    (when-some [r (:retain rmap)]
+      (when-not (and (map? r)
+                     (every? #{:judgment :data} (keys r))
+                     (every? boolean? (vals r)))
+        (throw (t/definition-error
+                (str ":retain is {:judgment bool? :data bool?} — what the "
+                     "transition log carries forward past the write")))))
     (check-worksheet! rmap)
     (when-not (contains? #{:primary :secondary :system} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))

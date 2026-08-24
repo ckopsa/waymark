@@ -20,6 +20,7 @@
     :owns :links :related
     :display :label-template :summary :deviations
     :on-create :mirror
+    :retain
     :scenarios})
 
 (def action-keys

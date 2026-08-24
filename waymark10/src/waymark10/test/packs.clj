@@ -484,6 +484,22 @@
     (row-in-state ctx kind (:initial (rdef ctx kind))))
   (mapv pr-str (conf/replay-violations (:engine ctx))))
 
+(defn- decision-record-violations
+  "Why it was ALLOWED, on the record (spec-decision-record): a
+  retained kind's committed transitions name the guards that judged
+  them and the verdict each returned, a kind that declares no
+  retention records nothing, and the stored names agree with the
+  basis DERIVED from the row's law revision.
+
+  Runs over the whole log the walk just wrote, like replay and
+  touches — the two halves of the same audit, and the reason this one
+  needs no staging of its own: whatever the driver drove, it drove
+  through the write path under judgment."
+  [ctx]
+  (let [{:keys [violations covered]}
+        (conf/decision-record-violations (:engine ctx))]
+    {:violations (mapv pr-str violations) :covered covered}))
+
 (defn- touches-violations
   "The blast radius declared is the blast radius logged. No
   application suite ever called this one — it had no driver to be
@@ -641,6 +657,10 @@
     {:name :core/collections :run collection-honesty-violations}
     {:name :core/replay-history :run replay-history-violations}
     {:name :core/touches :run touches-violations}
+    ;; the audit's other half: replay proves the edge was legal, this
+    ;; one proves WHY it was allowed — and proves that a kind which
+    ;; declared no retention paid no bytes for the privilege
+    {:name :core/decision-record :run decision-record-violations}
     ;; the POLICY's own obligation: the packs above prove the
     ;; machinery, this one proves what the household actually
     ;; declared. Core, not a module — a scenario judges core's law

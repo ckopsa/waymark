@@ -39,6 +39,7 @@
             [waymark10.demand :as demand]
             [waymark10.machine :as machine]
             [waymark10.server.collections :as collections]
+            [waymark10.server.decision :as decision]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.store :as store]
@@ -118,6 +119,100 @@
                        (assoc witness :violation :action-not-in-law)))
                    (assoc witness :violation :no-stored-law))))))
           ts)))
+
+(defn decision-record-violations
+  "The decision record's obligation (spec-decision-record): a
+  committed transition's record names its guards and its verdict, and
+  a kind that declares no retention records nothing at all.
+
+  → {:violations [maps] :covered n} — n is the number of stored
+  records actually read, so an application can tell
+  nothing-declared from nothing-proved.
+
+  Four claims, each the thin edge of a way this can go quietly wrong:
+
+  - RETENTION IS THE ONLY DOOR. A kind without :retain {:judgment
+    true} whose log carries a judgment object means the write path
+    started recording for everyone — which is bytes on every
+    transition of every kind forever, the one posture this feature
+    was built around.
+  - A RESTAMP IS NOT A JUDGMENT. :adopt records nothing, whatever the
+    kind retains; an empty object there would make the column lie
+    about coverage.
+  - THE RECORD NAMES ITS GUARDS. The stored names, in order, are the
+    names the DERIVED basis answers with — the two halves of the same
+    sentence, and the check that the stored half never drifts from
+    the free one.
+  - EVERY GUARD CARRIES A VERDICT, and either its evidence or the
+    honest `opaque` that says the evidence was a closure.
+
+  THE PRE-RECORD HORIZON, respected: retention starts the day it is
+  declared, so a transition older than the first recorded one on its
+  kind is not a violation — it is history, and the spec says so. Once
+  a kind HAS recorded, it may never stop: the obligation walks from
+  each kind's first record forward."
+  [eng]
+  (let [st (:storage eng)
+        rdefs (if-some [reg (:registry eng)] (:kinds @reg) (:resources eng))
+        ts (store/with-tx st
+             (fn [tx] (store/transitions st tx {} {:limit 100000})))
+        ;; the horizon, per kind: the id of its first stored record
+        horizon (reduce (fn [acc t]
+                          (if (:judgment t)
+                            (update acc (:kind t) (fnil min Long/MAX_VALUE)
+                                    (:id t))
+                            acc))
+                        {} ts)
+        witness (fn [t] (select-keys t [:kind :resource-id :action :id]))]
+    {:covered (count (filter :judgment ts))
+     :violations
+     (into []
+           (mapcat
+            (fn [t]
+              (let [rdef (get rdefs (:kind t))
+                    j (:judgment t)
+                    retained? (and rdef (decision/retains? rdef))
+                    past-horizon? (and (some? (get horizon (:kind t)))
+                                       (>= (:id t) (get horizon (:kind t))))]
+                (cond
+                  (nil? rdef) nil
+
+                  (and (not retained?) (some? j))
+                  [(assoc (witness t) :violation :judgment-without-retention)]
+
+                  (and (= :adopt (:action t)) (some? j))
+                  [(assoc (witness t) :violation :judgment-on-restamp)]
+
+                  (= :adopt (:action t)) nil
+
+                  (and retained? past-horizon? (nil? j))
+                  [(assoc (witness t) :violation :retained-but-unrecorded)]
+
+                  (nil? j) nil
+
+                  :else
+                  (let [basis (decision/basis rdef (:action t)
+                                              (:law-revision t))
+                        derived (mapv (comp name :name) (:guards basis))
+                        stored (mapv :name (:guards j))]
+                    (concat
+                     (when (and basis (not= derived stored))
+                       [(assoc (witness t) :violation :record-disagrees-with-basis
+                               :derived derived :stored stored)])
+                     (when (not= (:revision j) (:law-revision t))
+                       [(assoc (witness t) :violation :record-names-another-law
+                               :recorded (:revision j))])
+                     (keep (fn [g]
+                             (cond
+                               (not (#{"allow" "acknowledged" "warned"}
+                                     (:verdict g)))
+                               (assoc (witness t) :violation :guard-without-verdict
+                                      :guard (:name g))
+                               (and (nil? (:read g)) (nil? (:opaque g)))
+                               (assoc (witness t) :violation :guard-without-evidence
+                                      :guard (:name g))))
+                           (:guards j)))))))
+            ts))}))
 
 (defn touches-violations
   "The blast-radius promise (waymark9 touches=, design §24): every

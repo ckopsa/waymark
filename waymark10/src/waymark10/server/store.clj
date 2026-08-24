@@ -52,7 +52,14 @@
     point of this method is that it never becomes N queries.")
   (append-transition! [st tx record]
     "Append to the log and notify the outbox channel in the same
-    transaction. Returns the record with its assigned :id.")
+    transaction. Returns the record with its assigned :id.
+
+    :judgment is the decision record (spec-decision-record) — the
+    evidence the guards read, present only for a kind declaring
+    :retain {:judgment true}, and nil everywhere else rather than an
+    empty object that would lie about coverage. Which guards judged
+    needs no column: it derives from :law-revision through
+    waymark10.server.decision/basis.")
   (transitions [st tx where opts]
     "Log rows: where {:kind … :resource-id … :since id}, newest-last.")
   (transition-stats [st tx since include-system?]

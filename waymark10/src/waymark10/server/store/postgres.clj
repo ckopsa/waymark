@@ -86,6 +86,12 @@
               {:name "input_digest" :type "text" :ddl "input_digest text"}
               {:name "inputs" :type "jsonb" :ddl "inputs jsonb"}
               {:name "acknowledged" :type "jsonb" :ddl "acknowledged jsonb"}
+              ;; the decision record (spec-decision-record): the
+              ;; EVIDENCE the guards read, written only by a kind that
+              ;; declares :retain {:judgment true}. Which guards judged
+              ;; is derived from law_revision and needs no column;
+              ;; what they read is gone at commit and needs this one
+              {:name "judgment" :type "jsonb" :ddl "judgment jsonb"}
               {:name "correlation_id" :type "text" :ddl "correlation_id text"}
               {:name "idempotency_key" :type "text" :ddl "idempotency_key text"}
               {:name "summary" :type "text" :ddl "summary text"}]
@@ -245,6 +251,11 @@
      :input-digest (:input_digest r)
      :inputs (read-jsonb (:inputs r))
      :acknowledged (read-jsonb (:acknowledged r))
+     ;; the decision record. A column absent HERE is invisible to
+     ;; every reader, whatever the INSERT wrote — the one line in this
+     ;; file that decides whether a column exists as far as the engine
+     ;; is concerned
+     :judgment (read-jsonb (:judgment r))
      :correlation-id (:correlation_id r)
      :idempotency-key (:idempotency_key r)
      :summary (:summary r)}))
@@ -546,8 +557,8 @@
                [(str "INSERT INTO waymark10_transitions"
                      " (kind, resource_id, action, from_state, to_state, actor,"
                      "  law_revision, input_digest, inputs, acknowledged,"
-                     "  correlation_id, idempotency_key, summary)"
-                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                     "  judgment, correlation_id, idempotency_key, summary)"
+                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                      " RETURNING id, at")
                 (name (:kind record)) (:resource-id record)
                 (name (:action record))
@@ -558,6 +569,7 @@
                 (:input-digest record)
                 (some-> (:inputs record) jsonb)
                 (some-> (:acknowledged record) not-empty jsonb)
+                (some-> (:judgment record) not-empty jsonb)
                 (:correlation-id record)
                 (:idempotency-key record)
                 (:summary record)]

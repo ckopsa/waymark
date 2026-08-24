@@ -272,7 +272,14 @@
                   (assoc :id id :at (Instant/now))
                   (update :actor jsonish)
                   (update :inputs jsonish)
-                  (update :acknowledged jsonish))]
+                  (update :acknowledged jsonish)
+                  ;; the decision record (spec-decision-record). The
+                  ;; twin is the WEAKER witness here — it conjes the
+                  ;; record verbatim, so a field Postgres silently
+                  ;; drops would pass against memory. The round-trip
+                  ;; is the most this store can prove; the obligation
+                  ;; runs against both for the rest
+                  (update :judgment jsonish))]
       (swap! state #(-> %
                         (update :transitions (fnil conj []) rec)
                         (update :pending-notify (fnil conj []) id)))

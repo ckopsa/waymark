@@ -44,6 +44,12 @@
    :display :label-template :summary :deviations
    ;; hooks & engine weaves
    :on-create :mirror
+   ;; what the log carries forward past the write (spec-decision-record,
+   ;; spec-time-travel): {:judgment true} retains the evidence the
+   ;; guards read, {:data true} the document as it stood. ONE map, two
+   ;; entries, default off — write amplification on the one write path
+   ;; is bytes on every transition of every kind forever
+   :retain
    ;; proof — declared policy tests (waymark10.scenario), judged where
    ;; they can be judged for free and by the suite where they cannot.
    ;; Data, never law: fingerprint-of's whitelist does not name them,

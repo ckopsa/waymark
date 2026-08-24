@@ -283,6 +283,33 @@ page. `retire`/`restore` and `remove`/`restore` are `:undo` pairs;
 `clone` deep-copies the active slots through the same create gate, so a
 stale slot cannot propagate.
 
+`:retain` is what the transition log carries forward past the write —
+`{:judgment bool? :data bool?}`, per kind, **default off**, and closed to
+those two entries:
+
+```clojure
+:retain {:judgment true}
+```
+
+`{:judgment true}` is the decision record
+([spec](spec-decision-record.md)): each committed transition of this kind
+carries a `judgment` object naming the guards that judged, the verdict
+each returned, and — for a guard whose verdict is a form — its declared
+`:vars` evaluated over the scope it judged. *The decision record is the
+refusal sentence the guard did not have to give*, so an author who wants a
+fuller record declares fuller `:vars` and gets a better refusal for free.
+A code guard or a composite records `opaque` (its check is a closure, or
+its arms are law the declaration folded on purpose); a `{:secret true}`
+field is never captured at all; `:adopt` and dry runs record nothing.
+
+Which guards judged needs no retention and no column: it derives from the
+row's `law_revision` through
+`(waymark10.server.decision/basis rdef action revision)`, free and
+retroactive to every transition ever logged. Retention buys only the
+evidence. `:retain` is not law — `fingerprint-of` does not name it, so
+declaring it mints no revision — but it IS bytes on every transition of
+this kind forever, which is why it is off until an author says otherwise.
+
 ## 9 · `:touches` — the declared cross-write set
 
 An action that advances OTHER rows says so on its declaration:

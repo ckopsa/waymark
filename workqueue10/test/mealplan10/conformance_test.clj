@@ -257,7 +257,14 @@
     ;; (choreplan10 and eveningplan10 said exactly that, in a comment).
     ;; mealplan10 has them, so zero here is a hole, not a shrug.
     (is (pos? (suite/coverage report :core/folded-enums))
-        "at least one folded enum member was dry-run over the wire")))
+        "at least one folded enum member was dry-run over the wire")
+    ;; the same claim for the decision record: :plan is the one kind in
+    ;; this house that declares :retain {:judgment true}, and the walk
+    ;; drives it — so zero records read here means the obligation was
+    ;; green because it had nothing to look at, which is the failure
+    ;; mode a retention feature is most likely to hide behind
+    (is (pos? (suite/coverage report :core/decision-record))
+        "at least one committed transition's decision record was read")))
 
 ;; ── the bulk report: this app's own fan-out door ────────────────────
 

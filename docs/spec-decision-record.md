@@ -208,3 +208,161 @@ exists and is the larger half of the value. The retained evidence is four
 store edits, two invoke edits, one declaration key, and the two locks on field
 visibility — of which the read-time grant projection is the only part that can
 be got wrong quietly.
+
+---
+
+## Built (2026-08-24, waymark-442.5)
+
+Landed as specified. `waymark10.server.decision` is the one new namespace: the
+derived half, the written half, and the read lock, in that order, so the two
+halves of "why was this allowed" can be read in one file.
+
+### The derived basis
+
+```clojure
+(decision/basis rdef action law-revision)
+;; → {:action :take :revision 1 :law :resident|:stored|:engine
+;;    :guards [{:name :stock-remains :severity :refuse
+;;              :reads [] :judges [] :form :expr}
+;;             {:name :shelf-is-reachable :severity :refuse
+;;              :reads [:principal] :judges [] :form :code}]}
+```
+
+`:law` names which law answered — `:stored` when that revision's fingerprint
+served the trees through `judgment/resolve-action`, `:resident` when the
+resident declaration *is* that law (a nil pre-law stamp, the current revision,
+a pilot), `:engine` for the injected `:adopt`, which judges nothing and says so
+rather than answering with an empty guard vector that would read as "a law with
+no guards". `:form` is the one distinction the record draws about a guard's
+insides: `:expr`, `:code`, `:composite`. It reads no transitions row and stores
+nothing, so it is retroactive to every transition ever logged.
+
+### The recorded evidence
+
+One real row, `jsonb_pretty(judgment)` straight out of Postgres — a `take` on a
+cupboard with a secret `combination` field and an acknowledged warning:
+
+```json
+{ "revision": 1,
+  "guards": [
+    { "name": "stock-remains", "reads": [], "verdict": "allow",
+      "read": { "left": 3, "shelf": "the tall one" },
+      "read_fields": { "left": ["stock"], "shelf": ["shelf"] } },
+    { "name": "combination-known", "reads": [], "verdict": "allow",
+      "read": { "code": null },
+      "read_fields": { "code": ["combination"] } },
+    { "name": "shelf-is-reachable", "reads": ["principal"],
+      "verdict": "allow", "opaque": true },
+    { "name": "nothing-spilled", "reads": [], "verdict": "acknowledged",
+      "read": { "where": "the tall one" },
+      "read_fields": { "where": ["shelf"] } } ],
+  "acknowledged": ["nothing-spilled"] }
+```
+
+Read it against the spec's target shape: same guards, same `read`, same
+`opaque`. Three things the shape above gained in the building.
+
+**`read_fields`** — the second lock, made mechanical. A recorded value is a
+field value, but a `:vars` NAME is not a field name, so nothing downstream
+could have known which grant question to ask. Each var now carries the document
+fields its form read (`expr/info`'s `:data` ∪ `:inputs`, conservatively unioned
+— an input key lands in the document and visibility is a question about fields,
+not about which door a value came through). `decision/project` consumes it:
+
+```clojure
+(decision/project judgment visible?)   ; visible? = (fn [field-name] → bool)
+```
+
+An evidence value whose form read a concealed field is dropped from `read` and
+named in `withheld`. The var NAMES stay: a guard's `:vars` are law, they ride
+the definition row's fingerprint, and a reader who may see the guard at all may
+see what it was looking for. Only the VALUE is projected away. **This function
+is the history route's lock and it ships before the route.**
+
+**`"verdict": "acknowledged"`** — the spec's example showed only `allow`. An
+overridden warning is neither: it is the one verdict that was overridden rather
+than earned, and flattening it to `allow` would make the record disagree with
+its own `acknowledged` list. `warned` exists in the vocabulary but cannot
+appear in a committed row (a pending warning throws before the append).
+
+**Keyword keys in the engine.** The record is built with keyword keys because
+the store's jsonb round-trip keywordizes on the way back, and a shape that
+changed across a write would be two shapes to reason about. The BYTES are the
+spec's JSON exactly, as the block above shows.
+
+### Recorded deviations
+
+- **A 240-character cap on evidence strings**, ellipsis-marked. The spec bounds
+  the record by declaration alone; a `:vars` entry bound to a prose field would
+  still put a paragraph in the log on every write, and write amplification is
+  the one thing this spec asked to be careful about. Three lines, and the
+  ellipsis says the value was cut.
+- **A composite records `opaque`.** The spec said composites record under their
+  generated name (`a&b`) and did not say what evidence they carry; they carry
+  none, because the arms' `:vars` are law the declaration folded on purpose.
+  `opaque` is the honest word for "no values recorded" in both the code-guard
+  and the composite case.
+- **The create basis is resident-only.** `judgment/resolve-action` serves
+  `:actions`; the create path has never had an overlay, so
+  `(basis rdef :create rev)` answers with the resident `:create-guards` and
+  marks itself `:resident`. Not new: it is the create path's existing posture,
+  now merely visible.
+- **Empty is not nothing.** A retaining kind whose action declares no guards
+  records `"guards": []`. Only a kind that retains nothing writes SQL NULL — so
+  `run-guards` returns `:basis nil` rather than `[]` when retention is off, and
+  the two sentences stay distinguishable.
+
+### What proves it
+
+- `waymark10.decision-record-test` — the derived half alone (no storage
+  touched), then the written half run against **both stores from one body of
+  assertions** (`each-store`), because the memory twin is the weaker witness:
+  it conjes the record verbatim, so a field Postgres silently drops passes
+  there and only the real INSERT catches it. Plus the secret lock, the
+  acknowledged path, the retention-off control, the §23 rehearsal, and the
+  grant projection.
+- `conformance/decision-record-violations`, wired as **`:core/decision-record`**
+  beside `:core/replay-history` — the audit's other half. Four claims:
+  retention is the only door; a restamp is not a judgment; the stored guard
+  names equal the DERIVED basis's; every guard carries a verdict and either its
+  evidence or an honest `opaque`. It reports `:covered`, and
+  `mealplan10.conformance-test` asserts that count is positive, so the
+  obligation cannot pass by having read nothing.
+- **The pre-record horizon is respected**, not merely documented: the
+  obligation computes each kind's first recorded transition and only walks
+  forward from there. Retention starts the day it is declared; once a kind HAS
+  recorded, it may never stop.
+
+### Who declares it
+
+`:plan` (mealplan10) is the first and only kind to declare
+`:retain {:judgment true}`. "Why was this week allowed to finalize" is the
+household's own audit question, and the gates read counts that change hourly
+(`open_tasks`, `days_without_recipe`, `calendar_conflicts`) — a re-derivation
+next month answers about next month. The record is three integers and a date.
+
+### The migration
+
+No numbered migration; the desired shape is data and `migrate/plan` diffs it.
+Against a live database the planner emits exactly one step and the boot gate
+refuses to serve until it is applied:
+
+```
+add-column waymark10_transitions:
+  ALTER TABLE waymark10_transitions ADD COLUMN judgment jsonb
+  -- judgment is an engine column the live table predates.
+```
+
+**A production deploy must run that ALTER** (`make migrate-queue APPLY=1`, or
+the engine's `:auto-migrate`) before the new code serves. Engine-table columns
+are not part of any kind projection, so this mints **no law revision** — pinned
+by `mealplan10.style-invariance-test`, where adding `:retain` to both spellings
+left every fingerprint hash byte-identical.
+
+### Disclosure, checked
+
+Every existing reader of the transitions table projects explicitly rather than
+serializing the row — `mcp/history`, `events/transition-payload` (and therefore
+the SSE frame and the webhook body), `law_sweep`. The new column reaches no
+wire. `waymark-442.10` still owns the analysis; `decision/project` is the
+direction it asked for, grant-projected rather than refused.

@@ -257,6 +257,11 @@
    :states [:draft :planned :active :done :abandoned]
    :initial :draft
    :terminal #{:done :abandoned}
+   ;; the decision record's retention (waymark-442.5) rides both
+   ;; spellings — and rides them WITHOUT moving the hash, which is the
+   ;; proof this key is not law: fingerprint-of's whitelist never
+   ;; names it, so declaring retention mints no revision
+   :retain {:judgment true}
    :summary "Week of {data.start_date} · {data.weeks} wk · {state}"
    :schema [:map
             [:start_date {:x-display {:label "Start date"}} :waymark/date]

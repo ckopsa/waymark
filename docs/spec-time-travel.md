@@ -135,6 +135,14 @@ share one key: `:retain {:data true :judgment true}`. Either alone is a partial
 declaration of the same intent, and an engine grows at most one new opt across
 both specs.
 
+> **Landed 2026-08-24 (waymark-442.5).** The `:retain` key exists —
+> `declaration/top-level-keys` carries it, `resource/normalize-resource` closes
+> it to exactly `{:judgment bool? :data bool?}`, and `fingerprint-of`'s
+> whitelist does not name it, so declaring retention mints **no law revision**
+> (pinned by `mealplan10.style-invariance-test`). Tier 3 adds its `after`
+> column and reads `(get-in rdef [:retain :data])`; nothing else about the key
+> is left to build.
+
 **Tier 3's security clause is inherited, and it decides the order.** "An as-of
 read must project through the SAME visibility, or time travel becomes a
 disclosure channel" applies verbatim to a decision record's read values — they

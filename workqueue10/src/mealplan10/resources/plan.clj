@@ -297,6 +297,13 @@
    :states [:draft :planned :active :done :abandoned]
    :initial :draft
    :terminal #{:done :abandoned}
+   ;; the week keeps its reasons (spec-decision-record): "why was this
+   ;; plan allowed to finalize" is the household's own audit question —
+   ;; the gates read counts that change hourly (open_tasks,
+   ;; days_without_recipe, calendar_conflicts), so a re-derivation next
+   ;; month answers about next month. The guards' declared :vars are
+   ;; the whole record, which is three integers and a date
+   :retain {:judgment true}
    :summary "Week of {data.start_date} · {data.weeks} wk · {state}"
    :schema [:map
             [:start_date {:filter #{:eq :range} :sort :default-desc
