@@ -50,6 +50,13 @@
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "members" "roles" "grants" "approval_requests"
+   ;; insights carry a DAILY CAP counted over rows (waymark-iqa.6), so
+   ;; findings left behind by the last run are an allowance already
+   ;; spent — and two runs later they are also stale cards holding the
+   ;; decide section's two insight slots. The obligation mints a fresh
+   ;; author every run so it can ask the cap its question either way;
+   ;; this is the house not carrying yesterday's findings.
+   "insights"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 

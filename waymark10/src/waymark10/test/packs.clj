@@ -2322,6 +2322,261 @@
                       " returns, and the machine itself is what refuses"
                       " the question")))}))))
 
+;; ── the insight: no finding without a citation and an offer ─────────
+;;
+;; waymark-iqa.6's obligation, and the pack's new LAST one for the
+;; same reason `:feed/ticklers` sits below the counting obligations:
+;; it MINTS rows, and a minted finding is a card. It mints more than
+;; any other obligation does, because the daily cap is only provable
+;; by filling it.
+;;
+;; TWO PRINCIPALS, and they are not decoration. The four-eyes wall is
+;; the whole of 'it only ever offers', so the author has to be
+;; somebody other than the reader or the law cannot be watched doing
+;; its work: the finder publishes, the walker reads the feed and
+;; answers, and the finder's own attempt to answer is refused by name.
+
+;; A FRESH FINDER EVERY RUN, and it is not hygiene — it is the only
+;; way to ask the cap a question. A daily cap counts ROWS, so unlike
+;; the in-process pacing atoms it survives a restart: an obligation
+;; with a fixed author id would spend the allowance on its first run
+;; and be refused at its first create on every run after, in a suite
+;; whose fixture is under no obligation to drop that table. A new
+;; author has a new allowance by the law's own shape, which is exactly
+;; what the claim below wants to watch fill.
+(defn- finder-headers []
+  {"x-waymark-principal" (str "conformance-finder-"
+                              (subs (str (random-uuid)) 0 8))
+   "x-waymark-actor-type" "agent"})
+
+(defn- make-insight!
+  "One finding, through its own create door, as the finder."
+  [ctx hs body]
+  (let [resp (req ctx :post (str "/api/" (:plural (rdef ctx :insight)))
+                  body hs)]
+    {:status (:status resp) :doc (json ctx resp)}))
+
+(defn- refused-guard
+  "The guard a 409 named, or nil for anything that is not a guard
+  refusal — the same read `wire-verdict` makes, at one claim's scale.
+  Takes the {:status :doc} shape the makers here answer."
+  [{:keys [status doc]}]
+  (when (and (= 409 status)
+             (str/ends-with? (str (:type doc)) "guard-refused"))
+    (keyword (str (:guard doc)))))
+
+(defn- insight-card [doc id]
+  (some #(when (= (str "decide/insight/" id) (str (:card_id %))) %)
+        (feed-cards doc)))
+
+(defn- feed-insight-violations
+  "A finding cites what it read, offers something the house can tap,
+  runs out after three a day, and is answered by somebody other than
+  whoever found it — from the wire, in that order.
+
+  The subject is the feed's own first row card ABOVE THE SEAM, the
+  same fixture `:feed/ticklers` uses and for the same reason: the
+  offer has to name a row this engine really serves and really has not
+  finished, because `feed/set-aside?` retires a finding whose offer is
+  over. The citation is that row's address too — a real one, so the
+  registry consult in `cites-what-it-claims` is answering about
+  something rather than about nothing.
+
+  The ≤-selection door is proved with the card's OWN `heavier` entry
+  when it has one: `.3`'s partition already named a verb of that kind
+  that is too heavy for a thumb, and offering it is the one place in
+  the tree where that rule refuses at a door rather than moving a
+  button. A kind with no heavy verb skips that claim rather than
+  inventing one.
+
+  It reports `:covered`, because an engine with no insight kind, or a
+  feed with no row card at all, has nothing to find and should say so
+  rather than pass quietly."
+  [ctx]
+  (let [{:keys [doc]} (feed-doc ctx nil)
+        above-seam #{"do_now" "decide"}
+        subject (first (remove #(or (= "insight" (str (:kind %)))
+                                    (not (above-seam (str (:section %)))))
+                               (feed-row-cards doc)))]
+    (if-not subject
+      {:covered 0 :violations []}
+      (let [day (str (:day doc))
+            hs (finder-headers)
+            skind (str (:kind subject))
+            self (str (:self subject))
+            sid (id-of self)
+            light (some-> (first (sort (keys (:actions subject)))) name)
+            heavy (some-> (first (:heavier subject)) :name str not-empty)
+            offer {:offer_kind skind :offer_id sid :offer_href self}
+            finding (fn [text extra]
+                      (merge {:finding text :evidence [self]} offer extra))
+            ;; 1. no citation, no publish
+            uncited (make-insight!
+                     ctx hs (dissoc (finding "Nothing is behind this one" nil)
+                                    :evidence))
+            ;; 2. a citation this house cannot follow
+            unfollowable (make-insight!
+                          ctx hs
+                          (assoc (finding "This cites a house we do not live in" nil)
+                                 :evidence
+                                 ["/api/nowheres/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]))
+            ;; 3. no offered action, no publish
+            offerless (make-insight!
+                       ctx hs {:finding "An observation with no next step"
+                               :evidence [self]})
+            ;; 4. an offer heavier than a tap — the one declaration-time
+            ;; ≤-selection door, proved with the card's own heavy verb
+            too-heavy (when heavy
+                        (make-insight! ctx hs
+                                       (finding "This one wants a keyboard"
+                                                {:offer_action heavy})))
+            ;; 5. THE CAP, discovered rather than known. HOW MANY a
+            ;; house allows is the house's to declare — the obligation
+            ;; judges the LAW (that there IS a ceiling, and that the
+            ;; one past it is refused by name) exactly as
+            ;; `:feed/ticklers` judges the backoff without pinning the
+            ;; schedule. The bound is a bound and not a cap: a house
+            ;; that would publish twenty findings a day has not
+            ;; declared one.
+            filled (when light
+                     (loop [n 1 out []]
+                       (let [r (make-insight!
+                                ctx hs
+                                (finding (str "The house has not looked at this"
+                                              " in a while, and here is the"
+                                              " next step (" n ")")
+                                         {:offer_action light}))
+                             out (conj out r)]
+                         (if (and (= 201 (:status r)) (<= n 20))
+                           (recur (inc n) out)
+                           out))))
+            landed (filterv #(= 201 (:status %)) filled)
+            over (peek filled)
+            mine (into #{} (keep #(some-> (:self (:doc %)) id-of)) landed)
+            ;; the walker's own feed: the finder's findings are the
+            ;; walker's to answer, and the finder's own are not.
+            ;; WHICHEVER of them the day's order put on the page is the
+            ;; one answered — the recipe's `:take` is smaller than the
+            ;; cap on purpose, and hash(seed ‖ card_id) decides which
+            ;; two of three a member reads today. An obligation that
+            ;; insisted on the FIRST one published would be asserting a
+            ;; ranking the third law forbids.
+            offered (:doc (feed-doc ctx nil))
+            card (first (filter #(and (= "insight" (str (:kind %)))
+                                      (contains? mine (id-of (:self %))))
+                                (feed-cards offered)))
+            first-id (some-> (:self card) id-of)
+            finder-feed (:doc (feed-doc ctx hs))
+            take' (declared-name ctx :insight :take)
+            self-answer (when first-id
+                          (invoke-http ctx :insight first-id take' nil
+                                       {:headers hs}))
+            taken (when card
+                    (invoke-http ctx :insight first-id take' nil
+                                 {:headers {"idempotency-key"
+                                            (feed/origin-key
+                                             day (str (:card_id card))
+                                             (subs (str (random-uuid)) 0 8))}}))
+            after (when (= 200 (:status taken))
+                    (:doc (feed-doc ctx nil)))]
+        {:covered (if (= 200 (:status taken)) 1 0)
+         :violations
+         (cond-> []
+           (not= :cites-what-it-claims (refused-guard uncited))
+           (conj (str "feed: a finding with no evidence answered "
+                      (:status uncited) " — no citation, no publish is the"
+                      " compiler's first wall, and a claim nobody can check"
+                      " is a claim nobody should act on: "
+                      (pr-str (:doc uncited))))
+
+           (not= :cites-what-it-claims (refused-guard unfollowable))
+           (conj (str "feed: a finding citing /api/nowheres/… answered "
+                      (:status unfollowable) " — an address naming a"
+                      " collection this house does not serve is not a"
+                      " citation, it is a shape: " (pr-str (:doc unfollowable))))
+
+           (not= :offers-something-light (refused-guard offerless))
+           (conj (str "feed: a finding with no offered action answered "
+                      (:status offerless) " — every insight carries the one"
+                      " physical next step, and one that only observes is a"
+                      " notification: " (pr-str (:doc offerless))))
+
+           (and heavy
+                (not= :offers-something-light (refused-guard too-heavy)))
+           (conj (str "feed: a finding offering " skind "." heavy
+                      " answered " (:status too-heavy) " — that verb is on"
+                      " the card's own `heavier` list, so the house already"
+                      " says it does not fit under a thumb; the offer door"
+                      " is the one place that rule refuses rather than"
+                      " moves a button: " (pr-str (:doc too-heavy))))
+
+           (and light (empty? landed))
+           (conj (str "feed: not one well-formed finding could be published"
+                      " — the cap is a ceiling and not a floor: "
+                      (pr-str (mapv :doc filled))))
+
+           (and over (not= :insights-are-capped (refused-guard over)))
+           (conj (str "feed: " (count landed) " findings landed and the next"
+                      " answered " (:status over) " — a hard daily cap is"
+                      " what makes a compiler RANK rather than dump, and a"
+                      " surface that can be filled is a surface that will"
+                      " be: " (pr-str (:doc over))))
+
+           (and (seq mine) (nil? card))
+           (conj (str "feed: " (count mine) " findings were published and not"
+                      " one of them reached the feed. Cards: "
+                      (pr-str (mapv :card_id (feed-cards offered)))))
+
+           (and card (not= "decide" (str (:section card))))
+           (conj (str "feed: the insight card is in section "
+                      (pr-str (:section card)) " — a finding is something to"
+                      " DECIDE, and the census puts it there"))
+
+           (and card (not (contains? (set (map (comp name key) (:actions card)))
+                                     (name take'))))
+           (conj (str "feed: the insight card offers "
+                      (pr-str (sort (map (comp name key) (:actions card))))
+                      " and not " (pr-str (name take'))
+                      " — both answers are note-free precisely so both stay"
+                      " under the thumb; a verdict with a note is a `recall`"
+                      " demand and split-verbs moves it to `heavier`"))
+
+           (and card (str/blank? (str (get-in card [:links :offer :href]))))
+           (conj (str "feed: the insight card carries no offer link — the"
+                      " offer is an ADDRESS rather than a trigger, and a"
+                      " card that cannot reach it is a finding with nowhere"
+                      " to go: " (pr-str (:links card))))
+
+           (and first-id (insight-card finder-feed first-id))
+           (conj (str "feed: the finder's own finding is on the finder's own"
+                      " feed — the four-eyes wall means an author is"
+                      " structurally incapable of accepting it, so carding"
+                      " it there would be offering a door that answers 409"))
+
+           (and self-answer (not= 409 (:status self-answer)))
+           (conj (str "feed: the finder answering its own finding got "
+                      (:status self-answer) ", not 409 — 'it only ever"
+                      " offers' is a wall the compiler cannot walk through,"
+                      " not a policy it is trusted to keep"))
+
+           (and self-answer
+                (= 409 (:status self-answer))
+                (not= :the-finder-does-not-decide
+                      (refused-guard {:status 409
+                                      :doc (json ctx self-answer)})))
+           (conj (str "feed: the finder's own attempt was refused by "
+                      (pr-str (:guard (json ctx self-answer)))
+                      ", not the four-eyes wall"))
+
+           (and card (not= 200 (:status taken)))
+           (conj (str "feed: 'do it' from the card answered "
+                      (:status taken) ": " (pr-str (json ctx taken))))
+
+           (and after (insight-card after first-id))
+           (conj (str "feed: an answered finding is still on the feed —"
+                      " taken and dismissed are terminal, so an answered"
+                      " insight leaves by construction")))}))))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -2346,9 +2601,16 @@
     (feed-obligation :feed/verbs-are-light feed-verbs-are-light-violations)
     {:name :feed/ticklers
      :needs #{[:route :feed] [:kind :tickler]}
-     :run feed-tickler-violations}]
-   ;; The five obligations spec-feed § 'Where the law is proved' names
-   ;; are all here now, each having landed with the bead that landed
-   ;; the mechanism it judges rather than ahead of it. What .6 adds is
-   ;; the insight's own refusals, and it will add them the same way.
+     :run feed-tickler-violations}
+    ;; …and :insights below IT, for the same reason one turn further:
+    ;; it is the obligation that mints the MOST rows (the only honest
+    ;; way to watch a daily cap fill is to fill it), and a feed with
+    ;; three fresh findings in the decide section is a feed the two
+    ;; ticklers above would have had to share with them.
+    {:name :feed/insights
+     :needs #{[:route :feed] [:kind :insight]}
+     :run feed-insight-violations}]
+   ;; Every obligation spec-feed § 'Where the law is proved' names is
+   ;; here now, each having landed with the bead that landed the
+   ;; mechanism it judges rather than ahead of it.
    })

@@ -169,15 +169,15 @@
   cards a population contributes to one page; a population with
   nothing to say contributes nothing and the seam moves up.
 
-  It is deliberately SHORTER than the illustrative recipe in
-  docs/spec-feed.md § 'The recipe is static data', and that is the
-  landing order rather than a disagreement: `:insights` (.6) names a
-  kind that does not exist yet, and check (1) below refuses a recipe
-  naming a population the registry does not hold. Each bead adds its
-  population AND its line here, together, which is exactly the seam
-  fork (a) promised: swapping one entry changes no other line —
-  `:ticklers` (waymark-iqa.4) walked it first, and the three fuel
-  entries and `:memories` (waymark-iqa.5) walked it again.
+  Every population docs/spec-feed.md § 'The recipe is static data'
+  sketched is here now, and each arrived with the bead that built the
+  mechanism it names rather than ahead of it: check (1) below refuses
+  a recipe naming a population the registry does not hold, so a bead
+  adds its population AND its line here together. That is exactly the
+  seam fork (a) promised — swapping one entry changes no other line.
+  `:ticklers` (waymark-iqa.4) walked it first, the three fuel entries
+  and `:memories` (waymark-iqa.5) walked it again, and `:insights`
+  (waymark-iqa.6) walked it last.
 
   `:memories` is the bottomless tail and `:events` is one of the two
   sources it reads (waymark-iqa.8): check (3) admits exactly one
@@ -192,6 +192,7 @@
     {:section :decide  :population :letters      :take 3}
     {:section :decide  :population :ticklers     :take 2}
     {:section :decide  :population :conflicts    :take 2}
+    {:section :decide  :population :insights     :take 2}
     {:section :fuel    :population :cleared      :take 1}
     {:section :fuel    :population :streaks      :take 1}
     {:section :fuel    :population :finished     :take 2}
@@ -485,6 +486,50 @@
                                   (get-in d [:data :subject_id])))
                         {:kind :tickler :id (:id raw) :row raw}))))
             (rows-of ctx :tickler {:state "offered"})))
+    []))
+
+(defn insights
+  "decide: the findings an agent published and nobody has answered
+  (waymark-iqa.6). The `letters` and `ticklers` precedent exactly — a
+  core reader naming an OPTIONAL application kind and answering with
+  nothing when the engine holds none.
+
+  Three filters, and each is a law read off the declaration rather
+  than a preference:
+
+  - `published` markers only. `taken` and `dismissed` are terminal, so
+    an answered finding leaves the feed by construction.
+  - NOT THE READER'S OWN. The four-eyes wall on the kind
+    (`:decider {:not {:field :authored_by}}`) means an author is
+    structurally incapable of accepting its own finding, so carding it
+    to the author would be offering a door that answers 409. `asks`
+    does the same thing one population up, for the same reason.
+  - THE OFFER IS STILL LIVE. `set-aside?` is the one spelling of
+    'could the house still pick this up', and an insight offering a
+    next step on a row that is finished or gone is a dead offer. It
+    retires AT OFFER TIME, with no sweeper and no write — the
+    tickler's own posture, inherited whole rather than re-decided.
+
+  The bound is the read-time posture's: at most `row-scan-cap`
+  findings are read, and only the ones that survive the first two
+  filters cost a subject read. The kind's own daily cap
+  (`insight/insights-are-capped`, three an author) is what keeps that
+  number small at the source, which is the point of putting the wall
+  at the door instead of here."
+  [ctx]
+  (if-some [rdef (get (resources ctx) :insight)]
+    (let [pid (:id (:principal ctx))]
+      (into []
+            (keep (fn [raw]
+                    (let [d (inv/decode-row rdef raw)]
+                      (when (and (not= pid (get-in d [:data :authored_by]))
+                                 (set-aside?
+                                  ctx
+                                  (some-> (get-in d [:data :offer_kind])
+                                          str not-empty keyword)
+                                  (get-in d [:data :offer_id])))
+                        {:kind :insight :id (:id raw) :row raw}))))
+            (rows-of ctx :insight {:state "published"})))
     []))
 
 (defn conflicts
@@ -901,14 +946,18 @@
   never projects and never sorts: the mixer does all three, once, so
   the fourth law is enforced in one place.
 
-  Later beads extend it — .6 `:insights` — each adding its entry HERE
-  and its line in `default-recipe`, together, the way `:ticklers`
-  (waymark-iqa.4) and the fuel populations (waymark-iqa.5) already
-  did."
+  The registry is complete against docs/spec-feed.md's census as of
+  waymark-iqa.6, and it grew one entry at a time: each bead added its
+  entry HERE and its line in `default-recipe`, together — `:ticklers`
+  (waymark-iqa.4), the fuel populations and `:memories`
+  (waymark-iqa.5), `:insights` (waymark-iqa.6). A later population
+  arrives the same way, and swapping one entry for a materializing
+  read is fork (a)'s recorded punt working exactly as promised."
   {:next_actions next-actions
    :asks asks
    :letters letters
    :ticklers ticklers
+   :insights insights
    :conflicts conflicts
    :cleared cleared
    :streaks streaks

@@ -1251,3 +1251,234 @@ is the one thing in the file that reaches past a door.
 - **No hash moved.** `feed.clj`, `seasons.clj` and `packs.clj` are engine-side
   and carry no declarations; the twenty deterministic kinds are byte-identical
   and the nine waymark-j82 names are as unstable as they were.
+
+## Built — `.6`, the insight (2026-08-24, waymark-iqa.6)
+
+The one row-creating population landed as the contract asks:
+`workqueue10/src/workqueue10/resources/insight.clj` is a `:decision` kind whose
+open state is **`published`**, with two note-free one-tap answers, three create
+walls, and a four-eyes wall that makes *"it only ever offers"* structural rather
+than promised. `feed/populations` gained `:insights` and `feed/default-recipe`
+gained `{:section :decide :population :insights :take 2}` in the same commit —
+check (1)'s seam for the fourth and last time, and the registry is now complete
+against this document's own census.
+
+```clojure
+:decision
+{:offered :published
+ :asks    {:field :finding :max 240 :x-display {…}}
+ :by      :authored_by
+ :decider {:not {:field :authored_by
+                 :name :the-finder-does-not-decide
+                 :explain "The finding is yours; the answer is the household's. Whoever published this cannot be the one to accept it."}}
+ :stamps  {:decided-by :decided_by}
+ :own-surface true
+ :verdicts
+ [{:name :take    :to :taken     :label "Do it"     :style :primary :order 1 …}
+  {:name :dismiss :to :dismissed :label "Not useful" :order 2 …}]}
+:create-guards [cites-what-it-claims offers-something-light insights-are-capped]
+```
+
+**`seen` and `pinned` are dropped and the drop is the point.** The epic listed
+`published → seen/pinned/dismissed`; per-card seen state is exactly what the
+third law forbids and what this document's own punt already refused — *"No
+seen/unseen state, ever."* If pinning is ever wanted it is a third **verdict**,
+not a read receipt. `:offered :published` is the sugar's own rename key, so the
+states read `published → taken / dismissed` with no bespoke machine.
+
+**Neither verdict takes a `:note`, deliberately**, and `.4` is the citation: the
+sugar's note input is `[:maybe [:string {:max 240}]]`, `demand/field-class`
+reads it as `recall`, and `split-verbs` would move that verdict off the card
+into `heavier`. Both answers here are meant to be tapped. A finding that wants a
+written reason wants a second door.
+
+### The three walls, and where each one refuses
+
+**`cites-what-it-claims`** — `:reads [:storage]`, the `saved_view` write-gate
+shape exactly (`(:rdef-of ctx)`, and *allow* when the registry is absent because
+that is the storage-free render probe). Evidence is a vector of **addresses**,
+`/api/<collection>/<id>`, which is this document's own word for a citation and
+also the shape `feed/screen-of` and `sources.waymark/with-origin` already read.
+An empty list refuses; an address naming a collection this engine does not serve
+refuses and **names every offender**, not the first — a compiler fixing them one
+round trip at a time is a compiler burning the cap.
+
+The `:min 1` is on the GUARD and not on the schema, deliberately: a schema
+minimum would 422 before anybody said why, and the sentence that names the fix
+is the half `spec-decision-record.md`'s second thesis wants kept in the record.
+
+**`offers-something-light`** — the offer is four agreeing parts, `offer_kind` /
+`offer_id` / `offer_action` / `offer_href`, and the guard proves they say the
+same thing, so an author cannot name one row and link another. It refuses a
+kind this engine does not serve, an action that kind does not declare, and —
+the one that matters — an action whose rendered effort is heavier than
+`"selection"`, computed the way `usability/gesture-duties` computes it
+(`(demand/effort a (schema/json-schema (:input a)) key-field)`, classes as
+strings). **This is the one place in the tree where the ≤-selection rule is a
+door rather than a projection**, because it is the one place a verb is
+*declared* — in data, by the author — rather than inherited from a row.
+
+**`insights-are-capped`** — three findings a day, per author, and `:pacing` is
+NOT spelled. The bead's option (c), taken for the reason it gave: `:pacing
+{:limit 3 :per :day}` computes the right window and prints *"Asks are paced to
+{limit} an hour"* (`resource.clj:970`), and fixing that in the sugar would move
+`approval_request`'s pinned fingerprint to correct one word. So the cap is
+insight's own create guard, ~15 lines mirroring `pacing-guards`, counting rows
+through `(:find ctx)` — and its window is the **calendar day**, UTC midnight,
+the same midnight `feed/today` rolls the feed on. A rolling twenty-four hours
+would have been cheaper and would have made the sentence a lie: the household
+reads *three a day* and means the day it is having. The sugar bug is filed as
+**waymark-iqa.19**.
+
+Per AUTHOR rather than per house, which is `pacing-guards`' own shape (`{by
+pid}`) and the honest reading: the cap exists to make an author rank its own
+findings, and a house-wide cap would let a noisy author silence a quiet one.
+Unlike the in-process pacing atoms this one counts rows, so it is shared across
+processes; the recorded punt about coordinators is inherited anyway, because a
+house running two compilers is a house that declared two authors.
+
+The walls run **shape first, pace last**. `letters-are-paced` rides first
+because its atom must count the attempt; this cap counts ROWS, so a refused
+create spends nothing, and a malformed finding should hear what is wrong with it
+rather than that the house is full.
+
+### Accepting does not fire the offer, and the reason is not 442.14
+
+`.1` recorded the hazard as *"this bead depends on waymark-442.14"*. It does
+not, and the check closed the worry: `invoke/make-ctx` hands a handler's `ctx
+:invoke` the **outer principal** (`{:principal principal}`, `invoke.clj ~:294`),
+which is exactly right here — the outer principal IS the accepting member.
+442.14's blocker is the opposite need (a handler acting as a *system* actor,
+plus an `:id` on `ctx :create`), and neither applies.
+
+**A different wall is the one that closes it, and it is sharper.** Grant
+projection is a REQUEST-level concern: `router/check-row!`, `check-action!` and
+`grants/check-args!` all read `(:waymark10/visibility req)`, and a handler ctx
+carries no visibility. So a cross-write from a handler is gated by the
+DECLARATION, never by the caller's grant — which every other cross-write in the
+tree can afford, because every one of them names its target kind and action as
+**literals** (`ingredient/absorb-duplicate`, `grocery_list`; only the id is
+data) and advertises the pair in `:touches`, which
+`checks_assembly/check-touches` verifies at assembly and `render` puts on the
+wire. An insight's target is data chosen by its author. It is therefore the one
+cross-write no declaration could name, no `:touches` could advertise, and no
+grant would re-gate — and the author is a leashed agent by design, so the
+primitive would let a compiler propose `grant.extend` on its own leash and have
+one member's tap widen it. The four-eyes wall stops the agent accepting; it does
+not make the proposal safe.
+
+So **the offer is an ADDRESS rather than a trigger**: `take` records the
+household's answer, and `offer_href` rides a declared `:links {:rel "offer"}` as
+`/#` + the row's own address — the tickler's spelling, for the reason it gave,
+*a link is the honest way back to work that lives somewhere else*. The address
+is **checked at the door** against the registry, so the author cannot invent it.
+The seam that would change this answer is filed as **waymark-iqa.18**: a handler
+ctx that carries the caller's visibility. It is the sibling of the door
+`server/seams.clj` refuses and wants the same review 442.14 wants.
+
+`.7` gets one tap out of this anyway, and better gated than a handler could
+manage: the card carries the offer's address, so the primary chip can POST to
+the row's own action door **through the router**, where the reader's own grant
+gates it exactly as this document asks — carrying `feed/origin-key`, so it
+counts as an action-from-the-feed like every other card verb.
+
+### The population, and the two retirements it inherits
+
+`feed/insights` is the `ticklers` reader one turn over: `published` markers
+only, minus **the reader's own** (the four-eyes wall means carding a finding to
+its author would be offering a door that answers 409 — `asks` does the same
+thing one population up, for the same reason), and retired at offer time by
+`feed/set-aside?` when the offered row is finished or gone. A finding whose next
+step is over is a dead offer, and it says nothing at the moment it would have
+spoken rather than being swept. No new mechanism: `set-aside?` was already
+public because `.4`'s pack judges against it.
+
+The bound is the read-time posture's — at most `row-scan-cap` findings, and only
+the survivors of the first two filters cost a subject read. The daily cap is
+what keeps that number small **at the source**, which is the point of putting
+the wall at the door instead of in the query.
+
+### Where the law is proved
+
+Four `defscenario`s, and the tier split is read off declarations exactly as
+`.1` predicted:
+
+- **check tier** — `the-finder-does-not-decide` (the four-eyes wall,
+  `:reads [:principal]`) and `a-dismissed-finding-does-not-come-back` (the
+  reserved `:out-of-state` denier with no guard behind it).
+- **deferred to the suite** — `no-citation-no-publish` and
+  `no-offered-action-no-publish`. Both create-door scenarios carry every create
+  guard, and two of the three reach past `offline-reads` (`:storage`,
+  `:insight`), so `check` prints *"2 deferred to the suite: reads :insight,
+  :storage"* and `:core/law-scenarios` runs them through the real HTTP door.
+  Written expecting that, not fighting it.
+
+`make check-queue` reads **32 kinds, 11 warnings, 16 scenarios** — one kind
+more, two check-tier scenarios more, and the warning count unmoved.
+
+**`:feed/insights` in `packs/feed`** is the pack's new LAST obligation, below
+`:feed/ticklers` for one turn of the same reason: it mints the most rows of any
+obligation, because the only honest way to watch a daily cap fill is to fill it,
+and three fresh findings in the decide section are cards the two ticklers above
+would have had to share with. It runs on **two principals** — the four-eyes wall
+cannot be watched doing its work by one — and claims, from the wire:
+
+1. **No citation, no publish**, twice: an empty `evidence`, and an address
+   naming a collection this house does not serve.
+2. **No offered action, no publish.**
+3. **Nothing heavier than a tap**, proved with the subject card's own `heavier`
+   entry — `.3`'s partition has already named a verb of that kind that is too
+   heavy for a thumb, so the obligation offers exactly that one and watches the
+   door refuse it. A kind with no heavy verb skips the claim rather than
+   inventing one.
+4. **The cap refuses the N+1th**, discovered rather than known: it publishes
+   until the door says no, and asserts only that the refusal came and that it
+   named `insights-are-capped`. How many a house allows is the house's to
+   declare — the same restraint `:feed/ticklers` keeps about the backoff
+   schedule.
+5. **The card is real**: it lands in `decide`, offers both verdicts in `actions`
+   (never in `heavier` — the note-free proof), and carries its `offer` link.
+6. **The finder cannot answer its own finding** — 409, by name — and the
+   finder's own feed never cards it.
+7. **An answered finding leaves the feed**, because `taken` is terminal.
+
+Two things the obligation had to learn, and both are the law being right rather
+than the test being clever:
+
+- **It mints a FRESH author every run.** A daily cap counts ROWS, so unlike the
+  in-process pacing atoms it survives a restart: an obligation with a fixed
+  author id spends the allowance on its first run and is refused at its first
+  create on every run after, in a suite whose fixture is under no obligation to
+  drop that table. A new author has a new allowance by the law's own shape. (The
+  household's own fixture now drops `insights` too, so the decide section does
+  not accumulate last week's findings in its two slots.)
+- **It answers WHICHEVER finding the day's order carded**, not the first one
+  published. `:take 2` is smaller than the cap on purpose and `hash(seed ‖
+  card_id)` decides which two of three a member reads today; an obligation that
+  insisted on the first would have been asserting a ranking the third law
+  forbids. It cost a red run to notice, which is the obligation earning its
+  place.
+
+### Recorded here, for `.7`
+
+- **An insight card is a `decide` card with an `offer` link**, and the link is
+  the one thing on it that is not a verb. Render it as the PRIMARY affordance
+  (it is the next physical step) and the two verdict chips beside it; the link's
+  href is a screen, so it is a link and never a POST — `.3`'s rule for
+  `heavier`, and the same reason.
+- **The byline is a principal id and must stay one.** `:by :authored_by` is
+  `:raw` by the sugar's own rule; the agent badge posture
+  (`ui/140-links-access.js`) is how agent-ness is shown, not by dressing the id
+  up as a person. A friendlier byline is a separate bead and this document's own
+  punt.
+- **`take` and `dismiss` are both assent-effort and both must stay so.** The
+  moment either grows an input the card loses it to `heavier` and the epic's one
+  tap is gone.
+- **The one-tap "Do it" is `.7`'s to compose**: POST the offer's own action door
+  (`offer_href` + `/-/` + `offer_action`) under `feed/origin-key`, so the
+  reader's grant gates it at the router. Doing it from the insight's own handler
+  is refused above and filed as waymark-iqa.18.
+- **No hash moved that was not meant to.** `insight` is a new kind and mints a
+  fresh fingerprint; the sugar was not touched, so `approval_request`,
+  `permission_slip` and `tickler` are byte-identical, and `feed.clj`/`packs.clj`
+  are engine-side and carry no declarations.

@@ -57,6 +57,7 @@
             [workqueue10.confluence :as conf]
             [workqueue10.reconsent :as reconsent]
             [workqueue10.resources.dwelling :refer [self journal]]
+            [workqueue10.resources.insight :refer [insight]]
             [workqueue10.resources.letters :refer [letter]]
             [workqueue10.resources.permission-slip :refer [permission-slip]]
             [workqueue10.resources.media :refer [media-resource]]
@@ -322,8 +323,17 @@
        ;; :push-on-write and a "not now" must never call Google Tasks
        ;; (docs/spec-feed.md fork (b)); household-wide, because
        ;; abandoned media and unrun chores are the same pile.
+       ;; :insight rides last (waymark-iqa.6): the one card in the feed
+       ;; that is not a row the household already had — a finding, its
+       ;; citations, and the one physical next step, published by a
+       ;; leashed agent at the MCP door and answered by a member.
+       ;; Domainless for the same family reason the rest are: what the
+       ;; house has NOTICED about itself is not a domain of logistics
+       ;; beside queue/chores/meals. The compiler is not in the tree
+       ;; and must not be (docs/spec-feed.md § 'The compiler
+       ;; contract'); this kind is the engine's half of its leash.
        (into (into [saved-view capability connection self journal weather letter
-                    permission-slip tickler]
+                    permission-slip tickler insight]
                    dashboard/resources)))))
 
 (def surfaces
