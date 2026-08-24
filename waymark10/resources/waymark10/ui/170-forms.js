@@ -46,15 +46,23 @@ function instantToLocal(v) {
 function fieldWidget(name, rawProp, value) {
   const prop = schemaProp(rawProp);
   const xd = rawProp["x-display"] || prop["x-display"] || {};
+  /* enum prose (waymark-0ee): x-display.choices maps the wire token to
+     the sentence a person reads. Without it the option wears the token,
+     which is what the usability battery warns about. */
   if (prop.enum) {
+    const choices = xd.choices || {};
     return el("select", {name},
       el("option", {value: ""}, "…"),
       prop.enum.map(v => el("option",
         {value: String(v), selected: String(value ?? "") === String(v) ? "" : null},
-        String(v))));
+        choices[String(v)] || String(v))));
   }
   if (xd.widget === "prose" || xd.widget === "textarea") {
     const ta = el("textarea", {name, "data-prose": ""}, value ?? "");
+    /* scaffolding, never a value: the first declared example rides as
+       the placeholder so a blank textarea is not a blank page */
+    const ex = (prop.examples || rawProp.examples || [])[0];
+    if (ex !== undefined) ta.setAttribute("placeholder", String(ex));
     return ta;
   }
   if (prop.type === "boolean")

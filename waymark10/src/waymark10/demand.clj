@@ -57,7 +57,23 @@
                       [(first (:judges leaf))]))))
         (mapcat g/iter-leaves (:guards defn'))))
 
-(defn- field-class [fname prop accepted]
+(defn heavier?
+  "Is class a a heavier demand than class b? The order is the
+  vocabulary's own: assent < selection < recall < composition. Public
+  because the usability battery (waymark10.usability) asks the
+  comparison out loud — a gesture may not collect more than a
+  selection — and a second spelling of this order would be a second
+  opinion about what effort means."
+  [a b]
+  (> (long (order a)) (long (order b))))
+
+(defn field-class
+  "The demand class of ONE input field: fname its key, prop its
+  RENDERED JSON-Schema property (keyword keys), accepted the set of
+  fields some guard's declared acceptance set closes. Public for the
+  same reason `heavier?` is — the usability battery reads effort
+  per FIELD, not per action, because the fix is per field."
+  [fname prop accepted]
   (cond
     (= "prose" (widget prop)) "composition"
     (or (contains? prop :enum) (contains? prop :const)) "selection"

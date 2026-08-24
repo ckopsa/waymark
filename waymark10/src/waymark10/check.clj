@@ -22,7 +22,8 @@
   (:require [clojure.string :as str]
             [waymark10.modules :as modules]
             [waymark10.scenario :as scenario]
-            [waymark10.server.engine :as engine])
+            [waymark10.server.engine :as engine]
+            [waymark10.usability :as usability])
   (:gen-class))
 
 (set! *warn-on-reflection* true)
@@ -69,7 +70,16 @@
   waiting for the suite with the reason they wait. Nothing here opens
   a store — a check-tier scenario is judged by g/evaluate over a row
   the author wrote down, which is this namespace's whole posture and
-  the reason the tier rule exists at all."
+  the reason the tier rule exists at all.
+
+  The USABILITY BATTERY (waymark10.usability, waymark-0ee) prints
+  under the kind beside the gate's own warnings, and it runs over the
+  ENROLLED kinds too — the grant, the member, the role and their
+  siblings, which no application names in its resources vector and
+  which every application therefore serves unexamined. An enrolled
+  kind gets a row only when the battery has something to say about
+  it; the framework's own forms are the first fix-list this bead
+  wanted, and they are only visible from here."
   [resources]
   (let [enrollment-warnings (modules/warnings resources nil)
         _ (doseq [w enrollment-warnings]
@@ -79,23 +89,33 @@
         rows (for [r resources]
                {:kind (:kind r)
                 :warnings (vec (:waymark10/warnings (meta r)))
+                :usability (usability/warnings r)
                 :deviations (vec (:deviations r))
                 :scenarios (scenario/report r)
-                :coverage (scenario/coverage r)})]
-    (doseq [{:keys [kind warnings deviations scenarios coverage]}
-            (sort-by :kind rows)]
-      (println (str "  " (name kind)
-                    (if (seq warnings)
-                      (str " — " (count warnings) " warning"
-                           (when (not= 1 (count warnings)) "s"))
-                      " ✓")))
+                :coverage (scenario/coverage r)})
+        enrolled (for [r (modules/enrolled resources nil)
+                       :let [u (usability/warnings r)]
+                       :when (seq u)]
+                   {:kind (:kind r) :enrolled true :warnings []
+                    :usability u :deviations []})
+        all-rows (concat rows enrolled)]
+    (doseq [{:keys [kind enrolled warnings usability deviations scenarios
+                    coverage]}
+            (sort-by :kind all-rows)]
+      (let [n (+ (count warnings) (count usability))]
+        (println (str "  " (name kind) (when enrolled " (enrolled)")
+                      (if (pos? n)
+                        (str " — " n " warning" (when (not= 1 n) "s"))
+                        " ✓"))))
       (doseq [w warnings]
+        (println (str "      " w)))
+      (doseq [w usability]
         (println (str "      " w)))
       (doseq [d deviations]
         (println (str "      deviation: " d)))
       (let [{:keys [total checked deferred violations]} scenarios
             [named walls] coverage]
-        (when (pos? total)
+        (when (pos? (long (or total 0)))
           (println (str "      " checked " scenario"
                         (when (not= 1 checked) "s")
                         (if (seq violations)
@@ -115,7 +135,8 @@
     (doseq [w assembly-warnings]
       (println (str "  [assembly] " w)))
     {:kinds (count rows)
-     :warnings (+ (reduce + 0 (map (comp count :warnings) rows))
+     :warnings (+ (reduce + 0 (map (comp count :warnings) all-rows))
+                  (reduce + 0 (map (comp count :usability) all-rows))
                   (count assembly-warnings)
                   (count enrollment-warnings))
      :scenarios (reduce + 0 (map (comp :checked :scenarios) rows))

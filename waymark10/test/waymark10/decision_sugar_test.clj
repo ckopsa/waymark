@@ -103,7 +103,17 @@
               :handler grants/stamp-approver
               :display {:label "Approve" :style :primary :order 1}}
     :deny {:from #{:offered} :to :denied
-           :input [:map [:note {:optional true} [:maybe [:string {:max 240}]]]]
+           ;; the note's prose is the sugar's too (waymark-0ee): a
+           ;; generated field with no label and no hint is a usability
+           ;; warning the declaration's author cannot clear, so the
+           ;; hand spelling carries the very words the sugar mints
+           :input [:map [:note {:optional true
+                                :x-display
+                                {:label "Note"
+                                 :help (str "Optional. Say why, in a sentence "
+                                            "the asker will read beside the "
+                                            "verdict.")}}
+                         [:maybe [:string {:max 240}]]]]
            :edit {:prefill [:note] :fence false
                   :unfenced-reason "A denial's note is written once with the verdict; a frozen offered ask has nothing to clobber."}
            :guards [grants/someone-else-decides]

@@ -380,7 +380,14 @@
     ;; the declared default rides as the standard JSON-Schema keyword —
     ;; the form prefills it, the engine applies it to absent keys
     (contains? props :default)
-    (assoc :json-schema/default (:default props))))
+    (assoc :json-schema/default (:default props))
+    ;; :examples is scaffolding, not law (waymark-0ee's composition
+    ;; policy): a standard JSON-Schema keyword, so an agent reading
+    ;; the MCP tool schema and the generic form's placeholder read the
+    ;; one spelling. Unlike :default nothing is ever APPLIED from it —
+    ;; an example is a starting point offered, never a value assumed
+    (contains? props :examples)
+    (assoc :json-schema/examples (:examples props))))
 
 (defn- annotate
   "Walk a schema form, promoting waymark entry properties to

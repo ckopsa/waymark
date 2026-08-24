@@ -1117,8 +1117,22 @@
                             style (assoc :style style)
                             order (assoc :order order)))}
       note-field
+      ;; the generated note carries its own prose. A sugar that emits
+      ;; a bare field emits a usability warning (waymark-0ee's display
+      ;; policy) into a declaration whose author never wrote the
+      ;; field and cannot clear it — so the sugar says the human words
+      ;; itself, and a verdict spelling its own :input owns them
       (assoc :input (or input
-                        [:map [note-field {:optional true}
+                        [:map [note-field
+                               {:optional true
+                                :x-display
+                                {:label (str/capitalize
+                                         (str/replace
+                                          (clojure.core/name note-field)
+                                          "_" " "))
+                                 :help (str "Optional. Say why, in a sentence "
+                                            "the asker will read beside the "
+                                            "verdict.")}}
                                [:maybe [:string {:max note-max}]]]]))
       (and note-field edit) (assoc :edit edit)
       (and note-field (nil? edit))

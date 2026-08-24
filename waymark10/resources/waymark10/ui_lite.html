@@ -666,14 +666,16 @@ function instantToLocal(v) {
 function fieldWidget(name, prop, value) {
   const xd = prop["x-display"] || {};
   if (prop.enum) {
+    const choices = xd.choices || {};   /* enum prose (waymark-0ee) */
     return el("select", {name},
       el("option", {value: ""}, "…"),
       prop.enum.map(v => el("option",
         {value: String(v), selected: String(value ?? "") === String(v) ? "" : null},
-        String(v))));
+        choices[String(v)] || String(v))));
   }
   if (xd.widget === "prose" || xd.widget === "textarea")
-    return el("textarea", {name}, value ?? "");
+    return el("textarea", {name, placeholder: (prop.examples || [])[0] ?? ""},
+      value ?? "");
   if (prop.type === "boolean")
     return el("select", {name}, el("option", {value: ""}, "…"),
       el("option", {value: "true", selected: value === true ? "" : null}, "yes"),
@@ -804,10 +806,16 @@ function buildForm(schema, prefill, kind) {
           clientMessages(widget.value, prop, required.has(name)).join("; ");
       });
     }
+    /* declared prose beats the wire token, here as in the full client
+       (waymark-0ee): the label names the field in the household's own
+       words and the help sentence says what belongs in the box */
+    const xdf = prop["x-display"] || {};
     form.append(el("div", {class: "field"},
-      el("label", {}, el("b", {}, name), required.has(name) ? " *" : "",
+      el("label", {title: name}, el("b", {}, xdf.label || name),
+         required.has(name) ? " *" : "",
          vocabProp(prop) ? el("span", {class: "meta"}, " (vocab)") : ""),
       widget,
+      xdf.help ? el("div", {class: "meta"}, xdf.help) : "",
       errSlot,
       el("div", {class: "err srv", "data-srverr": name})));
   }

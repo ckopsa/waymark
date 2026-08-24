@@ -228,11 +228,24 @@
      [:external_id {:x-display {:hidden true}} [:string {:min 1 :max 256}]])
    [:external_etag {:optional true :x-display {:hidden true}}
     [:maybe [:string {:max 256}]]]
-   [:synced_at {:optional true} [:maybe :waymark/instant]]
+   ;; both of the remaining bookkeeping fields RENDER (unlike the two
+   ;; above) and neither is ever authored — the sync writes them. They
+   ;; carry their own prose anyway (waymark-0ee): a generated field
+   ;; with none is a warning the declaration's author cannot clear,
+   ;; and these two ride EVERY mirrored kind
+   [:synced_at {:optional true
+                :x-display {:label "Last synced"
+                            :help "Written by the sync, never by hand."}}
+    [:maybe :waymark/instant]]
    ;; why the row sits conflicted — data, so the gap renders (prose:
    ;; an adapter's error message is a paragraph, not a label); cleared
    ;; by the next successful sync write
-   [:conflict_reason {:optional true :x-display {:widget "prose"}}
+   [:conflict_reason {:optional true
+                      :x-display {:widget "prose"
+                                  :label "Why this row is conflicted"
+                                  :help (str "The sync writes this when the "
+                                             "two sides disagree; resolving "
+                                             "the conflict clears it.")}}
     [:maybe [:string {:max 280}]]]])
 
 (defn- declared-fields [data-schema]
@@ -960,8 +973,20 @@
                  ;; the one human door on the sync machine: a person
                  ;; picks the winner — never a silent last-writer-wins
                  {:from #{:conflicted} :to :fresh
+                  ;; the prose is the sugar's own, and it is not
+                  ;; decoration: this input is GENERATED for every
+                  ;; mirrored kind, so a lazily spelled :display here
+                  ;; would be a usability warning the author of the
+                  ;; declaration could not clear (waymark-0ee)
                   :input [:map
-                          [:keep {:x-display {:label "Which truth wins"}}
+                          [:keep {:x-display
+                                  {:label "Which truth wins"
+                                   :help (str "Both versions survive until "
+                                              "you choose; the loser is "
+                                              "overwritten on both sides.")
+                                   :choices
+                                   {"local" "Ours — the version stored here"
+                                    "remote" "Theirs — the version upstream"}}}
                            [:enum "local" "remote"]]]
                   :safety {:idempotent true :reversible false :confirm true
                            :consequence "The losing version of this document is overwritten, here and externally."}
