@@ -102,6 +102,52 @@
 (def theme-schema
   [:vector {:min 1 :max 10} [:waymark/vocab {:open true}]])
 
+;; ── the household's own words for a meal's fields ───────────────────
+;; the create form and the three on-list editors are four separate
+;; surfaces asking for the same fields; the prose is def'd once so no
+;; door can drift from another's spelling. :examples is offered, never
+;; applied — the placeholder is all a blank textarea gets.
+
+(def ^:private name-display
+  {:label "Meal name"
+   :help "The name the family actually says at the table — \"Ana's chicken tacos\" beats a recipe-book title."})
+
+(def ^:private themes-display
+  {:label "Theme nights"
+   :help "Every theme night this meal can serve — italian, mexican, american, asian, pizza, bbq, or whatever Sunday's rotation is running; fajitas are mexican AND american."})
+
+(def ^:private recipe-display
+  {:label "Recipe"
+   :widget "prose"
+   :help "The whole method, the way you would tell it to whoever is cooking tonight — what to buy up top, what to do below."})
+
+(def ^:private recipe-example
+  "Brown 1 lb of ground beef with the taco seasoning, warm the tortillas in a dry pan, and set the toppings out in bowls so everyone builds their own.")
+
+(def ^:private servings-display
+  {:label "Feeds"
+   :help "How many people one batch actually feeds at our table, not what the recipe claims."})
+
+(def ^:private prep-display
+  {:label "Hands-on time"
+   :help "Minutes standing at the counter — chopping and stirring, not the hours it sits in the oven or the slow cooker."})
+
+(def ^:private thaw-display
+  {:label "Thaw ahead"
+   :help "Hours before dinner something has to come out of the freezer — 0 when nothing does, which is how a phantom thaw gets fixed."})
+
+(def ^:private leftover-display
+  {:label "Leftovers last"
+   :help "How many days the cooked leftovers are still worth eating out of the fridge."})
+
+(def ^:private notes-display
+  {:label "Notes"
+   :widget "prose"
+   :help "Anything the cook should know that is not a step — who will not eat it, what to double, which pan it needs."})
+
+(def ^:private notes-example
+  "Ana will not touch the peppers, so keep her portion plain and put the rest on the side.")
+
 ;; a named safety value: an idempotent in-place overwrite — nothing to
 ;; confirm, and "reverse" is just writing the field again
 (def overwrite
@@ -135,14 +181,13 @@
 (defaction update-recipe
   {:from #{:on_list} :to :on_list
    :input [:map
-           [:recipe {:x-display {:label "Recipe"
-                                 :widget "prose"}}
+           [:recipe {:x-display recipe-display}
             [:string {:min 1 :max 8000}]]
-           [:prep_minutes {:optional true}
+           [:prep_minutes {:optional true :x-display prep-display}
             [:maybe [:int {:min 0}]]]
-           [:thaw_hours {:optional true}
+           [:thaw_hours {:optional true :x-display thaw-display}
             [:maybe [:int {:min 0}]]]
-           [:leftover_days {:optional true}
+           [:leftover_days {:optional true :x-display leftover-display}
             [:maybe [:int {:min 0}]]]]
    ;; one edit concept: prefilled (editing is not re-authoring), fenced
    ;; (a prefilled form is a snapshot), drafted shared + live (the
@@ -155,7 +200,7 @@
 
 (defaction update-themes
   {:from #{:on_list} :to :on_list
-   :input [:map [:themes theme-schema]]
+   :input [:map [:themes {:x-display themes-display} theme-schema]]
    :edit {:prefill [:themes]}
    :safety overwrite
    :handler apply-themes
@@ -165,10 +210,14 @@
 (defaction update-details
   {:from #{:on_list} :to :on_list
    :input [:map
-           [:name {:optional true} [:string {:min 1 :max 200}]]
-           [:servings {:optional true} [:maybe [:int {:min 1}]]]
-           [:prep_minutes {:optional true} [:maybe [:int {:min 0}]]]
-           [:thaw_hours {:optional true} [:maybe [:int {:min 0}]]]]
+           [:name {:optional true :x-display name-display}
+            [:string {:min 1 :max 200}]]
+           [:servings {:optional true :x-display servings-display}
+            [:maybe [:int {:min 1}]]]
+           [:prep_minutes {:optional true :x-display prep-display}
+            [:maybe [:int {:min 0}]]]
+           [:thaw_hours {:optional true :x-display thaw-display}
+            [:maybe [:int {:min 0}]]]]
    :edit {:prefill [:name :servings :prep_minutes :thaw_hours]}
    :safety overwrite
    :handler apply-details
@@ -187,17 +236,23 @@
    ;; else lives behind the ⋯ menu — v9's final cut, carried
    :nav :secondary
    :schema [:map
-            [:name {:sort :default} [:string {:min 1 :max 200}]]
+            [:name {:sort :default :x-display name-display}
+             [:string {:min 1 :max 200}]]
             ;; one declaration (design §6): membership filtering and
             ;; observed-value facets derive from the vocab itself
-            [:themes theme-schema]
+            [:themes {:x-display themes-display} theme-schema]
             [:recipe {:optional true
-                      :x-display {:label "Recipe" :widget "prose"}}
+                      :examples [recipe-example]
+                      :x-display recipe-display}
              [:maybe [:string {:min 1 :max 8000}]]]
-            [:prep_minutes {:optional true} [:maybe [:int {:min 0}]]]
-            [:thaw_hours {:optional true} [:maybe [:int {:min 0}]]]
-            [:leftover_days {:optional true} [:maybe [:int {:min 0}]]]
-            [:servings {:optional true} [:maybe [:int {:min 1}]]]
+            [:prep_minutes {:optional true :x-display prep-display}
+             [:maybe [:int {:min 0}]]]
+            [:thaw_hours {:optional true :x-display thaw-display}
+             [:maybe [:int {:min 0}]]]
+            [:leftover_days {:optional true :x-display leftover-display}
+             [:maybe [:int {:min 0}]]]
+            [:servings {:optional true :x-display servings-display}
+             [:maybe [:int {:min 1}]]]
             [:est_cost_cents {:optional true :derived meal-est-cost
                               :sort true
                               :x-display {:widget "money"
@@ -212,7 +267,9 @@
             [:has_recipe {:optional true :derived has-recipe
                           :filter #{:eq}}
              [:maybe :boolean]]
-            [:notes {:optional true :x-display {:widget "prose"}}
+            [:notes {:optional true
+                     :examples [notes-example]
+                     :x-display notes-display}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}}
    ;; the review feed: AI suggestions read one full screen at a time —

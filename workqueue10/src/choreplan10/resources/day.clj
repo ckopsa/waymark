@@ -15,7 +15,7 @@
   :notes is the household's standing message to the housekeeper for
   the day (\"skip the office, guests used the guest bath\"); close
   wraps the day — the runs themselves keep their own records."
-  (:require [waymark10.dsl :refer [defresource prose]]))
+  (:require [waymark10.dsl :refer [defresource described prose]]))
 
 (defresource day
   {:kind :day
@@ -28,8 +28,13 @@
    :sortable {:fields [:date] :default "date"}
 
    :fields
-   {:at-create  [[:date :waymark/date]]
-    :while-open [[:notes (prose "Notes for the day")]]
+   ;; a :fields row has no properties slot, so the prose rides on the
+   ;; word itself (described, waymark-ts2)
+   {:at-create  [[:date (described :waymark/date
+                                   {:label "Which day"
+                                    :help "The day this sheet is for — one sheet per date, and the board reads everything still owed by it."})]]
+    :while-open [[:notes (described (prose "Notes for the day")
+                                    {:help "The household's standing message to whoever works the day — skip the office, guests used the guest bath, the back gate is latched."})]]
     :open       #{:open}}
 
    ;; the day board's edges — what this day relates to, by law

@@ -549,6 +549,124 @@ adding a single `(defn- probe [x] x)` to `resource.clj` and nothing else
 moves them. That is **waymark-j82**, filed before this work and not
 fixed by it.
 
+## Amendment — the household kinds, and the word a `:fields` row lacked (waymark-ts2)
+
+The third and largest fix-list: 88 warnings at filing across the meal,
+chore, evening, queue, media and calendar kinds. This is **application of
+policy, not new policy** — no policy was narrowed, no source was added,
+and the one refusal in the battery was never approached. `make
+check-queue` over workqueue10: **94 → 8 warnings**, exit 0.
+
+| kind | before → after | kind | before → after |
+|---|---|---|---|
+| `plan_day` | 8 → 0 | `chore_run` | 3 → 0 |
+| `evening_session` | 8 → 0 | `evening_plan` | 3 → 0 |
+| `product` | 6 → 0 | `media` | 3 → 0 |
+| `chore` | 5 → 0 | `plan` | 3 → 0 |
+| `ingredient` | 5 → 0 | `rotation` | 3 → 0 |
+| `meal` | 5 → 0 | `substitution` | 3 → 0 |
+| `prep_task` | 5 → 0 | `day` | 2 → 0 |
+| `activity` | 4 → 0 | `event` | 2 → 0 |
+| `grocery_list` | 4 → 0 | `journal` | 2 → 0 |
+| `meal_line` | 4 → 0 | `self` | 2 → 0 |
+| `capability` | 1 → 0 | `weather` | 2 → 0 |
+| `letter` | 1 → 0 | `task` | 1 → 0 |
+| | | `task_list` | 2 → **1** |
+
+(`permission_slip` had already cleared through the decision sugar in
+waymark-7rw; `connection` never warned.)
+
+The remaining 8 are seven enrolled-kind warnings (`definition` 3,
+`subscription` 2, `attachment` 1, `job` 1 — the framework forms no bead
+has claimed yet) and **one deliberate hold-out**: `task_list`'s
+`[:conflict_reason]` composition-scaffolding. That field is mirror
+bookkeeping riding onto a create door, and papering it with an
+`:examples` in the declaration would hide the thing the battery found.
+It stays standing for **waymark-9va**, at the sugar.
+
+149 `:label`s and 131 `:help` sentences landed, plus `:choices` on 14
+enums, 14 `:examples` for composition doors, and 9 `:label-template`s.
+Every one of them is `:x-display` / `:examples` / `:label-template` —
+advertisement, in no fingerprint facet. **No `:x-options` was added and
+none was needed:** the household's fix-list carried zero effort-honesty
+warnings, because no household guard escapes closure with `:open`. The
+runtime-vocabulary spelling is a framework-form problem, and the two
+earlier fix-lists were where it lived.
+
+### The finding: a `:fields` row had no slot to say anything in
+
+The battery's own sentence — *"give each an `:x-display {:label … :help
+…}`"* — was, for three of the household's kinds, **an instruction that
+could not be followed**. `chore_run`, `day` and `evening_session` spell
+their schemas as `:fields` lifecycle groups, and a group row is strictly
+`[field (word …)]`: no properties slot, by construction. `prose` alone
+took a label, and only a label, because it happened to want one.
+
+So the fix landed on the word channel rather than on the row grammar —
+one function, `declare/described`, which merges an `:x-display` map into
+whatever the word already carries:
+
+```clojure
+[:capacity (described (one-of :high_focus :low_focus :exhausted)
+                      {:label "What you've got in you"
+                       :choices {"high_focus" "Sharp — …" …}})]
+[:notes (described (prose "How it went") {:help "Written after, not before — …"})]
+```
+
+It composes with **every** word, including the ones that already declare
+a widget, and it touches the malli form not at all — a described word and
+a bare one compile to the same schema and the same fingerprint. The row
+grammar stays two-element, which is what the `:fields` docstring promises
+and what `parse-field-rows` refuses to bend.
+
+This is a small framework growth in a bead billed as prose, and it is
+recorded as such. The alternative was an app-local workaround in three
+declarations, which the house rule (*grow the framework, not the
+workarounds*) exists to prevent.
+
+### Two things the battery is right about and one it is not asking
+
+- **`substitution`'s create door** demands `:from_ingredient_name` and
+  `:to_ingredient_name` — the very label copies its two `_id` refs
+  maintain. `meal_line` carries the identical pair and is silent, because
+  it declares a `:create-schema` that omits them. That difference is the
+  evidence: a declaration gap, not a prose gap. Prose was written that
+  says the field is carried for reading, and the real fix — a
+  `:create-schema` — is filed as **waymark-ts2.1**, because the create
+  facet *is* fingerprinted and deserves its own revision.
+- **`display-prose` cannot see an OPTIONAL enum's bare tokens.** The
+  clause reads `:enum` off the top-level projected property, and
+  `[:maybe [:enum …]]` publishes as `anyOf` with a null branch. So
+  `media`'s `:medium` was flagged and `media`'s `:source` was not, for a
+  reason no person meets in the form — both render a select of wire
+  tokens. `blank-box?` already unwraps that branch three functions
+  earlier. Filed as **waymark-0ee.1**; every affected field here got its
+  `:choices` anyway.
+
+### The hashes: ten movers, and one of them was never touched
+
+`make test10` twice and `make test-queue`: green. The style-invariance
+suite's literal pins (`meal`, `prep_task`, `event`) are **byte-identical**,
+which is the proof that entry properties and `:label-template` sit in no
+facet.
+
+Ten kinds' fingerprints nonetheless moved: `grocery_list`, `ingredient`,
+`meal_line`, `media`, `permission_slip`, `plan`, `plan_day`, `product`,
+`rotation`, `task`. **`permission_slip` was not edited by this work at
+all**, which is the whole argument. Bisected the way waymark-7rw
+bisected: a baseline `git worktree` at HEAD, hashes computed over
+`check-resources` in both trees, and then the *framework* patch alone —
+one `defn` in `declare.clj`, one alias in `dsl.clj`, every application
+file left at HEAD — applied to the baseline. It moved **exactly the same
+ten kinds**. That is **waymark-j82**, unfixed and now measured across a
+whole application rather than one kind; the twenty kinds that held still
+are the ones whose imperative residue is entirely canonical-form.
+
+The style-invariance suite needed the prose carried into its *old*
+spellings too, and that is correct rather than a chore: the suite pins
+that two spellings are one declaration, and a declaration that says
+something in one spelling and not the other is genuinely two.
+
 ## Recorded punts
 
 - **`effort-honesty` cannot see an unguarded free-text field.** Its whole

@@ -74,9 +74,12 @@
         (is (= {:kind "member"} (:x-ref entry)))
         (is (= {:kind "member"} (:x-ref input))
             "the update door offers the picker, not a text box")
-        (is (= {:label "Assigned to" :showcase true} (:x-display entry))
+        (is (= {:label "Assigned to" :showcase true
+                :help "Who usually owns this one — a run can still be handed to somebody else on the day."}
+               (:x-display entry))
             "…and 'whose chores?' stands above the table, not inside
-             the Filters popover")))
+             the Filters popover, wearing the household's own sentence
+             for what the field means (waymark-ts2)")))
 
     (testing "and so does the filter param — filtering by assignee is
               picking a person"

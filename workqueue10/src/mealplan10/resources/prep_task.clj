@@ -25,7 +25,8 @@
 
   Recorded deviations ride the declaration itself (:deviations, DX
   phase 5) — fingerprint-carried, rendered by waymark10.dev/explain."
-  (:require [waymark10.dsl :refer [defresource defhandler one-of ref-to]]))
+  (:require [waymark10.dsl :refer [defresource defhandler described one-of
+                                   ref-to]]))
 
 (defhandler set-calendar-event [row inp _ctx]
   (assoc-in row [:data :calendar_event_id] (:event_id inp)))
@@ -46,22 +47,42 @@
    :initial :pending
    :terminal #{:done :cancelled}
    :summary "{data.task_type} · {data.meal_name} ({data.date}) · {state}"
+   ;; the step and the dinner it serves — "thaw: Chicken curry" is how
+   ;; the kitchen says it, and meal_name is stated with every task, so
+   ;; the label never renders blank
+   :label-template "{data.task_type}: {data.meal_name}"
    :nav :secondary
    :schema [:map
-            [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
+            [:plan_id {:kind :plan :filter #{:eq}
+                       :x-display
+                       {:label "Meal plan"
+                        :help "The week this prep step belongs to."}}
+             :waymark/ref]
             ;; :filter is load-bearing beyond the UI: the day board
             ;; (choreplan10's day kind, one engine since waymark-bwu.2)
             ;; joins prep tasks by this date — a related join needs a
             ;; promoted column
             [:date {:filter #{:eq :range} :x-display {:label "Dinner date"}}
              :waymark/date]
-            [:meal_name [:string {:min 1 :max 200}]]
-            [:task_type {:filter #{:eq :in}} (one-of :thaw :prep :cook)]
+            [:meal_name {:x-display
+                         {:label "Meal"
+                          :help "The dinner this step is for, spelled the way the plan names it — 'Chicken curry'."}}
+             [:string {:min 1 :max 200}]]
+            [:task_type {:filter #{:eq :in}
+                         :x-display
+                         {:label "Kind of step"
+                          :choices {"thaw" "Thaw — get it out of the freezer in time"
+                                    "prep" "Prep — chop, marinate or mix ahead"
+                                    "cook" "Cook — start the stove"}}}
+             (one-of :thaw :prep :cook)]
             ;; who does the step — open vocab like chore's assignee (the
             ;; household's usage IS the option list). :filter #{:eq} is
             ;; load-bearing beyond the UI: choreplan10's prep_task mirror
             ;; discovers over ?assignee=…, so this fact is the feed's key
-            [:assignee {:optional true :filter #{:eq}}
+            [:assignee {:optional true :filter #{:eq}
+                        :x-display
+                        {:label "Who does it"
+                         :help "The person on the hook for this step — whoever preps that day, or whoever is cooking."}}
              [:maybe [:waymark/vocab {:open true}]]]
             [:due_at {:filter #{:after} :sort :default
                       :x-display {:label "When to start"}}
@@ -72,11 +93,20 @@
                        :derived {:over [:due_at :now]
                                  :expr '(< (var :due_at) (var :now))}}
              [:maybe :boolean]]
-            [:duration_minutes {:optional true} [:maybe [:int {:min 0}]]]
+            [:duration_minutes {:optional true
+                                :x-display
+                                {:label "How long it takes"
+                                 :help "Minutes at the counter or the stove for this step — what the calendar event should reserve."}}
+             [:maybe [:int {:min 0}]]]
             [:calendar_event_id {:optional true :kind :event
                                  :x-display {:hidden true}}
              [:maybe :waymark/ref]]
-            [:notes {:optional true :x-display {:widget "prose"}}
+            [:notes {:optional true
+                     :examples ["Move the roast to the fridge before school drop-off — it needs the whole day to thaw."]
+                     :x-display
+                     {:widget "prose"
+                      :label "Notes"
+                      :help "How to do the step, for whoever picks it up — which pan, how far ahead, what to do if it's still frozen."}}
              [:maybe [:string {:max 1000}]]]]
    :links [{:rel "plan" :kind :plan
             :href "/api/plans/{data.plan_id}"
@@ -92,7 +122,10 @@
    [[:pending   :schedule :scheduled
      ;; the arg is named for what it is: the id of the NEW event just
      ;; created — not an edit of the stored one, so no prefill, no :edit
-     {:args [[:event_id (ref-to :event)]]
+     {:args [[:event_id (described
+                         (ref-to :event)
+                         {:label "Calendar event"
+                          :help "The event you just put on the family calendar for this step — the task keeps the pointer so the two stay one thing."})]]
       :confirm "An event goes on the family calendar for this prep step."
       :handler set-calendar-event
       :display {:label "Put on calendar" :style :primary :order 1}}]

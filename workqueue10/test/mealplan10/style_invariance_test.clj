@@ -81,15 +81,41 @@
    :summary "{data.name} · {state}"
    :nav :secondary
    :schema [:map
-            [:name [:string {:min 1 :max 200}]]
-            [:themes meal/theme-schema]
+            [:name {:x-display
+                    {:label "Meal name"
+                     :help "The name the family actually says at the table — \"Ana's chicken tacos\" beats a recipe-book title."}}
+             [:string {:min 1 :max 200}]]
+            [:themes {:x-display
+                      {:label "Theme nights"
+                       :help "Every theme night this meal can serve — italian, mexican, american, asian, pizza, bbq, or whatever Sunday's rotation is running; fajitas are mexican AND american."}}
+             meal/theme-schema]
             [:recipe {:optional true
-                      :x-display {:label "Recipe" :widget "prose"}}
+                      :examples ["Brown 1 lb of ground beef with the taco seasoning, warm the tortillas in a dry pan, and set the toppings out in bowls so everyone builds their own."]
+                      :x-display
+                      {:label "Recipe"
+                       :widget "prose"
+                       :help "The whole method, the way you would tell it to whoever is cooking tonight — what to buy up top, what to do below."}}
              [:maybe [:string {:min 1 :max 8000}]]]
-            [:prep_minutes {:optional true} [:maybe [:int {:min 0}]]]
-            [:thaw_hours {:optional true} [:maybe [:int {:min 0}]]]
-            [:leftover_days {:optional true} [:maybe [:int {:min 0}]]]
-            [:servings {:optional true} [:maybe [:int {:min 1}]]]
+            [:prep_minutes {:optional true
+                            :x-display
+                            {:label "Hands-on time"
+                             :help "Minutes standing at the counter — chopping and stirring, not the hours it sits in the oven or the slow cooker."}}
+             [:maybe [:int {:min 0}]]]
+            [:thaw_hours {:optional true
+                          :x-display
+                          {:label "Thaw ahead"
+                           :help "Hours before dinner something has to come out of the freezer — 0 when nothing does, which is how a phantom thaw gets fixed."}}
+             [:maybe [:int {:min 0}]]]
+            [:leftover_days {:optional true
+                             :x-display
+                             {:label "Leftovers last"
+                              :help "How many days the cooked leftovers are still worth eating out of the fridge."}}
+             [:maybe [:int {:min 0}]]]
+            [:servings {:optional true
+                        :x-display
+                        {:label "Feeds"
+                         :help "How many people one batch actually feeds at our table, not what the recipe claims."}}
+             [:maybe [:int {:min 1}]]]
             [:est_cost_cents {:optional true
                               :x-display {:widget "money"
                                           :label "Est. cost"}}
@@ -97,7 +123,12 @@
             [:priced_ingredients {:optional true} [:maybe :int]]
             [:total_ingredients {:optional true} [:maybe :int]]
             [:has_recipe {:optional true} [:maybe :boolean]]
-            [:notes {:optional true :x-display {:widget "prose"}}
+            [:notes {:optional true
+                     :examples ["Ana will not touch the peppers, so keep her portion plain and put the rest on the side."]
+                     :x-display
+                     {:label "Notes"
+                      :widget "prose"
+                      :help "Anything the cook should know that is not a step — who will not eat it, what to double, which pan it needs."}}
              [:maybe [:string {:max 2000}]]]]
    :derived {:est_cost_cents meal/meal-est-cost
              :priced_ingredients meal/priced-ingredients
@@ -140,14 +171,25 @@
               :display {:label "No thanks" :order 2}}
     :update_recipe {:from #{:on_list} :to :on_list
                     :input [:map
-                            [:recipe {:x-display {:label "Recipe"
-                                                  :widget "prose"}}
+                            [:recipe {:x-display
+                                      {:label "Recipe"
+                                       :widget "prose"
+                                       :help "The whole method, the way you would tell it to whoever is cooking tonight — what to buy up top, what to do below."}}
                              [:string {:min 1 :max 8000}]]
-                            [:prep_minutes {:optional true}
+                            [:prep_minutes {:optional true
+                                            :x-display
+                                            {:label "Hands-on time"
+                                             :help "Minutes standing at the counter — chopping and stirring, not the hours it sits in the oven or the slow cooker."}}
                              [:maybe [:int {:min 0}]]]
-                            [:thaw_hours {:optional true}
+                            [:thaw_hours {:optional true
+                                          :x-display
+                                          {:label "Thaw ahead"
+                                           :help "Hours before dinner something has to come out of the freezer — 0 when nothing does, which is how a phantom thaw gets fixed."}}
                              [:maybe [:int {:min 0}]]]
-                            [:leftover_days {:optional true}
+                            [:leftover_days {:optional true
+                                             :x-display
+                                             {:label "Leftovers last"
+                                              :help "How many days the cooked leftovers are still worth eating out of the fridge."}}
                              [:maybe [:int {:min 0}]]]]
                     :edit {:prefill [:recipe :prep_minutes :thaw_hours :leftover_days]
                            :draft {:shared true :live true}}
@@ -155,7 +197,11 @@
                     :handler meal/apply-recipe
                     :display {:label "Update recipe" :order 2}}
     :update_themes {:from #{:on_list} :to :on_list
-                    :input [:map [:themes meal/theme-schema]]
+                    :input [:map
+                            [:themes {:x-display
+                                      {:label "Theme nights"
+                                       :help "Every theme night this meal can serve — italian, mexican, american, asian, pizza, bbq, or whatever Sunday's rotation is running; fajitas are mexican AND american."}}
+                             meal/theme-schema]]
                     :edit {:prefill [:themes]}
                     :safety {:idempotent true :reversible false :confirm false}
                     :handler meal/apply-themes
@@ -163,13 +209,25 @@
                               :description "Retag the meal with every theme night it can serve"}}
     :update_details {:from #{:on_list} :to :on_list
                      :input [:map
-                             [:name {:optional true}
+                             [:name {:optional true
+                                     :x-display
+                                     {:label "Meal name"
+                                      :help "The name the family actually says at the table — \"Ana's chicken tacos\" beats a recipe-book title."}}
                               [:string {:min 1 :max 200}]]
-                             [:servings {:optional true}
+                             [:servings {:optional true
+                                         :x-display
+                                         {:label "Feeds"
+                                          :help "How many people one batch actually feeds at our table, not what the recipe claims."}}
                               [:maybe [:int {:min 1}]]]
-                             [:prep_minutes {:optional true}
+                             [:prep_minutes {:optional true
+                                             :x-display
+                                             {:label "Hands-on time"
+                                              :help "Minutes standing at the counter — chopping and stirring, not the hours it sits in the oven or the slow cooker."}}
                               [:maybe [:int {:min 0}]]]
-                             [:thaw_hours {:optional true}
+                             [:thaw_hours {:optional true
+                                           :x-display
+                                           {:label "Thaw ahead"
+                                            :help "Hours before dinner something has to come out of the freezer — 0 when nothing does, which is how a phantom thaw gets fixed."}}
                               [:maybe [:int {:min 0}]]]]
                      :edit {:prefill [:name :servings :prep_minutes
                                       :thaw_hours]}
@@ -199,13 +257,31 @@
    :summary "{data.name} · {state}"
    :nav :secondary
    :schema [:map
-            [:name [:string {:min 1 :max 100}]]
-            [:themes [:vector {:min 1} [:string {:min 1 :max 50}]]]
-            [:position [:int {:min 0}]]
-            [:activated_at {:optional true} [:maybe :waymark/instant]]]
+            [:name {:x-display
+                    {:label "Rotation name"
+                     :help "What this list of Sunday themes is called — \"Sunday rotation\" until you keep a second one for winter."}}
+             [:string {:min 1 :max 100}]]
+            [:themes {:x-display
+                      {:label "Themes in the cycle"
+                       :help "The theme words Sunday walks through in order — a blank rotation starts on breakfast for dinner, indian, greek and soup night."}}
+             [:vector {:min 1} [:string {:min 1 :max 50}]]]
+            [:position {:x-display
+                        {:label "Next up"
+                         :help "How far down the list Sunday has got; Next theme moves it, nothing else does."}}
+             [:int {:min 0}]]
+            [:activated_at {:optional true
+                            :x-display {:label "Made active"}}
+             [:maybe :waymark/instant]]]
    :create-schema [:map
-                   [:name {:optional true} [:maybe [:string {:min 1 :max 100}]]]
-                   [:themes {:optional true}
+                   [:name {:optional true
+                           :x-display
+                           {:label "Rotation name"
+                            :help "What this list of Sunday themes is called — \"Sunday rotation\" until you keep a second one for winter."}}
+                    [:maybe [:string {:min 1 :max 100}]]]
+                   [:themes {:optional true
+                             :x-display
+                             {:label "Themes in the cycle"
+                              :help "The theme words Sunday walks through in order — a blank rotation starts on breakfast for dinner, indian, greek and soup night."}}
                     [:maybe [:vector {:min 1} [:string {:min 1 :max 50}]]]]]
    :on-create @#'rotation/rotation-on-create
    :filterable {:state #{:eq :in}}
@@ -263,6 +339,9 @@
    ;; names it, so declaring retention mints no revision
    :retain {:judgment true}
    :summary "Week of {data.start_date} · {data.weeks} wk · {state}"
+   ;; the picker/card/badge name for a week — advertisement, not law,
+   ;; so it rides both spellings without moving the hash
+   :label-template "Week of {data.start_date}"
    :schema [:map
             [:start_date {:x-display {:label "Start date"}} :waymark/date]
             [:weeks [:int {:min 1 :max 2}]]
@@ -288,11 +367,27 @@
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :create-schema [:map
-                   [:start_date {:optional true} [:maybe :waymark/date]]
-                   [:weeks {:optional true} [:maybe [:int {:min 1 :max 2}]]]
-                   [:rotation_id {:optional true :kind :rotation}
+                   [:start_date {:optional true
+                                 :x-display
+                                 {:label "Week starts"
+                                  :help "The Tuesday this week runs from — leave it blank for the coming Tuesday."}}
+                    [:maybe :waymark/date]]
+                   [:weeks {:optional true
+                            :x-display
+                            {:label "How many weeks"
+                             :help "One week, or two when you'd rather shop once and cook from it twice."}}
+                    [:maybe [:int {:min 1 :max 2}]]]
+                   [:rotation_id {:optional true :kind :rotation
+                                  :x-display
+                                  {:label "Sunday rotation"
+                                   :help "The list the Sundays draw their themes from — blank takes whichever rotation is active."}}
                     [:maybe :waymark/ref]]
-                   [:notes {:optional true :x-display {:widget "prose"}}
+                   [:notes {:optional true
+                            :examples ["Grandma eats with us Thursday — nothing spicy that night."]
+                            :x-display
+                            {:widget "prose"
+                             :label "Notes"
+                             :help "What this week needs remembered that the days themselves can't say — a guest, a birthday, a night nobody's home."}}
                     [:maybe [:string {:max 2000}]]]]
    :on-create @#'plan/plan-on-create
    :derived
@@ -414,6 +509,9 @@
    :initial :draft
    :terminal #{:done :discarded}
    :summary "Groceries · {state}"
+   ;; the trip's own name — advertisement, not law, so it rides both
+   ;; spellings without moving the hash
+   :label-template "Groceries · {data.covers_from}"
    :schema [:map
             [:plan_id {:kind :plan} :waymark/ref]
             [:covers_from {:optional true
@@ -466,14 +564,27 @@
             [:notes {:optional true :x-display {:widget "prose"}}
              [:maybe [:string {:max 2000}]]]]
    :create-schema [:map
-                   [:plan_id {:kind :plan} :waymark/ref]
+                   [:plan_id {:kind :plan
+                              :x-display
+                              {:label "Meal plan"
+                               :help "The week this trip shops for — the list compiles itself from that plan's dinners."}}
+                    :waymark/ref]
                    [:covers_from {:optional true
-                                  :x-display {:label "Covers from"}}
+                                  :x-display
+                                  {:label "Covers from"
+                                   :help "The day of the shopping trip — leave both dates blank when one trip covers the whole plan."}}
                     [:maybe :waymark/date]]
                    [:covers_until {:optional true
-                                   :x-display {:label "Covers until"}}
+                                   :x-display
+                                   {:label "Covers until"
+                                    :help "The last night this trip has to feed, before the next trip takes over."}}
                     [:maybe :waymark/date]]
-                   [:notes {:optional true :x-display {:widget "prose"}}
+                   [:notes {:optional true
+                            :examples ["Costco run — Dad's going Saturday before the kids are up."]
+                            :x-display
+                            {:widget "prose"
+                             :label "Notes"
+                             :help "What the shopper needs to know that the items can't say — which store, who's going, a coupon to bring."}}
                     [:maybe [:string {:max 2000}]]]]
    :create-guards [glist/window-is-paired]
    :on-create @#'glist/ensure-items
@@ -520,13 +631,30 @@
    :actions
    {:add_item {:from #{:draft} :to :draft
                :input [:map
-                       [:name [:string {:min 1 :max 200}]]
-                       [:quantity {:optional true} [:maybe [:string {:max 50}]]]
-                       [:category {:optional true} [:maybe [:string {:max 50}]]]
-                       [:meals {:optional true}
+                       [:name {:x-display
+                               {:label "Item"
+                                :help "What to buy, in the words you'd read off in the aisle — 'chicken thighs', not a recipe line."}}
+                        [:string {:min 1 :max 200}]]
+                       [:quantity {:optional true
+                                   :x-display
+                                   {:label "How much"
+                                    :help "The amount to pick up, said the way you'd say it in the store — '2 lbs', '900 g', 'one bunch'."}}
+                        [:maybe [:string {:max 50}]]]
+                       [:category {:optional true
+                                   :x-display
+                                   {:label "Aisle"
+                                    :help "Where it lives in the store — produce, dairy, frozen — so the list sorts the way you actually walk it."}}
+                        [:maybe [:string {:max 50}]]]
+                       [:meals {:optional true
+                                :x-display
+                                {:label "For which dinners"
+                                 :help "The nights this item feeds, so a cancelled dinner shows what comes off the list with it."}}
                         [:maybe [:vector [:string {:max 200}]]]]
                        [:ingredient_id {:optional true :kind :ingredient
-                                        :pick {:state "active"}}
+                                        :pick {:state "active"}
+                                        :x-display
+                                        {:label "Pantry ingredient"
+                                         :help "Link it to the pantry and a finished shop restocks it — leave it blank for one-offs like birthday candles."}}
                         [:maybe :waymark/ref]]
                        [:est_cost_cents {:optional true
                                          :x-display {:widget "money"
@@ -592,21 +720,49 @@
    :initial :pending
    :terminal #{:done :cancelled}
    :summary "{data.task_type} · {data.meal_name} ({data.date}) · {state}"
+   ;; the picker/card/badge name for a step — advertisement, not law,
+   ;; so it rides both spellings without moving the hash (the literal
+   ;; pin at the bottom is the proof)
+   :label-template "{data.task_type}: {data.meal_name}"
    :nav :secondary
    :schema [:map
-            [:plan_id {:kind :plan} :waymark/ref]
+            [:plan_id {:kind :plan
+                       :x-display
+                       {:label "Meal plan"
+                        :help "The week this prep step belongs to."}}
+             :waymark/ref]
             [:date {:x-display {:label "Dinner date"}} :waymark/date]
-            [:meal_name [:string {:min 1 :max 200}]]
-            [:task_type [:enum "thaw" "prep" "cook"]]
-            [:assignee {:optional true}
+            [:meal_name {:x-display
+                         {:label "Meal"
+                          :help "The dinner this step is for, spelled the way the plan names it — 'Chicken curry'."}}
+             [:string {:min 1 :max 200}]]
+            [:task_type {:x-display
+                         {:label "Kind of step"
+                          :choices {"thaw" "Thaw — get it out of the freezer in time"
+                                    "prep" "Prep — chop, marinate or mix ahead"
+                                    "cook" "Cook — start the stove"}}}
+             [:enum "thaw" "prep" "cook"]]
+            [:assignee {:optional true
+                        :x-display
+                        {:label "Who does it"
+                         :help "The person on the hook for this step — whoever preps that day, or whoever is cooking."}}
              [:maybe [:waymark/vocab {:open true}]]]
             [:due_at {:x-display {:label "When to start"}} :waymark/instant]
             [:overdue {:optional true} [:maybe :boolean]]
-            [:duration_minutes {:optional true} [:maybe [:int {:min 0}]]]
+            [:duration_minutes {:optional true
+                                :x-display
+                                {:label "How long it takes"
+                                 :help "Minutes at the counter or the stove for this step — what the calendar event should reserve."}}
+             [:maybe [:int {:min 0}]]]
             [:calendar_event_id {:optional true :kind :event
                                  :x-display {:hidden true}}
              [:maybe :waymark/ref]]
-            [:notes {:optional true :x-display {:widget "prose"}}
+            [:notes {:optional true
+                     :examples ["Move the roast to the fridge before school drop-off — it needs the whole day to thaw."]
+                     :x-display
+                     {:widget "prose"
+                      :label "Notes"
+                      :help "How to do the step, for whoever picks it up — which pan, how far ahead, what to do if it's still frozen."}}
              [:maybe [:string {:max 1000}]]]]
    :derived {:overdue {:over [:due_at :now]
                        :expr '(< (var :due_at) (var :now))}}
@@ -628,7 +784,12 @@
     "The with_plan profile has no v10 spelling."]
    :actions
    {:schedule {:from #{:pending} :to :scheduled
-               :input [:map [:event_id {:kind :event} :waymark/ref]]
+               :input [:map
+                       [:event_id {:kind :event
+                                   :x-display
+                                   {:label "Calendar event"
+                                    :help "The event you just put on the family calendar for this step — the task keeps the pointer so the two stay one thing."}}
+                        :waymark/ref]]
                :safety {:idempotent true :reversible false :confirm true
                         :consequence "An event goes on the family calendar for this prep step."}
                :handler ptask/set-calendar-event

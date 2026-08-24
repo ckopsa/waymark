@@ -54,11 +54,23 @@
    ;; :vocabulary-open? already won — so every named principal reads
    ;; every row here without a grant, and none of them is owned
    :own-surface {:all true}
+   ;; no :create-schema, so the schema IS the create form, and every
+   ;; entry owes the prose policy 2 asks of a door (waymark-ts2)
    :schema [:map
-            [:token [:string {:min 3 :max 80}]]
-            [:description [:string {:min 1 :max 240}]]
+            [:token {:x-display
+                     {:label "The power, as a token"
+                      :help "system.power, with the dot — telegram.send, gmail.search. The dot is how a grant knows it is naming a power and not a kind."}}
+             [:string {:min 3 :max 80}]]
+            [:description {:x-display
+                           {:label "What it lets somebody do"
+                            :help "One sentence a person can weigh before granting it — what the power reaches, in plain words rather than the API's."}}
+             [:string {:min 1 :max 240}]]
             ;; who enforces — a pointer for humans, never a call site
-            [:enforced_by {:optional true} [:maybe [:string {:max 120}]]]]
+            [:enforced_by {:optional true
+                           :x-display
+                           {:label "Who actually enforces it"
+                            :help "The system standing in front of the data — this engine holds the rule and never the credential, so this names where to look when the rule is not honoured."}}
+             [:maybe [:string {:max 120}]]]]
    :filterable {:state #{:eq :in} :token #{:eq}}
    :sortable {:fields [:token] :default "token"}
    :create-guards [token-wears-a-dot]

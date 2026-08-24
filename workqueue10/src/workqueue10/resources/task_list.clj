@@ -96,12 +96,21 @@
      :summary "{data.title} · {data.source}"
      :label-template "{data.title}"
      :schema [:map
-              [:title {:optional true} [:maybe [:string {:max 200}]]]
+              [:title {:optional true
+                       :x-display
+                       {:label "What the list is called"
+                        :help "The household's own name for this pile of work — \"Errands\", \"Woodworking\" — the word you would look for on the phone."}}
+               [:maybe [:string {:max 200}]]]
               ;; the confluence's routing tag, stamped by the adapter —
               ;; the same vocabulary task declares, narrowed to the
               ;; authorities that actually keep lists — plus "native",
               ;; the one tag no adapter ever stamps: the engine's own
-              [:source {:optional true :filter #{:eq :in}}
+              [:source {:optional true :filter #{:eq :in}
+                        :x-display
+                        {:label "Who keeps this list"
+                         :choices {"native" "Just us — a list that lives only here, with no phone behind it"
+                                   "gtasks" "Google Tasks — mirrored from the phone"
+                                   "todo" "Home assistant — mirrored from the wall tablet"}}}
                [:maybe [:enum "todo" "gtasks" "native"]]]
               ;; the birth law as a maintained fact (see above)
               [:identity_paired {:optional true :derived identity-paired}

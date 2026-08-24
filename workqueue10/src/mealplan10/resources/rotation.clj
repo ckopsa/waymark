@@ -82,8 +82,26 @@
                 (update :themes #(if (seq %) (vec %) default-themes))
                 (assoc :position 0)))))
 
+;; ── the household's own words for the rotation's fields ─────────────
+;; the create form and the row schema ask for the same two things, and
+;; add_theme/remove_theme share ONE input (the style-invariance test
+;; pins that sharing) — so the theme sentence has to serve both edits:
+;; it names what a theme word IS, not what this door does with it
+
+(def ^:private name-display
+  {:label "Rotation name"
+   :help "What this list of Sunday themes is called — \"Sunday rotation\" until you keep a second one for winter."})
+
+(def ^:private themes-display
+  {:label "Themes in the cycle"
+   :help "The theme words Sunday walks through in order — a blank rotation starts on breakfast for dinner, indian, greek and soup night."})
+
+(def ^:private theme-display
+  {:label "Theme night"
+   :help "One theme word Sunday can land on, in the family's own vocabulary — soup night, greek, breakfast for dinner."})
+
 (def theme-input
-  [:map [:theme [:string {:min 1 :max 50}]]])
+  [:map [:theme {:x-display theme-display} [:string {:min 1 :max 50}]]])
 
 (defresource rotation
   {:kind :rotation
@@ -91,15 +109,21 @@
    :summary "{data.name} · {state}"
    :nav :secondary
    :schema [:map
-            [:name [:string {:min 1 :max 100}]]
-            [:themes [:vector {:min 1} [:string {:min 1 :max 50}]]]
-            [:position [:int {:min 0}]]
-            [:activated_at {:optional true} [:maybe :waymark/instant]]]
+            [:name {:x-display name-display} [:string {:min 1 :max 100}]]
+            [:themes {:x-display themes-display}
+             [:vector {:min 1} [:string {:min 1 :max 50}]]]
+            [:position {:x-display {:label "Next up"
+                                    :help "How far down the list Sunday has got; Next theme moves it, nothing else does."}}
+             [:int {:min 0}]]
+            [:activated_at {:optional true
+                            :x-display {:label "Made active"}}
+             [:maybe :waymark/instant]]]
    ;; the create form: name it and list themes; the pointer starts at
    ;; 0 and only ever moves via advance
    :create-schema [:map
-                   [:name {:optional true} [:maybe [:string {:min 1 :max 100}]]]
-                   [:themes {:optional true}
+                   [:name {:optional true :x-display name-display}
+                    [:maybe [:string {:min 1 :max 100}]]]
+                   [:themes {:optional true :x-display themes-display}
                     [:maybe [:vector {:min 1} [:string {:min 1 :max 50}]]]]]
    :on-create rotation-on-create
    :filterable {:state #{:eq :in}}

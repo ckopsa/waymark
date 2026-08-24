@@ -27,6 +27,31 @@
   (:require [waymark10.dsl :refer [defaction defhandler defresource
                                    one-of]]))
 
+;; the household's own words for a chore's details, spelled ONCE: the
+;; create door and update-details are the same form twice, and a second
+;; spelling is a place the two drift apart (waymark-ts2, the saved_view
+;; precedent). Entry properties sit in no fingerprint facet, so citing
+;; the map here is the same law as inlining it.
+(def ^:private prose-for
+  {:name    {:label "What it is"
+             :help  "The chore the way somebody would say it out loud — Dishes, Take the trash out, Mow the front."}
+   :area    {:label "Where"
+             :help  "The room or patch of the house it happens in — kitchen, guest bath, front yard. Type a new one and it joins the list for next time."}
+   :cadence {:label   "How often"
+             :choices {"daily"     "Every day"
+                       "weekly"    "Once a week"
+                       "monthly"   "Once a month"
+                       "as_needed" "Only when somebody notices"}}
+   :notes   {:widget "prose"
+             :label  "Standing instructions"
+             :help   "Whatever whoever does it needs to know before they start — this rides along on every run, so nobody has to come back and ask."}})
+
+(def ^:private notes-example
+  "Something in the blank box (the composition policy): the create door
+  has no document to prefill from, so the placeholder is all a first
+  chore gets."
+  "Vinegar, not bleach — the grout gave up on bleach years ago.")
+
 (defhandler apply-details [row inp _ctx]
   (update row :data merge
           (select-keys inp [:name :area :assignee :cadence :notes])))
@@ -58,13 +83,18 @@
 (defaction update-details
   {:from #{:active} :to :active
    :input [:map
-           [:name [:string {:min 1 :max 120}]]
-           [:area {:optional true} [:maybe [:waymark/vocab {:open true}]]]
+           [:name {:x-display (:name prose-for)} [:string {:min 1 :max 120}]]
+           [:area {:optional true :x-display (:area prose-for)}
+            [:maybe [:waymark/vocab {:open true}]]]
            [:assignee {:optional true :kind :member
-                       :x-display {:label "Assigned to"}}
+                       :x-display {:label "Assigned to"
+                                   :help "Who usually owns this one — a run can still be handed to somebody else on the day."}}
             [:maybe :waymark/ref]]
-           [:cadence (one-of :daily :weekly :monthly :as_needed)]
-           [:notes {:optional true :x-display {:widget "prose"}}
+           [:cadence {:x-display (:cadence prose-for)}
+            (one-of :daily :weekly :monthly :as_needed)]
+           [:notes {:optional true
+                    :examples [notes-example]
+                    :x-display (:notes prose-for)}
             [:maybe [:string {:max 2000}]]]]
    :edit {:prefill [:name :area :assignee :cadence :notes]}
    ;; the overwrite writes the WHOLE detail set and is declared
@@ -84,10 +114,12 @@
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
    :schema [:map
-            [:name {:sort :default} [:string {:min 1 :max 120}]]
+            [:name {:sort :default :x-display (:name prose-for)}
+             [:string {:min 1 :max 120}]]
             ;; one declaration (design §6): membership filtering and
             ;; observed-value facets derive from the vocab itself
-            [:area {:optional true} [:maybe [:waymark/vocab {:open true}]]]
+            [:area {:optional true :x-display (:area prose-for)}
+             [:maybe [:waymark/vocab {:open true}]]]
             ;; the household's people are the :member collection, so
             ;; the same one-declaration rule points at THEM: the ref
             ;; is the picker, the navigable link, and — :filter #{:eq}
@@ -98,10 +130,14 @@
             ;; asks of this collection, and a standing picker answers
             ;; it in one click (the prep_task :status precedent).
             [:assignee {:optional true :filter #{:eq} :kind :member
-                        :x-display {:label "Assigned to" :showcase true}}
+                        :x-display {:label "Assigned to" :showcase true
+                                    :help "Who usually owns this one — a run can still be handed to somebody else on the day."}}
              [:maybe :waymark/ref]]
-            [:cadence {:filter #{:eq}} (one-of :daily :weekly :monthly :as_needed)]
-            [:notes {:optional true :x-display {:widget "prose"}}
+            [:cadence {:filter #{:eq} :x-display (:cadence prose-for)}
+             (one-of :daily :weekly :monthly :as_needed)]
+            [:notes {:optional true
+                     :examples [notes-example]
+                     :x-display (:notes prose-for)}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}}
    :owns {:runs {:kind :chore_run :via :chore_id}}

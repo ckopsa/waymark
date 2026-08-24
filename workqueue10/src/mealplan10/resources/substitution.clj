@@ -20,6 +20,19 @@
 (def overwrite
   {:idempotent true :reversible false :confirm false})
 
+;; ── the household's own words for the claim's fields ────────────────
+;; the row schema is also the create form here (no :create-schema),
+;; and update_details asks for two of the same fields — the prose is
+;; def'd once so neither door drifts from the other
+
+(def ^:private ratio-display
+  {:label "Grams per gram asked"
+   :help "How much stand-in the swap uses for each gram the recipe asked for — 0.8 means 80 g of oil where 100 g of butter was wanted."})
+
+(def ^:private context-display
+  {:label "When it works"
+   :help "The cooking this swap actually holds up in — \"fine in sauces, not on toast\", \"baking only\"."})
+
 (defderived distinct-fact
   {:over [:from_ingredient_id :to_ingredient_id]
    :expr '(not= (var :from_ingredient_id) (var :to_ingredient_id))
@@ -37,8 +50,10 @@
 (defaction update-details
   {:from #{:accepted} :to :accepted
    :input [:map
-           [:ratio {:optional true} [:maybe [:decimal {:gt 0 :max 100}]]]
-           [:context {:optional true} [:maybe [:string {:max 200}]]]]
+           [:ratio {:optional true :x-display ratio-display}
+            [:maybe [:decimal {:gt 0 :max 100}]]]
+           [:context {:optional true :x-display context-display}
+            [:maybe [:string {:max 200}]]]]
    :edit {:prefill [:ratio :context]}
    :safety overwrite
    :handler apply-sub-details
@@ -50,6 +65,9 @@
    :initial :suggested
    :terminal #{:retired}
    :summary "{data.from_ingredient_name} → {data.to_ingredient_name} · ×{data.ratio} · {state}"
+   ;; a claim has no name of its own — it IS the directed pair, so the
+   ;; card wears both engine-maintained ref-label copies
+   :label-template "{data.from_ingredient_name} → {data.to_ingredient_name}"
    :nav :secondary
    :schema [:map
             [:from_ingredient_id {:kind :ingredient
@@ -58,7 +76,12 @@
                                   :pick {:state "active"}
                                   :x-display {:label "Stands in for"}}
              :waymark/ref]
-            [:from_ingredient_name {:optional true}
+            ;; the engine-maintained label copy of the ref above: it is
+            ;; carried on the row so a list reads without a lookup, and
+            ;; the prose says so rather than inviting anyone to type it
+            [:from_ingredient_name {:optional true
+                                    :x-display {:label "Replaced ingredient"
+                                                :help "The name of the ingredient being stood in for, kept on the row so lists and estimates read without a lookup."}}
              [:maybe [:string {:max 200}]]]
             [:to_ingredient_id {:kind :ingredient
                                 :label :to_ingredient_name
@@ -66,12 +89,15 @@
                                 :pick {:state "active"}
                                 :x-display {:label "The stand-in"}}
              :waymark/ref]
-            [:to_ingredient_name {:optional true}
+            [:to_ingredient_name {:optional true
+                                  :x-display {:label "Stand-in ingredient"
+                                              :help "The name of the ingredient standing in, kept on the row so a priced_via mark can say which stand-in an estimate went through."}}
              [:maybe [:string {:max 200}]]]
             [:ratio {:optional true :default 1M
-                     :x-display {:label "Grams per gram asked"}}
+                     :x-display ratio-display}
              [:maybe [:decimal {:gt 0 :max 100}]]]
-            [:context {:optional true} [:maybe [:string {:max 200}]]]
+            [:context {:optional true :x-display context-display}
+             [:maybe [:string {:max 200}]]]
             [:distinct {:optional true :derived distinct-fact}
              [:maybe :boolean]]]
    :create-guards [distinct-at-create]

@@ -31,16 +31,72 @@
 (def overwrite
   {:idempotent true :reversible false :confirm false})
 
+;; the household prose, factored: the create door and update_details
+;; ask for the very same package facts, and one door is not a place
+;; the other may drift from (saved_view's move)
+(def ingredient-ref-display
+  {:label "Pantry ingredient"
+   :help "Which pantry concept this package is one store's version of — \"chicken thighs\", not the words on the bag."})
+
+(def product-name-display
+  {:label "Product name"
+   :help "The package the way the store writes it, size and all — \"Kirkland Organic Chicken Thighs, 2.72 kg\"."})
+
+(def package-grams-display
+  {:label "Package weight (g)"
+   :help "What the whole package weighs as you carry it out of the store — it's what turns a price into ¢ per 100 g."})
+
+(def yield-display
+  {:label "Usable share (%)"
+   :help "How much of that weight actually reaches the plate after bones, peel and trim — a rotisserie chicken picks about 51; blank means all of it, and over 100 is for things that grow (dry rice, about 300)."})
+
+(def package-count-display
+  {:label "Pieces per package"
+   :help "How many separate items are inside — 12 for a dozen eggs; leave it blank when the package is just one thing."})
+
+(def upc-display
+  {:label "Barcode number"
+   :help "The digits under the barcode — it's how a receipt line finds this exact package again."})
+
+(def url-display
+  {:raw true
+   :label "Store page"
+   :help "Link to this package on the store's own site, if it has one — the scraper reads a price off it when the page will give one up."})
+
 (def sighting-schema
   [:map
-   [:seen_on :waymark/date]
-   [:price_cents {:x-display {:widget "money" :label "Price (one package)"}}
+   [:seen_on {:x-display {:label "Seen on"
+                          :help "The day this price was true — recording the same day twice replaces, so a corrected receipt never doubles up."}}
+    :waymark/date]
+   [:price_cents {:x-display {:widget "money" :label "Price (one package)"
+                              :help "What ONE package cost — never the receipt line's total for several."}}
     [:int {:min 1}]]
-   [:source [:enum "receipt" "scrape"]]
-   [:ref {:optional true :x-display {:raw true}}
+   [:source {:x-display {:label "Where the price came from"
+                         :choices {"receipt" "A receipt — we actually bought it"
+                                   "scrape" "A store page — a price we looked up"}}}
+    [:enum "receipt" "scrape"]]
+   [:ref {:optional true
+          :x-display {:raw true
+                      :label "Receipt or link"
+                      :help "Where to find this price again — the receipt it came off, or the store page address the scrape read."}}
     [:maybe [:string {:max 280}]]]
-   [:quantity {:optional true :default 1} [:maybe [:int {:min 1}]]]
-   [:on_sale {:optional true :default false} [:maybe :boolean]]])
+   [:quantity {:optional true :default 1
+               :x-display {:label "Packages bought"
+                           :help "How many of this package the receipt covers — spend context only; the price above stays one package's."}}
+    [:maybe [:int {:min 1}]]]
+   [:on_sale {:optional true :default false
+              :x-display {:label "On sale"
+                          :help "Tick when this was a sale price, so a low number doesn't read as the everyday one."}}
+    [:maybe :boolean]]])
+
+(def sightings-display
+  {:label "Prices seen"
+   :help "Every price we've seen this package at, one entry per day — at creation that's just the receipt in your hand; later ones come in through Record price."})
+
+(def notes-display
+  {:widget "prose"
+   :label "Notes"
+   :help "Anything worth remembering about this particular package — where it sits in the store, how the size compares, whether the sale price is the real one."})
 
 (defn reprice-product
   "The price facts from the sightings, restated: sightings sorted by
@@ -145,7 +201,8 @@
 
 (defaction rematch
   {:from #{:suggested :tracked} :to :tracked
-   :input [:map [:ingredient_id {:kind :ingredient :pick {:state "active"}}
+   :input [:map [:ingredient_id {:kind :ingredient :pick {:state "active"}
+                                 :x-display ingredient-ref-display}
                  :waymark/ref]]
    ;; a one-field verdict, last-wins: the absorb cascade repoints
    ;; products it never rendered a form for, so the fence would lie.
@@ -178,13 +235,17 @@
 (defaction update-details
   {:from #{:tracked} :to :tracked
    :input [:map
-           [:name {:optional true} [:maybe [:string {:min 1 :max 200}]]]
-           [:package_grams {:optional true} [:maybe [:int {:min 1}]]]
-           [:yield_percent {:optional true}
+           [:name {:optional true :x-display product-name-display}
+            [:maybe [:string {:min 1 :max 200}]]]
+           [:package_grams {:optional true :x-display package-grams-display}
+            [:maybe [:int {:min 1}]]]
+           [:yield_percent {:optional true :x-display yield-display}
             [:maybe [:int {:min 1 :max 10000}]]]
-           [:package_count {:optional true} [:maybe [:int {:min 1}]]]
-           [:upc {:optional true} [:maybe [:string {:max 20}]]]
-           [:url {:optional true :x-display {:raw true}}
+           [:package_count {:optional true :x-display package-count-display}
+            [:maybe [:int {:min 1}]]]
+           [:upc {:optional true :x-display upc-display}
+            [:maybe [:string {:max 20}]]]
+           [:url {:optional true :x-display url-display}
             [:maybe [:string {:max 280}]]]]
    :edit {:prefill [:name :package_grams :yield_percent :package_count
                     :upc :url]}
@@ -204,12 +265,18 @@
    :nav :secondary
    :schema [:map
             [:ingredient_id {:kind :ingredient :label :ingredient_name
-                             :filter #{:eq} :pick {:state "active"}}
+                             :filter #{:eq} :pick {:state "active"}
+                             :x-display ingredient-ref-display}
              :waymark/ref]
             [:ingredient_name {:optional true} [:maybe [:string {:max 200}]]]
-            [:store {:filter #{:eq :in}} [:string {:min 1 :max 50}]]
-            [:name {:sort :default} [:string {:min 1 :max 200}]]
-            [:package_grams {:optional true} [:maybe [:int {:min 1}]]]
+            [:store {:filter #{:eq :in}
+                     :x-display {:label "Store"
+                                 :help "Where this exact package is sold — one store per row; the same item at WinCo is its own product."}}
+             [:string {:min 1 :max 50}]]
+            [:name {:sort :default :x-display product-name-display}
+             [:string {:min 1 :max 200}]]
+            [:package_grams {:optional true :x-display package-grams-display}
+             [:maybe [:int {:min 1}]]]
             ;; what survives to the plate, per 100 g carried out of
             ;; the store: nil = 100 — everything you carry out is
             ;; plate. Below 100 = trim (a whole chicken picks ~51%
@@ -219,13 +286,16 @@
             ;; divides by usable grams, so it reads ¢ per 100 PLATE
             ;; grams — recipe grams are plate grams, so every price
             ;; consumer inherits the correction
-            [:yield_percent {:optional true}
+            [:yield_percent {:optional true :x-display yield-display}
              [:maybe [:int {:min 1 :max 10000}]]]
-            [:package_count {:optional true} [:maybe [:int {:min 1}]]]
-            [:upc {:optional true :filter #{:eq}} [:maybe [:string {:max 20}]]]
-            [:url {:optional true :x-display {:raw true}}
+            [:package_count {:optional true :x-display package-count-display}
+             [:maybe [:int {:min 1}]]]
+            [:upc {:optional true :filter #{:eq} :x-display upc-display}
+             [:maybe [:string {:max 20}]]]
+            [:url {:optional true :x-display url-display}
              [:maybe [:string {:max 280}]]]
-            [:sightings {:part-scope {:key :seen_on}}
+            [:sightings {:part-scope {:key :seen_on}
+                         :x-display sightings-display}
              [:vector sighting-schema]]
             ;; the three handler-maintained price facts (reprice-product
             ;; is their one writer — the fn= boundary, recorded below)
@@ -244,28 +314,42 @@
             [:needs_weight {:optional true :derived needs-weight
                             :filter #{:eq}}
              [:maybe :boolean]]
-            [:notes {:optional true :x-display {:widget "prose"}}
+            [:notes {:optional true
+                     :examples ["The 2.72 kg bag is two dinners; the small one is never worth it."]
+                     :x-display notes-display}
              [:maybe [:string {:max 2000}]]]]
    ;; the author's create door: the birthing observation is at most one
    ;; sighting, and the price facts / engine label are not the client's
    ;; to write
    :create-schema [:map
-                   [:ingredient_id {:kind :ingredient :pick {:state "active"}}
+                   [:ingredient_id {:kind :ingredient :pick {:state "active"}
+                                    :x-display ingredient-ref-display}
                     :waymark/ref]
-                   [:store [:string {:min 1 :max 50}]]
-                   [:name [:string {:min 1 :max 200}]]
-                   [:package_grams {:optional true} [:maybe [:int {:min 1}]]]
+                   [:store {:x-display {:label "Store"
+                                        :help "Where this exact package is sold — one store per row; the same item at WinCo is its own product."}}
+                    [:string {:min 1 :max 50}]]
+                   [:name {:x-display product-name-display}
+                    [:string {:min 1 :max 200}]]
+                   [:package_grams {:optional true
+                                    :x-display package-grams-display}
+                    [:maybe [:int {:min 1}]]]
                    ;; nil = 100 (all plate); >100 = concentrates —
                    ;; the schema comment above carries the full story
-                   [:yield_percent {:optional true}
+                   [:yield_percent {:optional true :x-display yield-display}
                     [:maybe [:int {:min 1 :max 10000}]]]
-                   [:package_count {:optional true} [:maybe [:int {:min 1}]]]
-                   [:upc {:optional true} [:maybe [:string {:max 20}]]]
-                   [:url {:optional true :x-display {:raw true}}
+                   [:package_count {:optional true
+                                    :x-display package-count-display}
+                    [:maybe [:int {:min 1}]]]
+                   [:upc {:optional true :x-display upc-display}
+                    [:maybe [:string {:max 20}]]]
+                   [:url {:optional true :x-display url-display}
                     [:maybe [:string {:max 280}]]]
-                   [:sightings {:optional true :default []}
+                   [:sightings {:optional true :default []
+                                :x-display sightings-display}
                     [:maybe [:vector {:max 1} sighting-schema]]]
-                   [:notes {:optional true :x-display {:widget "prose"}}
+                   [:notes {:optional true
+                            :examples ["The 2.72 kg bag is two dinners; the small one is never worth it."]
+                            :x-display notes-display}
                     [:maybe [:string {:max 2000}]]]]
    :on-create product-on-create
    :filterable {:state #{:eq :in}}

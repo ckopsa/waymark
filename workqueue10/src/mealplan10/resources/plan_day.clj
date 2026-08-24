@@ -250,13 +250,23 @@
 
 ;; ── actions ─────────────────────────────────────────────────────────
 
-(def meal-input [:map [:meal_id {:kind :meal :pick {:state "on_list"}}
+;; one input value, two doors (assign_meal and assign_off_theme), so
+;; one spelling of the prose — the off-theme door's own sentence lives
+;; on its :consequence, where the departure from the theme belongs
+(def meal-input [:map [:meal_id {:kind :meal :pick {:state "on_list"}
+                                 :x-display
+                                 {:label "Dinner"
+                                  :help "What the family eats that night, picked from the meals already on the list."}}
                        :waymark/ref]])
 
 (def side-input
   ;; the SIDE's meal id — named for what it is, not the day's main
   ;; meal slot (recorded deviation from v9's meal_id spelling)
-  [:map [:side_id {:kind :meal :pick {:state "on_list"}} :waymark/ref]])
+  [:map [:side_id {:kind :meal :pick {:state "on_list"}
+                   :x-display
+                   {:label "Side dish"
+                    :help "What goes beside the main — also a meal from the list, and a night holds at most two."}}
+         :waymark/ref]])
 
 (defaction assign-meal
   {:from #{:undecided :eating_out :planned} :to :planned
@@ -283,7 +293,10 @@
 
 (defaction set-sunday-theme
   {:from #{:undecided} :to :undecided
-   :input [:map [:theme [:string {:min 1 :max 50}]]]
+   :input [:map [:theme {:x-display
+                         {:label "Sunday theme"
+                          :help "The kind of food this Sunday takes — one of the themes on the plan's rotation, like Italian or Asian."}}
+                 [:string {:min 1 :max 50}]]]
    :edit {:prefill [:theme]}
    :guards [plan-editable sunday-only theme-in-rotation]
    :safety overwrite
@@ -292,7 +305,10 @@
 
 (defaction mark-eating-out
   {:from #{:undecided :planned :eating_out} :to :eating_out
-   :input [:map [:where {:optional true :x-display {:label "Where"}}
+   :input [:map [:where {:optional true
+                         :x-display
+                         {:label "Where"
+                          :help "The restaurant or the house you're eating at — leave it blank when the night is out but the place isn't settled."}}
                  [:maybe [:string {:max 120}]]]]
    :guards [plan-editable]
    :safety {:idempotent true :reversible false :confirm false
@@ -333,6 +349,10 @@
    ;; no :terminal: the machine cycles for as long as the plan lives
    ;; (the rotation precedent); an abandoned plan's days simply rest
    :summary "{data.date} · {state}"
+   ;; a day is one night's dinner decision, and the family knows it by
+   ;; the night — meal_name would read blank on every undecided day,
+   ;; which is most of them while the week is being built
+   :label-template "Dinner on {data.date}"
    :nav :secondary
    :schema [:map
             [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
@@ -370,9 +390,20 @@
    :related {:meal {:kind :meal :on [[:meal_id := :id]]}}
    ;; the birth door supplies these; a hand-made day states the same
    :create-schema [:map
-                   [:plan_id {:kind :plan} :waymark/ref]
-                   [:date :waymark/date]
-                   [:theme {:optional true} [:maybe [:string {:min 1 :max 50}]]]]
+                   [:plan_id {:kind :plan
+                              :x-display
+                              {:label "Week"
+                               :help "The meal-plan week this night belongs to."}}
+                    :waymark/ref]
+                   [:date {:x-display
+                           {:label "Night"
+                            :help "The calendar day this dinner decision covers — it has to fall inside the plan's week."}}
+                    :waymark/date]
+                   [:theme {:optional true
+                            :x-display
+                            {:label "Theme night"
+                             :help "The night's kind of food — Tuesday is Mexican, Friday is pizza, Saturday is BBQ; a Sunday stays 'rotating' until somebody picks from the rotation."}}
+                    [:maybe [:string {:min 1 :max 50}]]]]
    :create-guards [date-in-plan-range]
    :unique [[:plan_id :date]]
    :filterable {:state #{:eq :in}}

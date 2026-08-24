@@ -39,6 +39,7 @@
 (defalias percent d/percent)
 (defalias prose d/prose)
 (defalias measured-by d/measured-by)
+(defalias described d/described)
 (defalias ref-to d/ref)
 
 ;; ── guard sentences and builders ────────────────────────────────────

@@ -28,7 +28,8 @@
     differs by a parameter.
 
   Batch H adds the typed field words (one-of, money, percent, date,
-  flag, quantity, prose, ref, measured-by) — plain functions returning
+  flag, quantity, prose, ref, measured-by, and described — the prose
+  wrapper any of them wears) — plain functions returning
   the exact malli forms the inline spelling writes, entry properties
   riding as namespaced metadata the :fields reader hoists — and the
   sentence-first defguard: (defguard name (refuse \"sentence\") '(law)).
@@ -268,6 +269,34 @@
                                              (or (:x-display (r/word-props w)) {})]))
                                      arms)}}}
            :waymark10/measured {:field nil :by by :arms arm-forms}})))
+
+(defn described
+  "A field word wearing the household's own prose: the :x-display map
+  every client renders above and below the box, and the MCP tool
+  description reads as the argument's explanation.
+
+     [:capacity (described (one-of :high_focus :low_focus :exhausted)
+                           {:label \"How much you have in you\"
+                            :choices {\"high_focus\" \"Sharp — …\" …}})]
+
+  A plain :schema entry has a properties slot and spells :x-display
+  itself; a :fields row is strictly [field (word …)], so this is where
+  a lifecycle-group field says its sentence (waymark-ts2). The merge is
+  key by key over whatever :x-display the word already declares, so
+  (described (prose \"How it went\") {:help \"…\"}) keeps both the prose
+  widget and the label the word named.
+
+  The malli FORM is untouched — entry properties sit in no fingerprint
+  facet, so a described word and a bare one are the same law."
+  [w display]
+  (when-not (map? display)
+    (werr "described takes a field word and an :x-display map: (described (flag) {:label \"…\"})"))
+  (let [form (r/word-form w)
+        props (r/word-props w)]
+    (with-meta (if (keyword? form) [form] form)
+      (assoc (meta w)
+             :waymark10/props
+             (assoc props :x-display (merge (:x-display props) display))))))
 
 ;; ── sentence-first guards (batch H) ─────────────────────────────────
 ;; (defguard blocking-items-reviewed

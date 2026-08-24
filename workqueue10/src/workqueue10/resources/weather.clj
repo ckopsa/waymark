@@ -100,9 +100,22 @@
             [:note {:optional true :x-display {:raw true}}
              [:maybe [:string {:max 280}]]]]
    :create-schema [:map
-                   [:owner {:optional true} [:maybe [:string {:min 1 :max 128}]]]
-                   [:sky [:enum "quiet" "steady" "loud"]]
-                   [:note {:optional true} [:maybe [:string {:max 280}]]]]
+                   [:owner {:optional true
+                            :x-display
+                            {:label "Whose sky"
+                             :help "Leave it blank — the house records the weather in your own name, and nobody reports the sky for anybody else."}}
+                    [:maybe [:string {:min 1 :max 128}]]]
+                   [:sky {:x-display
+                          {:label "How you are"
+                           :choices {"quiet" "Quiet — running low, keep it gentle today"
+                                     "steady" "Steady — nothing to report, going fine"
+                                     "loud" "Loud — a lot going on in here right now"}}}
+                    [:enum "quiet" "steady" "loud"]]
+                   [:note {:optional true
+                           :x-display
+                           {:label "A word about it"
+                            :help "One line if you want one — \"slept badly\", \"good morning so far\"; a glance for the family, never an explanation you owe."}}
+                    [:maybe [:string {:max 280}]]]]
    :filterable {:owner #{:eq} :sky #{:eq} :state #{:eq}}
    ;; current weather = newest row per owner; newest-first is the law
    :sortable {:fields [:created_at] :default "-created_at"}

@@ -25,27 +25,42 @@
   terminal states into ones with a way back: :reopen and :unskip are
   the declared :undo pairs, and a mis-swipe costs one tap on the
   undo toast instead of a wrong record kept forever."
-  (:require [waymark10.dsl :refer [defresource prose ref-to]]))
+  (:require [waymark10.dsl :refer [defresource described prose ref-to]]))
 
 (defresource chore-run
   {:kind :chore_run
    :states [:due :done :skipped]
    :initial :due
    :summary "{data.chore_name} · {data.due_date} · {state}"
+   ;; a run has no name of its own, and the raw id is what a ref picker
+   ;; would otherwise show — the chore's maintained label copy plus the
+   ;; date is how the household says which run it means (waymark-ts2)
+   :label-template "{data.chore_name} · {data.due_date}"
    :filterable {:state #{:eq :in} :chore_id #{:eq} :overdue #{:eq}}
    :sortable {:fields [:due_date] :default "due_date"}
 
    :fields
-   {:at-create  [[:chore_id (ref-to :chore {:label :chore_name
-                                            ;; the chore's standing
-                                            ;; instructions ride the run
-                                            ;; — at a glance, no hop to
-                                            ;; the chore
-                                            :carry {:notes :chore_notes}})]
-                 [:due_date :waymark/date]]
+   ;; a :fields row is strictly [field (word …)] and has no properties
+   ;; slot, so the household's prose rides on the word itself (described,
+   ;; waymark-ts2) — the form is untouched, only the advertisement grows
+   {:at-create  [[:chore_id (described
+                             (ref-to :chore {:label :chore_name
+                                             ;; the chore's standing
+                                             ;; instructions ride the run
+                                             ;; — at a glance, no hop to
+                                             ;; the chore
+                                             :carry {:notes :chore_notes}})
+                             {:label "Which chore"
+                              :help "The standing chore this is one turn of — its instructions come along for the ride."})]
+                 [:due_date (described :waymark/date
+                                       {:label "Due by"
+                                        :help "The day it should be done by; the morning after, the run starts reading as overdue."})]]
 
-    :while-open [[:assignee [:waymark/vocab {:open true}]]
-                 [:notes (prose "How it went")]]
+    :while-open [[:assignee (described [:waymark/vocab {:open true}]
+                                       {:label "Who's doing it"
+                                        :help "Whoever actually takes this turn — type a name once and it joins the list."})]
+                 [:notes (described (prose "How it went")
+                                    {:help "Anything worth remembering next time — what was already clean, what ran out, what to bring."})]]
     :open       #{:due}
     ;; engine-maintained: the ranked worklist's one law — hard-due
     ;; first — needs "past due" as an indexed fact on BOTH kinds

@@ -16,7 +16,8 @@
   real filter, not a dead one; :sortable is what its server-side grid
   embed can offer to sort by."
   (:require [waymark10.dsl :refer [defresource defguard defguardfn
-                                    refuse one-of flag prose ref-to]]
+                                    refuse one-of flag prose ref-to
+                                    described]]
             [waymark10.types :as t]))
 
 ;; a residual code guard (vocabulary doc §6): the verdict reads
@@ -45,23 +46,54 @@
    :initial :staged
    :terminal #{:complete}
    :summary "Session: {data.date} — {state}"
+   ;; one session per date, so the date IS the name; without this a ref
+   ;; picker and the plan's embedded list both show a raw id
+   ;; (waymark-ts2)
+   :label-template "Evening of {data.date}"
    :create-guards [date-in-plan-range]
    :filterable {:plan_id #{:eq}}
    :sortable {:fields [:date] :default "date"}
 
+   ;; a :fields row is strictly [field (word …)] and has no properties
+   ;; slot, so the household's prose rides on the word itself (described,
+   ;; waymark-ts2). The form is untouched; only the advertisement grows
    :fields
-   {:at-create  [[:plan_id (ref-to :evening_plan)]
-                 [:date :waymark/date]]
+   {:at-create  [[:plan_id (described (ref-to :evening_plan)
+                                      {:label "Which stretch"
+                                       :help "The plan this evening belongs to — the date has to fall inside its two dates."})]
+                 [:date (described :waymark/date
+                                   {:label "Which evening"
+                                    :help "The night itself. One row per date, staged weeks ahead and decided as it gets close."})]]
 
-    :while-open [[:notes (prose "What actually happened")]
-                 [:capacity (one-of :high_focus :low_focus :exhausted)]
-                 [:childcare (flag)]
-                 [:window_minutes [:int {:min 30 :max 180}]]
-                 [:desired_activity_id (ref-to :activity {:label :desired_activity_name})]
-                 [:backup_activity_id_1 (ref-to :activity {:label :backup_activity_1_name})]
-                 [:backup_activity_id_2 (ref-to :activity {:label :backup_activity_2_name})]]
+    :while-open [[:notes (described (prose "What actually happened")
+                                    {:help "Written after, not before — what you got to, what got in the way, what to try differently next time."})]
+                 [:capacity (described (one-of :high_focus :low_focus :exhausted)
+                                       {:label "What you've got in you"
+                                        :choices {"high_focus" "Sharp — a real go at something that needs thinking"
+                                                  "low_focus"  "Willing but foggy — hands, not head"
+                                                  "exhausted"  "Nothing left — pick something that asks for nothing"}})]
+                 [:childcare (described (flag)
+                                        {:label "Kids covered"
+                                         :help "On when somebody else has the children for the evening — that is what makes the workshop possible at all."})]
+                 [:window_minutes (described [:int {:min 30 :max 180}]
+                                             {:label "Minutes you actually have"
+                                              :help "From when you're free to when you're done — anything under an hour is refused for the activities that need one."})]
+                 [:desired_activity_id (described
+                                        (ref-to :activity {:label :desired_activity_name})
+                                        {:label "What you'd like to do"
+                                         :help "First choice off the activity shelf — the one this evening is really for."})]
+                 [:backup_activity_id_1 (described
+                                         (ref-to :activity {:label :backup_activity_1_name})
+                                         {:label "If that falls through"
+                                          :help "Second choice, picked now so a tired evening doesn't have to decide anything."})]
+                 [:backup_activity_id_2 (described
+                                         (ref-to :activity {:label :backup_activity_2_name})
+                                         {:label "And if that falls through"
+                                          :help "Third choice — usually the low-energy one that always works."})]]
     :open       #{:staged :preparing :active}
-    :support    [[:interrupted (flag)]]}
+    :support    [[:interrupted (described (flag)
+                                          {:label "Interrupted"
+                                           :help "On when the evening got taken from you — a kid up, a call, a leak. It keeps the record honest without failing the session."})]]}
 
    :actions
    {:lock-in

@@ -199,16 +199,34 @@
      ;; an ordinary create! whose post-commit push is a CREATE — Google
      ;; mints the id, claim_external stamps it home
      :create-schema (into [:map
-                           [:title [:string {:min 1 :max 200}]]]
+                           [:title {:x-display
+                                    {:label "What is happening"
+                                     :help "How it should read on the family calendar — \"Iris recital\", \"dentist, Otto\"; this is the line everyone sees on their phone."}}
+                            [:string {:min 1 :max 200}]]]
                           (concat
                            when-fields
-                           [[:location {:optional true}
+                           [[:location {:optional true
+                                        :x-display
+                                        {:label "Where"
+                                         :help "Enough for whoever is driving — the school gym, the address, \"their place\"; left blank the event simply names no place."}}
                              [:maybe [:string {:max 200}]]]
-                            [:detail {:optional true :x-display {:widget "prose"}}
+                            [:detail {:optional true
+                                      :examples ["Doors at 6:30, she needs to be there by 6:00 in the black skirt."]
+                                      :x-display
+                                      {:widget "prose"
+                                       :label "Anything else to know"
+                                       :help "The part that would otherwise be a text message — what to bring, when to leave, who is picking up."}}
                              [:maybe [:string {:max 2000}]]]
-                            [:kind {:optional true}
+                            [:kind {:optional true
+                                    :x-display
+                                    {:label "Does this claim the evening"
+                                     :choices {"blocking" "Spoken for — we are not free then"
+                                               "note" "Just a note — worth knowing, not a claim on anyone"}}}
                              [:maybe (one-of :blocking :note)]]
-                            [:calendar {:optional true}
+                            [:calendar {:optional true
+                                        :x-display
+                                        {:label "Which calendar"
+                                         :help "Which of the household's calendars it lands on — left blank it goes on the family one, which is nearly always what is meant."}}
                              [:maybe [:string {:max 64}]]]]))
      :create-guards [one-when ends-after-it-starts]
      :on-create (fn [row _ctx]

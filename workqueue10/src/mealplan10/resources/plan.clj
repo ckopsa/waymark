@@ -305,6 +305,10 @@
    ;; the whole record, which is three integers and a date
    :retain {:judgment true}
    :summary "Week of {data.start_date} · {data.weeks} wk · {state}"
+   ;; a week has no name — the family calls it by the Tuesday it
+   ;; starts on, which is exactly what the picker, the card and the
+   ;; link badge should say instead of a uuid
+   :label-template "Week of {data.start_date}"
    :schema [:map
             [:start_date {:filter #{:eq :range} :sort :default-desc
                           :x-display {:label "Start date"}}
@@ -369,11 +373,27 @@
    ;; blank start date = the coming Tuesday, blank rotation = the
    ;; active one
    :create-schema [:map
-                   [:start_date {:optional true} [:maybe :waymark/date]]
-                   [:weeks {:optional true} [:maybe [:int {:min 1 :max 2}]]]
-                   [:rotation_id {:optional true :kind :rotation}
+                   [:start_date {:optional true
+                                 :x-display
+                                 {:label "Week starts"
+                                  :help "The Tuesday this week runs from — leave it blank for the coming Tuesday."}}
+                    [:maybe :waymark/date]]
+                   [:weeks {:optional true
+                            :x-display
+                            {:label "How many weeks"
+                             :help "One week, or two when you'd rather shop once and cook from it twice."}}
+                    [:maybe [:int {:min 1 :max 2}]]]
+                   [:rotation_id {:optional true :kind :rotation
+                                  :x-display
+                                  {:label "Sunday rotation"
+                                   :help "The list the Sundays draw their themes from — blank takes whichever rotation is active."}}
                     [:maybe :waymark/ref]]
-                   [:notes {:optional true :x-display {:widget "prose"}}
+                   [:notes {:optional true
+                            :examples ["Grandma eats with us Thursday — nothing spicy that night."]
+                            :x-display
+                            {:widget "prose"
+                             :label "Notes"
+                             :help "What this week needs remembered that the days themselves can't say — a guest, a birthday, a night nobody's home."}}
                     [:maybe [:string {:max 2000}]]]]
    :on-create plan-on-create
    ;; the relation the plan decision actually consults (design 6.0

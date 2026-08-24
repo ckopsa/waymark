@@ -272,8 +272,16 @@
      ;; on a google-bound birth refuses too, and for a harder reason
      ;; — see day-granular-due-for-google.
      :create-schema [:map
-                     [:title [:string {:min 1 :max 200}]]
-                     [:source {:optional true} [:maybe [:enum "todo" "gtasks"]]]
+                     [:title {:x-display
+                              {:label "What needs doing"
+                               :help "The one line you would say out loud — \"call the dentist\", \"return the library books\"; the how goes further down."}}
+                      [:string {:min 1 :max 200}]]
+                     [:source {:optional true
+                               :x-display
+                               {:label "Where it should land"
+                                :choices {"todo" "The house list — home assistant, on the wall tablet"
+                                          "gtasks" "Google Tasks — the list in your phone"}}}
+                      [:maybe [:enum "todo" "gtasks"]]]
                      [:task_list {:optional true :kind :task_list
                                   :x-display {:label "List (google's, or a native one)"}}
                       [:maybe :waymark/ref]]
@@ -283,7 +291,11 @@
                      [:due_date {:optional true
                                  :x-display {:label "Due day (all day — becomes its closing midnight)"}}
                       [:maybe :waymark/date]]
-                     [:detail {:optional true} [:maybe [:string {:max 1000}]]]]
+                     [:detail {:optional true
+                               :x-display
+                               {:label "Anything the doer needs to know"
+                                :help "The part that would otherwise be a text message — which pharmacy, which shelf, what to bring; it rides along on the queue so whoever picks it up reads it there."}}
+                      [:maybe [:string {:max 1000}]]]]
      :create-guards [one-due list-owned-by-the-capturing-source
                      day-granular-due-for-google]
      :on-create (fn [row ctx]

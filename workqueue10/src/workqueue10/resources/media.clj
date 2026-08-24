@@ -183,15 +183,36 @@
      ;; an ordinary mirror row, adoptable by a future authority
      ;; through its :work_key.
      :create-schema [:map
-                     [:title [:string {:min 1 :max 200}]]
-                     [:medium [:enum "movie" "show" "book" "audiobook" "comic"]]
-                     [:creator {:optional true}
+                     [:title {:x-display
+                              {:label "What is it called"
+                               :help "The name you would say out loud when somebody asks what we should watch — the words on the poster or the spine."}}
+                      [:string {:min 1 :max 200}]]
+                     [:medium {:x-display
+                               {:label "What kind of thing"
+                                :choices {"movie" "Movie — one evening, start to finish"
+                                          "show" "Show — episodes we work through"
+                                          "book" "Book — read on paper or a screen"
+                                          "audiobook" "Audiobook — listened to"
+                                          "comic" "Comic — issues, or a graphic novel"}}}
+                      [:enum "movie" "show" "book" "audiobook" "comic"]]
+                     [:creator {:optional true
+                                :x-display
+                                {:label "Who made it"
+                                 :help "The author, director or showrunner — the name we would go looking under later; leave it empty if nobody remembers."}}
                       [:maybe [:waymark/vocab {:open true}]]]
-                     [:year {:optional true} [:maybe :int]]
+                     [:year {:optional true
+                             :x-display {:label "Year it came out"}}
+                      [:maybe :int]]
                      [:audience_name {:optional true
-                                      :x-display {:label "For (a name)"}}
+                                      :x-display
+                                      {:label "For (a name)"
+                                       :help "Who in the house this one is meant for — a name that matches somebody's handle links it to them, any other name simply stands as written."}}
                       [:maybe [:waymark/vocab {:open true}]]]
-                     [:source {:optional true} [:maybe [:enum "hub"]]]]
+                     [:source {:optional true
+                               :x-display
+                               {:label "Where this row lives"
+                                :choices {"hub" "Here at home — the house keeps this one itself"}}}
+                      [:maybe [:enum "hub"]]]]
      :on-create (fn [row _ctx]
                   (-> row
                       (update-in [:data :source] #(or % "hub"))
@@ -233,7 +254,8 @@
       {:from writable :to :fresh
        :input [:map
                [:progress_text
-                {:x-display {:label "Where you are, in your own words"}}
+                {:x-display {:label "Where you are, in your own words"
+                             :help "However this medium counts itself — \"S02E05\", \"page 140\", \"halfway through disc two\"; nothing translates it, it is kept exactly as you write it."}}
                 [:string {:min 1 :max 100}]]
                [:progress
                 {:optional true

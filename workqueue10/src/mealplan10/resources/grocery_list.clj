@@ -556,6 +556,10 @@
    :initial :draft
    :terminal #{:done :discarded}
    :summary "Groceries · {state}"
+   ;; a list is known by the trip it is for — covers_from IS the trip
+   ;; date (era 4). A list with no window covers the whole plan and
+   ;; renders the dash, which is the honest reading: there is only one
+   :label-template "Groceries · {data.covers_from}"
    :schema [:map
             [:plan_id {:kind :plan :filter #{:eq}} :waymark/ref]
             ;; the coverage window (spec-pantry era 4): this trip's
@@ -643,14 +647,27 @@
    ;; the create form: pick the plan (and this trip's window, both
    ;; ends or neither); items arrive via add_item
    :create-schema [:map
-                   [:plan_id {:kind :plan} :waymark/ref]
+                   [:plan_id {:kind :plan
+                              :x-display
+                              {:label "Meal plan"
+                               :help "The week this trip shops for — the list compiles itself from that plan's dinners."}}
+                    :waymark/ref]
                    [:covers_from {:optional true
-                                  :x-display {:label "Covers from"}}
+                                  :x-display
+                                  {:label "Covers from"
+                                   :help "The day of the shopping trip — leave both dates blank when one trip covers the whole plan."}}
                     [:maybe :waymark/date]]
                    [:covers_until {:optional true
-                                   :x-display {:label "Covers until"}}
+                                   :x-display
+                                   {:label "Covers until"
+                                    :help "The last night this trip has to feed, before the next trip takes over."}}
                     [:maybe :waymark/date]]
-                   [:notes {:optional true :x-display {:widget "prose"}}
+                   [:notes {:optional true
+                            :examples ["Costco run — Dad's going Saturday before the kids are up."]
+                            :x-display
+                            {:widget "prose"
+                             :label "Notes"
+                             :help "What the shopper needs to know that the items can't say — which store, who's going, a coupon to bring."}}
                     [:maybe [:string {:max 2000}]]]]
    :create-guards [window-is-paired]
    :on-create ensure-items
@@ -677,13 +694,30 @@
           :display {:label "Discard list" :style :danger :order 9}}]
      [[:draft :add_item     :draft
        {:input [:map
-                [:name [:string {:min 1 :max 200}]]
-                [:quantity {:optional true} [:maybe [:string {:max 50}]]]
-                [:category {:optional true} [:maybe [:string {:max 50}]]]
-                [:meals {:optional true}
+                [:name {:x-display
+                        {:label "Item"
+                         :help "What to buy, in the words you'd read off in the aisle — 'chicken thighs', not a recipe line."}}
+                 [:string {:min 1 :max 200}]]
+                [:quantity {:optional true
+                            :x-display
+                            {:label "How much"
+                             :help "The amount to pick up, said the way you'd say it in the store — '2 lbs', '900 g', 'one bunch'."}}
+                 [:maybe [:string {:max 50}]]]
+                [:category {:optional true
+                            :x-display
+                            {:label "Aisle"
+                             :help "Where it lives in the store — produce, dairy, frozen — so the list sorts the way you actually walk it."}}
+                 [:maybe [:string {:max 50}]]]
+                [:meals {:optional true
+                         :x-display
+                         {:label "For which dinners"
+                          :help "The nights this item feeds, so a cancelled dinner shows what comes off the list with it."}}
                  [:maybe [:vector [:string {:max 200}]]]]
                 [:ingredient_id {:optional true :kind :ingredient
-                                 :pick {:state "active"}}
+                                 :pick {:state "active"}
+                                 :x-display
+                                 {:label "Pantry ingredient"
+                                  :help "Link it to the pantry and a finished shop restocks it — leave it blank for one-offs like birthday candles."}}
                  [:maybe :waymark/ref]]
                 [:est_cost_cents {:optional true
                                   :x-display {:widget "money"

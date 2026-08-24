@@ -62,6 +62,35 @@
 (def overwrite
   {:idempotent true :reversible false :confirm false})
 
+;; the household prose, factored: the create door and update_details /
+;; update_aliases ask for the very same facts, and one door is not a
+;; place the other may drift from (saved_view's move)
+(def alias-display
+  {:label "Also called"
+   :help "Every other name it goes by on receipts and recipes, one per entry — \"chicken thigh\", \"boneless thighs\", \"CHKN THGH BNLS\"."})
+
+(def category-display
+  {:label "Aisle"
+   :help "The part of the store it lives in — \"produce\", \"dairy\", \"freezer\" — it's what gathers the grocery list into one walk."})
+
+(def unit-display
+  {:label "Measured in"
+   :choices {"g" "Grams — anything we weigh"
+             "ml" "Millilitres — anything we pour"
+             "each" "Each — anything we count"}})
+
+(def stores-display
+  {:label "Where we buy it"
+   :help "The stores we'd rather buy it from, best first, one per entry — \"costco\", then \"winco\"; the price math reads that order when several carry it."})
+
+(def shelf-life-display
+  {:label "Keeps for (days)"
+   :help "Roughly how long an unopened one stays good — leave it blank for a staple like salt, which has no clock at all."})
+
+(def opened-shelf-life-display
+  {:label "Keeps once opened (days)"
+   :help "How long the half-used jar lasts after the seal is broken — blank means opening it changes nothing."})
+
 (defderived products-tracked
   {:count {:owns :product :where {:state #{"tracked"}}}})
 
@@ -170,7 +199,7 @@
 
 (defaction update-aliases
   {:from #{:active} :to :active
-   :input [:map [:aliases alias-schema]]
+   :input [:map [:aliases {:x-display alias-display} alias-schema]]
    :edit {:prefill [:aliases]}
    :safety overwrite
    :handler apply-aliases
@@ -180,11 +209,16 @@
 (defaction update-details
   {:from #{:active} :to :active
    :input [:map
-           [:category {:optional true} [:maybe [:string {:max 50}]]]
-           [:unit {:optional true} [:maybe [:enum "g" "ml" "each"]]]
-           [:preferred_stores {:optional true} [:maybe store-schema]]
-           [:shelf_life_days {:optional true} [:maybe [:int {:min 1}]]]
-           [:opened_shelf_life_days {:optional true}
+           [:category {:optional true :x-display category-display}
+            [:maybe [:string {:max 50}]]]
+           [:unit {:optional true :x-display unit-display}
+            [:maybe [:enum "g" "ml" "each"]]]
+           [:preferred_stores {:optional true :x-display stores-display}
+            [:maybe store-schema]]
+           [:shelf_life_days {:optional true :x-display shelf-life-display}
+            [:maybe [:int {:min 1}]]]
+           [:opened_shelf_life_days {:optional true
+                                     :x-display opened-shelf-life-display}
             [:maybe [:int {:min 1}]]]]
    :edit {:prefill [:category :unit :preferred_stores :shelf_life_days
                     :opened_shelf_life_days]}
@@ -215,7 +249,10 @@
 
 (defaction absorb
   {:from #{:active} :to :active
-   :input [:map [:duplicate_id {:kind :ingredient :pick {:state "active"}}
+   :input [:map [:duplicate_id
+                 {:kind :ingredient :pick {:state "active"}
+                  :x-display {:label "The duplicate to fold in"
+                              :help "The other row standing for this same thing — its name and aliases join this one, its products repoint here, and it retires."}}
                  :waymark/ref]]
    :guards [duplicate-is-absorbable]
    :touches [{:kind :product :action :rematch :may true}
@@ -233,34 +270,51 @@
    :summary "{data.name} · {state}"
    :nav :secondary
    :schema [:map
-            [:name {:sort :default} [:string {:min 1 :max 200}]]
-            [:aliases {:optional true :default []} [:maybe alias-schema]]
-            [:category {:optional true :filter #{:eq :in}}
+            [:name {:sort :default
+                    :x-display {:label "Ingredient"
+                                :help "The family's own name for it, the one the pantry list is read by — every other spelling belongs in Also called."}}
+             [:string {:min 1 :max 200}]]
+            [:aliases {:optional true :default [] :x-display alias-display}
+             [:maybe alias-schema]]
+            [:category {:optional true :filter #{:eq :in}
+                        :x-display category-display}
              [:maybe [:string {:max 50}]]]
-            [:unit {:optional true :default "g"}
+            [:unit {:optional true :default "g" :x-display unit-display}
              [:maybe [:enum "g" "ml" "each"]]]
-            [:preferred_stores {:optional true :default []}
+            [:preferred_stores {:optional true :default []
+                                :x-display stores-display}
              [:maybe store-schema]]
             ;; the stock story (spec-pantry era 2): nil shelf life =
             ;; shelf-stable — the absence of a clock, not a big number;
             ;; stocked_on is restock's stamp, out the human override
-            [:shelf_life_days {:optional true} [:maybe [:int {:min 1}]]]
+            [:shelf_life_days {:optional true :x-display shelf-life-display}
+             [:maybe [:int {:min 1}]]]
             ;; the opened-residual clock (spec-pantry era 4): how long
             ;; it keeps once opened — nil = opening changes nothing.
             ;; Solver input only; no law here reads it
-            [:opened_shelf_life_days {:optional true}
+            [:opened_shelf_life_days {:optional true
+                                      :x-display opened-shelf-life-display}
              [:maybe [:int {:min 1}]]]
             ;; promoted (?stocked_on_lte= beside stocked=true) so the
             ;; staple re-confirmation queue is a query, not a new
             ;; clock fact — deliberately the minimal spelling
-            [:stocked_on {:optional true :filter #{:eq :range}}
+            [:stocked_on {:optional true :filter #{:eq :range}
+                          :x-display {:label "Last stocked on"
+                                      :help "The day we last knew we had it — a finished shop or Restock stamps this for you."}}
              [:maybe :waymark/date]]
-            [:out {:optional true} [:maybe :boolean]]
+            [:out {:optional true
+                   :x-display {:label "We're out"
+                               :help "Tick it when somebody notices the jar is empty — it beats the shelf-life clock until the next restock."}}
+             [:maybe :boolean]]
             [:stocked {:optional true :derived stocked :filter #{:eq}}
              [:maybe :boolean]]
             [:products_tracked {:optional true :derived products-tracked}
              [:maybe :int]]
-            [:notes {:optional true :x-display {:widget "prose"}}
+            [:notes {:optional true
+                     :examples ["Ana reacts to the store-brand thighs — buy the Kirkland ones."]
+                     :x-display {:widget "prose"
+                                 :label "Notes"
+                                 :help "Anything the family needs to remember when buying this — a brand that works, a brand that doesn't, where it hides in the store."}}
              [:maybe [:string {:max 2000}]]]]
    :filterable {:state #{:eq :in}}
    :display {:title "{data.name}"}

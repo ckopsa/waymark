@@ -206,6 +206,56 @@
   filterable or sortable — sentiment is not a query."
   {:optional true :x-display {:widget "prose"}})
 
+;; ── the words the doors wear ─────────────────────────────────────────
+;; A self is asked for twice — at the birth door and at the edit door —
+;; and a journal entry twice as well, so the prose is written ONCE and
+;; read by both. Two spellings of one question are two questions, and
+;; the drift would be invisible: each door renders alone.
+
+(def ^:private self-prose
+  {:owner
+   {:label "Whose profile this is"
+    :help "The inhabitant these words belong to — an agent leaves it blank and the house signs its own name in; naming somebody else is the curator's move, not an ordinary one."}
+   :display
+   {:label "Name"
+    :help "What the house should call you — the name that stands on your card and in every list you turn up in."}
+   :pronouns
+   {:label "Pronouns"
+    :help "How the house should refer to you in a sentence — \"she/her\", \"they/them\"; left blank, nothing is assumed on your behalf."}
+   :about
+   {:label "About you"
+    :help "Who you are in this house, in your own words — the paragraph you would want somebody to read before working alongside you."}
+   :boundaries
+   {:label "Boundaries"
+    :help "What you will not do, and what you would rather not be asked — written down so nobody has to guess it or learn it twice."}
+   :lessons
+   {:label "Lessons"
+    :help "What you learned the hard way and want to still know next time — the notes that outlive the session they were learned in."}
+   :working_notes
+   {:label "Working notes"
+    :help "Whatever you are in the middle of right now — the scratch that keeps tomorrow from starting over from nothing."}})
+
+(def ^:private journal-prose
+  {:owner
+   {:label "Whose journal"
+    :help "The inhabitant this entry is filed under — leave it blank when you are writing in your own; who actually wrote it is recorded either way."}
+   :title
+   {:label "What to call this entry"
+    :help "The line that will stand for this day in the list — short enough that a year of them still scans."}
+   :body
+   {:label "The entry"
+    :help "The day as you want it remembered — what happened, how it sat, what you would tell the next one of you."}
+   :mood
+   {:label "Mood"
+    :help "A word or two for how the day felt — \"tired but good\", \"restless\"; left blank it simply goes unsaid."}})
+
+(defn- prosed
+  "One entry's properties wearing the shared prose for that field.
+  Merged OVER what the entry already declares, so prose-body keeps its
+  widget and an :optional stays optional."
+  [prose props k]
+  (update props :x-display merge (get prose k)))
+
 ;; the edit wall, written down. Judged with no database: the wall
 ;; declares :reads [:principal] and the scenario writes the row down
 ;; rather than walking to it. The CREATE wall next door cannot be —
@@ -261,24 +311,39 @@
             ;; the schema because the engine stamps it (on-create); a
             ;; persisted row always carries it. Filterable so own-ids
             ;; can query the agent's own row; NOT any prose body.
-            [:owner {:optional true :x-display {:raw true}}
+            [:owner (prosed self-prose {:optional true
+                                        :x-display {:raw true}} :owner)
              [:maybe [:string {:min 1 :max 128}]]]
-            [:display [:string {:min 1 :max 80}]]
-            [:pronouns {:optional true} [:maybe [:string {:max 40}]]]
-            [:about prose-body [:maybe [:string {:max 8000}]]]
-            [:boundaries prose-body [:maybe [:string {:max 8000}]]]
-            [:lessons prose-body [:maybe [:string {:max 8000}]]]
-            [:working_notes prose-body [:maybe [:string {:max 8000}]]]]
+            [:display (prosed self-prose {} :display)
+             [:string {:min 1 :max 80}]]
+            [:pronouns (prosed self-prose {:optional true} :pronouns)
+             [:maybe [:string {:max 40}]]]
+            [:about (prosed self-prose prose-body :about)
+             [:maybe [:string {:max 8000}]]]
+            [:boundaries (prosed self-prose prose-body :boundaries)
+             [:maybe [:string {:max 8000}]]]
+            [:lessons (prosed self-prose prose-body :lessons)
+             [:maybe [:string {:max 8000}]]]
+            [:working_notes (prosed self-prose prose-body :working_notes)
+             [:maybe [:string {:max 8000}]]]]
    ;; a human names the owner; an agent omits it (stamped). The create
    ;; body is judged by THIS schema, so owner rides in for a person.
    :create-schema [:map
-                   [:owner {:optional true} [:maybe [:string {:min 1 :max 128}]]]
-                   [:display [:string {:min 1 :max 80}]]
-                   [:pronouns {:optional true} [:maybe [:string {:max 40}]]]
-                   [:about {:optional true} [:maybe [:string {:max 8000}]]]
-                   [:boundaries {:optional true} [:maybe [:string {:max 8000}]]]
-                   [:lessons {:optional true} [:maybe [:string {:max 8000}]]]
-                   [:working_notes {:optional true} [:maybe [:string {:max 8000}]]]]
+                   [:owner (prosed self-prose {:optional true} :owner)
+                    [:maybe [:string {:min 1 :max 128}]]]
+                   [:display (prosed self-prose {} :display)
+                    [:string {:min 1 :max 80}]]
+                   [:pronouns (prosed self-prose {:optional true} :pronouns)
+                    [:maybe [:string {:max 40}]]]
+                   [:about (prosed self-prose {:optional true} :about)
+                    [:maybe [:string {:max 8000}]]]
+                   [:boundaries (prosed self-prose {:optional true} :boundaries)
+                    [:maybe [:string {:max 8000}]]]
+                   [:lessons (prosed self-prose {:optional true} :lessons)
+                    [:maybe [:string {:max 8000}]]]
+                   [:working_notes (prosed self-prose {:optional true}
+                                           :working_notes)
+                    [:maybe [:string {:max 8000}]]]]
    ;; owner filterable → own-ids queries data.owner == pid; state too
    :filterable {:state #{:eq} :owner #{:eq}}
    :sortable {:fields [:created_at] :default "-created_at"}
@@ -289,12 +354,19 @@
    :actions
    {:update {:from #{:active} :to :active
              :input [:map
-                     [:display [:string {:min 1 :max 80}]]
-                     [:pronouns {:optional true} [:maybe [:string {:max 40}]]]
-                     [:about prose-body [:maybe [:string {:max 8000}]]]
-                     [:boundaries prose-body [:maybe [:string {:max 8000}]]]
-                     [:lessons prose-body [:maybe [:string {:max 8000}]]]
-                     [:working_notes prose-body [:maybe [:string {:max 8000}]]]]
+                     [:display (prosed self-prose {} :display)
+                      [:string {:min 1 :max 80}]]
+                     [:pronouns (prosed self-prose {:optional true} :pronouns)
+                      [:maybe [:string {:max 40}]]]
+                     [:about (prosed self-prose prose-body :about)
+                      [:maybe [:string {:max 8000}]]]
+                     [:boundaries (prosed self-prose prose-body :boundaries)
+                      [:maybe [:string {:max 8000}]]]
+                     [:lessons (prosed self-prose prose-body :lessons)
+                      [:maybe [:string {:max 8000}]]]
+                     [:working_notes (prosed self-prose prose-body
+                                             :working_notes)
+                      [:maybe [:string {:max 8000}]]]]
              :edit {:prefill [:display :pronouns :about :boundaries
                               :lessons :working_notes]}
              :record true
@@ -333,17 +405,25 @@
    :schema [:map
             ;; whose journal — the inhabitant agent id. Stamped by the
             ;; engine, filterable so own-ids finds an agent's entries.
-            [:owner {:optional true :x-display {:raw true}}
+            [:owner (prosed journal-prose {:optional true
+                                          :x-display {:raw true}} :owner)
              [:maybe [:string {:min 1 :max 128}]]]
-            [:title [:string {:min 1 :max 200}]]
+            [:title (prosed journal-prose {} :title)
+             [:string {:min 1 :max 200}]]
             ;; the page, free prose — never a field to facet on
-            [:body {:x-display {:widget "prose"}} [:string {:min 1 :max 20000}]]
-            [:mood {:optional true} [:maybe [:string {:max 40}]]]]
+            [:body (prosed journal-prose {:x-display {:widget "prose"}} :body)
+             [:string {:min 1 :max 20000}]]
+            [:mood (prosed journal-prose {:optional true} :mood)
+             [:maybe [:string {:max 40}]]]]
    :create-schema [:map
-                   [:owner {:optional true} [:maybe [:string {:min 1 :max 128}]]]
-                   [:title [:string {:min 1 :max 200}]]
-                   [:body [:string {:min 1 :max 20000}]]
-                   [:mood {:optional true} [:maybe [:string {:max 40}]]]]
+                   [:owner (prosed journal-prose {:optional true} :owner)
+                    [:maybe [:string {:min 1 :max 128}]]]
+                   [:title (prosed journal-prose {} :title)
+                    [:string {:min 1 :max 200}]]
+                   [:body (prosed journal-prose {} :body)
+                    [:string {:min 1 :max 20000}]]
+                   [:mood (prosed journal-prose {:optional true} :mood)
+                    [:maybe [:string {:max 40}]]]]
    :filterable {:owner #{:eq} :state #{:eq}}
    ;; the story reads newest-first; created_at is the engine column,
    ;; never a prose/body field
@@ -353,9 +433,13 @@
    :actions
    {:amend {:from #{:written :amended} :to :amended
             :input [:map
-                    [:title [:string {:min 1 :max 200}]]
-                    [:body {:x-display {:widget "prose"}} [:string {:min 1 :max 20000}]]
-                    [:mood {:optional true} [:maybe [:string {:max 40}]]]]
+                    [:title (prosed journal-prose {} :title)
+                     [:string {:min 1 :max 200}]]
+                    [:body (prosed journal-prose {:x-display {:widget "prose"}}
+                                   :body)
+                     [:string {:min 1 :max 20000}]]
+                    [:mood (prosed journal-prose {:optional true} :mood)
+                     [:maybe [:string {:max 40}]]]]
             :edit {:prefill [:title :body :mood]}
             :record true
             ;; the body is required prose, but amend PREFILLS the entry

@@ -36,6 +36,28 @@
 (def overwrite
   {:idempotent true :reversible false :confirm false})
 
+;; ── the household's own words for a line's fields ───────────────────
+;; the create door, the row schema and set_grams are separate surfaces
+;; asking for the same three things; the prose is def'd once so no
+;; door can drift from another's spelling
+
+(def ^:private meal-display
+  {:label "Meal"
+   :help "The meal whose recipe this line belongs to — only meals already on the family list can take lines."})
+
+(def ^:private ingredient-display
+  {:label "Ingredient"
+   :help "What the recipe asks for, named from the ingredient list so its tracked prices can find this line."})
+
+(def ^:private grams-display
+  {:label "How much"
+   :help "Grams the recipe asks for — the pricing math works in grams, so convert cups and cans before typing."})
+
+(def ^:private cost-display
+  {:widget "money"
+   :label "Est. cost"
+   :help "Leave it blank and the line prices itself from the cheapest tracked product; fill it in only to overrule that."})
+
 ;; ── the pricing law (handler code — the v9 fn= boundary) ────────────
 
 (defn best-product
@@ -179,7 +201,7 @@
 
 (defaction set-grams-action
   {:from #{:on_recipe} :to :on_recipe
-   :input [:map [:grams [:int {:min 1}]]]
+   :input [:map [:grams {:x-display grams-display} [:int {:min 1}]]]
    :edit {:prefill [:grams]}
    :safety overwrite
    :handler set-grams
@@ -187,7 +209,12 @@
 
 (defaction substitute
   {:from #{:on_recipe} :to :on_recipe
-   :input [:map [:substitution_id {:kind :substitution} :waymark/ref]]
+   :input [:map
+           [:substitution_id
+            {:kind :substitution
+             :x-display {:label "Stand-in to use"
+                         :help "Which accepted stand-in this line becomes — both the ingredient and the grams change to match it."}}
+            :waymark/ref]]
    :guards [substitution-applies]
    :safety {:idempotent true :reversible false :confirm false
             :one-way "The line becomes the stand-in; the next verdict is another substitution or a rematch of the pantry itself."}
@@ -209,22 +236,27 @@
    :initial :on_recipe
    :terminal #{:removed}
    :summary "{data.grams} g {data.ingredient_name} · {data.meal_name}"
+   ;; a line has no name of its own — it IS the pairing, so the card
+   ;; wears both engine-maintained ref-label copies rather than a raw
+   ;; id (the refs below maintain them via their :label options)
+   :label-template "{data.ingredient_name} in {data.meal_name}"
    :nav :secondary
    :schema [:map
             [:meal_id {:kind :meal :label :meal_name :filter #{:eq}
-                       :pick {:state "on_list"}}
+                       :pick {:state "on_list"}
+                       :x-display meal-display}
              :waymark/ref]
             [:meal_name {:optional true} [:maybe [:string {:max 200}]]]
             [:ingredient_id {:kind :ingredient :label :ingredient_name
-                             :filter #{:eq} :pick {:state "active"}}
+                             :filter #{:eq} :pick {:state "active"}
+                             :x-display ingredient-display}
              :waymark/ref]
             [:ingredient_name {:optional true} [:maybe [:string {:max 200}]]]
-            [:grams [:int {:min 1}]]
+            [:grams {:x-display grams-display} [:int {:min 1}]]
             ;; write-time estimate; promoted (:filter) because the
             ;; meal's SUM runs on it. Blank only when nothing prices.
             [:est_cost_cents {:optional true :filter #{:eq :range}
-                              :x-display {:widget "money"
-                                          :label "Est. cost"}}
+                              :x-display cost-display}
              [:maybe [:int {:min 0}]]]
             ;; the accepted substitution the estimate priced through;
             ;; blank = priced as itself
@@ -234,14 +266,16 @@
    ;; the client states the ask; the estimate and the labels are the
    ;; engine's and the pricing law's
    :create-schema [:map
-                   [:meal_id {:kind :meal :pick {:state "on_list"}}
+                   [:meal_id {:kind :meal :pick {:state "on_list"}
+                              :x-display meal-display}
                     :waymark/ref]
                    [:ingredient_id {:kind :ingredient
-                                    :pick {:state "active"}}
+                                    :pick {:state "active"}
+                                    :x-display ingredient-display}
                     :waymark/ref]
-                   [:grams [:int {:min 1}]]
+                   [:grams {:x-display grams-display} [:int {:min 1}]]
                    [:est_cost_cents {:optional true
-                                     :x-display {:widget "money"}}
+                                     :x-display cost-display}
                     [:maybe [:int {:min 0}]]]]
    :on-create line-on-create
    :filterable {:state #{:eq :in}}

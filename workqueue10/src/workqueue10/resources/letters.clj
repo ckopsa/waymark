@@ -391,10 +391,24 @@
             ;; the note itself, free prose — never a field to facet on
             [:body {:x-display {:widget "prose"}} [:string {:min 1 :max 10000}]]]
    :create-schema [:map
-                   [:owner {:optional true} [:maybe [:string {:min 1 :max 128}]]]
-                   [:to [:string {:min 1 :max 128}]]
-                   [:title {:optional true} [:maybe [:string {:max 120}]]]
-                   [:body [:string {:min 1 :max 10000}]]]
+                   [:owner {:optional true
+                            :x-display
+                            {:label "From"
+                             :help "Who is signing this — leave it blank and the house signs it in your own name; a letter cannot be sent under anybody else's."}}
+                    [:maybe [:string {:min 1 :max 128}]]]
+                   [:to {:x-display
+                         {:label "To"
+                          :help "The inhabitant this letter is for — somebody the household actually has, because it lands on their shelf and nowhere else."}}
+                    [:string {:min 1 :max 128}]]
+                   [:title {:optional true
+                            :x-display
+                            {:label "What it is about"
+                             :help "The line they see on the shelf before they open it — a few words, the way you would head a note left on the counter."}}
+                    [:maybe [:string {:max 120}]]]
+                   [:body {:x-display
+                           {:label "The letter"
+                            :help "What you wanted to say to them — once sent it cannot be edited or taken back, so say it the way you mean it."}}
+                    [:string {:min 1 :max 10000}]]]
    ;; BOTH party fields :eq-filterable — the own-surface ids-of
    ;; pushdown (owner=pid OR to=pid) depends on it; state for the shelf
    :filterable {:owner #{:eq} :to #{:eq} :state #{:eq}}

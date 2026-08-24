@@ -25,10 +25,24 @@
    :initial :draft
    :terminal #{:archived}
    :summary "Plan {data.start_date} → {data.end_date} · {state}"
+   ;; a plan is a stretch of evenings and has no name of its own; the
+   ;; two dates ARE how the household says which one it means, and the
+   ;; alternative a ref picker falls back to is a raw id (waymark-ts2)
+   :label-template "Evenings {data.start_date} → {data.end_date}"
    :schema [:map
-            [:start_date {:filter #{:eq :range} :sort :default} :waymark/date]
-            [:end_date {:filter #{:eq :range}} :waymark/date]
-            [:notes {:optional true :x-display {:widget "prose"}}
+            [:start_date {:filter #{:eq :range} :sort :default
+                          :x-display {:label "First evening"
+                                      :help "The first night this stretch covers — a session gets staged for every date from here to the last."}}
+             :waymark/date]
+            [:end_date {:filter #{:eq :range}
+                        :x-display {:label "Last evening"
+                                    :help "The last night this stretch covers; an evening outside the two dates is refused rather than quietly filed here."}}
+             :waymark/date]
+            [:notes {:optional true
+                     :examples ["Ana's away the second week — plan the loud jobs for then."]
+                     :x-display {:widget "prose"
+                                 :label "What this stretch is for"
+                                 :help "Anything that shapes the whole run of evenings — a trip, a deadline, a season with the light going early."}}
              [:maybe [:string {:max 2000}]]]]
    :owns {:sessions {:kind :evening_session :via :plan_id}}
    :links [{:rel "sessions" :owns :evening_session
