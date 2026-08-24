@@ -88,7 +88,6 @@
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
-            [waymark10.server.store :as store]
             [waymark10.wire :as wire])
   (:import (java.net URLEncoder)
            (java.nio.charset StandardCharsets)))
@@ -365,9 +364,13 @@
    :title "One row's transitions"
    :description
    (str "The audit trail of one row, newest first: which action moved "
-        "it, from which state to which, who did it and when. Every "
-        "write in this engine is logged; nothing here is reconstructed "
-        "after the fact.")
+        "it, from which state to which, who did it and when — and, for "
+        "each, WHY it was allowed. `basis` names the guards that judged "
+        "it under the law revision of that day; `judgment` carries what "
+        "those guards read, where the kind retains it. Every write in "
+        "this engine is logged; nothing here is reconstructed after the "
+        "fact, and `evidence` says which of the two answers you are "
+        "reading.")
    :input-schema {:type "object"
                   :properties {:kind {:type "string"}
                                :id {:type "string"}
@@ -578,41 +581,23 @@
                                          acknowledge_warnings)}))))))))))
 
 (defn- history
-  "The row's transitions, newest first.
+  "The row's transitions, newest first — now a call onto the route,
+  like the other five (waymark-zp5, closed).
 
-  The row is READ first, through the real route, and that read is the
-  whole of this tool's authorization: a row the grant conceals 404s
-  there, and nothing below runs. The log itself has no route to call —
-  `GET /api/{plural}/{id}/-/history` is docs/spec-time-travel.md's,
-  unbuilt — so this reads the transition log directly and projects it.
-  When that route lands this tool becomes a call onto it, like the
-  other five."
+  This namespace used to read `store/transitions` directly and choose
+  its own projection, because `GET /api/{plural}/{id}/-/history` was
+  docs/spec-time-travel.md's and unbuilt. That projection is DELETED
+  rather than widened: a transition's meaning had two homes, and the
+  bead existed to record that adding a third would be the wrong fix.
+  Concealment, the field projection over the decision record, the
+  honesty notes and the derived basis all now arrive from the one
+  place that owes them."
   [eng call session {:keys [kind id limit]}]
-  (let [rdef (rdef-of eng kind)
-        self (str "/api/" (:plural rdef) "/" id)
-        env-resp (call (request session :get self {:query "depth=summary"}))]
-    (if-not (<= 200 (:status env-resp 500) 299)
-      (pass-through env-resp)
-      (let [st (:storage eng)
-            rows (store/with-tx
-                   st (fn [tx]
-                        (store/transitions st tx {:kind (:kind rdef)
-                                                  :resource-id (str id)}
-                                           {:limit (min (long (or limit 50)) 200)
-                                            :newest-first true})))]
-        (value-result
-         {:self self
-          :kind (name (:kind rdef))
-          :transitions
-          (mapv (fn [t]
-                  (cond-> {:at (str (:at t))
-                           :action (name (:action t))
-                           :from (some-> (:from-state t) name)
-                           :to (some-> (:to-state t) name)
-                           :actor (select-keys (:actor t) [:type :id :display])}
-                    (:acknowledged t) (assoc :acknowledged (:acknowledged t))
-                    (:summary t) (assoc :summary (:summary t))))
-                rows)})))))
+  (let [rdef (rdef-of eng kind)]
+    (pass-through
+     (call (request session :get
+                    (str "/api/" (:plural rdef) "/" id "/-/history")
+                    (when limit {:query (str "limit=" (long limit))}))))))
 
 (def ^:private bodies
   {"waymark_discover" discover

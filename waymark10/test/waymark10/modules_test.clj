@@ -162,7 +162,8 @@
                "/api/surfaces/:name" "/api/surfaces/:name/:id"
                "/api/:plural" "/api/:plural/-/worksheet"
                "/api/:plural/-/:action" "/api/:plural/:id"
-               "/api/:plural/:id/-/events" "/api/:plural/:id/-/:action"
+               "/api/:plural/:id/-/events" "/api/:plural/:id/-/history"
+               "/api/:plural/:id/-/:action"
                "/api/:plural/:id/-/:action/batch"
                "/api/:plural/:id/-/:action/draft"
                "/api/:plural/:id/-/:action/draft/collab"}
@@ -186,7 +187,11 @@
         (is (< (at p) (at "/api/:plural"))
             (str p " would be read as a collection if it came later"))))
     (testing "and the plural bucket sits inside the grammar, not before it"
-      (is (< (at "/api/:plural") (at "/api/:plural/-/worksheet"))))))
+      (is (< (at "/api/:plural") (at "/api/:plural/-/worksheet"))))
+    (testing "the history read precedes the invoke grammar that would
+              shadow it (waymark-442.4)"
+      (is (< (at "/api/:plural/:id/-/history")
+             (at "/api/:plural/:id/-/:action"))))))
 
 (deftest a-module-left-out-takes-its-routes-with-it
   (let [full (engine/handler @eng)

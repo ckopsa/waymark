@@ -156,3 +156,113 @@ URL.
 `mcp/history`'s local projection is **deleted** rather than widened. That bead
 was filed precisely to record that a transition's meaning had two homes; adding
 a third first and unifying second would be the wrong order.
+
+## Built (2026-08-24, waymark-442.4)
+
+Tiers 1 and 2 landed on the amendments. Tier 3 is still the punt this spec was
+written to force, and `:retain {:data true}` is still where it will go.
+
+`waymark10/src/waymark10/server/history.clj` is the whole computation — the
+history document, the two as-of folds, the honesty notes, and the `law-of`
+seam that decides how a revision's law was reached.
+`waymark10.server.definitions/stored-fingerprint` is the on-demand loader the
+amendment asked for. `waymark10.server.router` mounts
+`GET /api/{plural}/{id}/-/history` and forks the row and collection reads on
+`?as-of=`. `waymark10.server.mcp/history` lost its local projection.
+
+### The loader, and where its cache lives
+
+The amendment was right that this was the expensive half, and it is still
+small: `:law-ids {revision → definition row id}` was already on the rdef,
+written by `boot-revise!` over **every** stored definition row of the kind
+whatever its state, so an arbitrary historical revision is one `load-row` away.
+`stored-fingerprint` tries `:judgment-laws` first (free when the revision is
+one the engine must serve anyway), then its cache, then the row; only hits are
+remembered, because a miss is waiting on a write that may land a second later.
+
+The cache lives in the **registry atom**, under `:law-fingerprints`, and not on
+the rdef. `install!` rebuilds `[:kinds kind]` wholesale on every law install
+and hands the kind a fresh `:judgment-cache`, so an rdef-borne cache of
+historical law would be discarded every time a proposal moved. The registry's
+top level survives that, and it is safe to survive it: a revision's stored
+fingerprint is written once and never rewritten. Rebuilt *guard vectors* still
+cache on `:judgment-cache` by `[revision action]`, shared by identity with the
+live rdef — the overlay is `assoc`'d onto a local copy — so the reset costs a
+rebuild and never a wrong answer.
+
+### Tier 2 is two answers, and the document says which
+
+With [the decision record](spec-decision-record.md) landed first, the *"why was
+this allowed"* question splits exactly as that spec predicted, and every
+transition on `/-/history` wears both halves plus a label:
+
+- `basis` — **derived**, from `decision/basis` under the law of the day. Free,
+  retroactive, and present on every transition ever logged.
+- `judgment` — **stored**, for a kind that declares `:retain {:judgment true}`,
+  projected through the caller's grant.
+- `evidence` — `recorded`, `before_the_record`, or `not_retained`. A retaining
+  kind's pre-retention transitions say so rather than answering with an empty
+  object; a kind that never declared retention says *that*, and still answers
+  which guards judged.
+
+`basis.law` grew a fourth value here. `decision/basis` answers `:resident` both
+when the resident code genuinely **is** that law (the pre-law horizon, the
+current revision, a pilot) and when the revision simply could not be found —
+one word for a true sentence and a hopeful one. The loader knows which
+happened, so `history/law-of` names the second `unrecoverable`, and the notes
+say the guards listed are today's.
+
+### The three departures
+
+**No re-judgment of today's document.** The spec's tier 2 asks for *the actions
+that were available on July 1st*. This does not answer that, and the omission
+is the whole reason the decision record landed first: the log records what
+happened, not what the row looked like, so re-judging July's law against
+today's document is a plausible-looking wrong answer. Tier 3 is what closes it.
+
+**The as-of read is not an envelope.** The spec says it *"answers the envelope
+with `state`, `law_revision` and `summary`"*. It answers a dedicated `as_of`
+document instead, with the `X-As-Of` header the spec asked for. An envelope
+carries `data`, `actions`, `links` and an ETag, and every one of them is a
+statement about now: the data is not recoverable at all, the actions would be
+today's doors probed against today's document, and a client whose first rule is
+*follow the envelope's own href* would find live verbs hanging off a historical
+document. The `summary` is not reconstructed either — `invoke` renders it at
+write time and the transition keeps the sentence, so the as-of read answers
+with the words the household actually read that day.
+
+**An as-of collection takes no filters.** The collection grammar queries stored
+`data`, and `data` at a past instant is exactly what the log does not carry. A
+filter answered against today's rows would name a set nobody could describe, so
+any parameter beside `as-of` is a 422 that says why. The fold is bounded, and
+`complete` is false only when the bound was reached *before* the instant asked
+about — reaching it after costs nothing, because those transitions could not
+have changed the answer.
+
+### The disclosure clause, inherited rather than reinvented
+
+`decision/project` already existed, beside the write, and the route calls it
+with `(fn [field-name] → bool)` built from the same `:field?` closure a row read
+narrows its data with. Concealment is the row's and is checked first, so a row
+a grant hides has no history either. A transition's stored `inputs` are
+deliberately **not** served: a raw input map has no field projection of its own,
+and growing one would be a second visibility surface with its own bugs.
+
+### `waymark-zp5`, closed by deletion
+
+`mcp/history` is now `(call (request session :get ".../-/history"))` and nothing
+else — a pass-through like the other five. The projection it used to choose for
+itself is gone rather than widened, which was the whole content of that bead.
+
+### Proved by
+
+`waymark10.time-travel-test` boots twice over one storage, the law sweep's
+shape for the opposite reason: the sweep needs two laws in hand at once, and
+this needs a law that is **gone** — a revision the engine promoted past, whose
+rows all restamped, whose `:judgment-laws` entry `sweep!` therefore dropped.
+The severity of one guard moves between the boots with its name and position
+held fixed (`rebuild-guards` substitutes positionally *and* by name, so a
+rename would prove nothing), and a transition stamped revision 1 answering
+`warning` while the resident code says `refuse` is the proof that the law of
+the day served. `packs/core` grew `:core/history`, which holds every engine to
+the retention agreement from the wire rather than from the column.

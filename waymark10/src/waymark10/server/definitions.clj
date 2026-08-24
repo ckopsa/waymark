@@ -370,6 +370,64 @@
 (defn proposed-law [eng kind] (:proposed-law (rdef-now eng kind)))
 (defn piloted-law [eng kind] (:piloted-law (rdef-now eng kind)))
 
+;; ── the on-demand loader (waymark-442.4) ────────────────────────────
+
+(defn- load-fingerprint
+  "Revision R's stored fingerprint, read out of its definition ROW.
+  `:law-ids` ({revision → row id}) is the index — written by
+  boot-revise! over every stored row of the kind, whatever state, and
+  kept current by install-current!/after-pilot! — so the common case
+  is one load-row. The scan behind it is the honest fallback for an
+  engine whose rdef predates the index (a kind installed by a boot
+  that never wrote one); it costs a query and answers rather than
+  guessing."
+  [eng kind revision]
+  (when (rdef-now eng :definition)
+    (let [st (:storage eng)
+          row (or (when-some [id (get-in (rdef-now eng kind) [:law-ids revision])]
+                    (store/with-tx st (fn [tx] (store/load-row st tx :definition
+                                                               id {}))))
+                  (first (filter #(= revision (rev-of %)) (def-rows eng kind))))
+          fp (some-> row fp-of wire-keys)]
+      (when (and (map? fp) (seq fp)) fp))))
+
+(defn stored-fingerprint
+  "The law of revision R for one kind — the half of time travel that
+  `:judgment-laws` deliberately does not hold.
+
+  That slot carries only the revisions that must be SERVED: a
+  grandfathered law with rows still stamped to it, or the current law
+  under a propose hold. install-current! dissocs the revision it
+  promotes and sweep! dissocs a law whose last row left, because a
+  law nobody is judged by should not be resolved through on every
+  read. An as-of question asks the opposite thing — what did the law
+  of THAT day say — so it needs an ARBITRARY revision, and it reads
+  the definition row to get one.
+
+  Cached in the registry atom under :law-fingerprints, NOT on the
+  rdef, and that placement is the whole subtlety: `install!` rebuilds
+  [:kinds kind] wholesale on every law install and hands the kind a
+  fresh :judgment-cache, so an rdef-borne cache of historical law
+  would be thrown away every time a proposal moved. The registry's
+  top level survives, and it is safe to survive: a revision's stored
+  fingerprint is written once and never rewritten, so a hit can never
+  go stale. Only hits are remembered — a miss stays a miss, because
+  the row it is waiting for may be written a second from now.
+
+  An engine built without a registry atom (`inv/engine`, the bare
+  constructor a unit test reaches for) still gets an ANSWER; it just
+  pays for it every time. Refusing to answer without a cache would
+  make the law of the day depend on how the engine was constructed."
+  [eng kind revision]
+  (when (some? revision)
+    (let [reg (:registry eng)]
+      (or (get (:judgment-laws (rdef-now eng kind)) revision)
+          (when reg (get-in @reg [:law-fingerprints kind revision]))
+          (when-some [fp (load-fingerprint eng kind revision)]
+            (when reg
+              (swap! reg assoc-in [:law-fingerprints kind revision] fp))
+            fp)))))
+
 ;; ── the deploy story helpers ────────────────────────────────────────
 
 (defn- describe [diff]

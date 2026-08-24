@@ -500,6 +500,98 @@
         (conf/decision-record-violations (:engine ctx))]
     {:violations (mapv pr-str violations) :covered covered}))
 
+(defn- history-doc-violations
+  "One row's /-/history, graded against its own promises
+  (waymark-442.4, docs/spec-time-travel.md tiers 1-2): the log is
+  served newest first, every transition says which of the two answers
+  it is giving, and the basis says how the law of the day reached it.
+
+  The retention agreement is the load-bearing line. `evidence` may say
+  `recorded` only for a kind that declared `:retain {:judgment true}`,
+  and a kind that declared none may never say anything but
+  `not_retained` — the default-off posture proved from the wire rather
+  than from the column."
+  [ctx kind]
+  (let [rd (rdef ctx kind)
+        row (row-in-state ctx kind (:initial rd))]
+    (when row
+      (let [retains? (boolean (get-in rd [:retain :judgment]))
+            self (self-of ctx kind (:id row))
+            resp (req ctx :get (str self "/-/history"))
+            d (:data (json ctx resp))
+            ts (vec (:transitions d))
+            ats (mapv #(str (:at %)) ts)]
+        (if (not= 200 (:status resp))
+          [(str "history: GET " self "/-/history answered " (:status resp)
+                ", not 200")]
+          (into []
+                (remove nil?)
+                (concat
+                 [(when-not (seq ts)
+                    (str "history: " self " has been written to and its log"
+                         " is empty — every write in this engine is logged"))
+                  (when-not (seq (:notes d))
+                    (str "history: " self " reported no notes — the derived"
+                         " basis, the retention posture and the tier-3 punt"
+                         " are what keep this document from being read as"
+                         " the whole past"))
+                  (when (not= (count ts) (:scanned d))
+                    (str "history: " self " scanned " (pr-str (:scanned d))
+                         " but served " (count ts) " transitions"))
+                  (when (not= ats (vec (reverse (sort ats))))
+                    (str "history: " self " served its transitions out of"
+                         " order — the log reads newest first"))]
+                 (map (fn [t]
+                        (let [ev (str (:evidence t))
+                              law (str (get-in t [:basis :law]))]
+                          (cond
+                            (not (contains? #{"recorded" "before_the_record"
+                                              "not_retained"} ev))
+                            (str "history: a transition of " self " reports"
+                                 " evidence " (pr-str ev) " — the tiers are"
+                                 " recorded, before_the_record and"
+                                 " not_retained")
+
+                            (and (= "recorded" ev) (not retains?))
+                            (str "history: " self " reports recorded evidence"
+                                 " for " (pr-str (:action t)) " on a kind that"
+                                 " declares no :retain {:judgment true} —"
+                                 " retention is off by default and paid for"
+                                 " by declaration")
+
+                            (and (not retains?) (not= "not_retained" ev))
+                            (str "history: " self " reports evidence "
+                                 (pr-str ev) " on a kind that retains nothing")
+
+                            (and (= "recorded" ev) (nil? (:judgment t)))
+                            (str "history: " self " reports recorded evidence"
+                                 " for " (pr-str (:action t)) " and carries no"
+                                 " judgment object")
+
+                            (and (some? (:basis t))
+                                 (not (contains? #{"stored" "resident" "engine"
+                                                   "unrecoverable"} law)))
+                            (str "history: a transition of " self " reports"
+                                 " law " (pr-str law) " — the tiers are"
+                                 " stored, resident, engine and unrecoverable")
+
+                            (and (some? (:basis t))
+                                 (not= (:law_revision t)
+                                       (get-in t [:basis :revision])))
+                            (str "history: a transition of " self " is stamped"
+                                 " revision " (pr-str (:law_revision t))
+                                 " and its basis answers for "
+                                 (pr-str (get-in t [:basis :revision]))))))
+                      ts))))))))
+
+(defn- history-violations
+  "The transition log, read as history on every kind this engine
+  serves. Core, not a module: the log is core storage, and tier 1's
+  other half is a query parameter on the core row read that no module
+  could have contributed."
+  [ctx]
+  (into [] (mapcat #(history-doc-violations ctx %)) (app-kinds ctx)))
+
 (defn- touches-violations
   "The blast radius declared is the blast radius logged. No
   application suite ever called this one — it had no driver to be
@@ -661,6 +753,11 @@
     ;; one proves WHY it was allowed — and proves that a kind which
     ;; declared no retention paid no bytes for the privilege
     {:name :core/decision-record :run decision-record-violations}
+    ;; …and the audit's third face: the log READ, as the wire serves
+    ;; it. Replay proves the edge was legal and the record proves why
+    ;; it was allowed; this one proves a client can ask, and that what
+    ;; comes back says which of the two answers it is giving
+    {:name :core/history :run history-violations}
     ;; the POLICY's own obligation: the packs above prove the
     ;; machinery, this one proves what the household actually
     ;; declared. Core, not a module — a scenario judges core's law

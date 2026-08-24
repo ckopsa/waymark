@@ -100,6 +100,7 @@
             [waymark10.server.drafts :as drafts]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
+            [waymark10.server.history :as history]
             [waymark10.server.invoke :as inv]
             [waymark10.server.members :as members]
             [waymark10.server.oidc :as oidc]
@@ -461,17 +462,37 @@
             (println "waymark10 presence read-mark failed:"
                      (ex-message e))))))))
 
+(defn- as-of-response
+  "An as-of document, marked as one. `X-As-Of` is the spec's own
+  request: the body is not an envelope and cannot be mistaken for one
+  by anything that reads it, but a proxy, a log line or a cache reads
+  headers, and the marker is for them."
+  [body ^java.time.Instant instant]
+  (json-response 200 (p/wire-value body) "application/json"
+                 {"X-As-Of" (str instant)}))
+
 (defn- collection [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-kind! req rdef)
-          params (query-params req)
-          rows (rows-of params)
-          env (collections/envelope eng rdef (dissoc params "rows")
-                                    (cond-> (render-opts eng req)
-                                      rows (assoc :rows rows)))]
-      (mark-read! eng req (str "/api/" plural))
-      (json-response 200 env media-type nil))))
+          params (query-params req)]
+      ;; time travel tier 1: ?as-of= answers the rows that existed
+      ;; then, and it forks BEFORE parse-query — the collection
+      ;; grammar refuses every parameter it does not declare, so an
+      ;; as-of that fell through would 422 rather than answer
+      (if-some [instant (history/as-of-instant params)]
+        ;; params whole, `rows` included: an as-of collection declares
+        ;; no parameter but its own, and refusing the ones it cannot
+        ;; honor is the collection grammar's own posture
+        (as-of-response (history/collection-as-of eng rdef instant params
+                                                  (visibility-of req))
+                        instant)
+        (let [rows (rows-of params)
+              env (collections/envelope eng rdef (dissoc params "rows")
+                                        (cond-> (render-opts eng req)
+                                          rows (assoc :rows rows)))]
+          (mark-read! eng req (str "/api/" plural))
+          (json-response 200 env media-type nil))))))
 
 (defn- create [eng]
   (fn [{{:keys [plural]} :path-params :as req}]
@@ -661,12 +682,50 @@
      env
      embeddable)))
 
-(defn- get-one [eng]
+(defn- history-doc
+  "GET /api/{plural}/{id}/-/history — the transition log as a read
+  (docs/spec-time-travel.md, waymark-442.4).
+
+  CORE, not a module, and the two reasons are the same reason: the
+  log is core storage (every engine has one, whatever it assembled),
+  and tier 1's other half is a query PARAMETER on the core row and
+  collection reads, which no module could contribute. The MCP tool
+  that rides this address is a module; an address a module needed and
+  core might not have mounted would be a dependency the inventory
+  table has no column for.
+
+  Concealment is the ROW's, checked before a single transition is
+  read — a row a grant hides has no history either — and what
+  survives it is projected field by field."
+  [eng]
   (fn [{{:keys [plural id]} :path-params :as req}]
     (let [rdef (rdef-by-plural eng plural)
           _ (check-row! req rdef id)
-          depth (depth-of req)
-          row (load-decoded eng rdef id)
+          ;; the row must BE there: history for an id this engine
+          ;; never held is a 404 like any other missing row, not an
+          ;; empty log that would read as "nothing ever happened"
+          _ (load-decoded eng rdef id)
+          doc (history/row-history eng rdef id (query-params req)
+                                   (visibility-of req))]
+      (mark-read! eng req (str "/api/" plural "/" id))
+      (json-response 200 (p/wire-value doc) "application/json" nil))))
+
+(defn- as-of-one
+  "GET /api/{plural}/{id}?as-of=INSTANT (time travel tier 1). It does
+  NOT load the row: the log is the record of a row that existed, and
+  refusing to answer for a retired-then-purged id would make the one
+  read that is about the past depend on the present. Concealment is
+  still the grant's — check-row! ran before this."
+  [eng rdef id instant req]
+  (as-of-response (history/row-as-of eng rdef id instant
+                                     (visibility-of req))
+                  instant))
+
+(defn- get-one-live
+  "The live row read: the envelope, as it has always been."
+  [eng rdef plural id req]
+  (let [depth (depth-of req)
+        row (load-decoded eng rdef id)
           ;; the mirror's pull-through seam (phase 8): a stale mirrored
           ;; row refreshes from its adapter on read, system actor.
           ;; :suppress-mirror-refresh is the walker-scoped conformance
@@ -681,17 +740,28 @@
           ;; — every kind in an engine that never met the mirror
           ;; module — serves what is stored, which is what it always
           ;; did.
-          row (if (and (:mirror rdef) (not (:suppress-mirror-refresh eng)))
-                (seams/pull-through (:mirror rdef) eng rdef row)
-                row)
-          opts (render-opts eng req)
-          env (if (= :summary depth)
-                (render/envelope-summary rdef row opts)
-                (splice-embeds eng rdef (render/envelope rdef row opts) opts
-                               (embed-overrides req)))]
-      (mark-read! eng req (str "/api/" plural "/" id))
-      (json-response 200 env media-type
-                     {"ETag" (get-in env ["meta" "etag"])}))))
+        row (if (and (:mirror rdef) (not (:suppress-mirror-refresh eng)))
+              (seams/pull-through (:mirror rdef) eng rdef row)
+              row)
+        opts (render-opts eng req)
+        env (if (= :summary depth)
+              (render/envelope-summary rdef row opts)
+              (splice-embeds eng rdef (render/envelope rdef row opts) opts
+                             (embed-overrides req)))]
+    (mark-read! eng req (str "/api/" plural "/" id))
+    (json-response 200 env media-type
+                   {"ETag" (get-in env ["meta" "etag"])})))
+
+(defn- get-one
+  "The row read, forked once: `?as-of=` is a question about the past
+  and answers from the log; everything else is the live envelope."
+  [eng]
+  (fn [{{:keys [plural id]} :path-params :as req}]
+    (let [rdef (rdef-by-plural eng plural)]
+      (check-row! req rdef id)
+      (if-some [instant (history/as-of-instant (query-params req))]
+        (as-of-one eng rdef id instant req)
+        (get-one-live eng rdef plural id req)))))
 
 (defn- invoke-action [eng]
   (fn [{{:keys [plural id action]} :path-params :as req}]
@@ -1568,6 +1638,11 @@
   [["/api/:plural/-/:action" {:post (bulk-action eng)}]
    ["/api/:plural/:id" {:get (get-one eng)}]
    ["/api/:plural/:id/-/events" {:get (resource-events eng)}]
+   ;; the log, read (waymark-442.4). A literal third segment, so it
+   ;; must sit ahead of the /-/{action} grammar; a GET has no verb to
+   ;; collide with there, but position is the routing rule and this
+   ;; line's order is not decorative
+   ["/api/:plural/:id/-/history" {:get (history-doc eng)}]
    ["/api/:plural/:id/-/:action" {:post (invoke-action eng)}]
    ["/api/:plural/:id/-/:action/batch" {:post (batch-action eng)}]
    ["/api/:plural/:id/-/:action/draft" {:get (draft-get eng)
