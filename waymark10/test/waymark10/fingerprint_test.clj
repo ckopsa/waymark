@@ -157,3 +157,51 @@
   (is (= :judgment (fp/classify-path "machine.actions.finalize.safety.confirm")))
   (is (= :truth (fp/classify-path "somewhere.unmapped"))
       "an unclassified change is conservatively a change of meaning"))
+
+;; ── the law is a form, and a form must print the same twice ─────────
+;; waymark-j82. Two mechanisms made a fingerprint a function of the
+;; JVM run rather than of the declaration; these are their unit-level
+;; shapes. The whole-household proof lives in
+;; workqueue10.fingerprint-stability-test.
+
+(deftest a-reader-gensym-never-reaches-the-stored-form
+  (let [make (fn [] (eval '(waymark10.guards/defguard probe-gensym-guard
+                             {:explain "probe"}
+                             [row _inp _ctx]
+                             (some #(= :active (:state %)) (:parts row)))))
+        form-of (fn [v] (:waymark10/form (meta (:check (deref v)))))
+        a (form-of (make))
+        _ (dotimes [_ 50] (read-string "#(vector % %2)"))
+        b (form-of (make))]
+    (is (= a b)
+        "the same body, read twice with the counter moved between, is one form")
+    (is (not (re-find #"p1__\d+#" (pr-str a)))
+        "no load-global counter rides into the law")
+    (is (= (fp/callable-hash "x" (:check @(make)))
+           (fp/callable-hash "x" (:check @(make))))
+        "…so its identity holds across the boot")))
+
+(deftest gensym-free-forms-are-left-exactly-alone
+  ;; the pinned literal hashes (decision-sugar, style-invariance) rest
+  ;; on this: canonicalization costs the gensym-free world nothing
+  (let [form '(fn [row inp ctx] (assoc-in row [:data :x] (:x inp)))]
+    (is (= form (waymark10.expr/canonical-gensyms form)))
+    (is (= (pr-str form) (pr-str (waymark10.expr/canonical-gensyms form))))))
+
+(deftest an-opaque-fn-hashes-by-its-address-not-its-object
+  (let [a (fn [_ _ _] :allow)
+        b (fn [_ _ _] :deny)
+        addr "plan_day.machine.actions.assign_meal.guards.meal-fits-day.check"]
+    (is (= (fp/callable-hash addr a) (fp/callable-hash addr b))
+        (str "the recorded trade: at one address the fingerprint sees WHERE "
+             "opaque code sits, never what it does"))
+    (is (not= (fp/callable-hash addr a) (fp/callable-hash "elsewhere" a))
+        "…and moving it is a change the law can state")
+    (is (not= (fp/callable-hash addr a)
+              (fp/callable-hash addr (with-meta a {:waymark10/form '(fn [_ _ _] :allow)})))
+        "a form, once declared, outranks the address"))
+  (testing "a form-carrying callable hashes exactly as it always did"
+    (let [form '(fn [row _inp ctx] (t/allow))
+          f (with-meta (fn [_ _ _] :allow) {:waymark10/form form})]
+      (is (= (waymark10.wire/sha256-hex (pr-str form))
+             (fp/callable-hash "anywhere" f))))))

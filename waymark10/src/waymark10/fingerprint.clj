@@ -7,7 +7,11 @@
   stored as wire trees (waymark10.wire), never hashed — the diff pins
   the exact leaf that moved and any stored revision reads back into an
   evaluable form. Only the imperative residue (handlers, code guards)
-  is hashed, by canonical printed form.
+  is hashed, by canonical printed form — and where there is no form to
+  print, by the ADDRESS the declaration carries the code at, never by
+  the resident object (waymark-j82; see callable-hash for the trade).
+  The fingerprint must be a function of the declaration and of nothing
+  else: not of load order, not of a class counter, not of a JVM run.
 
   Ported semantics (waymark9 core/fingerprint.py):
   - classify-path → :shape / :judgment / :truth / :advertisement,
@@ -31,19 +35,50 @@
 (defn- form-tree [form]
   (wire/form->wire (expr/normalize form)))
 
+(def ^:private opaque-address
+  "The salt that makes an address-hash unmistakable in a diff: this
+  leaf says WHERE opaque code sits, not what it does."
+  "waymark10.opaque-code@")
+
 (defn callable-hash
-  "Identity for the imperative residue. Strings pass through (already
-  a hash); anything else hashes by canonical printed form — the
-  defhandler/defguard macros (phase 1) supply the source form as
-  metadata; a bare fn hashes by its printed identity as a stopgap the
-  checks will later refuse in strict mode."
-  [h]
+  "Identity for the imperative residue, at the address the declaration
+  carries it. Strings pass through (already a hash); a callable
+  carrying :waymark10/form — what defhandler, defguard and the
+  hand-built sugar forms supply — hashes by that canonical printed
+  form, byte-for-byte as it always has.
+
+  A BARE fn has no content to hash, so it hashes by its ADDRESS: the
+  kind, action and slot the declaration puts it in. That is the same
+  honesty the decision record already keeps about opaque code — the
+  fingerprint says where the opacity is, never what it does — and the
+  trade is recorded loudly here: swapping one bare fn's body for
+  another at the same address is INVISIBLE to the fingerprint. It was
+  exactly as invisible before (a printed object identity says nothing
+  about a body either); what changes is that it is now STABLE.
+
+  Before waymark-j82 a bare fn hashed by `pr-str` of the object —
+  #object[…$fn__12873 0x7698a3d9 …] — a compiler-assigned class
+  number and a JVM identity hash, both functions of everything loaded
+  before it. Nine workqueue10 kinds therefore hashed differently on
+  every boot with no code change at all, and production minted 73 law
+  revisions that were almost entirely boot noise. An identity that
+  moves without the law moving is not an identity.
+
+  The stopgap posture stands, one step further along: the checks now
+  WARN on a bare fn in a fingerprinted slot (checks/[opaque-residue]),
+  and a strict mode may later refuse it. The cure is the same one it
+  always was — declare it with defguard/defhandler, or mint its form
+  by hand the way guards/not-the-field does — which upgrades the leaf
+  from an address to a law."
+  [address h]
   (cond
     (nil? h) nil
     (string? h) h
-    :else (wire/sha256-hex (pr-str (or (:waymark10/form (meta h)) h)))))
+    :else (if-some [form (:waymark10/form (meta h))]
+            (wire/sha256-hex (pr-str form))
+            (wire/sha256-hex (str opaque-address address)))))
 
-(defn- guard-fp [g]
+(defn- guard-fp [address g]
   (if-some [w (:when g)]
     ;; expression guard: the stored tree IS the law; check is nil
     {"name"           (name (:name g))
@@ -62,7 +97,8 @@
      "requires_token" (:requires-token g)
      "check"          nil}
     {"name"           (name (:name g))
-     "check"          (callable-hash (or (:check g) (:accepts g)))
+     "check"          (callable-hash (str address ".check")
+                                     (or (:check g) (:accepts g)))
      "explain"        (:explain g)
      "remedies"       (mapv (fn [r]
                               (if (qualified-keyword? r)
@@ -91,12 +127,13 @@
                                                 [(name f) (vec (sort-by str vs))]))
                                          (:where c)))))
 
-(defn- derived-fp [d]
+(defn- derived-fp [address d]
   (cond-> {"over" (mapv name (:over d))}
     (contains? d :expr)      (assoc "expr" (form-tree (:expr d)))
     (contains? d :count)     (assoc "count" (aggregate-fp (:count d)))
     (contains? d :sum)       (assoc "sum" (aggregate-fp (:sum d)))
-    (contains? d :fn)        (assoc "fn" (callable-hash (:fn d)))
+    (contains? d :fn)        (assoc "fn" (callable-hash (str address ".fn")
+                                                        (:fn d)))
     (contains? d :tolerance) (assoc "tolerance" (str (:tolerance d)))
     (:explain d)             (assoc "explain" (:explain d))
     (:vars d)                (assoc "vars" (into (sorted-map)
@@ -170,12 +207,20 @@
                       (concat own nested))))
           (schema/entry-map form))))
 
-(defn- action-fp [a]
+(defn- action-fp [address a]
   (cond-> {"from"    (vec (sort (map name (:from a))))
            "to"      (name (:to a))
            "safety"  (safety-fp (:safety a))
-           "guards"  (mapv guard-fp (:guards a []))
-           "handler" (callable-hash (:handler a))}
+           ;; a guard's address names it, never its position: inserting
+           ;; a wall ahead of another must not restate the other's
+           ;; identity (the diff paths stay positional, and honest)
+           "guards"  (mapv (fn [g]
+                             (guard-fp (str address ".guards."
+                                            (name (:name g)))
+                                       g))
+                           (:guards a []))
+           "handler" (callable-hash (str address ".handler")
+                                    (:handler a))}
     ;; a default changes what a blank write stores — law, non-empty-only
     (seq (schema-defaults (:input a)))
     (assoc "input_defaults" (schema-defaults (:input a)))
@@ -235,50 +280,63 @@
   schema, owns, vocab, query, links — each facet landing with the
   feature that declares it. A mirror kind additionally projects its
   AUTHORITY facet (sync law: document contract, push-on-write,
-  external keys, adopts/frozen windows) — never its cadences."
+  external keys, adopts/frozen windows) — never its cadences.
+
+  The kind's name roots the ADDRESS every opaque leaf hashes by (see
+  callable-hash): `plan_day.machine.actions.assign_meal.guards.meal-
+  fits-day.check` is where that opacity sits, and the address is the
+  only thing about it the law can honestly state."
   [rmap]
-  (cond-> {"kind" (name (:kind rmap))
-           "machine"
-           {"states"   (mapv name (:states rmap))
-            "initial"  (name (:initial rmap))
-            "terminal" (vec (sort (map name (:terminal rmap))))
-            "actions"  (into (sorted-map)
-                             (map (fn [[k a]] [(name k) (action-fp a)]))
-                             (:actions rmap))}
-           "derived"
-           (into (sorted-map)
-                 (map (fn [[k d]] [(name k) (derived-fp d)]))
-                 (:derived rmap))}
-    ;; the facet exists exactly when the declaration names a table —
-    ;; :plural is normalized in, so every registered kind carries it
-    (and (:schema rmap) (:plural rmap))
-    (assoc "storage" (storage-fp rmap))
+  (let [kind (name (:kind rmap))
+        actions (into (sorted-map)
+                      (map (fn [[k a]]
+                             [(name k)
+                              (action-fp
+                               (str kind ".machine.actions." (name k)) a)]))
+                      (:actions rmap))
+        derived (into (sorted-map)
+                      (map (fn [[k d]]
+                             [(name k)
+                              (derived-fp
+                               (str kind ".derived." (name k)) d)]))
+                      (:derived rmap))]
+    (cond-> {"kind" kind
+             "machine"
+             {"states"   (mapv name (:states rmap))
+              "initial"  (name (:initial rmap))
+              "terminal" (vec (sort (map name (:terminal rmap))))
+              "actions"  actions}
+             "derived" derived}
+      ;; the facet exists exactly when the declaration names a table —
+      ;; :plural is normalized in, so every registered kind carries it
+      (and (:schema rmap) (:plural rmap))
+      (assoc "storage" (storage-fp rmap))
 
-    ;; the :secret disposition (waymark-kyg) is shape-class law: a field
-    ;; whose value never leaves the engine. Removing it flips a field
-    ;; concealed→world-readable, so it must mint a revision and show in
-    ;; the diff. Non-empty-only, so every secret-free kind hashes
-    ;; byte-identical to before the disposition existed
-    (and (:schema rmap) (seq (schema/secret-fields (:schema rmap))))
-    (assoc "shape" {"secret" (vec (sort (map name (schema/secret-fields
-                                                   (:schema rmap)))))})
+      ;; the :secret disposition (waymark-kyg) is shape-class law: a field
+      ;; whose value never leaves the engine. Removing it flips a field
+      ;; concealed→world-readable, so it must mint a revision and show in
+      ;; the diff. Non-empty-only, so every secret-free kind hashes
+      ;; byte-identical to before the disposition existed
+      (and (:schema rmap) (seq (schema/secret-fields (:schema rmap))))
+      (assoc "shape" {"secret" (vec (sort (map name (schema/secret-fields
+                                                     (:schema rmap)))))})
 
-    ;; the create facet (design §24, anticipated above): declared
-    ;; field defaults are law — a default changes what a blank write
-    ;; stores. Non-empty-only: the default-free world hashes as ever
-    (seq (schema-defaults (or (:create-schema rmap) (:schema rmap))))
-    (assoc "create" {"defaults" (schema-defaults
-                                 (or (:create-schema rmap) (:schema rmap)))})
+      ;; the create facet (design §24, anticipated above): declared
+      ;; field defaults are law — a default changes what a blank write
+      ;; stores. Non-empty-only: the default-free world hashes as ever
+      (seq (schema-defaults (or (:create-schema rmap) (:schema rmap))))
+      (assoc "create" {"defaults" (schema-defaults
+                                   (or (:create-schema rmap) (:schema rmap)))})
 
-    ;; recorded deviations are reviewable law (advertisement-class):
-    ;; editing one shows in the diff and mints a revision. Projected
-    ;; only when non-empty, so every deviation-free kind's hash is
-    ;; byte-identical to the pre-deviations era
-    (seq (:deviations rmap))
-    (assoc "deviations" (vec (:deviations rmap)))
+      ;; recorded deviations are reviewable law (advertisement-class):
+      ;; editing one shows in the diff and mints a revision. Projected
+      ;; only when non-empty, so every deviation-free kind's hash is
+      ;; byte-identical to the pre-deviations era
+      (seq (:deviations rmap))
+      (assoc "deviations" (vec (:deviations rmap)))
 
-    (and (:mirror rmap) (seq (authority-fp rmap)))
-    (assoc "authority" (authority-fp rmap))))
+      (and (:mirror rmap) (seq (authority-fp rmap)))
+      (assoc "authority" (authority-fp rmap)))))
 
 (defn fingerprint-hash ^String [fp]
   (wire/digest fp))

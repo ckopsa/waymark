@@ -13,14 +13,18 @@
   hash values themselves for the kinds whose residue is all
   canonical-form (meal, prep_task, event), so no future respelling
   can move those fingerprints even if it rewrites this file's old
-  spellings too; the bare-fn kinds' hashes bake in compilation order
-  (callable-hash's recorded stopgap) and hold their proof in the
-  shared-object pins instead.
+  spellings too; the formless-residue kinds hold their proof in the
+  shared-object pins instead. (Until waymark-j82 those kinds' hashes
+  baked in COMPILATION ORDER and moved every boot. They no longer do
+  — a formless :check hashes by the address the declaration carries
+  it at — but a pinned literal is still the wrong instrument for
+  them: an address-hash says nothing about a body, so pinning one
+  would pin a promise this file cannot keep.)
 
   Sharing rules, inherited from waymark10.batch-g-invariance-test:
-  - code guards and handlers hash by printed fn identity (unless
-    defhandler/defguard minted a canonical form), so the old spelling
-    must cite the very objects the new spelling uses;
+  - code guards and handlers hash by canonical printed form, and a
+    formless one by its address, so the old spelling must cite the
+    very objects the new spelling uses at the very same addresses;
   - g/require mints a fresh :check fn per call, so the grocery
     complete gate is the hoisted var, not a second g/require;
   - :on-create is not fingerprinted, but the shared object keeps the

@@ -42,14 +42,18 @@
 
 ;; ── one suite-local law ─────────────────────────────────────────────
 
-(def ^:private curator-only
-  (g/guard {:name :curator-only
-            :explain "Only a curator closes an errand; ask one to."
-            :reads [:principal]
-            :remedies [:approval_request/create]
-            :check (fn [_ _ ctx]
-                     (if (contains? (:roles (:principal ctx)) "curator")
-                       (t/allow) (t/deny)))}))
+;; defguard, not a bare :check — the macro captures the body's printed
+;; form, which is what gives the wall an identity the fingerprint can
+;; state (waymark-j82). A formless check would hash by its address and
+;; earn the [opaque-residue] warning this suite's own coverage test
+;; insists nobody here has.
+(g/defguard curator-only
+  {:explain "Only a curator closes an errand; ask one to."
+   :reads [:principal]
+   :remedies [:approval_request/create]}
+  [_ _ ctx]
+  (if (contains? (:roles (:principal ctx)) "curator")
+    (t/allow) (t/deny)))
 
 (def ^:private curator-only-broken
   "The same wall with the same words and no law behind it — what a

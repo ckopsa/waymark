@@ -169,6 +169,87 @@ a membership predicate, so paths whose leaf value was `nil` or
 and poisoned the gate toward `code_or_shape`. Presence is
 `contains?`, never truthiness — the regression test pins it.
 
+## The fingerprint is a function of the declaration and of nothing else
+
+A second scar, deeper, and worth the section it earned. The law is a
+form; a form must print the same twice. For a long while it did not,
+and the engine could not tell.
+
+Two mechanisms (waymark-j82, bisected three times before it was
+believed):
+
+- **A bare fn hashed by its printed object.** `callable-hash` fell
+  back to `pr-str` on the resident function —
+  `#object[…$fn__12873 0x7698a3d9 …]` — which is a compiler-assigned
+  class number and a JVM identity hash. Both are functions of
+  everything loaded before it. Nine of workqueue10's thirty kinds
+  therefore hashed differently on **every boot with no code change**;
+  a tenth was stable per boot but moved when any unrelated namespace
+  loaded earlier.
+- **A reader gensym rode into the stored form.** `defguard` and
+  `defhandler` capture their body AFTER READ, so a `#(…)` inside it
+  is already `(fn* [p1__10794#] …)` — and that counter is global to
+  the load. Adding a `defn` to an earlier namespace moved guards in
+  namespaces that patch never touched.
+
+The consequence was live: task rows at the deployed engine carried
+`law_revision 73`, almost all of it boot noise. Time travel's as-of
+basis, the decision record, and a propose hold all cite revision
+numbers, and those numbers were citing the class loader.
+
+The fix is two-halved, matching the two mechanisms.
+
+**Gensym canonicalization.** `expr/canonical-gensyms` renames every
+minted symbol (`p1__1234#`, `x__1234__auto__`, `G__1234`) to `g__1`,
+`g__2` … in order of first appearance, and the def-macros apply it at
+the STORAGE site — before the form becomes law, never at read — so a
+stored fingerprint in an existing database stays comparable to a
+freshly computed one once it is re-minted. A form carrying no minted
+symbol comes back identical, so the gensym-free world's pinned hashes
+do not move by a byte.
+
+**A bare fn hashes by its ADDRESS.** Opaque code has no content to
+hash; the only true thing the law can say about it is *where it sits*
+— `plan_day.machine.actions.assign_meal.guards.meal-fits-day.check`.
+So that is what is hashed. The trade is recorded loudly in
+`callable-hash`: **swapping one bare fn's body for another at the same
+address is invisible to the fingerprint.** It was exactly as invisible
+before — a printed object identity says nothing about a body either —
+and what changes is that it is now stable. A guard's address names the
+guard, never its index, so inserting a wall ahead of another does not
+restate the other's identity.
+
+The cure for the blindness is the one it always was, and the checks
+now say so out loud: `[opaque-residue]` warns on every formless
+`:check`/`:accepts` in a fingerprinted slot, beside the older
+`[handler-signatures]` warning. Declaring it with `defguard`, or
+minting its `:waymark10/form` by hand the way `guards/not-the-field`
+does, upgrades the leaf from an address to a law. Every factory in
+`waymark10.guards` (role, owner, feature-flag, require, unless,
+rate-limit) mints its form now: a guard the sugar writes is one the
+app author cannot rewrite, so filing it under an address would warn
+somebody about code that is not theirs.
+
+**The one-time move.** Fixing an identity changes it. Every kind
+carrying a formless `:check`, a factory-minted guard, or a `#(…)` in a
+guard or handler body hashes differently after this change than
+before, and mints exactly ONE legitimate revision at each database's
+next boot — a `:code-or-shape` diff that promotes totally, which is
+the correct handling of "the imperative residue's identity changed".
+After that boot the hash stops moving, which is the whole point.
+Squashing the phantom revisions already minted is a separate
+decision, filed rather than done: transitions reference
+`law_revision`, and time travel reads stored fingerprints, so the
+safe operation is marking a phantom identical-to-predecessor, never
+deleting it.
+
+The proof is the bug's own shape, run inside one JVM:
+`workqueue10.fingerprint-stability-test` fingerprints all thirty
+kinds, loads unrelated namespaces, burns the reader's gensym counter
+forward, re-evaluates every declaring namespace — which mints new fn
+objects, new class numbers and new gensyms, exactly what a boot does —
+and demands all thirty come back byte-identical.
+
 # 5. The declaration layer (phase 1, landed)
 
 A resource is one map; `defresource` normalizes it, runs the check
@@ -197,7 +278,10 @@ Recorded adaptations from the Python original:
 - **Handler identity is a warning, then a gate.** A handler without
   `defhandler`'s form metadata gets a usability warning in phase 1;
   the strict mode that refuses it arrives with the registry, when
-  grandfathered laws make unstateable identity an actual lie.
+  grandfathered laws make unstateable identity an actual lie. Since
+  waymark-j82 a guard's `:check`/`:accepts` carries the same warning
+  under its own name (`[opaque-residue]`) — it is fingerprinted
+  exactly like a handler, so it owes the same identity.
 - **`async` evaporates.** Guard checks and accepts fns are plain
   functions; concurrency is the server's problem (threads), not the
   declaration's.

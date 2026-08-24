@@ -347,6 +347,16 @@
           :needs-input true}))
 
 ;; ── built-ins ───────────────────────────────────────────────────────
+;; Every factory here mints its :check's canonical printed form
+;; EXPLICITLY, the discipline not-the-field and is-the-field draw at
+;; the bottom of this file and waymark-j82 finished. A factory-minted
+;; guard is one the app author cannot rewrite: leaving it formless
+;; would file its law under its ADDRESS (callable-hash's honest
+;; fallback) and warn an author about code that is not theirs. So the
+;; form is data here, built to print exactly as the equivalent
+;; defguard body would — the argument that distinguishes one call from
+;; the next (the role, the field, the flag) rides INSIDE it, so
+;; changing it is a change of law and not merely of a guard's name.
 
 (defn role [role-name & [{:keys [explain requires-token hide]}]]
   (guard {:name (keyword (str "role:" (clojure.core/name role-name)))
@@ -356,9 +366,15 @@
           :requires-token (clojure.core/or requires-token
                                            (str "role:" (clojure.core/name role-name)))
           :hide (boolean hide)
-          :check (fn [_ _ ctx]
-                   (if (contains? (:roles (:principal ctx)) (clojure.core/name role-name))
-                     (t/allow) (t/deny)))}))
+          :check (with-meta
+                   (fn [_ _ ctx]
+                     (if (contains? (:roles (:principal ctx)) (clojure.core/name role-name))
+                       (t/allow) (t/deny)))
+                   {:waymark10/form
+                    (list 'fn '[_ _ ctx]
+                          (list 'if (list 'contains? '(:roles (:principal ctx))
+                                          (clojure.core/name role-name))
+                                '(t/allow) '(t/deny)))})}))
 
 (defn owner [& [{:keys [field explain hide] :or {field :customer_id}}]]
   (guard {:name (keyword (str "owner:" (clojure.core/name field)))
@@ -366,9 +382,15 @@
           :reads [:principal]
           :requires-token (str "owner:" (clojure.core/name field))
           :hide (boolean hide)
-          :check (fn [row _ ctx]
-                   (if (= (str (get-in row [:data field])) (:id (:principal ctx)))
-                     (t/allow) (t/deny)))}))
+          :check (with-meta
+                   (fn [row _ ctx]
+                     (if (= (str (get-in row [:data field])) (:id (:principal ctx)))
+                       (t/allow) (t/deny)))
+                   {:waymark10/form
+                    (list 'fn '[row _ ctx]
+                          (list 'if (list '= (list 'str (list 'get-in 'row [:data field]))
+                                          '(:id (:principal ctx)))
+                                '(t/allow) '(t/deny)))})}))
 
 (defn feature-flag [flag & [{:keys [explain]}]]
   (guard {:name (keyword (str "feature-flag:" (clojure.core/name flag)))
@@ -376,11 +398,19 @@
                                     (str "Feature '" (clojure.core/name flag) "' is not enabled."))
           :reads [:services.features]
           :requires-token (str "feature:" (clojure.core/name flag))
-          :check (fn [_ _ ctx]
-                   (let [fs (set (:features (:services ctx)))]
-                     (if (clojure.core/or (contains? fs flag)
-                                          (contains? fs (clojure.core/name flag)))
-                       (t/allow) (t/deny))))}))
+          :check (with-meta
+                   (fn [_ _ ctx]
+                     (let [fs (set (:features (:services ctx)))]
+                       (if (clojure.core/or (contains? fs flag)
+                                            (contains? fs (clojure.core/name flag)))
+                         (t/allow) (t/deny))))
+                   {:waymark10/form
+                    (list 'fn '[_ _ ctx]
+                          (list 'let ['fs '(set (:features (:services ctx)))]
+                                (list 'if (list 'or (list 'contains? 'fs flag)
+                                                (list 'contains? 'fs
+                                                      (clojure.core/name flag)))
+                                      '(t/allow) '(t/deny))))})}))
 
 (defn rate-limit
   "Budget consumed only in :invoke mode — probe and dry-run never
@@ -392,18 +422,35 @@
     (guard {:name (keyword gname)
             :explain (clojure.core/or explain "Rate limit reached; try again shortly.")
             :reads [:now]
-            :check (fn [_ _ ctx]
-                     (if-some [rate (:rate ctx)]
-                       (let [k (str key-scope ":" (:id (:principal ctx)))
-                             cutoff (.minusSeconds ^java.time.Instant (:now ctx) (long per-seconds))
-                             hits ((:window rate) k cutoff)]
-                         (if (>= (count hits) limit)
-                           (t/deny {:retry-at (.plusSeconds ^java.time.Instant (first hits)
-                                                            (long per-seconds))})
-                           (do (clojure.core/when (= :invoke (:mode ctx))
-                                 ((:hit rate) k (:now ctx)))
-                               (t/allow))))
-                       (t/allow)))})))
+            :check (with-meta
+                     (fn [_ _ ctx]
+                       (if-some [rate (:rate ctx)]
+                         (let [k (str key-scope ":" (:id (:principal ctx)))
+                               cutoff (.minusSeconds ^java.time.Instant (:now ctx) (long per-seconds))
+                               hits ((:window rate) k cutoff)]
+                           (if (>= (count hits) limit)
+                             (t/deny {:retry-at (.plusSeconds ^java.time.Instant (first hits)
+                                                              (long per-seconds))})
+                             (do (clojure.core/when (= :invoke (:mode ctx))
+                                   ((:hit rate) k (:now ctx)))
+                                 (t/allow))))
+                         (t/allow)))
+                     {:waymark10/form
+                      (list 'fn '[_ _ ctx]
+                            (list 'if-some ['rate '(:rate ctx)]
+                                  (list 'let ['k (list 'str key-scope ":"
+                                                       '(:id (:principal ctx)))
+                                              'cutoff (list 'minus-seconds '(:now ctx)
+                                                            (long per-seconds))
+                                              'hits '((:window rate) k cutoff)]
+                                        (list 'if (list '>= '(count hits) (long limit))
+                                              (list 't/deny
+                                                    {:retry-at (list 'plus-seconds '(first hits)
+                                                                     (long per-seconds))})
+                                              '(do (when (= :invoke (:mode ctx))
+                                                     ((:hit rate) k (:now ctx)))
+                                                   (t/allow))))
+                                  '(t/allow)))})})))
 
 ;; ── fact-gated requirement ──────────────────────────────────────────
 
@@ -425,11 +472,18 @@
           :hide (boolean hide)
           :remedies (vec remedies)
           :severity (clojure.core/or severity :refuse)
-          :check (fn [row inp _ctx]
-                   (cond
-                     (nil? row) (t/allow {:pending-input (nil? inp)})
-                     (get-in row [:data fact]) (t/allow)
-                     :else (t/deny)))}))
+          :check (with-meta
+                   (fn [row inp _ctx]
+                     (cond
+                       (nil? row) (t/allow {:pending-input (nil? inp)})
+                       (get-in row [:data fact]) (t/allow)
+                       :else (t/deny)))
+                   {:waymark10/form
+                    (list 'fn '[row inp _ctx]
+                          (list 'cond
+                                '(nil? row) '(t/allow {:pending-input (nil? inp)})
+                                (list 'get-in 'row [:data fact]) '(t/allow)
+                                :else '(t/deny)))})}))
 
 ;; ── history-judged guards ───────────────────────────────────────────
 
@@ -449,13 +503,22 @@
                                          " on this resource; a different principal must do this."))
           :reads [:transitions :principal]
           :hide (boolean hide)
-          :check (fn [row _ ctx]
-                   (let [actor (clojure.core/when-some [f (:actor-of ctx)]
-                                 (f row transition))]
-                     (if (clojure.core/and (some? actor)
-                                           (= actor (:id (:principal ctx))))
-                       (t/deny)
-                       (t/allow))))}))
+          :check (with-meta
+                   (fn [row _ ctx]
+                     (let [actor (clojure.core/when-some [f (:actor-of ctx)]
+                                   (f row transition))]
+                       (if (clojure.core/and (some? actor)
+                                             (= actor (:id (:principal ctx))))
+                         (t/deny)
+                         (t/allow))))
+                   {:waymark10/form
+                    (list 'fn '[row _ ctx]
+                          (list 'let ['actor (list 'when-some ['f '(:actor-of ctx)]
+                                                   (list 'f 'row transition))]
+                                '(if (and (some? actor)
+                                          (= actor (:id (:principal ctx))))
+                                   (t/deny)
+                                   (t/allow))))})}))
 
 (defn four-eyes
   "Whoever performed `of` cannot do this."
@@ -477,15 +540,14 @@
 ;; drawing, generalized, so the :decision sugar and the hand-written
 ;; guard are one law with two spellings.
 ;;
-;; Both mint their :check's canonical form EXPLICITLY. Every other
-;; factory here (role, owner, feature-flag, unless) hands the
-;; fingerprint a bare fn, which hashes by printed object identity and
-;; therefore moves every JVM run — the recorded stopgap in
-;; callable-hash. A guard the sugar mints is the one place that
-;; stopgap would be intolerable: a declaration key whose hash drifts
-;; is a declaration key that mints a revision for nothing. So the form
-;; is data here, built to print exactly as the equivalent defguard
-;; body would — which is also what lets grants.clj's own
+;; Both mint their :check's canonical form EXPLICITLY — the rule these
+;; two set first and waymark-j82 carried to every factory above (role,
+;; owner, feature-flag, require, unless, rate-limit). A guard the sugar
+;; mints is the one place a formless :check would be intolerable: it
+;; would file the law under the address callable-hash falls back to,
+;; and warn an author about a body they did not write and cannot fix.
+;; So the form is data here, built to print exactly as the equivalent
+;; defguard body would — which is also what lets grants.clj's own
 ;; someone-else-decides become a call to this factory without moving
 ;; approval_request's fingerprint by one byte.
 
@@ -557,10 +619,18 @@
        {:judges [:meal_id] :reads [:meal]
         :explain \"That meal is not on the family meal list yet.\"}
        [row inp ctx]
-       …body…)"
+       …body…)
+
+  The captured form is gensym-canonicalized (expr/canonical-gensyms)
+  before it is stored: the body arrives AFTER READ, so a `#(…)`
+  inside it is already `(fn* [p1__10794#] …)` and that counter is
+  global to the load. Storing the raw shape made the guard's identity
+  a function of everything compiled before it (waymark-j82)."
   [name opts params & body]
   `(def ~name
      (guard (merge ~opts
                    {:name ~(keyword name)
                     :check (with-meta (fn ~params ~@body)
-                             {:waymark10/form '~(list* 'fn params body)})}))))
+                             {:waymark10/form
+                              '~(expr/canonical-gensyms
+                                 (list* 'fn params body))})}))))

@@ -69,14 +69,18 @@
 
   An inline (fn …) :handler gets its canonical printed form captured
   as :waymark10/form metadata — the same identity defhandler mints —
-  so the fingerprint hashes the law, never the object."
+  so the fingerprint hashes the law, never the object. The form is
+  gensym-canonicalized on the way in (waymark-j82): a `#(…)` in the
+  body reads as `(fn* [p1__29157#] …)`, and that counter belongs to
+  the load, not to the law."
   [name amap]
   (let [amap (if (and (map? amap)
                       (seq? (:handler amap))
                       (= 'fn (first (:handler amap))))
                (assoc amap :handler
                       `(with-meta ~(:handler amap)
-                         {:waymark10/form '~(:handler amap)}))
+                         {:waymark10/form
+                          '~(expr/canonical-gensyms (:handler amap))}))
                amap)]
     `(def ~name (action ~(keyword name) ~amap))))
 

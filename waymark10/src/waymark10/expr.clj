@@ -313,6 +313,62 @@
   [form]
   (norm (debruijn form {} 0)))
 
+;; ── canonical gensyms (waymark-j82) ─────────────────────────────────
+;; The same discipline `normalize` keeps for the expression language,
+;; one turn outward: a stored CLOJURE form must print the same today
+;; and next boot, or the fingerprint it feeds is not an identity.
+;;
+;; A defguard/defhandler body is captured AFTER READ, so `#(= :active
+;; (:state %))` is already `(fn* [p1__10794#] …)` — and that counter
+;; is global to the load. Anything compiled earlier moves it, so the
+;; guard's hash drifted whenever an unrelated namespace grew a form.
+;; Renaming every minted symbol to its position of first appearance
+;; makes the printed form a function of the code and nothing else.
+
+(def ^:private minted-symbol
+  ;; the three shapes the reader and the macroexpander mint:
+  ;; #()'s p1__1234#, syntax-quote's x__1234__auto__, gensym's G__1234
+  #"^(?:.+__\d+#|.+__\d+__auto__|G__\d+)$")
+
+(defn minted-symbol?
+  "True for a symbol the reader or a macro minted rather than an
+  author wrote — the ones whose names carry a load-global counter."
+  [x]
+  (and (symbol? x)
+       (nil? (namespace x))
+       (some? (re-matches minted-symbol (name x)))))
+
+(defn canonical-gensyms
+  "Rename every minted symbol in `form` to g__1, g__2 … in order of
+  first appearance. A form that carries none comes back identical
+  (=, and printing byte-for-byte), so canonicalizing costs the
+  gensym-free world exactly nothing — the pinned literal hashes hold.
+  Idempotent: g__1 is not itself a minted shape.
+
+  The trade, recorded: an author who literally writes `g__1` beside a
+  reader gensym has them conflated. Nobody writes that symbol on
+  purpose, and the cost would be a hash collision inside one guard
+  body, not a wrong verdict."
+  [form]
+  (let [seen (volatile! {})
+        rename (fn [s]
+                 (or (get @seen s)
+                     (let [c (symbol (str "g__" (inc (count @seen))))]
+                       (vswap! seen assoc s c)
+                       c)))
+        walk (fn walk [x]
+               (cond
+                 (minted-symbol? x) (rename x)
+                 (record? x) x
+                 (map? x) (into (empty x)
+                                (map (fn [[k v]] [(walk k) (walk v)]))
+                                x)
+                 (vector? x) (into (with-meta [] (meta x)) (map walk) x)
+                 (set? x) (into (empty x) (map walk) x)
+                 (seq? x) (with-meta (apply list (mapv walk x)) (meta x))
+                 :else x))]
+    (walk form)))
+
 ;; ── evaluation (total) ──────────────────────────────────────────────
 
 (defn- truthy? [v] (boolean v))

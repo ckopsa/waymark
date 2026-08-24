@@ -57,9 +57,16 @@
 ;; ── plan (trimmed: days coverage, calendar gate, prep rollup) ───────
 
 (def date-in-plan
+  ;; the :accepts carries its own printed form (waymark-j82): an
+  ;; acceptance fn is fingerprinted exactly like a :check, and a
+  ;; formless one would file its law under its address and warn — the
+  ;; fixtures load with zero warnings, and mean it
   (g/guard {:name :date-in-plan
             :judges [:date]
-            :accepts (fn [row] (mapv :date (get-in row [:data :days])))
+            :accepts (with-meta
+                       (fn [row] (mapv :date (get-in row [:data :days])))
+                       {:waymark10/form
+                        '(fn [row] (mapv :date (get-in row [:data :days])))})
             :explain "{date} is not a day of this plan."}))
 
 (defn calendar-clear-guard

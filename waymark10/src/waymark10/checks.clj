@@ -231,6 +231,32 @@
                          "defhandler")))))
         (machine/actions-seq r)))
 
+(defn- check-opaque-residue
+  "The other half of the stateable-identity sentence (waymark-j82). A
+  guard's :check/:accepts is fingerprinted exactly like a handler, and
+  a BARE fn has no form to hash: since j82 it hashes by its ADDRESS,
+  which is stable but says nothing about the body. So the law records
+  where the opacity sits and cannot see it change. Warn where it sits
+  — a warning now, the refusal callable-hash promises later. The cure
+  is defguard, or a hand-minted :waymark10/form the way
+  guards/not-the-field does it."
+  [r]
+  (into []
+        (mapcat (fn [a]
+                  (keep (fn [g]
+                          (let [h (or (:check g) (:accepts g))]
+                            (when (and (fn? h)
+                                       (nil? (:when g))
+                                       (nil? (:waymark10/form (meta h))))
+                              (str "[opaque-residue] guard " (name (:name g))
+                                   " on action " (name (:name a))
+                                   " has no stateable identity — its "
+                                   "fingerprint is its address, so a changed "
+                                   "body is invisible to the law; declare it "
+                                   "with defguard"))))
+                        (:guards a []))))
+        (machine/actions-seq r)))
+
 (def ^:private template-root #"\{([A-Za-z0-9_]+)")
 
 (defn- check-summary-template [r]
@@ -1087,7 +1113,8 @@
          [check-tokens check-reachability check-terminal-no-exit
           check-reversible check-one-way check-guard-declarations
           check-guard-templates check-create-guards check-closure
-          check-handler-signatures check-summary-template check-waive-tokens
+          check-handler-signatures check-opaque-residue
+          check-summary-template check-waive-tokens
           check-place check-edit check-altitude check-long-text
           check-options
           check-filterable check-sortable check-default-filters

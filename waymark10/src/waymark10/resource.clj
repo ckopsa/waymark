@@ -1829,11 +1829,17 @@
 
 (defmacro defhandler
   "An imperative-residue handler whose identity is its canonical
-  printed form: (defhandler assign-meal [row inp ctx] …)."
+  printed form: (defhandler assign-meal [row inp ctx] …).
+
+  The form is gensym-canonicalized before it is stored (waymark-j82)
+  — a `#(…)` in the body is already `(fn* [p1__29157#] …)` by the
+  time the macro sees it, and that counter is the load's, not the
+  law's."
   [name params & body]
   `(def ~name
      (with-meta (fn ~params ~@body)
-       {:waymark10/form '~(list* 'fn params body)})))
+       {:waymark10/form '~(expr/canonical-gensyms
+                           (list* 'fn params body))})))
 
 (defn fingerprint
   "The canonical projection of a normalized resource declaration."

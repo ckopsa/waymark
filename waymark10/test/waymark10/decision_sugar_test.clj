@@ -181,8 +181,14 @@
            (schema/entry-map (:create-schema sugared)))))
   (testing "the decider wall is one law in two objects"
     (doseq [[an a] (:actions sugared)]
-      (is (= (fp/callable-hash (:check (first (:guards a))))
-             (fp/callable-hash (:check grants/someone-else-decides)))
+      ;; both sides carry a canonical form, so callable-hash reads the
+      ;; LAW and not the address it was handed (waymark-j82) — assert
+      ;; that first, or the comparison below would pass on any two
+      ;; bare fns quoted at one address
+      (is (some? (:waymark10/form (meta (:check (first (:guards a))))))
+          (str (name an) "'s decider wall carries its printed form"))
+      (is (= (fp/callable-hash "probe" (:check (first (:guards a))))
+             (fp/callable-hash "probe" (:check grants/someone-else-decides)))
           (str (name an) "'s first guard IS someone-else-decides, by form")))))
 
 (deftest the-minted-on-create-stamps-what-the-hand-written-one-stamped
