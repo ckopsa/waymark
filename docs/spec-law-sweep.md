@@ -112,3 +112,51 @@ posture.
 
 **Medium.** The probes and the report resource are small; the honest work is
 the four finding classes and their prose. No new storage, no new dependency.
+
+## Amendments (2026-08-23, waymark-442.1)
+
+The spec above stands. Four corrections and one reuse, recorded against the
+tree rather than folded in, so the original reading survives beside them.
+
+**Enrollment is not a deploy mode.** "A `:law_sweep` kind, enrolled only on
+engines running `:propose` mode" names a verb `waymark10.modules` does not have
+and must not grow: enrollment is `:always` | `:when-declared` | `:app-opt-in`,
+and it is what `check` and the conformance driver select on. Making it depend
+on a runtime environment variable is the failure `modules.clj`'s no-discovery
+paragraph exists to forbid — `boot-revise!` would write a different law in a
+REPL than in a container. So: a `:law-sweep` **module**, whose kind enrols
+`:always` within it, and propose-only becomes a `deploy-only`-shaped guard on
+the create door (`definitions.clj:115` is the precedent). An engine that does
+not want the kind does not assemble the module.
+
+**The two probes are already in hand, and the naive reading is backwards.**
+Under a propose hold the boot installs the **current** revision's stored
+fingerprint into `:judgment-laws` while the **resident** code is the proposed
+law (`judgment.clj:12-17`). So "under current" is
+`judgment/resolve-action rdef defn' current-revision` — the overlay — and
+"under proposed" is `defn'` verbatim. The sweep needs no new judgment mechanism
+at all; it needs a caller that asks for a revision other than the row's own
+stamp.
+
+**Derivation drift is already built.** Finding class (4) is the definition
+kind's `:measure` / `:measure_pilot` lifecycle: it evaluates *both* laws'
+specs over current data and reports `{:facts [{:fact … :flips n :of total
+:sample […]}] :population … :from_revision :to_revision}` onto `data.measure`
+(`definitions.clj:288-303`, `derived/specs-under`,
+`waymark10-design.md:2139-2162`). The sweep calls it and projects the result as
+class `derivation`; it does not grow a second recomputation.
+
+**Availability drift is the design doc's own named punt.** *"Judgment blast
+radius (newly-refused rows) unmeasured"* (`waymark10-design.md:2161`, restated
+`:2341`). Class (2) is the one finding nothing in the tree answers, which is
+the sweep's whole justification and worth naming as the punt it closes.
+
+**Reuse: one evaluator, two callers.** Once
+[law scenarios](spec-law-scenarios.md) land, the per-row probe is
+`waymark10.scenario`'s judge with the revision as a parameter, and a sweep
+finding's `because` is a scenario's refusal rendered by the same code path. Two
+probe loops over `g/evaluate` would be one too many.
+
+**Sequencing.** Build order is unchanged — the sweep first — but see
+[time travel](spec-time-travel.md)'s amendment: the two share less than
+`waymark10-next.md` promised, and the sweep landing does not make tier 2 free.

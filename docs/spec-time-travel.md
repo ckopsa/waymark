@@ -102,3 +102,49 @@ Default off, so no existing engine's storage grows without a declaration.
 **Tier 1+2: small.** A fold, a query parameter, a route. **Tier 3: medium**,
 and mostly the retention declaration, the migration that adds the column, and
 the grant projection above.
+
+## Amendments (2026-08-23, waymark-442.1)
+
+**The DDL citation is stale in form, not in content.** `store/postgres.clj:73`
+is no longer a literal `CREATE TABLE`: the transitions table is a projection in
+`pg/engine-projections` (`postgres.clj:70-98`) rendered by `table-ddl`
+(`:49-59`), and `migrate/plan` diffs it additively against
+`information_schema`. The column list above is still exactly right. Adding one
+is four edits — the projection, the INSERT's column and param (`:546-563`),
+`transition->map` (`:234-250`, a column absent here is invisible to every
+reader), and one `jsonish` line in `memory.clj:273-275` — and it mints **no law
+revision**, because engine-table columns are not part of any kind's
+fingerprint.
+
+**Tier 2 and the sweep share less than advertised.** `waymark10-next.md` says
+they "share their whole mechanism". They share `judgment/rebuild-guards`. They
+do not share *revision acquisition*, and that is the expensive half: the
+sweep's two revisions are both in hand under a propose hold, while tier 2 needs
+an **arbitrary historical** revision — and `:judgment-laws` deliberately holds
+only the revisions that must be served. `install-current!` dissocs the newly
+promoted revision (`definitions.clj:491`) and `sweep!` dissocs on supersede
+(`:415`). Tier 2's real work is therefore an on-demand fingerprint loader from
+the definition row (`:law-ids {revision → row id}` already exists on the rdef)
+plus a cache keyed like `:judgment-cache`. Build the sweep first — but do not
+budget tier 2 as free.
+
+**One `:retain` map, not two.** Tier 3's proposed `after` jsonb column and
+[the decision record](spec-decision-record.md)'s `judgment` column are the same
+migration shape and the same posture (default off, grown by declaration). They
+share one key: `:retain {:data true :judgment true}`. Either alone is a partial
+declaration of the same intent, and an engine grows at most one new opt across
+both specs.
+
+**Tier 3's security clause is inherited, and it decides the order.** "An as-of
+read must project through the SAME visibility, or time travel becomes a
+disclosure channel" applies verbatim to a decision record's read values — they
+are field values. So the decision record lands **before** the history route,
+and the route ships with the projection rather than gaining it. A route that
+shipped an unprojected `judgment` object would be a disclosure channel with a
+URL.
+
+**`waymark-zp5` closes here, in one move.** When
+`GET /api/{plural}/{id}/-/history` lands it carries the judgment object too, so
+`mcp/history`'s local projection is **deleted** rather than widened. That bead
+was filed precisely to record that a transition's meaning had two homes; adding
+a third first and unifying second would be the wrong order.
