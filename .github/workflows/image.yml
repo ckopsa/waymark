@@ -1,4 +1,5 @@
-# Builds the workqueue10 image and publishes it to GHCR (waymark-27y).
+# Builds the workqueue10 image, publishes it to GHCR, and points the
+# nomad job at it (waymark-27y).
 #
 # WHY GHCR AND NOT docker.kopsa.info, the Makefile's default: a hosted
 # runner cannot reach the home cluster's registry, and a public repo is
@@ -11,12 +12,12 @@
 # WHY arm64 NATIVELY: the cluster's only node is ARM64, which locally
 # means cross-building under qemu binfmt — the one-time-per-boot install
 # the Makefile warns about. Public repos get free arm64 runners, so the
-# runner IS the target architecture and qemu never enters it.
+# runner IS the target architecture and qemu never enters it. One
+# platform, because the cluster has exactly one.
 #
-# THE TAG IS THE BARE SHORT SHA, matching the Makefile's IMAGE_TAG. A
-# CI-built image is therefore addressable by exactly the string
-# `make deploy-queue` would have computed, and the nomad var it writes
-# needs no translation.
+# THE TAG IS THE BARE SHORT SHA, computed by the same command the
+# Makefile's IMAGE_TAG runs, so the image CI pushes and the var CI
+# writes cannot drift from what a laptop would have produced.
 
 name: image
 
@@ -24,7 +25,8 @@ on:
   push:
     branches: [main]
     # Only the three modules the Dockerfile COPYs can change the image.
-    # A docs or .beads commit rebuilding it would be noise.
+    # A docs or .beads commit rebuilding and REDEPLOYING it would be
+    # noise with a restart attached.
     paths:
       - 'waymark10/**'
       - 'calendar10/**'
@@ -41,7 +43,9 @@ on:
   workflow_dispatch:
 
 # A second push to the same branch makes the first build's image
-# unwanted before it finishes.
+# unwanted before it finishes. Deploys are not cancelled mid-flight:
+# the nomad step is the last one, and by then the build it would race
+# has already been superseded.
 concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: true
@@ -55,6 +59,15 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Tag
+        id: tag
+        # Deliberately `git rev-parse --short HEAD` and not github.sha:
+        # the Makefile computes IMAGE_TAG this way, and the two must
+        # agree or a hand-run `make deploy-queue` and a CI deploy would
+        # name different images. CI checkouts are never dirty, so the
+        # Makefile's `-dirty` suffix has no counterpart by construction.
+        run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -74,12 +87,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/workqueue10
-          # `prefix=` strips the action's default `sha-`, leaving the
-          # bare 7-character short SHA `git rev-parse --short HEAD`
-          # produces. CI checkouts are never dirty, so the Makefile's
-          # `-dirty` suffix has no counterpart here by construction.
           tags: |
-            type=sha,format=short,prefix=
+            type=raw,value=${{ steps.tag.outputs.sha }}
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
@@ -101,3 +110,37 @@ jobs:
           # A single-platform image wants a plain manifest, not the
           # index buildx otherwise wraps it in to carry attestations.
           provenance: false
+
+      # ---- the deploy half ----
+      #
+      # Writing the var is the whole deploy: the nomad job template
+      # reads nomad/jobs/workqueue10/deploy and restarts the server task
+      # on the new tag. Same path and same `-force` as the Makefile's
+      # deploy-queue target, so a laptop deploy and a CI deploy are the
+      # same act by two hands.
+      #
+      # GUARDED TO MAIN, not merely to non-PR: workflow_dispatch can be
+      # aimed at any branch, and a manual build of a side branch must
+      # not roll the house.
+      #
+      # The migrate gate the Dockerfile names still stands and is NOT
+      # here: boot REFUSES on schema drift because WAYMARK10_AUTO_MIGRATE
+      # stays unset, so a deploy whose schema moved fails loudly at the
+      # task rather than migrating itself. `clojure -M:migrate` (APPLY=1)
+      # remains a deliberate act before pushing such a change.
+
+      - name: Setup Nomad CLI
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: hashicorp/setup-nomad@v1.0.0
+
+      - name: Point the job at the new image
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        env:
+          NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
+          NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
+        run: |
+          set -euo pipefail
+          nomad var put -force \
+            nomad/jobs/workqueue10/deploy \
+            image_tag='${{ steps.tag.outputs.sha }}' >/dev/null
+          echo "deploying ghcr.io/${{ github.repository_owner }}/workqueue10:${{ steps.tag.outputs.sha }}"
