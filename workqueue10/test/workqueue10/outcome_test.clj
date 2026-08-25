@@ -168,6 +168,7 @@
 (defn- stage-piece! [who outcome-id says target prepared]
   (req :post "/api/outcome_pieces"
        {:outcome_id outcome-id :says says
+        :form "create"
         :target_kind target :prepared prepared}
        (human who)))
 
@@ -265,10 +266,26 @@
                                      :starts_at "Saturday at 2"})]
         (is (= 409 (:status r)))
         (is (= "the-prepared-input-fits-the-door" (guard-of r)))))
-    (testing "a kind outside the declared set never reaches a guard at all — the enum refuses it"
+    ;; waymark-jfv.9 INVERTED THIS ONE, and the inversion is the bead.
+    ;; jfv.3 asserted 422 here: `target_kind` was a closed enum, so a
+    ;; kind outside it never reached a guard at all. The owner ruled
+    ;; that a piece may name anything and that what he needs is to
+    ;; inspect the impact — so a governance kind is now REACHABLE, its
+    ;; own create model judges the body, and the wall that used to be
+    ;; the enum is the engine's sentence on the row plus that kind's
+    ;; own guards under the member's hand.
+    (testing "a governance kind is no longer walled out — its own door judges the body"
       (let [r (stage-piece! "composer-fit" o "Grant yourself something"
                             "grant" {:audience "me"})]
-        (is (= 422 (:status r)))))
+        (is (= 409 (:status r)))
+        (is (= "the-prepared-input-fits-the-door" (guard-of r)))
+        (is (str/includes? (str (detail r)) "grant's own create door"))))
+    (testing "a kind this house does not serve at all is still nothing"
+      (let [r (stage-piece! "composer-fit" o "Reach for a kind nobody has"
+                            "unicorn" {:title "Nope"})]
+        (is (= 409 (:status r)))
+        (is (= "the-prepared-input-fits-the-door" (guard-of r)))
+        (is (str/includes? (str (detail r)) "no such kind"))))
     (testing "six pieces is a week rather than an afternoon"
       (dotimes [n 4]
         (is (= 201 (:status (stage-piece! "composer-fit" o
@@ -476,6 +493,7 @@
       ;; about the row instead of a promise about the composer
       (let [forged (req :post "/api/outcome_pieces"
                         {:outcome_id o :says "A piece with its own story"
+                         :form "create"
                          :target_kind "task" :prepared {:title "Forged"}
                          :impact "Yes will create nothing at all."}
                         (human "composer-impact"))]
@@ -502,3 +520,166 @@
                        (:cards feed'))]
         (is (some? card))
         (is (str/includes? (str (:impact card)) "Make it so = all 2 pieces"))))))
+
+;; ── 11. the open piece (waymark-jfv.9) ──────────────────────────────
+;;
+;; The owner's ruling, verbatim: *a piece can do whatever it wants,
+;; but I just need to be able to inspect the impact — what it's
+;; actually going to do.* jfv.3's closed enum came off, and what
+;; stands in its place is four things a declaration-time world cannot
+;; judge: the engine's sentence about a door it read off the registry,
+;; the version fence, and the two halves of the safety story — a
+;; four-eyes wall on the TARGET holding at the tap, and a governance
+;; door the member's own hand may lawfully walk through.
+
+(defn- stage-invoke-piece!
+  [who outcome-id says kind target-id action prepared]
+  (req :post "/api/outcome_pieces"
+       {:outcome_id outcome-id :says says
+        :form "invoke" :target_kind kind
+        :target_id (str target-id) :target_action (name action)
+        :prepared (or prepared {})}
+       (human who)))
+
+(defn- make-task! [who title]
+  (id-of (req :post "/api/tasks" {:title title} (human who))))
+
+(deftest an-invoke-piece-moves-the-row-it-names
+  (let [v (declare-value! "colton-inv" "an open piece" ["the shop"])
+        o (id-of (stage-outcome! "composer-inv" (vid v)))
+        t (make-task! "colton-inv" "Cut the box stock to length")
+        p (stage-invoke-piece! "composer-inv" o
+                               "Mark the stock cut once Friday is done"
+                               "task" t "complete" {})
+        d (fields p)]
+    (testing "it stages: the form is on the row, explicit, and so is the door it names"
+      (is (= 201 (:status p)))
+      (is (= "invoke" (:form d)))
+      (is (= "task" (:target_kind d)))
+      (is (= "complete" (:target_action d)))
+      (is (= t (:target_id d))))
+    (testing "and the engine wrote what the tap will do — the door by its OWN label, the row by its own name"
+      (is (str/includes? (str (:impact d)) "\"Done\" door"))
+      (is (str/includes? (str (:impact d)) "Cut the box stock to length"))
+      (is (str/includes? (str (:impact d)) "already stands"))
+      (is (str/includes? (str (:impact d)) "Nothing else.")))
+    (testing "and stamped the version it was staged against — the fence's own half"
+      (is (some? (:target_version d))))
+    (let [took (invoke! "outcome_pieces" (id-of p) :take nil
+                        (human "colton-inv"))
+          after (fields took)]
+      (testing "the tap takes the piece and cites the row it moved"
+        (is (= 200 (:status took)))
+        (is (= "taken" (:state (json took))))
+        (is (= (str "/api/tasks/" t) (str (:materialized after)))))
+      (testing "the TARGET really moved, through its own door"
+        (is (= "done" (:status (fields (req :get (str "/api/tasks/" t)
+                                            (human "colton-inv")))))))
+      (testing "…and the MEMBER is on that transition, never the composer"
+        (is (contains? (creators :task t) [:complete "colton-inv"]))
+        (is (not-any? #(= "composer-inv" (second %)) (creators :task t)))))))
+
+(deftest the-fence-refuses-a-target-that-moved
+  ;; recipe_proposal's `the-order-has-not-moved` generalized past one
+  ;; kind. The framework's own `:if-match` is consulted only when the
+  ;; TARGET action declares a fence, which `complete` does not — so
+  ;; without this wall a stale tap would have gone through without a
+  ;; word, and the sentence the household read would have described a
+  ;; world that no longer existed.
+  (let [v (declare-value! "colton-fence" "a fenced piece" ["the shop"])
+        o (id-of (stage-outcome! "composer-fence" (vid v)))
+        t (make-task! "colton-fence" "Call the lumber yard")
+        p (id-of (stage-invoke-piece! "composer-fence" o
+                                      "Mark the call made"
+                                      "task" t "complete" {}))]
+    (testing "somebody moves the target between staging and the tap"
+      (is (= 200 (:status (invoke! "tasks" t :complete nil
+                                   (human "colton-fence"))))))
+    (let [took (invoke! "outcome_pieces" p :take nil (human "colton-fence"))]
+      (testing "the tap refuses BY NAME rather than writing over the top"
+        (is (= 409 (:status took)))
+        (is (= "the-target-has-not-moved" (guard-of took))))
+      (testing "and the refusal names the drift — both versions and where the row stands now"
+        (is (str/includes? (detail took) (str "/api/tasks/" t)))
+        (is (str/includes? (detail took) "was at v"))
+        (is (str/includes? (detail took) "is at v")))
+      (testing "nothing landed: the piece is still on offer, and the way out is two taps"
+        (is (= "offered" (:state (json (req :get (str "/api/outcome_pieces/" p)
+                                            (human "colton-fence"))))))
+        (is (= 200 (:status (invoke! "outcome_pieces" p :not_this nil
+                                     (human "colton-fence")))))))))
+
+(deftest a-four-eyes-wall-on-the-target-holds-at-the-tap
+  ;; HALF ONE OF THE RULING'S SAFETY STORY. Governance doors are not
+  ;; walled off any more — and they do not need to be, because the tap
+  ;; IS a person's hand and the target's own guards judge it as that
+  ;; person, in the transaction. `outcome/the-composer-does-not-decide`
+  ;; is `g/not-the-field`, the very guard `desugar-decision` mints for
+  ;; every `:decision` kind's `:decider`, so this is the same wall an
+  ;; approval_request wears — proved on the door this file can stage
+  ;; both sides of.
+  (let [v (declare-value! "colton-4e" "four eyes, still" ["the shop"])
+        his (id-of (stage-outcome! "colton-4e" (vid v)))
+        o (id-of (stage-outcome! "composer-4e" (vid v)))
+        p (stage-invoke-piece! "composer-4e" o
+                               "Set the bundle you staged yourself aside"
+                               "outcome" his "not_this_week" {})]
+    (testing "the piece stages — no enum stands in front of a governance door any more"
+      (is (= 201 (:status p))))
+    (let [took (invoke! "outcome_pieces" (id-of p) :take nil
+                        (human "colton-4e"))]
+      (testing "and the TARGET's own four-eyes wall refuses the wrong hand, at the tap"
+        (is (= 409 (:status took)))
+        (is (= "the-composer-does-not-decide" (guard-of took))))
+      (testing "nothing moved: the target is still offered and so is the piece"
+        (is (= "offered" (:state (json (req :get (str "/api/outcomes/" his)
+                                            (human "colton-4e"))))))
+        (is (= "offered" (:state (json (req :get (str "/api/outcome_pieces/"
+                                                      (id-of p))
+                                            (human "colton-4e"))))))))))
+
+(deftest a-value-is-affirmed-through-a-piece
+  ;; HALF TWO. The mirror image, and it is the half that makes the
+  ;; first one mean something: the member's own tap affirming his own
+  ;; value THROUGH a piece is lawful, because it is his hand. A wall
+  ;; that had refused this would have been a capability wall wearing a
+  ;; safety argument, which is exactly what the ruling took down.
+  (let [v (declare-value! "colton-aff" "unhurried Saturdays, affirmed"
+                          ["the shop"])
+        vid' (vid v)
+        o (id-of (stage-outcome! "composer-aff" vid'))
+        p (stage-invoke-piece! "composer-aff" o
+                               "Say whether this one is still yours"
+                               "value" vid' "still_stands" {})]
+    (testing "a piece may name a value's own affirmation door"
+      (is (= 201 (:status p)))
+      (is (str/includes? (str (:impact (fields p))) "already stands"))
+      (is (str/includes? (str (:impact (fields p)))
+                         "unhurried Saturdays, affirmed")))
+    (let [took (invoke! "outcome_pieces" (id-of p) :take nil
+                        (human "colton-aff"))]
+      (testing "and the member's tap WORKS — written-by-a-person passes, because a person is tapping"
+        (is (= 200 (:status took)))
+        (is (= "taken" (:state (json took)))))
+      (testing "the value carries the member's own affirmation, not the composer's"
+        (let [after (fields (req :get (str "/api/values/" vid')
+                                 (human "colton-aff")))]
+          (is (= "colton-aff" (:affirmed_by after)))
+          (is (some? (:affirmed_at after))))))))
+
+(deftest a-piece-may-not-half-approve-an-ask
+  ;; The one door an OPEN piece is refused, and it is not a wall about
+  ;; authority. `grants/approval-effects!` mints the approved ask's
+  ;; grant post-commit, at the router's boundary; a tap fired from
+  ;; inside a handler never reaches out there, so the ask would go
+  ;; terminal and the leash it was FOR would never exist. The set is
+  ;; read off `grants/wire-boundary-effects`, so waymark-442.14 empties
+  ;; it and this refusal disappears with it.
+  (let [v (declare-value! "colton-half" "no half answers" ["the shop"])
+        o (id-of (stage-outcome! "composer-half" (vid v)))
+        r (stage-invoke-piece! "composer-half" o "Approve the leash"
+                               "approval_request"
+                               "01HZQ7Y7F2R3W4V5X6Y7Z8A9B8" "approve" {})]
+    (is (= 409 (:status r)))
+    (is (= "the-door-carries-its-own-effect" (guard-of r)))
+    (is (str/includes? (detail r) "on its own screen"))))

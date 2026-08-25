@@ -795,6 +795,14 @@ async function feedStory() {
   const t1 = await post("/api/tasks",
     {title: `Call the dentist ${tag}`, detail: "the one on Maple street"});
   const t2 = await post("/api/tasks", {title: `Return the library books ${tag}`});
+  /* a third, and the number is load-bearing the way the eight retired
+     chores below are: this walk COMPLETES two tasks before the
+     deal-again block runs (one from a card, one through an open
+     piece), and a do-now line with too few candidates left can deal
+     itself the same order three times in a row — which is the hash
+     telling the truth about a small deck, and a walk failing for a
+     reason that has nothing to do with the law it is testing. */
+  await post("/api/tasks", {title: `Water the front beds ${tag}`});
   /* an activity carries a COMPOSITION verb (set_duration) beside its
      assent one — the heavier half of the partition, which must render
      as a link and never as a button */
@@ -849,6 +857,7 @@ async function feedStory() {
     await post("/api/outcome_pieces",
       {outcome_id: String(outcome.self).split("/").pop(),
        says: `${says} — twenty minutes, and Saturday opens with the glue-up`,
+       form: "create",
        target_kind: "task",
        prepared: {title: `${says}`}}, "sous");
 
@@ -1306,6 +1315,117 @@ async function feedStory() {
     .find(([u]) => u.includes("/api/verdict_reasons"));
   ok("the reason rode the feed's own origin key, like any card tap",
      !!reasonKey && reasonKey[1].startsWith("feed/" + feedDay + "/"));
+
+  /* ── the open piece (waymark-jfv.9) ────────────────────────────────
+     The owner's ruling: *a piece can do whatever it wants, but I just
+     need to be able to inspect the impact — what it's actually going
+     to do.* jfv.3's piece could only CREATE; this one MOVES the very
+     task the tap above just made, through that task's own Done door.
+
+     It is a SECOND bundle, staged now rather than beside the first,
+     because the first one's every piece has been answered — one taken,
+     one declined — so the population has already retired it and this
+     is the only bundle in the crown. */
+  console.log("· the open piece");
+  const movedTask = String((materialized || {}).self || "").split("/").pop();
+  const outcome2 = await post("/api/outcomes",
+    {goal: `And then close the loop on it ${tag}`,
+     value_id: String(val.self).split("/").pop(),
+     routing: `It runs through ${loved} too — the row is already there and`
+            + " this is the twenty seconds that finishes it.",
+     routes_through: loved,
+     evidence: [val.self, materialized ? materialized.self : t1.self]},
+    /* a SECOND composer, and not for variety: `outcomes-are-few` is
+       two a week PER AUTHOR, so a walk that staged both bundles under
+       one name would spend that name's whole allowance and refuse to
+       run twice in a week against the same dev database. */
+    "ari");
+  const o2 = String(outcome2.self).split("/").pop();
+  await post("/api/outcome_pieces",
+    {outcome_id: o2,
+     says: `Mark the stock cut once Friday is done ${tag}`,
+     form: "invoke",
+     target_kind: "task",
+     target_id: movedTask,
+     target_action: "complete",
+     prepared: {}}, "ari");
+  await post("/api/outcome_pieces",
+    {outcome_id: o2,
+     says: `Sweep the shavings up after ${tag}`,
+     form: "create",
+     target_kind: "task",
+     prepared: {title: `Sweep the shavings up after ${tag}`}}, "ari");
+
+  await evaljs(`location.reload(); true`);
+  await waitFor(`document.querySelector(
+     '.fcard[data-section="outcomes"] .fpiece')`, "the second bundle");
+  ok("a piece that MOVES a row already standing cards like any other",
+     await evaljs(`document.querySelectorAll(
+        '.fcard[data-section="outcomes"] .fpiece').length === 2`));
+  ok("the invoke piece states what its tap will do — the DOOR by its own label",
+     await evaljs(`[...document.querySelectorAll(
+        '.fcard[data-section="outcomes"] .fpiece-impact')]
+       .some(n => n.textContent.includes('the "Done" door')
+                  && n.textContent.includes("already stands")
+                  && n.textContent.endsWith("Nothing else."))`));
+  ok("…and it NAMES the row it will move, not just the kind",
+     await evaljs(`[...document.querySelectorAll(
+        '.fcard[data-section="outcomes"] .fpiece-impact')]
+       .some(n => n.textContent.includes('the "Done" door')
+                  && n.textContent.includes(
+                       ${JSON.stringify("Cut the box stock to length " + tag)}))`));
+  ok("the two forms wear ONE key — the invoke arm needed no new wire",
+     await evaljs(`(() => {
+       const t = [...document.querySelectorAll(
+         '.fcard[data-section="outcomes"] .fpiece-impact')]
+         .map(n => n.textContent);
+       return t.length === 2 &&
+              t.some(x => x.startsWith("Yes will create one task:")) &&
+              t.some(x => x.includes('will use the "Done" door'));
+     })()`));
+  console.log("    the open piece says: " + await evaljs(
+    `[...document.querySelectorAll(
+       '.fcard[data-section="outcomes"] .fpiece-impact')]
+      .find(n => n.textContent.includes("Done")).textContent`));
+  await evaljs(`(() => {
+    const p = [...document.querySelectorAll(
+      '.fcard[data-section="outcomes"] .fpiece')]
+      .find(n => n.querySelector(".fpiece-impact").textContent
+                  .includes('the "Done" door'));
+    window.__open = p;
+    [...p.querySelectorAll(".fpiece-verbs button")]
+      .find(b => b.textContent.trim() === "Yes").click();
+    return true; })()`);
+  await waitFor(`window.__open.querySelector(".fpiece-verbs .feed-settled")`,
+                "the open piece settling");
+  ok("the open piece settles on its own line, like every other tap",
+     await evaljs(`/now taken/i.test(
+       window.__open.querySelector(".fpiece-verbs").textContent)`));
+  const targetAfter = await (async () => {
+    const r = await fetch(`${BASE}/api/tasks/${movedTask}`,
+                          {headers: H("colton")});
+    return r.ok ? await r.json() : null;
+  })();
+  ok("the TARGET really moved, through its own door, under the member's name",
+     !!targetAfter && (targetAfter.data || {}).status === "done");
+  console.log("    the task now reads: " + (targetAfter || {}).summary);
+  /* and the second bundle is ANSWERED before the walk moves on, so
+     the crown is empty again and the engine this walk hands to the
+     deal-again block is the engine it found — the same discipline the
+     conformance obligation keeps, and the reason this walk can be run
+     twice against one dev database. */
+  await evaljs(`(() => {
+    const c = document.querySelector('.fcard[data-section="outcomes"]');
+    [...c.querySelectorAll(".feed-verbs button")]
+      .find(b => b.textContent.trim() === "Not this week").click();
+    return true; })()`);
+  await waitFor(`!document.querySelector(
+     '.fcard[data-section="outcomes"] .fpiece-verbs button')`,
+                "the bundle answering its own pieces");
+  ok("the bundle's verdict answers the piece still standing, and no chip survives it",
+     await evaljs(`[...document.querySelectorAll(
+        '.fcard[data-section="outcomes"] .fpiece-verbs')]
+       .some(n => /answered with the bundle/i.test(n.textContent))`));
 
   /* ── deal again: the person spins (waymark-8um.2, law 6) ────────
      Four claims, one per half of the law. ↻ Re-read asks the SAME

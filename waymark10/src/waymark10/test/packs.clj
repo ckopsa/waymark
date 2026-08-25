@@ -3902,17 +3902,24 @@
 ;; on is the engine it found.
 
 (defn- piece-target
-  "The kind a piece will become, read off the declaration's own enum
-  rather than named here. `outcome_piece/materializable` is a DECLARED
-  set that grows by law revision, and an obligation that spelled
-  `task` would be a second opinion about which kinds a composer may
-  birth."
+  "The kind a piece will become, read off the declaration rather than
+  named here — an obligation that spelled `task` would be a second
+  opinion about what a composer may birth.
+
+  IT READS `:touches` NOW AND NOT AN ENUM (waymark-jfv.9). The enum on
+  `target_kind` was the declaration until the owner's ruling replaced
+  the wall with the impact line; what a piece still advertises about
+  its create form is the blast radius on its own verdict door, so that
+  is where this looks. First create-touch naming a kind this engine
+  actually serves wins."
   [ctx]
-  (let [rd (rdef ctx :outcome_piece)
-        form (schema/field-schema (or (:create-schema rd) (:schema rd))
-                                  :target_kind)]
-    (when (and (vector? form) (= :enum (first form)))
-      (first (filter #(rdef ctx (keyword %)) (rest form))))))
+  (let [rd (rdef ctx :outcome_piece)]
+    (some (fn [[_ a]]
+            (some (fn [t]
+                    (when (and (= :create (:action t)) (rdef ctx (:kind t)))
+                      (name (:kind t))))
+                  (:touches a)))
+          (:actions rd))))
 
 (defn- outcome-card
   "The card standing for one bundle, found by its ROW rather than by a
@@ -3999,6 +4006,11 @@
                          {:outcome_id oid
                           :says (str "Piece " n " of " tag
                                      " — twenty minutes, already prepared")
+                          ;; the FORM, explicit since waymark-jfv.9: a
+                          ;; piece says whether it births a row or moves
+                          ;; one, and the door refuses a piece that left
+                          ;; the question open
+                          :form "create"
                           :target_kind target
                           :prepared (get prepped n)})))
         pieces (into [] (keep piece) [1 2 3])
@@ -4065,11 +4077,61 @@
         ;; offered — the third piece — inside one transaction.
         still (when oid (:doc (feed-doc ctx as-member)))
         card' (when oid (outcome-card still oid))
+        ;; 7b. THE OPEN PIECE (waymark-jfv.9), staged AFTER the union
+        ;; line above has been read so that claim keeps its own world.
+        ;; jfv.3's piece could only CREATE; the owner's ruling replaced
+        ;; the enum with inspection, so a piece may now MOVE a row that
+        ;; already stands — and the row this one moves is the one the
+        ;; tap two steps up just created, which is the cheapest honest
+        ;; target an obligation can have.
+        ;;
+        ;; The DOOR is read off the target's own declaration — its
+        ;; primary-styled action — and the piece is staged only when
+        ;; that door takes no input, because an obligation that had to
+        ;; invent a body for an arbitrary door would be inventing law.
+        ;; A target whose primary door takes input simply yields no
+        ;; piece and these claims stand down, the way the naming claim
+        ;; above already does.
+        open-door (when trdef
+                    (some (fn [[n a]]
+                            (when (and (= :primary (get-in a [:display :style]))
+                                       (nil? (:input a)))
+                              n))
+                          (sort-by key (:actions trdef))))
+        open-label (when open-door
+                     (get-in trdef [:actions open-door :display :label]))
+        open-piece (when (and oid landed open-door)
+                     (stage :outcome_piece
+                            {:outcome_id oid
+                             :says (str "And then " (name open-door)
+                                        " the row that piece landed " tag)
+                             :form "invoke"
+                             :target_kind target
+                             :target_id (str landed)
+                             :target_action (name open-door)
+                             :prepared {}}))
+        open-id (some-> (:doc open-piece) :self id-of)
+        open-doc (when open-id (:doc (feed-doc ctx as-member)))
+        open-card (when open-id (outcome-card open-doc oid))
+        open-part (when open-card (piece-of open-card open-id))
         accepted (when card'
                    (invoke-http ctx :outcome oid make-it-so nil
                                 {:headers (assoc as-member
                                                  "idempotency-key"
                                                  (origin card'))}))
+        open-after (when (and open-id (= 200 (:status accepted)))
+                     (json ctx (get-env ctx :outcome_piece open-id)))
+        ;; the actor on the TARGET's own door, found by the action
+        ;; rather than by recency: a mirrored kind pushes on write and
+        ;; appends a sync transition on top, so `newest-actor` would
+        ;; answer about the mirror (waymark-jfv.4's own finding, one
+        ;; door over from `create-actor`'s)
+        open-actor (when (and landed target open-door
+                              (= 200 (:status accepted)))
+                     (some (fn [t]
+                             (when (= (keyword (name (:action t))) open-door)
+                               (get-in t [:actor :id])))
+                           (vec (transitions ctx (keyword target) landed))))
         third (when (= 200 (:status accepted))
                 (json ctx (get-env ctx :outcome_piece (nth pids 2))))
         gone (when (= 200 (:status accepted))
@@ -4330,7 +4392,65 @@
        (and gone oid (outcome-card gone oid))
        (conj (str "feed: an answered bundle is still on the feed — accepted"
                   " is terminal, so it leaves by construction rather than"
-                  " by a query remembering to exclude it")))}))
+                  " by a query remembering to exclude it"))
+
+       ;; ── THE OPEN PIECE (waymark-jfv.9) ──
+       ;;
+       ;; Five claims, and each one is a clause of the owner's ruling:
+       ;; a piece may name a door instead of a birth, the engine says
+       ;; which door and which row, and the tap moves that row under
+       ;; the member's own name with the piece citing where it went.
+
+       (and landed open-door (not= 201 (:status open-piece)))
+       (conj (str "feed: a piece that MOVES a row already standing was"
+                  " refused (" (:status open-piece) "): "
+                  (pr-str (:doc open-piece))
+                  " — the target enum came off at waymark-jfv.9, and an"
+                  " engine that still refuses the invoke form is one"
+                  " where the ruling landed as prose"))
+
+       (and open-id (nil? open-part))
+       (conj (str "feed: the invoke piece never reached the bundle's card"
+                  " — a staged write nobody is shown is a write nobody"
+                  " can answer"))
+
+       (and open-part (str/blank? (str (:impact open-part))))
+       (conj (str "feed: an invoke piece carries no impact line — the"
+                  " line IS what replaced the closed target enum, so a"
+                  " piece that reaches an arbitrary door in silence is"
+                  " the one shape this whole law exists to prevent"))
+
+       (and open-part open-label (:impact open-part)
+            (not (str/includes? (str (:impact open-part))
+                                (str open-label))))
+       (conj (str "feed: the invoke piece's line does not name the DOOR"
+                  " it will knock on (" (pr-str open-label) "): "
+                  (pr-str (:impact open-part))
+                  " — a sentence that said only 'this moves a row' would"
+                  " render and teach nothing"))
+
+       (and open-after (not= "taken" (str (:state open-after))))
+       (conj (str "feed: after 'make it so' the invoke piece reads "
+                  (pr-str (:state open-after))
+                  " — the bundle's verb takes every piece still offered,"
+                  " whichever form it wears"))
+
+       (and open-after landed
+            (not (str/ends-with? (str (get-in open-after [:data :materialized]))
+                                 (str landed))))
+       (conj (str "feed: the invoke piece cites "
+                  (pr-str (get-in open-after [:data :materialized]))
+                  " rather than the row it moved — a piece names where"
+                  " its tap went, both forms alike"))
+
+       (and open-actor (not= member (str open-actor)))
+       (conj (str "feed: the row an invoke piece moved carries "
+                  (pr-str open-actor) " on that door's transition, not "
+                  (pr-str member)
+                  " — ctx :invoke hands the inner write the OUTER"
+                  " principal, and the whole safety story of an open"
+                  " piece is that the hand on the target is the"
+                  " member's own")))}))
 
 ;; ── the taps learn to speak (waymark-jfv.16) ────────────────────────
 ;;
@@ -4395,6 +4515,7 @@
                          {:outcome_id oid
                           :says (str "Piece " n " of " tag
                                      " — twenty minutes, already prepared")
+                          :form "create"
                           :target_kind target
                           :prepared (create-body ctx (keyword target)
                                                  (+ 4700 (long n)))})))

@@ -1266,11 +1266,24 @@
 ;; backfill. `piece-impact` is public for exactly those two callers.
 ;;
 ;; THE SHAPE IS A FUNCTION OF THE PIECE'S TARGET FORM, one arm per
-;; form, and today the enum closes at one: `:create`. waymark-jfv.9's
-;; general piece — {kind, row id, action, prepared} — slots its own
-;; arm in beside this one ("Yes will <action> <that row>: <the
-;; engine's diff>") without touching it, which is why the create arm
-;; is spelled as an arm rather than as the whole function.
+;; form. jfv.17 wrote the CREATE arm and left the seat beside it warm;
+;; waymark-jfv.9 sat down in it. The two arms are now:
+;;
+;;   :create — "Yes will create one task: …"
+;;   :invoke — "Yes will use the \"Done\" door on one task that
+;;              already stands: …"
+;;
+;; and there is no third, because an UPDATE is not a form: a revise is
+;; an ACTION, so editing an existing row is the invoke arm naming that
+;; kind's own wording door. That was weighed at jfv.9 and written down
+;; rather than left implicit.
+;;
+;; THE OWNER'S RULING is what took the wall down and what put this
+;; sentence in its place: *a piece can do whatever it wants, but I
+;; just need to be able to inspect the impact — what it's actually
+;; going to do.* So the enum of targets died and this function became
+;; load-bearing: it is the ONLY place a household reads what a tap
+;; reaches, and every word of it is derived from a declaration.
 
 (defn- affirming-verb
   "The word the household will actually tap, read off the kind's own
@@ -1336,19 +1349,49 @@
   (when (:create-push (:mirror trdef))
     (str ", and at the source it mirrors to, the way any " noun " does")))
 
-(defn piece-impact
-  "The engine's reading of one still-offered piece's tap, in the
-  household's own words — the CREATE arm, which is the whole of the
-  target form enum today.
+(defn- mirror-edit-clause
+  "The same clause for a tap that MOVES a row rather than birthing
+  one, and the condition is `:push-on-write` rather than
+  `:create-push`: a kind that pushes its edits carries this tap out to
+  the authority too, whether or not it was ever allowed to push a
+  birth."
+  [trdef noun]
+  (when (:push-on-write (:mirror trdef))
+    (str ", and at the source it mirrors to, the way any " noun " does")))
 
-  Every word of it is derived: the verb from the piece kind's primary
-  action, the noun from the target's declaration, the name from the
-  target's `:label-template` over the prepared body, and the mirror
-  clause from the target's `:mirror`. nil when the target kind is not
-  one this engine serves, which is the same answer the card gives —
-  no line rather than a guess."
+(defn- row-label
+  "What the house already calls the row this tap would move — its own
+  `:label-template`, rendered over its own data. The same template
+  `invoke/label-of` writes into every labelled ref, so the name in the
+  sentence is the name on the card the household would open."
+  [trdef row]
+  (when (and trdef row)
+    (when-some [tpl (:label-template trdef)]
+      (let [s (str/trim (summary/render tpl row))]
+        (when (and (seq s) (not= "—" s))
+          (if (< 200 (count s)) (str (subs s 0 199) "…") s))))))
+
+(defn- state-word
+  "A state token mid-sentence — `summary/state-label`'s prose without
+  its capital, because this one is never the start of a sentence."
+  [s]
+  (some-> s name (str/replace "_" " ")))
+
+(defn- carried-clause
+  "The prepared input, said out loud. An action that takes no input
+  has nothing to say here; one that does gets its body rendered rather
+  than summarized, because the whole promise of this line is that the
+  household can read what the tap carries."
+  [prepared]
+  (when (and (map? prepared) (seq prepared))
+    (let [s (pr-str (into (sorted-map) prepared))]
+      (str ", carrying " (if (< 240 (count s)) (str (subs s 0 239) "…") s)))))
+
+(defn- create-arm
+  "jfv.17's sentence, unchanged to the byte: what a tap that BIRTHS a
+  row does."
   [prdef trdef prepared]
-  (when (and prdef trdef (map? prepared))
+  (when (map? prepared)
     (let [noun (kind-noun trdef)
           label (prepared-label trdef prepared)]
       (str (or (affirming-verb prdef) "This") " will create one " noun
@@ -1356,6 +1399,76 @@
            " — in this house's own record"
            (mirror-clause trdef noun)
            ". Nothing else."))))
+
+(defn- invoke-arm
+  "waymark-jfv.9's sentence: what a tap that MOVES a row already
+  standing does. Four derived clauses and not one authored word —
+
+  - the DOOR, by the label the target kind put on it, quoted, so a
+    household reads the same word it would read on that row's own
+    screen (and a rename renames it here);
+  - the ROW, by the target's own `:label-template`, so the sentence
+    names the thing rather than an id;
+  - the MOVE, from the state the row is resting in to the state that
+    door declares as `:to` — or `stays`, when the door is a self-loop
+    like a value's `still_stands`;
+  - what the tap CARRIES, the prepared input rendered, because an
+    input the household cannot see is exactly the half of a tap the
+    ruling is about.
+
+  A target row this engine cannot find drops the row clauses rather
+  than guessing at them — jfv.17's own failure direction, less said
+  and nothing false."
+  [prdef trdef adefn trow prepared]
+  (let [noun (kind-noun trdef)
+        label (row-label trdef trow)
+        door (or (some-> (get-in adefn [:display :label]) str str/trim
+                         not-empty)
+                 (some-> (:name adefn) name (str/replace "_" " ")))
+        from (state-word (:state trow))
+        to (state-word (:to adefn))]
+    (str (or (affirming-verb prdef) "This") " will use the " (pr-str door)
+         " door on one " noun " that already stands"
+         (when label (str ": " (pr-str label)))
+         ;; SILENT ON A SELF-LOOP, and on a mirrored kind whose machine
+         ;; state is its SYNC state rather than its household one. A
+         ;; door that lands where the row already is has no move to
+         ;; report, and "which stays fresh" about a task somebody is
+         ;; completing would be a true sentence saying nothing — the
+         ;; door's own label and what it carries are the change.
+         (when (and from to (not= from to))
+           (str ", which reads " from " now and " to " after"))
+         (carried-clause prepared)
+         " — in this house's own record"
+         (mirror-edit-clause trdef noun)
+         ". Nothing else.")))
+
+(defn piece-impact
+  "The engine's reading of one still-offered piece's tap, in the
+  household's own words — one arm per target FORM, and the form is
+  read off the piece's own row rather than guessed at.
+
+  Every word of it is derived: the verb from the piece kind's primary
+  action, the noun and the mirror clause from the target's own
+  declaration, the name from a `:label-template`, and — for the invoke
+  arm — the door's label and its `:to` from the target ACTION's own
+  declaration. nil when the target kind or door is not one this engine
+  serves, which is the same answer the card gives: no line rather than
+  a guess.
+
+  `trow` is the target row the invoke arm is about, decoded, and is
+  ignored by the create arm (which has no row yet — that is the whole
+  difference between the two forms)."
+  ([prdef trdef prepared] (piece-impact prdef trdef {:prepared prepared} nil))
+  ([prdef trdef pdata trow]
+   (when (and prdef trdef)
+     (let [prepared (:prepared pdata)
+           action (some-> (:target_action pdata) str str/trim not-empty)]
+       (if (or (= "invoke" (some-> (:form pdata) str)) action)
+         (when-some [adefn (some-> (get-in trdef [:actions (keyword action)])
+                                   (assoc :name (keyword action)))]
+           (invoke-arm prdef trdef adefn trow prepared))
+         (create-arm prdef trdef prepared))))))
 
 (defn- bundle-impact
   "The bundle's own line: `make_it_so` is the UNION of the pieces
@@ -1470,13 +1583,22 @@
   have written the engine's sentence onto them from outside the
   staging door it belongs to. Both paths call one function over one
   pair of declarations, so a stored line and a derived line are the
-  same sentence, and a piece keeps whichever it was born with."
+  same sentence, and a piece keeps whichever it was born with.
+
+  THE INVOKE ARM READS THE TARGET ROW, and only when it has to — the
+  fallback is for pieces born before their law existed, so the read
+  costs nothing on the ordinary path where the line is already on the
+  row (waymark-jfv.9)."
   [ctx prdef pd]
   (or (some-> (get-in pd [:data :impact]) str not-empty)
-      (piece-impact prdef
-                    (get (resources ctx)
-                         (keyword (str (get-in pd [:data :target_kind]))))
-                    (get-in pd [:data :prepared]))))
+      (let [d (:data pd)
+            tk (keyword (str (:target_kind d)))
+            trdef (get (resources ctx) tk)
+            tid (some-> (:target_id d) str not-empty)]
+        (piece-impact prdef trdef d
+                      (when (and trdef tid)
+                        (some->> (load-raw ctx tk tid)
+                                 (inv/decode-row trdef)))))))
 
 (defn- bundle-parts
   "The pieces of one bundle, oldest first — the order `take-the-rest`

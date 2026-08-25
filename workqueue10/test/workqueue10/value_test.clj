@@ -305,6 +305,7 @@
       (req :post "/api/outcome_pieces"
            {:outcome_id o
             :says (str "Piece " n " — twenty minutes, already prepared")
+            :form "create"
             :target_kind "task"
             :prepared {:title (str goal " — piece " n)}}
            (human who)))

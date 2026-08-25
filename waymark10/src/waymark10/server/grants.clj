@@ -871,6 +871,30 @@
   (t/principal {:id "waymark10-grants" :type :system
                 :display "Grant approvals"}))
 
+(def wire-boundary-effects
+  "THE DOORS WHOSE EFFECT DOES NOT LIVE IN THEIR HANDLER — every
+  (kind, action) pair whose full consequence runs POST-COMMIT at the
+  wire boundary rather than inside the transition, so a caller that
+  reaches the door any other way gets the transition and not the
+  effect.
+
+  There is exactly one, and it is `approval-effects!` below: an
+  `approve` on an `approval_request` moves the ask and then MINTS THE
+  GRANT out here, under a system actor, keyed on the approval's id.
+  waymark-442.14 is the bead for moving it inside; until it lands,
+  this set is the honest name of the gap.
+
+  It is a `def` rather than a literal in the `when` because something
+  else now has to read it. A staged piece (waymark-jfv.9) may name any
+  door in the house, and a piece naming THIS one would move an ask to
+  `approved` — terminally — while the grant it was the whole point of
+  never appeared. That is not a capability question and no wall about
+  authority would catch it; it is a fact about where this engine keeps
+  one effect, and the piece's own staging door refuses it by reading
+  this set. The day 442.14 lands, the set empties and the refusal
+  disappears with it."
+  #{[:approval_request :approve]})
+
 (defn approval-effects!
   "Post-commit, wire-boundary (the router calls this after every
   single invoke, the attachments put-bytes! precedent): a fresh,
@@ -886,8 +910,7 @@
   warned on *err*, never thrown: the approval committed; the grant
   honestly did not move."
   [eng rdef action-name result]
-  (when (and (= :approval_request (:kind rdef))
-             (= :approve action-name)
+  (when (and (contains? wire-boundary-effects [(:kind rdef) action-name])
              (:transition result)
              (nil? (:replayed? result)))
     (let [row (:row result)

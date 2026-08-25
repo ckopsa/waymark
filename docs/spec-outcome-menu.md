@@ -2497,3 +2497,395 @@ paragraph is the record of asking.
   things about one card: the bundle's candidacy, its union line, and
   whether a piece's line has a tap left to describe. It was inline
   before and would have been inline three times after.
+
+## Built — jfv.9, the open piece (2026-08-25, waymark-jfv.9)
+
+**The owner's ruling, verbatim, 2026-08-25:**
+
+> A piece can do whatever it wants, but I just need to be able to inspect the
+> impact — what it's actually going to do.
+
+It overrules § *The design* → *Materialization*'s third bullet (*"`target_kind`
+is an **`:enum`** the application declares … `target_action` is **`:create`**
+in v1"*) and jfv.3's `materializable [:task :event]`. The § *Built — jfv.3*
+section above stands as history and is not edited; what follows supersedes it
+wherever the two disagree.
+
+**What is superseded, exactly:**
+
+| jfv.3 said | as it stands after jfv.9 |
+|---|---|
+| `target_kind` is a closed `:enum` of `[:task :event]` | a plain `[:string {:min 1 :max 64}]` — any kind this engine serves |
+| `target_action` is `:create`, implicitly and only | a `form` field, `create` or `invoke`, EXPLICIT on the row |
+| `:touches` names the union LITERALLY, so *"only the input is data"* is true | `:touches` advertises the two ordinary create doors, each `:may true`, and says out loud what it cannot name |
+| governance kinds are out *"by construction rather than by a blocklist"* | reachable; their own guards judge, under the member's hand |
+| *"reopen the abandoned show cannot be a piece today, only a task that says so"* | it is a piece: `{kind, id, action, prepared}` |
+| the enum refuses an unlisted kind with a **422** at the schema | the target's own door judges the body with a **409** at a wall |
+
+The rest of jfv.3 — two kinds, per-piece consent, the two declines, the weekly
+cap, the bundle ceiling, the leash, the four-eyes wall, one transaction per
+tap, no deterministic inner key — is untouched.
+
+### Three forms weighed, two landed, and the third is a mirage
+
+```clojure
+(def forms ["create" "invoke"])
+```
+
+- **`create`** births a row. jfv.3's whole world.
+- **`invoke`** moves a row that already stands, through that row's own named
+  door: `{target_kind, target_id, target_action, prepared}`.
+- **`update` is NOT a third form**, and saying so is the bead's own answer to
+  its own question. In this framework a rewording IS an action — `revise`,
+  `restate`, `prioritize` — declared on the kind with its own `:input`, its own
+  guards and its own `:to`. So an edit is the invoke arm naming a wording door,
+  and a third form would have bought a second spelling for one law plus a third
+  arm for the impact line to drift in.
+
+**The form is EXPLICIT on the row, not derived from which fields are
+present** — the bead's own hunch, confirmed at the walls. Three guards read it,
+and a wall that had to infer its subject from an absence would be a wall that
+guessed: a create carrying a stray `target_id` and an invoke that forgot one are
+different mistakes and each deserves its own sentence.
+
+**It is REQUIRED in the create model and optional in the row schema.** A
+default was the cheaper spelling and lost twice: a composer that forgot the
+field would silently get `create`, and the form is precisely the difference
+between birthing a row and moving one; and a declared default lands in
+`fingerprint-of`'s `create` facet, so the cheaper spelling would have moved a
+hash to say something a required field says for free. Absent on a ROW reads as
+`create`, which is what every piece staged before this law is — no backfill,
+and nothing written to those rows to tell them what they already are.
+
+### The schema, as it landed
+
+```clojure
+;; ROW
+(pe :form          {:optional true}  [:maybe form-enum])
+(pe :target_kind   {:filter #{:eq}}  [:string {:min 1 :max 64}])   ; ← was an :enum
+(pe :target_id     {:optional true}  [:maybe [:string {:max 64}]])
+(pe :target_action {:optional true}  [:maybe [:string {:min 1 :max 64}]])
+(pe :target_version {:optional true} [:maybe [:int {:min 0}]])     ; ENGINE-written
+(pe :prepared      {}                [:map-of :keyword :any])
+(pe :impact        {:optional true}  [:maybe [:string {:max 600}]]) ; ENGINE-written
+
+;; CREATE MODEL
+(pe :form          {}                form-enum)                    ; ← required
+(pe :target_kind   {}                [:string {:min 1 :max 64}])
+(pe :target_id     {:optional true}  [:maybe [:string {:max 64}]])
+(pe :target_action {:optional true}  [:maybe [:string {:min 1 :max 64}]])
+(pe :prepared      {}                [:map-of :keyword :any])
+```
+
+**`target_id` is a plain string and not a `:waymark/ref`**, deliberately: a ref
+names ONE kind at declaration time and this one is chosen at staging.
+`recipe_proposal/target_id` is the same shape for a narrower version of the same
+reason. **No new field carries `:filter` or `:sort`** — only `filterable ∪
+sortable` becomes a generated column, which is what keeps the migrate plan
+empty.
+
+A real invoke piece, off the wire, with the line the engine wrote for it:
+
+```json
+{"kind": "outcome_piece", "state": "offered",
+ "data": {
+   "says": "Mark the stock cut once Friday is done",
+   "form": "invoke",
+   "target_kind": "task",
+   "target_id": "5446dda0-00bf-4e77-8bc0-7a241245742b",
+   "target_action": "complete",
+   "target_version": 1,
+   "prepared": {},
+   "impact": "Yes will use the \"Done\" door on one task that already stands: \"Cut the box stock to length\" — in this house's own record, and at the source it mirrors to, the way any task does. Nothing else.",
+   "composed_by": "ari"}}
+```
+
+Every word of that sentence is read off a declaration. `Yes` is
+`outcome_piece`'s own primary label; `"Done"` is `task.complete`'s own
+`:display :label`; `task` is the kind's noun; the title is the target's own
+`:label-template` rendered over the target's own row; the mirror clause is
+`task`'s `:mirror :push-on-write`. The composer cannot reach a word of it, and
+`impact` is out of the create model, so a composer that supplies one gets 422.
+
+### The impact line: one new arm, no new key, no new mechanism
+
+`feed/piece-impact` was written by jfv.17 as *an arm rather than the whole
+function*, with the seat beside it named and left warm. This is what sat down in
+it — `create-arm` is jfv.17's sentence to the byte, `invoke-arm` is new, and the
+dispatch is the row's `form`:
+
+```clojure
+(str verb " will use the " (pr-str door) " door on one " noun
+     " that already stands" (when label (str ": " (pr-str label)))
+     (when (and from to (not= from to))
+       (str ", which reads " from " now and " to " after"))
+     (carried-clause prepared)
+     " — in this house's own record" (mirror-edit-clause trdef noun)
+     ". Nothing else.")
+```
+
+Four decisions inside it, each recorded:
+
+- **The mirror clause reads `:push-on-write`, not `:create-push`.** A birth and
+  an edit are different pushes; a kind that pushes edits carries this tap out to
+  the authority whether or not it may push births.
+- **The move clause is SILENT on a self-loop and on a mirrored kind** whose
+  machine state is its SYNC state. *"which stays fresh"* about a task somebody
+  is completing is a true sentence saying nothing — the door's own label and
+  what it carries are the change, and the rest is noise.
+- **`carried-clause` renders the prepared body rather than summarizing it.** An
+  input the household cannot see is exactly the half of a tap the ruling is
+  about. Clamped at 240 characters.
+- **A door or kind this engine does not serve yields NO line**, which is the
+  same answer the card gives: no sentence rather than a guess.
+
+**`piece-impact-of`'s read-time fallback now reads the target row**, and only
+when it has to — the stored line is preferred, so the ordinary path costs
+nothing.
+
+**And the staleness paragraph jfv.17 wrote has to be amended.** It said *"the
+line is a function of `{target_kind, prepared}` and neither can change after
+staging, so there is no world-state the sentence could go stale about."* For the
+invoke arm that is **no longer true**: the target row's label and state can both
+move. The answer is not a second derivation — it is the fence below. A stale
+line can never be tapped into effect, because the tap that would have acted on
+it refuses first, naming the drift.
+
+### The fence, and why an `:if-match` was not enough
+
+Two halves, and the second one is the finding:
+
+1. **`materialize` hands the target its own etag.** `ctx :invoke` passes
+   `:if-match` (waymark-0k4's rule — a cross-write SUPPLIES the fence rather
+   than waiving it), and `recipe_proposal/apply-the-order` is the spelling
+   copied.
+2. **…and `invoke-in-tx!` step 6 consults it ONLY when the target action
+   declares `:safety :fence`**, which in this framework is implied by an
+   `:edit` and absent everywhere else. `task.complete` declares none. So the
+   framework's own fence would have let a stale tap through **without a word**,
+   on most doors in the house.
+
+So the wall that always fires is a guard: **`the-target-has-not-moved`** on the
+piece's `take`, which is `recipe_proposal/the-order-has-not-moved` generalized
+past one kind. `stamp-the-composer` writes `target_version` at staging (nobody
+may supply it — a piece that could name its own version could name the one the
+row is about to reach); the guard reads the row again at the tap and refuses:
+
+> That row has moved since this was staged — `/api/tasks/5446dda0…` was at v1
+> when this was staged and is at v2 now — it reads fresh today. The way through
+> is two taps: not this on the stale piece, and ask for it again against what
+> the house reads now.
+
+The walk, proved end to end in `the-fence-refuses-a-target-that-moved`: stage
+against v1 → somebody completes the task → tap → 409 by name, both versions in
+the sentence, the piece still `offered`, and `not_this` is the way out.
+
+### The security question, answered honestly rather than tidily
+
+The bead asked what a piece-fired `ctx :invoke` can and cannot be refused on
+compared with the member tapping the target directly. It was read off the code
+rather than assumed, and here is the whole of it.
+
+**Applied on both paths, identically** — `invoke-in-tx!` steps 3–15: the row
+lock, the judgment overlay, the `:from` state check, hide-flagged concealment
+(`probe-hidden-only?` → 404), the fence when the action declares one, input
+validation against the action's own `:input`, **every guard**, warnings refused
+unless explicitly acknowledged, the transition, and the actor — which is the
+**outer** principal, the member.
+
+**Skipped by `ctx :invoke`** — the router's request-level layer:
+`router/check-row!`, `router/check-action!`, `grants/check-args!`, the leash and
+its default-deny, and `grants/approval-effects!`. All four of the first read
+`(:waymark10/visibility req)`, which lives on the Ring request; a handler ctx
+has none. **That is waymark-iqa.18, unchanged and not fixed here.**
+
+**Why it is equivalent protection for THIS door, and where it is not:**
+
+- The tapper is a **member**. `a-person-answers` refuses every agent at every
+  verdict of both kinds, so an agent can never be the principal on a
+  piece-fired invoke.
+- A human presenting no grant header gets `unscoped-visibility` → **nil**, so
+  the router's four checks check nothing. For that member — which is every
+  member on the household's own feed — the two paths are **the same set of
+  walls**.
+- **The gap that is real:** a member who IS wearing a narrowed scope (a
+  presented `x-waymark-grant`, the guest door's session) would have that
+  narrowing applied to their own request and **not** to a piece-fired invoke.
+  Filed (**waymark-jfv.20**) rather than papered over. It is iqa.18's own shape,
+  and this bead is its second witness.
+- **The gap that was found and CLOSED:** `grants/approval-effects!` mints an
+  approved ask's grant **post-commit, at the wire boundary**. A piece invoking
+  `approval_request.approve` would have moved the ask to `approved` —
+  terminally — and minted nothing: the household would read an approved ask and
+  the composer would still have no leash. That is not a capability question and
+  no wall about authority would have caught it.
+
+  `grants/wire-boundary-effects` is now a `def` — `#{[:approval_request
+  :approve]}` — read both by `approval-effects!` itself and by the piece's new
+  create wall **`the-door-carries-its-own-effect`**, so the wall and the effect
+  cannot drift. **waymark-442.14** (move the effect into the verdict handler)
+  empties the set and dissolves the wall with it. It is a wall about where this
+  engine keeps one effect, not about anybody's authority, and that distinction
+  is the reason it is allowed to exist under the ruling.
+
+### The governance proof pair — the ruling's whole safety story in two tests
+
+Both in `workqueue10/test/workqueue10/outcome_test.clj`, over the real ring
+handler:
+
+- **`a-four-eyes-wall-on-the-target-holds-at-the-tap`.** Colton stages a bundle
+  of his own; a second composer stages an invoke piece naming that bundle's
+  `not_this_week`; Colton taps it. **409, refused by
+  `the-composer-does-not-decide` — the TARGET's own wall, judged in-transaction,
+  about the member whose hand is on the tap.** Nothing moved: the target is
+  still `offered` and so is the piece. That wall is `g/not-the-field`, the very
+  guard `desugar-decision` mints for every `:decision` kind's `:decider`, so it
+  is the same wall an `approval_request` wears — proved on the door this file
+  can stage both sides of.
+- **`a-value-is-affirmed-through-a-piece`.** A piece names a value's own
+  `still_stands`; the member taps; **200**, the value moves, and `affirmed_by`
+  is the member's own id. `written-by-a-person` passes for the honest reason: a
+  person is tapping.
+
+Together they are the ruling read literally. **The wall is not the enum; the
+wall is whose hand it is** — and the pair exists so that neither half can be
+read alone.
+
+### `:touches` on an open piece — the iqa.6 question, answered in the open
+
+An open piece cannot enumerate its targets at declaration time. That is
+waymark-iqa.6's refused primitive returning, and it was resolved by reading what
+the framework actually enforces rather than by inventing a spelling:
+
+- **`checks_assembly/check-touches` errors only on OVER-declaration** — a touch
+  naming a kind or door that does not exist. Under-declaration is checked
+  nowhere, except as a warning for `:owns` cascade edges.
+- **Nothing at runtime consults `:touches`.** `ctx :invoke` and `ctx :create`
+  never read the calling action's declared set.
+- **The conformance pack's `:core/touches` asks the OTHER direction** — every
+  declared touch must have fired under the same correlation id, with `:may true`
+  tolerating absence.
+- **`resource.clj` admits exactly `:kind`, `:action`, `:may`.** There is no
+  dynamic-touch spelling and this bead did not mint one.
+- **The worksheet is the precedent and it declares NO `:touches` at all.**
+  `worksheet/apply` replays arbitrary lines through arbitrary targets and
+  carries its blast radius entirely in `:safety :consequence` prose — legitimate
+  there because its writes run post-commit rather than through a handler ctx.
+
+So the resolution is the middle, and it is written down rather than smuggled:
+
+1. **`advertised-creates [:task :event]` survives, demoted from a wall to an
+   advertisement.** `touched-creates` builds `:touches` from it with **`:may
+   true`** on each entry — because a given tap walks through one of those doors,
+   or through neither when the piece is an invoke. (Without `:may` the pack
+   would have judged every invoke tap a `:touch-did-not-fire`.)
+2. **The honest statement lives in three places**, one of them machine-readable:
+   `take`'s `:safety :one-way`, in the household's own words (*"It reaches
+   exactly what that line names and nothing else"*); the **impact line on the
+   row**, which names the exact kind, door and row this particular tap
+   reaches — the per-ROW blast radius the per-ACTION declaration cannot carry;
+   and `target_kind` / `target_action` / `target_id` as ordinary wire fields, so
+   a client reads the pair without parsing prose.
+3. **A piece that reaches some other kind is LAWFUL and simply unadvertised at
+   the declaration.** That is the cost of the ruling, stated.
+
+`packs/piece-target` was the one reader of the dead enum and now reads
+`:touches` instead — a declaration either way, and never the word `task`.
+
+### Where the law is proved
+
+**Three new scenarios** on `outcome_piece` (7 total, 3 judged at check tier and
+4 deferred — `make check-queue` reads **36 kinds, 11 warnings, 47 scenarios
+judged**, every number unmoved):
+
+- `an-invoke-piece-fits-the-door-it-will-knock-on` — a composer offering to rank
+  a task at minus one, refused against `task.prioritize`'s **own** `:input`
+  model.
+- `an-invoke-piece-names-a-door-that-exists` — an invented door name, refused
+  with the kind's real doors LISTED, because a composer discovering a vocabulary
+  one round trip at a time is a composer burning its cap.
+- `a-piece-does-not-half-approve-an-ask` — the wire-boundary refusal above.
+
+**Five deftests** in `outcome_test.clj`: `an-invoke-piece-moves-the-row-it-names`
+(the form on the row, the door named, the row named, the version stamped, the
+target really `done`, the MEMBER on that transition and the composer nowhere in
+it), `the-fence-refuses-a-target-that-moved`, the governance pair above, and
+`a-piece-may-not-half-approve-an-ask`. One existing test was **inverted** and
+the inversion is the bead: `a-piece-is-judged-by-the-door-it-will-knock-on` used
+to assert **422** for `target_kind "grant"` (*"the enum refuses it"*); it now
+asserts **409** from `grant`'s own create model, plus a second arm for a kind
+this house does not serve at all.
+
+**Seven claims added to `:feed/outcomes`** rather than a new obligation: the
+bundle grows a fourth piece — an invoke on the very row the third piece's tap
+just created — staged AFTER the union line is read so that claim keeps its own
+world. It cards; it carries an impact line; the line NAMES THE DOOR by the
+target's own label; `make it so` takes it like any other; it cites the row it
+moved; and the actor on **the target's own door** is the member, found by the
+action rather than by recency (a mirrored kind appends a sync transition on
+top — `create-actor`'s own finding, one door over).
+
+**`ui-drive.mjs`'s feed walk, extended by seven checks** and run against a fresh
+dev database: **60 checks passed, no console errors** (was 53). It stages a
+second bundle — one create piece and one invoke piece completing the task the
+first tap made — reads the line off the page, taps it, and reads the task back
+`done`. The line it printed:
+
+> Yes will use the "Done" door on one task that already stands: "Cut the box
+> stock to length 457761" — in this house's own record, and at the source it
+> mirrors to, the way any task does. Nothing else.
+
+**Two walk fixtures moved and both are load-bearing**, in the way jfv.4's eight
+retired chores were. The second bundle is staged by a **second composer**
+(`ari`), because `outcomes-are-few` is two a week PER AUTHOR and one name
+staging both would have spent its whole allowance; and the walk **seeds a third
+task**, because it now completes two before the deal-again block runs and a
+do-now line with too few candidates left can honestly deal itself the same order
+three times. The walk also **answers the second bundle** before moving on, so
+the engine it hands to the deal-again block is the engine it found.
+
+### Recorded here, for whoever comes next
+
+- **Exactly two fingerprints moved, computed both ways rather than argued.**
+  `outcome` `5de724bc…` → `6f57c0d5…`, `outcome_piece` `672d914f…` →
+  `8db51a4b…`. The other **34** kinds are byte-identical to `HEAD`. The reasons
+  are exactly two and both are legitimate law: `:may true` joined the create
+  touches on `make_it_so` and on `take` (`action-fp` projects `touches`), and
+  `take` gained the guard `the-target-has-not-moved` and a new `materialize`
+  body (`action-fp` projects `guards` and `handler`).
+- **The FOUR new create walls minted no revision at all, and that is
+  waymark-442.9's third witness rather than a relief.** `the-prepared-input-fits-
+  the-door`'s widening, `the-door-carries-its-own-effect`, `the-row-it-names-is-
+  there` and the `:on-create` stamp are all invisible to `fingerprint-of`, which
+  projects only `machine.actions.*`. **A create door's law can change completely
+  and show in no diff.** This bead widened the most permissive door in the tree
+  and moved no hash for it.
+- **The migrate plan is EMPTY, verified rather than argued.** `make
+  migrate-queue` against a `workqueue10_dev` whose `outcome_pieces` predates this
+  bead prints *storage matches the declarations — empty plan*, and the table
+  still carries exactly `f_composed_by / f_outcome_id / f_target_kind`. The enum
+  → string change on `target_kind` did **not** move the storage facet: a
+  generated column's type is the same either way, which is what 442.9's
+  witnesses predicted and what the empty plan confirms. **Production needs no
+  DDL for this deploy.**
+- **The battery is unmoved at 11, and the reason is a narrowing worth knowing.**
+  A free-text `target_kind` judged by an `:open` guard is exactly the shape
+  `usability/effort-honesty` warns about — except that the policy exempts guards
+  which `reads-rows?` (a `:storage` or kind keyword in `:reads`), and
+  `the-prepared-input-fits-the-door` reads `:storage` by necessity. So the wall
+  that had to read the registry is the wall that earns no warning, which is the
+  right answer for the right reason: no picker could enumerate the registry into
+  a form.
+- **The sharpest edge, named so it is not discovered later.** A piece may now
+  name `grant.create`, `member.suspend`, `capability.revoke` — anything this
+  engine serves. Nothing is walled; the impact line says what the tap does, and
+  the target's own guards judge under the member's hand. That IS the ruling, and
+  it is the owner's to revisit. What this bead adds beside it is that **the
+  household reads the sentence before the thumb lands**, on the card, in the
+  serif's quieter sibling, above the button it describes.
+- **A `target_kind` that names a kind and a `target_action` that names a bulk
+  door are both refused at staging.** `ctx :invoke` refuses a bulk action by
+  name — its row form does not exist — so a piece naming one could never be
+  tapped, and the wall says so where it was written.
+- **An invoke piece's `materialized` is the row it MOVED**, not a row it made.
+  Same field, same meaning one level up: the address of what this tap reached.

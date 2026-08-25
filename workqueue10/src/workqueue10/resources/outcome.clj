@@ -123,35 +123,68 @@
   composer to READ, the wall's own `:open` sentence says to read it,
   and holding a composer to it is waymark-jfv.5's contract.
 
-  ── THE TARGET IS NOT FREE DATA ──
+  ── THE TARGET WAS AN ENUM AND IS NOW INSPECTABLE (waymark-jfv.9) ──
 
-  `insight` recorded the one cross-write no declaration could name:
+  jfv.3 closed `target_kind` to `[:task :event]` and `target_action`
+  to `:create`, implicitly and only, and the argument was `insight`'s:
   'an insight's target is data chosen by its author — no `:touches`
-  could advertise it, and no grant would re-gate it', so its offer is
-  an ADDRESS rather than a trigger. A piece closes every clause of
-  that sentence. `target_kind` is a DECLARED enum of the household's
-  work kinds; `:touches` names the union literally, so
-  `checks_assembly/check-touches` verifies it at assembly and the
-  envelope advertises the blast radius. Only the INPUT is data — the
-  `ingredient/absorb-duplicate` shape, one notch wider.
+  could advertise it, and no grant would re-gate it'. The owner ruled
+  otherwise, and the ruling is the law this kind now runs under:
+
+    A piece can do whatever it wants, but I just need to be able to
+    inspect the impact — what it's actually going to do.
+
+  So the wall is gone and THREE CONSTRAINTS stand where it stood, none
+  of them about what a piece is allowed to name:
+
+  1. THE IMPACT LINE, written by the engine at staging (`impact`,
+     `feed/piece-impact`) — one arm per FORM, every word derived from
+     the target's own declaration: the door by its own label, the row
+     by its own `:label-template`, the move by the action's `:to`,
+     what it carries by the prepared body. The composer cannot reach
+     a word of it. It is the thing the ruling actually asked for.
+  2. THE PREPARED INPUT JUDGED AGAINST THE TARGET'S OWN DOOR at
+     staging — the create model for a create, the named action's own
+     `:input` for an invoke, read off `ctx :rdef-of` rather than
+     copied, in that door's own three steps and order.
+  3. THE TARGET'S OWN GUARDS JUDGING AGAIN AT THE TAP, as the member,
+     inside the transaction, behind a version fence.
+
+  TWO FORMS AND NOT THREE. `create` births a row, `invoke` moves one
+  through its own named door — and UPDATE is not a third, because in
+  this framework a rewording IS an action (`revise`, `restate`), so an
+  edit is the invoke arm naming a wording door. Said out loud in
+  `forms` rather than left to be rediscovered.
 
   ── VALIDATED AT STAGING, JUDGED AGAIN AT THE TAP ──
 
   `the-prepared-input-fits-the-door` runs the prepared input through
-  the target kind's OWN create model at staging, exactly as its door
+  the very door it will knock on at staging, exactly as that door
   would: decode, defaults, closed errors. That is 0k4's
   letter-addressing lesson — a button that fails is worse than a
-  button that was never offered.
+  button that was never offered — and for the invoke form
+  `the-row-it-names-is-there` adds the other half of it: the row is
+  really here, and the door it names is one that row can walk through
+  today.
 
   The world still moves between staging and the tap: the Wednesday
   slot fills, the list is thrown away, the authority conflicts the
-  row. The answer is that THE TARGET'S OWN CREATE GUARDS JUDGE AT THE
-  TAP, inside the transaction, and their refusal is what the household
-  reads. What is deliberately NOT built here is a second staleness
-  oracle: a wall that tried to predict another kind's guards would be
-  a second opinion about that kind's law, and it would be wrong first.
-  The way out is two taps — `Not this` on the stale piece, `Make it
-  so` again.
+  row, somebody completes the task the piece was going to reopen. Two
+  answers, and they are different questions:
+
+  - THE TARGET'S OWN GUARDS JUDGE AT THE TAP, inside the transaction,
+    and their refusal is what the household reads. What is deliberately
+    NOT built here is a second staleness oracle: a wall that tried to
+    predict another kind's guards would be a second opinion about that
+    kind's law, and it would be wrong first.
+  - AND FOR AN INVOKE, THE VERSION FENCE. That one is not a second
+    opinion about anybody's law; it is a fact about THIS row's own
+    sentence — the impact line describes a target as it stood at
+    staging, so `the-target-has-not-moved` refuses when it has, naming
+    the drift, and `materialize` hands the target its own etag on top.
+
+  The way out of either is two taps — `Not this` on the stale piece,
+  `Make it so` again.
 
   ── WHY THE :decision SUGAR IS DECLINED FOR BOTH ──
 
@@ -198,6 +231,15 @@
             ;; reaches for `feed/recipe-diff` from a resource ns for
             ;; the same reason, one kind over.
             [waymark10.server.feed :as feed]
+            ;; the ONE fact about this engine an open piece has to know
+            ;; (waymark-jfv.9): which doors keep half their work outside
+            ;; the transaction. Read by name so the wall and the effect
+            ;; cannot drift — see `the-door-carries-its-own-effect`.
+            [waymark10.server.grants :as grants]
+            ;; the fence's HTTP half, spelled the way an honest client
+            ;; spells it — `recipe_proposal/apply-the-order`'s own
+            ;; reach, one kind over
+            [waymark10.server.invoke :as inv]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [workqueue10.resources.tickler :as tickler])
@@ -208,45 +250,106 @@
 
 ;; ── what a piece may become ─────────────────────────────────────────
 
-(def materializable
-  "The household's WORK kinds a piece may birth, as a DECLARED set —
-  the answer to the primitive waymark-iqa.6 refused.
+(def forms
+  "THE TWO HONEST SHAPES A PIECE'S TARGET WEARS (waymark-jfv.9), and
+  the third one is a mirage this def exists to say so about.
 
-  TWO, and the smallness is the decision rather than an omission. The
-  reference composition (the artifact 'The Feed, Composed') composed
-  exactly three sorts of thing: errands, calendar holds, and grocery
-  lines. Errands are `task`. Calendar holds are `event`. A grocery
-  LINE is not a row at all — it is an item inside a `grocery_list`,
-  added by that kind's own `add_item` action, and a piece may only
-  CREATE in v1 — so the honest spelling of 'buy the stock' today is a
-  task that says so.
+  - `create` — the piece BIRTHS a row. jfv.3's whole world: a task
+    joins the queue, a hold joins the calendar, and the target has no
+    id because it does not exist yet.
+  - `invoke` — the piece MOVES a row that already stands, through
+    that row's own named door: `{target_kind, target_id,
+    target_action, prepared}`. `buy the box stock` becomes
+    `grocery_list.add_item` on the list the house is already
+    carrying; `reopen the dropped task` becomes that task's own door.
 
-  What is NOT in here, by construction rather than by a blocklist:
-  every governance kind (`grant`, `capability`, `approval_request`,
-  `permission_slip`, `member`, `role`), every editorial kind
-  (`feed_recipe`, `recipe_proposal`, `value`, `outcome`,
-  `outcome_piece`), and the kinds a composer has no business birthing
-  on somebody's behalf — `chore_run` (an occurrence of a chore the
-  house DECLARED, whose schedule is the chore's own law), `media` (a
-  shelf entry is a wish, not friction pre-paid), `letter` (nobody
-  signs somebody else's name).
+  AND UPDATE IS NOT A THIRD FORM, which was weighed here rather than
+  left to be discovered. An edit looks like its own shape and is not
+  one: in this framework a rewording is an ACTION — `revise`,
+  `restate`, `set_priority` — declared on the kind with its own
+  `:input`, its own guards and its own `:to`. So `update` IS invoke
+  naming a wording door, and giving it a form of its own would have
+  bought a second spelling for one law and a second arm for the impact
+  line to drift in.
 
-  It grows by law revision, which is the point of it being declared:
-  widening the set is a change to the household's law that a reader
-  can see, not a field a composer fills in."
+  The set is closed and short because a FORM is a shape of THIS row,
+  which a reader can enumerate. What is deliberately not closed any
+  more is what the form points AT — see `target_kind` below."
+  ["create" "invoke"])
+
+(def form-enum
+  "The schema form `form` wears — a real closed enum, so the demand
+  class is `selection` and a form renders a picker rather than a blank
+  box."
+  (into [:enum] forms))
+
+(def advertised-creates
+  "The kinds whose CREATE door `take` still advertises in `:touches`.
+
+  THIS USED TO BE A WALL AND IS NOT ONE ANY MORE. jfv.3 declared
+  `materializable [:task :event]` as a closed enum on `target_kind`,
+  and the argument for it was good: `insight` had recorded the one
+  cross-write no declaration could name, and closing the KIND made
+  'only the input is data' true. waymark-jfv.9's ruling took it down,
+  in the owner's own words:
+
+    A piece can do whatever it wants, but I just need to be able to
+    inspect the impact — what it's actually going to do.
+
+  So the wall came off and three constraints stand in its place: the
+  IMPACT LINE the engine writes at staging, the prepared input judged
+  against the target's OWN door at staging, and the target's own
+  guards judging again at the tap, as the member, behind a version
+  fence. What is left here is ADVERTISEMENT: the two kinds a piece
+  ordinarily births, kept so `:touches` says something true and
+  `checks_assembly/check-touches` can verify it at assembly.
+
+  It is honestly INCOMPLETE and that is written down rather than
+  papered over — see `touched-creates`."
   [:task :event])
 
-(def target-kind-enum
-  "The schema form `target_kind` wears — the same set, spelled as the
-  closed enum a form and a wire read."
-  (into [:enum] (map name) materializable))
-
 (def touched-creates
-  "The blast radius, named LITERALLY so `checks_assembly/check-touches`
-  can verify it at assembly and the envelope can advertise it. One
-  entry per materializable kind, and it must stay the union of the set
-  above — that agreement is what makes 'only the input is data' true."
-  (mapv (fn [k] {:kind k :action :create}) materializable))
+  "The advertised blast radius of a `take`, and the honest statement of
+  what it cannot name.
+
+  `:touches` is a DECLARATION-time advertisement: `check-touches`
+  refuses an entry naming a door that does not exist, and the
+  conformance pack's `:core/touches` asks that every declared touch
+  actually fired. Neither direction can help an OPEN piece, because an
+  open piece's target is chosen by its author at staging — which is
+  waymark-iqa.6's own refused primitive, arriving from the other side.
+  The framework has no spelling for a dynamic touch (`resource.clj`
+  admits exactly `:kind`, `:action`, `:may`), and the one precedent for
+  a handler whose writes vary — `worksheet`'s `apply`, which replays
+  arbitrary lines through arbitrary targets — declares NO `:touches` at
+  all and carries its blast radius in `:safety :consequence` prose.
+
+  So this is the middle: the two create doors a piece ordinarily walks
+  through, each `:may true` — because a given tap walks through ONE of
+  them, or through neither when the piece is an invoke — plus the
+  honest statement, said in the two places a household actually reads
+  and in the one a machine does:
+
+  1. the `:safety :one-way` on `take`, in the household's own words;
+  2. the IMPACT LINE on the row, which names the exact kind, the exact
+     door and the exact row this particular tap reaches — the per-ROW
+     blast radius the per-ACTION declaration cannot carry;
+  3. `target_kind` / `target_action` / `target_id` as ordinary fields
+     on the wire, so a client reads the pair without parsing prose.
+
+  A piece that creates or invokes some other kind is LAWFUL and simply
+  unadvertised here. That is the cost of the ruling, stated rather
+  than hidden."
+  (mapv (fn [k] {:kind k :action :create :may true}) advertised-creates))
+
+(defn- form-of
+  "Which shape this piece's target wears, read off the row. A piece
+  born before the field existed is a `create`, because that is what
+  every piece was."
+  [d]
+  (if (= "invoke" (some-> (:form d) str str/trim not-empty))
+    :invoke
+    :create))
 
 ;; ── the leashes and the caps, as household numbers ──────────────────
 
@@ -622,16 +725,34 @@
                             str str/trim not-empty)]
       (read' :outcome oid))))
 
+(defn- fits?
+  "One model, one body, the target door's own three steps and their
+  order (`invoke/create-in-tx!` and `invoke/invoke-in-tx!` step 7 use
+  exactly these): decode, fill declared defaults, refuse unknowns.
+  Returns the errors map, or nil when the door would take it."
+  [model body]
+  (schema/closed-errors model (schema/apply-defaults
+                               model (schema/decode model body))))
+
 (defguardfn the-prepared-input-fits-the-door
-  {:judges [:target_kind :prepared]
+  {:judges [:form :target_kind :target_action :target_id :prepared]
    :reads [:storage]
    :vars [:target :problems]
-   :open "A piece is judged against the create model of the very kind it will knock on — decoded, defaulted and closed, exactly as that door does it."
-   :explain "That is not something {target}'s own create door would take, so nobody could ever tap it: {problems}"}
+   :open "A piece is judged against the very door it will knock on, read off the registry rather than copied — a create against that kind's create model, an invoke against that action's own input model — decoded, defaulted and closed, exactly as that door does it."
+   :explain "That is not something {target} would take, so nobody could ever tap it: {problems}"}
   [_row inp ctx]
+  ;; WIDENED BY waymark-jfv.9 FROM ONE ARM TO TWO. jfv.3 judged a
+  ;; create body against a create model, which was the whole of the
+  ;; world while `target_action` was `:create` implicitly and only.
+  ;; With the enum gone, this wall is one of the three things standing
+  ;; where it stood — and the load-bearing half of it is that BOTH arms
+  ;; read the model off `ctx :rdef-of` rather than copying it, so a
+  ;; staged piece cannot drift away from the door it is about.
   (let [rdef-of (:rdef-of ctx)
         k (some-> (:target_kind inp) str str/trim not-empty)
+        action (some-> (:target_action inp) str str/trim not-empty)
         prepared (:prepared inp)
+        invoke? (= :invoke (form-of inp))
         deny (fn [target problems]
                (t/deny {:vars {:target target :problems problems}}))]
     (if (nil? rdef-of)
@@ -639,9 +760,6 @@
       (t/allow)
       (let [rd (some-> k rdef-of)]
         (cond
-          ;; the enum in the schema has already refused an undeclared
-          ;; word with a 422; this is the belt for the day the set and
-          ;; the registry disagree
           (nil? rd)
           (deny (or k "that") "this house serves no such kind at all.")
 
@@ -650,18 +768,170 @@
                        " an object — this one carries "
                        (pr-str prepared) "."))
 
+          (not invoke?)
+          ;; THE CREATE ARM, jfv.3's, unchanged: the target kind's own
+          ;; create model, the same value its door validates against
+          (if-some [errs (fits? (or (:create-schema rd) (:schema rd)) prepared)]
+            (deny (str k "'s own create door") (pr-str errs))
+            (t/allow))
+
+          ;; ── THE INVOKE ARM ──
+          (nil? action)
+          (deny k (str "an invoke piece names the DOOR it will knock on."
+                       " Read /api/" (:plural rd) " and take the action's"
+                       " own name off a row's envelope."))
+
+          (str/blank? (str (:target_id inp)))
+          (deny (str k "." action)
+                (str "an invoke piece names the ROW it will move, by id."
+                     " A door with nothing behind it is a create wearing"
+                     " somebody else's clothes — say form \"create\" and"
+                     " mean it."))
+
           :else
-          ;; THE TARGET'S OWN CREATE MODEL, read off the registry
-          ;; rather than copied — the same value its door validates
-          ;; against, in the same three steps and the same order
-          ;; (invoke/create-in-tx!): decode, fill declared defaults,
-          ;; refuse unknowns.
-          (let [model (or (:create-schema rd) (:schema rd))
-                decoded (schema/apply-defaults
-                         model (schema/decode model prepared))]
-            (if-some [errs (schema/closed-errors model decoded)]
-              (deny k (pr-str errs))
-              (t/allow))))))))
+          (let [adefn (get-in rd [:actions (keyword action)])]
+            (cond
+              (nil? adefn)
+              (deny (str k "." action)
+                    (str "that kind has no such door. The ones it has are "
+                         (listed (map name (keys (:actions rd)))) "."))
+
+              ;; ctx :invoke refuses a bulk action by name — its row
+              ;; form does not exist — so a piece naming one could
+              ;; never be tapped
+              (:bulk adefn)
+              (deny (str k "." action)
+                    (str "that is a collection door rather than a row's,"
+                         " so it has no row form to tap."))
+
+              (nil? (:input adefn))
+              (if (seq prepared)
+                (deny (str k "." action)
+                      (str "that door takes no input at all, and it refuses"
+                           " a body rather than ignoring one — prepare {}."))
+                (t/allow))
+
+              :else
+              ;; THE TARGET ACTION'S OWN INPUT MODEL, the same value
+              ;; `invoke-in-tx!` step 7 validates against
+              (if-some [errs (fits? (:input adefn) prepared)]
+                (deny (str k "." action) (pr-str errs))
+                (t/allow)))))))))
+
+(defguardfn the-door-carries-its-own-effect
+  {:judges [:form :target_kind :target_action]
+   :reads [:storage]
+   :vars [:door]
+   :explain "{door} is a door whose work is not finished when the row moves: this engine lands the rest of it at the wire boundary, after the transaction, and a tap fired from a piece never reaches out there. The row would go terminal and the thing it was FOR would never happen — so the piece is refused here rather than half-kept later. Answer that one on its own screen."}
+  [_row inp _ctx]
+  ;; NOT A CAPABILITY WALL, and the difference is the whole reason this
+  ;; guard is allowed to exist under waymark-jfv.9's ruling. Governance
+  ;; doors are not walled off here — an approval, a grant, a value's
+  ;; own affirmation are all a member's to tap through a piece, and
+  ;; their own guards judge. What this refuses is one FACT ABOUT THIS
+  ;; ENGINE: `grants/approval-effects!` mints the approved ask's grant
+  ;; POST-COMMIT, at the router's boundary, so a piece-fired approve
+  ;; would move the ask to `approved` — terminally — and mint nothing.
+  ;;
+  ;; The set is read off `grants/wire-boundary-effects` rather than
+  ;; spelled here, so the wall and the effect cannot drift, and
+  ;; waymark-442.14 (move the effect into the verdict handler) empties
+  ;; the set and dissolves the wall with it.
+  (let [k (some-> (:target_kind inp) str str/trim not-empty)
+        a (some-> (:target_action inp) str str/trim not-empty)]
+    (if (and (= :invoke (form-of inp)) k a
+             (contains? grants/wire-boundary-effects
+                        [(keyword k) (keyword a)]))
+      (t/deny {:vars {:door (str k "." a)}})
+      (t/allow))))
+
+(defguardfn the-row-it-names-is-there
+  {:reads [:storage]
+   :vars [:problem]
+   :open "An invoke piece is staged against a row that exists and a door that row can actually walk through today — the letter-addressing lesson, one kind over: a button that fails is worse than a button that was never offered."
+   :explain "That piece could not be tapped as it stands: {problem}"}
+  ;; NO :judges, and the absence is forced the same way
+  ;; `the-outcome-is-still-open`'s is: this wall reads a ROW in another
+  ;; kind's collection, which is not one of this door's input fields
+  ;; being judged — the id is, and `the-prepared-input-fits-the-door`
+  ;; is where the id's SHAPE is refused. Here the subject is the row.
+  [_row inp ctx]
+  (let [read' (:read ctx)
+        rdef-of (:rdef-of ctx)
+        k (some-> (:target_kind inp) str str/trim not-empty)
+        tid (some-> (:target_id inp) str str/trim not-empty)
+        action (some-> (:target_action inp) str str/trim not-empty)
+        deny (fn [problem] (t/deny {:vars {:problem problem}}))]
+    (if (or (not= :invoke (form-of inp)) (nil? read') (nil? rdef-of)
+            (nil? k) (nil? tid) (nil? action))
+      (t/allow)
+      (let [rd (rdef-of k)
+            adefn (get-in rd [:actions (keyword action)])
+            row (when rd (read' (:kind rd) tid))]
+        (cond
+          (nil? rd) (t/allow)                ; the shape wall's sentence
+          (nil? adefn) (t/allow)             ; likewise
+          (nil? row)
+          (deny (str "this house has no " k " " tid " — read /api/"
+                     (:plural rd) " and name one of those."))
+
+          (not (contains? (:from adefn) (keyword (name (:state row)))))
+          (deny (str "/api/" (:plural rd) "/" tid " is "
+                     (name (:state row)) " today, and " k "." action
+                     " leaves from "
+                     (listed (map name (:from adefn)))
+                     ". A piece staged against a row that has already"
+                     " moved past its door is one nobody can answer."))
+
+          :else (t/allow))))))
+
+(defguardfn the-target-has-not-moved
+  {:reads [:storage]
+   :vars [:problem]
+   :open "The impact line a person taps under describes the row as it stood when the piece was staged. A target that has moved since is refused BY NAME, never quietly written over."
+   :explain "That row has moved since this was staged — {problem} The way through is two taps: not this on the stale piece, and ask for it again against what the house reads now."}
+  [row _inp ctx]
+  ;; THE FENCE, AND WHY IT IS A GUARD RATHER THAN ONLY AN :if-match.
+  ;; `materialize` DOES hand the target its own etag (recipe_proposal's
+  ;; spelling, and 0k4's rule that a cross-write supplies the fence
+  ;; rather than waiving it) — but `invoke-in-tx!` step 6 consults it
+  ;; only when the TARGET action declares `:safety :fence`, which in
+  ;; this framework is implied by an `:edit` and absent everywhere
+  ;; else. So a `complete`-shaped door would have taken the stale tap
+  ;; without a word. This wall is the half that always fires, and it is
+  ;; `recipe_proposal/the-order-has-not-moved` generalized past one
+  ;; kind: the staged version, the current version, and a refusal that
+  ;; names the drift.
+  (let [d (:data row)
+        read' (:read ctx)
+        rdef-of (:rdef-of ctx)
+        k (some-> (:target_kind d) str str/trim not-empty)
+        tid (some-> (:target_id d) str str/trim not-empty)
+        staged (:target_version d)
+        deny (fn [problem] (t/deny {:vars {:problem problem}}))]
+    (if (or (not= :invoke (form-of d)) (nil? read') (nil? rdef-of)
+            (nil? k) (nil? tid))
+      (t/allow)
+      (let [rd (rdef-of k)
+            cur (when rd (read' (:kind rd) tid))]
+        (cond
+          (nil? rd) (t/allow)
+
+          (nil? staged)
+          (deny (str "this piece carries no version of /api/"
+                     (:plural rd) "/" tid " to have been staged against,"
+                     " so nothing here can promise the sentence on the"
+                     " card is still true."))
+
+          (nil? cur)
+          (deny (str "/api/" (:plural rd) "/" tid " is not there any more."))
+
+          (not= (long staged) (long (:version cur)))
+          (deny (str "/api/" (:plural rd) "/" tid " was at v" staged
+                     " when this was staged and is at v" (:version cur)
+                     " now — it reads " (name (:state cur)) " today."))
+
+          :else (t/allow))))))
 
 ;; NO :judges, and the absence is forced rather than sloppy: this one
 ;; guard stands at the piece's CREATE door (where the outcome arrives
@@ -864,42 +1134,74 @@
 ;; already been decoded, defaulted and closed against the very create
 ;; model the tap will knock on. A line about an input the door would
 ;; refuse is a line that never gets written, because the row does not.
+;;
+;; AND, FOR AN INVOKE PIECE, THE VERSION IT WAS STAGED AGAINST
+;; (waymark-jfv.9). It is the third stamp and the second half of the
+;; impact line's integrity: the sentence describes a row as it stood at
+;; this instant, so the instant is written down beside it and
+;; `the-target-has-not-moved` asks about it at the tap. Nobody may
+;; supply it — a piece that could name its own version could name a
+;; version the row is about to reach.
 (defhandler stamp-the-composer [row ctx]
   (let [rdef-of (:rdef-of ctx)
-        k (some-> (get-in row [:data :target_kind]) str str/trim not-empty)
+        d (:data row)
+        k (some-> (:target_kind d) str str/trim not-empty)
         trdef (when (and rdef-of k) (rdef-of k))
         ;; this kind's own declaration, read off the registry rather
         ;; than reached for by name: the verb in the sentence is the
         ;; label of whatever action this piece advertises as primary,
         ;; so renaming the tap renames it in the sentence too
-        prdef (when rdef-of (rdef-of "outcome_piece"))]
+        prdef (when rdef-of (rdef-of "outcome_piece"))
+        tid (some-> (:target_id d) str str/trim not-empty)
+        ;; the target ROW, read through the write's own transaction —
+        ;; the invoke arm names it and states where it stands, and
+        ;; `the-row-it-names-is-there` has already refused a piece
+        ;; whose row is not here
+        trow (when (and (= :invoke (form-of d)) trdef tid (:read ctx))
+               ((:read ctx) (:kind trdef) tid))]
     (cond-> (assoc-in row [:data :composed_by] (:id (:principal ctx)))
+      trow (assoc-in [:data :target_version] (:version trow))
       ;; the storage-free probe carries no registry (the same nil
       ;; `the-prepared-input-fits-the-door` allows optimistically);
       ;; it also never runs :on-create, so this arm is the belt
       (and trdef prdef)
-      (assoc-in [:data :impact]
-                (feed/piece-impact prdef trdef
-                                   (get-in row [:data :prepared]))))))
+      (assoc-in [:data :impact] (feed/piece-impact prdef trdef d trow)))))
 
 (defhandler record-the-verdict [row _inp ctx]
   (assoc-in row [:data :decided_by] (:id (:principal ctx))))
 
 (defhandler materialize [row _inp ctx]
-  ;; THE TAP IS THE WRITE. ctx :create carries the OUTER principal, so
-  ;; the task or the event that lands carries the MEMBER's name on its
-  ;; create transition and is judged by its own kind's create guards as
-  ;; that member — which is also the whole of the staleness answer: the
-  ;; world is re-judged here, by the target's own law, and its refusal
-  ;; is what the household reads. Same transaction, so a refusal rolls
-  ;; the tap back and the piece does not read taken.
-  (let [k (keyword (str (get-in row [:data :target_kind])))
-        res ((:create ctx) k (get-in row [:data :prepared]))
+  ;; THE TAP IS THE WRITE, and it is the member's own — both arms.
+  ;; `ctx :create` and `ctx :invoke` carry the OUTER principal, so the
+  ;; row that lands or moves carries the MEMBER's name on its own
+  ;; transition and is judged by its own kind's guards as that member.
+  ;; That is also the whole of the staleness answer: the world is
+  ;; re-judged here, by the target's own law, and its refusal is what
+  ;; the household reads. Same transaction, so a refusal rolls the tap
+  ;; back and the piece does not read taken.
+  (let [d (:data row)
+        k (keyword (str (:target_kind d)))
         plural (:plural ((:rdef-of ctx) k))
-        rid (str (get-in res [:row :id]))]
-    (-> row
-        (assoc-in [:data :decided_by] (:id (:principal ctx)))
-        (assoc-in [:data :materialized] (str "/api/" plural "/" rid)))))
+        stamp (fn [row href]
+                (-> row
+                    (assoc-in [:data :decided_by] (:id (:principal ctx)))
+                    (assoc-in [:data :materialized] href)))]
+    (if (= :invoke (form-of d))
+      ;; THE INVOKE ARM (waymark-jfv.9). The fence is SUPPLIED rather
+      ;; than waived — waymark-0k4's rule, and `recipe_proposal`'s own
+      ;; spelling: the caller is the only one who knows which version
+      ;; it MEANT to write over, so it hands the target its own etag
+      ;; the way an honest client would. `the-target-has-not-moved` has
+      ;; already asked the same question in the household's words,
+      ;; because this half only fires on a target whose door declares a
+      ;; fence, and most doors do not.
+      (let [tid (str (:target_id d))]
+        ((:invoke ctx) k tid (keyword (str (:target_action d)))
+         (not-empty (:prepared d))
+         {:if-match (inv/etag k tid (:target_version d))})
+        (stamp row (str "/api/" plural "/" tid)))
+      (let [res ((:create ctx) k (:prepared d))]
+        (stamp row (str "/api/" plural "/" (str (get-in res [:row :id]))))))))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
@@ -940,6 +1242,7 @@
 (def ^:private a-prepared-piece
   {:outcome_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B2"
    :says "Cut the stock to length Friday evening — twenty minutes, and Saturday starts with the glue-up"
+   :form "create"
    :target_kind "task"
    :prepared {:title "Cut the box stock to length"}
    :composed_by "composer"})
@@ -1079,10 +1382,72 @@
    :as      {:id "colton" :type :person}
    :input   {:outcome_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B2"
              :says "Put the box on the calendar"
+             :form "create"
              :target_kind "event"
              :prepared {:title "Shop afternoon with Jack"
                         :when "Saturday at 2"}}
    :expect  {:refused :the-prepared-input-fits-the-door}})
+
+(defscenario an-invoke-piece-fits-the-door-it-will-knock-on
+  "The same wall, the other arm (waymark-jfv.9). An open piece may
+   name any door in the house, so the door's OWN input model is what
+   judges what it carries — here a composer that offered to rank a
+   task at minus one, which `task.prioritize` declares as an int no
+   smaller than zero. Refused where it was written, for the reason the
+   create arm is: a button that fails is worse than a button that was
+   never offered."
+  {:kind    :outcome_piece
+   :attempt :create
+   :as      {:id "colton" :type :person}
+   :input   {:outcome_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B2"
+             :says "Push the stock-cutting up the queue"
+             :form "invoke"
+             :target_kind "task"
+             :target_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B7"
+             :target_action "prioritize"
+             :prepared {:priority -1}}
+   :expect  {:refused :the-prepared-input-fits-the-door
+             :because "priority"}})
+
+(defscenario an-invoke-piece-names-a-door-that-exists
+  "An open target is not a free-text target. The door has to be one
+   the kind actually declares — and the refusal LISTS the ones it
+   does, because a composer discovering a vocabulary one round trip at
+   a time is a composer burning its cap."
+  {:kind    :outcome_piece
+   :attempt :create
+   :as      {:id "colton" :type :person}
+   :input   {:outcome_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B2"
+             :says "Un-drop the task the source let go"
+             :form "invoke"
+             :target_kind "task"
+             :target_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B7"
+             :target_action "undrop"
+             :prepared {}}
+   :expect  {:refused :the-prepared-input-fits-the-door
+             :because "no such door"}})
+
+(defscenario a-piece-does-not-half-approve-an-ask
+  "The one door an open piece may not name, and it is not a wall about
+   authority — the ruling took those down. `approval_request.approve`
+   mints its grant POST-COMMIT, at the router's boundary, so a tap
+   fired from inside a transaction would move the ask to `approved`,
+   terminally, and mint nothing: the household would read an approved
+   ask and the composer would still have no leash. The refusal names
+   the lawful path, and waymark-442.14 is the bead that empties this
+   set."
+  {:kind    :outcome_piece
+   :attempt :create
+   :as      {:id "colton" :type :person}
+   :input   {:outcome_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B2"
+             :says "Approve the composer's own ask"
+             :form "invoke"
+             :target_kind "approval_request"
+             :target_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B8"
+             :target_action "approve"
+             :prepared {}}
+   :expect  {:refused :the-door-carries-its-own-effect
+             :because "on its own screen"}})
 
 ;; ── the prose the doors wear ────────────────────────────────────────
 ;;
@@ -1161,20 +1526,37 @@
    {:x-display
     {:label "What this piece is"
      :help "The one thing this piece does, in the words the household would use out loud — \"cut the stock to length Friday evening, twenty minutes\". Say what changes and what it costs; this is the line somebody reads before deciding whether it happens."}}
+   :form
+   {:x-display
+    {:label "What the tap does"
+     :choices {"create" "Creates a row — an errand, a hold on the calendar, something that does not exist yet"
+               "invoke" "Moves a row that already stands, through that row's own named door"}}}
    :target_kind
    {:x-display
-    {:label "What it becomes"
-     :choices {"task" "A task — an errand, a call, twenty minutes of prep"
-               "event" "An event — a hold on the family calendar"}}}
+    {:label "What it reaches"
+     :help "The kind this piece writes — \"task\", \"event\", \"grocery_list\", any kind this house serves. Read /.well-known/waymark for the list. It is checked against the registry when the piece is staged, and what the tap will actually do is written out on the row underneath."}}
+   :target_id
+   {:x-display
+    {:label "The row it moves"
+     :help "For an invoke: the id of the row this piece will move. Leave it empty for a create — there is no row yet, which is the whole difference between the two."}}
+   :target_action
+   {:x-display
+    {:label "The door it knocks on"
+     :help "For an invoke: the action's own name, exactly as that kind declares it — \"complete\", \"add_item\", \"still_stands\". Read a row's envelope and take the name off its actions. Leave it empty for a create."}}
+   :target_version
+   {:x-display
+    {:raw true
+     :label "Staged against version"
+     :help "Where the target row stood when this piece was written, stamped by the engine. If it has moved since, the tap is refused by name rather than written over the top — the sentence somebody reads has to describe the world they are reading it in."}}
    :prepared
    {:x-display
-    {:label "The row, already filled in"
-     :help "Exactly the body the target's own create door will take — this is where the friction is pre-paid, and it is checked against that door when the piece is staged rather than when somebody taps it."}}
+    {:label "The input, already filled in"
+     :help "Exactly the body the door will take — the create model for a create, the action's own input for an invoke, and {} for a door that takes none. This is where the friction is pre-paid, and it is checked against that very door when the piece is staged rather than when somebody taps it."}}
    :impact
    {:x-display
     {:widget "prose"
      :label "What the tap will do"
-     :help "The engine's own reading of this piece, in the household's words: what one tap creates, what it is called, where it lands, and what it does not touch. Written when the piece was staged, from the prepared input and the target kind's own declaration — nobody types it and nobody can edit it, which is the point. The composer says what the piece IS; this says what saying yes to it DOES."}}
+     :help "The engine's own reading of this piece, in the household's words: what one tap creates or moves, what it is called, which door it goes through, what it carries, where it lands, and what it does not touch. Written when the piece was staged, from the target kind's own declaration and the prepared input — nobody types it and nobody can edit it, which is the point, and it is the whole of what replaced the old closed list of what a piece was allowed to be. The composer says what the piece IS; this says what saying yes to it DOES."}}
    :materialized
    {:x-display
     {:raw true
@@ -1369,12 +1751,53 @@
    [:map
     (pe :outcome_id {:kind :outcome :filter #{:eq}} :waymark/ref)
     (pe :says {} [:string {:min 1 :max 240}])
-    (pe :target_kind {:filter #{:eq}} target-kind-enum)
-    ;; THE ONE PIECE OF FREE DATA IN THIS KIND, and the reason it is
-    ;; safe is the enum above it: the SHAPE varies, the KIND does not.
-    ;; It is judged at staging against the very create model its door
-    ;; will judge it against, and again by that door's own guards at
-    ;; the tap.
+    ;; THE FORM (waymark-jfv.9), and it is EXPLICIT on the row rather
+    ;; than derived from which of the target fields happen to be
+    ;; present. Three walls read it, and a wall that had to infer its
+    ;; own subject from an absence would be a wall that guessed: a
+    ;; create with a stray `target_id` and an invoke that forgot one
+    ;; are different mistakes, and each deserves its own sentence.
+    ;;
+    ;; OPTIONAL HERE, REQUIRED IN THE CREATE MODEL. Four pieces stood
+    ;; in production before this law and every one of them is a create,
+    ;; which is exactly what `form-of` reads an absent field as; no
+    ;; backfill, and nothing is written to those rows to say what they
+    ;; already are.
+    ;;
+    ;; NO :filter AND NO :sort on this or on the three fields below,
+    ;; deliberately: only `filterable ∪ sortable` becomes a generated
+    ;; column, so four new fields land in the `data` jsonb, the table
+    ;; projection is unchanged, the storage facet does not move and the
+    ;; migrate plan stays EMPTY. 442.9's witnesses, applied a third
+    ;; time. "Every piece that ever invoked" is a real question and a
+    ;; cheap follow-up; buying it now would cost the household a
+    ;; revision and a DDL at the next boot.
+    (pe :form {:optional true} [:maybe form-enum])
+    ;; THE ENUM DIED HERE (waymark-jfv.9). jfv.3 closed this field to
+    ;; `[:task :event]` and the argument was good; the owner's ruling
+    ;; replaced the wall with inspection — *a piece can do whatever it
+    ;; wants, but I just need to be able to inspect the impact.* What
+    ;; stands in its place is `impact` two fields down, written by the
+    ;; engine at staging from the target's own declaration, plus the
+    ;; target's own door judging at the tap as the member.
+    (pe :target_kind {:filter #{:eq}} [:string {:min 1 :max 64}])
+    ;; THE ROW AND THE DOOR, for the invoke form. Plain strings and not
+    ;; a `:waymark/ref`, because a ref names ONE kind at declaration
+    ;; time and this one is chosen at staging — `recipe_proposal`'s
+    ;; `target_id` is the same shape for a narrower version of the same
+    ;; reason.
+    (pe :target_id {:optional true} [:maybe [:string {:max 64}]])
+    (pe :target_action {:optional true} [:maybe [:string {:min 1 :max 64}]])
+    ;; ENGINE-WRITTEN: where the target stood when this was staged.
+    ;; `the-target-has-not-moved` asks about it at the tap, and
+    ;; `materialize` hands it to the target's own fence as an etag.
+    (pe :target_version {:optional true} [:maybe [:int {:min 0}]])
+    ;; THE FREE DATA, and what makes it safe is no longer the enum
+    ;; above it — it is that this map is judged at staging against the
+    ;; very model the door will judge it against (its create model, or
+    ;; the named action's own `:input`), read off the registry rather
+    ;; than copied, and judged again by that door's own guards at the
+    ;; tap, as the member.
     (pe :prepared {} [:map-of :keyword :any])
     ;; ENGINE-WRITTEN (waymark-jfv.17), and OPTIONAL for a reason that
     ;; is about the rows already standing rather than about the field.
@@ -1401,25 +1824,43 @@
    [:map
     (pe :outcome_id {:kind :outcome} :waymark/ref)
     (pe :says {} [:string {:min 1 :max 240}])
-    (pe :target_kind {} target-kind-enum)
+    ;; REQUIRED, and it is the one place jfv.9 chose the stricter
+    ;; spelling. A default would have meant a composer that forgot the
+    ;; field silently got `create` — and the form is the difference
+    ;; between birthing a row and moving one, which is precisely the
+    ;; thing that must never be arrived at by omission. It also keeps
+    ;; the `create` fingerprint facet (declared defaults) empty, so the
+    ;; only hash that moves is the one whose law really did.
+    (pe :form {} form-enum)
+    (pe :target_kind {} [:string {:min 1 :max 64}])
+    (pe :target_id {:optional true} [:maybe [:string {:max 64}]])
+    (pe :target_action {:optional true} [:maybe [:string {:min 1 :max 64}]])
     (pe :prepared {} [:map-of :keyword :any])]
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:created_at] :default "created_at"}
    :own-surface {:by :composed_by :actions #{}}
    :on-create stamp-the-composer
-   ;; shape first, world next, pace last — the same order one kind up
+   ;; shape first, world next, pace last — the same order one kind up.
+   ;; `the-door-carries-its-own-effect` sits with the shape walls
+   ;; because what it reads is a fact about this ENGINE's declarations
+   ;; and not about any row.
    :create-guards [the-prepared-input-fits-the-door
+                   the-door-carries-its-own-effect
+                   the-row-it-names-is-there
                    the-outcome-is-still-open
                    a-bundle-is-small]
    :actions
    {:take
     {:from #{:offered} :to :taken
      :guards [the-composer-does-not-decide a-person-answers
-              the-outcome-is-still-open]
+              the-outcome-is-still-open the-target-has-not-moved]
      :handler materialize
      :touches touched-creates
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This writes the row shown, through its own door, with YOUR name on it — the task joins the queue, the hold joins the calendar. The way back is that row's own doors; this piece is answered either way."}
+              ;; the honest statement `:touches` cannot carry
+              ;; (waymark-jfv.9), in the household's own words and in
+              ;; the one place a person taps under
+              :one-way "This writes the row named in the line above, through that row's OWN door, with YOUR name on it — a new task joins the queue, a hold joins the calendar, or a row that already stands moves. It reaches exactly what that line names and nothing else, and the door's own law judges it as you. The way back is that row's own doors; this piece is answered either way."}
      :display {:label "Yes" :style :primary :order 1
                :description "Make this one real — it lands as a row of its own, under your name"}}
     :not_this
@@ -1461,4 +1902,7 @@
    :scenarios [the-composer-does-not-answer-its-own-piece
                an-agent-does-not-answer-a-piece
                a-taken-piece-does-not-come-back
-               a-piece-fits-the-door-it-will-knock-on]})
+               a-piece-fits-the-door-it-will-knock-on
+               an-invoke-piece-fits-the-door-it-will-knock-on
+               an-invoke-piece-names-a-door-that-exists
+               a-piece-does-not-half-approve-an-ask]})
