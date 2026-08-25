@@ -126,6 +126,10 @@
      bundle's own verdicts, never smaller than a fingertip */
   html[data-ui="mobile"] .fpiece-verbs button.chip.verb { min-height: 40px;
     font-size: 14.5px; flex: 1 1 auto; }
+  /* a reason is a thumb too (waymark-jfv.16) — quieter than a verdict,
+     never smaller than a fingertip */
+  html[data-ui="mobile"] .feed-reasons button.chip.reason { min-height: 38px;
+    font-size: 14px; flex: 1 1 auto; }
   html[data-ui="mobile"] .feed-head h2 { font-size: 20px; }
   html[data-ui="mobile"] .feed-seam-say { font-size: 16px; }
 

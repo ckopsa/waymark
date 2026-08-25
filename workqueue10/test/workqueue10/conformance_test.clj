@@ -174,4 +174,12 @@
     ;; kinds it needs, so a skip here is a regression rather than a
     ;; posture.
     (is (pos? (suite/coverage report :feed/outcomes))
-        "a member's tap made a piece of the week real")))
+        "a member's tap made a piece of the week real")
+    ;; …and so did the reasons (waymark-jfv.16), for the same reason
+    ;; said one turn on: `:feed/verdict-reasons` is the obligation whose
+    ;; whole claim is that a SECOND tap wrote something — a decline that
+    ;; learned to speak — and a run over zero reasons would be a green
+    ;; run over the bead's own sentence. This engine holds every kind it
+    ;; needs, so a skip here is a regression rather than a posture.
+    (is (pos? (suite/coverage report :feed/verdict-reasons))
+        "a declined piece carried a reason, in one more optional tap")))

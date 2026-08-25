@@ -1278,7 +1278,13 @@
      :touches [{:kind :outcome_piece :action :moot}]
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The whole bundle leaves the feed and stays on record. It means the WEEK was wrong rather than the pieces — the remaining pieces are set aside rather than refused, so nobody reads this as a verdict on any one of them. The house will hear it recomposed, later, not tomorrow."}
-     :display {:label "Not this week" :order 2
+     ;; …and it may say WHY, in one more optional tap after it lands
+     ;; (waymark-jfv.16). `:reasons` is advertisement — it rides no
+     ;; fingerprint facet and moves no hash — and it says only this:
+     ;; when this verdict has settled, the card offers the four quick
+     ;; words. The tap itself stays input-free and `assent`, which is
+     ;; the whole constraint the reason kind exists to respect.
+     :display {:label "Not this week" :order 2 :reasons true
                :description "The timing is wrong — set the whole thing aside, and say when the house is willing to hear it again"}}
     :expire
     {:from #{:offered} :to :expired
@@ -1360,7 +1366,11 @@
      ;; says THE COMPOSITION WAS WRONG — do not bring this piece back.
      :safety {:idempotent true :reversible false :confirm false
               :one-way "This piece is wrong and the record says so — which is the part a composer can actually learn from. The rest of the outcome is untouched; say yes to whatever is still right."}
-     :display {:label "Not this" :order 2
+     ;; THE TEACHING REFUSAL LEARNS TO SPEAK (waymark-jfv.16): after it
+     ;; settles, the card offers four quick words — wrong time, wrong
+     ;; piece, not this way, never this — one more optional tap, and a
+     ;; sentence one screen deeper. Silence stays a complete answer.
+     :display {:label "Not this" :order 2 :reasons true
                :description "This part was wrong — decline it and leave the rest of the bundle standing"}}
     :moot
     {:from #{:offered} :to :moot
@@ -1373,6 +1383,12 @@
      ;; anything from it. No four-eyes wall: nothing is created and
      ;; nothing is refused, so there is nothing here for a stager to
      ;; grade.
+     ;;
+     ;; AND NO `:reasons` EITHER (waymark-jfv.16), for exactly that
+     ;; reason said once more: this verdict's whole meaning is that
+     ;; there is nothing here to learn, so offering four words that
+     ;; teach a composer something would be the verdict contradicting
+     ;; itself on the same line.
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Beside the point now — the piece steps out of the way without being counted as a refusal, so nobody reads it as a verdict on the idea."}
      :display {:label "Beside the point" :order 3

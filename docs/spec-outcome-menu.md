@@ -1954,3 +1954,283 @@ judged**; 11 warnings, unchanged. `person` reports clean.
   house could do next. A roster screen with the unanswered rows on top is
   the obvious first ask; that is when a population and its obligation are
   earned. Filed (`waymark-jfv.13`).
+
+## Built — jfv.16, the taps learn to speak (2026-08-25, waymark-jfv.16)
+
+The owner's ruling: *we should be able to reject with feedback, so the
+system can learn over time beyond just inaction why we're not
+engaging.* It landed as **one framework kind and one word of
+advertisement**, and the whole shape of it was decided by a constraint
+this document already carried.
+
+### The constraint, and what it kills
+
+`demand/effort` reduces an action to its **worst input field**. An
+optional `[:maybe [:string {:max 240}]]` renders `anyOf [string, null]`,
+`demand/field-class` reads that as `recall`, and `feed/split-verbs`
+moves anything heavier than `feed/card-ceiling` out of `actions` and
+into `heavier` — a link, not a thumb. That is waymark-iqa.4's second
+finding (the sugar's `:note`) and jfv.3's second (a `[:vector [:enum]]`
+of pieces), and it is the same finding a third time.
+
+Three shapes were weighed against it and **two are refused by this
+tree's own gates rather than merely being heavy**:
+
+| shape | verdict |
+|---|---|
+| (b) an OPTIONAL input on the verdict door | **Dead twice.** It changes the demand class, so the one-tap decline becomes a dialog (`135-feed-screen.js` opens `actionDialog` for any entry carrying `input`); and the row a decline leaves behind is **terminal**, so there is no second firing to supply the reason with — the engine's replay answers a second tap with the first tap's own response. |
+| (c) the reason as an AMENDMENT — a `:record true` revision on the declined row | **Refused by name.** `checks/check-terminal-no-exit` errors on any action whose `:from` intersects `:terminal`. Terminal states carry no actions in this framework, self-loops included. The bead asked whether the machine allows a terminal self-loop; it does not, and the refusal is a definition ERROR rather than a warning. |
+| (a) a ROW OF ITS OWN | **Wins.** A create is always open — there is no state to be out of — and naming the subject as `{subject_kind, subject_id}` (the tickler's shape) makes **one kind serve every verdict in the house**. |
+
+### Two layers, and the first one is one more tap
+
+1. **ON THE CARD.** The decline stays exactly what it was: input-free,
+   `assent`, one tap. After it **settles**, the settled bar grows four
+   chips — `wrong_time` / `wrong_piece` / `wrong_way` / `never_this`,
+   rendered as **"Wrong time" · "Wrong piece" · "Not this way" ·
+   "Never this"**. Tapping one is a `POST` that creates a row. Tapping
+   none is a complete answer and writes nothing.
+2. **ONE SCREEN DEEPER.** `words` is free text in the member's own
+   voice, optional at birth and addable afterwards through `say_more`
+   — an `:edit` of one prose field, which is `composition` by
+   construction, so it can never climb back onto a card. The link to it
+   is what the collapsed chip hands over.
+
+**The quick word is REQUIRED and the sentence is not**, and that order
+is the design rather than an accident. A row exists because a chip was
+tapped; the sentence deepens a word already on the record. The
+alternative — both optional, with a wall refusing the row that said
+neither — was written and taken out again: it made a `composition`
+field guard-judged, which is precisely what `usability/effort-honesty`
+warns about (a blank box where a picker belongs), and it bought a case
+the four words already cover by picking the closest and saying the rest
+underneath.
+
+### Where it lives: `waymark10.verdict-reason`, in the `:feed` module
+
+`feed_view` is the precedent and the reasoning is its own
+(waymark-8um.1): a record a **screen** posts, about cards the feed
+itself minted, named in `server/feed.clj` as a keyword and enrolled
+`:always`. The chips are drawn by `135-feed-screen.js`, which is the
+generic page and knows no application's kind names — an application
+kind would have made the framework's own screen reach for a name only
+one deployment has. The kind itself names **no application vocabulary
+at all**, which is what lets it answer a declined piece, a declined
+bundle, a let-go tickler and a dismissed finding under one law.
+
+```clojure
+(defresource verdict-reason
+  {:kind :verdict_reason
+   :plural "verdict_reasons"
+   :nav :system
+   ;; ONE STATE, and deliberately NOT terminal: the second layer is an
+   ;; edit of this row, and check-terminal-no-exit refuses an action
+   ;; out of a terminal state by name.
+   :states [:noted] :initial :noted :terminal #{}
+   :unique [[:subject_kind :subject_id :verdict]]
+   :summary "{data.verdict} on {data.about} · {data.reason}"
+   :links [{:rel "subject" :href "/#{data.subject_href}"}]
+   :schema [:map
+            [:subject_kind {:filter #{:eq}} [:string {:min 1 :max 64}]]
+            [:subject_id   {:filter #{:eq}} [:string {:min 1 :max 64}]]
+            [:subject_href {:optional true}  [:maybe [:string {:max 500}]]]
+            [:about        {:optional true}  [:maybe [:string {:max 200}]]]
+            [:verdict      {:filter #{:eq}} [:string {:min 1 :max 64}]]
+            [:reason       {:filter #{:eq}} reason-enum]
+            [:words        {:optional true}  [:maybe [:string {:max 600}]]]
+            [:said_by      {:optional true :filter #{:eq}}
+                                             [:maybe [:string {:max 128}]]]]
+   :own-surface {:by :said_by :actions #{:say_more}}
+   :on-create stamp-the-sayer
+   :create-guards [a-reason-is-your-own one-reason-per-verdict]
+   :actions
+   {:say_more {:from #{:noted} :to :noted
+               :input [:map [:words {:optional true
+                                     :x-display {:widget "prose" …}}
+                             [:maybe [:string {:max 600}]]]]
+               :edit {:prefill [:words]}
+               :record true
+               :handler write-the-words
+               :display {:label "Say more" :order 1}}}})
+
+(def reasons
+  [["wrong_time"  "Wrong time"]
+   ["wrong_piece" "Wrong piece"]
+   ["wrong_way"   "Not this way"]
+   ["never_this"  "Never this"]])
+```
+
+Two walls, and they are `feed_view`'s two, one law over.
+`a-reason-is-your-own` refuses a body that names somebody else —
+**nobody explains another member's no**, which matters more here than
+anywhere because this is the one kind whose whole purpose is to be read
+back later as what somebody meant. `one-reason-per-verdict` is the
+household's sentence and `:unique [[:subject_kind :subject_id
+:verdict]]` is the fact under a race — `feed_view`'s belt and braces
+exactly.
+
+### The wire: a door on the document, a word on the action
+
+Neither half is derived and neither is hard-coded.
+
+- **Where to send it** rides the DOCUMENT, beside `views`:
+  `feed/reasons-doc` answers `{post_to, field, choices, says}`, with
+  the address read off the kind's own `:plural` (`collection-of`) and
+  the choices read off the create model's own `:enum` and
+  `:x-display {:choices …}`. A fifth word declared server-side is a
+  fifth chip with nothing else changed, and the chip on a card and the
+  select on a form render one vocabulary. **Unlike `views` it has no
+  preview clause**, and that is the honest difference: `views` says
+  whether a screen may beacon about somebody else's page, while a
+  reason is an ordinary write under the tapper's own name — exactly as
+  a verb chip is.
+- **Whether to ask** rides the ACTION, as `:display {:reasons true}`.
+  `:display` is advertisement: `fingerprint/action-fp` projects
+  `from`, `to`, `safety`, `guards`, `handler`, `input_defaults` and
+  `touches`, and **not** `:display` — so the flag moves no hash. It
+  also rides the ordinary grant projection, which means **a decline a
+  reader does not hold carries no chips for the same structural reason
+  it carries no verb.**
+
+### The v1 set, and the two deliberate absences
+
+| door | why |
+|---|---|
+| `outcome.not_this_week` | the timing was wrong, and *which* wrong timing is what a recomposition needs |
+| `outcome_piece.not_this` | the teaching refusal; this is the bead's centre |
+| `tickler.let_it_go` | the household-wide decline that sticks |
+| `insight.dismiss` | the finding the house did not want |
+
+`outcome_piece.moot` carries none **on purpose**: that verdict's whole
+meaning is *there is nothing here to learn*, so offering four words
+that teach a composer something would be the verdict contradicting
+itself on the same line. `insight.take` carries none either, and the
+asymmetry is the point — a composer learns from what the house turned
+down; why somebody said yes is the work itself, on its own rows.
+
+`tickler.not_now` was in the bead's candidate list and is **not** in
+v1, for a mechanical reason worth keeping: a not-now is said again and
+again by design, and `one-reason-per-verdict` holds one row per
+`(subject, verdict)`, so only the first of four could ever carry a
+word. Filed (`waymark-jfv.18`) rather than smuggled.
+
+`value.dismiss` and `person.dismiss` are **ready and not wired**, and
+the honest reason is that neither kind cards: they have no population,
+so their verdicts are answered on the row's own screen, and the row
+screen (`160-resource-surface.js`) does not render reason chips. The
+mechanism is kind-agnostic and the flag is one word; the missing half
+is a screen, not a law. Filed (`waymark-jfv.19`).
+
+### The composer read — 8um.4's input now exists
+
+`:own-surface {:by :said_by :actions #{:say_more}}`: the person who
+said it reads their own and may add to them, with no grant. A composer
+reads them through an ordinary grant the household approves by name —
+`{:kind "verdict_reason" :actions []}` — the insight precedent, which
+confers reading and nothing else because there is nothing else to
+confer. **That grant is the input waymark-8um law 4's diagnosis duty
+has been waiting for: non-engagement made of words instead of
+silence.**
+
+**A `{:actions []}` grant is not the whole of the read-only story, and
+the pack found it.** `grants/visibility`'s `:action?` answers the
+own-surface affordance at **kind** level —
+`(contains? (:actions (own-of k)) a)`, with no row in the question —
+so a composer holding a read grant over this kind is **advertised**
+`say_more` on rows that are not theirs. That advertisement is the
+framework's shape and was not this bead's to change; what *is* this
+bead's is that the door **refuse**. `the-reason-is-your-own-hand` is
+that refusal, in the household's own words —
+*read it, learn from it, recompose against it — but the words in it
+stay theirs* — and without it a read-only diagnosis grant would have
+carried a quiet edit on the very sentences it was granted to read.
+Worth knowing for every future kind that pairs `:own-surface
+{:actions #{…}}` with grantability: **the advertisement is kind-level,
+so the row-level wall has to be declared.**
+
+### Where the law is proved
+
+- **Two scenarios, one per wall about whose words these are.**
+  `nobody-explains-somebody-elses-no` defers to the suite — and the
+  deferral is the guard *chain's* rather than the wall's:
+  `a-reason-is-your-own` reads only the caller and the body, but a
+  create scenario is judged against the whole chain and
+  `one-reason-per-verdict` reads rows.
+  `nobody-rewrites-somebody-elses-reason` is judged at **check tier**,
+  with no database, because `say_more` carries exactly one guard and it
+  reads the principal and the row.
+- **`:feed/verdict-reasons` in `packs/feed`**, below `:feed/outcomes`
+  because it mints a second bundle and answers it the *other* way —
+  every piece declined and the week refused. Nineteen claims, and the
+  load-bearing ones are the shape rather than the words: the decline
+  carries **no input** and reads `assent`; the decline advertises
+  `display.reasons` and the **accept does not**; a reason posted
+  against an already-terminal row lands `201` (the create-is-always-open
+  proof); the row names its subject kind, its subject id, its verdict
+  and its word, and is stamped with the tapper; a **second** reason for
+  the same verdict is `409` by `one-reason-per-verdict`; a reason filed
+  under somebody else is `409` by `a-reason-is-your-own`; a **second
+  piece declined with no reason at all** stays `declined` and leaves
+  **zero** rows behind; a composer holding `{:actions []}` reads the
+  row; that same composer's attempt to **rewrite** it is `409` by
+  `the-reason-is-your-own-hand`; and `say_more` reads `composition`,
+  which is heavier than `feed/card-ceiling` — the second layer is a
+  screen by construction. `workqueue10.conformance-test` asserts its
+  **coverage is positive**, beside `:feed/outcomes`' own: an obligation
+  that ran over zero reasons would be a green run over this bead's own
+  sentence.
+- **`ui-drive.mjs`'s feed walk**, extended: the second piece is
+  declined in the browser, no dialog opens, the settled line grows the
+  four household words, one is tapped, the chips **collapse to the word
+  that was chosen** and hand over a `#/api/verdict_reasons/…` link, the
+  row is read back over the API with its verdict and its word on it,
+  and the POST is checked for the feed's own `Idempotency-Key`. Run
+  against a fresh dev database: **49 checks passed, no console
+  errors**, and it is what caught the `about` line reading
+  *"Piece of an outcome"* on every reason row — a piece's `says` is
+  what it IS, and its `display.title` is the kind's static heading.
+- `make check-queue` goes from **46 to 47 scenarios judged**, with
+  **36 kinds** and **11 warnings** both unmoved. The kind count does
+  not move because `check/report` counts the APPLICATION's own
+  resources and `verdict_reason` is the framework's; it appears in the
+  listing as `verdict_reason (enrolled) ✓`. The battery is at zero for
+  this kind, and getting there is the record of two design decisions
+  rather than three cosmetic fixes — see the required-quick-word
+  paragraph above.
+
+### Recorded here, for whoever comes next
+
+- **Exactly one fingerprint appeared and nothing moved.** The whole
+  census — the household's own kinds plus everything the module table
+  enrols — goes **48 → 49**, and the one new line is
+  `verdict_reason 8213d8c5…`. Every other kind is **byte-identical**,
+  including the four that gained a `:display` key: `outcome`
+  `5de724bc…`, `outcome_piece` `672d914f…`, `tickler` `d2b11408…`,
+  `insight` `d5b2724b…` — the same prints they had at `HEAD`, computed
+  both ways. That is the legitimate shape of an advertisement change:
+  `action-fp` never reads `:display`.
+- **One new table, and it is the FRAMEWORK's, so every waymark engine
+  grows it.** `make migrate-queue-prod` prints one
+  `CREATE TABLE verdict_reasons` with generated columns `f_reason /
+  f_said_by / f_subject_id / f_subject_kind / f_verdict`, plus four
+  standard indexes and **one unique index**,
+  `ux_verdict_reasons_subject_kind_subject_id_verdict`. A person runs
+  the statements through
+  `nomad alloc exec -task postgres <alloc> psql -U workqueue -d workqueue10`
+  before the deploy that serves them. Nothing here touched production.
+- **Six framework kind-name assertions moved**, and every one of them
+  moved the same way `feed_view` moved them: `verdict_reason` joins the
+  own-surface list every leashed principal sees on
+  `.well-known/waymark`, because a reason is the sayer's own.
+- **A reason may outlive its subject, and that is the tickler's own
+  accepted cost.** Nothing here reads the subject — a marker naming any
+  row in the house cannot ask a kind-specific question of it, and a
+  wall that tried would be a wall that guessed. `verdict` is a plain
+  string for `feed_view`'s reason one field over: a record whose schema
+  refused an action name the engine has since renamed would be a record
+  nobody could write.
+- **There is no way to say why about a decline you made yesterday from
+  the card**, because the card is gone. The generic create form at
+  `/#/api/verdict_reasons` is always there and takes the same four
+  fields, so the path exists; it is simply not a thumb. That is the
+  honest v1 and it is written down rather than discovered later.

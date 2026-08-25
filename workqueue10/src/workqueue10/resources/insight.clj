@@ -432,7 +432,17 @@
       :safety {:idempotent true :reversible false :confirm false
                :one-way "Taking a finding is the house saying yes to it — the record keeps who said so and when. The work itself is on its own screen, through this card's offer link, where its own doors are."}}
      {:name :dismiss :to :dismissed
-      :label "Not useful" :order 2
+      ;; …and it may say WHY (waymark-jfv.16): the four quick words on
+      ;; the settled card, one more optional tap, a sentence one screen
+      ;; deeper. `:display` is spelled whole because a verdict's own
+      ;; display wins whole over the sugar's label/order pair; the two
+      ;; facts are unchanged and `:display` rides no fingerprint facet,
+      ;; so this kind's hash does not move.
+      ;;
+      ;; `:take` carries none, and the asymmetry is the point: a
+      ;; composer learns from what the house turned down. Why somebody
+      ;; said yes is the work itself, on its own rows.
+      :display {:label "Not useful" :order 2 :reasons true}
       :safety {:idempotent true :reversible false :confirm false
                :one-way "The finding leaves the feed and stays on record. Nothing is deleted and nothing is hidden; the house has simply answered it."}}]}
    :schema

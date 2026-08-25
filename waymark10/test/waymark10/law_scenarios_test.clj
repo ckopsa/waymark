@@ -302,6 +302,7 @@
 
 (def ^:private tables
   ["errands" "members" "roles" "grants" "approval_requests" "definitions"
+   "verdict_reasons"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_drafts"
    "waymark10_cursors" "events"])
 
@@ -324,12 +325,17 @@
         mine (first (filter #(= :core/law-scenarios (:name %)) report))]
     (is (some? mine) "core's pack owes the obligation")
     (is (= [] (:violations mine)))
-    (is (= 5 (:covered mine))
+    (is (= 6 (:covered mine))
         (str "exactly the scenarios the check tier could not judge, and no"
              " more: errand's one, plus the two recipe_proposal staging"
              " scenarios the :feed module enrols into every engine"
              " (waymark-0k4 — their create door carries a wall that reads"
              " the house's own recipe rows), plus the two feed_view ones"
              " (waymark-8um.1 — the same shape, one door over: its create"
-             " reads the member's switch and this member's own day). The"
-             " other three of errand's are not re-run here"))))
+             " reads the member's switch and this member's own day), plus"
+             " verdict_reason's one (waymark-jfv.16 — and the deferral is"
+             " the CHAIN's rather than the wall's: nobody-explains-somebody"
+             "-elses-no reads only the caller, but its door's second guard"
+             " counts rows, and a create scenario is judged against the"
+             " whole chain). The other three of errand's are not re-run"
+             " here"))))

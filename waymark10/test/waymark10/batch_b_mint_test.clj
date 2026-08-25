@@ -262,7 +262,7 @@
               recipe proposals: the own surface rides every leash)"
       (let [b (json (req :get "/api/.well-known/waymark" nil scoped))]
         (is (= ["approval_request" "feed_view" "feed_view_consent"
-                "grant" "job" "recipe_proposal"]
+                "grant" "job" "recipe_proposal" "verdict_reason"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))
           "the domain stays concealed")

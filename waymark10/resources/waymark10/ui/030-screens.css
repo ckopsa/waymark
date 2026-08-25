@@ -385,6 +385,22 @@
   .feed-verbs a.link-chip { font-size: 12px; padding: 6px 10px; }
   .feed-settled { font-size: 13.5px; color: var(--muted); }
   .feed-settled .ok { color: var(--verdigris); font-weight: 700; }
+  /* ── the quick reasons (waymark-jfv.16): the row a SETTLED decline
+     grows. Quieter than a verdict and on its own line, because it is
+     the second, optional tap rather than the answer — the answer has
+     already happened and the card already says so above this. */
+  .feed-reasons { display: flex; flex-wrap: wrap; gap: 6px;
+                  align-items: center; margin-top: 8px; width: 100%; }
+  .feed-reasons-ask { font-size: 12.5px; }
+  .feed-reasons button.chip.reason { font-family: var(--sans);
+    font-size: 12.5px; min-height: 30px; padding: 4px 10px; cursor: pointer;
+    border: 1px dashed var(--line); background: transparent;
+    color: var(--muted); }
+  .feed-reasons button.chip.reason:hover { border-style: solid;
+    border-color: var(--verdigris); background: var(--verdigris-wash);
+    color: var(--ink); }
+  .feed-reasons button.chip.reason:disabled { opacity: .5; cursor: default; }
+  .feed-reasons a.link-chip { font-size: 12px; padding: 4px 9px; }
   .fcard .problem { margin-top: 10px; }
   /* ── a bundle's pieces (waymark-jfv.4): sub-rows with their own
      thumbs. Indented under the bundle they belong to, quieter than

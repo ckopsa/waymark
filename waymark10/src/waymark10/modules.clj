@@ -167,6 +167,7 @@
             [waymark10.server.routes.worksheet :as worksheet-routes]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.server.worksheet :as worksheet]
+            [waymark10.verdict-reason :as verdict-reason]
             [waymark10.test.packs :as packs]
             [waymark10.types :as t]))
 
@@ -405,6 +406,15 @@
    ;; own populations — and both together or neither, because a record
    ;; enrolled without its switch would be a door with the wall left in
    ;; the other jar.
+   ;; …and since waymark-jfv.16 a FIFTH: `verdict_reason`, the four
+   ;; quick words a settled card offers after a decline lands, and the
+   ;; sentence one screen deeper. `:always` for the view door's own
+   ;; reason — the chips are drawn by the feed's generic screen, off a
+   ;; door the feed DOCUMENT names, so a house that serves the feed
+   ;; serves the way to say why. The kind itself names no application
+   ;; vocabulary at all ({subject_kind, subject_id, verdict}, the
+   ;; tickler's shape), which is what lets one kind answer every
+   ;; verdict in the house.
    {:module :feed
     :enrols [{:kind :feed_recipe :enroll :always
               :kinds (fn [_] [feed-recipe/feed-recipe])}
@@ -413,7 +423,9 @@
              {:kind :feed_view_consent :enroll :always
               :kinds (fn [_] [feed-view/feed-view-consent])}
              {:kind :feed_view :enroll :always
-              :kinds (fn [_] [feed-view/feed-view])}]
+              :kinds (fn [_] [feed-view/feed-view])}
+             {:kind :verdict_reason :enroll :always
+              :kinds (fn [_] [verdict-reason/verdict-reason])}]
     :routes feed-routes/routes :pack packs/feed}
 
    ;; named, contributing nothing through this seam

@@ -100,6 +100,10 @@
    ;; row would have this fixture's engine recording before its
    ;; obligation says so
    "feed_views" "feed_view_consents"
+   ;; …and the reason door's own rows (waymark-jfv.16): a leftover
+   ;; reason would make `one-reason-per-verdict` answer about a
+   ;; previous run's bundle
+   "verdict_reasons"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"
    "waymark10_job_leases" "waymark10_drafts" "waymark10_observations"])
 

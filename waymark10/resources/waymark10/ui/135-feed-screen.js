@@ -426,9 +426,103 @@ async function renderFeedScreen(view, doc) {
        it happening one line at a time */
     if (v.scope === "piece") {
       settleBar(v.bar, lbl, res.body);
+      reasonChips(v.bar, v);
       return;
     }
-    settle(card, article, lbl, res.body);
+    /* AWAITED, and it has to be: the settle may finish by re-reading
+       the row, and a chip row appended before that read landed would
+       be wiped by the bar it was appended to. */
+    await settle(card, article, lbl, res.body);
+    reasonChips(article.querySelector(".feed-verbs"), v);
+  }
+
+  /* ── the quick reasons (waymark-jfv.16) ─────────────────────────────
+     THE DECLINE STAYS ONE TAP. Everything above this line fires an
+     input-free verb; what happens here is a SECOND, OPTIONAL tap on a
+     card that has already settled — which is the only shape the card
+     grammar leaves. A verdict that collected anything would read
+     `recall` at `demand/effort`, and `split-verbs` would have moved it
+     off the card into a link before this page ever saw it.
+
+     Three facts arrive rather than being derived, and that is the
+     whole of this page's manners:
+
+     - WHETHER to ask is the ACTION's own advertisement
+       (`display.reasons`), so it rides the ordinary grant projection.
+       A decline a reader does not hold carries no chips for the same
+       structural reason it carries no verb.
+     - WHERE to send it is the DOCUMENT's own door (`reasons.post_to`),
+       read off the reason kind's `:plural` — the `views` precedent.
+     - WHICH WORDS to offer is the same door's `choices`, which is the
+       declaration's own enum wearing its own `:x-display` prose. A
+       fifth word declared server-side is a fifth chip here with
+       nothing changed.
+
+     Tapping none is a complete answer and nothing is written. */
+  function reasonChips(bar, v) {
+    const door = doc.reasons || null;
+    if (!bar || !door || !door.post_to) return;
+    const choices = door.choices || [];
+    if (!choices.length) return;
+    if (!(((v.entry || {}).display || {}).reasons)) return;
+    const subject = v.doc || {};
+    const self = String(subject.self || "");
+    if (!self) return;
+    const row = el("div", {class: "feed-reasons", "data-reasons": ""});
+    row.append(el("span", {class: "muted feed-reasons-ask"}, "Why?"));
+    for (const c of choices) {
+      const chip = el("button",
+        {class: "chip reason", "data-reason": c.value,
+         title: door.says || ""}, c.label);
+      chip.addEventListener("click", async () => {
+        for (const b of row.querySelectorAll("button")) b.disabled = true;
+        /* the same origin convention the verdict rode, with a fresh
+           nonce: a reason tapped from a card IS an action from the
+           feed, and actions-from-the-feed should be able to count it
+           against the card the thumb was actually on. */
+        const key = feedOriginKey(day, v.cardId || v.card.card_id);
+        const res = await api(door.post_to, {
+          method: "POST",
+          headers: {"Idempotency-Key": key},
+          body: JSON.stringify({
+            subject_kind: subject.kind || v.card.kind || "",
+            subject_id: self.split("/").pop(),
+            subject_href: self,
+            /* `says` FIRST: a piece's own sentence is what it IS,
+               while its `display.title` is the kind's static heading
+               ("Piece of an outcome"), which would make every reason
+               row read the same. A bundle carries no `says` and its
+               title is its goal, so the fallback is right there. */
+            about: subject.says || (subject.display || {}).title ||
+                   subject.summary || "",
+            verdict: v.name,
+            [door.field || "reason"]: c.value})});
+        if (!res.ok) {
+          for (const b of row.querySelectorAll("button")) b.disabled = false;
+          const box = (v.problemBox && v.problemBox.isConnected)
+            ? v.problemBox : v.article.querySelector("[data-feed-problem]");
+          if (box) box.replaceChildren(problemBox(res.body || {}));
+          return;
+        }
+        /* THE CHIPS COLLAPSE TO THE WORD THAT WAS CHOSEN — the others
+           do not come back, the way no settled verb does. Beside it,
+           the way to the second layer: the sentence a quick word could
+           not carry lives on the reason row's own screen, and it is a
+           LINK because a prose box is `composition` and composition is
+           never a thumb. */
+        const reasonSelf = ((res.body || {}).self) || "";
+        row.replaceChildren(
+          el("span", {class: "feed-settled"},
+            el("span", {class: "ok"}, "✓ "), c.label),
+          reasonSelf
+            ? el("a", {class: "chip link-chip", href: "#" + reasonSelf,
+                       title: "add what the quick word could not carry"},
+                "Say more ↗")
+            : null);
+      });
+      row.append(chip);
+    }
+    bar.append(row);
   }
 
   /* one verb bar, settled: the chips do not come back. A fresh

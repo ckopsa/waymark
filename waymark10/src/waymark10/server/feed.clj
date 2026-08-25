@@ -178,6 +178,7 @@
             [waymark10.server.render :as render]
             [waymark10.server.seasons :as seasons]
             [waymark10.server.store :as store]
+            [waymark10.schema :as schema]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
@@ -617,6 +618,14 @@
   "The record a screen posts when the switch is on."
   :feed_view)
 
+(def reason-kind
+  "The row a SETTLED card posts when somebody taps one of the quick
+  reasons after a decline (waymark10.verdict-reason, waymark-jfv.16).
+  Named here as a keyword for the same reason the two above are: this
+  namespace reads kinds the feed module enrols without requiring the
+  namespaces that declare them."
+  :verdict_reason)
+
 (defn- collection-of
   "The address of a kind's collection, or nil when this engine holds no
   such kind. Read off the declaration's own `:plural` rather than
@@ -671,6 +680,54 @@
                (str "Nothing is being recorded about what you were"
                     " shown. It is off for everybody until each person"
                     " turns their own on, at " switch "."))})))
+
+;; ── the reason door (waymark-jfv.16) ────────────────────────────────
+
+(defn- reasons-doc
+  "Where a settled card sends a quick reason, and the four words it may
+  send — or nil, when this engine holds no reason kind and a card has
+  nothing to offer after a decline lands.
+
+  IT IS A DOOR, NOT AN ANSWER, which is the difference from `views`
+  above. `views` says whether this reader's screen MAY beacon, and the
+  preview half of that had to be the server's. A reason is an ordinary
+  write under the tapper's own name: whoever taps is who the row is
+  about (`verdict-reason/a-reason-is-your-own`), exactly as whoever
+  taps a verb chip is who fired the verb — so there is no preview
+  clause here and none would mean anything.
+
+  BOTH HALVES ARE READ OFF THE DECLARATION. The address is the kind's
+  own `:plural`, through `collection-of`, so the one place a plural is
+  decided stays the one place; the words are the create model's own
+  enum and its own `:x-display :choices`, so the chip on a card and
+  the select on a form render one vocabulary and a second copy cannot
+  drift from it. An engine whose reason kind grew a fifth word grows a
+  fifth chip with nothing here changed.
+
+  WHICH VERBS OFFER THEM IS NOT THIS FUNCTION'S BUSINESS. A verdict
+  says so itself, in `:display {:reasons true}` — advertisement, which
+  rides no fingerprint facet — and it rides the action entry through
+  the ordinary grant projection, so a decline a reader does not hold
+  carries no chips for the same structural reason it carries no verb."
+  [ctx]
+  (when-some [rdef (get (resources ctx) reason-kind)]
+    (when-some [post-to (collection-of ctx reason-kind)]
+      (let [model (or (:create-schema rdef) (:schema rdef))
+            prop (get-in (schema/json-schema model) [:properties :reason])
+            choices (get-in prop [:x-display :choices])
+            label (fn [v] (or (get choices (str v))
+                              (get choices (keyword (str v)))
+                              (str v)))]
+        (when (seq (:enum prop))
+          {:post_to post-to
+           :field "reason"
+           :choices (mapv (fn [v] {:value (str v) :label (label v)})
+                          (:enum prop))
+           :says (str "A decline that has landed may say why, in one more"
+                      " optional tap. Nothing is written unless somebody"
+                      " taps — silence is a complete answer — and the"
+                      " sentence a quick word could not carry lives one"
+                      " screen deeper, at " post-to ".")})))))
 
 ;; ── the contest's one read (waymark-8um.3) ──────────────────────────
 
@@ -3266,6 +3323,11 @@
         ;; client because the PREVIEW half has to be the server's — see
         ;; views-doc
         views (views-doc ctx preview recording)
+        ;; the reason door (waymark-jfv.16): where a SETTLED card sends
+        ;; the quick word somebody taps after a decline lands, and the
+        ;; four words it may send. A door rather than an answer, so
+        ;; unlike `views` it has no preview clause — see reasons-doc.
+        reasons (reasons-doc ctx)
         recipe-doc (cond-> (update (recipe-view recipe) "lines"
                                    (fn [ls] (mapv (fn [l]
                                                     (merge l (get counts (get l "line"))))
@@ -3393,6 +3455,7 @@
               draw (assoc :draw draw)
               preview (assoc :preview preview)
               views (assoc :views views)
+              reasons (assoc :reasons reasons)
               (and bottomless more?)
               (assoc :links
                      {:next {:href (str base

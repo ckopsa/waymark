@@ -1196,6 +1196,77 @@ async function feedStory() {
      String(materialized.summary || "").includes("Cut the box stock"));
   console.log("    it became: " + (materialized || {}).self);
 
+  /* ── the taps learn to speak (waymark-jfv.16) ──────────────────────
+     The OTHER piece is declined, and then — on the line that has
+     already settled — the card asks why. Everything this block claims
+     is about the SHAPE of that asking: the decline is still one
+     input-free tap, the reasons are a second OPTIONAL one wearing the
+     household's own words, and once a word is tapped the chips
+     collapse to it and hand over a link to the screen where the
+     sentence lives. Silence is proved on the wire rather than here —
+     the pack's own :feed/verdict-reasons declines a piece and never
+     explains it. */
+  console.log("· declining with a reason");
+  const declineId = await evaljs(`(() => {
+    const p = [...document.querySelectorAll(
+      '.fcard[data-section="outcomes"] .fpiece')][1];
+    window.__decline = p;
+    [...p.querySelectorAll(".fpiece-verbs button")]
+      .find(b => b.textContent.trim() === "Not this").click();
+    return p.dataset.cardId; })()`);
+  await waitFor(`window.__decline.querySelector(".fpiece-verbs .feed-settled")`,
+                "the decline settling on its own line");
+  ok("the decline is one tap — no dialog, and the chip carried no body",
+     await evaljs(`!document.querySelector("dialog[open]")`));
+  await waitFor(`window.__decline.querySelector(".feed-reasons button")`,
+                "the quick reasons on the settled line");
+  ok("the SETTLED line offers the four quick reasons, in household words",
+     await evaljs(`(() => {
+       const labels = [...window.__decline.querySelectorAll(
+         ".feed-reasons button.chip.reason")].map(b => b.textContent.trim());
+       window.__reasons = labels;
+       return ["Wrong time", "Wrong piece", "Not this way", "Never this"]
+                .every(l => labels.includes(l));
+     })()`));
+  console.log("    it asks: " + (await evaljs(`window.__reasons`)).join(" · "));
+  await evaljs(`window.__decline.querySelector(
+     '.feed-reasons button[data-reason="wrong_time"]').click(); true`);
+  await waitFor(`window.__decline.querySelector(".feed-reasons .feed-settled")`,
+                "the reason landing");
+  ok("the chips collapse to the word that was chosen, and do not come back",
+     await evaljs(`(() => {
+       const r = window.__decline.querySelector(".feed-reasons");
+       return r.textContent.includes("Wrong time") &&
+              !r.querySelector("button");
+     })()`));
+  ok("…and beside it, the way to the second layer — a LINK, never a box",
+     await evaljs(`!!window.__decline.querySelector(
+        '.feed-reasons a[href^="#/api/verdict_reasons/"]')`));
+  const reasonRow = await (async () => {
+    const pid = declineId.split("/").pop();
+    const list = await (await fetch(
+      `${BASE}/api/verdict_reasons?subject_id=${pid}`,
+      {headers: H("colton")})).json();
+    const first = ((list.data || {}).items || [])[0];
+    if (!first || !first.self) return null;
+    const row = await fetch(BASE + first.self, {headers: H("colton")});
+    return row.ok ? await row.json() : null;
+  })();
+  ok("the tap WROTE a row that names the verdict it explains, and the word",
+     !!reasonRow &&
+     (reasonRow.data || {}).subject_kind === "outcome_piece" &&
+     (reasonRow.data || {}).verdict === "not_this" &&
+     (reasonRow.data || {}).reason === "wrong_time" &&
+     (reasonRow.data || {}).said_by === "colton");
+  console.log("    the reason reads: " + (reasonRow || {}).summary);
+  ok("saying more is a SCREEN and not a thumb — composition, on the row",
+     !!reasonRow &&
+     ((reasonRow.actions || {}).say_more || {}).effort === "composition");
+  const reasonKey = (await evaljs(`window.__keys`))
+    .find(([u]) => u.includes("/api/verdict_reasons"));
+  ok("the reason rode the feed's own origin key, like any card tap",
+     !!reasonKey && reasonKey[1].startsWith("feed/" + feedDay + "/"));
+
   /* ── deal again: the person spins (waymark-8um.2, law 6) ────────
      Four claims, one per half of the law. ↻ Re-read asks the SAME
      address again and answers the same order. A deal-again tap puts a

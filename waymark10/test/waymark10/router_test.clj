@@ -102,11 +102,13 @@
     ;; waymark-0k4: its sibling recipe_proposal, the staged change an
     ;; agent may prepare and only a person may apply;
     ;; waymark-8um.1: and its view door's pair — feed_view_consent, the
-    ;; per-member switch, and feed_view, the record it lets exist
+    ;; per-member switch, and feed_view, the record it lets exist;
+    ;; waymark-jfv.16: and verdict_reason, the four quick words a
+    ;; settled card offers after a decline lands
     (is (= ["approval_request" "attachment" "definition" "feed_recipe"
             "feed_view" "feed_view_consent"
             "grant" "job" "meal" "member" "plan" "recipe_proposal"
-            "role" "subscription" "task"]
+            "role" "subscription" "task" "verdict_reason"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))

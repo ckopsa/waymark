@@ -217,7 +217,18 @@
       :safety {:idempotent false :reversible false :confirm false
                :one-way "Each 'not now' pushes the next offer further out — a week, then three, then two months. Nothing is lost and nothing is deleted; the house just stops asking for a while, and remembers that you said so."}}
      {:name :let_it_go :to :let_go
-      :label "Let it go" :order 2
+      ;; …and it may say WHY (waymark-jfv.16). `:display` spelled whole
+      ;; because a verdict's own display wins whole over the sugar's
+      ;; label/order pair — same two facts, plus the one word that
+      ;; tells a settled card to offer the four quick reasons.
+      ;;
+      ;; `:not_now` deliberately does NOT carry it, and the reason is
+      ;; the reason kind's own `one-reason-per-verdict`: a not-now is
+      ;; said again and again by design, and one row per (subject,
+      ;; verdict) could only ever hold the first of them. Letting go is
+      ;; said once, which is what makes it the tickler's answerable
+      ;; decline. Filed (waymark-jfv.18) rather than smuggled.
+      :display {:label "Let it go" :order 2 :reasons true}
       :safety {:idempotent true :reversible false :confirm false
                :one-way "This one is done being carried. It never comes back — the row stays on record, the asking stops, and if you want it again you will have to want it enough to say so."}}
      {:name :take_it_back :to :taken

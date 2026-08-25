@@ -58,9 +58,14 @@
   ;; the per-member switch, :feed_view the record it lets exist. They
   ;; enroll together or not at all — a record whose wall was in another
   ;; jar would be a door with no switch on it.
+  ;; …and :verdict_reason (waymark-jfv.16): the four quick words a
+  ;; SETTLED card offers after a decline lands. :always for the view
+  ;; door's own reason — the chips are drawn by the feed's generic
+  ;; screen off a door the feed DOCUMENT names, so a house that serves
+  ;; the feed serves the way to say why.
   (is (= #{:definition :member :role :grant :approval_request
            :attachment :subscription :job :feed_recipe :recipe_proposal
-           :feed_view :feed_view_consent}
+           :feed_view :feed_view_consent :verdict_reason}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled

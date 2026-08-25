@@ -4226,6 +4226,369 @@
                   " is terminal, so it leaves by construction rather than"
                   " by a query remembering to exclude it")))}))
 
+;; ── the taps learn to speak (waymark-jfv.16) ────────────────────────
+;;
+;; A decline already teaches something, in the vocabulary of STATES,
+;; which is four words wide. This is where the household says which
+;; four words it meant — and the whole obligation is about the SHAPE of
+;; that saying rather than about the words:
+;;
+;;   the decline is still ONE TAP (no input, `assent`, on the card);
+;;   the reasons are a SECOND, OPTIONAL tap on the settled card;
+;;   SILENCE is a complete answer and leaves no row behind;
+;;   one verdict collects ONE reason, and the second is refused by name;
+;;   nobody explains somebody else's no;
+;;   the deeper layer can never climb back onto a card;
+;;   and a COMPOSER reads what it was told, under an ordinary grant.
+;;
+;; It mints a value, a bundle, two pieces and one reason, and it ends
+;; with the bundle declined — terminal, so the population retires it by
+;; construction and the engine it hands on is the engine it found.
+
+(defn- reason-door [doc] (:reasons doc))
+
+(defn- feed-reason-violations
+  [ctx]
+  (let [tag (subs (str (random-uuid)) 0 8)
+        as-member (member-headers tag)
+        member (get as-member "x-waymark-principal")
+        composer (get (composer-headers tag) "x-waymark-principal")
+        loved (str "the shop " tag)
+        reasons-plural (:plural (rdef ctx :verdict_reason))
+        value (req ctx :post (str "/api/" (:plural (rdef ctx :value)))
+                   {:name (str "Making things with the boys " tag)
+                    :says (str "The evenings worth remembering are the ones"
+                               " somebody built something in.")
+                    :loved [loved]
+                    :scope "household"}
+                   as-member)
+        vid (when (= 201 (:status value)) (id-of (:self (json ctx value))))
+        vself (when vid (str "/api/" (:plural (rdef ctx :value)) "/" vid))
+        leashed (leash! ctx composer
+                        [{:kind "outcome" :actions ["create"]}
+                         {:kind "outcome_piece" :actions ["create"]}])
+        target (piece-target ctx)
+        stage (fn [kind body]
+                (let [resp (req ctx :post
+                                (str "/api/" (:plural (rdef ctx kind)))
+                                body leashed)]
+                  {:status (:status resp) :doc (json ctx resp)}))
+        staged (when (and vid leashed)
+                 (stage :outcome
+                        {:goal (str "A Saturday nobody wanted " tag)
+                         :value_id vid
+                         :routing (str "It runs through " loved ", which this"
+                                       " house wrote down as something it"
+                                       " loves.")
+                         :routes_through loved
+                         :evidence [vself]}))
+        oid (some-> (:doc staged) :self id-of)
+        piece (fn [n]
+                (when (and oid target)
+                  (stage :outcome_piece
+                         {:outcome_id oid
+                          :says (str "Piece " n " of " tag
+                                     " — twenty minutes, already prepared")
+                          :target_kind target
+                          :prepared (create-body ctx (keyword target)
+                                                 (+ 4700 (long n)))})))
+        pieces (into [] (keep piece) [1 2])
+        pids (mapv #(some-> (:doc %) :self id-of) pieces)
+        mine (:doc (feed-doc ctx as-member))
+        door (reason-door mine)
+        card (when oid (outcome-card mine oid))
+        day (str (:day mine))
+        not-this (declared-name ctx :outcome_piece :not_this)
+        take' (declared-name ctx :outcome_piece :take)
+        not-this-week (declared-name ctx :outcome :not_this_week)
+        origin (fn [c] (feed/origin-key day (str (:card_id c))
+                                        (subs (str (random-uuid)) 0 8)))
+        pc1 (when card (piece-of card (nth pids 0 nil)))
+        pc2 (when card (piece-of card (nth pids 1 nil)))
+        ;; the DECLINE's own entry, as the card projects it: the chip
+        ;; this bead must not have made heavier, and the one word that
+        ;; says a settled card may ask why
+        decline-entry (get-in pc1 [:actions (keyword not-this)])
+        take-entry (get-in pc1 [:actions (keyword take')])
+        bundle-entry (get-in card [:actions (keyword not-this-week)])
+        word (some-> door :choices first :value)
+        ;; 1. THE DECLINE ITSELF — one tap, no body, the feed's own key
+        declined (when pc1
+                   (invoke-http ctx :outcome_piece (nth pids 0) not-this nil
+                                {:headers (assoc as-member "idempotency-key"
+                                                 (origin pc1))}))
+        ;; 2. …AND THE SECOND TAP, which is a CREATE and therefore open
+        ;; against a row that is already terminal — the whole reason
+        ;; this is a kind rather than a field
+        reason-body (fn [extra]
+                      (merge {:subject_kind "outcome_piece"
+                              :subject_id (nth pids 0 "")
+                              :subject_href (str "/api/outcome_pieces/"
+                                                 (nth pids 0 ""))
+                              :about (str (:says pc1))
+                              ;; the ACTION's wire name, not the keyword
+                              ;; the registry holds it under — a reason
+                              ;; names the door the household tapped
+                              :verdict (name not-this)
+                              :reason word}
+                             extra))
+        said (when (and word (= 200 (:status declined)))
+               (let [resp (req ctx :post (str "/api/" reasons-plural)
+                               (reason-body {})
+                               (assoc as-member "idempotency-key"
+                                      (origin pc1)))]
+                 {:status (:status resp) :doc (json ctx resp)}))
+        rid (some-> (:doc said) :self id-of)
+        again (when (= 201 (:status said))
+                (let [resp (req ctx :post (str "/api/" reasons-plural)
+                                (reason-body {}) as-member)]
+                  {:status (:status resp) :doc (json ctx resp)}))
+        ;; 3. NOBODY EXPLAINS SOMEBODY ELSE'S NO — the scenario's own
+        ;; wall, over the wire, because the create door's chain reads
+        ;; rows and the check tier could not reach it
+        foreign (when word
+                  (let [resp (req ctx :post (str "/api/" reasons-plural)
+                                  (reason-body {:said_by "somebody-else"
+                                                :subject_id (str "x" tag)})
+                                  as-member)]
+                    {:status (:status resp) :doc (json ctx resp)}))
+        ;; 4. THE SILENT DECLINE — the second piece, answered and never
+        ;; explained, which has to stay a complete answer
+        silent (when pc2
+                 (invoke-http ctx :outcome_piece (nth pids 1) not-this nil
+                              {:headers (assoc as-member "idempotency-key"
+                                               (origin pc2))}))
+        after-silent (when (= 200 (:status silent))
+                       (json ctx (get-env ctx :outcome_piece (nth pids 1))))
+        theirs (when rid
+                 (let [resp (req ctx :get (str "/api/" reasons-plural
+                                               "?subject_id=" (nth pids 1 ""))
+                                 nil as-member)]
+                   {:status (:status resp) :doc (json ctx resp)}))
+        ;; 5. THE COMPOSER READS IT, under a read grant and nothing more
+        reader (leash! ctx (str "conformance-diagnoser-" tag)
+                       [{:kind "verdict_reason" :actions []}])
+        read-back (when (and rid reader)
+                    (let [resp (req ctx :get
+                                    (str "/api/" reasons-plural "/" rid)
+                                    nil reader)]
+                      {:status (:status resp) :doc (json ctx resp)}))
+        ;; 6. …AND THE DEEPER LAYER IS A SCREEN, never a thumb
+        mine-reason (when rid
+                      (json ctx (get-env ctx :verdict_reason rid)))
+        say-more (declared-name ctx :verdict_reason :say_more)
+        say-entry (get-in mine-reason [:actions (keyword say-more)])
+        ;; 7. …AND IT IS THE SAYER'S OWN HAND. The own-surface
+        ;; affordance is answered at KIND level by grants/visibility
+        ;; (`:action?` reads `(:actions (own-of k))` with no row in the
+        ;; question), so a read-only diagnosis grant IS advertised this
+        ;; door on somebody else's row. The wall is what keeps the
+        ;; advertisement from being an edit.
+        rewritten (when (and rid reader)
+                    (invoke-http ctx :verdict_reason rid say-more
+                                 {:words "Actually it was fine."}
+                                 {:headers reader}))
+        ;; and the bundle goes with it, so this obligation leaves no
+        ;; live outcome behind
+        _ (when oid
+            (invoke-http ctx :outcome oid not-this-week nil
+                         {:headers as-member}))]
+    {:covered (if (= 201 (:status said)) 1 0)
+     :violations
+     (cond-> []
+       (nil? door)
+       (conj (str "feed: the document carries no `reasons` door — this"
+                  " engine enrols " (pr-str reasons-plural) " and the feed's"
+                  " own screen has no other way to learn where a quick"
+                  " reason goes; a chip row hard-coding a plural would be"
+                  " the framework reaching for a name one deployment has"))
+
+       (and door (str/blank? (str (:post_to door))))
+       (conj (str "feed: the reasons door names no post_to: " (pr-str door)))
+
+       (and door (< (count (:choices door)) 2))
+       (conj (str "feed: the reasons door offers " (pr-str (:choices door))
+                  " — the quick reasons are a SELECTION, and a menu of one"
+                  " is a button with an opinion"))
+
+       (and door (some #(or (str/blank? (str (:label %)))
+                            (= (str (:label %)) (str (:value %))))
+                       (:choices door)))
+       (conj (str "feed: a reason choice wears its wire token as its label ("
+                  (pr-str (:choices door)) ") — the chips are the"
+                  " household's own words, declared once as :x-display"
+                  " {:choices …} and rendered by the form and the card"
+                  " alike"))
+
+       (nil? card)
+       (conj (str "feed: the staged bundle never reached the member's feed,"
+                  " so nothing here could be judged from a card at all"))
+
+       (and card (nil? pc1))
+       (conj (str "feed: the bundle carded without its pieces, and the"
+                  " pieces are where the decline this bead is about"
+                  " happens"))
+
+       (and decline-entry (some? (:input decline-entry)))
+       (conj (str "feed: the decline collects an input ("
+                  (pr-str (:input decline-entry))
+                  ") — the whole design of this bead is that it must not."
+                  " A verdict with a body opens a dialog instead of"
+                  " answering a thumb, and `split-verbs` would move a"
+                  " recall-class one off the card entirely"))
+
+       (and decline-entry (not= "assent" (str (:effort decline-entry))))
+       (conj (str "feed: the decline reads effort "
+                  (pr-str (:effort decline-entry))
+                  " — a decline is one tap, and the reason chips exist"
+                  " precisely so it can stay one"))
+
+       (and decline-entry
+            (not (true? (get-in decline-entry [:display :reasons]))))
+       (conj (str "feed: the piece's decline does not advertise"
+                  " display.reasons, so a settled card has no way to know"
+                  " it may ask why: " (pr-str (:display decline-entry))))
+
+       (and bundle-entry
+            (not (true? (get-in bundle-entry [:display :reasons]))))
+       (conj (str "feed: the BUNDLE's decline does not advertise"
+                  " display.reasons — the timing being wrong is a thing a"
+                  " composer can learn from too: "
+                  (pr-str (:display bundle-entry))))
+
+       (and take-entry (true? (get-in take-entry [:display :reasons])))
+       (conj (str "feed: the ACCEPT advertises reasons. The asymmetry is"
+                  " the point — a composer learns from what the house"
+                  " turned down, and why somebody said yes is the work"
+                  " itself on its own rows"))
+
+       (and pc1 (not= 200 (:status declined)))
+       (conj (str "feed: the piece's decline answered "
+                  (:status declined) ": " (pr-str (:doc declined))))
+
+       (and word (= 200 (:status declined)) (not= 201 (:status said)))
+       (conj (str "feed: a reason for a decline that had already landed"
+                  " answered " (:status said) ": " (pr-str (:doc said))
+                  " — the declined row is TERMINAL, which is exactly why"
+                  " the reason is a create and not a door on that row;"
+                  " a create is always open"))
+
+       (and rid (not= "outcome_piece"
+                      (str (get-in (:doc said) [:data :subject_kind]))))
+       (conj (str "feed: the reason does not name the kind it explains: "
+                  (pr-str (:data (:doc said)))))
+
+       (and rid (not= (str (nth pids 0 ""))
+                      (str (get-in (:doc said) [:data :subject_id]))))
+       (conj (str "feed: the reason does not name the ROW it explains: "
+                  (pr-str (:data (:doc said)))))
+
+       (and rid (not= (name not-this)
+                      (str (get-in (:doc said) [:data :verdict]))))
+       (conj (str "feed: the reason does not name the VERDICT it explains ("
+                  (pr-str (get-in (:doc said) [:data :verdict]))
+                  ") — a reason floating free of the answer it is about"
+                  " teaches a composer nothing it can act on"))
+
+       (and rid (not= (str word) (str (get-in (:doc said) [:data :reason]))))
+       (conj (str "feed: the reason did not keep the word that was tapped: "
+                  (pr-str (:data (:doc said)))))
+
+       (and rid (not= member (str (get-in (:doc said) [:data :said_by]))))
+       (conj (str "feed: the reason is filed under "
+                  (pr-str (get-in (:doc said) [:data :said_by]))
+                  " and " (pr-str member) " is who tapped — whoever taps"
+                  " is whose reason it is, stamped rather than supplied"))
+
+       (and again (not= 409 (:status again)))
+       (conj (str "feed: a SECOND reason for the same verdict answered "
+                  (:status again) " — one verdict, one reason; it grows by"
+                  " saying more rather than by being said again"))
+
+       (and again (= 409 (:status again))
+            (not= :one-reason-per-verdict (refused-guard again)))
+       (conj (str "feed: the second reason was refused by "
+                  (pr-str (:guard (:doc again)))
+                  ", not by the wall about one reason per verdict"))
+
+       (and foreign (not= 409 (:status foreign)))
+       (conj (str "feed: a reason filed under somebody else answered "
+                  (:status foreign) ": " (pr-str (:doc foreign))
+                  " — this is the one kind in the house whose whole"
+                  " purpose is to be read back later as what somebody"
+                  " meant"))
+
+       (and foreign (= 409 (:status foreign))
+            (not= :a-reason-is-your-own (refused-guard foreign)))
+       (conj (str "feed: the foreign reason was refused by "
+                  (pr-str (:guard (:doc foreign)))
+                  ", not by the wall about whose reason it is"))
+
+       (and pc2 (not= 200 (:status silent)))
+       (conj (str "feed: a decline with no reason after it answered "
+                  (:status silent) ": " (pr-str (:doc silent))
+                  " — SILENCE IS A COMPLETE ANSWER, and a decline that"
+                  " needed a reason would be a door that manufactured"
+                  " one"))
+
+       (and after-silent
+            (not= "declined" (str (:state after-silent))))
+       (conj (str "feed: the silently declined piece reads state "
+                  (pr-str (:state after-silent))
+                  " — a decline is a decline whether or not anybody"
+                  " said why"))
+
+       (and theirs (= 200 (:status theirs))
+            (pos? (count (get-in (:doc theirs) [:data :items]))))
+       (conj (str "feed: the silent decline left "
+                  (count (get-in (:doc theirs) [:data :items])) " reason row(s) behind: "
+                  (pr-str (:doc theirs))
+                  " — nothing is written unless somebody taps"))
+
+       (nil? reader)
+       (conj (str "feed: a read grant over " (pr-str reasons-plural)
+                  " could not be minted and accepted — the reasons are the"
+                  " diagnosis duty's input, and a kind a composer cannot"
+                  " be leashed to is a record it can never read"))
+
+       (and reader rid (not= 200 (:status read-back)))
+       (conj (str "feed: a composer holding a READ grant could not read the"
+                  " reason (" (:status read-back) "): "
+                  (pr-str (:doc read-back))
+                  " — the household answering in words is only worth"
+                  " anything if the thing being answered can hear it"))
+
+       ;; 409 by the wall is what this engine answers today; a 404
+       ;; would mean the framework had CONCEALED the door instead,
+       ;; which is a stronger answer to the same question. What must
+       ;; never happen is the edit landing.
+       (and rewritten (#{200 201} (:status rewritten)))
+       (conj (str "feed: a composer holding a READ grant rewrote somebody"
+                  " else's reason (" (:status rewritten) "): "
+                  (pr-str (json ctx rewritten))
+                  " — the own-surface affordance is answered at KIND level,"
+                  " so this door IS advertised to a read-only grantee; the"
+                  " wall is the whole of what keeps a diagnosis grant from"
+                  " carrying a quiet edit on the very sentences it was"
+                  " granted to read"))
+
+       (and rewritten (= 409 (:status rewritten))
+            (not= :the-reason-is-your-own-hand
+                  (refused-guard {:status (:status rewritten)
+                                  :doc (json ctx rewritten)})))
+       (conj (str "feed: the rewrite was refused by "
+                  (pr-str (:guard (json ctx rewritten)))
+                  ", not by the wall about whose words they are"))
+
+       (and say-entry
+            (not (demand/heavier? (str (:effort say-entry))
+                                  feed/card-ceiling)))
+       (conj (str "feed: say_more reads effort " (pr-str (:effort say-entry))
+                  ", which fits under a thumb — the second layer is a"
+                  " SCREEN by construction, and a prose box that could be"
+                  " tapped from a card would put the recall the decline"
+                  " was kept free of straight back onto it")))}))
+
 ;; ── the contest (waymark-8um.3) ─────────────────────────────────────
 
 (defn- days-before
@@ -4497,6 +4860,18 @@
      :needs #{[:route :feed] [:kind :value]
               [:kind :outcome] [:kind :outcome_piece]}
      :run feed-outcome-violations}
+    ;; …and the reasons below the crown (waymark-jfv.16), because it
+    ;; mints a second bundle of its own and answers it the OTHER way:
+    ;; every piece declined and the week refused. Run above :outcomes
+    ;; its bundle would be a second crown in the deck that obligation
+    ;; counts pieces on, and run above the counting obligations its
+    ;; value and its outcome would be rows they sized. It ends with the
+    ;; outcome declined — terminal — so the population retires it by
+    ;; construction and the engine it hands on is the engine it found.
+    {:name :feed/verdict-reasons
+     :needs #{[:route :feed] [:kind :verdict_reason] [:kind :value]
+              [:kind :outcome] [:kind :outcome_piece]}
+     :run feed-reason-violations}
     ;; …and the preview LAST, for the third reason in the same
     ;; sequence: it is the only obligation that mints a MEMBER, and a
     ;; new member is a new row on a nav kind — one more card every

@@ -4072,3 +4072,47 @@ prose.
   becomes exactly the work order law 4 wants the composer to have. The counts
   this bead reads back are the composer's evidence, already grantable
   (`{:kind "feed_view" :actions []}`).
+
+## Built — the reason door on the feed document (2026-08-25, waymark-jfv.16)
+
+The design and the shape decision live in **docs/spec-outcome-menu.md
+§ 'Built — jfv.16, the taps learn to speak'**; what belongs *here* is
+the two additions this document's own surface grew, because a later
+reader of the feed will meet them before they meet that spec.
+
+**The document gained `reasons`, beside `views`.** `feed/reasons-doc`
+answers `{post_to, field, choices, says}` — where a SETTLED card sends
+the quick word somebody taps after a decline lands, and which words it
+may send. Both halves are read off the declaration: `post_to` from the
+`verdict_reason` kind's own `:plural` through `collection-of` (the
+`view-kind` / `consent-kind` precedent, keywords named in `feed.clj`
+without requiring the namespace that declares them), and `choices` from
+that kind's create model's own `:enum` and `:x-display {:choices …}`.
+
+It is a **door, not an answer**, which is the one place it differs from
+`views` and the difference is deliberate. `views` says whether this
+reader's screen MAY beacon, and the preview half of that had to be the
+server's; a reason is an ordinary write under the tapper's own name, so
+there is no preview clause and none would mean anything — a previewer
+tapping a reason is a previewer writing their own row, exactly as a
+previewer tapping a verb fires their own verb.
+
+**An action gained `:display {:reasons true}`.** It says only this:
+when this verdict has settled, the card may offer the quick words. It
+rides the ordinary action entry, therefore the ordinary grant
+projection — a decline a reader does not hold carries no chips for the
+same structural reason it carries no verb — and it moves **no hash**,
+because `fingerprint/action-fp` projects `from`, `to`, `safety`,
+`guards`, `handler`, `input_defaults` and `touches`, and never
+`:display`.
+
+**The card ceiling is why any of this exists.** The decline itself
+stays input-free and `assent`; a verdict that collected the reason
+would read `recall` at `demand/effort` and `split-verbs` would move it
+off the card into `heavier` — `.4`'s note-input finding for the third
+time. The chips are a SECOND, optional tap on a card that has already
+settled, which is the only shape the card grammar leaves.
+
+`:feed/verdict-reasons` in `packs/feed` is the obligation, below
+`:feed/outcomes`; `135-feed-screen.js` draws the chips in
+`reasonChips`, and `ui-drive.mjs`'s feed walk taps one.
