@@ -412,9 +412,12 @@
           (is (= 404 (:status (req :get (str "/api/approval_requests/" foreign)
                                   nil own-scoped))))))
       (testing "well-known lists the own surface beside the granted —
-                the negotiation kinds and the jobs the principal asked for"
+                the negotiation kinds, the jobs the principal asked for,
+                and (waymark-0k4) the recipe proposals it staged itself"
         (let [b (json (req :get "/api/.well-known/waymark" nil own-scoped))]
-          (is (= #{"approval_request" "grant" "job" "plan"} (set (:kinds b))))))
+          (is (= #{"approval_request" "grant" "job" "plan"
+                   "recipe_proposal"}
+                 (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"
         (is (= 200 (:status (req :post (str "/api/grants/" g1 "/-/revoke")))))

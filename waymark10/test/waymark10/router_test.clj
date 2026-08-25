@@ -98,10 +98,12 @@
     ;; phase 9b: so do the subscription (webhooks) and job kinds;
     ;; batch B: the negotiation machine's approval_request;
     ;; waymark-4yn: the feed module's own feed_recipe — the engine opt
-    ;; authored at runtime, enrolled wherever the feed is served
+    ;; authored at runtime, enrolled wherever the feed is served;
+    ;; waymark-0k4: its sibling recipe_proposal, the staged change an
+    ;; agent may prepare and only a person may apply
     (is (= ["approval_request" "attachment" "definition" "feed_recipe"
-            "grant" "job" "meal" "member" "plan" "role" "subscription"
-            "task"]
+            "grant" "job" "meal" "member" "plan" "recipe_proposal"
+            "role" "subscription" "task"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))

@@ -55,6 +55,11 @@
    "letters" "ticklers" "insights" "weathers" "permission_slips"
    "selves" "journals" "dwellings" "connections" "capabilities"
    "saved_views" "dashboards" "dashboard_slots"
+   ;; the feed module's own pair (waymark-4yn, waymark-0k4): a stored
+   ;; recipe would re-order this test's whole page and a leftover
+   ;; offered proposal is a decide card, so both fall under the rule
+   ;; above rather than beside it
+   "feed_recipes" "recipe_proposals"
    "activities" "evening_plans" "evening_sessions"
    "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"

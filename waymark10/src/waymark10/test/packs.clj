@@ -3160,6 +3160,334 @@
                   " own order says " (pr-str was)
                   " — retiring the override is how a house goes back")))}))
 
+;; ── the staged proposal (waymark-0k4) ───────────────────────────────
+;;
+;; The bead's whole claim, over the wire, in one walk: an AGENT that
+;; may not write the feed's order stages an EXACT change to it, the
+;; household reads the diff on a decide card, one tap applies it — and
+;; the transition on the recipe names THE MEMBER WHO TAPPED. Then the
+;; three walls that make that safe rather than merely convenient: the
+;; stager cannot answer its own proposal, no agent may answer anybody
+;; else's, and a proposal staged against an order that has since moved
+;; refuses instead of writing over the top.
+;;
+;; THREE PRINCIPALS, and none of them is decoration. The composer
+;; stages (holding a leash that covers proposals and NOT recipes); a
+;; second agent stands in for the two-agent house; and a MEMBER — a
+;; human actor type, not the walker's system one — is the only one who
+;; can land the write, which is the sentence the actor proof reads.
+
+(defn- composer-headers [tag]
+  {"x-waymark-principal" (str "conformance-composer-" tag)
+   "x-waymark-actor-type" "agent"})
+
+(defn- member-headers [tag]
+  {"x-waymark-principal" (str "conformance-member-" tag)
+   "x-waymark-actor-type" "human"})
+
+(defn- leash!
+  "One grant over one kind's named doors, offered to an agent and
+  accepted by it → the headers that present it, or nil when the mint
+  or the acceptance refused.
+
+  Every claim below about what an agent may not do is made by an agent
+  HOLDING a leash, because an unleashed agent is already answered 404
+  by the router's default deny and that proves nothing about any wall
+  — 4yn's own obligation says it in the same words, one kind over. And
+  that the recipe_proposal mint SUCCEEDS is itself half a claim: the
+  kind is grantable (not one of the private own-surface trio), which
+  it may be precisely because holding the grant confers no power over
+  the feed's order at all."
+  [ctx audience kind actions]
+  (let [hs {"x-waymark-principal" audience "x-waymark-actor-type" "agent"}
+        made (req ctx :post "/api/grants"
+                  {:audience audience
+                   :scope [{:kind (name kind) :actions actions}]})
+        gid (when (= 201 (:status made)) (id-of (:self (json ctx made))))
+        took (when gid ((:invoke ctx) :grant gid :accept {} {:headers hs}))]
+    (when (= 200 (:status took)) (assoc hs "x-waymark-grant" gid))))
+
+(defn- stage-proposal!
+  "One proposal, through its own create door, as whoever the headers
+  name."
+  [ctx body hs]
+  (let [resp (req ctx :post (str "/api/" (:plural (rdef ctx :recipe_proposal)))
+                  body hs)]
+    {:status (:status resp) :doc (json ctx resp)}))
+
+(defn- proposal-card [doc id]
+  (some #(when (= (str "decide/recipe_proposal/" id) (str (:card_id %))) %)
+        (feed-cards doc)))
+
+(defn- newest-actor
+  "Who moved this row last, read off the audit trail rather than off
+  anything the write reported about itself. This is the whole actor
+  proof: `ctx :invoke` hands the inner write the OUTER principal, so a
+  recipe changed by an applied proposal must carry the member's name
+  here — and would carry the composer's, or the engine's, if the
+  cross-write had gone through a system actor the way the approvals
+  effect does."
+  [ctx kind id]
+  ;; the log is newest-LAST — store/transitions' own contract
+  (get-in (last (vec (transitions ctx kind id))) [:actor :id]))
+
+(defn- feed-proposal-violations
+  [ctx]
+  (let [tag (subs (str (random-uuid)) 0 8)
+        before (:doc (feed-doc ctx nil))
+        source (recipe-source before)
+        target (when (not= "built-in" (str (:source source)))
+                 (str (:id source)))
+        current (get-in before [:recipe :order])
+        composer (get (composer-headers tag) "x-waymark-principal")
+        as-composer (composer-headers tag)
+        as-member (member-headers tag)
+        ;; TWO LEASHES, ONE COMPOSER. One over the proposal doors it is
+        ;; meant to walk through, one over the recipe doors it is not —
+        ;; both the sort a household might carelessly approve, and the
+        ;; claim worth making is that the second buys nothing at all.
+        ;; (Two grants rather than one because a request presents one
+        ;; X-Waymark-Grant; the composer is the same principal either
+        ;; way, which is the whole point.)
+        leashed (leash! ctx composer :recipe_proposal
+                        ["create" "apply" "decline"])
+        recipe-leash (leash! ctx composer :feed_recipe ["create" "revise"])
+        ;; a SECOND agent, leashed to answer, standing in for the house
+        ;; that runs two of them
+        other (leash! ctx (str "conformance-other-" tag) :recipe_proposal
+                      ["apply" "decline"])
+        words (str "Everything the house had, and that is all · " tag)
+        proposal-body (fn [order]
+                        (cond-> {:proposal (str "The seam should say what this"
+                                                " house says (" tag ")")
+                                 :label (str "Proposed order " tag)
+                                 :evidence [(str "/api/feed_recipes/dummy-" tag)]
+                                 :current_order current
+                                 :order order}
+                          target (assoc :target_id target)))
+        staged (when leashed
+                 (stage-proposal! ctx (proposal-body (reseam before words))
+                                  leashed))
+        pid (some-> (:doc staged) :self id-of)
+        ;; the agent wall, unchanged and re-proved from the same
+        ;; principal in the same breath: the composer that CAN stage a
+        ;; change still cannot write the recipe itself
+        direct (when recipe-leash
+                 (make-recipe! ctx {:label (str "Composer's own " tag)
+                                    :scope "household"
+                                    :order (reseam before words)}
+                               recipe-leash))
+        ;; who sees it, and who does not
+        member-feed (when pid (:doc (feed-doc ctx as-member)))
+        composer-feed (when pid (:doc (feed-doc ctx as-composer)))
+        card (when pid (proposal-card member-feed pid))
+        verbs (when card (set (map (comp name key) (:actions card))))
+        apply' (declared-name ctx :recipe_proposal :apply)
+        decline (declared-name ctx :recipe_proposal :decline)
+        ;; the two walls on the answer
+        self-answer (when pid
+                      (invoke-http ctx :recipe_proposal pid apply' nil
+                                   {:headers leashed}))
+        agent-answer (when (and pid other)
+                       (invoke-http ctx :recipe_proposal pid apply' nil
+                                    {:headers other}))
+        ;; …and the tap itself, as a person
+        applied (when card
+                  (invoke-http ctx :recipe_proposal pid apply' nil
+                               {:headers as-member}))
+        row (when (= 200 (:status applied))
+              (json ctx (req ctx :get (str "/api/recipe_proposals/" pid))))
+        landed (some-> (get-in row [:data :applied_to]) id-of)
+        after (when landed (:doc (feed-doc ctx nil)))
+        actor (when landed (newest-actor ctx :feed_recipe landed))
+        ;; THE STALE REFUSAL. A second proposal staged against what the
+        ;; house reads NOW, then the order moved out from under it by a
+        ;; member's own revise — which is exactly the race the diff a
+        ;; person read would otherwise be lying about.
+        second-body (when after
+                      {:proposal (str "And once more, differently (" tag ")")
+                       :label (str "Proposed order again " tag)
+                       :evidence [(str "/api/feed_recipes/" landed)]
+                       :current_order (get-in after [:recipe :order])
+                       :target_id landed
+                       :order (reseam after (str "Caught up, again · " tag))})
+        second-staged (when (and second-body leashed)
+                        (stage-proposal! ctx second-body leashed))
+        second-id (some-> (:doc second-staged) :self id-of)
+        revise (declared-name ctx :feed_recipe :revise)
+        moved (when second-id
+                (invoke-http ctx :feed_recipe landed revise
+                             {:label (str "Moved on " tag)
+                              :order (reseam after (str "Moved on · " tag))}
+                             {:headers as-member}))
+        stale (when (= 200 (:status moved))
+                (invoke-http ctx :recipe_proposal second-id apply' nil
+                             {:headers as-member}))
+        ;; …and the way back, before anything else reads a feed
+        declined (when second-id
+                   (invoke-http ctx :recipe_proposal second-id decline nil
+                                {:headers as-member}))
+        retire (declared-name ctx :feed_recipe :retire)
+        gone (when landed (invoke-http ctx :feed_recipe landed retire nil))]
+    {:covered (if (= 200 (:status applied)) 1 0)
+     :violations
+     (cond-> []
+       (nil? leashed)
+       (conj (str "feed: a recipe_proposal grant could not be minted and"
+                  " accepted for a composer — recipe_proposal is meant to"
+                  " be GRANTABLE (it is not one of the private"
+                  " own-surface kinds), and it may be precisely because"
+                  " holding the grant confers no power over the feed's"
+                  " order; a kind an agent cannot be leashed to is a"
+                  " staging door no MCP composer can reach"))
+
+       (nil? recipe-leash)
+       (conj (str "feed: a feed_recipe write grant could not be minted and"
+                  " accepted for the same composer — the wall this"
+                  " obligation is about is not concealment, so an"
+                  " UNLEASHED agent's 404 would prove nothing"))
+
+       (nil? other)
+       (conj (str "feed: a second agent could not be leashed to the"
+                  " proposal's answer doors — the two-agent house is where"
+                  " a four-eyes wall alone would not have been enough"))
+
+       (and leashed (not= 201 (:status staged)))
+       (conj (str "feed: an AGENT holding a recipe_proposal grant staged a"
+                  " change and got " (:status staged) ": "
+                  (pr-str (:doc staged))
+                  " — an agent may prepare an exact revision even though it"
+                  " may not write one; that asymmetry IS the bead"))
+
+       (and direct (= 201 (:status direct)))
+       (conj (str "feed: the same composer wrote a feed_recipe directly —"
+                  " the staging door is a way to ASK, never a way around"
+                  " the wall, and a proposal kind that opened one would"
+                  " have undone waymark-4yn instead of completing it"))
+
+       (and direct (not= :written-by-a-person (refused-guard direct)))
+       (conj (str "feed: the composer's direct recipe write was refused by "
+                  (pr-str (refused-guard direct)) " (" (:status direct)
+                  "), not by the actor-type wall: " (pr-str (:doc direct))))
+
+       (and pid (nil? card))
+       (conj (str "feed: a staged proposal did not reach the member's"
+                  " feed — a change nobody is shown is a change nobody can"
+                  " answer. Cards: "
+                  (pr-str (mapv :card_id (feed-cards member-feed)))))
+
+       (and card (not= "decide" (str (:section card))))
+       (conj (str "feed: the proposal card is in section "
+                  (pr-str (:section card)) " — a staged change is something"
+                  " to DECIDE, and the census puts it there"))
+
+       (and card (str/blank? (str (:sentence card))))
+       (conj (str "feed: the proposal card says nothing about what changes"
+                  " — the diff IS the card, and a verdict button over a"
+                  " summary line is a person agreeing to a title"))
+
+       (and card (not (str/includes? (str (:sentence card)) words)))
+       (conj (str "feed: the card's sentence never mentions the one thing"
+                  " that changes (" (pr-str words) "): "
+                  (pr-str (:sentence card))
+                  " — a diff that does not name the change is not a diff"))
+
+       (and card (not (contains? verbs (name apply'))))
+       (conj (str "feed: the proposal card offers " (pr-str (sort verbs))
+                  " and not " (pr-str (name apply'))
+                  " — both answers are note-free precisely so both stay"
+                  " under the thumb; a verdict with a note is a `recall`"
+                  " demand and split-verbs moves it to `heavier`"))
+
+       (and card (not (contains? verbs (name decline))))
+       (conj (str "feed: the proposal card offers " (pr-str (sort verbs))
+                  " and not " (pr-str (name decline))
+                  " — a change you cannot say no to is not a proposal"))
+
+       (and pid (proposal-card composer-feed pid))
+       (conj (str "feed: the composer's own proposal is on the composer's"
+                  " own feed — the four-eyes wall means a stager is"
+                  " structurally incapable of answering it, so carding it"
+                  " there would be offering a door that answers 409"))
+
+       (and self-answer (not= 409 (:status self-answer)))
+       (conj (str "feed: the composer applying its own proposal got "
+                  (:status self-answer) ", not 409 — an agent that could"
+                  " stage a change AND tap it through would be writing the"
+                  " feed's order under a member's roof"))
+
+       (and self-answer (= 409 (:status self-answer))
+            (not= :the-proposer-does-not-decide
+                  (refused-guard {:status 409 :doc (json ctx self-answer)})))
+       (conj (str "feed: the composer's own attempt was refused by "
+                  (pr-str (:guard (json ctx self-answer)))
+                  ", not the four-eyes wall"))
+
+       (and agent-answer
+            (not= :a-person-answers
+                  (refused-guard {:status (:status agent-answer)
+                                  :doc (json ctx agent-answer)})))
+       (conj (str "feed: a SECOND agent applying somebody else's proposal"
+                  " was answered " (:status agent-answer) " / "
+                  (pr-str (:guard (json ctx agent-answer)))
+                  " — a house running two agents must not be a house where"
+                  " one stages and the other taps"))
+
+       (and card (not= 200 (:status applied)))
+       (conj (str "feed: a member's tap on Apply answered "
+                  (:status applied) ": " (pr-str (json ctx applied))))
+
+       (and (= 200 (:status applied)) (nil? landed))
+       (conj (str "feed: the proposal applied and stamped no applied_to —"
+                  " the citation is what makes the audit readable from"
+                  " either row: " (pr-str (:data row))))
+
+       (and after (not= words (seam-sentence after)))
+       (conj (str "feed: the proposal applied and the next feed read still"
+                  " says " (pr-str (seam-sentence after))
+                  " — the tap IS the write, and a proposal that moved its"
+                  " own row without moving the order applied nothing"))
+
+       (and actor (not= (get as-member "x-waymark-principal") actor))
+       (conj (str "feed: the recipe's own transition names " (pr-str actor)
+                  " and the member who tapped is "
+                  (pr-str (get as-member "x-waymark-principal"))
+                  " — the apply invokes the recipe's own door AS THE"
+                  " ACCEPTING MEMBER, so the audit says a person wrote"
+                  " this. An engine or composer actor here would mean the"
+                  " household's assent had been laundered into a system"
+                  " write"))
+
+       (and second-staged (not= 201 (:status second-staged)))
+       (conj (str "feed: a second proposal staged against the order the"
+                  " house now reads answered " (:status second-staged) ": "
+                  (pr-str (:doc second-staged))))
+
+       (and stale (not= 409 (:status stale)))
+       (conj (str "feed: a proposal whose target was revised out from"
+                  " under it applied anyway (" (:status stale)
+                  ") — the diff a person read describes the world they"
+                  " read it in, and applying over somebody else's edit"
+                  " would make the tap mean something it never said"))
+
+       (and stale (= 409 (:status stale))
+            (not= :the-order-has-not-moved
+                  (refused-guard {:status 409 :doc (json ctx stale)})))
+       (conj (str "feed: the stale proposal was refused by "
+                  (pr-str (:guard (json ctx stale)))
+                  ", not by the staleness wall"))
+
+       (and second-id (not= 200 (:status declined)))
+       (conj (str "feed: declining the leftover proposal answered "
+                  (:status declined) " — a change you cannot say no to is"
+                  " not a proposal"))
+
+       (and landed (not= 200 (:status gone)))
+       (conj (str "feed: retiring the applied recipe answered "
+                  (:status gone) " — the way back is the recipe's own"
+                  " doors, and a change that cannot be undone is not"
+                  " tuning")))}))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -3218,7 +3546,17 @@
     ;; leaves behind is the engine it found.
     {:name :feed/recipe-is-a-row
      :needs #{[:route :feed] [:kind :feed_recipe]}
-     :run feed-recipe-violations}]
+     :run feed-recipe-violations}
+    ;; …and the staged proposal after even that (waymark-0k4), for the
+    ;; same fourth reason taken one step further: it changes the order
+    ;; too, and it changes it THROUGH the recipe's own door under a
+    ;; member's name, which is a thing every claim above would rather
+    ;; not have happening underneath it. It ends where it began — the
+    ;; recipe it wrote retired, the proposal it left declined — so the
+    ;; engine it hands on is the engine it found.
+    {:name :feed/staged-proposals
+     :needs #{[:route :feed] [:kind :feed_recipe] [:kind :recipe_proposal]}
+     :run feed-proposal-violations}]
    ;; Every obligation spec-feed § 'Where the law is proved' names is
    ;; here now, each having landed with the bead that landed the
    ;; mechanism it judges rather than ahead of it.

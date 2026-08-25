@@ -48,12 +48,14 @@
   (into #{} (map :kind) (modules/enrolled resources modules)))
 
 (deftest the-table-enrols-exactly-what-the-literal-did
-  ;; …plus :feed_recipe, the one kind added since (waymark-4yn): the
-  ;; feed's own engine opt authored at runtime, enrolled :always
-  ;; because it composes the FEED module's vocabulary rather than an
+  ;; …plus the feed module's own pair. :feed_recipe (waymark-4yn) is
+  ;; the feed's engine opt authored at runtime; :recipe_proposal
+  ;; (waymark-0k4) is the exact change an agent may stage against it
+  ;; and only a person may apply. Both enroll :always, because both
+  ;; compose the FEED module's vocabulary rather than an
   ;; application's, so there is nothing left for an app to opt into.
   (is (= #{:definition :member :role :grant :approval_request
-           :attachment :subscription :job :feed_recipe}
+           :attachment :subscription :job :feed_recipe :recipe_proposal}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled

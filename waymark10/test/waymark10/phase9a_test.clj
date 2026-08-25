@@ -335,9 +335,15 @@
       ;; batch B: the own-grant surface — a holder may read its grant
       (is (= 200 (:status (req :get (str "/api/grants/" gid) nil (scoped gid))))))
     (testing "discovery lists the granted kinds plus the own surface
-              (negotiation kinds and the principal's own jobs)"
+              (negotiation kinds, the principal's own jobs, and — since
+              waymark-0k4 — the recipe proposals it staged itself. That
+              one is READ-ONLY courtesy: an agent that could not read
+              back what it staged could not tell an applied change from
+              a declined one, but staging itself takes an ordinary
+              grant)"
       (let [b (json (req :get "/api/.well-known/waymark" nil (scoped gid)))]
-        (is (= ["approval_request" "grant" "job" "plan"] (:kinds b)))))
+        (is (= ["approval_request" "grant" "job" "plan" "recipe_proposal"]
+               (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]
         (is (= 200 (:status (req :get "/api/plans" nil (scoped gid)))))

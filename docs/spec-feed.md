@@ -2641,3 +2641,319 @@ a sentence — is **waymark-a2b**.
   ordinary grant machinery (main.clj says so of weather), and the wall that
   actually matters — you cannot rearrange somebody else's morning — is the
   engine's `owner` stamp, not concealment. Recorded as a deviation.
+
+## Built — 0k4, the staged proposal (2026-08-25, waymark-0k4)
+
+`4yn` put a wall at `feed_recipe`'s doors — *the order the feed is read in is
+written by a person* — and named the lawful path for an agent that disagrees:
+**publish an insight**. That path is honest and it was half-built. An insight
+carries prose and an address; a member who agreed with a finding still had to
+re-type the order by hand into a form, from a page that was not showing them
+the change.
+
+A proposal closes it. The agent stages the **exact** revision as a row; the
+household reads a diff on a decide card; **one tap applies it, through the
+recipe's own door, with the member's name on the transition.**
+
+The wall did not move. Not one line of `feed_recipe`'s declaration changed.
+
+### The kind
+
+`recipe_proposal` — framework-side, enrolled `:always` by the `:feed` module
+beside `feed_recipe` itself, because it names that kind's own doors and this
+module's own census. An engine that serves the recipe serves the way to
+propose changes to it; the asymmetry below is the wall's other half, and half
+a wall is not a thing to opt into.
+
+```clojure
+(defresource recipe-proposal
+  {:kind :recipe_proposal
+   :plural "recipe_proposals"
+   :states [:offered :applied :declined :expired]
+   :initial :offered :terminal #{:applied :declined :expired}
+   :schema [:map
+            [:proposal …]        ; one sentence, in the household's words
+            [:label …]           ; what the order will be called
+            [:target_id …]       ; the feed_recipe row — EMPTY means the built-in
+            [:current_order …]   ; the order this was staged against
+            [:order …]           ; the order proposed in its place
+            [:evidence …]        ; what was read
+            ;; engine-written, all four, and none of them anybody's to supply
+            [:diff …] [:proposed_by …] [:decided_by …] [:applied_to …]
+            [:expires_at …]]
+   :on-create stage-the-proposal
+   :create-guards [the-prepared-input-fits-the-door
+                   the-order-will-assemble
+                   it-cites-what-it-read
+                   the-staging-is-current
+                   staged-changes-are-few]
+   :actions
+   {:apply   {:from #{:offered} :to :applied
+              :guards [the-proposer-does-not-decide a-person-answers
+                       the-leash-has-not-run-out the-order-has-not-moved]
+              :handler apply-the-order
+              :touches [{:kind :feed_recipe :action :revise}
+                        {:kind :feed_recipe :action :create}]}
+    :decline {:from #{:offered} :to :declined
+              :guards [the-proposer-does-not-decide a-person-answers]}
+    :expire  {:from #{:offered} :to :expired
+              :guards [the-leash-has-run-out]}}})
+```
+
+`:label` and `:order` are declared with **`feed-recipe/order-schema` itself**,
+and `the-prepared-input-fits-the-door` validates them against
+`feed-recipe/recipe-input` — literally the value `:revise` takes. That var was
+`^:private`; it is public now, which changed no declaration and moved no hash.
+The point is that the schema a proposal is judged against cannot drift away
+from the door it is about, because it *is* that door's schema.
+
+### The asymmetry, said out loud
+
+An agent may create one of these and may not create a `feed_recipe`. That is
+not a loophole in the wall; it is what the wall is for. A proposal changes
+nothing until a member says so, and the member sees in full what they are
+saying yes to. Put the other way round: `recipe_proposal` is **grantable** at
+the MCP door precisely *because* holding that grant confers no power over the
+feed's order.
+
+```
+{:kind "recipe_proposal" :actions ["create"]}
+```
+
+The kind is not one of the private own-surface trio (`self`, `journal`,
+`letter`), so `scope-omits-private-kinds` admits it; the composer stages
+through `waymark_invoke {kind: "recipe_proposal", action: "create", …}` like
+any other leashed write. The obligation mints the composer **both** leashes —
+proposals *and* recipes, the careless pair a household might actually approve
+— and the claim it makes is that the second one buys nothing.
+
+An agent **needs** that grant, and this is where the kind departs from the
+insight precedent on purpose. `insight`'s own-surface carries `create`, so an
+unleashed agent may publish a finding and the daily cap is the only wall. A
+finding is a sentence the household reads; a proposal is a prepared WRITE a
+member enacts with one tap, and which agents may put one of those in front of
+the house is a decision the house should get to make. So `recipe_proposal`'s
+own-surface is **read-only** — `{:by :proposed_by :actions #{}}` — the stager
+reads back what it staged (else it cannot tell an applied change from a
+declined one, and stages it again tomorrow) and nothing more. Humans are
+unscoped and stage without a grant, as they always could.
+
+### The apply IS the member's write
+
+```clojure
+(defhandler apply-the-order
+  [row _inp ctx]
+  (let [input {:label … :order …}
+        res (if target-id
+              (let [target ((:read ctx) :feed_recipe target-id)]
+                ((:invoke ctx) :feed_recipe target-id :revise input
+                 {:if-match (inv/etag :feed_recipe target-id (:version target))}))
+              ((:create ctx) :feed_recipe (assoc input :scope "household")))]
+    …stamp decided_by and applied_to…))
+```
+
+`ctx :invoke` and `ctx :create` carry the **outer** principal
+(`server/invoke`'s `make-ctx` — the finding `waymark-iqa.6` recorded), so the
+recipe's transition names the member who tapped, the recipe's own guards judge
+the write, and `written-by-a-person` passes for the honest reason: a person is
+writing. The obligation and the unit test both read it off the audit trail
+rather than off anything the write reports about itself.
+
+Three things were decided here and each could have gone the other way:
+
+1. **One transaction.** `grants/approval-effects!` was the available
+   precedent and it is declined on purpose: it runs POST-COMMIT at the wire
+   boundary, under a SYSTEM actor, and warns to `*err*` when its effect
+   refuses. All three are wrong here — the actor has to be the member, an
+   apply that landed nothing must not read as applied, and a refusal inside
+   must roll the whole tap back.
+2. **No deterministic idempotency key for the inner write.** The bead
+   proposed one (`proposal-<id>`, the approvals precedent). It is unnecessary
+   and would have been a second idempotency boundary inside one transaction:
+   the verdict door IS the boundary, and a second tap meets a terminal row.
+3. **The fence is supplied, not waived.** `feed_recipe`'s `:revise` declares
+   an `:edit`, and *an edit implies the fence* (`resource.clj`), so the
+   cross-write hands over the target's current etag exactly as an honest
+   client would — the **worksheet's** own spelling
+   (`worksheet/apply-invocations!`), which is the other place in this tree
+   that applies a staged change through a target kind's own doors. This needed
+   one framework line: `ctx :invoke` now passes `:if-match` from its opts. A
+   cross-write that quietly waived the fence would be the one door in the tree
+   where *"the resource changed since you read it"* stopped being asked.
+
+### The diff, computed at staging and stored
+
+`feed/order-diff` takes two orders and answers the sentences a person taps
+under. It lives in `feed.clj` beside `line-says`, because narrating the feed's
+own order is the feed's business, and it is pure — the same two orders answer
+the same sentences in a test, in the obligation and in the house.
+
+```
+The order goes from 12 lines to 13.
+Line 1 shows 1 card instead of 5 cards; is media's alone.
+Line 6 shows 1 card instead of 2 cards.
+Line 10 moves to decide; reads mail on your shelf you have not opened instead
+  of the last thing each front door finished this week; shows 1 card instead
+  of 2 cards.
+Line 11, the caught-up line, reads "Everything the house had, and that is all.".
+Line 13 is new: Archive, up to 6 cards: what this house was doing a year ago
+  this week, and behind it everything that has moved.
+```
+
+It is **positional**, and that is not a shortcut: the vector's order IS the
+feed's order, so line 2 is a place on the page and not an identity. Inserting
+a line near the top reads as several lines moving, which is exactly what a
+reader would see happen. An order that changes nothing says so out loud —
+an empty list under a verdict button is the one thing a person cannot read.
+
+The engine writes it at birth, in `:on-create`, so the sentence a person taps
+under is the engine's reading of the two orders and never the stager's
+description of it. That is why the `:decision` sugar is **not** spelled here,
+and the reason is the sugar's own recorded limit in its own words: *"a
+decision kind that needs an extra birth stamp has no spelling yet"*. This kind
+needs two — the diff and the leash — on top of the stager's name. The
+four-eyes wall is still `g/not-the-field`, the very guard `desugar-decision`
+would have minted, so the law is the sugar's law and not a lookalike.
+
+### Validated at staging; stale at the tap
+
+A proposal that would be refused when somebody taps it is refused when it is
+**staged** — the letter-addressing lesson, and the reason is household rather
+than technical: a button that fails is worse than a button that was never
+offered. Four walls judge the body and the world before a row exists; a fifth
+paces it.
+
+And the same fact is asked **again** at the tap, because the world moves in
+between:
+
+> The order changed since this was staged — /api/feed_recipes/01H… reads
+> differently now than it did when this was staged. Re-stage against the
+> current order and the diff will say what is true now.
+
+It does not apply over the top. The diff a person read describes the world
+they read it in; writing over somebody else's edit would make the tap mean
+something it never said.
+
+### The built-in is a target too, and it is production's target
+
+Production today holds **no** `feed_recipe` row: the built-in IS the household
+default until somebody deliberately overrides it (4yn's own seeding decision).
+So a proposal with an empty `target_id` stages a **create** — scope
+`household`, the proposed order — and its staleness question is the mirror
+image: *has the house written its own order since?* If it has, the proposal
+refuses and says where to re-stage, because applying would have thrown away
+what the house wrote.
+
+The card says which of the two worlds it is in, out loud, because they are
+different proposals.
+
+### The card
+
+A `:proposals` population joins the decide section — one registry entry and
+one line in `default-recipe`, together, the `.4`/`.5`/`.6` pattern — and it is
+the first decide population to hand its card a `sentence` of its own. It has
+to: a proposal's whole claim is WHAT CHANGES, and a summary line naming the
+row cannot say it.
+
+```
+Staged against the order this deployment ships with — the house has written
+none of its own yet. Line 11, the caught-up line, reads "Everything the house
+had, and that is all.". 1 row behind it.
+
+                                            [ Apply ]  [ Decline ]
+```
+
+Both verdicts are note-free and both are one tap — `waymark-iqa.4`'s finding
+inherited whole: a `:note` makes a verdict a `recall` demand and
+`feed/split-verbs` moves it off the card into `heavier`. The population also
+drops the stager's own proposals from the stager's own feed, and lapsed ones
+from everybody's, for the reasons `insights` and `ticklers` already gave.
+
+### The leash
+
+Seven days, engine-stamped at birth, not author-settable. Enforcement is live
+at the door and at the read; `expire` is bookkeeping anybody may run once the
+clock has passed, and no sweeper drives it — `grant`'s own recorded posture,
+inherited rather than re-decided. The clock sweeper was considered and does
+not fit: it maintains **derived facts**, not states.
+
+`staged-changes-are-few` is the wall that keeps the decide section from being
+filled: three waiting per principal, counted over rows the way the insight cap
+is. It is the second of two walls on the asking, and they answer different
+questions — the grant says WHICH agents may reach the staging door at all, the
+cap says how often anybody may walk through it. A household with one trusted
+composer still does not want its decide section filled.
+
+### Where the law is proved
+
+The tiers are read off the declarations, never chosen, and they fell in a way
+worth recording. `apply` carries a wall that reads the house's own recipe
+rows, so it is conformance tier — and a conformance-tier ACTION scenario
+stages its row through the kind's own create door **as the walker**, which
+would stamp the walker's name into `proposed_by` and make the four-eyes wall
+answer about the wrong person. So:
+
+- **Check tier (4 scenarios, no database):** the four-eyes wall and the
+  person wall, both proved on `decline` — the same guard objects `apply`
+  carries; the machine's own refusal of a second answer; and the leash's
+  other side, on `expire`.
+- **Conformance tier (2 scenarios):** the two staging refusals that fire
+  *before* the world-reading wall, so what they claim is true whatever order
+  the engine they meet is reading.
+- **`:feed/staged-proposals`, the pack's new last obligation:** the whole
+  apply path from the wire — a leashed composer stages, the same leashed
+  composer's direct recipe write still refuses by name, the card lands in
+  decide with the diff in its sentence, the stager and a second leashed agent
+  are both refused, a member's tap lands it, **the recipe's transition names
+  the member**, and a proposal whose target moved refuses. It ends where it
+  began: the recipe it wrote retired, the proposal it left declined.
+- **`recipe-proposal-test`:** what a driver with one world cannot arrange —
+  a CLOCK the test holds, so the leash can be watched running out; both target
+  shapes in one run, so the built-in case is not left to whatever the suite
+  happened to leave behind; and the diff read as sentences.
+- **And the obligation is pinned as having RUN.**
+  `runtime-conformance-test` asserts `:feed/staged-proposals` is in the
+  report's `ran` set with positive coverage, the same way the five runtime
+  obligations are — because a `:needs` that quietly went unmet would be a
+  green run over the bead's own sentence, and nothing else would have said so.
+
+`make check-queue` goes from **21 to 25 scenarios judged**, battery warnings
+unchanged at 11.
+
+### Recorded here, for whoever comes next
+
+- **A new kind is a new table.** Production needs `recipe_proposals` created
+  before the deploy that serves it — `make migrate-queue-prod` prints the
+  plan, and a person runs it through `nomad alloc exec … psql`. Nothing here
+  touched production.
+- **`feed_recipe`'s fingerprint did NOT move, and 4yn's note that it would
+  was wrong.** The prediction was *"adding a population moves `feed_recipe`'s
+  fingerprint — the population enum is part of this kind's declared law"*. It
+  is not: `fingerprint-of` is a whitelist over `kind`, `machine`, `derived`
+  and `storage`, and a kind's `:schema` is not in it. Adding `:proposals` to
+  the population registry (and so to `order-schema`'s enum) leaves the hash
+  byte-identical, proved by removing the value again and re-hashing. The only
+  new fingerprint in this bead is `recipe_proposal`'s own.
+- **The wall's sentence still says "publish an insight", and was left
+  alone.** After this bead the lawful path for an *exact* change is a
+  proposal, so the refusal arguably owes a second clause. Changing it would
+  move `feed_recipe`'s judgment surface to say a sentence, and the insight
+  path is still true — it is the path for a finding that has no exact revision
+  behind it. Filed rather than done.
+- **The two staging scenarios are a PERSON's mistakes, not an agent's.** The
+  walls they name judge the BODY, so they say the same thing to whoever wrote
+  it; who may reach the door at all is the leash's question and a different
+  sentence. Written as an agent they would have met the router's own 404
+  (an unleashed agent reaches nothing) and proved concealment instead of law.
+- **`:open` is not a decoration.** Two of the staging walls judge SHAPE (an
+  input against another door's schema, an address against its form) rather
+  than a token set, so neither wears `:open` — which everywhere else in this
+  tree means *the legal tokens are the registry's, one GET away*. Wearing it
+  would have claimed a gap that is not there and earned an `effort-honesty`
+  warning nobody could clear.
+- **A conformance-tier action scenario cannot test a stamped-`by` wall.**
+  The staging walker is not the scenario's principal (deliberately — *"a
+  scenario that wants to say that says it as its own attempt"*), so any kind
+  whose four-eyes field is written by `:on-create` must prove that wall on a
+  door whose every guard is offline, or in a pack. Worth knowing before the
+  next decision kind is written.

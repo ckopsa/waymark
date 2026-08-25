@@ -195,6 +195,11 @@
   and `:memories` (waymark-iqa.5) walked it again, and `:insights`
   (waymark-iqa.6) walked it last.
 
+  `:proposals` (waymark-0k4) is the newest line and it walked the same
+  seam: an agent may not write the feed's order, so it STAGES the
+  exact revision and the household's tap applies it — a decide card
+  like every other, one population entry and one line here, together.
+
   `:memories` is the bottomless tail and `:events` is one of the two
   sources it reads (waymark-iqa.8): check (3) admits exactly one
   bottomless entry, so the archive's stand-in did not move down the
@@ -209,6 +214,7 @@
     {:section :decide  :population :ticklers     :take 2}
     {:section :decide  :population :conflicts    :take 2}
     {:section :decide  :population :insights     :take 2}
+    {:section :decide  :population :proposals    :take 2}
     {:section :fuel    :population :cleared      :take 1}
     {:section :fuel    :population :streaks      :take 1}
     {:section :fuel    :population :finished     :take 2}
@@ -654,6 +660,66 @@
                                   (get-in d [:data :offer_id])))
                         {:kind :insight :id (:id raw) :row raw}))))
             (rows-of ctx :insight {:state "published"})))
+    []))
+
+(defn- proposal-says
+  "One staged proposal's card sentence: what it is staged against, the
+  diff the engine wrote at staging, and how many rows are behind it.
+
+  The diff is READ, never recomputed — `recipe_proposal` writes it at
+  birth from the two orders, and a card that re-derived it could
+  narrate a change nobody agreed to. What this adds is the two facts
+  the row's own document holds but a diff cannot: WHICH order is being
+  changed, and how much reading stands behind the claim."
+  [d]
+  (let [data (:data d)
+        tid (some-> (:target_id data) str not-empty)
+        ev (count (remove str/blank? (map str (:evidence data))))]
+    (str (if tid
+           (str "Staged against this house's own order, "
+                (pr-str (str (:label data))) ". ")
+           (str "Staged against the order this deployment ships with —"
+                " the house has written none of its own yet. "))
+         (str/join " " (:diff data))
+         (when (pos? ev)
+           (str " " ev " row" (when (not= 1 ev) "s") " behind it.")))))
+
+(defn proposals
+  "decide: exact revisions of the feed's own order, staged by somebody
+  and waiting on a person's tap (waymark-0k4). The `insights`
+  precedent one turn further along — a core reader naming a kind the
+  feed module enrols, answering with nothing when the engine holds
+  none — and the same three filters, each read off the declaration:
+
+  - `offered` proposals only. `applied`, `declined` and `expired` are
+    terminal, so an answered proposal leaves the feed by construction.
+  - NOT THE READER'S OWN. `recipe_proposal`'s four-eyes wall means the
+    principal that staged a proposal is structurally incapable of
+    applying it, so carding it to the stager would be offering a door
+    that answers 409. `asks` and `insights` do the same thing, for the
+    same reason.
+  - THE LEASH IS STILL ON. A proposal past its `expires_at` is not
+    offered — the same read-side retirement the tickler's backoff
+    already uses, with no sweeper and no write: a lapsed proposal is
+    simply not a candidate, and `expire` is the bookkeeping verb that
+    tidies the row when somebody gets to it.
+
+  It hands the card its own `sentence`, which no other decide
+  population does and this one must: a proposal's whole claim is WHAT
+  CHANGES, and a summary line naming the row cannot say it."
+  [ctx]
+  (if-some [rdef (get (resources ctx) :recipe_proposal)]
+    (let [pid (:id (:principal ctx))
+          now (:now ctx)]
+      (into []
+            (keep (fn [raw]
+                    (let [d (inv/decode-row rdef raw)
+                          exp (get-in d [:data :expires_at])]
+                      (when (and (not= pid (get-in d [:data :proposed_by]))
+                                 (or (nil? exp) (pos? (compare exp now))))
+                        {:kind :recipe_proposal :id (:id raw) :row raw
+                         :sentence (proposal-says d)}))))
+            (rows-of ctx :recipe_proposal {:state "offered"})))
     []))
 
 (defn conflicts
@@ -1117,14 +1183,16 @@
   waymark-iqa.6, and it grew one entry at a time: each bead added its
   entry HERE and its line in `default-recipe`, together — `:ticklers`
   (waymark-iqa.4), the fuel populations and `:memories`
-  (waymark-iqa.5), `:insights` (waymark-iqa.6). A later population
-  arrives the same way, and swapping one entry for a materializing
-  read is fork (a)'s recorded punt working exactly as promised."
+  (waymark-iqa.5), `:insights` (waymark-iqa.6), `:proposals`
+  (waymark-0k4). A later population arrives the same way, and swapping
+  one entry for a materializing read is fork (a)'s recorded punt
+  working exactly as promised."
   {:next_actions next-actions
    :asks asks
    :letters letters
    :ticklers ticklers
    :insights insights
+   :proposals proposals
    :conflicts conflicts
    :cleared cleared
    :streaks streaks
@@ -1591,6 +1659,7 @@
    :ticklers "things you set aside, whose date has come round again"
    :conflicts "rows where the outside authority and this house disagree"
    :insights "findings an agent published that nobody has answered"
+   :proposals "exact changes to this feed's own order, staged and waiting on a tap"
    :cleared "a queue that went all the way to zero"
    :streaks "the weeks in a row this house finished something"
    :finished "the last thing each front door finished this week"
@@ -1601,10 +1670,13 @@
   "Which DECLARED traits a population consults, so a card's citation
   can quote the kind's own declaration rather than describe it from
   outside. A population reading none of them is not a gap: `asks`,
-  `letters`, `ticklers`, `conflicts` and `insights` all choose by a
-  STATE their own kind declares and by whose row it is, which the
-  line's own sentence already says and the card's own `state` already
-  shows."
+  `letters`, `ticklers`, `conflicts`, `insights` and `proposals` all
+  choose by a STATE their own kind declares and by whose row it is,
+  which the line's own sentence already says and the card's own
+  `state` already shows. `proposals` adds a clock read on top of that
+  and still declares nothing here, for the same reason: `expires_at`
+  is a field of the row, not a trait of the kind, and the card carries
+  it."
   {:next_actions [:nav :machine :over]
    :cleared [:nav :over]
    :streaks [:nav :over]
@@ -1741,6 +1813,121 @@
                  (str " — and this line is " (str/join " and " (map name ks))
                       "'s alone"))
                ".")))))
+
+;; ── two orders, read side by side (waymark-0k4) ─────────────────────
+;;
+;; A staged proposal is an EXACT revision somebody will apply with one
+;; tap, so the one thing it owes the person tapping is an honest
+;; account of what changes. That account is computed HERE, from the
+;; two orders and nothing else — pure, so the sentence a person reads
+;; under their thumb is a function of the two things being compared
+;; and never of who is asking or when.
+;;
+;; It is POSITIONAL, and that is not a shortcut: the vector's order IS
+;; the feed's order (`default-recipe`'s own first sentence), so line 2
+;; is a place on the page and not an identity. Inserting a line near
+;; the top therefore reads as several lines moving, which is exactly
+;; what a reader would see happen.
+
+(defn- section-words ^String [e]
+  (str/replace (name (:section e)) "_" " "))
+
+(defn- takes-words ^String [n]
+  (str n " card" (when (not= 1 (long n)) "s")))
+
+(defn- population-words ^String [p]
+  (population-says p (str "the " (name p) " population")))
+
+(defn- line-changes
+  "What changed between two lines standing in the same place, key by
+  key and each in the household's own words. Empty when the two lines
+  say the same thing."
+  [was now]
+  (cond-> []
+    (not= (boolean (:seam was)) (boolean (:seam now)))
+    (conj (if (:seam now)
+            "becomes the caught-up line"
+            (str "stops being the caught-up line and becomes "
+                 (section-words now))))
+
+    (and (not (:seam now)) (not= (:section was) (:section now)))
+    (conj (str "moves to " (section-words now)))
+
+    (and (not (:seam now)) (not= (:population was) (:population now)))
+    (conj (str "reads " (population-words (:population now))
+               " instead of " (population-words (:population was))))
+
+    (and (not (:seam now)) (not= (:take was) (:take now)))
+    (conj (str "shows " (takes-words (:take now 0))
+               " instead of " (takes-words (:take was 0))))
+
+    (not= (vec (:kinds was)) (vec (:kinds now)))
+    (conj (if (seq (:kinds now))
+            (str "is " (str/join " and " (map name (:kinds now))) "'s alone")
+            "stops being any one kind's alone"))
+
+    (not= (boolean (:bottomless was)) (boolean (:bottomless now)))
+    (conj (if (:bottomless now)
+            "never ends — it pages forever"
+            "stops paging forever"))
+
+    (not= (:sentence was) (:sentence now))
+    (conj (str "reads " (pr-str (str (:sentence now)))))
+
+    (not= (:says was) (:says now))
+    (conj (if (:says now)
+            (str "says of itself " (pr-str (str (:says now))))
+            "drops its own sentence and narrates itself again"))))
+
+(defn order-diff
+  "Two orders — the one in force and the one proposed — read side by
+  side, as the sentences a person reads before they tap. Both are in
+  the RECIPE MAP shape `check-recipe!` and `line-says` speak (keyword
+  sections, keyword populations), never the editor's wire spelling;
+  `waymark10.feed-recipe/recipe-of` is the one converter.
+
+  A line that is unchanged says nothing at all — a diff that recited
+  every line would bury the one that moved. A line with no counterpart
+  arrives or goes whole, narrated by `line-says` so the reader meets
+  it in the same words the narrated recipe uses. And an order that
+  changes nothing says SO, out loud, rather than answering with
+  silence: an empty list under a verdict button is the one thing a
+  person cannot read."
+  [was now]
+  (let [was (vec was)
+        now (vec now)
+        n (max (count was) (count now))
+        moves (into []
+                    (keep
+                     (fn [i]
+                       (let [a (nth was i nil)
+                             b (nth now i nil)]
+                         (cond
+                           (= a b) nil
+                           (nil? a) (str "Line " (inc i) " is new: "
+                                         (line-says b))
+                           (nil? b) (str "Line " (inc i) " goes — it used"
+                                         " to be: " (line-says a))
+                           :else
+                           (let [cs (line-changes a b)]
+                             (if (seq cs)
+                               (str "Line " (inc i)
+                                    (when (and (:seam a) (:seam b))
+                                      ", the caught-up line,")
+                                    " " (str/join "; " cs) ".")
+                               (str "Line " (inc i) " changes: "
+                                    (line-says b))))))))
+                    (range n))]
+    (cond
+      (empty? moves)
+      ["Nothing changes — this is the order already in force, line for line."]
+
+      (not= (count was) (count now))
+      (into [(str "The order goes from " (count was) " line"
+                  (when (not= 1 (count was)) "s") " to " (count now) ".")]
+            moves)
+
+      :else moves)))
 
 (def recipe-guarantees
   "The four assembly checks, as the one sentence they buy a reader.

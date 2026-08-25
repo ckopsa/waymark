@@ -57,6 +57,15 @@
    ;; author every run so it can ask the cap its question either way;
    ;; this is the house not carrying yesterday's findings.
    "insights"
+   ;; and the feed module's own pair, for the same two reasons one
+   ;; turn on (waymark-4yn, waymark-0k4). A stored feed_recipe left
+   ;; ACTIVE is the order every feed obligation above would be read
+   ;; in; a recipe_proposal left OFFERED is a decide card holding a
+   ;; slot, and its own open cap (three a stager) counts rows the way
+   ;; the insight cap does. Both obligations end where they began, so
+   ;; this only matters after a run that did not finish — which is
+   ;; exactly the run whose residue is hardest to read.
+   "feed_recipes" "recipe_proposals"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 

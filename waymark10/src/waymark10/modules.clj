@@ -152,6 +152,7 @@
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.presence :as presence]
+            [waymark10.recipe-proposal :as recipe-proposal]
             [waymark10.server.roles :as roles]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.routes.feed :as feed-routes]
@@ -388,9 +389,19 @@
    ;; not want the surface, while a feed recipe names this module's own
    ;; census and its own population registry. An engine that serves the
    ;; feed serves the feed's recipe; there is nothing left to opt into.
+   ;; …and since waymark-0k4 a SECOND: `recipe_proposal`, the staged
+   ;; change an agent may write and only a person may apply. It rides
+   ;; the same module for the same reason and one more: it names
+   ;; feed_recipe's own doors and the feed's own census, so a house
+   ;; that serves the recipe serves the way to propose changes to it.
+   ;; `:always` too — the asymmetry (an agent may stage what it may
+   ;; not write) is the wall's other half, and half a wall is not a
+   ;; thing to opt into.
    {:module :feed
     :enrols [{:kind :feed_recipe :enroll :always
-              :kinds (fn [_] [feed-recipe/feed-recipe])}]
+              :kinds (fn [_] [feed-recipe/feed-recipe])}
+             {:kind :recipe_proposal :enroll :always
+              :kinds (fn [_] [recipe-proposal/recipe-proposal])}]
     :routes feed-routes/routes :pack packs/feed}
 
    ;; named, contributing nothing through this seam

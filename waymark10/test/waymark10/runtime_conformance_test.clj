@@ -191,4 +191,15 @@
       (is (pos? (suite/coverage report :jobs/worker-progress))
           "and the worker was given one to drive")
       (is (pos? (suite/coverage report :webhooks/delivery-receipt))
-          "and the deliverer was given an endpoint and an event"))))
+          "and the deliverer was given an endpoint and an event")
+      ;; waymark-0k4: the feed module enrols recipe_proposal :always,
+      ;; so this obligation is owed by every engine that serves the
+      ;; feed — and it is the only place the whole apply path is
+      ;; walked from the wire (an agent stages, a member taps, the
+      ;; RECIPE's transition names the member). A silent skip here
+      ;; would be a green run over the bead's own sentence.
+      (is (contains? ran :feed/staged-proposals)
+          (str ":feed/staged-proposals did not run; skipped for "
+               (pr-str (get skipped :feed/staged-proposals))))
+      (is (pos? (suite/coverage report :feed/staged-proposals))
+          "a member's tap landed the staged change"))))

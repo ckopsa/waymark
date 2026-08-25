@@ -258,9 +258,11 @@
   (let [scoped (assoc (agent-headers "boot-agent")
                       "x-waymark-grant" "never-minted")]
     (testing "a named principal behind a dead grant still sees the door
-              (and its own jobs — the own surface rides every leash)"
+              (and its own jobs, and — waymark-0k4 — its own staged
+              recipe proposals: the own surface rides every leash)"
       (let [b (json (req :get "/api/.well-known/waymark" nil scoped))]
-        (is (= ["approval_request" "grant" "job"] (:kinds b))))
+        (is (= ["approval_request" "grant" "job" "recipe_proposal"]
+               (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))
           "the domain stays concealed")
       (let [b (json (req :get "/api/approval_requests" nil scoped))]

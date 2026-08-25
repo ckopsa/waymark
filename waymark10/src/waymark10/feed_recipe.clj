@@ -393,7 +393,14 @@
   [k extra form]
   [k (merge (get prose k) extra) form])
 
-(def ^:private recipe-input
+(def recipe-input
+  "What :revise takes: the whole authored surface, overwritten
+  wholesale. PUBLIC since waymark-0k4, and for one reason — a staged
+  proposal prepares this very input and is refused at STAGING when it
+  would not fit the door, so the schema the proposal is judged against
+  has to be the schema the door actually takes rather than a copy of
+  it that could drift. Nothing about the declaration moved: this is
+  the same value under the same name, no longer behind a `^:private`."
   [:map
    (entry :label {} [:string {:min 1 :max 60}])
    (entry :order {} order-schema)])

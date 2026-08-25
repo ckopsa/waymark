@@ -294,6 +294,20 @@
                               {:principal principal
                                :correlation-id correlation-id
                                :require-key? false
+                               ;; a FENCED target takes its etag the way
+                               ;; an honest client would supply one —
+                               ;; the worksheet's own spelling
+                               ;; (worksheet/apply-invocations!), which
+                               ;; reads the row's current version and
+                               ;; hands it over rather than waiving the
+                               ;; wall. The caller supplies it because
+                               ;; only the caller knows which version it
+                               ;; MEANT to write over; a cross-write
+                               ;; that quietly waived the fence would be
+                               ;; the one door in the tree where "the
+                               ;; resource changed since you read it"
+                               ;; stopped being asked (waymark-0k4).
+                               :if-match (:if-match opts)
                                :acknowledged (or (:acknowledged opts) #{})})]
                      (swap! sink conj {:kind target-kind
                                        :action action-name
