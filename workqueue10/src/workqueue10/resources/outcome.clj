@@ -1001,7 +1001,13 @@
    :terminal #{:accepted :declined :expired}
    :summary "{data.goal} · for {data.value_name} · {state}"
    :label-template "{data.goal}"
-   :display {:title "Outcome"}
+   ;; the title is the GOAL, templated (waymark-jfv.4). A static noun
+   ;; was fine while this kind had no card; the feed's crown takes its
+   ;; heading from `:display :title` like every other card, and a card
+   ;; on top of the page headed "Outcome" would be the one element
+   ;; there that said nothing. `:display` is advertisement and rides
+   ;; no fingerprint facet, so this moves no hash.
+   :display {:title "{data.goal}"}
    :links [{:rel "value" :kind :value
             :href "/api/values/{data.value_id}"
             :summary "The value this outcome serves"}

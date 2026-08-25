@@ -1149,3 +1149,312 @@ both kinds report clean.
   made `make_it_so`'s `:touches` a lie by omission and given `moot` a
   second, silent driver. The `pieces` link is a filtered collection
   href, which is what the household's own screen wants anyway.
+
+## Built — jfv.4, the outcomes section (2026-08-25, waymark-jfv.4)
+
+The crown, on the feed. **`:outcomes` joins `feed/census` on top** —
+`[:outcomes :do_now :decide :fuel :seam :archive]` — and everything else
+this bead touched follows from that one literal moving.
+
+### The join list, as it landed
+
+Every site the design section named, plus three it did not:
+
+| site | what changed |
+|---|---|
+| `feed/census` | `:outcomes` first; the docstring says why it is the only member above do-now |
+| `feed/outcomes` | the population (below) |
+| `feed/populations` | `:outcomes outcomes` — the registry entry |
+| `feed/population-says` | *"what this week could hold — composed bundles, with the friction already paid, waiting on a thumb"* |
+| `feed/population-reads` | **nothing**, and deliberately — see below |
+| `feed/card-says` | the section clause, quoting `crown-and-floor` verbatim |
+| `feed/default-recipe` | `{:section :outcomes :population :outcomes :take 2 :says …}` |
+| `feed/recipe-guarantees` | **new**: the sections sentence now READS `census` instead of spelling it |
+| `feed_recipe/order-schema` | the `:section` help now reads `census` too — the enum already did |
+| `135-feed-screen.js` | `FEED_SECTION_LABEL` / `FEED_SECTION_HINT`, and the pieces sub-list |
+| `test/packs.clj` | the `above-seam` literal, hard-coded twice, is now one derivation |
+| `scripts/ui-drive.mjs` | the census literal, twice in one expression, is now one `CENSUS` |
+
+`entry-cards`' `admits?` / `keep?` needed no new branch, exactly as the
+design section predicted: a bundle with no verb left is retired at offer
+time instead.
+
+**`population-reads` gets NO entry, and that is a correction to the design
+section's `[:nav]`.** The population reads a clock, another row's state and
+a count of its own children — not one of them is a declared *trait*, which is
+what that map is for (`asks`, `letters`, `ticklers`, `conflicts`, `insights`
+and `proposals` all declare nothing for the same reason). And `:nav` in
+particular would have made the citation say *"outcome is `:nav :system` —
+house machinery rather than anybody's next step"* at the top of the page,
+which is the one trait word that means the opposite of what the section is
+for.
+
+**Three fingerprint-free literals were widened by DERIVATION rather than by
+editing.** `recipe-guarantees`, `order-schema`'s `:section` help and the
+pack's `above-seam` all named the census in prose or in a set; all three now
+compute it. A fourth (`ui-drive.mjs`) named it twice inside one comparator.
+The next section to join the census edits one vector.
+
+### The population
+
+`feed/outcomes` names `:outcome` and `:outcome_piece` by keyword and answers
+`[]` when the engine holds either without the other — the fourth and fifth
+optional application kind core names, and the tipping point the spec already
+recorded stands where it was.
+
+Four filters and three retirements, each read off a declaration:
+
+- `offered` bundles only; the other three states are terminal.
+- **not the reader's own** — `the-composer-does-not-decide` makes the stager
+  structurally incapable of answering, so carding it would offer three doors
+  that all answer 409. `asks`, `insights` and `proposals` already do this.
+- **the leash is still on** (`good_until`), the proposal's own read-side
+  retirement, with no sweeper and no write.
+- **the value is still held** — a retired value takes its outcomes with it,
+  which is `names-a-value` read at offer time.
+- **something is still on offer** — a bundle whose every piece is answered
+  would card `Make it so` over a tap that `something-is-still-on-offer`
+  refuses, and a button that fails is worse than one that was never offered.
+- **the bundle floor**, `feed/bundle-floor` = 2. This is **waymark-jfv.7**'s
+  population half, taken here because it was one `<=` on a count the
+  population already had: *an outcome with one piece is a finding — publish
+  an insight.* The ceiling stays at the piece's create door where it can
+  count siblings; the floor could never stand at a door, because the parent
+  is born before any piece exists. jfv.7 keeps its prose half for `jfv.5`.
+
+Each candidate carries a `:sentence` — the value named, the composer's
+routing prose **quoted rather than paraphrased**, and how many rows were read
+— and a `:parts` vector, oldest first (the order `take-the-rest` fans out in,
+so a refusal names the piece the household read first).
+
+The cap is **not here and must not come here**. `outcomes-are-few` is two per
+author per calendar week at the create door, so the composer has to rank; a
+read-side window would bury what the door already let be staged and would
+make the exposure floor unmeasurable.
+
+### The card carries `pieces`, and that is the one wire widening
+
+`feed/piece-card` is `card`'s own three gates over a child row: `:row?`
+first (a piece this grant does not confer is **absent**, never narrowed),
+then `envelope-summary` with `:visibility`, then `split-verbs` over what
+survived. A bundle whose parts are all concealed carries **no `pieces` key
+at all** rather than an empty one, because a client reading `pieces: []`
+would have to guess whether the bundle was empty or hidden.
+
+Each piece carries its **own** `card_id` — `outcomes/outcome_piece/<id>` —
+so a piece verb rides `origin-key` like any other card verb and
+`actions-from-feed` counts the tap that happened rather than filing it under
+the bundle. Under a DRAW the spelling is unchanged (waymark-mbr's
+draw-not-named punt stands).
+
+The pieces' verbs are `assent` without help: `take`, `not_this` and `moot`
+are note-free and input-free, so `demand/effort` answers `"assent"` and the
+≤-selection partition keeps all three under the thumb. The pack asserts it
+rather than trusting it.
+
+A real card, off the wire (trimmed to the keys this bead added):
+
+```json
+{"card_id": "outcomes/outcome/aa23a926-…", "section": "outcomes",
+ "population": "outcomes", "kind": "outcome", "state": "offered",
+ "summary": "One Saturday afternoon in the shop with Jack · for Making things with the boys · Offered",
+ "sentence": "For Making things with the boys. It runs through the shop, which this house wrote down as something it loves — so the expensive part, getting started, is already paid. 2 rows behind it.",
+ "why": {"line": 0, "rank": 1, "of": 1},
+ "fields": {"composed_by": "sous", "goal": "One Saturday afternoon in the shop with Jack",
+            "routes_through": "the shop", "value_name": "Making things with the boys",
+            "good_until": "2026-09-01T07:17:02Z"},
+ "actions": {"make_it_so":    {"effort": "assent", "label": "Make it so"},
+             "not_this_week": {"effort": "assent", "label": "Not this week"}},
+ "heavier": [],
+ "pieces": [
+  {"card_id": "outcomes/outcome_piece/b2620592-…", "kind": "outcome_piece",
+   "state": "taken",
+   "says": "Cut the box stock to length — twenty minutes, and Saturday opens with the glue-up",
+   "actions": {}, "heavier": []},
+  {"card_id": "outcomes/outcome_piece/4cae1eea-…", "kind": "outcome_piece",
+   "state": "offered",
+   "says": "Clear the bench Friday evening — twenty minutes, and Saturday opens with the glue-up",
+   "actions": {"take":     {"effort": "assent", "label": "Yes"},
+               "not_this": {"effort": "assent", "label": "Not this"},
+               "moot":     {"effort": "assent", "label": "Beside the point"}},
+   "heavier": []}]}
+```
+
+The taken piece is the honest half of that: it is still on the card, wearing
+its state, with **no verbs** — because the projection answered, not because
+the page decided.
+
+### The crown-and-floor sentence, and where it could not go
+
+It is quoted verbatim in `feed/crown-and-floor` and reaches every outcome
+card's `?explain=1` citation through `card-says`' section clause, beside
+do-now's and the archive's.
+
+**It could not ride the recipe line's `:says`**, which is where the bead's
+own framing put it: that field is capped at **400 characters** by
+`feed_recipe/order-schema` — it is a household's own sentence, typed into a
+form — and the paragraph is six hundred. The line carries the short version
+instead, in the shape the other lines wear, and it says the floor out loud:
+*"its take is the exposure floor, so the ledger below stays a fair audit of
+it rather than a competitor for its place."* The cap is a real wall and
+widening it to fit a paragraph the framework wrote would have been the wrong
+half to move.
+
+### The screen
+
+`135-feed-screen.js` dispatches on `card.pieces` and never on a kind name —
+`.7`'s own correction, binding doubly here because `outcome` is a workqueue10
+kind and this is the framework's page. A bundle renders as: the goal as the
+heading, the value and routing as the say-line, the composer's principal id
+as a badge (the `bylineChip` posture, unchanged — an agent is never dressed
+up as a person), the evidence read late as live links, then a `<ul>` of
+pieces each with its own state chip, its own sentence and its own chips, and
+finally `Make it so` / `Not this week` as the card's own.
+
+Three behaviours are worth writing down:
+
+- **A piece settles ITSELF.** `scope: "piece"` replaces that line's verb bar
+  and leaves the rest of the bundle standing — which is what a partial accept
+  *looks like*, one row at a time.
+- **A piece's refusal stays on the piece.** The target's own create guards
+  judge at the tap, and the household has to read which LINE was refused.
+- **The bundle's verdict answers the pieces too.** `settle` clears every
+  piece bar to *"answered with the bundle"*, because the server took them in
+  one transaction and chips offering a closed door are a lie.
+
+`030-screens.css` and `040-mobile.css` gained the piece styles and one
+section rule: the crown wears `--law`, the colour of the one card here that
+was authored.
+
+### One declaration moved, and it moves no hash
+
+`outcome`'s `:display {:title "Outcome"}` became `{:title "{data.goal}"}`.
+A static noun was fine while the kind had no card; the feed's crown takes its
+heading from `:display :title` like every other card, and a card at the top
+of the page headed *"Outcome"* would have been the one element there that
+said nothing. `:display` is advertisement and rides no `fingerprint-of`
+facet — verified, not assumed: the whole 35-kind census was computed with and
+without this bead and **every hash is byte-identical**.
+
+### Where the law is proved
+
+**`:feed/outcomes`**, a new obligation in `packs/feed`, gated on
+`#{[:route :feed] [:kind :value] [:kind :outcome] [:kind :outcome_piece]}`
+and placed below every obligation that counts cards — it mints more rows than
+any other (a value, a bundle, three pieces, and the work rows two of those
+pieces become) and its bundle cards **above** everything. It ends with the
+bundle accepted and every piece answered, so the population retires it and
+the engine it hands on is the engine it found.
+
+**Three principals**, and none decoration: a MEMBER declares the value
+(`written-by-a-person` stands at that door, so the composer could not have
+written what its own bundle cites); a COMPOSER, an agent leashed to two
+create doors and nothing else, stages; and a THIRD reader holds a leash over
+`outcome` and **not** over `outcome_piece`, which is how the new `pieces`
+key's concealment is watched rather than asserted.
+
+Its claims, in order: the bundle cards in `outcomes` with nothing above it;
+its sentence cites the routing; it carries three pieces; the parent offers
+`make_it_so`; a piece offers `not_this`; no piece verb is heavier than
+`card-ceiling`; a piece's `card_id` is its own; **the composer sees nothing**;
+the half-sighted reader sees the bundle and **no pieces**; a decline settles
+one piece; a tap materializes a row whose **create transition names the
+member**; the origin key parses back to `outcomes` / `outcome_piece` / the
+piece's id with no join; `make_it_so` takes the piece still offered; and the
+answered bundle leaves the feed. `workqueue10.conformance-test` now asserts
+its **coverage** is positive, because an obligation whose whole claim is that
+a tap wrote something proves nothing over zero taps.
+
+**Two driver widenings**, both small and both the same shape as something
+already there:
+
+- `fac/create-body` — the body `create-example` would send, without sending
+  it, exposed on the driver ctx as `:create-body`. A piece's `prepared` is a
+  CREATE's input the way `:input-for` is an action's, and staging a piece
+  with a hand-written map that happens to fit today's schema would prove
+  something narrower than the law.
+- `packs/create-actor` — the CREATE transition's actor rather than the newest
+  one's. A mirrored kind pushes to its authority the instant a row lands and
+  appends a sync transition on top, so `newest-actor` answered `"mirror-sync"`
+  about a task the member had just made. `newest-actor` is still right for
+  `feed_recipe`, which is not mirrored; this is the same question one kind
+  over.
+
+**Two fixtures gained three tables.** `conformance_test` and
+`feed_shape_test` now drop `outcome_pieces`, `outcomes` and `values` — the
+rule both files already state, for the same two reasons: an outcome another
+run left `offered` is a card ABOVE do-now, and a `value` is never terminal so
+it outlives everything. `feed_shape_test` found this by failing.
+
+**`feed_shape_test`'s two do-now line assertions now find their lines by
+SENTENCE rather than by index.** They pinned line 0 and line 1; a section
+above them made both wrong. A test that pins a place on the page was pinning
+the wrong thing — the line the household wrote is the thing being asserted.
+
+### Verified by hand, and the walk is written down
+
+`waymark10/scripts/ui-drive.mjs feed` against `make dev-queue`: **41 checks,
+no console errors** (was 32). The feed walk now seeds a value, a bundle
+composed by `sous` and two prepared pieces, and adds eleven checks:
+
+- the bundle cards in `outcomes` with nothing above it, carrying a piece list;
+- its heading is the goal, not the kind's name;
+- it says the value it serves and cites the loved activity;
+- the composer rides as a principal id;
+- it names what the composer read (two rows, each a live link);
+- two pieces render as sub-rows, each with `Yes` / `Not this` /
+  `Beside the point`;
+- the bundle offers exactly `Make it so` and `Not this week`;
+- no piece verb is heavier than a tap;
+- **the tapped piece settles on its own line and its chips do not come back**
+  (`✓ Yes · now taken`);
+- **the other piece is untouched** — a partial accept is one row at a time;
+- the piece's verb carried the PIECE's card id in the origin key
+  (`feed/2026-08-25/outcomes%2Foutcome_piece%2F…/79377f672e76`), and the row
+  it wrote is really there;
+- and, reading as `sous`, **the bundle does not card to whoever composed it**.
+
+The whole deal-again block runs after all of that and passes unchanged, so
+the crown behaves under a draw.
+
+**One fixture bug fell out of running the walk on a FRESH database.** The
+`links.next continues the SAME draw` claim needs more than six archive cards
+and the walk retired three chores; on a dev database that had been
+accumulating for weeks it passed by accident. It retires eight now.
+
+### Recorded here, for whoever comes next
+
+- **No new kinds, and the migration plan is empty** —
+  `make migrate-queue` says *"storage matches the declarations"*. Production
+  needs nothing before this deploys that jfv.2 and jfv.3 did not already ask
+  for.
+- **Every fingerprint is byte-identical.** 35 kinds before, 35 after,
+  computed with and without this bead. `feed_recipe`'s `:section` enum gained
+  a word and did not move, which is 0k4's correction re-verified rather than
+  re-asserted; `outcome`'s `:display` changed and did not move either.
+- **`make check-queue` is unchanged**: 35 kinds, 11 warnings, 39 scenarios.
+  This bead declared no scenario, because everything it added is a READ over
+  a live engine and `scenario.clj` never writes.
+- **The raw store row's `:state` is a KEYWORD.** `rows-of` and `load-raw`
+  answer `{:state :offered}`, not `"offered"` — `open?` has always spelled it
+  `(keyword (:state row))` and this population's first draft did not. It cost
+  an hour and an empty section; written down so it costs nobody else one.
+- **A `rows-of` whose where-key is not a promoted column answers `[]`
+  silently** (the `catch Exception _ []` is deliberate — a kind whose table
+  this engine never made must not fail the whole read). It is the right
+  posture and it is also the reason an empty population is hard to diagnose.
+- **The exposure floor is a rule, not yet a mechanism.** Nothing ranks, so
+  the line's `:take` is trivially honored. What **waymark-8um.3** inherits is
+  fixed here: the formula may not reduce this line below its take while
+  candidates exist, a card held by the floor says so in its `why`, and the
+  population keeps NAMING candidates it did not show so `claimed_above` stays
+  truthful. It names all of them today.
+- **A piece's `says` rides the wire from the POPULATION, not from the
+  projection.** It is the `sentence` precedent one row down. A grant that
+  concealed the `says` field specifically (rather than the row) would leave
+  the piece's own sentence on the card; the row-level concealment that
+  matters is exact, and this one is filed rather than defended.
+- **`moot` renders as a third chip.** jfv.3 left the shape question open;
+  the answer is yes, because the projection offered it and a page that
+  dropped a door the reader holds would be lying in the direction `heavier`
+  exists to prevent.

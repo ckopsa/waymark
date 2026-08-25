@@ -364,9 +364,17 @@ in the module's route builder, throwing `t/definition-error` the way
 1. every `:population` names a member of the closed population registry;
 2. exactly one entry carries `:seam true`;
 3. at most one `:bottomless`, and it is last;
-4. sections appear in census order (`do_now`, `decide`, `fuel`, seam,
-   `archive`) — the census is law, so a recipe that puts fuel above do-now is a
-   typo, not a preference.
+4. sections appear in census order (`outcomes`, `do_now`, `decide`, `fuel`,
+   seam, `archive`) — the census is law, so a recipe that puts fuel above
+   do-now is a typo, not a preference.
+
+`outcomes` joined the census on top with **waymark-jfv.4** (`spec-outcome-menu.md`
+§ *Built — jfv.4*), and it is the only member added since the epic wrote this
+list. It is the crown: the one section here whose card is **authored** rather
+than projected, sitting above the ledger it is audited against. Adding a
+member widens `feed_recipe`'s `:section` enum for free — the enum is generated
+from `feed/census` — and moves no fingerprint, because `:schema` is not one of
+`fingerprint-of`'s facets.
 
 The **population registry** is a closed map in the module namespace,
 `{:next_actions (fn [ctx] …) :ticklers (fn [ctx] …) …}` — a var a reviewer

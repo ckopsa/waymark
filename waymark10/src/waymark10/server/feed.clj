@@ -166,11 +166,20 @@
 
 (def census
   "The card census, top to bottom — the epic's own law, not a
-  preference. do-now (the next physical action) → decide (what is
-  waiting on this reader) → fuel (history as momentum) → the caught-up
-  seam → the archive interleave. A recipe that puts fuel above do-now
-  is a typo, and `check-recipe!` says so rather than serving it."
-  [:do_now :decide :fuel :seam :archive])
+  preference. outcomes (what this week could hold) → do-now (the next
+  physical action) → decide (what is waiting on this reader) → fuel
+  (history as momentum) → the caught-up seam → the archive interleave.
+  A recipe that puts fuel above do-now is a typo, and `check-recipe!`
+  says so rather than serving it.
+
+  `:outcomes` is the newest member and the only one above do-now
+  (waymark-jfv.4). It is the crown: the one place in this feed where a
+  card is AUTHORED rather than projected, and everything beneath it
+  stays the ledger it is audited against. Adding a member here widens
+  `feed_recipe`'s `:section` enum for free — the enum is generated
+  from this vector — and moves no fingerprint, because `:schema` is
+  not one of `fingerprint-of`'s facets."
+  [:outcomes :do_now :decide :fuel :seam :archive])
 
 (def ^:private census-rank
   (into {} (map-indexed (fn [i s] [s i])) census))
@@ -193,6 +202,33 @@
 
 ;; ── the recipe (static data) ────────────────────────────────────────
 
+(def crown-and-floor
+  "The outcomes section's own sentence, quoted verbatim from
+  docs/spec-outcome-menu.md § 'The outcomes section — the crown, and
+  its floor' (waymark-jfv.1 wrote it so waymark-jfv.4 could quote it
+  rather than re-derive it; `plan` reads `outcome` throughout, the
+  mechanical substitution waymark-5c4 made).
+
+  It is the SECTION's own sentence, so it rides `card-says`' section
+  clause — beside do-now's and the archive's, which is where a
+  section says the bargain it strikes — and every outcome card that
+  is asked why it is here reads it back verbatim. It could not ride
+  the recipe line's `:says` instead: that field is a household's own
+  words in a form, capped at 400 characters, and a paragraph the
+  framework wrote is not a household's sentence anyway. The line's
+  `:says` carries the short version, in the shape the other lines
+  wear."
+  (str "The outcomes section is the one place in this feed where a card"
+       " is AUTHORED rather than projected, and it sits on top because"
+       " that is what it is for. Everything beneath it stays the"
+       " incorruptible ledger — rows nobody wrote for effect — and that"
+       " is precisely what makes it a fair audit of the crown. The floor"
+       " exists so the contest can be MEASURED, not so the crown can"
+       " escape it: an outcome that keeps being passed over is a"
+       " diagnosis waiting to be written, and the sections below will"
+       " still say, in the household's own rows, whether the week"
+       " actually held it."))
+
 (def default-recipe
   "The v1 recipe: the vector's ORDER is the feed's order, and there is
   no other ordering input anywhere in this design. `:take` is how many
@@ -214,6 +250,15 @@
   exact revision and the household's tap applies it — a decide card
   like every other, one population entry and one line here, together.
 
+  `:outcomes` (waymark-jfv.4) is the newest line and the first one
+  ever to arrive ABOVE do-now. Its `:take` is the exposure floor laws
+  v3 law 3 asks for — guaranteed slots, so the contest can be
+  measured — and the WEEKLY CAP is nowhere near here: it is
+  `outcome/outcomes-are-few`, a wall at the create door, because a
+  filter in a population would bury what the door already let be
+  staged and would teach a composer nothing. The recipe has no word
+  for a week and must not grow one; `:take` is per PAGE.
+
   `:memories` is the bottomless tail and `:events` is one of the two
   sources it reads (waymark-iqa.8): check (3) admits exactly one
   bottomless entry, so the archive's stand-in did not move down the
@@ -222,7 +267,13 @@
   {:salt "waymark-feed"
    :zone "UTC"
    :order
-   [{:section :do_now  :population :next_actions :take 5}
+   [{:section :outcomes :population :outcomes :take 2
+     :says (str "What this week could hold: composed bundles with the"
+                " friction already paid, waiting on a thumb. This is the"
+                " crown — the one authored card on the page — and its take"
+                " is the exposure floor, so the ledger below stays a fair"
+                " audit of it rather than a competitor for its place.")}
+    {:section :do_now  :population :next_actions :take 5}
     {:section :decide  :population :asks         :take 3}
     {:section :decide  :population :letters      :take 3}
     {:section :decide  :population :ticklers     :take 2}
@@ -897,6 +948,167 @@
             (rows-of ctx :recipe_proposal {:state "offered"})))
     []))
 
+;; ── the crown: what this week could hold (waymark-jfv.4) ────────────
+;;
+;; The census's first section, and the only population in this file
+;; whose card is AUTHORED. It sits down here beside `proposals`
+;; because it reads `load-raw` and `rows-of`, which are defined above
+;; it; the ORDER of the page is `census` and `default-recipe`, never
+;; the order of the defns.
+
+(def bundle-floor
+  "The fewest pieces a bundle may card with. TWO, and it is
+  `outcome/a-bundle-is-small`'s own sentence — *an outcome with one
+  piece is a finding; publish an insight* — finally judged somewhere
+  it can be judged honestly.
+
+  The ceiling stands at the piece's create door, counting siblings.
+  The FLOOR cannot: the parent row is born before any piece exists, so
+  no create door can count what has not been written yet, and putting
+  it on `make_it_so` would refuse the legitimate partial accept
+  (decline all but one, then take that one — exactly the shape the
+  epic asked for). So it is judged AT OFFER TIME, the way `ticklers`
+  retires a marker whose subject is finished: the bundle simply is not
+  a candidate, nothing sweeps it, and no row is written. waymark-jfv.7
+  is where the two homes were weighed; this is the population's half
+  of that bead."
+  2)
+
+(defn- outcome-says
+  "One offered outcome's card sentence — the three things its summary
+  line cannot say.
+
+  The GOAL is the row's own summary and the card's heading, so it is
+  not repeated here. What this adds is WHICH value the week would be
+  spent on, WHY it is cheap to start (the routing citation, in the
+  household's own words, written by whoever composed it), and HOW MANY
+  rows were read before any of it was claimed. The routing is READ,
+  never re-derived: a card that paraphrased the composer's claim would
+  be a second author on somebody else's sentence."
+  [d]
+  (let [data (:data d)
+        v (some-> (:value_name data) str not-empty)
+        routing (str/trim (str (:routing data)))
+        ;; the composer's prose is quoted, so it decides its own words
+        ;; — all this does is make sure the count that follows starts a
+        ;; sentence rather than continuing somebody else's
+        routing (cond-> routing
+                  (and (seq routing) (not (re-find #"[.!?…]$" routing)))
+                  (str "."))
+        ev (count (remove str/blank? (map str (:evidence data))))]
+    (str/trim
+     (str (when v (str "For " v ". "))
+          routing
+          (when (pos? ev)
+            (str " " ev " row" (when (not= 1 ev) "s") " behind it."))))))
+
+(defn- value-still-held?
+  "Does the house still hold the value this bundle serves? A retired
+  value is exactly how a household stops being offered outcomes that
+  serve it (`names-a-value` says so at the create door), and this is
+  the same law read at offer time — no sweeper, no write, the
+  tickler's own posture.
+
+  An engine with no `value` kind cannot answer, so it does not
+  pretend to: the bundle stands, and its own create door was the wall."
+  [ctx d]
+  (if-not (get (resources ctx) :value)
+    true
+    (boolean
+     (when-some [vid (some-> (get-in d [:data :value_id]) str not-empty)]
+       (when-some [raw (load-raw ctx :value vid)]
+         (= :declared (keyword (name (:state raw)))))))))
+
+(defn- bundle-parts
+  "The pieces of one bundle, oldest first — the order `take-the-rest`
+  fans out in, so the household reads them in the order the engine
+  would take them and a refusal names the piece they read first."
+  [ctx oid]
+  (vec (sort-by (juxt #(str (:created-at %)) #(str (:id %)))
+                (rows-of ctx :outcome_piece {:outcome_id (str oid)}))))
+
+(defn outcomes
+  "outcomes: the composed bundles this house has not answered — the
+  feed's crown, *This week could hold* (waymark-jfv.4). The `letters`
+  / `ticklers` / `insights` / `proposals` precedent one section
+  further up: a core reader naming OPTIONAL application kinds by
+  keyword and answering with nothing when the engine holds neither.
+  These are the fourth and fifth such names; a sixth would be the
+  moment to declare a read-trait instead, and the spec records that
+  tipping point rather than pretending it is far away.
+
+  Four filters and two retirements, each a law read off the
+  declaration rather than a preference:
+
+  - `offered` bundles only. `accepted`, `declined` and `expired` are
+    terminal, so an answered outcome leaves the feed by construction.
+  - NOT THE READER'S OWN. `the-composer-does-not-decide` means the
+    principal that staged a bundle is structurally incapable of
+    answering any part of it, so carding it to the composer would be
+    offering doors that answer 409. `asks`, `insights` and
+    `proposals` all do this, for the same reason.
+  - THE LEASH IS STILL ON. Past `good_until` the week the bundle was
+    for is over; `expire` is bookkeeping anybody may run, and nothing
+    here sweeps.
+  - THE VALUE IS STILL HELD, and EVERY PIECE IS NOT ALREADY ANSWERED.
+    Both retire at offer time, the way a tickler's finished subject
+    does. A bundle with nothing left on offer would card `Make it so`
+    over a tap that could land nothing — `something-is-still-on-offer`
+    refuses it at the door, and a card that offered it anyway would be
+    a button that fails.
+  - THE BUNDLE FLOOR, `bundle-floor`: fewer than two pieces is a
+    finding rather than an outcome, and the population is the only
+    honest place that count can be made.
+
+  It hands each candidate a `:sentence` — the value named, the routing
+  cited, the reading counted — and a `:parts` vector, which is the one
+  wire widening this epic asks for: `card` renders each piece through
+  the SAME `envelope-summary` → `:row?` → `split-verbs` path and hangs
+  the results on the card as `pieces`, so a piece's chips are the
+  piece row's own projected verbs and concealment holds exactly as it
+  does for the parent.
+
+  THE WEEKLY CAP IS NOT HERE and must not come here. It is
+  `outcome/outcomes-are-few`, two per author per calendar week, at the
+  create door — so a composer has to RANK. A read-side window would
+  bury what the door already let be staged, would leave those rows
+  sitting offered teaching the composer that this house ignores it,
+  and would make laws v3's exposure floor unmeasurable: a learner
+  cannot learn about a card it never shows.
+
+  The cost is the read-time posture's, bounded twice over: at most
+  `row-scan-cap` bundles are scanned, each surviving one costs a value
+  read and a piece query, and `a-bundle-is-small` caps the pieces at
+  five. The create-door cap is what keeps the number of bundles small
+  at the source, which is the point of putting the wall there."
+  [ctx]
+  (let [rdef (get (resources ctx) :outcome)
+        prdef (get (resources ctx) :outcome_piece)]
+    (if-not (and rdef prdef)
+      []
+      (let [pid (:id (:principal ctx))
+            now (:now ctx)]
+        (into []
+              (keep (fn [raw]
+                      (let [d (inv/decode-row rdef raw)
+                            good (get-in d [:data :good_until])
+                            parts (bundle-parts ctx (:id raw))]
+                        (when (and (not= pid (get-in d [:data :composed_by]))
+                                   (or (nil? good) (pos? (compare good now)))
+                                   (<= (long bundle-floor) (count parts))
+                                   (some #(= :offered (keyword (name (:state %))))
+                                         parts)
+                                   (value-still-held? ctx d))
+                          {:kind :outcome :id (:id raw) :row raw
+                           :sentence (outcome-says d)
+                           :parts (mapv
+                                   (fn [p]
+                                     {:kind :outcome_piece :id (:id p) :row p
+                                      :says (str (get-in (inv/decode-row prdef p)
+                                                         [:data :says]))})
+                                   parts)}))))
+              (rows-of ctx :outcome {:state "offered"}))))))
+
 (defn conflicts
   "decide: mirrored rows whose authority and household disagree. A
   conflicted row takes no local writes until a person decides, which
@@ -1359,10 +1571,12 @@
   entry HERE and its line in `default-recipe`, together — `:ticklers`
   (waymark-iqa.4), the fuel populations and `:memories`
   (waymark-iqa.5), `:insights` (waymark-iqa.6), `:proposals`
-  (waymark-0k4). A later population arrives the same way, and swapping
+  (waymark-0k4), `:outcomes` (waymark-jfv.4, and the first entry whose
+  section was new too). A later population arrives the same way, and swapping
   one entry for a materializing read is fork (a)'s recorded punt
   working exactly as promised."
-  {:next_actions next-actions
+  {:outcomes outcomes
+   :next_actions next-actions
    :asks asks
    :letters letters
    :ticklers ticklers
@@ -1709,6 +1923,41 @@
     (some->> (store/with-tx st #(store/load-row st % (:kind rdef) id {}))
              (inv/decode-row rdef))))
 
+(defn- piece-card
+  "One PIECE of a bundle, as a mini-card — the one wire widening the
+  outcome epic asks for (waymark-jfv.4).
+
+  It is `card`'s own three gates, in `card`'s own order, over a
+  different row: `:row?` first (a piece this grant does not confer is
+  ABSENT from the bundle, never narrowed), then `envelope-summary`
+  with `:visibility`, then `split-verbs` over what survived. So a
+  piece's chips are the piece ROW's own projected verbs — `take`,
+  `not_this`, `moot`, each note-free and input-free and therefore
+  `assent`, which is why they stay under a thumb — and concealment
+  holds exactly as it does for the parent. Nothing here re-derives a
+  verb and nothing here consults the declaration; if it did, the
+  partition could name a door the projection had just hidden.
+
+  It carries its OWN `card_id` (`<section>/outcome_piece/<id>`), so a
+  piece verb rides `origin-key` like any other card verb and
+  `actions-from-feed` counts the tap that actually happened rather
+  than attributing it to the bundle.
+
+  The `says` is the population's, the `sentence` precedent one row
+  down: a piece's whole claim is what it IS, and the summary line the
+  wire projects wears the state on the end of it."
+  [ctx section {:keys [kind id row says]}]
+  (let [rdef (get (resources ctx) kind)
+        vis (:visibility ctx)]
+    (when (and rdef (or (nil? vis) ((:row? vis) kind id)))
+      (when-some [decoded (if row (inv/decode-row rdef row)
+                              (load-decoded ctx rdef id))]
+        (let [body (dissoc (render/envelope-summary rdef decoded (ctx-opts ctx))
+                           "waymark" "unavailable")]
+          (cond-> (assoc (split-verbs body (get body "self"))
+                         "card_id" (card-id section kind id))
+            (not (str/blank? (str says))) (assoc "says" says)))))))
+
 (defn- card
   "One card, or nil — the ONE place a row becomes wire, so the fourth
   law is enforced once and inherited by every population.
@@ -1731,15 +1980,25 @@
   document, and `unavailable`, because a card has no room for the
   narration of doors that are shut. What a reader HOLDS is never
   dropped — it is `actions` plus `heavier`, and the whole point of
-  `heavier` is that a card does not lie about a door it has."
-  [ctx section population {:keys [kind id row at sentence]}]
+  `heavier` is that a card does not lie about a door it has.
+
+  A candidate carrying `:parts` cards as a BUNDLE (waymark-jfv.4):
+  each part goes through `piece-card` — the same three gates over the
+  child row — and the survivors ride as `pieces`. A part the grant
+  conceals is simply absent from the vector, and a bundle whose parts
+  are all concealed carries no `pieces` key at all rather than an
+  empty one, because a client that saw `pieces: []` would have to
+  decide whether the bundle was empty or hidden."
+  [ctx section population {:keys [kind id row at sentence parts]}]
   (let [rdef (get (resources ctx) kind)
         vis (:visibility ctx)]
     (when (and rdef (or (nil? vis) ((:row? vis) kind id)))
       (when-some [decoded (if row (inv/decode-row rdef row)
                               (load-decoded ctx rdef id))]
         (let [body (dissoc (render/envelope-summary rdef decoded (ctx-opts ctx))
-                           "waymark" "unavailable")]
+                           "waymark" "unavailable")
+              pieces (when (seq parts)
+                       (into [] (keep #(piece-card ctx section %)) parts))]
           (cond-> (assoc (split-verbs body (get body "self"))
                          "card_id" (card-id section kind id)
                          "section" (name section)
@@ -1749,7 +2008,8 @@
             ;; `sentence` is the element of this document that is
             ;; PROSE rather than a projection, and a fuel card says
             ;; the thing its row cannot say about itself
-            sentence (assoc "sentence" sentence)))))))
+            sentence (assoc "sentence" sentence)
+            (seq pieces) (assoc "pieces" pieces)))))))
 
 (defn- offers-something?
   "Does this card put a verb under the thumb? do-now's own filter: a
@@ -1832,7 +2092,8 @@
   sentence a parent reads on a phone. A recipe line may override the
   whole narration with `:says`; this is what a line that says nothing
   falls back to."
-  {:next_actions "rows nobody has finished yet, from the kinds this house goes to"
+  {:outcomes "what this week could hold — composed bundles, with the friction already paid, waiting on a thumb"
+   :next_actions "rows nobody has finished yet, from the kinds this house goes to"
    :asks "access somebody has asked for and somebody else must answer"
    :letters "mail on your shelf you have not opened"
    :ticklers "things you set aside, whose date has come round again"
@@ -1849,13 +2110,17 @@
   "Which DECLARED traits a population consults, so a card's citation
   can quote the kind's own declaration rather than describe it from
   outside. A population reading none of them is not a gap: `asks`,
-  `letters`, `ticklers`, `conflicts`, `insights` and `proposals` all
-  choose by a STATE their own kind declares and by whose row it is,
-  which the line's own sentence already says and the card's own
-  `state` already shows. `proposals` adds a clock read on top of that
-  and still declares nothing here, for the same reason: `expires_at`
-  is a field of the row, not a trait of the kind, and the card carries
-  it."
+  `letters`, `ticklers`, `conflicts`, `insights`, `proposals` and
+  `outcomes` all choose by a STATE their own kind declares and by
+  whose row it is, which the line's own sentence already says and the
+  card's own `state` already shows. `proposals` adds a clock read on
+  top of that and still declares nothing here, for the same reason:
+  `expires_at` is a field of the row, not a trait of the kind, and the
+  card carries it. `outcomes` reads a clock, another row's state and
+  a count of its own children, and declares nothing here for exactly
+  that reason — none of the three is a TRAIT, and a citation that
+  quoted `:nav :system` at the crown would be quoting the one trait
+  that says the opposite of what the section is for."
   {:next_actions [:nav :machine :over]
    :cleared [:nav :over]
    :streaks [:nav :over]
@@ -2112,9 +2377,15 @@
   "The four assembly checks, as the one sentence they buy a reader.
   `check-recipe!` runs them at the route's build site, so a recipe
   that broke any of them refused the boot rather than this request —
-  which is why this can be said in the present tense."
-  (str "The sections always come in this order — do now, decide, fuel,"
-       " the seam, the archive; exactly one card is the seam; the archive"
+  which is why this can be said in the present tense.
+
+  The order is READ OFF `census` rather than spelled again here: a
+  sentence that named the sections in a second place would be the
+  place that drifts the first time one is added, and waymark-jfv.4
+  added one."
+  (str "The sections always come in this order — "
+       (str/join ", " (map #(str/replace (name %) "_" " ") census))
+       "; exactly one card is the seam; the archive"
        " is last and bottomless; and every line names a population this"
        " engine actually holds. A recipe that broke any of those would have"
        " refused to start rather than serve you a surprise."))
@@ -2215,7 +2486,8 @@
          [(str "Recipe line " (inc (long (:line entry 0))) " — "
                (line-says entry))]
          (trait-says rdef row (population-reads (:population entry)))
-         [(when (= :do_now section)
+         [(when (= :outcomes section) crown-and-floor)
+          (when (= :do_now section)
             (str "It kept its place in do now because it still has a verb"
                  " light enough to tap — a next action with nothing under"
                  " the thumb is a row on a list, and drops out."))

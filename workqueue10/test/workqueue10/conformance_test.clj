@@ -24,7 +24,7 @@
     every state on its own.
 
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
-  (:require [clojure.test :refer [deftest use-fixtures]]
+  (:require [clojure.test :refer [deftest is use-fixtures]]
             [next.jdbc :as jdbc]
             [workqueue10.main :as main]
             [waymark10.server.engine :as engine]
@@ -72,6 +72,13 @@
    ;; claim of that obligation is that nothing is written until
    ;; somebody says so.
    "feed_views" "feed_view_consents"
+   ;; …and the crown's three (waymark-jfv.4), for the first two
+   ;; reasons at once. An outcome left OFFERED with its pieces still
+   ;; on offer is a card ABOVE do-now, and the section takes two — so
+   ;; a run's own bundle could be crowded off the page by a run that
+   ;; did not finish. The value beneath it is what keeps it there, and
+   ;; a value is never terminal, so it outlives everything.
+   "outcome_pieces" "outcomes" "values"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 
@@ -158,4 +165,13 @@
 ;; ── the whole suite ─────────────────────────────────────────────────
 
 (deftest conformance
-  (suite/check! {:engine *eng* :handler *h* :kinds kinds}))
+  (let [report (suite/check! {:engine *eng* :handler *h* :kinds kinds})]
+    ;; …and the crown MEASURED itself (waymark-jfv.4). `:feed/outcomes`
+    ;; is the one obligation in this house whose whole claim is that a
+    ;; tap WROTE something — a piece materializing a real row under the
+    ;; member's own name — and an obligation that ran over zero taps is
+    ;; a green run that proved nothing. This engine holds all four
+    ;; kinds it needs, so a skip here is a regression rather than a
+    ;; posture.
+    (is (pos? (suite/coverage report :feed/outcomes))
+        "a member's tap made a piece of the week real")))

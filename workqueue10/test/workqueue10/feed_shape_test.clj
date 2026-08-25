@@ -63,6 +63,10 @@
    ;; consent would put a `views.recording true` on a document this
    ;; test reads for its shape
    "feed_recipes" "recipe_proposals" "feed_views" "feed_view_consents"
+   ;; …and the crown's three (waymark-jfv.4), for the same rule: an
+   ;; outcome another suite left `offered` is a card ABOVE do-now on
+   ;; this test's page, and the value it serves is what keeps it there
+   "outcome_pieces" "outcomes" "values"
    "activities" "evening_plans" "evening_sessions"
    "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
@@ -337,32 +341,44 @@
       (let [lines (get-in plain [:recipe :lines])]
         (is (= (count (:order main/feed-recipe)) (count lines)))
         (is (every? #(seq (str (:says %))) lines))
-        (is (str/includes? (:says (first lines)) "the work queue")
+        (is (some #(str/includes? (str (:says %)) "the work queue") lines)
             "the queue line is the household's own sentence, not the
              framework's fallback")
         (is (str/includes? (get-in plain [:recipe :guarantees])
                            "exactly one card is the seam"))))
 
-    (testing "a task in do-now cites the line the household dedicated to it"
-      (let [c (card-of plain "task" "do_now")]
-        (is (some? c))
-        (is (= 0 (:line (:why c))) "line 0 is the queue's two slots")
-        (is (<= 1 (:rank (:why c)) (:of (:why c))))))
+    ;; the two do-now lines are found by their own SENTENCES rather
+    ;; than by an index: waymark-jfv.4 put a section above them, and a
+    ;; test that pinned line 0 was pinning a place on the page rather
+    ;; than the line this house wrote
+    (let [lines (get-in plain [:recipe :lines])
+          line-saying (fn [s] (:line (first (filter #(str/includes?
+                                                      (str (:says %)) s)
+                                                    lines))))
+          queue-line (line-saying "the work queue")
+          rest-line (line-saying "three more")]
 
-    (testing "and a media card in do-now cites the OTHER line, its :nav,
-              and the :over that says a queued film is not over"
-      (let [c (card-of spelled "media" "do_now")]
-        (when c                       ; the seed may not draw one today
-          (let [s (str/join " " (:says (:why c)))]
-            (is (= 1 (:line (:why c)))
-                "the general do-now line, never the queue's")
-            (is (str/includes? s ":nav :primary"))
-            (is (str/includes? s ":over reads its status field")
-                "the movie's own declaration, quoted — this is the sentence
-                 the owner could not find anywhere")
-            (is (str/includes? s "which is neither, so its work is not over"))
-            (is (str/includes? s "verb light enough to tap"))
-            (is (str/includes? s "seed"))))))
+      (testing "a task in do-now cites the line the household dedicated to it"
+        (let [c (card-of plain "task" "do_now")]
+          (is (some? c))
+          (is (= queue-line (:line (:why c)))
+              "the queue's own two slots")
+          (is (<= 1 (:rank (:why c)) (:of (:why c))))))
+
+      (testing "and a media card in do-now cites the OTHER line, its :nav,
+                and the :over that says a queued film is not over"
+        (let [c (card-of spelled "media" "do_now")]
+          (when c                     ; the seed may not draw one today
+            (let [s (str/join " " (:says (:why c)))]
+              (is (= rest-line (:line (:why c)))
+                  "the general do-now line, never the queue's")
+              (is (str/includes? s ":nav :primary"))
+              (is (str/includes? s ":over reads its status field")
+                  "the movie's own declaration, quoted — this is the sentence
+                   the owner could not find anywhere")
+              (is (str/includes? s "which is neither, so its work is not over"))
+              (is (str/includes? s "verb light enough to tap"))
+              (is (str/includes? s "seed")))))))
 
     (testing "and an archive card says it is below the seam because the
               work is over as the row stands NOW"

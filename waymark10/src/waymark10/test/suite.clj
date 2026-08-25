@@ -179,6 +179,15 @@
                  (machine/actions-seq (rdef kind)))
            wire-kw))
 
+     ;; a CREATE's input, the way :input-for is an action's
+     ;; (waymark-jfv.4). An outcome piece carries `prepared` — the
+     ;; body its target's own create door will take — and the honest
+     ;; body to stage is the one the walk itself would have sent,
+     ;; through the same generator, rather than a hand-written map
+     ;; that happens to fit today's schema.
+     :create-body
+     (fn [kind s] (fac/create-body engine kind {:seed s}))
+
      :input-for
      (fn [kind action-def row s]
        (let [body (fac/synthesize-input engine (rdef kind) action-def row

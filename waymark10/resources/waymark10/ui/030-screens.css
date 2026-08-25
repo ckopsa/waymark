@@ -345,6 +345,9 @@
            padding: 14px 16px 12px; }
   /* the census wears colour: do-now is the one under the thumb,
      decide is waiting on a person, fuel and the archive are quiet */
+  /* the crown wears the law's own colour: it is the one card here
+     that was authored rather than projected, and it sits on top */
+  .fcard[data-section="outcomes"] { border-left: 3px solid var(--law); }
   .fcard[data-section="do_now"] { border-left: 3px solid var(--verdigris); }
   .fcard[data-section="decide"] { border-left: 3px solid var(--warn); }
   .fcard[data-section="fuel"], .fcard[data-section="archive"] {
@@ -383,6 +386,30 @@
   .feed-settled { font-size: 13.5px; color: var(--muted); }
   .feed-settled .ok { color: var(--verdigris); font-weight: 700; }
   .fcard .problem { margin-top: 10px; }
+  /* ── a bundle's pieces (waymark-jfv.4): sub-rows with their own
+     thumbs. Indented under the bundle they belong to, quieter than
+     the card's own verdicts, and each one answerable alone — the
+     partial accept is a person tapping down this list. */
+  .fcard-pieces { list-style: none; margin: 10px 0 2px; padding: 0;
+                  border-left: 2px solid var(--line); }
+  .fpiece { padding: 8px 0 8px 12px; }
+  .fpiece + .fpiece { border-top: 1px dashed var(--line); }
+  .fpiece-top { display: flex; align-items: baseline; gap: 8px;
+                flex-wrap: wrap; }
+  .fpiece-say { font-family: var(--serif); font-size: 15px;
+                line-height: 1.4; color: var(--ink); flex: 1 1 12rem; }
+  .fpiece-verbs { display: flex; flex-wrap: wrap; gap: 6px;
+                  margin-top: 6px; align-items: center; }
+  .fpiece-verbs button.chip.verb { font-family: var(--sans);
+    font-size: 13.5px; min-height: 32px; padding: 5px 11px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); }
+  .fpiece-verbs button.chip.verb:hover { border-color: var(--verdigris);
+                                         background: var(--verdigris-wash); }
+  .fpiece-verbs button.chip.verb.primary { background: var(--verdigris);
+    border-color: var(--verdigris); color: #fff; font-weight: 600; }
+  .fpiece-verbs button.chip.verb:disabled { opacity: .5; cursor: default; }
+  .fpiece-verbs a.link-chip { font-size: 12px; padding: 5px 9px; }
+  .fpiece-problem:empty { display: none; }
   /* the seam: the one structural element, and it says so quietly */
   .feed-seam { margin: 22px 0 6px; text-align: center; }
   .feed-seam-rule { border-top: 1px solid var(--line); margin-bottom: 10px; }

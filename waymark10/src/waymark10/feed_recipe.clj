@@ -338,8 +338,21 @@
   map: an entry's fields are each other's siblings)."
   [:vector
    [:map
+    ;; the help READS the census rather than spelling it a second
+    ;; time — waymark-jfv.4 added a section, and a sentence naming the
+    ;; bands in prose is the copy that goes stale the moment one does
     [:section {:x-display {:label "Section"
-                           :help "Which band of the page this line fills. The census is law and cannot be reordered — do now, decide, fuel, then the seam, then the archive — so a line out of that order is a typo, not a preference. Spell \"seam\" for the caught-up line itself."}}
+                           :help (str "Which band of the page this line"
+                                      " fills. The census is law and cannot"
+                                      " be reordered — "
+                                      (str/join ", "
+                                                (map #(str/replace (name %)
+                                                                   "_" " ")
+                                                     feed/census))
+                                      " — so a line out of that order is a"
+                                      " typo, not a preference. Spell"
+                                      " \"seam\" for the caught-up line"
+                                      " itself.")}}
      (into [:enum] (map name) feed/census)]
     [:population {:optional true
                   :x-display {:label "Population"

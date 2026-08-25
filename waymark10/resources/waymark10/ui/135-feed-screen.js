@@ -80,8 +80,10 @@
    heading painted from the census would announce a section that never
    arrives. */
 const FEED_SECTION_LABEL = {
-  do_now: "Do now", decide: "Decide", fuel: "Fuel", archive: "Archive"};
+  outcomes: "This week could hold", do_now: "Do now", decide: "Decide",
+  fuel: "Fuel", archive: "Archive"};
 const FEED_SECTION_HINT = {
+  outcomes: "composed, with the friction already paid — a thumb each way",
   do_now: "one physical next step, under the thumb",
   decide: "things waiting on somebody's answer",
   fuel: "what the house already finished",
@@ -372,7 +374,11 @@ async function renderFeedScreen(view, doc) {
      whichever door it opened. */
   async function fireVerb(v) {
     const {card, article, chip, name, entry, lbl} = v;
-    const key = feedOriginKey(day, card.card_id);
+    /* the origin names the card the thumb was actually on. A PIECE of
+       a bundle is its own card_id (feed/piece-card mints it), so
+       actions-from-the-feed counts the piece rather than filing the
+       tap under the bundle that happened to contain it. */
+    const key = feedOriginKey(day, v.cardId || card.card_id);
     if (entry && (entry.input || (entry.safety || {}).confirm)) {
       actionDialog({name, entry, doc: v.doc, idemKey: key,
                     onDone: out => settle(card, article, lbl, out)});
@@ -388,12 +394,16 @@ async function renderFeedScreen(view, doc) {
       chip.disabled = false;
       /* the engine's own refusal sentence, on the card that asked for
          it — never a toast that scrolls away from the thing it is
-         about */
-      const box = article.querySelector("[data-feed-problem]");
+         about. A piece keeps its refusal on the piece: the target's
+         own create guards judge at the tap, and the household needs
+         to read which LINE was refused. */
+      const box = (v.problemBox && v.problemBox.isConnected)
+        ? v.problemBox : article.querySelector("[data-feed-problem]");
       box.replaceChildren(problemBox(res.body || {}));
       return;
     }
-    article.querySelector("[data-feed-problem]").replaceChildren();
+    (v.problemBox || article.querySelector("[data-feed-problem]"))
+      .replaceChildren();
     maybeUndoToast(name, v.doc, res.body || {});
     /* a card verb answers the CARD; the offered step answers a
        different row and leaves the finding still unanswered, so it
@@ -403,7 +413,27 @@ async function renderFeedScreen(view, doc) {
         el("span", {class: "ok"}, "✓ "), lbl));
       return;
     }
+    /* a PIECE answers itself and leaves the rest of the bundle
+       standing — that IS the partial accept, and the card has to show
+       it happening one line at a time */
+    if (v.scope === "piece") {
+      settleBar(v.bar, lbl, res.body);
+      return;
+    }
     settle(card, article, lbl, res.body);
+  }
+
+  /* one verb bar, settled: the chips do not come back. A fresh
+     envelope carries every effort, and re-deriving the ≤-selection
+     partition here would be a second opinion about what fits under a
+     thumb (feed/card-ceiling is the server's one spelling). */
+  function settleBar(bar, lbl, after) {
+    if (!bar) return;
+    bar.replaceChildren(el("span", {class: "feed-settled"},
+      el("span", {class: "ok"}, "✓ "), lbl,
+      (after && after.state)
+        ? el("span", {class: "muted"}, " · now " + pretty(after.state))
+        : null));
   }
 
   /* after a verb lands: the ROW's own fresh envelope decides what the
@@ -415,6 +445,13 @@ async function renderFeedScreen(view, doc) {
      simply will not carry it. */
   async function settle(card, article, lbl, after) {
     article.classList.add("done");
+    /* a bundle's own verdict answers every piece still on offer — in
+       one transaction, server-side — so the pieces' chips go with it
+       rather than sitting there offering a door that is closed */
+    for (const pb of article.querySelectorAll("[data-piece-verbs]"))
+      if (pb.querySelector("button"))
+        pb.replaceChildren(el("span", {class: "feed-settled muted"},
+          "answered with the bundle"));
     const bar = article.querySelector(".feed-verbs");
     const say = state => el("div", {class: "feed-settled"},
       el("span", {class: "ok"}, "✓ "), lbl,
@@ -517,14 +554,68 @@ async function renderFeedScreen(view, doc) {
     return details;
   }
 
+  /* ── a bundle's pieces (waymark-jfv.4) ──────────────────────────────
+     A card carrying `pieces` is a BUNDLE, and the dispatch is on that
+     shape and never on a kind name — `outcome` is an application's
+     word and this is the framework's page.
+
+     Each piece is a line with its own state, its own sentence and its
+     OWN chips, because the epic's unit of consent is a thumb per part:
+     tap Not this on the ones that are wrong, then Make it so on the
+     bundle, which takes the ones still standing. The chips are the
+     piece row's own projected verbs — the server already ran them
+     through the same grant projection and the same ≤-selection
+     partition the card's went through — so this page invents no
+     affordance and hides none it was handed. */
+  function pieceLine(card, article, piece) {
+    const bar = el("div", {class: "fpiece-verbs", "data-piece-verbs": ""});
+    const box = el("div", {class: "fpiece-problem"});
+    const orderOf = e => (e.display || {}).order ?? 99;
+    for (const [name, entry] of Object.entries(piece.actions || {})
+           .sort(([a, ea], [b, eb]) =>
+             orderOf(ea) - orderOf(eb) || a.localeCompare(b))) {
+      const primary = (entry.display || {}).style === "primary";
+      const chip = el("button",
+        {class: "chip verb" + (primary ? " primary" : ""),
+         "data-action": name, "data-effort": entry.effort || "",
+         title: (entry.display || {}).description ||
+                (entry.safety || {}).one_way || ""},
+        label(name, entry), (entry.safety || {}).confirm ? " …" : "");
+      chip.addEventListener("click", () => fireVerb({
+        card, article, chip, name, entry, bar, problemBox: box,
+        cardId: piece.card_id, scope: "piece",
+        lbl: label(name, entry), doc: piece,
+        href: entry.href, method: entry.method || "POST"}));
+      bar.append(chip);
+    }
+    /* a piece whose only surviving verb wants a screen says so, the
+       same way a card does — a link, never a button */
+    for (const h of piece.heavier || [])
+      bar.append(el("a", {class: "chip link-chip",
+        href: feedScreenHref(h.href),
+        title: `${h.label} asks for a screen — effort ${h.effort}`},
+        h.label + " ↗"));
+    return el("li", {class: "fpiece", "data-card-id": piece.card_id,
+                     "data-kind": piece.kind || ""},
+      el("div", {class: "fpiece-top"},
+        piece.state ? el("span", {class: "statechip"}, piece.state) : null,
+        el("a", {class: "fpiece-say prose", href: "#" + piece.self,
+                 title: piece.self},
+          piece.says || piece.summary || "this piece")),
+      bar.childElementCount ? bar : null,
+      box);
+  }
+
   /* the card, by the shape the WIRE gives it rather than by any kind
-     name this generic page could not know: a card carrying an `offer`
-     link is a finding with a next step attached; a card with a
-     sentence and no verb is fuel or a memory, something to read; and
-     everything else is a row speaking for itself. An unknown card
-     degrades into that last shape rather than into a blank — and a
-     card that throws is a problem panel wearing its own refusal,
-     never its neighbours' problem (the dashboard's posture). */
+     name this generic page could not know: a card carrying `pieces`
+     is a composed bundle whose parts each answer for themselves; a
+     card carrying an `offer` link is a finding with a next step
+     attached; a card with a sentence and no verb is fuel or a memory,
+     something to read; and everything else is a row speaking for
+     itself. An unknown card degrades into that last shape rather than
+     into a blank — and a card that throws is a problem panel wearing
+     its own refusal, never its neighbours' problem (the dashboard's
+     posture). */
   function cardArticle(card, hints, srcHref) {
     const kind = card.kind || "";
     const article = el("article",
@@ -544,6 +635,7 @@ async function renderFeedScreen(view, doc) {
                   (card.sentence || card.section === "fuel" ||
                    card.section === "archive");
     const offer = (card.links || {}).offer;
+    const bundle = (card.pieces || []).length ? card.pieces : null;
     const heading = (card.display || {}).title || card.summary || title(kind);
     /* the say-line: the server's own sentence wherever there is one —
        the seam has one, a cleared queue has one, a memory from a year
@@ -560,8 +652,14 @@ async function renderFeedScreen(view, doc) {
       el("span", {class: "fcard-kind",
                   title: `${pretty(card.population || card.section || "")}`
                        + ` · ${kind}`}, pretty(kind)),
-      offer && (card.fields || {}).authored_by
-        ? bylineChip(card.fields.authored_by) : null,
+      /* the byline, on the two cards that are somebody's WORK rather
+         than the house's own rows: a finding was authored, a bundle
+         was composed, and either way the reader is owed the principal
+         id rather than a name this page invented for it */
+      (offer && (card.fields || {}).authored_by)
+        ? bylineChip(card.fields.authored_by)
+        : (bundle && (card.fields || {}).composed_by
+             ? bylineChip(card.fields.composed_by) : null),
       when ? el("span", {class: "version",
                          title: card.at ? "when this happened" : "last moved"},
         String(when).slice(0, 16).replace("T", " ")) : null));
@@ -587,8 +685,20 @@ async function renderFeedScreen(view, doc) {
         article.append(line);
     }
 
-    /* a finding's evidence: the claim the house can check */
-    if (offer) {
+    /* THE PIECES, each one its own line with its own thumb. They go
+       between what the bundle SAYS and what the bundle's own verdicts
+       are, because that is the order a person reads it in: this is
+       what the week could hold, here is what it is made of, and here
+       is the answer to the whole of it. */
+    if (bundle)
+      article.append(el("ul", {class: "fcard-pieces"},
+        bundle.map(p => pieceLine(card, article, p))));
+
+    /* the evidence, on the two cards that CLAIM something: a finding
+       cites what it read, and so does a bundle — an outcome sits on
+       top of the household's own ledger, and the ledger is one tap
+       down each of these links */
+    if (offer || bundle) {
       const slot = el("div", {class: "fcard-evidence"});
       article.append(slot);
       fillEvidence(slot, card);

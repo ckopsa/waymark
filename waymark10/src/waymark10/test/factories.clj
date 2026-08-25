@@ -339,27 +339,38 @@
 
 ;; ── create ──────────────────────────────────────────────────────────
 
-(defn create-example
-  "Invoke create! with a synthesized create body: the registered
-  :create example when present, else malli generation over
+(defn create-body
+  "The body `create-example` would send, without sending it: the
+  registered :create example when present, else malli generation over
   :create-schema (or :schema) with derived facts and optional fields
   dropped — derived facts are the engine's to write, optional fields
-  the walk's to earn. :overrides merge last (wire-shaped). Warning-
-  severity create guards are acknowledged on retry. Returns the
-  create! result {:row … :transition …}."
+  the walk's to earn. :overrides merge last (wire-shaped).
+
+  Public because a create body is sometimes wanted as DATA rather
+  than as a row: waymark-jfv.4's outcome pieces carry `prepared`, the
+  input their target's own create door will take, and a piece staged
+  with a body the walk itself would not have sent would be proving
+  something narrower than the law."
   [eng kind {:keys [seed overrides] :or {seed 0}}]
   (let [rdef (or (get (inv/resources eng) kind)
                  (throw (ex-info (str "no enrolled kind " kind) {:kind kind})))
-        model (or (:create-schema rdef) (:schema rdef))
-        body (or (example-for eng kind :create)
-                 (let [generated (generate model {:seed seed})
-                       optional (into #{}
-                                      (keep (fn [[k e]] (when (:optional e) k)))
-                                      (schema/entry-map model))
-                       derived (set (keys (:derived rdef)))]
-                   (schema/encode model (apply dissoc generated
-                                               (into optional derived)))))
-        body (merge body overrides)
+        model (or (:create-schema rdef) (:schema rdef))]
+    (merge (or (example-for eng kind :create)
+               (let [generated (generate model {:seed seed})
+                     optional (into #{}
+                                    (keep (fn [[k e]] (when (:optional e) k)))
+                                    (schema/entry-map model))
+                     derived (set (keys (:derived rdef)))]
+                 (schema/encode model (apply dissoc generated
+                                             (into optional derived)))))
+           overrides)))
+
+(defn create-example
+  "Invoke create! with a synthesized create body (`create-body`).
+  Warning-severity create guards are acknowledged on retry. Returns
+  the create! result {:row … :transition …}."
+  [eng kind {:keys [seed overrides] :or {seed 0}}]
+  (let [body (create-body eng kind {:seed seed :overrides overrides})
         go (fn [ack] (inv/create! eng kind body
                                   {:principal (walker-principal)
                                    :acknowledged ack}))]

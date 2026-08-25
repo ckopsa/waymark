@@ -96,6 +96,7 @@
             [waymark10.demand :as demand]
             [waymark10.machine :as machine]
             [waymark10.scenario :as scenario]
+            [waymark10.schema :as schema]
             [waymark10.server.attachments :as attachments]
             [waymark10.server.capabilities :as cap]
             [waymark10.server.curtain :as curtain]
@@ -132,6 +133,12 @@
   ([ctx kind action-def row] (input-for ctx kind action-def row 3))
   ([ctx kind action-def row seed]
    ((:input-for ctx) kind action-def row seed)))
+
+(defn- create-body
+  "The body the walk itself would send at one kind's create door —
+  the driver's own generator, as data (waymark-jfv.4)."
+  [ctx kind seed]
+  ((:create-body ctx) kind seed))
 
 (defn- action-def [ctx kind aname]
   (some-> (get-in (rdef ctx kind) [:actions aname]) (assoc :name aname)))
@@ -2079,6 +2086,20 @@
                  " — one read, one draw, and neither half of a request"
                  " that disagrees with itself gets to be guessed at")))))
 
+(def ^:private above-seam
+  "The sections the census puts ABOVE the caught-up line, read off
+  `feed/census` rather than spelled here.
+
+  Two obligations below need a subject row that is still OPEN — a
+  marker over a finished row retires at offer time, exactly as it
+  should, which would make them fail for being right — and above the
+  seam is where the open rows are. It was the literal
+  `#{\"do_now\" \"decide\"}`, twice, until waymark-jfv.4 put a section
+  on top of both; a set that had stayed a literal would have judged
+  the crown as though it were history and picked a subject from
+  somewhere else without saying so."
+  (into #{} (comp (take-while #(not= :seam %)) (map name)) feed/census))
+
 (defn- feed-row-cards
   "Every card of one feed answer that stands for a row — the seam has
   no verbs and no screen, and it is the one element here that is not a
@@ -2479,7 +2500,6 @@
   quietly."
   [ctx]
   (let [{:keys [doc]} (feed-doc ctx nil)
-        above-seam #{"do_now" "decide"}
         subject (first (remove #(or (= "tickler" (str (:kind %)))
                                     (not (above-seam (str (:section %)))))
                                (feed-row-cards doc)))]
@@ -2664,7 +2684,6 @@
   rather than pass quietly."
   [ctx]
   (let [{:keys [doc]} (feed-doc ctx nil)
-        above-seam #{"do_now" "decide"}
         subject (first (remove #(or (= "insight" (str (:kind %)))
                                     (not (above-seam (str (:section %)))))
                                (feed-row-cards doc)))]
@@ -3319,14 +3338,19 @@
   kind is grantable (not one of the private own-surface trio), which
   it may be precisely because holding the grant confers no power over
   the feed's order at all."
-  [ctx audience kind actions]
-  (let [hs {"x-waymark-principal" audience "x-waymark-actor-type" "agent"}
-        made (req ctx :post "/api/grants"
-                  {:audience audience
-                   :scope [{:kind (name kind) :actions actions}]})
-        gid (when (= 201 (:status made)) (id-of (:self (json ctx made))))
-        took (when gid ((:invoke ctx) :grant gid :accept {} {:headers hs}))]
-    (when (= 200 (:status took)) (assoc hs "x-waymark-grant" gid))))
+  ([ctx audience kind actions]
+   (leash! ctx audience [{:kind (name kind) :actions actions}]))
+  ;; …and the whole SCOPE, for a leash that has to cover more than one
+  ;; kind: waymark-jfv.4's composer stages a bundle and its pieces,
+  ;; which is two create doors on two kinds, and a request presents
+  ;; exactly one X-Waymark-Grant.
+  ([ctx audience scope]
+   (let [hs {"x-waymark-principal" audience "x-waymark-actor-type" "agent"}
+         made (req ctx :post "/api/grants"
+                   {:audience audience :scope scope})
+         gid (when (= 201 (:status made)) (id-of (:self (json ctx made))))
+         took (when gid ((:invoke ctx) :grant gid :accept {} {:headers hs}))]
+     (when (= 200 (:status took)) (assoc hs "x-waymark-grant" gid)))))
 
 (defn- stage-proposal!
   "One proposal, through its own create door, as whoever the headers
@@ -3351,6 +3375,19 @@
   [ctx kind id]
   ;; the log is newest-LAST — store/transitions' own contract
   (get-in (last (vec (transitions ctx kind id))) [:actor :id]))
+
+(defn- create-actor
+  "Who the log says CREATED this row — the create transition's actor
+  rather than the newest one's, which is a different question the
+  moment the kind is MIRRORED: a task pushed to its authority the
+  instant it lands carries a sync transition on top, and
+  `newest-actor` would then answer about the mirror instead of about
+  the person whose tap made the row (waymark-jfv.4 found this from
+  the other side)."
+  [ctx kind id]
+  (some (fn [t] (when (= :create (keyword (name (:action t))))
+                  (get-in t [:actor :id])))
+        (vec (transitions ctx kind id))))
 
 (defn- feed-proposal-violations
   [ctx]
@@ -3828,6 +3865,364 @@
                   " answered " (:status shut-again)
                   " — off has to mean off the moment it is said")))}))
 
+;; ── the crown: an outcome and its pieces (waymark-jfv.4) ────────────
+;;
+;; The one section above do-now, and the one card in this document
+;; that is AUTHORED rather than projected. What a wire document can
+;; answer about it is the whole of this obligation: does a staged
+;; bundle reach the household on top, carrying its pieces as
+;; sub-elements with their OWN one-tap verbs; does a tap on one of
+;; those pieces write a real row under the MEMBER's name with the
+;; feed's origin on the transition; does a decline settle only itself;
+;; and does the grant conceal a piece exactly as it conceals a card.
+;;
+;; TWO PRINCIPALS AND A THIRD LOOKING ON, and none of them decoration.
+;; A COMPOSER (an agent, leashed to two create doors and nothing else)
+;; stages the bundle; a MEMBER (a human actor type) is the only one
+;; who can answer any part of it; and a THIRD reader holds a leash
+;; over the bundle's kind and NOT over its pieces', which is how
+;; concealment of the new `pieces` key gets watched rather than
+;; asserted.
+;;
+;; IT MINTS THE MOST ROWS OF ANY OBLIGATION HERE — a value, a bundle,
+;; three pieces and the two work rows two of those pieces become —
+;; which is why it sits below every obligation that counts cards. It
+;; ends where it began: the bundle accepted, every piece answered, so
+;; the population retires it by construction and the engine it hands
+;; on is the engine it found.
+
+(defn- piece-target
+  "The kind a piece will become, read off the declaration's own enum
+  rather than named here. `outcome_piece/materializable` is a DECLARED
+  set that grows by law revision, and an obligation that spelled
+  `task` would be a second opinion about which kinds a composer may
+  birth."
+  [ctx]
+  (let [rd (rdef ctx :outcome_piece)
+        form (schema/field-schema (or (:create-schema rd) (:schema rd))
+                                  :target_kind)]
+    (when (and (vector? form) (= :enum (first form)))
+      (first (filter #(rdef ctx (keyword %)) (rest form))))))
+
+(defn- outcome-card
+  "The card standing for one bundle, found by its ROW rather than by a
+  section name: which band the line sits in is the household's recipe
+  to say, and the claim that it is `outcomes` is made separately and
+  out loud."
+  [doc id]
+  (some #(when (and (= "outcome" (str (:kind %)))
+                    (= (str id) (id-of (:self %)))) %)
+        (feed-cards doc)))
+
+(defn- piece-of
+  "One piece of a carded bundle, by the id it stands for."
+  [card id]
+  (some #(when (= (str id) (id-of (:self %))) %) (:pieces card)))
+
+(defn- feed-outcome-violations
+  [ctx]
+  (let [tag (subs (str (random-uuid)) 0 8)
+        as-member (member-headers tag)
+        member (get as-member "x-waymark-principal")
+        composer (get (composer-headers tag) "x-waymark-principal")
+        loved (str "the shop " tag)
+        ;; 1. THE VALUE, and a person declares it. `written-by-a-person`
+        ;; stands at this door, so the composer could not have written
+        ;; what its own outcome is about to cite.
+        value (req ctx :post (str "/api/" (:plural (rdef ctx :value)))
+                   {:name (str "Making things with the boys " tag)
+                    :says (str "The evenings that are worth remembering are"
+                               " the ones somebody built something in.")
+                    :loved [loved]
+                    :scope "household"}
+                   as-member)
+        vid (when (= 201 (:status value)) (id-of (:self (json ctx value))))
+        vself (when vid (str "/api/" (:plural (rdef ctx :value)) "/" vid))
+        ;; 2. THE LEASH: two create doors, no verdict door anywhere.
+        ;; That the mint succeeds is half a claim on its own — an
+        ;; outcome is grantable at the MCP door precisely because
+        ;; holding the grant confers no power over the household's
+        ;; Saturday.
+        leashed (leash! ctx composer
+                        [{:kind "outcome" :actions ["create"]}
+                         {:kind "outcome_piece" :actions ["create"]}])
+        target (piece-target ctx)
+        stage (fn [kind body]
+                (let [resp (req ctx :post
+                                (str "/api/" (:plural (rdef ctx kind)))
+                                body leashed)]
+                  {:status (:status resp) :doc (json ctx resp)}))
+        goal (str "One Saturday afternoon in the shop with the boys " tag)
+        staged (when (and vid leashed)
+                 (stage :outcome
+                        {:goal goal
+                         :value_id vid
+                         :routing (str "It runs through " loved ", which this"
+                                       " house wrote down as something it"
+                                       " loves — so the expensive part,"
+                                       " getting started, is already paid.")
+                         :routes_through loved
+                         :evidence [vself]}))
+        oid (some-> (:doc staged) :self id-of)
+        ;; 3. THE PIECES. Three, so the partial accept is a real shape
+        ;; rather than a story: one declined, one taken by its own tap,
+        ;; and one left for the bundle's own verb to take.
+        piece (fn [n]
+                (when (and oid target)
+                  (stage :outcome_piece
+                         {:outcome_id oid
+                          :says (str "Piece " n " of " tag
+                                     " — twenty minutes, already prepared")
+                          :target_kind target
+                          :prepared (create-body ctx (keyword target)
+                                                 (+ 4100 (long n)))})))
+        pieces (into [] (keep piece) [1 2 3])
+        pids (mapv #(some-> (:doc %) :self id-of) pieces)
+        ;; 4. WHO SEES IT. The member does; the composer must not (the
+        ;; four-eyes wall means carding it to its stager would offer
+        ;; doors that answer 409); and a reader leashed to the BUNDLE
+        ;; and not to its pieces reads a bundle with no pieces at all.
+        mine (:doc (feed-doc ctx as-member))
+        theirs (:doc (feed-doc ctx leashed))
+        half (leash! ctx (str "conformance-halfsighted-" tag)
+                     [{:kind "outcome" :actions []}])
+        halfdoc (when half (:doc (feed-doc ctx half)))
+        card (when oid (outcome-card mine oid))
+        day (str (:day mine))
+        verbs (when card (set (map (comp name key) (:actions card))))
+        pverbs (fn [i] (when-some [p (piece-of card (nth pids i nil))]
+                         (set (map (comp name key) (:actions p)))))
+        take' (declared-name ctx :outcome_piece :take)
+        not-this (declared-name ctx :outcome_piece :not_this)
+        make-it-so (declared-name ctx :outcome :make_it_so)
+        origin (fn [c] (feed/origin-key day (str (:card_id c))
+                                        (subs (str (random-uuid)) 0 8)))
+        ;; 5. THE DECLINE, from the piece's own chip: it settles ITSELF
+        ;; and leaves the rest of the bundle standing.
+        pc1 (when card (piece-of card (nth pids 0 nil)))
+        declined (when pc1
+                   (invoke-http ctx :outcome_piece (nth pids 0) not-this nil
+                                {:headers (assoc as-member
+                                                 "idempotency-key"
+                                                 (origin pc1))}))
+        ;; 6. THE TAP, and it is the WRITE. The piece's own key rides
+        ;; it, so actions-from-the-feed counts the piece rather than
+        ;; attributing it to the bundle.
+        pc2 (when card (piece-of card (nth pids 1 nil)))
+        key2 (when pc2 (origin pc2))
+        took (when pc2
+               (invoke-http ctx :outcome_piece (nth pids 1) take' nil
+                            {:headers (assoc as-member
+                                             "idempotency-key" key2)}))
+        stamped (when (= 200 (:status took))
+                  (some #(when (= key2 (:idempotency-key %)) %)
+                        (transitions ctx :outcome_piece (nth pids 1))))
+        parsed (when key2 (feed/origin-of key2))
+        after-take (when (= 200 (:status took))
+                     (json ctx (get-env ctx :outcome_piece (nth pids 1))))
+        landed (some-> (get-in after-take [:data :materialized]) id-of)
+        actor (when (and landed target)
+                (create-actor ctx (keyword target) landed))
+        ;; 7. AND THE BUNDLE'S OWN VERB, which takes what is still
+        ;; offered — the third piece — inside one transaction.
+        still (when oid (:doc (feed-doc ctx as-member)))
+        card' (when oid (outcome-card still oid))
+        accepted (when card'
+                   (invoke-http ctx :outcome oid make-it-so nil
+                                {:headers (assoc as-member
+                                                 "idempotency-key"
+                                                 (origin card'))}))
+        third (when (= 200 (:status accepted))
+                (json ctx (get-env ctx :outcome_piece (nth pids 2))))
+        gone (when (= 200 (:status accepted))
+               (:doc (feed-doc ctx as-member)))]
+    {:covered (if (= 200 (:status took)) 1 0)
+     :violations
+     (cond-> []
+       (not= 201 (:status value))
+       (conj (str "feed: a person could not declare a value (" (:status value)
+                  "): " (pr-str (json ctx value))
+                  " — nothing in this section means anything until the house"
+                  " has said what it cares about"))
+
+       (nil? leashed)
+       (conj (str "feed: an outcome/outcome_piece create grant could not be"
+                  " minted and accepted for a composer — both kinds are"
+                  " meant to be GRANTABLE at the MCP door, and they may be"
+                  " precisely because holding the grant confers no power"
+                  " over the household's Saturday; a kind an agent cannot"
+                  " be leashed to is a staging door no composer can reach"))
+
+       (nil? target)
+       (conj (str "feed: outcome_piece declares no target_kind this engine"
+                  " serves — the materializable set is a DECLARED enum, and"
+                  " a piece that could become nothing is a button that"
+                  " never lands"))
+
+       (and leashed vid (not= 201 (:status staged)))
+       (conj (str "feed: an AGENT holding an outcome grant staged a bundle"
+                  " and got " (:status staged) ": " (pr-str (:doc staged))
+                  " — the composer may PREPARE the household's week even"
+                  " though it may not decide any of it"))
+
+       (and oid target (not= 3 (count (filter #(= 201 (:status %)) pieces))))
+       (conj (str "feed: staging three pieces answered "
+                  (pr-str (mapv :status pieces)) ": "
+                  (pr-str (mapv :doc pieces))
+                  " — a bundle is two to five pieces, and the prepared"
+                  " input is judged at STAGING against the very door it"
+                  " will knock on"))
+
+       (and oid (nil? card))
+       (conj (str "feed: a staged bundle never reached the member's feed —"
+                  " a week nobody is shown is a week nobody can answer."
+                  " Cards: " (pr-str (mapv :card_id (feed-cards mine)))))
+
+       (and card (not= "outcomes" (str (:section card))))
+       (conj (str "feed: the outcome card is in section "
+                  (pr-str (:section card)) " — the census puts the crown on"
+                  " top, and " (pr-str (mapv name feed/census)) " is law"))
+
+       (and card
+            (not (every? #(= "outcomes" (str (:section %)))
+                         (take-while #(not= (str (:card_id card))
+                                            (str (:card_id %)))
+                                     (feed-cards mine)))))
+       (conj (str "feed: something that is not an outcome is ABOVE the"
+                  " bundle — " (pr-str (mapv :card_id (feed-cards mine)))
+                  " — and a crown below anything is a section out of"
+                  " census order"))
+
+       (and card (str/blank? (str (:sentence card))))
+       (conj (str "feed: the outcome card says nothing on its own behalf —"
+                  " the value it serves and the routing that makes it cheap"
+                  " to start are the whole claim, and a summary line naming"
+                  " the row cannot say either"))
+
+       (and card (not (str/includes? (str (:sentence card)) loved)))
+       (conj (str "feed: the card's sentence never cites the loved activity"
+                  " the bundle routes through (" (pr-str loved) "): "
+                  (pr-str (:sentence card))))
+
+       (and card (not= 3 (count (:pieces card))))
+       (conj (str "feed: the bundle carded with "
+                  (count (:pieces card)) " pieces, not 3 — the pieces ARE"
+                  " the consent, and a bundle that cannot show which part"
+                  " is which is a single yes/no wearing a list's clothes"))
+
+       (and card (not (contains? verbs (name make-it-so))))
+       (conj (str "feed: the bundle offers " (pr-str (sort verbs))
+                  " and not " (pr-str (name make-it-so))
+                  " — both of the bundle's verdicts are note-free precisely"
+                  " so both stay under a thumb"))
+
+       (and card (pverbs 0) (not (contains? (pverbs 0) (name not-this))))
+       (conj (str "feed: a piece offers " (pr-str (sort (pverbs 0)))
+                  " and not " (pr-str (name not-this))
+                  " — a decline that cannot name WHICH piece teaches the"
+                  " composer nothing, which is the whole reason the pieces"
+                  " are rows"))
+
+       (and card (pverbs 0)
+            (some #(demand/heavier? (str (:effort %)) feed/card-ceiling)
+                  (vals (:actions (piece-of card (nth pids 0 nil))))))
+       (conj (str "feed: a piece verb is heavier than "
+                  feed/card-ceiling " — the ≤-selection rule is the same"
+                  " projection for a sub-element as for a card, and a piece"
+                  " that wanted a keyboard would not be one tap"))
+
+       (and card (not= (str "outcomes/outcome_piece/" (nth pids 0 nil))
+                       (str (:card_id (piece-of card (nth pids 0 nil))))))
+       (conj (str "feed: a piece's card_id is "
+                  (pr-str (:card_id (piece-of card (nth pids 0 nil))))
+                  " — a piece verb rides the origin key like any other card"
+                  " verb, so the piece needs an id of its own or the audit"
+                  " trail will read the tap as the bundle's"))
+
+       (and oid (outcome-card theirs oid))
+       (conj (str "feed: the bundle carded to its own COMPOSER — the"
+                  " four-eyes wall means the stager is structurally"
+                  " incapable of answering any part of it, so this is a"
+                  " door that answers 409 offered to the one principal it"
+                  " will never open for"))
+
+       (and half oid (nil? (outcome-card halfdoc oid)))
+       (conj (str "feed: a reader leashed to the bundle's kind was shown no"
+                  " bundle at all — this half of the claim exists so the"
+                  " other half means something"))
+
+       (and half oid (seq (:pieces (outcome-card halfdoc oid))))
+       (conj (str "feed: a reader whose leash names the bundle and NOT its"
+                  " pieces was shown "
+                  (count (:pieces (outcome-card halfdoc oid)))
+                  " pieces — a piece is projected through the same three"
+                  " gates the card is, and one this grant does not confer"
+                  " is ABSENT rather than narrowed"))
+
+       (and pc1 (not= 200 (:status declined)))
+       (conj (str "feed: 'not this' on a piece answered " (:status declined)
+                  ": " (pr-str (json ctx declined))))
+
+       (and pc2 (not= 200 (:status took)))
+       (conj (str "feed: 'yes' on a piece answered " (:status took) ": "
+                  (pr-str (json ctx took))
+                  " — the tap IS the write, and it goes through the"
+                  " target's own door inside the same transaction"))
+
+       (and (= 200 (:status took)) (nil? stamped))
+       (conj (str "feed: a piece verb invoked with " (pr-str key2)
+                  " left no transition carrying that key — a piece tap is a"
+                  " card verb, and actions-from-the-feed is reading a"
+                  " column nothing filled"))
+
+       (and key2 (not= [(str "outcomes") "outcome_piece" (str (nth pids 1))]
+                       [(:section parsed) (:kind parsed) (:id parsed)]))
+       (conj (str "feed: a piece's origin key parses to " (pr-str parsed)
+                  " — the section, the kind and the id come back out of the"
+                  " audit trail with no join, or they come back wrong"))
+
+       (and (= 200 (:status took)) (str/blank? (str landed)))
+       (conj (str "feed: the taken piece names no materialized row — the"
+                  " address the tap wrote is the only way the household can"
+                  " follow what it just agreed to"))
+
+       (and landed (not= member (str actor)))
+       (conj (str "feed: the row a piece materialized carries "
+                  (pr-str actor) " on its create transition, not "
+                  (pr-str member)
+                  " — ctx :create hands the inner write the OUTER"
+                  " principal, and a row minted under a system actor or"
+                  " under the composer's name would be the household"
+                  " agreeing to something somebody else signed"))
+
+       (and (= 200 (:status took)) card'
+            (some #(= "declined" (str (:state %)))
+                  [(piece-of card' (nth pids 1 nil))]))
+       (conj (str "feed: taking one piece moved another — the pieces are"
+                  " separately tappable precisely so one answer is one"
+                  " row"))
+
+       (and card' (nil? (piece-of card' (nth pids 2 nil))))
+       (conj (str "feed: after one decline and one tap the bundle no longer"
+                  " shows the piece still on offer — a partial accept is"
+                  " the state of the piece rows at the moment of the tap,"
+                  " and the card has to show what is left"))
+
+       (and card' (not= 200 (:status accepted)))
+       (conj (str "feed: 'make it so' answered " (:status accepted) ": "
+                  (pr-str (json ctx accepted))))
+
+       (and third (not= "taken" (str (:state third))))
+       (conj (str "feed: after 'make it so' the piece still on offer is "
+                  (pr-str (:state third))
+                  " — the bundle's verb takes the pieces STILL OFFERED,"
+                  " through their own doors, in one transaction"))
+
+       (and gone oid (outcome-card gone oid))
+       (conj (str "feed: an answered bundle is still on the feed — accepted"
+                  " is terminal, so it leaves by construction rather than"
+                  " by a query remembering to exclude it")))}))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -3874,6 +4269,18 @@
     {:name :feed/insights
      :needs #{[:route :feed] [:kind :insight]}
      :run feed-insight-violations}
+    ;; …and the crown below even that (waymark-jfv.4), for the same
+    ;; reason once more: it mints more rows than any obligation here —
+    ;; a value, a bundle, three pieces and the work rows two of those
+    ;; pieces become — and its bundle cards ABOVE every other card on
+    ;; the page, which is one more thing every obligation ahead of it
+    ;; would have had to share a deck with. It ends with the bundle
+    ;; accepted and every piece answered, so the population retires it
+    ;; and the engine it hands on is the engine it found.
+    {:name :feed/outcomes
+     :needs #{[:route :feed] [:kind :value]
+              [:kind :outcome] [:kind :outcome_piece]}
+     :run feed-outcome-violations}
     ;; …and the preview LAST, for the third reason in the same
     ;; sequence: it is the only obligation that mints a MEMBER, and a
     ;; new member is a new row on a nav kind — one more card every

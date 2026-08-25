@@ -774,6 +774,11 @@ async function batchAStory() {
 
    `scripts/feed-smoke.sh` is this drive plus the half node cannot see:
    the Idempotency-Key the tap left on the transition row. */
+/* the census, named once here as the server names it once in
+   feed/census — waymark-jfv.4 put a section on top and two copies of
+   the order in one function is one copy too many */
+const CENSUS = ["outcomes", "do_now", "decide", "fuel", "seam", "archive"];
+
 async function feedStory() {
   const tag = String(Date.now()).slice(-6);
   const H = pid => ({"x-waymark-principal": pid,
@@ -797,8 +802,16 @@ async function feedStory() {
     physical_energy: "low", mental_energy: "low", location: "anywhere"});
   /* fuel + the archive: chores can END, so retiring them empties the
      kind (a `cleared` card) and leaves the rest as memories */
+  /* EIGHT of them, and the number is load-bearing: the archive's line
+     takes six, so a house with three finished things has one page and
+     the "links.next continues the same draw" claim below has nothing
+     to walk. On a dev database that had been accumulating for weeks
+     this passed by accident; on a fresh one it did not, which is the
+     kind of fixture that only fails for whoever starts clean. */
   for (const name of ["Wipe the baseboards", "Descale the kettle",
-                      "Flip the mattress"]) {
+                      "Flip the mattress", "Bleed the radiators",
+                      "Sweep the porch", "Oil the hinges",
+                      "Change the furnace filter", "Wash the windows"]) {
     const c = await post("/api/chores", {name: `${name} ${tag}`,
                                          cadence: "monthly"});
     if (c && c.self) await post(c.self + "/-/retire");
@@ -814,6 +827,30 @@ async function feedStory() {
      evidence: [t2.self, tick.self], offer_kind: "tickler",
      offer_id: String(tick.self).split("/").pop(),
      offer_action: "take_it_back", offer_href: tick.self}, "sous");
+  /* the crown (waymark-jfv.4): a value colton declares, and a bundle
+     SOMEBODY ELSE composed against it — the four-eyes wall means a
+     bundle never cards to whoever staged it — with two pieces, each
+     prepared to the shape a task's own create door will take */
+  const loved = `the shop ${tag}`;
+  const val = await post("/api/values",
+    {name: `Making things with the boys ${tag}`, scope: "household",
+     says: "The evenings worth remembering are the ones we built something in.",
+     loved: [loved]});
+  const outcome = await post("/api/outcomes",
+    {goal: `One Saturday afternoon in the shop with Jack ${tag}`,
+     value_id: String(val.self).split("/").pop(),
+     routing: `It runs through ${loved}, which this house wrote down as`
+            + " something it loves — so the expensive part, getting started,"
+            + " is already paid.",
+     routes_through: loved,
+     evidence: [val.self, t1.self]}, "sous");
+  for (const [n, says] of [[1, `Cut the box stock to length ${tag}`],
+                           [2, `Clear the bench Friday evening ${tag}`]])
+    await post("/api/outcome_pieces",
+      {outcome_id: String(outcome.self).split("/").pop(),
+       says: `${says} — twenty minutes, and Saturday opens with the glue-up`,
+       target_kind: "task",
+       prepared: {title: `${says}`}}, "sous");
 
   console.log("· boot + principal");
   await send("Page.navigate", {url: BASE + "/api/-/ui"});
@@ -841,17 +878,16 @@ async function feedStory() {
     .map(n => n.dataset.section || "seam")`);
   ok("sections arrive in census order with the seam among them",
      JSON.stringify(order) === JSON.stringify(
-       [...order].sort((a, b) => ["do_now", "decide", "fuel", "seam", "archive"]
-         .indexOf(a) - ["do_now", "decide", "fuel", "seam", "archive"]
-         .indexOf(b))) && order.includes("seam"));
+       [...order].sort((a, b) => CENSUS.indexOf(a) - CENSUS.indexOf(b)))
+     && order.includes("seam"));
   ok("every section the answer carries wears a heading",
      await evaljs(`(() => {
        const heads = [...document.querySelectorAll(".feed-sect b")]
          .map(b => b.textContent);
        const secs = new Set([...document.querySelectorAll(".fcard")]
          .map(c => c.dataset.section));
-       const want = {do_now: "Do now", decide: "Decide", fuel: "Fuel",
-                     archive: "Archive"};
+       const want = {outcomes: "This week could hold", do_now: "Do now",
+                     decide: "Decide", fuel: "Fuel", archive: "Archive"};
        return [...secs].every(s => heads.includes(want[s]));
      })()`));
   ok("the seam is one quiet element, not a card, and says the sentence",
@@ -1025,6 +1061,124 @@ async function feedStory() {
      /^[0-9a-f]{12}$/.test(keys[0][1].split("/").pop()));
   console.log("    key sent: " + keys[0][1]);
 
+  /* ── the crown, and a thumb per piece (waymark-jfv.4) ───────────
+     The one card on this page that is AUTHORED rather than projected,
+     and the one card whose body carries child rows with verbs of
+     their own. The claims are the epic's: it is on top, it says which
+     value it serves and why it is cheap to start, it names who
+     composed it without dressing an agent up as a person, and each
+     piece is answerable ALONE — which is what makes a partial accept
+     a shape rather than a story. */
+  console.log("· the crown: a composed week, one thumb per piece");
+  ok("the bundle cards in the outcomes section, above everything",
+     await evaljs(`(() => {
+       const nodes = [...document.querySelectorAll(
+         ".feedcards .fcard, .feedcards .feed-seam")];
+       const i = nodes.findIndex(n => n.dataset.section === "outcomes");
+       return i === 0 && !!nodes[0].querySelector(".fcard-pieces");
+     })()`));
+  ok("its heading is what the week could hold, not the kind's name",
+     await evaljs(`(() => {
+       const c = document.querySelector('.fcard[data-section="outcomes"]');
+       const h = c.querySelector(".fcard-title").textContent;
+       return h.includes(${JSON.stringify("in the shop with Jack " + tag)}) &&
+              h !== "Outcome";
+     })()`));
+  ok("it says the value it serves and cites the loved activity it runs through",
+     await evaljs(`(() => {
+       const s = document.querySelector(
+         '.fcard[data-section="outcomes"] .fcard-say').textContent;
+       return s.startsWith("For Making things with the boys") &&
+              s.includes(${JSON.stringify(loved)}) &&
+              s.includes("2 rows behind it");
+     })()`));
+  ok("the composer rides as a principal id, never as a person's name",
+     await evaljs(`document.querySelector(
+        '.fcard[data-section="outcomes"] .fcard-by').textContent
+       .includes("sous")`));
+  await waitFor(`document.querySelector(
+     '.fcard[data-section="outcomes"] .fcard-evidence a')`,
+                "the bundle's evidence, read late");
+  ok("the bundle names what the composer read (two rows, each a live link)",
+     await evaljs(`document.querySelector(
+        '.fcard[data-section="outcomes"] .fcard-evidence').textContent
+       .includes("read 2 rows")`));
+  ok("two pieces render as sub-rows, each with its own three verdicts",
+     await evaljs(`(() => {
+       const ps = [...document.querySelectorAll(
+         '.fcard[data-section="outcomes"] .fpiece')];
+       if (ps.length !== 2) return false;
+       return ps.every(p => {
+         const labels = [...p.querySelectorAll(".fpiece-verbs button")]
+           .map(b => b.textContent.trim());
+         return ["Yes", "Not this", "Beside the point"]
+                  .every(l => labels.includes(l)) &&
+                p.querySelector(".fpiece-say").textContent.includes("twenty minutes");
+       });
+     })()`));
+  ok("the bundle's own verdicts are the whole-week answers, and only those",
+     await evaljs(`(() => {
+       const c = document.querySelector('.fcard[data-section="outcomes"]');
+       const labels = [...c.querySelectorAll(".feed-verbs button")]
+         .map(b => b.textContent.trim());
+       return labels.length === 2 && labels.includes("Make it so") &&
+              labels.includes("Not this week");
+     })()`));
+  ok("nothing on a piece is heavier than a tap — a picker is not a thumb",
+     await evaljs(`[...document.querySelectorAll(
+        '.fcard[data-section="outcomes"] .fpiece-verbs button')]
+       .every(b => b.dataset.effort === "assent")`));
+
+  /* the tap itself: one piece, its OWN origin key, a real row at the
+     other end, and the rest of the bundle left standing */
+  const pieceId = await evaljs(`(() => {
+    const p = document.querySelector(
+      '.fcard[data-section="outcomes"] .fpiece');
+    window.__piece = p;
+    [...p.querySelectorAll(".fpiece-verbs button")]
+      .find(b => b.textContent.trim() === "Yes").click();
+    return p.dataset.cardId; })()`);
+  await waitFor(`window.__piece.querySelector(".fpiece-verbs .feed-settled")`,
+                "the piece settling on its own line");
+  ok("the tapped PIECE settles where it is, and its chips do not come back",
+     await evaljs(`(() => {
+       const t = window.__piece.querySelector(".fpiece-verbs").textContent;
+       window.__settled = t;
+       return t.includes("Yes") && /now taken/i.test(t) &&
+              !window.__piece.querySelector(".fpiece-verbs button");
+     })()`));
+  console.log("    the piece now reads: " + await evaljs(`window.__settled`));
+  ok("the OTHER piece is untouched — a partial accept is one row at a time",
+     await evaljs(`(() => {
+       const ps = [...document.querySelectorAll(
+         '.fcard[data-section="outcomes"] .fpiece')];
+       return ps[1].querySelectorAll(".fpiece-verbs button").length === 3;
+     })()`));
+  const feedDay = await evaljs(
+    `document.querySelector(".feed-head").dataset.day`);
+  const pieceKey = (await evaljs(`window.__keys`))
+    .find(([u]) => u.includes("/api/outcome_pieces/"));
+  ok("the piece's verb carried the PIECE's own card id in the origin key",
+     !!pieceKey &&
+     pieceKey[1] === "feed/" + feedDay + "/" + encodeURIComponent(pieceId) +
+       "/" + pieceKey[1].split("/").pop() &&
+     /^[0-9a-f]{12}$/.test(pieceKey[1].split("/").pop()) &&
+     pieceId.startsWith("outcomes/outcome_piece/"));
+  console.log("    key sent: " + (pieceKey || [])[1]);
+  const materialized = await (async () => {
+    const pid = pieceId.split("/").pop();
+    const row = await (await fetch(`${BASE}/api/outcome_pieces/${pid}`,
+                                   {headers: H("colton")})).json();
+    const addr = (row.data || {}).materialized;
+    if (!addr) return null;
+    const made = await fetch(BASE + addr, {headers: H("colton")});
+    return made.ok ? await made.json() : null;
+  })();
+  ok("the tap WROTE the row: the piece names what it became, and it is there",
+     !!materialized &&
+     String(materialized.summary || "").includes("Cut the box stock"));
+  console.log("    it became: " + (materialized || {}).self);
+
   /* ── deal again: the person spins (waymark-8um.2, law 6) ────────
      Four claims, one per half of the law. ↻ Re-read asks the SAME
      address again and answers the same order. A deal-again tap puts a
@@ -1139,6 +1293,11 @@ async function feedStory() {
   ok("a finding never cards to its own author (the four-eyes wall, " +
      "read off the wire)",
      await evaljs(`!document.querySelector('.fcard[data-kind="insight"]')`));
+  /* and the same wall one section up: sous composed the bundle, so
+     sous is structurally incapable of answering any part of it, and
+     carding it would be offering three doors that all answer 409 */
+  ok("nor a composed week to whoever composed it",
+     await evaljs(`!document.querySelector('.fcard[data-section="outcomes"]')`));
 }
 
 
