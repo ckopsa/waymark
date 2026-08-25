@@ -158,6 +158,16 @@ and `(:find ctx)` is `(fn [kind where opts] → rows)`, present on every
 enforcement ctx and absent on the pure render probe — so end with the
 optimistic `(t/allow)` when the hooks are missing; return `(t/allow)` /
 `(t/deny)` / `(t/deny {:errors {:field ["why"]}})` from `waymark10.types`.
+One more ctx fact, and it is about the CALL rather than the world:
+`(:within ctx)` is the `{:kind … :action …}` of the write a nested
+`ctx :invoke` / `ctx :create` was opened inside of, and nil at the wire
+boundary, on the render probe and in every rehearsal (waymark-jfv.20). A
+guard that reads it declares `:reads [:within]` — the check tier serves it as
+nil, which is the same answer a client's knock gets — and it is the one
+honest way to say *this door opens for another kind's own handler and for
+nobody's hand*: `composition_request`'s `answer` admits `outcome`'s create
+and refuses everything else by name.
+
 An acceptance-set guard (`guard` with `:accepts (fn [row ctx] …)` and
 `:reads`) does the same through its set: the rendered enum, the picker, and
 the enforcement are one declaration.

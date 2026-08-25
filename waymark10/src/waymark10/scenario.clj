@@ -96,8 +96,13 @@
   as EMPTY, since a declaration-time world has no service wiring. A
   guard reading anything else (:storage, :transitions, a kind
   keyword) is judged where its reads can be answered: the conformance
-  tier."
-  #{:now :principal :services.features})
+  tier.
+
+  `:within` (waymark-jfv.20) is on the offline side: a scenario is a
+  client's knock, so the check tier answers it as nil — which is the
+  same answer the wire gives, and exactly the case a door walled on it
+  exists to refuse."
+  #{:now :principal :services.features :within})
 
 (def out-of-state
   "The reserved denier name: a row whose state is outside the

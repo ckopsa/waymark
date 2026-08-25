@@ -257,6 +257,60 @@ async function renderFeedScreen(view, doc) {
     head.append(why);
   }
   view.append(head);
+
+  /* ── COMPOSE ME ANOTHER (waymark-jfv.20) ─────────────────────────────
+     The person pulls; the cap only ever walled the machine. The server
+     says whether the crown carded nothing (`doc.crown.empty`), where
+     the ask goes (`doc.crown.ask`), and which requests this reader
+     already has standing — this page paints exactly that and authors
+     none of it. The chip is ONE TAP under the feed's own origin key
+     (the card_id is the server's, `outcomes/composition_request/ask`),
+     so the pull is counted as an action-from-the-feed like any card
+     verb; a standing request is a sentence with a link and no verb,
+     because your own request is not a decision to make. The answer
+     comes at the composer's next sitting, and the note says so rather
+     than letting a button imply a vending machine. */
+  const crown = doc.crown || null;
+  if (crown && (crown.ask || (crown.standing || []).length)) {
+    const panel = el("div", {class: "feed-sect feed-crown",
+                             "data-crown-empty": crown.empty ? "1" : "0"},
+      el("b", {}, FEED_SECTION_LABEL.outcomes),
+      el("span", {class: "muted"}, crown.says || ""));
+    const bar = el("div", {class: "actions feed-verbs"});
+    for (const s of crown.standing || [])
+      bar.append(el("a", {class: "chip", href: "#" + s.self,
+                          title: "your standing request — the composer"
+                               + " reads it at its next sitting"},
+        "asked " + String(s.asked_at || "").slice(0, 10)
+          + (s.value_name ? " · for " + s.value_name : "") + " ↗"));
+    if (crown.ask) {
+      const problem = el("div", {"data-feed-problem": ""});
+      const chip = el("button", {class: "chip primary",
+                                 title: crown.ask.note || ""},
+        "✦ " + (crown.ask.label || "Compose me another"));
+      chip.onclick = async () => {
+        chip.disabled = true;
+        const res = await api(crown.ask.href, {
+          method: crown.ask.method || "POST",
+          body: JSON.stringify({}),
+          headers: {"Idempotency-Key": feedOriginKey(day, crown.card_id)}});
+        if (!res.ok) {
+          chip.disabled = false;
+          problem.replaceChildren(problemBox(res.body || {}));
+          return;
+        }
+        problem.replaceChildren();
+        chip.replaceWith(el("span", {class: "feed-settled"},
+          el("span", {class: "ok"}, "✓ "), "Asked",
+          el("span", {class: "muted"},
+             " — the composer answers at its next sitting")));
+      };
+      bar.append(chip);
+      panel.append(bar, problem);
+    } else panel.append(bar);
+    view.append(panel);
+  }
+
   const list = el("div", {class: "feedcards", role: "feed",
                           "aria-label": "the day's feed"});
   view.append(list);

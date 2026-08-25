@@ -1530,7 +1530,13 @@
                   (str "."))
         ev (count (remove str/blank? (map str (:evidence data))))]
     (str/trim
-     (str (when v
+     (str ;; THE PERSON'S OWN PULL, said first (waymark-jfv.20): a
+          ;; bundle that answers a request is here because somebody
+          ;; asked, and the card should say so before it says anything
+          ;; the composer chose
+          (when (some-> (:request_id data) str not-empty)
+            "You asked for another, and this is the composer's answer. ")
+          (when v
             (str "For " v
                  (when observed?
                    (str " — a value observed in your record, not yet"
@@ -1706,6 +1712,114 @@
                                                    ctx prdef pd))}))
                                    parts)}))))
               (rows-of ctx :outcome {:state "offered"}))))))
+
+;; ── compose me another (waymark-jfv.20) ─────────────────────────────
+;;
+;; THE PERSON PULLS, and the cap only ever walled the machine. The
+;; owner's sentence — *I want to be able to just keep requesting
+;; outcomes* — is law 6 (the person spins; the system never spins for
+;; them) applied to composition: `outcome/outcomes-are-few` is two a
+;; week per composer so that a composer RANKS, and a person asking for
+;; another is consent given in advance. The ask is a row
+;; (`composition_request`, born by one tap, a person's and never an
+;; agent's), and the crown is where it lives on the page, because the
+;; crown is where the person who asked is already looking.
+;;
+;; NOT A CARD, and the absence is the design. A card is a projection
+;; of a row with a verb on it; the chip exists precisely when there is
+;; NO row to project — the crown carded nothing — and a request
+;; standing open is not something to answer, so it carries no verb at
+;; all. `document` hands the whole thing over under one key, `crown`,
+;; beside `views` and `reasons`: whether the crown was empty, the door
+;; the chip knocks on, and the requests this reader already has
+;; standing. The chip rides the origin key like a card verb, under a
+;; card_id that names the section, the kind the tap creates, and `ask`
+;; where a row id would stand — so `origin-of` parses it and
+;; `actions-from-feed` counts the pull under `outcomes`, per day.
+
+(def ask-card-id
+  "The `card_id` the crown's chip rides the origin key under — see the
+  block above. Public because the conformance pack mints the same key
+  the screen does."
+  "outcomes/composition_request/ask")
+
+(defn- crown-says
+  "The one sentence the chip stands beside, in the household's words."
+  [empty? standing]
+  (cond
+    (seq standing)
+    (str "You asked for another"
+         (when (> (count standing) 1)
+           (str " — " (count standing) " requests are standing"))
+         ". The composer answers at its next sitting, past the week's cap,"
+         " because the cap walls the composer and not you.")
+
+    empty?
+    (str "Nothing composed is on offer. Ask, and the composer stages one"
+         " at its next sitting — past the week's cap, because the cap walls"
+         " the composer and not you.")
+
+    :else nil))
+
+(defn- crown-doc
+  "The crown's own chip and standing (waymark-jfv.20), or nil when this
+  engine holds no `composition_request` or no `outcome` kind, or the
+  read is an archive page (the crown lives on the day's first page,
+  and page two of the archive is not where anybody asks).
+
+  `empty` is whether the crown carded nothing on THIS read — the
+  reader's own bundles, lapsed ones and answered ones all having been
+  dropped by the population already — and `ask` rides only then: a
+  house with a bundle on offer answers that first, and a chip beside
+  an unanswered bundle would be the page asking for more before the
+  person has said what they think of what is there. `standing` is the
+  reader's own open requests whose week has not run out, each with the
+  value it aims at when it names one; it rides whether or not the
+  crown is empty, because the sentence 'you asked, and the composer
+  has not sat down yet' is true either way and the person who asked
+  deserves to read it.
+
+  Under a preview the principal is the PREVIEWED member (`document`'s
+  own rule), so the standing requests are theirs and the ask is their
+  door — which the router judges the actual caller at, exactly as it
+  judges a card verb."
+  [ctx cards archive-only?]
+  (let [rdef (get (resources ctx) :composition_request)]
+    (when (and rdef (get (resources ctx) :outcome) (not archive-only?))
+      (let [pid (:id (:principal ctx))
+            now (:now ctx)
+            empty? (not-any? #(= "outcome" (get % "kind")) cards)
+            standing (into []
+                           (keep (fn [raw]
+                                   (let [d (inv/decode-row rdef raw)
+                                         good (get-in d [:data :good_until])
+                                         vid (get-in d [:data :value_id])
+                                         vname (get-in d [:data :value_name])]
+                                     (when (or (nil? good)
+                                               (pos? (compare good now)))
+                                       (cond-> {"self" (str (collection-of ctx :composition_request)
+                                                            "/" (:id raw))
+                                                "asked_at" (str (:created-at d))}
+                                         good (assoc "good_until" (str good))
+                                         (some-> vid str not-empty)
+                                         (assoc "value" (str "/api/values/" vid))
+                                         (some-> vname str not-empty)
+                                         (assoc "value_name" (str vname)))))))
+                           (rows-of ctx :composition_request
+                                    {:requested_by pid :state "offered"}))]
+        (cond-> {"empty" empty?
+                 "card_id" ask-card-id}
+          (crown-says empty? standing) (assoc "says" (crown-says empty? standing))
+          (seq standing) (assoc "standing" standing)
+          empty?
+          (assoc "ask" {"href" (collection-of ctx :composition_request)
+                        "method" "POST"
+                        "label" "Compose me another"
+                        "note" (str "One tap writes a request under your name;"
+                                    " the composer reads it at its next"
+                                    " sitting and stages an outcome that"
+                                    " cites it, admitted past the week's"
+                                    " cap. It stands a week.")}))))))
 
 (defn conflicts
   "decide: mirrored rows whose authority and household disagree. A
@@ -2417,7 +2531,10 @@
 
   NO NEW COLUMN, and that is the point. `invoke/finish!` stamps a
   present idempotency key into the transition row whether or not the
-  action is idempotent, so actions-from-the-feed is one prefix away —
+  action is idempotent — and since waymark-jfv.20 `create-in-tx!`
+  stamps it on a birth's transition too, so a create tapped from a
+  card (a quick reason, the crown's own ask) counts the same as a
+  move — so actions-from-the-feed is one prefix away —
   per day, per section, per kind, forever, and RETROACTIVE to the day
   the convention lands. Two alternatives were weighed and rejected in
   docs/spec-feed.md: a new `origin` column (a migration and the
@@ -3642,6 +3759,11 @@
         ;; four words it may send. A door rather than an answer, so
         ;; unlike `views` it has no preview clause — see reasons-doc.
         reasons (reasons-doc ctx)
+        ;; the crown's own chip and standing (waymark-jfv.20): whether
+        ;; the crown carded nothing, the door 'compose me another'
+        ;; knocks on, and the requests this reader already has open —
+        ;; see crown-doc
+        crown (crown-doc ctx cards archive-only?)
         recipe-doc (cond-> (update (recipe-view recipe) "lines"
                                    (fn [ls] (mapv (fn [l]
                                                     (merge l (get counts (get l "line"))))
@@ -3770,6 +3892,7 @@
               preview (assoc :preview preview)
               views (assoc :views views)
               reasons (assoc :reasons reasons)
+              crown (assoc :crown crown)
               (and bottomless more?)
               (assoc :links
                      {:next {:href (str base

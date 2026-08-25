@@ -600,6 +600,13 @@ a composer must read:
  "expires_at": "…"}
 ```
 
+**Since waymark-jfv.20, one more read-only line:** `{"kind":
+"composition_request", "actions": []}`. A composer reads the requests the
+household has standing (`?state=offered`) and answers one by staging an
+outcome whose `request_id` names it — no door on the request kind is granted
+because none is needed: the staging itself moves the request, and the only
+door that could is walled to the staging's own hand (§ 'Built — jfv.20').
+
 Write three kinds, all create-only; read the values it must name, the work
 kinds it composes over and cites as evidence, and the owner's feed as the
 owner sees it. **Never** a verdict action, never `value` create or revise,
@@ -2889,3 +2896,192 @@ the engine it hands to the deal-again block is the engine it found.
   tapped, and the wall says so where it was written.
 - **An invoke piece's `materialized` is the row it MOVED**, not a row it made.
   Same field, same meaning one level up: the address of what this tap reached.
+
+## Built — jfv.20, the composition request (2026-08-25, waymark-jfv.20)
+
+**The owner's ruling, verbatim:** *I want to be able to just keep requesting
+outcomes.* The weekly cap (`outcomes-are-few`, two per composer, Monday to
+Monday) walls the **machine's initiative**, and the reasoning behind it is
+unchanged: a composer that could stage ten would never rank. But a person
+asking for another is consent given in advance — waymark-8um law 6 (*the
+person spins; the system never spins for them*) applied to composition — and
+a wall that refused the person's own pull would be the system deciding how
+much the household is allowed to want. So the pull is a row, the row admits
+one outcome past the cap, and the cap is otherwise untouched to the letter.
+
+### The kind, as it landed
+
+`composition_request` (`/api/composition_requests`), `:nav :system`,
+`offered → answered | expired`. The create model is **one optional field**,
+`value_id` — the value the next outcome should serve, when the person has one
+in mind; *compose me another* with no aim is the common case and the one the
+crown's chip mints. The engine stamps `requested_by` and `good_until` (seven
+days — `leash-days`, the outcome's own number for the outcome's own sentence),
+and `answered_by` at the answer. Three walls:
+
+| wall | where | what it refuses |
+|---|---|---|
+| `only-a-person-asks` | create | an **agent**. A composer that could ask itself for a third outcome would have walked around the cap through the back door. `:system` stays admitted; the wall is about the composer. |
+| `aims-at-a-value-this-house-holds` | create | an aim naming a value this house does not hold — `names-a-value`'s two states, so a request cannot admit an outcome past the cap for a retired value |
+| `answered-by-a-composition` | `answer` | **everyone but `outcome`'s own create** — see the seam below |
+
+No pace wall, on purpose: a cap on asking would be the cap this kind exists
+to get past, one door over.
+
+### The outcome's side
+
+`outcome` gains an optional `request_id` (a `:waymark/ref` to the request,
+**no `:filter`** — the join runs the other way, the request stamps the outcome
+that answered it, so nothing queries outcomes by request and the field lands
+in `data`; storage facet unmoved, migrate plan empty, fingerprint unmoved).
+`the-request-is-open` stands **directly in front of** `outcomes-are-few` in
+the guard order and refuses, by name: no such request; already answered (and
+by which outcome); expired; the leash run out; an aim not served (*the pull
+was for THAT, not for anything*). `outcomes-are-few` then admits any cited
+outcome without counting — it can trust a citation it did not read, because
+by the time the count runs a citation has either been refused or is known
+good. `stage-the-outcome` (the `:on-create`) invokes
+`composition_request.answer {outcome_id (:id row)}` through `ctx :invoke` —
+**before the outcome's own insert**, which works because the create algorithm
+mints the row id ahead of the hook and the hook's ctx keeps `:invoke` live
+(only `:create` defers). So the request reads `answered` in the same
+transaction, names the outcome that answered it, and a second outcome citing
+it meets a **state**, not a count. A refusal inside rolls the staging back.
+
+### The seam: `(:within ctx)` — the one framework growth
+
+*One request, one outcome* needed a wall that opens for another kind's own
+handler and for nobody's hand, and the framework had no word for that: a
+guard could read the principal, the clock, rows — never *which write opened
+this door*. `invoke/make-ctx` now takes `:self` (the `{:kind :action}` of
+the write it serves) and `:within` (the `:self` of the write it was opened
+inside of); `invoke-in-tx!` and `create-in-tx!` pass their own `:self`, the
+`ctx :invoke` / `ctx :create` doors hand it down as `:within`, and the
+deferred `:on-create` births carry it too. At the wire, on the render probe
+and in every rehearsal it is nil. A guard declares `:reads [:within]`;
+`usability/declaration-reads` lists it (a fact about the call, like the
+principal — effort-honesty stays silent) and `scenario/offline-reads` lists it
+(the check tier serves nil, which is the same answer a client's knock gets).
+`answered-by-a-composition` is the first reader: `outcome`/`create` opens it,
+everything else is refused with the lawful path in the sentence. **This is
+structural where a grant would have been a promise** — the composer's leash
+never lists a door on the request kind, but the wall would hold even if it
+did.
+
+### Not a decide-section citizen — decided and recorded
+
+The bead asked whether an undecided request should nag. **It should not.**
+Your own request is not a decision to make, and a card reminding you that you
+asked would be the feed manufacturing a thing to answer. The crown carries it
+instead.
+
+### The crown, on the wire and on the screen
+
+`feed/document` gains a `crown` key beside `views` and `reasons` — never a
+card, because a card projects a row with a verb and the chip exists precisely
+when there is **no** row to project:
+
+```json
+"crown": {"empty": true,
+          "card_id": "outcomes/composition_request/ask",
+          "says": "Nothing composed is on offer. Ask, and …",
+          "ask": {"href": "/api/composition_requests", "method": "POST",
+                  "label": "Compose me another", "note": "…"},
+          "standing": [{"self": "/api/composition_requests/01H…",
+                        "asked_at": "…", "good_until": "…",
+                        "value": "/api/values/…", "value_name": "…"}]}
+```
+
+Two rules, both the server's: `ask` rides **only when the crown carded
+nothing** on the day's first page (answer what is there first — a chip beside
+an unanswered bundle is the page asking for more before the person has said
+what they think); `standing` rides whenever the reader has open requests,
+crown empty or not, because *you asked, and the composer has not sat down
+yet* is true either way. Under a preview the principal is the previewed
+member, so both are theirs. The chip rides the origin key under
+`outcomes/composition_request/ask` — `origin-of` parses it and
+`actions-from-feed` counts the pull under `outcomes`. `135-feed-screen.js`
+paints exactly that: one tap, then the settled sentence *the composer answers
+at its next sitting*; a standing request is a link with no verb on it. A
+bundle that answers a request says so first on its card (*You asked for
+another, and this is the composer's answer.*).
+
+### The honest note about time
+
+A request is answered at the composer's **next sitting**, not on the tap.
+Until **waymark-53u** gives the composer a pulse, the tap writes an invitation
+and the answer arrives when somebody sits the composer down. The kind's prose
+(`value_id` help, `expire`'s sentence) and the chip's settled line say so
+rather than letting a button imply a vending machine.
+
+### The composer contract, one line wider
+
+The grant gains `{"kind": "composition_request", "actions": []}` — read only.
+The composer reads `?state=offered`, stages an outcome citing one, and the
+staging answers it. No door on the request kind is granted because none is
+needed and the only one that could is walled to the staging's own hand.
+
+### Where the law is proved
+
+- **Two scenarios on the request** (check tier, no database):
+  `nothing-but-a-staging-answers-a-request` (a client's knock arrives with no
+  `:within` and is refused by name) and
+  `a-live-request-is-not-expired-out-of-the-way`. `make check-queue` reads
+  **37 kinds, 11 warnings, 49 scenarios judged** — the battery unmoved.
+- **No scenario names `only-a-person-asks`, and the absence is forced**: a
+  create attempt runs every create guard, `aims-at-a-value-this-house-holds`
+  reads a kind, so the scenario defers to the conformance tier — where it is
+  attempted as an agent with **no leash** and the router's default deny answers
+  404 before any wall speaks (**waymark-zs9**, met again; the first run of the
+  suite proved it). The wall is proved where an agent can be leashed instead.
+- **And none names `the-request-is-open`**, for `names-a-person`'s reason: a
+  scenario's `:input` is a literal, so the only request it could cite is a
+  dangling one, and `names-a-value` refuses the same body first because its
+  value is dangling too (the suite's first run said so: *a different wall*).
+  Five arms, all proved over the live engine.
+- **Five deftests** in `outcome_test.clj` § 15:
+  `a-persons-request-admits-one-outcome-past-the-cap` (two staged, the uncited
+  third refused, the cited third admitted, the request `answered` naming it
+  with the **composer's** hand on the `answer` transition, a second citation
+  refused, an uncited fourth still refused),
+  `a-request-that-names-a-value-admits-only-an-outcome-serving-it`,
+  `an-agent-does-not-mint-a-request` (leashed),
+  `nothing-but-a-staging-answers-a-request-over-the-wire` (a person's tap and
+  a leashed agent's post both refused; the door absent from the row's own
+  envelope), `the-crown-carries-the-pull` (standing on the document; the ask
+  standing down when a bundle cards; an answered request leaving the list).
+- **Seventeen claims added to `:feed/outcomes`** (conditional on the engine
+  holding the kind): the document carries `crown`; empty ⇒ ask, not empty ⇒
+  no ask; the tap lands under the member's name with the origin key on its
+  transition, parsing to `outcomes` / `composition_request`; the next read
+  says it is standing; a composer leashed to the kind with no doors reads it;
+  an outcome citing it is admitted; the request reads answered naming that
+  outcome with the composer's hand; a second citation is refused; a person's
+  by-hand `answer` is refused; a leashed agent's create is refused.
+- **`ui-drive.mjs`'s feed walk, extended by five checks** after the deal-again
+  block (both bundles answered ⇒ the crown offers the chip; one tap; the
+  settled sentence; the row under the asker's name with the origin key on its
+  log; the standing line on re-read).
+
+### Recorded here, for whoever comes next
+
+- **Only the new kind's fingerprint is new; `outcome`'s does not move.** A
+  create-schema field and a create guard are outside `fingerprint-of`
+  (442.9's witnesses, once more); `request_id` carries no `:filter`, so no
+  generated column, no storage facet, **no DDL on `outcomes`**. Production
+  needs one `CREATE TABLE composition_requests` — the migrate plan says so.
+- **The battery found the naming.** The answer door's input was first spelled
+  `outcome_id` beside a document field `outcome_id`, and the battery read the
+  door as an *edit* (an edit implies a fence, and this door is opened by
+  another kind's hand with no etag to give). The stamp is `answered_by` — named
+  for what it is — and the input stays the typed ref.
+- **A deferred `:on-create` birth is `:within` its parent's create**, and the
+  drain says so. Nothing reads it yet; it is there so the first thing that
+  does is not surprised.
+- **A CREATE's transition now carries the client's idempotency key.** The
+  pack's origin-key claim on the ask failed on the first run: `create-in-tx!`
+  never stamped the key on the birth transition, while `finish!` stamps it on
+  every invoke — so `actions-from-feed` could count a tap that *moved* a row
+  and never one that *made* one. The quick reasons (jfv.16) have been ridden
+  under the origin key uncounted since they landed. One line in the framework;
+  the column already existed.

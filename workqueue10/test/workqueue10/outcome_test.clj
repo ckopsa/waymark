@@ -59,7 +59,7 @@
   ;; own three would boot into whatever shape another suite left
   ;; behind, and a promoted column added to a folded kind refuses at
   ;; boot with a storage-drift plan.
-  ["outcome_pieces" "outcomes" "values" "people"
+  ["composition_requests" "outcome_pieces" "outcomes" "values" "people"
    "tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
@@ -683,3 +683,161 @@
     (is (= 409 (:status r)))
     (is (= "the-door-carries-its-own-effect" (guard-of r)))
     (is (str/includes? (detail r) "on its own screen"))))
+
+;; ── 15. the person's pull (waymark-jfv.20) ──────────────────────────
+;;
+;; The owner's own sentence: *I want to be able to just keep requesting
+;; outcomes.* The cap walls the MACHINE's initiative; a request is a
+;; person's consent given in advance, and an outcome citing one is
+;; admitted past the cap. What only a live engine can answer is here:
+;; the cap counting real rows and letting a cited third through, the
+;; request moving to answered INSIDE the outcome's own staging (the
+;; `:within` seam, waymark-jfv.20's one framework growth), a second
+;; citation meeting that state, and the aim being honoured.
+
+(defn- leash!
+  "An agent HOLDING a grant over the request kind's named doors — the
+  pack's own idiom, for its own reason: an unleashed agent is already
+  answered 404 by the router's default deny, and that proves nothing
+  about any wall. → the headers that present the leash."
+  [id actions]
+  (let [hs {"x-waymark-principal" id "x-waymark-actor-type" "agent"}
+        made (req :post "/api/grants"
+                  {:audience id
+                   :scope [{:kind "composition_request" :actions actions}]}
+                  (human "colton-leash"))
+        gid (id-of made)
+        took (invoke! "grants" gid :accept nil hs)]
+    (assert (= 201 (:status made)) (pr-str (json made)))
+    (assert (= 200 (:status took)) (pr-str (json took)))
+    (assoc hs "x-waymark-grant" gid)))
+
+(defn- ask!
+  ([who] (ask! who nil))
+  ([who value-id]
+   (req :post "/api/composition_requests"
+        (cond-> {} value-id (assoc :value_id value-id))
+        (human who))))
+
+(defn- request-row [rid who]
+  (json (req :get (str "/api/composition_requests/" rid) (human who))))
+
+(deftest a-persons-request-admits-one-outcome-past-the-cap
+  (let [v (declare-value! "colton-pull" "a pulled week" ["the shop"])
+        who "composer-pull"
+        asked (ask! "colton-pull")
+        rid (id-of asked)]
+    (testing "the request lands with the asker's name and a week's leash, neither the caller's to give"
+      (is (= 201 (:status asked)))
+      (is (= "offered" (:state (json asked))))
+      (is (= "colton-pull" (:requested_by (fields asked))))
+      (is (some? (:good_until (fields asked)))))
+    (is (= 201 (:status (stage-outcome! who (vid v)))))
+    (is (= 201 (:status (stage-outcome! who (vid v)))))
+    (testing "the third, uncited, still meets the cap — nothing about the machine's allowance moved"
+      (let [third (stage-outcome! who (vid v))]
+        (is (= 409 (:status third)))
+        (is (= "outcomes-are-few" (guard-of third)))))
+    (let [cited (stage-outcome! who (vid v) {:request_id rid})
+          oid (id-of cited)]
+      (testing "the third citing the person's request is admitted past the cap"
+        (is (= 201 (:status cited)))
+        (is (= rid (:request_id (fields cited)))))
+      (testing "and the request reads answered, naming the outcome, in the same stroke"
+        (let [r (request-row rid "colton-pull")]
+          (is (= "answered" (:state r)))
+          (is (= oid (:answered_by (:data r))))))
+      (testing "the answer transition carries the composer's hand — the staging answered it, not a tap and not a system actor"
+        (is (contains? (creators :composition_request rid) [:answer who])))
+      (testing "a second outcome citing the same request is refused — one request, one outcome"
+        (let [again (stage-outcome! who (vid v) {:request_id rid})]
+          (is (= 409 (:status again)))
+          (is (= "the-request-is-open" (guard-of again)))
+          (is (str/includes? (detail again) "already answered"))))
+      (testing "and an uncited fourth still meets the cap — the pull spent nothing of the machine's allowance"
+        (let [fourth (stage-outcome! who (vid v))]
+          (is (= 409 (:status fourth)))
+          (is (= "outcomes-are-few" (guard-of fourth))))))))
+
+(deftest a-request-that-names-a-value-admits-only-an-outcome-serving-it
+  (let [aim (declare-value! "colton-aim" "the aimed value" ["the shop"])
+        other (declare-value! "colton-aim" "some other value" ["the shop"])
+        asked (ask! "colton-aim" (vid aim))
+        rid (id-of asked)
+        wrong (stage-outcome! "composer-aim" (vid other) {:request_id rid})]
+    (testing "the aim's own words ride the request, copied by the engine"
+      (is (= "the aimed value" (:value_name (fields asked)))))
+    (testing "an outcome serving another value is refused, and the refusal names the aim"
+      (is (= 409 (:status wrong)))
+      (is (= "the-request-is-open" (guard-of wrong)))
+      (is (str/includes? (detail wrong) (vid aim))))
+    (testing "and the request is untouched by the refusal — a refused staging answers nothing"
+      (is (= "offered" (:state (request-row rid "colton-aim")))))
+    (testing "the one that serves it is admitted"
+      (is (= 201 (:status (stage-outcome! "composer-aim" (vid aim)
+                                          {:request_id rid})))))
+    (testing "and a request aimed at a value this house does not hold is refused at its own door"
+      (let [bad (ask! "colton-aim" "01HZQ7Y7F2R3W4V5X6Y7Z8A9ZZ")]
+        (is (= 409 (:status bad)))
+        (is (= "aims-at-a-value-this-house-holds" (guard-of bad)))))))
+
+(deftest an-agent-does-not-mint-a-request
+  (let [refused (req :post "/api/composition_requests" {}
+                     (leash! "composer-mint" ["create"]))]
+    (testing "the cap walls the machine's initiative, and a composer that could ask itself for a third has walked around it"
+      (is (= 409 (:status refused)))
+      (is (= "only-a-person-asks" (guard-of refused))))))
+
+(deftest nothing-but-a-staging-answers-a-request-over-the-wire
+  (let [rid (id-of (ask! "colton-wire"))
+        body {:outcome_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B2"}
+        person (invoke! "composition_requests" rid :answer body
+                        (human "colton-wire"))
+        agent (invoke! "composition_requests" rid :answer body
+                       (leash! "composer-wire" ["answer"]))]
+    (testing "a person's own tap does not answer their request — the way out is the leash, not a hand"
+      (is (= 409 (:status person)))
+      (is (= "answered-by-a-composition" (guard-of person))))
+    (testing "and neither does an agent's post — a request answered with no outcome behind it would be the pull burned"
+      (is (= 409 (:status agent)))
+      (is (= "answered-by-a-composition" (guard-of agent))))
+    (testing "the row is untouched"
+      (is (= "offered" (:state (request-row rid "colton-wire")))))
+    (testing "and the door renders refused on the row's own envelope — nobody taps it, and the envelope says so rather than offering it"
+      (let [env (json (req :get (str "/api/composition_requests/" rid)
+                           (human "colton-wire")))]
+        (is (not-any? #(= "answer" (str (:name %))) (:actions env)))))))
+
+(deftest the-crown-carries-the-pull
+  (let [who "colton-crown"
+        v (declare-value! who "a crowned week" ["the shop"])
+        rid (id-of (ask! who))
+        doc (json (req :get "/api/-/feed" (human who)))]
+    (testing "the feed's document carries the crown key at all"
+      (is (map? (:crown doc))))
+    (testing "the reader's standing request rides the crown, with no verb on it"
+      (is (some #(str/ends-with? (str (:self %)) rid)
+                (get-in doc [:crown :standing]))))
+    (testing "and the crown says so in words"
+      (is (str/includes? (str (get-in doc [:crown :says])) "asked")))
+    ;; a bundle staged by somebody else, with two pieces, cards for
+    ;; this reader — and the chip stands down: answer what is there
+    ;; first
+    (let [o (id-of (stage-outcome! "composer-crown" (vid v)))]
+      (is (= 201 (:status (stage-piece! "composer-crown" o "Cut the stock"
+                                        "task" {:title "Cut the box stock (crown)"}))))
+      (is (= 201 (:status (stage-piece! "composer-crown" o "Glue it up"
+                                        "task" {:title "Glue up the box (crown)"}))))
+      (let [doc' (json (req :get "/api/-/feed" (human who)))]
+        (testing "with a bundle on offer the crown is not empty and offers no ask"
+          (is (false? (get-in doc' [:crown :empty])))
+          (is (nil? (get-in doc' [:crown :ask]))))
+        (testing "but the standing request is still said"
+          (is (some #(str/ends-with? (str (:self %)) rid)
+                    (get-in doc' [:crown :standing]))))
+        (testing "and an answered request leaves the standing list"
+          (is (= 201 (:status (stage-outcome! "composer-crown2" (vid v)
+                                              {:request_id rid}))))
+          (let [doc'' (json (req :get "/api/-/feed" (human who)))]
+            (is (not-any? #(str/ends-with? (str (:self %)) rid)
+                          (get-in doc'' [:crown :standing])))))))))

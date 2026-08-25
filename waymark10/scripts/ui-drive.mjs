@@ -1526,6 +1526,47 @@ async function feedStory() {
      !(await evaljs(`location.hash`)).includes("draw=") &&
      JSON.stringify(await idsNow()) === JSON.stringify(daily));
 
+  /* ── compose me another: the person pulls (waymark-jfv.20) ──────
+     Both bundles above are answered, so the crown carded nothing —
+     which is exactly when the page offers the person's own pull past
+     the composer's weekly cap. One tap under the feed's origin key
+     writes a request under the tapper's name; the chip settles into
+     the honest sentence (the composer answers at its next sitting,
+     not now); and the next read says the request is standing, with
+     no verb on it, because your own request is not a decision. */
+  console.log("· asking for another");
+  ok("with no bundle on offer the crown offers 'compose me another'",
+     await evaljs(`!!document.querySelector(
+        '.feed-crown[data-crown-empty="1"] button.chip')`));
+  await evaljs(`(() => { const b = document.querySelector(
+        '.feed-crown button.chip'); if (b) b.click(); return !!b; })()`);
+  await waitFor(`!!document.querySelector('.feed-crown .feed-settled')`,
+                "the ask to settle", 8000);
+  ok("one tap asks, and the chip says the composer answers at its next sitting",
+     await evaljs(`/next sitting/.test(
+        document.querySelector('.feed-crown .feed-settled').textContent)`));
+  const askedRows = await (await fetch(
+    `${BASE}/api/composition_requests?state=offered`,
+    {headers: H("colton")})).json();
+  const askedRow = (((askedRows || {}).data || {}).items || []).find(
+    r => r.data && r.data.requested_by === "colton");
+  ok("the request stands under the asker's name, with a week's leash",
+     !!askedRow && !!askedRow.data.good_until);
+  ok("the tap rode the feed's origin key, so actions-from-the-feed counts the pull",
+     await (async () => {
+       if (!askedRow) return false;
+       const log = await (await fetch(`${BASE}${askedRow.self}/-/events`,
+                                      {headers: H("colton")})).json();
+       return JSON.stringify(log).includes(
+         "feed/" + (askedRows.day || "") ) ||
+         JSON.stringify(log).includes("outcomes%2Fcomposition_request%2Fask");
+     })());
+  await chip("Re-read");
+  ok("the next read says the request is standing — a sentence with a link and no verb on it",
+     await evaljs(`(() => { const c = document.querySelector('.feed-crown');
+       return !!c && !!c.querySelector('a.chip') &&
+         /asked/i.test(c.textContent); })()`));
+
   /* ── a refusal speaks in the engine's own words, on the card ──── */
   console.log("· a refusal, on the card that asked for it");
   await evaljs(`location.hash = "#/api/-/feed"; true`);

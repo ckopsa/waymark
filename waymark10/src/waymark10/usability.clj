@@ -121,8 +121,12 @@
   a published SCHEMA could honestly enumerate, and `:services` sits on
   the near side of it here — the registry a service hook answers from
   is a projection of declarations, which is exactly what well-known
-  publishes."
-  #{:now :principal :services :services.features :transitions})
+  publishes.
+
+  `:within` (waymark-jfv.20) sits on this side too: which write opened
+  the door is a fact about the CALL, like the principal, and a guard
+  reading it judges no row."
+  #{:now :principal :services :services.features :transitions :within})
 
 (defn- reads-rows?
   "Does this guard judge against rows rather than against the

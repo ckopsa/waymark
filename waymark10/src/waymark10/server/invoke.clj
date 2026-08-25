@@ -258,8 +258,26 @@
 (declare invoke-in-tx! create-in-tx!)
 
 (defn- make-ctx
+  "The invocation context for ONE write. `opts`:
+
+  - `:correlation-id` — the request's, threaded through every inner
+    write so a cascade reads as one story in the log.
+  - `:self` — `{:kind … :action …}` naming THIS write, handed to the
+    ctx :invoke / :create doors so the inner write they open knows
+    what it was opened inside of.
+  - `:within` — the `:self` of the write this ctx was opened INSIDE,
+    or nil at the wire boundary. It rides the ctx as `(:within ctx)`
+    (waymark-jfv.20), which is the one fact a guard cannot otherwise
+    learn: whether the door it stands on was reached by a client's
+    request or by another kind's own handler in the same transaction.
+    `composition_request`'s `answer` door is the first to read it —
+    a request is answered by an outcome's own staging and by nothing
+    else, and without this key that law was a grant's promise rather
+    than a wall. The render probe and the dry-run rehearsals never set
+    it, so a door walled on it renders refused, which is the truth: no
+    client taps it. A guard reading it declares `:reads [:within]`."
   ([engine tx mode principal] (make-ctx engine tx mode principal nil))
-  ([engine tx mode principal {:keys [correlation-id]}]
+  ([engine tx mode principal {:keys [correlation-id self within]}]
    (let [;; the cross-WRITE door (waymark9 Ctx.invoke): handlers and
          ;; on-create hooks write OTHER rows through the same
          ;; transaction and the full per-item algorithm. Only a real
@@ -273,6 +291,9 @@
              :services (:services engine)
              :mode mode
              :inner-sink sink
+             ;; the write this ctx was opened inside of, or nil at the
+             ;; wire — see the docstring
+             :within within
              :invoke
              (when sink
                (fn ctx-invoke [target-kind id action-name body & [opts]]
@@ -293,6 +314,9 @@
                               (body-digest body) body
                               {:principal principal
                                :correlation-id correlation-id
+                               ;; the inner door learns whose hand
+                               ;; opened it (waymark-jfv.20)
+                               :within self
                                :require-key? false
                                ;; a FENCED target takes its etag the way
                                ;; an honest client would supply one —
@@ -340,6 +364,7 @@
                             engine tx target-kind body
                             {:principal principal
                              :correlation-id correlation-id
+                             :within self
                              :acknowledged (or (:acknowledged opts) #{})})]
                    (swap! sink conj {:kind target-kind
                                      :action create-action
@@ -925,7 +950,7 @@
   :require-key? false waives step 2's 428 for fan-out items."
   [engine tx rdef kind id defn digest body
    {:keys [principal if-match idempotency-key dry-run acknowledged
-           correlation-id require-key?]
+           correlation-id require-key? within]
     :or {acknowledged #{} require-key? true}}]
   (let [action-name (:name defn)]
     ;; 2. idempotency: requirement, then stored replay
@@ -953,7 +978,9 @@
             ;; revision's stored trees (the judgment overlay)
             defn (judgment/resolve-action rdef defn (:law-revision row))
             ctx (make-ctx engine tx (if dry-run :dry-run :invoke) principal
-                          {:correlation-id correlation-id})
+                          {:correlation-id correlation-id
+                           :within within
+                           :self {:kind kind :action action-name}})
             ;; guards judge; they never write — the pen stays with the
             ;; handler (and :on-create), so guard evaluation gets a
             ;; ctx without the cross-write door
@@ -1569,7 +1596,7 @@
   child's full create algorithm — its own :on-create may birth
   grandchildren; a declaration cycle refuses at depth 8."
   [engine tx kind body {:keys [principal acknowledged correlation-id id
-                               idempotency-key mint? depth]
+                               idempotency-key mint? depth within]
                         :or {acknowledged #{} depth 0}}]
   (let [rdef (rdef-of engine kind)
         model (if mint?
@@ -1592,7 +1619,9 @@
             _ (when-some [errors (schema/closed-errors model inp)]
                 (throw (p/schema-invalid :create errors)))
             ctx (make-ctx engine tx :invoke principal
-                          {:correlation-id correlation-id})
+                          {:correlation-id correlation-id
+                           :within within
+                           :self {:kind kind :action create-action}})
             {:keys [warned overridden basis]}
             (create-guard-pass (if mint? [] (:create-guards rdef))
                                inp (dissoc ctx :invoke :create :inner-sink)
@@ -1667,6 +1696,14 @@
                        :judgment (decision/record (:law-revision row) basis
                                                   overridden)
                        :correlation-id correlation-id
+                       ;; the key a client sent rides the birth's own
+                       ;; transition exactly as finish! stamps it on an
+                       ;; invoke's (waymark-jfv.20 found the gap): the
+                       ;; feed's origin convention reads this column,
+                       ;; and a CREATE tapped from a card — a quick
+                       ;; reason, the crown's own ask — was invisible
+                       ;; to actions-from-feed without it
+                       :idempotency-key idempotency-key
                        :summary (:summary row)})
               ;; drain the :on-create births: full create algorithm,
               ;; same transaction, each riding the inner sink so
@@ -1683,6 +1720,9 @@
                              (schema/encode tmodel (or body {}))
                              {:principal principal
                               :correlation-id correlation-id
+                              ;; a deferred birth is still opened
+                              ;; inside THIS create's hand
+                              :within {:kind kind :action create-action}
                               :acknowledged (or (:acknowledged opts) #{})
                               :depth (inc depth)})]
                     (swap! (:inner-sink ctx) conj

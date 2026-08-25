@@ -4135,7 +4135,91 @@
         third (when (= 200 (:status accepted))
                 (json ctx (get-env ctx :outcome_piece (nth pids 2))))
         gone (when (= 200 (:status accepted))
-               (:doc (feed-doc ctx as-member)))]
+               (:doc (feed-doc ctx as-member)))
+        ;; 8. COMPOSE ME ANOTHER (waymark-jfv.20). The bundle is
+        ;; answered and off the feed, which is exactly when the crown
+        ;; should offer the person's own pull. The claims stand down
+        ;; whole on an engine holding no request kind, and the ask
+        ;; claim stands down when some OTHER bundle is carding for
+        ;; this member (the chip's rule is 'answer what is there
+        ;; first', and an obligation cannot know what a neighbouring
+        ;; run left on offer).
+        askable (rdef ctx :composition_request)
+        crown (when (and askable gone) (:crown gone))
+        ask-key (when crown (feed/origin-key day (str (:card_id crown))
+                                             (subs (str (random-uuid)) 0 8)))
+        asked (when (and crown (:ask crown))
+                (req ctx :post (str (get-in crown [:ask :href]))
+                     {}
+                     (assoc as-member "idempotency-key" ask-key)))
+        rid (when (= 201 (:status asked)) (id-of (:self (json ctx asked))))
+        request (when rid (json ctx (get-env ctx :composition_request rid)))
+        ask-stamped (when rid
+                      (some #(when (= ask-key (:idempotency-key %)) %)
+                            (transitions ctx :composition_request rid)))
+        ask-parsed (when ask-key (feed/origin-of ask-key))
+        after-ask (when rid (:doc (feed-doc ctx as-member)))
+        ;; the composer READS it under the leash the spec's contract
+        ;; names — the kind, no doors — and answers it by staging: the
+        ;; outcome cites the request and the request moves in the
+        ;; same stroke, under the composer's own hand
+        reader (when rid
+                 (leash! ctx (str "conformance-reader-" tag)
+                         [{:kind "composition_request" :actions []}]))
+        read-back (when reader
+                    (req ctx :get (str "/api/"
+                                       (:plural (rdef ctx :composition_request))
+                                       "/" rid)
+                         reader))
+        answered (when (and rid leashed vid)
+                   (stage :outcome
+                          {:goal (str "The one you asked for " tag)
+                           :value_id vid
+                           :routing (str "You asked, so the hard part —"
+                                         " deciding whether to want it —"
+                                         " is already paid.")
+                           :evidence [vself]
+                           :request_id rid}))
+        aoid (some-> (:doc answered) :self id-of)
+        request' (when (and rid (= 201 (:status answered)))
+                   (json ctx (get-env ctx :composition_request rid)))
+        answer-actor (when request'
+                       (some (fn [t]
+                               (when (= "answer" (name (:action t)))
+                                 (get-in t [:actor :id])))
+                             (vec (transitions ctx :composition_request rid))))
+        twice (when (and rid (= 201 (:status answered)))
+                (stage :outcome
+                       {:goal (str "The same request, cited again " tag)
+                        :value_id vid
+                        :routing "Once was the deal."
+                        :evidence [vself]
+                        :request_id rid}))
+        ;; and nobody answers one by hand — a person's tap, an agent's
+        ;; post — because a request marked answered with no outcome
+        ;; behind it would be the person's pull burned by a hand that
+        ;; composed nothing
+        by-hand (when (and crown (:ask crown))
+                  (let [r2 (req ctx :post (str (get-in crown [:ask :href]))
+                                {} as-member)
+                        rid2 (when (= 201 (:status r2))
+                               (id-of (:self (json ctx r2))))]
+                    (when rid2
+                      (invoke-http ctx :composition_request rid2
+                                   (declared-name ctx :composition_request :answer)
+                                   {:outcome_id (str aoid)}
+                                   {:headers as-member}))))
+        ;; …and an agent does not mint one at all: the cap walls the
+        ;; machine's initiative, and a composer that could ask itself
+        ;; for a third would have walked around it
+        minted (when (and askable leashed)
+                 (req ctx :post (str "/api/"
+                                     (:plural (rdef ctx :composition_request)))
+                      {}
+                      (assoc (leash! ctx (str "conformance-asker-" tag)
+                                     [{:kind "composition_request"
+                                       :actions ["create"]}])
+                             "idempotency-key" (str "ask-" tag))))]
     {:covered (if (= 200 (:status took)) 1 0)
      :violations
      (cond-> []
@@ -4450,7 +4534,106 @@
                   " — ctx :invoke hands the inner write the OUTER"
                   " principal, and the whole safety story of an open"
                   " piece is that the hand on the target is the"
-                  " member's own")))}))
+                  " member's own"))
+
+       ;; ── compose me another (waymark-jfv.20) ───────────────────
+       (and askable gone (nil? crown))
+       (conj (str "feed: the day's document carries no `crown` key at all"
+                  " while this engine holds a composition_request kind —"
+                  " the person's pull lives on the crown, and a feed that"
+                  " never says whether the crown is empty cannot offer it"))
+
+       (and crown (:empty crown) (nil? (:ask crown)))
+       (conj (str "feed: the crown carded nothing and offers no ask — the"
+                  " cap walls the composer and not the person, and the one"
+                  " place the person pulls past it is a chip that is absent"))
+
+       (and crown (not (:empty crown)) (:ask crown))
+       (conj (str "feed: a bundle is on offer and the crown still offers"
+                  " 'compose me another' — answer what is there first; a"
+                  " chip beside an unanswered bundle is the page asking for"
+                  " more before the person has said what they think"))
+
+       (and asked (not= 201 (:status asked)))
+       (conj (str "feed: the crown's own ask answered " (:status asked)
+                  ": " (pr-str (json ctx asked))
+                  " — one tap, one request, under the member's name"))
+
+       (and request (not= member (str (get-in request [:data :requested_by]))))
+       (conj (str "feed: the request carries "
+                  (pr-str (get-in request [:data :requested_by]))
+                  " as its asker, not " (pr-str member)
+                  " — who asked is the engine's stamp off the principal,"
+                  " never the body's"))
+
+       (and rid (nil? ask-stamped))
+       (conj (str "feed: the ask invoked with " (pr-str ask-key)
+                  " left no transition carrying that key — the pull is a"
+                  " card verb without a card, and actions-from-the-feed"
+                  " should count it under the crown"))
+
+       (and ask-key (not= ["outcomes" "composition_request"]
+                          [(:section ask-parsed) (:kind ask-parsed)]))
+       (conj (str "feed: the crown's ask key parses to " (pr-str ask-parsed)
+                  " — it should come back out of the audit trail as the"
+                  " outcomes section and the request kind, with no join"))
+
+       (and rid after-ask
+            (not (some #(= rid (id-of (:self %)))
+                       (get-in after-ask [:crown :standing]))))
+       (conj (str "feed: the request stands and the member's next read of"
+                  " the crown does not say so — 'you asked, and the composer"
+                  " has not sat down yet' is the sentence the person who"
+                  " asked deserves to read"))
+
+       (and reader (not= 200 (:status read-back)))
+       (conj (str "feed: a composer leashed to the request kind with no"
+                  " doors could not READ the request (" (:status read-back)
+                  ") — the composer contract's scope is exactly that line,"
+                  " and a request nobody can read is a pull nobody answers"))
+
+       (and rid leashed (not= 201 (:status answered)))
+       (conj (str "feed: an outcome citing the person's request was refused"
+                  " (" (:status answered) "): " (pr-str (:doc answered))
+                  " — the cap walls the machine's initiative, and a cited"
+                  " outcome is the person's own pull"))
+
+       (and request' (not= "answered" (str (:state request'))))
+       (conj (str "feed: after an outcome cited it the request still reads "
+                  (pr-str (:state request'))
+                  " — the staging answers the request in the same stroke,"
+                  " or a second outcome could cite it tomorrow"))
+
+       (and request' aoid
+            (not= (str aoid) (str (get-in request' [:data :answered_by]))))
+       (conj (str "feed: the answered request names "
+                  (pr-str (get-in request' [:data :answered_by]))
+                  " as its outcome, not " (pr-str aoid)
+                  " — the join runs from the request to the outcome that"
+                  " answered it, and it has to be the right one"))
+
+       (and request' answer-actor (not= composer (str answer-actor)))
+       (conj (str "feed: the request's answer transition carries "
+                  (pr-str answer-actor) ", not the composer "
+                  (pr-str composer)
+                  " — the staging answered it, so the staging's hand is on"
+                  " the record, not a system actor's"))
+
+       (and twice (= 201 (:status twice)))
+       (conj (str "feed: a second outcome citing the same request was"
+                  " admitted — one request, one outcome; the person asks"
+                  " again with one tap if they want another"))
+
+       (and by-hand (not= 409 (:status by-hand)))
+       (conj (str "feed: a person answered a request BY HAND ("
+                  (:status by-hand) ") — nothing but an outcome's own"
+                  " staging answers one, or a request could be burned with"
+                  " no outcome behind it"))
+
+       (and minted (= 201 (:status minted)))
+       (conj (str "feed: an AGENT minted a composition request — the cap"
+                  " walls the machine's initiative, and a composer that can"
+                  " ask itself for a third has walked around it")))}))
 
 ;; ── the taps learn to speak (waymark-jfv.16) ────────────────────────
 ;;

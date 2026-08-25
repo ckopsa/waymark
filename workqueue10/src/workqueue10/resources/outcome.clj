@@ -689,15 +689,89 @@
 
           :else (t/allow))))))
 
+(defn- cited-request
+  "The composition request an outcome cites, trimmed, or nil — the one
+  spelling both the wall and the cap read (waymark-jfv.20)."
+  [inp]
+  (some-> (:request_id inp) str str/trim not-empty))
+
+(defguardfn the-request-is-open
+  {:judges [:request_id]
+   :reads [:composition_request :now]
+   :vars [:problem]
+   :open "An outcome may answer a person's own request for another — and when it does, the request is one this house is holding open: it exists, nobody has answered it, its week has not run out, and if the person named the value it should serve, this outcome serves that value."
+   :explain "That request cannot admit this outcome: {problem}"}
+  [_row inp ctx]
+  ;; THE PERSON'S PULL, CHECKED (waymark-jfv.20). This wall stands in
+  ;; front of `outcomes-are-few`, which is what lets the cap say
+  ;; 'a cited outcome is admitted' without re-reading the request: by
+  ;; the time the cap runs, a citation has either been refused here or
+  ;; is known to be good. The four arms are the bead's own list, and
+  ;; the second is 'one request, one outcome' seen from the outcome's
+  ;; side — the request's `answer` door moved it to `answered` the
+  ;; instant the first outcome citing it was staged, so the second
+  ;; meets a state rather than a count.
+  (let [read' (:read ctx)
+        rid (cited-request inp)
+        deny (fn [problem] (t/deny {:vars {:problem problem}}))]
+    (cond
+      (nil? rid) (t/allow)
+      (nil? read') (t/allow)
+      :else
+      (let [r (read' :composition_request rid)
+            good (get-in r [:data :good_until])
+            aim (some-> (get-in r [:data :value_id]) str str/trim not-empty)
+            vid (some-> (:value_id inp) str str/trim not-empty)]
+        (cond
+          (nil? r)
+          (deny (str "this house holds no request " rid
+                     " — read /api/composition_requests?state=offered and"
+                     " cite one of those, or cite none and stage inside"
+                     " the week's allowance."))
+
+          (= "answered" (name (:state r)))
+          (deny (str "/api/composition_requests/" rid " was already"
+                     " answered, by /api/outcomes/"
+                     (get-in r [:data :answered_by])
+                     ". One request admits one outcome; the person asks"
+                     " again with one tap if they want another."))
+
+          (not= "offered" (name (:state r)))
+          (deny (str "/api/composition_requests/" rid " is "
+                     (name (:state r)) " — the week it was asked in is"
+                     " over, and a request the house is no longer"
+                     " holding open admits nothing."))
+
+          (and good (not (pos? (compare good (:now ctx)))))
+          (deny (str "/api/composition_requests/" rid " ran out at "
+                     good ". The person asked about a week that is over;"
+                     " if the want survived they will ask again."))
+
+          (and aim (not= aim vid))
+          (deny (str "the person asked for an outcome serving /api/values/"
+                     aim " and this one serves "
+                     (if vid (str "/api/values/" vid) "no value at all")
+                     ". A request that names its aim admits only an"
+                     " outcome that serves it — the pull was for THAT,"
+                     " not for anything."))
+
+          :else (t/allow))))))
+
 (defguardfn outcomes-are-few
   {:reads [:principal :now :outcome]
    :vars [:limit :retry_at]
-   :open "Two outcomes a week, per composer, Monday to Monday — the cap is what makes a composer rank rather than dump."
-   :explain "That is {limit} outcomes staged this week, which is the week's whole allowance; the next one opens on Monday ({retry_at}). Rank what is left and bring the best of it then."}
-  [_row _inp ctx]
-  ;; the storage-free probe never spends a slot — letters-are-paced's
+   :open "Two outcomes a week, per composer, Monday to Monday — the cap is what makes a composer rank rather than dump. It walls the machine's initiative and never the person's pull: an outcome citing a request the house is holding open is admitted past it."
+   :explain "That is {limit} outcomes staged this week, which is the week's whole allowance; the next one opens on Monday ({retry_at}). Rank what is left and bring the best of it then — unless a person has asked for another: an outcome citing an open request at /api/composition_requests is admitted past the cap."}
+  [_row inp ctx]
+  ;; THE CAP WALLS THE MACHINE, NOT THE PERSON (waymark-jfv.20). An
+  ;; outcome citing a request is admitted without counting — the
+  ;; request was a person's own pull, and `the-request-is-open`, one
+  ;; wall up, has already refused a citation that is not good. The
+  ;; uncited case is unchanged to the letter.
+  ;;
+  ;; The storage-free probe never spends a slot — letters-are-paced's
   ;; own discipline, and the same one pacing-guards keeps
-  (if (nil? (:find ctx))
+  (if (or (nil? (:find ctx)) (some? (cited-request inp)))
     (t/allow)
     (let [pid (:id (:principal ctx))
           monday (week-start (:now ctx))
@@ -1060,7 +1134,19 @@
 ;; rephrases.
 (defhandler stage-the-outcome [row ctx]
   (let [sid (some-> (get-in row [:data :supersedes]) str str/trim not-empty)
-        prior (when (and sid (:read ctx)) ((:read ctx) :outcome sid))]
+        prior (when (and sid (:read ctx)) ((:read ctx) :outcome sid))
+        rid (cited-request (:data row))]
+    ;; THE REQUEST IS ANSWERED IN THE SAME STROKE (waymark-jfv.20),
+    ;; through its own door, before this row's own insert — the id was
+    ;; minted ahead of this hook, so the request can name the outcome
+    ;; that answered it. The door's one wall reads `(:within ctx)`,
+    ;; which names THIS create, and opens for nothing else; a refusal
+    ;; inside it rolls the whole staging back, so no outcome ever
+    ;; reads staged against a request that did not move. The
+    ;; storage-free probe never runs :on-create, so there is no probe
+    ;; arm to guard here.
+    (when (and rid (:invoke ctx))
+      ((:invoke ctx) :composition_request rid :answer {:outcome_id (:id row)}))
     (-> row
         (assoc-in [:data :composed_by] (:id (:principal ctx)))
         (assoc-in [:data :good_until]
@@ -1337,6 +1423,16 @@
 ;; over the real ring handler — `take` and `make_it_so`'s own posture,
 ;; two kinds up, for the same reason.
 
+;; NO SCENARIO NAMES `the-request-is-open` EITHER, and for the same
+;; structural reason `names-a-person` has none (waymark-jfv.20): a
+;; scenario's `:input` is a literal map, so the only request it could
+;; cite is a dangling one — and `names-a-value` stands in front of this
+;; wall and refuses the same body first, because the value it cites is
+;; dangling too. All five arms of the wall (no such request, already
+;; answered, expired, lapsed, an aim not served) want a live engine
+;; holding real request rows anyway, and workqueue10.outcome-test § 15
+;; proves them over the real ring handler.
+
 (defscenario the-composer-does-not-answer-its-own-piece
   "The same wall, one row down, and it has to be here as well as on
    the parent: the pieces are where the consent actually happens, so a
@@ -1498,6 +1594,10 @@
     {:raw true
      :label "With"
      :help "Their name, copied by the engine so the card reads without a second lookup."}}
+   :request_id
+   {:x-display
+    {:label "The request it answers"
+     :help "When a person tapped \"compose me another\" and this outcome is the answer, name their request — /api/composition_requests?state=offered. It is admitted past the weekly cap, because the cap walls the composer's initiative and never the person's pull; it is checked to be open, and if the person named the value it should serve, this outcome serves that one. One request admits one outcome."}}
    :supersedes
    {:x-display
     {:label "The outcome this recomposes"
@@ -1606,7 +1706,10 @@
             :summary "The outcome this one recomposes"}
            {:rel "companion" :kind :person
             :href "/api/people/{data.companion_id}"
-            :summary "Who this outcome is with, off the house's roster"}]
+            :summary "Who this outcome is with, off the house's roster"}
+           {:rel "request" :kind :composition_request
+            :href "/api/composition_requests/{data.request_id}"
+            :summary "The person's request this outcome answers"}]
    :schema
    [:map
     (oe :goal {} [:string {:min 1 :max 240}])
@@ -1641,6 +1744,15 @@
         [:maybe [:vector [:string {:min 1 :max 200}]]])
     (oe :supersedes {:optional true :kind :outcome :filter #{:eq}}
         [:maybe :waymark/ref])
+    ;; THE REQUEST IT ANSWERS (waymark-jfv.20). NO :filter, on purpose:
+    ;; the join runs the other way — the request stamps the outcome
+    ;; that answered it — so nothing queries outcomes by request, and
+    ;; a generated column here would move this kind's storage facet
+    ;; and mint a revision for a question nobody asks (442.9's
+    ;; witnesses, applied once more). It lands in `data`, the migrate
+    ;; plan stays empty, and the hash does not move.
+    (oe :request_id {:optional true :kind :composition_request}
+        [:maybe :waymark/ref])
     ;; ENGINE-WRITTEN, all five. They are in the row schema because
     ;; they are the row's document; they are out of the create model
     ;; because none of them is anybody's to supply.
@@ -1661,7 +1773,9 @@
     (oe :companion_id {:optional true :kind :person} [:maybe :waymark/ref])
     (oe :evidence {:optional true}
         [:maybe [:vector [:string {:min 1 :max 200}]]])
-    (oe :supersedes {:optional true :kind :outcome} [:maybe :waymark/ref])]
+    (oe :supersedes {:optional true :kind :outcome} [:maybe :waymark/ref])
+    (oe :request_id {:optional true :kind :composition_request}
+        [:maybe :waymark/ref])]
    :filterable {:state #{:eq :in}}
    :default-filters {:state "offered"}
    :sortable {:fields [:created_at :good_until] :default "-created_at"}
@@ -1679,11 +1793,15 @@
    ;; shape first, world next, PACE LAST: a malformed outcome hears
    ;; what is wrong with it rather than that the week is full, and
    ;; because the cap counts ROWS a refused create spends nothing
+   ;; …and the person's pull stands right in front of the cap
+   ;; (waymark-jfv.20), so the cap may trust a citation it did not
+   ;; read: refused here, or known good by the time the count runs
    :create-guards [cites-what-it-read
                    names-a-value
                    names-a-person
                    routes-through-something-loved
                    a-recomposition-waits-its-turn
+                   the-request-is-open
                    outcomes-are-few]
    :actions
    {:make_it_so

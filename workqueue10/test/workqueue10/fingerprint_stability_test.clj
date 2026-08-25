@@ -79,8 +79,10 @@
         world (roots nses)
         before (hashes)]
     (try
-      ;; 36 since waymark-jfv.11 added :person — the roster, so a
-      ;; composed plan stops inventing who somebody is (35 since
+      ;; 37 since waymark-jfv.20 added :composition_request — the
+      ;; person's own pull past the weekly cap, one tap, never an
+      ;; agent's (36 since waymark-jfv.11 added :person — the roster,
+      ;; so a composed plan stops inventing who somebody is; 35 since
       ;; waymark-jfv.3's :outcome and :outcome_piece, TWO kinds because
       ;; consent is per piece and a verdict carrying a selection is
       ;; inexpressible in the card grammar; 33 since waymark-jfv.2's
@@ -88,7 +90,7 @@
       ;; :tickler). The count is a census, not a law: it moves when the
       ;; house gains a kind and never otherwise, which is exactly the
       ;; change it is here to notice.
-      (is (= 36 (count before)) "the whole household is under the lens")
+      (is (= 37 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)

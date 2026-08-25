@@ -66,7 +66,7 @@
    ;; …and the crown's three (waymark-jfv.4), for the same rule: an
    ;; outcome another suite left `offered` is a card ABOVE do-now on
    ;; this test's page, and the value it serves is what keeps it there
-   "outcome_pieces" "outcomes" "values" "people"
+   "composition_requests" "outcome_pieces" "outcomes" "values" "people"
    "activities" "evening_plans" "evening_sessions"
    "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"

@@ -61,6 +61,8 @@
             [workqueue10.resources.letters :refer [letter]]
             [workqueue10.resources.permission-slip :refer [permission-slip]]
             [workqueue10.resources.media :refer [media-resource]]
+            [workqueue10.resources.composition-request
+             :refer [composition-request]]
             [workqueue10.resources.outcome :refer [outcome outcome-piece]]
             [workqueue10.resources.person :refer [person]]
             [workqueue10.resources.task :refer [task-resource]]
@@ -387,9 +389,20 @@
        ;; for value's reason — a roster is not a thing to do. What
        ;; reads it is `outcome/names-a-person` at the composer's create
        ;; door (docs/spec-outcome-menu.md § 'Built — jfv.11').
+       ;; :composition_request rides last (waymark-jfv.20): the
+       ;; person's own pull — "compose me another" — one tap, born by
+       ;; a person and never by an agent, standing a week, answered by
+       ;; the one outcome that cites it. It exists because the weekly
+       ;; cap on outcomes walls the MACHINE's initiative and a person
+       ;; asking for another is consent given in advance (8um law 6,
+       ;; applied to composition). Domainless for value's reason, and
+       ;; :nav :system for outcome's: a request is neither work nor a
+       ;; decision, and a card for it would be the feed manufacturing
+       ;; a thing to answer. The crown carries it instead
+       ;; (docs/spec-outcome-menu.md § 'Built — jfv.20').
        (into (into [saved-view capability connection self journal weather letter
                     permission-slip tickler insight value outcome outcome-piece
-                    person]
+                    person composition-request]
                    dashboard/resources)))))
 
 (def surfaces
