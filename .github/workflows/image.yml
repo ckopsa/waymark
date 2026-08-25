@@ -123,11 +123,24 @@ jobs:
       # aimed at any branch, and a manual build of a side branch must
       # not roll the house.
       #
-      # The migrate gate the Dockerfile names still stands and is NOT
-      # here: boot REFUSES on schema drift because WAYMARK10_AUTO_MIGRATE
-      # stays unset, so a deploy whose schema moved fails loudly at the
-      # task rather than migrating itself. `clojure -M:migrate` (APPLY=1)
-      # remains a deliberate act before pushing such a change.
+      # NO MIGRATION HAPPENS HERE, and none can. Production leaves
+      # WAYMARK10_AUTO_MIGRATE unset (main.clj's :auto-migrate reads it),
+      # so an alloc whose schema moved REFUSES TO BOOT and names its
+      # plan rather than migrating itself.
+      #
+      # Note that `make migrate-queue-prod` REFUSES APPLY on purpose
+      # (waymark-yqs): reading prod's plan and running it deserve
+      # different friction, so the statements print and a person runs
+      # them through `nomad alloc exec -task postgres <alloc> psql`.
+      # Dockerfile.workqueue10's "the deploy gate runs `clojure
+      # -M:migrate` (APPLY=1)" predates that rule and is wrong for prod.
+      #
+      # THE CONSEQUENCE OF AUTOMATING THIS STEP: a laptop deploy put a
+      # person between the merge and the roll, and that person migrated
+      # first. Nothing does now. Merging a schema change to main rolls a
+      # container that will not boot until someone applies the plan BY
+      # HAND, from the LAN, because that is the only place prod Postgres
+      # is published. Migrate before merging such a change.
 
       - name: Setup Nomad CLI
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
