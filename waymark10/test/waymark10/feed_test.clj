@@ -1258,3 +1258,213 @@
                   asked why is not answered a silent archive"
           (let [href (str (get-in spelled [:links :next :href]))]
             (is (or (str/blank? href) (str/includes? href "explain=1")))))))))
+
+;; ── the contest (waymark-8um.3, laws v3 law 5) ──────────────────────
+;;
+;; What belongs here rather than in the pack is what a driver with one
+;; world cannot arrange: a member whose whole view history the test
+;; wrote, a second member built to prove the formula never reads across
+;; the house, and a do-now lane with two kinds in it so a step BACK is
+;; something a reader could see happen.
+
+(defn- consent! [eng who]
+  (call! eng :post "/api/feed_view_consents" :body {}
+         :headers {"x-waymark-principal" who}))
+
+(defn- saw! [eng who card-id population day]
+  (call! eng :post "/api/feed_views"
+         :body {:card_id card-id :population population :day day}
+         :headers {"x-waymark-principal" who}))
+
+(defn- days-before [^String day ^long n]
+  (mapv #(str (.minusDays (java.time.LocalDate/parse day) (long (inc %))))
+        (range n)))
+
+(defn- why-of [doc card-id]
+  (:why (first (filter #(= card-id (str (:card_id %))) (:cards doc)))))
+
+(deftest the-formula-is-two-numbers-and-they-ride-the-wire
+  (testing "law 5: the ranking formula is DATA the owner can read. It is
+            on every answer, in the editor's own shape, narrated"
+    (let [eng (boot-house)]
+      (post! eng "fd_errands" {:title "one"})
+      (let [recipe (:recipe (:doc (feed! eng)))]
+        (is (= {:window_days 14 :cools_after 3} (:formula recipe)))
+        (is (str/includes? (:formula_says recipe) "cools one step"))
+        (is (str/includes? (:formula_says recipe) "14"))
+        (is (str/includes? (:formula_says recipe) "nobody else's")))))
+  (testing "and the household's own numbers answer instead when it wrote
+            some — a row that names none keeps the deployment's"
+    (is (= {:window-days 14 :cools-after 3} (feed/formula-of {})))
+    (is (= {:window-days 30 :cools-after 3}
+           (feed/formula-of {:formula {:window-days 30}})))
+    (is (= 0 (feed/cooling-step {:cools-after 3} 2)))
+    (is (= 1 (feed/cooling-step {:cools-after 3} 3)))
+    (is (= 4 (feed/cooling-step {:cools-after 3} 14)))
+    (is (= 0 (feed/cooling-step {:cools-after 0} 99))
+        "cools_after 0 is the contest turned off, and it is a number a
+         person can see rather than a key they have to know to delete"))
+  (testing "a formula that is not two numbers refuses at assembly"
+    (is (str/includes? (str (try (feed/check-recipe!
+                                  (assoc feed/default-recipe
+                                         :formula {:cools-after "soon"}))
+                                 (catch Exception e (ex-message e))))
+                       ":formula :cools-after"))))
+
+(deftest a-non-recording-member-reads-the-feed-they-always-read
+  (testing "off is the default, so the whole contest is inert: no query
+            is run, no card carries a cooling key, and the document is
+            the one this engine answered before the formula existed"
+    (let [eng (boot-house)]
+      (dotimes [i 3] (post! eng "fd_errands" {:title (str "errand " i)}))
+      (dotimes [i 3] (post! eng "fd_parcels" {:title (str "parcel " i)}))
+      (let [before (:doc (feed! eng))
+            day (str (:day before))
+            ;; a SECOND member records everything she is shown — and the
+            ;; formula reads the reader's own rows, so none of it may
+            ;; reach mom's morning
+            _ (consent! eng "iris")
+            _ (doseq [c (:cards (:doc (feed! eng :headers
+                                             {"x-waymark-principal" "iris"})))
+                      :when (not= "seam" (str (:card_id c)))
+                      d (days-before day 9)]
+                (saw! eng "iris" (str (:card_id c)) (str (:population c)) d))
+            after (:doc (feed! eng))]
+        (is (= before after)
+            "the same document, key for key: same seed, same order, same
+             notes, same cards, same narrated recipe — a non-recording
+             member's feed is not merely similar to what it was, it is the
+             same value, and the contest ran no query to compute it")
+        (is (every? #(and (nil? (:seen (:why %))) (nil? (:cooled (:why %))))
+                    (:cards after))
+            "and no card carries a cooling key, because there is nothing
+             to say")
+        (is (not-any? #(str/includes? (str %) "weighted by what you have")
+                      (:notes after))
+            "nor does the document mention a mechanism that did nothing —
+             a surface that explained an inert contest every morning
+             would be advertising it")))))
+
+(deftest a-cooled-card-steps-back-inside-its-own-lane-and-says-why
+  (let [eng (boot-house)]
+    (dotimes [i 3] (post! eng "fd_errands" {:title (str "errand " i)}))
+    (dotimes [i 3] (post! eng "fd_parcels" {:title (str "parcel " i)}))
+    (consent! eng "mom")
+    (let [before (:doc (feed! eng))
+          day (str (:day before))
+          top (first (filter #(= "do_now" (str (:section %))) (:cards before)))
+          cid (str (:card_id top))
+          _ (is (zero? (long (:seen (:why top))))
+                "a card nobody has been shown is FRESH — it ranks as unseen
+                 rather than as unloved")
+          seen (doseq [d (days-before day 3)]
+                 (saw! eng "mom" cid (str (:population top)) d))
+          after (:doc (feed! eng :query "explain=1"))
+          do-now (filter #(= "do_now" (str (:section %))) (:cards after))]
+      (is (nil? seen))
+      (is (= 3 (long (:seen (why-of after cid))))
+          "three days on the feed with nothing done — PER DAY, because the
+           storage counts one row per card per day and a person who deals
+           again three times is having one morning (waymark-dtv)")
+      (is (= 1 (long (:cooled (why-of after cid))))
+          "…which is exactly one step at cools_after 3")
+      (is (not= cid (str (:card_id (first do-now))))
+          "so it is behind its lane-mate now: the spread still decides
+           whose turn it is, and the formula only weights WITHIN a lane")
+      (is (= (count (filter #(= "do_now" (str (:section %))) (:cards before)))
+             (count do-now))
+          "and the line shows exactly as many cards as it did — cooling
+           reorders, it never starves")
+      (is (some #(str/includes? (str %) "Cooled — shown 3 days")
+                (:says (why-of after cid)))
+          "and the card says so, in the household's own words, with the
+           recipe's own numbers in the sentence")
+      (is (some #(str/includes? (str %) "Fresh —")
+                (:says (why-of after (str (:card_id (first do-now))))))
+          "while the card that overtook it says it has never been shown")
+      (is (some #(str/includes? (str %) "weighted by what you have already")
+                (:notes after))
+          "and the document says the contest weighted this read"))))
+
+(deftest the-floor-holds-under-any-view-data
+  (testing "law 3: a floored line never empties. The formula is a sort
+            key and there is no arithmetic anywhere that can drop a card,
+            so however much a member has seen, every line shows what its
+            take says it shows"
+    (let [eng (boot-house)]
+      (dotimes [i 4] (post! eng "fd_errands" {:title (str "errand " i)}))
+      (dotimes [i 4] (post! eng "fd_parcels" {:title (str "parcel " i)}))
+      (consent! eng "mom")
+      (let [before (:doc (feed! eng))
+            day (str (:day before))
+            showed (fn [doc] (mapv #(get % :showed) (:lines (:recipe doc))))]
+        ;; every card the house has, seen on every day of the window
+        (doseq [c (:cards before)
+                :when (not= "seam" (str (:card_id c)))
+                d (days-before day 13)]
+          (saw! eng "mom" (str (:card_id c)) (str (:population c)) d))
+        (let [after (:doc (feed! eng))]
+          (is (= (showed before) (showed after))
+              "line for line, the same number of cards")
+          (is (= (count (:cards before)) (count (:cards after))))
+          (let [do-now (filter #(= "do_now" (str (:section %))) (:cards after))]
+            (is (every? #(or (zero? (long (:seen (:why %) 0)))
+                             (<= 4 (long (:cooled (:why %) 0))))
+                        do-now)
+                "every card the member actually saw is thoroughly cold, and
+                 still on the page — which is the whole of the floor: a
+                 contest that could bury a line could not be measured")
+            (is (some #(zero? (long (:seen (:why %) 0))) do-now)
+                "and a card the member has never been shown has come
+                 forward into the page the cold ones used to fill, which is
+                 the contest doing the one thing it is for")))))))
+
+(deftest a-household-writes-its-own-contest-and-the-next-read-obeys
+  (testing "the two numbers are a field on the recipe ROW, so tuning the
+            contest is the form that already exists — and the very next
+            read is answered by what was written, uncached (waymark-4yn's
+            own decision, inherited)"
+    (let [eng (boot-house)]
+      (dotimes [i 3] (post! eng "fd_errands" {:title (str "errand " i)}))
+      (dotimes [i 3] (post! eng "fd_parcels" {:title (str "parcel " i)}))
+      (consent! eng "mom")
+      (let [before (:doc (feed! eng))
+            day (str (:day before))
+            top (first (filter #(= "do_now" (str (:section %))) (:cards before)))
+            made (call! eng :post "/api/feed_recipes"
+                        :body {:label "One morning is enough"
+                               :scope "household"
+                               :order (get-in before [:recipe :order])
+                               :formula {:window_days 30 :cools_after 1}})]
+        (is (= 201 (:status made)) (pr-str (:doc made)))
+        ;; one morning, and at cools_after 1 that is already a step
+        (saw! eng "mom" (str (:card_id top)) (str (:population top))
+              (first (days-before day 1)))
+        (let [after (:doc (feed! eng))]
+          (is (= {:window_days 30 :cools_after 1}
+                 (get-in after [:recipe :formula]))
+              "the household's own numbers answer this read")
+          (is (str/includes? (get-in after [:recipe :formula_says])
+                             "1 day inside the last 30"))
+          (is (= 1 (long (:cooled (why-of after (str (:card_id top))))))
+              "…and the arithmetic is the one the household just wrote")
+          (is (not= (str (:card_id top))
+                    (str (:card_id (first (filter #(= "do_now" (str (:section %)))
+                                                  (:cards after))))))))
+        (testing "and turning the contest off is a number, not a deletion"
+          (let [rid (last (str/split (str (:self (:doc made))) #"/"))
+                revised (call! eng :post (str "/api/feed_recipes/" rid "/-/revise")
+                               :body {:label "The seed alone"
+                                      :order (get-in before [:recipe :order])
+                                      :formula {:window_days 30 :cools_after 0}}
+                               ;; an edit implies the fence
+                               :headers {"if-match"
+                                         (get-in made [:doc :meta :etag])})
+                after (:doc (feed! eng))]
+            (is (= 200 (:status revised)) (pr-str (:doc revised)))
+            (is (str/includes? (get-in after [:recipe :formula_says])
+                               "The contest is off"))
+            (is (every? #(nil? (:seen (:why %))) (:cards after))
+                "no card carries a cooling key, because nothing is cooling")
+            (is (= (mapv :card_id (:cards before)) (mapv :card_id (:cards after)))
+                "and the order is the seeded one again")))))))

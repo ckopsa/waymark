@@ -3611,3 +3611,464 @@ without one.
   the answer for now and the cheaper one; if the ranker ever wants *"shown
   three times today across three spins"* it is a schema change and a law
   change, not a query.
+
+## Built — 8um.3, the readable formula and the exposure floor (2026-08-25, waymark-8um.3)
+
+Law 5, built: **the ranking formula is DATA the owner can read, never a hidden
+model.** The whole of it is two numbers on the recipe and one line of
+arithmetic. It is on the wire on every answer, it says what it did to every
+card it touched, it operates on three sections and never on the other two, and
+for a household that has turned nothing on it does not run at all — the
+document is the same value, key for key, that it was before this bead.
+
+### The formula, as landed
+
+Two numbers, and there is no third:
+
+```clojure
+;; feed/default-recipe
+:formula {:window-days 14 :cools-after 3}
+```
+
+```clojure
+(defn cooling-step
+  ^long [formula ^long seen]
+  (let [after (long (:cools-after formula 0))]
+    (if (pos? after) (quot seen after) 0)))
+```
+
+`seen` is **how many days this card was on THIS reader's own feed** inside the
+window. `step` is how many places back it sits **in its own line**. That is
+all of it.
+
+`:window-days` is how far back the counting looks — outside it a card is unseen
+again, because a card you scrolled past in June is not a card you are bored of
+in August. `:cools-after` is how many days a card may sit untouched before it
+steps back. The steps keep accruing and the **window bounds them on its own**
+(fourteen over three is four), which is why there is no third constant and no
+cap on the depth: a household can read two numbers, and the moment this schema
+needs a third field somebody is building the hidden model law 5 forbids.
+
+`cools_after 0` is the contest turned off, and it is deliberately a NUMBER a
+person can see rather than a key they have to know to delete.
+
+On the wire, on every read, beside `recipe.order`:
+
+```json
+"recipe": {
+  "guarantees": "The sections always come in this order — outcomes, do now, decide, fuel, seam, archive; exactly one card is the seam; the archive is last and bottomless; every line names a population this engine actually holds; and the contest is two numbers a person can read. …",
+  "order":   [ … ],
+  "formula": {"window_days": 14, "cools_after": 3},
+  "formula_says": "Below the crown and outside everything waiting on an answer, the order is weighted by what you have already seen — and this is the whole of it. A card that has been on your feed 3 days inside the last 14 without being acted on cools one step and sits behind the fresher cards IN ITS OWN LINE; 6 days is two steps, and the window lets a card go cold again on its own. A card you have never been shown is fresh, and ranks as unseen rather than as unloved. Cooling never removes a card and never empties a line — the seed still decides inside a step, and every line still shows as many cards as it says. It reads your own rows and nobody else's, and it does nothing at all until you turn the record of what you were shown on.",
+  "lines":   [ … ]
+}
+```
+
+Two keys because they answer different questions and neither answers the
+other's — `recipe.order`'s own sentence, one field over: `formula` is data a
+person copies into the form, `formula_says` is what they read before they
+decide to. The prose quotes the recipe's own numbers back, so a household that
+edits one reads its own arithmetic on the next morning's page.
+
+And on every card the contest touched, always, about twenty bytes:
+
+```json
+"why": {"line": 1, "rank": 3, "of": 8, "seen": 3, "cooled": 1}
+```
+
+The numbers ride the plain read rather than `?explain=1`, and that is
+deliberate: a card that moved for a reason and would not say so unless asked is
+the thing law 5 forbids. The **sentences** are still the opt-in half, exactly
+as `.29` arranged.
+
+### Which sections consult it, and which never do
+
+```clojure
+(def contested-sections #{:do_now :fuel :archive})
+```
+
+It is a literal in `feed.clj` and there is **no recipe field for it**, because
+laws 2 and 3 are the framework's and not the household's — a field here would
+be a field that could put the letters into the contest.
+
+- **`:outcomes` never consults it.** Its `:take` IS the exposure floor law 3
+  asks for. Weighting the crown would be the contest eating the measurement it
+  exists to be measured by.
+- **`:decide` never consults it** — `asks`, `letters`, `ticklers`, `conflicts`,
+  `insights`, `proposals`. Law 2: an obligation with a deadline appears because
+  it must.
+- **`:do_now`, `:fuel` and `:archive` do**, which is exactly where the owner's
+  own case for adaptivity lives: which of the five you have already scrolled
+  past four mornings running, which deed you have been congratulated on all
+  week, and the archive — the boredom sink.
+
+The gate is by SECTION rather than by population, and that is the law read
+carefully rather than a shortcut: laws 2 and 3 speak in sections, and a
+population added to `:decide` tomorrow inherits the wall without anybody
+remembering it exists.
+
+### waymark-dtv, decided: PER DAY
+
+**Per day, and the storage already answers only that question.**
+`feed_view`'s `:unique [[:card_id :day :member]]` collapses a card seen in
+three spins of one evening into ONE row, and `this-card-is-counted-once-a-day`
+refuses the second report by name. So `count` IS days-shown, with no `distinct`
+anywhere in `view-days` and none possible.
+
+The grain is also the honest one, which is what settles it rather than the
+convenience: what the formula wants to know is **how many mornings a card has
+been in front of somebody without being acted on**, and a person who deals
+again three times is having one morning. Per-draw would be a schema change (the
+unique grows a draw column, and the daily order's rows would need a
+null-or-sentinel draw) AND a law change (the volume arithmetic in § *Volume,
+honestly* assumes one row per card per day), bought for a distinction the
+household never asked about. Closed, and the reasoning is in `view-days`'
+docstring so nobody reopens it from the code either.
+
+### The verdict half, and why there is no join
+
+Law 5 says *a declared formula over view/verdict counts*. There is no join
+against the audit trail here and none is needed, because of a fact the mixer
+already guarantees: **a card acted on from the feed falls out of its population
+on the next read.** A do-now row that was completed is `work-over?`; a tickler
+answered is terminal or pushed out; an insight taken is terminal; a fuel or
+archive card has no verb to fire. So *still a candidate* already means *nothing
+was done about it*, and `seen` is therefore days-shown-and-untouched by
+construction rather than by a second query over `log-scan-cap` transitions.
+
+Recorded rather than assumed, because it is the sentence a later bead would
+otherwise re-derive: if a population is ever added whose cards SURVIVE being
+acted on, that population owes the join `feed/origin-of` already makes possible
+(waymark-8um.1 built the two names for it) — and it should say so at its
+registry entry rather than here.
+
+### The composition with the seed
+
+```clojure
+(sort-by (if cool
+           (juxt #(long (:lane % 0)) #(cool (cid %)) #(rank seed (cid %)))
+           (juxt #(long (:lane % 0))                 #(rank seed (cid %)))))
+```
+
+**Lane, then step, then hash**, and each position is an argument:
+
+- **The lane stays outermost**, so the spread `.24` built is untouched: no kind
+  can cool its way out of its turn, and five slots still draw from five kinds
+  when five kinds have work. The formula weights *within* a lane, which is
+  where the crowding-out it is meant to answer actually happens.
+- **The hash stays innermost**, so the seed still decides inside a step and the
+  answer is a pure function of `(member, day, draw, this reader's own view
+  rows)`. `:feed/day-stable` and `:feed/deal-again` are unchanged and still
+  true: two reads on one day answer the same cards, because the view rows are
+  the same rows both times.
+- **The branch is not a tidiness.** With no cooler the sort is the two-key sort
+  it has always been, not a three-key sort whose third key happens to be zero —
+  which is what makes *inert means unchanged* something a reader can see in the
+  code rather than something a comment claims.
+
+### Inert when off, and that is the default
+
+The formula reads `feed_view` rows, and there are none until a member turned
+their own record on (law 7, and off is the default for everybody).
+`reader-cooling` answers **nil** in that case: no query runs, no key is added
+to any card, and the sort takes the branch above.
+
+Proved the strongest way available, in `feed-test`
+(`a-non-recording-member-reads-the-feed-they-always-read`): a second member
+turns her record on and reports **every card of the house on nine separate
+days**, and the non-recording member's document is asserted equal *as a whole
+value* — `(= before after)` — same seed, same order, same notes, same cards,
+same narrated recipe. That is the byte-identity claim `8um.2` made about the
+default draw, made here about the default consent, and it carries the
+cross-member claim with it for free: the formula reads the reader's own rows
+and there is no filter here that could be relaxed, because `feed_view`'s
+`member` is engine-stamped from whoever posted it.
+
+The pack says the same thing from the wire twice: before the switch, and again
+after `stop` — because stopping has to put a reader back in the feed they
+started in, or *off* would be a third state.
+
+### The floor holds, and it holds by construction
+
+The step is a **sort key**. `entry-cards` computes `ordered` exactly as it did,
+sorts it, and takes `n`; there is no filter, no threshold and no arithmetic
+anywhere in this bead that can drop a candidate. So a floored line — the
+crown's `:take`, a queue line dedicated to `:kinds [:task]`, any line at all —
+shows exactly as many cards under any view data as it showed under none.
+
+Asserted rather than argued, from both sides:
+
+- **`feed-test/the-floor-holds-under-any-view-data`** drives every card the
+  member can see cold on thirteen separate days and asserts the section is the
+  same size — and then asserts the thing that makes the floor worth having: a
+  card the member has **never been shown** has come forward into the page the
+  cold ones used to fill. That is the contest doing the one thing it is for.
+- **`:feed/formula`** asserts it line by line off the document's own narrated
+  recipe: `recipe.lines[i].showed` is identical before and after every card on
+  the page has been looked at past the cooling threshold. If the floor ever
+  fails, that is the claim that names which line. The bottomless line is
+  excluded and the exclusion is honest rather than convenient — see the note
+  below on `recipe.lines`.
+
+### The why sentences, as they actually read
+
+Five, and three of them are the law rather than the arithmetic — said whether
+or not anybody is recording, because they are true either way:
+
+```
+Held by the floor: this section's take is a guaranteed slot, so this card is
+here because the floor says so and not because it won anything. Nothing about
+what you have already been shown moves it — a contest nobody can measure is
+not a contest.
+
+Outside the contest: something waiting on your answer appears because it must
+— an ask that expires, a conflict, mail on your shelf, a change staged for a
+tap — and what you have already been shown never moves it.
+
+Fresh — this card has not been on your feed in the last 14 days, so it ranks
+as unseen rather than as unloved and the seed alone placed it.
+
+Shown 2 days in the last 14 with nothing done, which is not yet enough to cool
+it: a card steps back after 3.
+
+Cooled — shown 4 days in the last 14 with nothing done, so it sits 1 step back
+in its own line. Cooling reorders inside a line and never empties one, the seed
+still decides inside a step, and this reads your own rows and nobody else's.
+```
+
+**One deviation, recorded.** Law 5's illustrative sentence is *"shown because
+you lingered here"*, and this file cannot honestly say it. `8um.1` refused to
+store a dwell time or an impression count on purpose — *"the exposure is the
+fact and the number of times a thumb scrolled back past it is not"* — so there
+is no lingering in the record to cite, and a sentence that claimed one would be
+the surface inventing evidence. What the record holds is the other half of the
+same law: how many mornings a card was in front of somebody and nothing
+happened. The law's other example, *"held by the floor"*, is said verbatim.
+
+### Where the constants live, and how they change
+
+**On the `feed_recipe` row**, as an optional `formula` field beside `order`,
+with `feed/default-formula` as the built-in — the same fallback shape `:salt`
+and `:zone` already have, so a row that names none keeps the deployment's
+numbers and the way to say *no contest* is `cools_after 0`.
+
+That choice buys four properties without building any of them:
+
+1. **The agent wall already stands.** `written-by-a-person` is at create,
+   revise, retire and restore. An agent that could tune the contest would be
+   the ranking model editing its own editorial frame, which is precisely what
+   that guard's own sentence is about. Not one line of it moved.
+2. **The editor is the generic form.** `formula-schema` is two bounded ints
+   with `x-display` prose; `:revise`'s `:edit {:prefill [:label :order
+   :formula]}` hands them back, so a person moving a line never silently clears
+   the numbers.
+3. **The tuning history is the row's transitions**, like every other edit.
+4. **Staged proposals govern it** — and this is the one half that did NOT
+   come free, which is worth saying plainly because it looked as though it
+   would. `:revise` overwrites `recipe-fields` wholesale, so a proposal that
+   knew nothing about the formula would have cleared it on every apply. So
+   `recipe_proposal` grew `formula` and `current_formula` (both optional,
+   mirroring `order`/`current_order`), `feed/formula-diff` and
+   `feed/recipe-diff` narrate the change beside the order's, both staleness
+   walls ask about the contest as well as the order, and `apply-the-order`
+   carries the CURRENT numbers through when a proposal named none. A proposal
+   that touches neither is exactly the proposal this kind has always been.
+
+The diff a person taps under:
+
+```
+The order itself is unchanged, line for line.
+A card cools a step after 5 days untouched instead of 3.
+The contest counts the last 21 days of your own looking instead of 14.
+```
+
+…or, when it is being switched off:
+
+```
+The contest turns OFF: nothing below the crown is weighted by what anybody has
+already been shown, and the seed alone decides the order.
+```
+
+An order-only change still says *"Nothing changes — this is the order already
+in force, line for line"* when it moved nothing; a contest-only change says the
+order is unchanged and then says what moved. *Nothing changes* beside a
+sentence saying what changes would be the diff arguing with itself.
+
+**The engine-opt alternative was refused, and the reason is law 5 itself.** A
+formula in `main.clj` is a code edit and a deploy, unreadable from the wire,
+unproposable, and — the disqualifying half — invisible to the household whose
+attention it is arranging. A formula the owner cannot read is the hidden model
+whatever its shape.
+
+### The fifth assembly check
+
+`check-recipe!` grew one, at the same door as the other four: the contest's two
+numbers are **numbers**, `window_days` 1–365 and `cools_after` 0–365. It runs
+at the build site for the built-in and as `the-assembly-checks-pass` for a
+stored row, so an unreadable formula refuses where it is written rather than at
+a read. `recipe-guarantees` gained the clause, which is the sentence a reader
+gets for free.
+
+`:judges` on that guard names `:order` alone and deliberately **not**
+`:formula`: `:judges` beside an `:open` claims this guard holds legal tokens
+the schema could not publish, and the formula's are published — two bounded
+ints, in the form's own schema. Naming it would have claimed a gap that is not
+there and earned three `effort-honesty` warnings nobody could clear. That is
+`0k4`'s own sentence about `:open` on a shape wall, one door over, and it was
+discovered by writing it the other way and watching the battery say so.
+
+### The cost, bounded and announced
+
+One indexed query per read, and **only when the reader is recording** — so a
+household that has turned nothing on pays nothing at all, which is every
+household until somebody chooses otherwise. It is `member=` plus `day_gte=`
+through the ordinary collection grammar (`in-states`' path, never a bespoke
+query), over the `(card_id, day, member)` index `8um.1` spent its one `:unique`
+group on for exactly this read.
+
+`view-scan-cap` is 2000 — a fortnight of one person's own looking with room
+over, against the ~40 rows a day § *Volume, honestly* projects. Truncation
+**fails toward showing rather than burying**, which is the only direction it
+could honestly fail: the rows dropped are the oldest days in the window, so a
+card reads as warmer by fewer steps than it has earned, never by more. The
+document says so when it happens, `history/fold-cap`'s posture inherited whole.
+
+`recording?` was being asked once already for the `views` key; it is asked once
+now and answered twice, so the switch costs one row read and not two.
+
+### Under a preview
+
+The formula reads the **previewed member's** rows, because `:principal` under a
+preview is theirs — and it must, or a preview would answer an order the member
+does not have, which is the one failure a preview may not have (`.23`'s own
+sentence about the roles union, one mechanism over). `views.recording` is a
+different question — *may the PREVIEWER's screen beacon* — and is still false
+on every preview.
+
+The consequence, said out loud rather than discovered: a previewer holding
+`feed.preview_as` can read `why.seen` on the member's cards, which is a fact
+about that member's looking. It is inside the contract that capability already
+has — the grant names one member, is four-eyes approved, expires and is
+revocable — and the ORDER itself already encodes the same fact, so concealing
+the number while serving the order it produced would be concealment that
+conceals nothing.
+
+### The screen
+
+Two additions, both of them joins rather than derivations (`.3`'s lesson):
+*Why this order* now opens into `recipe.formula_says` beneath the guarantees
+sentence — on every read, whether or not the contest is weighting it, because a
+formula a household can only read once it has already been affected by it is
+not a formula a household can read — and a card's *Why this card?* opens with
+the contest's own two numbers before any network happens, replaced by the
+server's sentences the first time anybody actually asks. The page authors no
+prose.
+
+### Where the law is proved
+
+- **`:feed/formula`, the pack's new LAST obligation** (`:needs` the route,
+  `member`, `feed_view`, `feed_view_consent`). It runs below `:feed/view-events`
+  for that obligation's own two reasons taken further: it mints a member AND
+  writes about a read, and it writes one for every card on the page. It
+  claims: the
+  formula is on the wire as data and as a sentence quoting its own numbers; a
+  member with no record reads no cooling key and no note about a contest; an
+  unseen card reads `seen 0`; a card in `outcomes` or `decide` carries no
+  cooling key at all; `cools_after` mornings of looking read back as exactly
+  that many days and exactly one step; the citation says *Cooled*; every line
+  above the bottomless one shows the same number of cards after every card on
+  the page has been looked at past the cooling threshold as it did before; and
+  stopping the record puts the order back where it was found. It reports
+  `:covered`, because an engine whose feed has no card in a contested section
+  has proved nothing about a contest.
+- **`runtime-conformance-test`** pins `:feed/formula` as having RUN with
+  positive coverage, beside `:feed/staged-proposals`, `:feed/view-events` and
+  `:feed/deal-again` — and this is the one whose silence would be hardest to
+  notice, because a contest that never ran looks exactly like a contest that is
+  inert, which is what it is supposed to look like.
+- **`feed-test`**, five deftests, for what a driver with one world cannot
+  arrange: a member whose whole view history the test wrote, a second member
+  built to prove the formula never reads across the house, and a do-now lane
+  with two kinds in it so a step BACK is something a reader could see happen.
+  The formula's arithmetic is also asserted directly, because two numbers a
+  household is promised it can predict from should be predictable in a test.
+  The fifth walks the field itself: a household POSTs a `feed_recipe` with its
+  own two numbers, the very next read is answered by them (uncached, `4yn`'s
+  own decision inherited), one morning at `cools_after 1` is already a step,
+  and a `revise` to `cools_after 0` puts every card back where the seed had it
+  with no cooling key anywhere — the off switch is a number, not a deletion.
+- **`recipe-proposal-test`** gained `the-contest-is-diffed-beside-the-order`:
+  an order-only proposal, a contest-only proposal, and the case that matters
+  for the staleness walls — an absent formula and one spelling the deployment's
+  own numbers are the same contest, and neither reads as a change.
+- **`ui-drive.mjs feed`** grew one check: *Why this order* opens into the
+  contest's own two numbers, narrated.
+
+### Recorded here, for whoever comes next
+
+- **No new kind, no new table, no migration.** `feed_recipe` and
+  `recipe_proposal` grew SCHEMA fields, and `:schema` is not one of
+  `fingerprint-of`'s facets — the finding `0k4` recorded when it corrected
+  `4yn`'s prediction. The schema plan is empty (a kind's fields live in
+  JSONB), so production needs nothing before the deploy that serves this.
+  `make check-queue` is unmoved at **35 kinds, 11 warnings, 39 scenarios**.
+- **ONE fingerprint moved, and it is the right one.** Computed on `HEAD` and
+  on this tree rather than argued: `feed_recipe` is `9e5ba71d…` both times,
+  `feed_view` and `feed_view_consent` are byte-identical, and every one of the
+  32 application kinds `fingerprint-stability-test` counts is unmoved.
+  `recipe_proposal` goes `0a4be5fd…` → `782e6b4e…`, and the mover is
+  `the-order-has-not-moved` — a `defguard` on `:apply`, so its body is inside
+  `machine.actions`. That wall now asks a second question (*has the contest
+  moved since this was staged?*), which is a real change to what the door
+  refuses, so a law revision is the honest answer rather than noise.
+  `boot-revise!` will write one. The two guards whose `:open` and `:judges`
+  sentences changed cost nothing, and it is worth knowing why:
+  `guard-fp` projects `name`, `check`, `explain`, `remedies`, `hide`,
+  `severity` and `requires_token` — an `:open` is a sentence a form reads and
+  `:judges` is which field a refusal points at, and neither is law.
+- **`recipe.lines` grew one key, and it is not this bead's mechanism.**
+  `bottomless` was on `recipe.order` all along and missing from the narrated
+  half, so a reader of *Why this order* was promised by the guarantees sentence
+  that exactly one line never ends and could not tell which. `:feed/formula`
+  needed the same fact for an honest floor claim — the archive's candidate set
+  is the transition log, and every view row is a transition, so the bottomless
+  line is the one line whose count may legitimately move for a reason that has
+  nothing to do with the contest. Said where the prose is, now.
+- **The formula is a read-side trait, exactly as `:over` is**, and the same
+  temptation should be resisted the same way: the moment a GUARD reads it, it
+  becomes law with a revision behind it. Today no door consults it.
+- **`contested-sections` is a literal on purpose.** If a household ever wants
+  its own answer to *which sections compete*, that is an argument with laws 2
+  and 3 and belongs in an amendment to this document, not in a recipe field.
+- **There is no per-population aggregate here and `feed_view.population` is
+  still unread by the formula.** The column is stored (`8um.1` put it there for
+  the diagnosis duty) and this bead aggregates by CARD alone, which is what the
+  one declared index answers. A per-population read is still the scan
+  waymark-fab is watching.
+- **A cursor page re-computes the cooling, and it must.** `document` asks
+  `reader-cooling` on every read including a cursor page, so the offset walks
+  the same order the first page walked. What that inherits is the punt
+  waymark-iqa.17 already records one register over: a view row written between
+  two pages can shift the ordering the offset is counting into, exactly as a
+  household write already can. The bound is the same — within a day and a quiet
+  evening the order holds — and the honest fix is the same one, for the same
+  population.
+- **The archive's window and the contest's window are different bounds and
+  should stay so.** `log-scan-cap` decides which rows are candidates;
+  `window-days` decides how tired the reader is of them. Collapsing them would
+  make *what the house did lately* a function of what one member has looked at.
+- **Three follow-ups are filed.** `waymark-bsf` (should the contest ever read
+  `feed_view.population` — *this house scrolls past every insight* is a
+  different and probably more useful thing to know than *this house scrolls
+  past THIS insight*, and it is a scan until `waymark-fab`'s index exists),
+  `waymark-mkn` (a population whose cards SURVIVE being acted on owes the
+  acted-follows join, and should say so at its registry entry), and
+  `waymark-hge` (`view-scan-cap` has arithmetic behind it and no measurement).
+- **`8um.4`'s diagnosis duty is what this bead deliberately did not build.**
+  The formula cools a card and says so; it never decides that a card should
+  STOP being shown, and nothing here fades anything. Law 4 — *no burial without
+  a diagnosis* — is unbroken because there is no burial: the floor holds, the
+  steps are bounded by the window, and a card that goes untouched long enough
+  becomes exactly the work order law 4 wants the composer to have. The counts
+  this bead reads back are the composer's evidence, already grantable
+  (`{:kind "feed_view" :actions []}`).

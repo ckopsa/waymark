@@ -4223,6 +4223,219 @@
                   " is terminal, so it leaves by construction rather than"
                   " by a query remembering to exclude it")))}))
 
+;; ── the contest (waymark-8um.3) ─────────────────────────────────────
+
+(defn- days-before
+  "The n days before a feed's own day, as the wire spells a date. The
+  view door takes the day as the client's word, checked for shape and
+  not for truth (waymark-8um.1's own recorded decision), which is what
+  lets this obligation write several mornings of looking in one run."
+  [^String day ^long n]
+  (mapv #(str (.minusDays (java.time.LocalDate/parse day) (long (inc ^long %))))
+        (range n)))
+
+(defn- line-showed
+  "How many cards each recipe line put on this page, off the document's
+  own narrated recipe — the BOTTOMLESS line excluded.
+
+  The exclusion is honest rather than convenient: the archive's
+  candidate set is a bounded newest-first window over the transition
+  log (`log-scan-cap`, the punt waymark-iqa.17 already records), and
+  every view row this obligation writes is a create and therefore a
+  transition. So the archive can legitimately show fewer cards after
+  a member has recorded a lot of looking, for a reason that has
+  nothing to do with the formula. Every other line reads ROWS, so its
+  count is the floor's claim exactly."
+  [doc]
+  (into []
+        (comp (remove #(true? (:bottomless %)))
+              (map #(long (get % :showed 0))))
+        (get-in doc [:recipe :lines])))
+
+(defn- cooling-of [doc card-id]
+  (some->> (feed-cards doc)
+           (filter #(= card-id (str (:card_id %))))
+           first :why))
+
+(defn- feed-formula-violations
+  "Law 5 from the wire: the ranking formula is DATA the owner can read,
+  and it does exactly three things.
+
+  1. **It is on the wire, as data and as a sentence.**
+     `recipe.formula` is two integers in the shape the editor takes;
+     `recipe.formula_says` narrates them in the household's words. A
+     formula a household cannot read is the model law 5 forbids, and
+     the only way to tell them apart is whether it is published.
+  2. **It is INERT until the reader turned their own record on.** A
+     member who has said nothing reads a feed with no cooling key on
+     any card and no note about a contest — and stopping the record
+     puts them back there. Off is the default, so this is what the
+     house gets.
+  3. **It reorders and never starves.** With every card on the page
+     looked at past the cooling threshold, every line still shows
+     exactly the number of cards it showed before. That is law 3's
+     floor, and it holds by construction rather than by a filter
+     remembering to spare something: the step is a sort key.
+
+  …and two laws about WHERE it operates, which are the framework's and
+  not the household's: a card in `outcomes` or `decide` carries no
+  cooling key at all, whatever the member has seen. The crown is held
+  by its floor and an obligation appears because it must.
+
+  It reports `:covered`, because an engine whose feed has no card in a
+  contested section has proved nothing about a contest."
+  [ctx]
+  (let [tag (subs (str (random-uuid)) 0 8)
+        made (req ctx :post (str "/api/" (:plural (rdef ctx :member)))
+                  {:display (str "contest-subject-" tag) :actor_type "human"})
+        member (some-> (:self (json ctx made)) id-of)
+        as-member {"x-waymark-principal" member}
+        off (when member (:doc (feed-doc ctx as-member)))
+        formula (get-in off [:recipe :formula])
+        says (str (get-in off [:recipe :formula_says]))
+        day (str (:day off))
+        cools (long (get formula :cools_after 0))
+        window (long (get formula :window_days 0))
+        switch (when member (post-row! ctx :feed_view_consent {} as-member))
+        switch-id (some-> (:doc switch) :self id-of)
+        fresh (when (= 201 (:status switch)) (:doc (feed-doc ctx as-member)))
+        contested? (fn [c] (contains? (into #{} (map name) feed/contested-sections)
+                                      (str (:section c))))
+        walled (remove contested?
+                       (remove #(= "seam" (str (:card_id %))) (feed-cards fresh)))
+        top (first (filter contested? (feed-cards fresh)))
+        cid (str (:card_id top))
+        ;; the member reads the same card on `cools_after` mornings and
+        ;; does nothing about it — which is the one fact this formula is
+        ;; made of, at the one grain the storage keeps it (per DAY:
+        ;; waymark-dtv, decided in waymark-8um.3)
+        _ (when (and top (pos? cools))
+            (doseq [d (days-before day cools)]
+              (post-row! ctx :feed_view
+                         {:card_id cid :population (str (:population top))
+                          :day d}
+                         as-member)))
+        cooled (when top (:doc (feed-doc ctx as-member "explain=1")))
+        ;; …and then EVERY card on the page, walled sections included —
+        ;; a claim that the crown is outside the contest is worth
+        ;; nothing unless the crown was actually looked at. One morning
+        ;; past the cooling threshold is enough to move everything that
+        ;; can move; a fortnight of it would push the archive's own
+        ;; candidate window (`log-scan-cap`, unfiltered) off the end of
+        ;; the log and prove something about the wrong mechanism.
+        _ (when (and (= 201 (:status switch)) (pos? cools))
+            (doseq [c (feed-cards fresh)
+                    :when (not= "seam" (str (:card_id c)))
+                    d (days-before day (min window (inc cools)))]
+              (post-row! ctx :feed_view
+                         {:card_id (str (:card_id c))
+                          :population (str (:population c)) :day d}
+                         as-member)))
+        frozen (when (= 201 (:status switch)) (:doc (feed-doc ctx as-member)))
+        ;; and the switch goes back where it was found, which must put
+        ;; the reader back in the feed they started in
+        stop (declared-name ctx :feed_view_consent :stop)
+        stopped (when switch-id
+                  (invoke-http ctx :feed_view_consent switch-id stop nil
+                               {:headers as-member}))
+        again (when (= 200 (:status stopped)) (:doc (feed-doc ctx as-member)))]
+    {:covered (if (and top cooled) 1 0)
+     :violations
+     (cond-> []
+       (nil? member)
+       (conj (str "feed: the contest obligation could not mint a member ("
+                  (:status made) "): " (pr-str (json ctx made))))
+
+       (and off (not (and (int? (:window_days formula))
+                          (int? (:cools_after formula)))))
+       (conj (str "feed: recipe.formula reads " (pr-str formula)
+                  " — the contest is two numbers the household can read,"
+                  " on every answer. A formula that is not published is"
+                  " the hidden model law 5 forbids, and publishing it is"
+                  " the whole difference"))
+
+       (and off (or (not (str/includes? says (str window)))
+                    (not (str/includes? says (str cools)))))
+       (conj (str "feed: recipe.formula_says does not quote its own"
+                  " numbers back — " (pr-str says)))
+
+       (and off (some #(some? (:seen (:why %))) (feed-cards off)))
+       (conj (str "feed: a member who has never turned the record on reads"
+                  " a card carrying a cooling count. The contest reads the"
+                  " reader's OWN view rows, there are none, and off is the"
+                  " default for everybody"))
+
+       (and off (some #(str/includes? (str %) "weighted by what you have")
+                      (:notes off)))
+       (conj (str "feed: the document tells a member with no record that"
+                  " their order was weighted by what they were shown —"
+                  " nothing was, and a surface that explains an inert"
+                  " mechanism every morning is advertising it"))
+
+       (and top (not= 0 (:seen (:why top))))
+       (conj (str "feed: a card this member has never been shown reads"
+                  " seen " (pr-str (:seen (:why top)))
+                  " — an unseen card ranks as unseen, never as unloved"))
+
+       (seq (filter #(some? (:seen (:why %))) walled))
+       (conj (str "feed: "
+                  (pr-str (mapv :card_id
+                                (filter #(some? (:seen (:why %))) walled)))
+                  " carries a cooling count and its section is outside the"
+                  " contest. Laws 2 and 3: an obligation appears because it"
+                  " must, and the crown's take IS the exposure floor — a"
+                  " contest that could weight the thing it is measured"
+                  " against would be measuring itself"))
+
+       (and cooled top (pos? cools)
+            (not= cools (:seen (cooling-of cooled cid))))
+       (conj (str "feed: after " cools " mornings on this member's own"
+                  " feed, " cid " reads seen "
+                  (pr-str (:seen (cooling-of cooled cid)))
+                  " — one row per card per day is the grain, so the count"
+                  " IS days-shown"))
+
+       (and cooled top (pos? cools) (not= 1 (:cooled (cooling-of cooled cid))))
+       (conj (str "feed: " cid " has been shown " cools
+                  " days untouched and reads cooled "
+                  (pr-str (:cooled (cooling-of cooled cid)))
+                  " — the formula is seen ÷ cools_after, rounded down, and"
+                  " a household that cannot predict it from the two numbers"
+                  " it read cannot argue with it"))
+
+       (and cooled top (pos? cools)
+            (not-any? #(str/includes? (str %) "Cooled")
+                      (:says (cooling-of cooled cid))))
+       (conj (str "feed: " cid " moved and its citation does not say so: "
+                  (pr-str (:says (cooling-of cooled cid)))
+                  " — law 5's other half is that a card's why says what"
+                  " lifted or held it"))
+
+       (and frozen fresh (pos? cools)
+            (not= (line-showed fresh) (line-showed frozen)))
+       (conj (str "feed: with everything this member has seen driven cold,"
+                  " the lines show " (pr-str (line-showed frozen))
+                  " where they showed " (pr-str (line-showed fresh))
+                  " — the floor did not hold. The step is a SORT key: it"
+                  " reorders inside a line and there is no arithmetic here"
+                  " that may drop a card"))
+
+       ;; above the seam only, and for `line-showed`'s own reason: the
+       ;; archive's candidate window is the transition log, and this
+       ;; obligation has been writing to it
+       (and again off
+            (not= (mapv :card_id (remove #(= "archive" (str (:section %)))
+                                         (feed-cards off)))
+                  (mapv :card_id (remove #(= "archive" (str (:section %)))
+                                         (feed-cards again)))))
+       (conj (str "feed: the member stopped their record and the order did"
+                  " not come back to what it was — inert has to mean"
+                  " inert, or stopping would be a third state"))
+
+       (and again (some #(some? (:seen (:why %))) (feed-cards again)))
+       (conj (str "feed: a stopped record still cools cards. Stopping"
+                  " stops the reading as well as the writing")))}))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -4323,7 +4536,20 @@
     {:name :feed/view-events
      :needs #{[:route :feed] [:kind :member]
               [:kind :feed_view] [:kind :feed_view_consent]}
-     :run feed-view-violations}]
+     :run feed-view-violations}
+    ;; …and the contest last of all (waymark-8um.3), for the view
+    ;; door's own two reasons taken further: it mints a member AND it
+    ;; writes about a read, and it writes a FORTNIGHT of them. Run
+    ;; higher, its rows would be in the transition log the archive
+    ;; folds and its cooling would be reordering the deck every
+    ;; obligation above reads. It stops the record before it returns,
+    ;; and asserts that stopping puts the order back where it found it
+    ;; — which is the same claim as leaving the engine as it was
+    ;; found, said from the reader's side.
+    {:name :feed/formula
+     :needs #{[:route :feed] [:kind :member]
+              [:kind :feed_view] [:kind :feed_view_consent]}
+     :run feed-formula-violations}]
    ;; Every obligation spec-feed § 'Where the law is proved' names is
    ;; here now, each having landed with the bead that landed the
    ;; mechanism it judges rather than ahead of it.

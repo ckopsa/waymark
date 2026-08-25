@@ -233,6 +233,14 @@ async function renderFeedScreen(view, doc) {
       if (recipe.guarantees)
         why.append(el("p", {class: "prose muted"}, recipe.guarantees));
     }
+    /* the contest, in the household's own words with its own two
+       numbers (waymark-8um.3, law 5). It rides EVERY answer, whether or
+       not it is doing anything for this reader, because the point of a
+       readable formula is that a person can read it before they have to
+       care — and the page authors none of it: the sentence is the
+       server's, the numbers are the recipe's. */
+    if (recipe.formula_says)
+      why.append(el("p", {class: "prose muted"}, recipe.formula_says));
     for (const n of doc.notes || [])
       why.append(el("p", {class: "prose muted"}, n));
     /* the view door, when it is SHUT (waymark-8um.1). The open case
@@ -538,6 +546,21 @@ async function renderFeedScreen(view, doc) {
     if (typeof why.rank === "number")
       box.append(el("p", {class: "muted"},
         "Drawn #" + why.rank + " of " + why.of + " this line offered today."));
+    /* the contest's own two numbers, from the card's own always-on why
+       (waymark-8um.3). Present only when the reader is recording and
+       this section is one the contest may weight — absent everywhere
+       else, which is itself the honest answer. The full sentence
+       arrives with the server's citation when anybody actually asks. */
+    if (typeof why.seen === "number")
+      box.append(el("p", {class: "muted"},
+        why.seen === 0
+          ? "Fresh — you have not been shown this one."
+          : ("Shown " + why.seen + " day" + (why.seen === 1 ? "" : "s")
+             + " with nothing done"
+             + (why.cooled > 0
+                ? (", so it steps back " + why.cooled
+                   + " place" + (why.cooled === 1 ? "" : "s") + " in its line.")
+                : ", which has not cooled it yet."))));
     const details = el("details", {class: "fcard-why"},
       el("summary", {}, "Why this card?"), box);
     let asked = false;

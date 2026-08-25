@@ -216,7 +216,26 @@
     (is (= [(str "Line " (seam-line)
                  ", the caught-up line, reads"
                  " \"Everything the house had, and that is all.\".")]
-           (proposal/diff-of wire changed)))))
+           (proposal/diff-of wire changed nil nil)))))
+
+(deftest the-contest-is-diffed-beside-the-order
+  ;; waymark-8um.3: the formula rides the same staged change, and a
+  ;; proposal that touches only the two numbers says the order is
+  ;; unchanged rather than saying "nothing changes" beside a sentence
+  ;; saying what changes
+  (let [wire (walk/keywordize-keys (feed/order-as-written feed/default-recipe))
+        now (walk/keywordize-keys (feed/formula-as-written feed/default-recipe))]
+    (is (= ["The order itself is unchanged, line for line."
+            "A card cools a step after 5 days untouched instead of 3."]
+           (proposal/diff-of wire wire now (assoc now :cools_after 5))))
+    (is (= ["The order itself is unchanged, line for line."
+            (str "The contest turns OFF: nothing below the crown is weighted"
+                 " by what anybody has already been shown, and the seed alone"
+                 " decides the order.")]
+           (proposal/diff-of wire wire now (assoc now :cools_after 0))))
+    ;; an absent formula and one spelling the deployment's own numbers
+    ;; are the same contest, and neither reads as a change
+    (is (= [feed/order-unchanged] (proposal/diff-of wire wire nil now)))))
 
 ;; ── staging: the wall stands, and the door beside it opens ──────────
 

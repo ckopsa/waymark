@@ -224,4 +224,13 @@
       ;; skip here would mean the door itself had gone missing.
       (is (contains? ran :feed/deal-again)
           (str ":feed/deal-again did not run; skipped for "
-               (pr-str (get skipped :feed/deal-again)))))))
+               (pr-str (get skipped :feed/deal-again))))
+      ;; waymark-8um.3: law 5, and the one whose silence would be
+      ;; hardest to notice — a contest that never ran looks exactly like
+      ;; a contest that is inert, which is what it is SUPPOSED to look
+      ;; like for a member who never turned the record on.
+      (is (contains? ran :feed/formula)
+          (str ":feed/formula did not run; skipped for "
+               (pr-str (get skipped :feed/formula))))
+      (is (pos? (suite/coverage report :feed/formula))
+          "a card in a contested section was actually cooled and said so"))))

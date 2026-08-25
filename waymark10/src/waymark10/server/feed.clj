@@ -114,6 +114,33 @@
   it is the same hash. See `parse-draw`, `seed-of` and `document`'s
   `:draw`.
 
+  ── THE CONTEST, AND WHY IT IS NOT A MODEL ──
+
+  Law 5 (laws v3, waymark-8um.3): *the ranking formula is DATA the
+  owner can read, never a hidden model.* The whole of it is two numbers
+  on the recipe (`:formula {:window-days :cools-after}`) and one line
+  of arithmetic (`cooling-step`): a card that has been on this
+  reader's own feed N days without being acted on sits a step back in
+  its own line, the seed still decides inside a step, and a card
+  nobody has been shown is FRESH — unseen, never unloved.
+
+  Three walls, and none of them is a promise:
+
+  - It reorders and never filters. The step is a sort key between the
+    lane and the hash, so a line shows exactly as many cards as its
+    `:take` says whatever the view data. The exposure floor (law 3)
+    therefore cannot be starved by arithmetic that has no way to drop
+    a card.
+  - It touches three sections and never the others
+    (`contested-sections`, read off laws 2 and 3, and not a recipe
+    field). The crown's floor and everything waiting on an answer are
+    outside the contest by construction.
+  - It reads the READER's OWN rows and nobody else's, and there are
+    none until that member turned their own record on. Off is the
+    default, so for a household that has said nothing the whole
+    mechanism is inert and the document is byte-identical to what it
+    was before this bead.
+
   ── NO DISCOVERY, TWICE ──
 
   The recipe is DATA and the populations are CODE, and neither is
@@ -284,7 +311,109 @@
     {:section :fuel    :population :streaks      :take 1}
     {:section :fuel    :population :finished     :take 2}
     {:seam true :sentence "That's the house, caught up."}
-    {:section :archive :population :memories :take 6 :bottomless true}]})
+    {:section :archive :population :memories :take 6 :bottomless true}]
+   ;; the contest's two numbers (waymark-8um.3, laws v3 law 5). They
+   ;; ride the recipe because that is where a household can READ them,
+   ;; edit them through the ordinary form, and be shown a diff before a
+   ;; tap changes them.
+   :formula {:window-days 14 :cools-after 3}})
+
+;; ── the contest: a formula the household can read (waymark-8um.3) ───
+;;
+;; Laws v3, law 5: *the ranking formula is DATA the owner can read — a
+;; declared formula over view counts, never a hidden model.* What was
+;; forbidden did not weaken, it got a name: a scoring function the
+;; household CANNOT READ. So the whole of the contest is two numbers on
+;; the recipe and one line of arithmetic (`cooling-step`), and every
+;; card it touches says so in its own citation, in the household's
+;; words, with the numbers quoted back.
+;;
+;; Laws 2 and 3 say WHERE it may operate, and that half is the
+;; framework's rather than the household's — see `contested-sections`.
+;;
+;; And law 7 says whether it operates at all: the formula reads the
+;; reader's OWN `feed_view` rows and there are none until that member
+;; turned their own record on. Off is the default, so for a household
+;; that has said nothing this whole section is inert and the feed is
+;; the byte-identical document it was before this bead.
+
+(def contested-sections
+  "The sections the formula may weight, and the whole of the answer to
+  *where does the contest operate*. It is read off laws 2 and 3 and it
+  is deliberately NOT tunable — a recipe field for it would be a field
+  that could put the letters into the contest.
+
+  `:decide` is the obligations — an ask that expires, a conflict
+  waiting on a verdict, mail on a shelf, a staged proposal — and law 2
+  says they appear because they MUST. `:outcomes` is the crown, whose
+  `:take` IS the exposure floor law 3 asks for, so weighting it would
+  be the contest eating the measurement it exists to be measured by.
+
+  What is left is exactly where the owner's own case for adaptivity
+  lives: do-now (which of the five you have already scrolled past four
+  mornings running), fuel, and the archive — the boredom sink."
+  #{:do_now :fuel :archive})
+
+(def default-formula
+  "The contest, as two numbers, and there is no third.
+
+  `:window-days` — how far back the counting looks. Outside it a card
+  is unseen again, because a card you scrolled past in June is not a
+  card you are bored of in August.
+
+  `:cools-after` — how many DAYS a card may sit on your feed untouched
+  before it cools one step and sits behind the fresher cards in its own
+  line. The steps keep accruing and the window bounds them on its own
+  (fourteen days over three is four), which is why there is no third
+  constant: law 5 asks for a formula a household can read, and a
+  household can read two numbers.
+
+  `:cools-after 0` turns the contest OFF and the recipe view says so
+  out loud — a household's own way to say *the seed alone*, with no
+  code edit and no deploy."
+  {:window-days 14
+   :cools-after 3})
+
+(def view-scan-cap
+  "View rows one read folds, newest day first. A recording member
+  writes on the order of forty rows a day (docs/spec-feed.md § 'Volume,
+  honestly'), so this holds a fortnight of one person's own looking
+  with room over.
+
+  Truncation fails toward SHOWING rather than burying, which is the
+  only direction it could honestly fail: the rows dropped are the
+  OLDEST days in the window, so a card reads as cooler by fewer steps
+  than it has earned, never by more. The document says so when it
+  happens, `history/fold-cap`'s posture inherited whole."
+  2000)
+
+(defn formula-of
+  "The formula this recipe reads: the household's own numbers, with the
+  deployment's filled in for anything it did not state. A row that
+  names none inherits the built-in's — the same shape `:salt` and
+  `:zone` already have — and the way to say *no contest* is
+  `cools_after 0`, which is a number a person can see rather than a
+  key they have to know to delete."
+  [recipe]
+  (merge default-formula (:formula recipe)))
+
+(defn cooling-step
+  "THE FORMULA, and this is the whole of it:
+
+      step = seen ÷ cools-after, rounded down
+
+  where `seen` is how many DAYS this card was on THIS reader's own feed
+  inside the window. Zero when nothing has been shown — an unseen card
+  ranks as unseen, never as unloved — and zero when the household set
+  `:cools-after` to nothing.
+
+  It is only ever an ORDER key. The step joins the sort behind the lane
+  and in front of the hash, so a line still shows exactly as many cards
+  as its `:take` says, the seed still decides inside a step, and there
+  is no arithmetic anywhere that can drop a card."
+  ^long [formula ^long seen]
+  (let [after (long (:cools-after formula 0))]
+    (if (pos? after) (quot seen after) 0)))
 
 ;; ── the seed ────────────────────────────────────────────────────────
 
@@ -521,9 +650,9 @@
   attribution anyway (`feed-view/a-view-is-your-own`). The two halves
   are belt and braces on purpose — a promise kept only in a client is
   a promise kept only until somebody writes a second client."
-  [ctx preview]
+  [ctx preview recording]
   (when-some [switch (collection-of ctx view-consent-kind)]
-    (let [on (and (nil? preview) (recording? ctx))]
+    (let [on (and (nil? preview) (boolean recording))]
       {:recording on
        :switch switch
        :post_to (collection-of ctx view-kind)
@@ -542,6 +671,90 @@
                (str "Nothing is being recorded about what you were"
                     " shown. It is off for everybody until each person"
                     " turns their own on, at " switch "."))})))
+
+;; ── the contest's one read (waymark-8um.3) ──────────────────────────
+
+(defn- view-days
+  "How many DAYS each card was on THIS reader's own feed inside the
+  formula's window — `{card_id days}` — plus whether the fold reached
+  its cap.
+
+  ONE indexed query, through the ordinary collection grammar
+  (`member=`, `day_gte=`) the way `in-states` asks its question: a
+  second way to ask *which rows are mine* is a second answer waiting to
+  disagree. It reads the reader's OWN rows and nothing else, which is
+  not a filter that could be relaxed but the whole shape of the law —
+  `feed_view`'s `member` is engine-stamped from whoever posted it, so
+  there are no other rows this read could name.
+
+  PER DAY, NOT PER DRAW (waymark-dtv, decided here). The storage
+  already answers the day-level question and only that one:
+  `feed_view`'s `:unique [[:card_id :day :member]]` collapses a card
+  seen in three spins of one evening into ONE row, and
+  `this-card-is-counted-once-a-day` refuses the second report by name.
+  So `count` IS days-shown, with no `distinct` anywhere and none
+  possible. The grain is also the honest one: what the formula wants to
+  know is how many MORNINGS a card has been in front of somebody
+  without being acted on, and a person who deals again three times is
+  having one morning. Per-draw would be a schema change (the unique
+  grows a draw column) and a law change (the volume arithmetic in
+  § 'Volume, honestly' assumes one row per card per day) bought for a
+  distinction the household never asked about."
+  [ctx formula]
+  (let [rdef (get (resources ctx) view-kind)
+        st (:storage (:eng ctx))
+        from (str (.minusDays (LocalDate/parse ^String (:day ctx))
+                              (long (:window-days formula 0))))
+        pid (str (:id (:principal ctx)))]
+    (try
+      (let [{:keys [conds]} (coll/parse-query rdef
+                                              {"member" pid "day_gte" from}
+                                              {:defaults? false})
+            rows (store/with-tx
+                   st (fn [tx] (store/search-rows st tx view-kind conds
+                                                  {:order-by :day :desc true
+                                                   :limit (inc view-scan-cap)})))]
+        {:counts (frequencies (keep #(some-> (get-in % [:data :card_id]) str)
+                                    rows))
+         :reached-cap (> (count rows) view-scan-cap)})
+      ;; a kind whose table this engine never made is not something the
+      ;; feed gets to fail over — `rows-of`'s posture, and here it is
+      ;; also the honest answer: no rows is no contest
+      (catch Exception _ nil))))
+
+(defn- reader-cooling
+  "The contest's whole state for one read, or NIL — and nil is the
+  DEFAULT, because the view record is off for everybody until each
+  person turns their own on (law 7).
+
+  Nil means inert: no query is run, no key is added to any card, and
+  the sort below is the two-key sort it has always been. That is what
+  makes *a non-recording member's feed is unchanged* a structural claim
+  rather than a promise.
+
+  Under a PREVIEW this reads the PREVIEWED member's rows, because
+  `:principal` here is theirs — and it must, or a preview would answer
+  an order the member does not have, which is the one failure a preview
+  may not have. It is the same sentence `for-reader` and the visibility
+  already say one door over. `views.recording` is a different question
+  (may the PREVIEWER's screen beacon — always no) and is answered
+  elsewhere."
+  [ctx recipe recording]
+  (let [formula (formula-of recipe)]
+    (when (and recording
+               (pos? (long (:cools-after formula 0)))
+               (get (resources ctx) view-kind))
+      (when-some [{:keys [counts reached-cap]} (view-days ctx formula)]
+        {:formula formula :counts counts :reached-cap reached-cap}))))
+
+(defn- cooler
+  "`(fn [card-id] → step)` for a section the contest may weight, or nil
+  — which is both the inert case and every section laws 2 and 3 keep
+  out of the contest."
+  [ctx section]
+  (when-some [{:keys [formula counts]} (:cooling ctx)]
+    (when (contains? contested-sections section)
+      (fn ^long [cid] (cooling-step formula (long (get counts cid 0)))))))
 
 (defn- candidates-of
   "Raw rows → candidates, carrying the row so the card builder need not
@@ -1603,7 +1816,8 @@
     1. every `:population` names a member of the closed registry;
     2. exactly one entry carries `:seam true`;
     3. at most one `:bottomless`, and it is last;
-    4. sections appear in census order.
+    4. sections appear in census order;
+    5. the contest's two numbers are numbers (waymark-8um.3).
 
   Plus the shape of `:kinds`, the one entry key that arrived after
   `.2` (waymark-iqa.24): an optional vector of kind keywords
@@ -1674,6 +1888,27 @@
         (refuse (str "the :bottomless entry is LAST — a section that never"
                      " ends cannot have anything below it")
                 {:last (last order)})))
+    ;; …and the fifth (waymark-8um.3): the contest's two numbers are
+    ;; numbers. A formula is DATA a household reads and edits, so it is
+    ;; judged here beside the order rather than trusted at read time —
+    ;; the same reason the four above run at the door: a recipe that
+    ;; will not assemble refuses where it is written.
+    (when-some [f (:formula recipe)]
+      (when-not (map? f)
+        (refuse (str ":formula is a map of {:window-days :cools-after} — the"
+                     " two numbers the contest is made of, or absent for the"
+                     " deployment's own")
+                {:formula f}))
+      (doseq [[k lo hi what]
+              [[:window-days 1 365 "how far back the counting looks"]
+               [:cools-after 0 365 (str "how many days a card may sit unacted"
+                                        " on before it cools a step — 0 is"
+                                        " the contest turned off")]]]
+        (when-some [v (get f k)]
+          (when-not (and (int? v) (<= (long lo) (long v) (long hi)))
+            (refuse (str ":formula " k " is " what ", " lo "–" hi
+                         " — read " (pr-str v))
+                    {:formula f})))))
     (reduce (fn [seen e]
               (let [s (if (:seam e) :seam (:section e))
                     r (census-rank s)]
@@ -2323,6 +2558,14 @@
             (str "says of itself " (pr-str (str (:says now))))
             "drops its own sentence and narrates itself again"))))
 
+(def order-unchanged
+  "The sentence an order that moved nothing says. Spelled once because
+  `recipe-diff` reads it back to decide whether the ORDER half of a
+  staged change said anything at all — an empty list under a verdict
+  button is the one thing a person cannot read, and two different
+  spellings of *nothing changed* would be two."
+  "Nothing changes — this is the order already in force, line for line.")
+
 (defn order-diff
   "Two orders — the one in force and the one proposed — read side by
   side, as the sentences a person reads before they tap. Both are in
@@ -2363,8 +2606,7 @@
                                     (line-says b))))))))
                     (range n))]
     (cond
-      (empty? moves)
-      ["Nothing changes — this is the order already in force, line for line."]
+      (empty? moves) [order-unchanged]
 
       (not= (count was) (count now))
       (into [(str "The order goes from " (count was) " line"
@@ -2372,6 +2614,57 @@
             moves)
 
       :else moves)))
+
+(defn formula-diff
+  "The contest's two numbers, read side by side (waymark-8um.3). Both
+  arguments are recipe-map formulas — nil for *whatever the deployment
+  says*, which is what `formula-of` fills in, so the comparison is
+  between the numbers a household would actually READ rather than
+  between one number and an absence.
+
+  Empty when nothing moved, so `recipe-diff` can tell an order-only
+  change from a contest-only one and say so."
+  [was now]
+  (let [a (formula-of {:formula was})
+        b (formula-of {:formula now})
+        wa (long (:window-days a)) wb (long (:window-days b))
+        ca (long (:cools-after a)) cb (long (:cools-after b))]
+    (cond-> []
+      (and (pos? ca) (zero? cb))
+      (conj (str "The contest turns OFF: nothing below the crown is weighted"
+                 " by what anybody has already been shown, and the seed alone"
+                 " decides the order."))
+
+      (and (zero? ca) (pos? cb))
+      (conj (str "The contest turns ON: a card that has been on your feed "
+                 cb " days inside the last " wb " with nothing done cools a"
+                 " step and sits behind the fresher cards in its own line."))
+
+      (and (pos? ca) (pos? cb) (not= ca cb))
+      (conj (str "A card cools a step after " cb " day"
+                 (when (not= 1 cb) "s") " untouched instead of " ca "."))
+
+      (and (pos? cb) (not= wa wb))
+      (conj (str "The contest counts the last " wb " days of your own looking"
+                 " instead of " wa ".")))))
+
+(defn recipe-diff
+  "The whole of a staged change, in the household's own words: what
+  moves in the ORDER, and what moves in the CONTEST. Both halves are
+  positional-and-pure like everything else here, and an order that
+  moved nothing says so rather than vanishing — but only when the
+  contest moved nothing either, because *nothing changes* beside a
+  sentence saying what changes would be the diff arguing with itself.
+
+  Both arguments are recipe maps, `{:order … :formula …}`."
+  [was now]
+  (let [moves (order-diff (:order was) (:order now))
+        moved? (not= moves [order-unchanged])
+        f (formula-diff (:formula was) (:formula now))]
+    (cond
+      (and (not moved?) (empty? f)) [order-unchanged]
+      (not moved?) (into ["The order itself is unchanged, line for line."] f)
+      :else (into moves f))))
 
 (def recipe-guarantees
   "The four assembly checks, as the one sentence they buy a reader.
@@ -2386,9 +2679,49 @@
   (str "The sections always come in this order — "
        (str/join ", " (map #(str/replace (name %) "_" " ") census))
        "; exactly one card is the seam; the archive"
-       " is last and bottomless; and every line names a population this"
-       " engine actually holds. A recipe that broke any of those would have"
-       " refused to start rather than serve you a surprise."))
+       " is last and bottomless; every line names a population this"
+       " engine actually holds; and the contest is two numbers a person can"
+       " read. A recipe that broke any of those would have refused to start"
+       " rather than serve you a surprise."))
+
+(defn formula-as-written
+  "The contest's two numbers in the shape the EDITOR takes — the wire
+  spelling of `waymark10.feed-recipe`'s `formula` field, so what a
+  person copies out of a feed document is what the form takes back.
+  `recipe.order`'s own sentence, one field over."
+  [recipe]
+  (let [f (formula-of recipe)]
+    {"window_days" (:window-days f)
+     "cools_after" (:cools-after f)}))
+
+(defn formula-says
+  "The contest, narrated in household words with its own numbers quoted
+  back — the recipe view's half of law 5. A pure function of the
+  recipe, like every other line of `recipe-view`: what THIS reader's
+  own looking did to THIS read is a card's business (`cooling-says`)
+  and a note's, because only a read knows it."
+  ^String [recipe]
+  (let [{:keys [window-days cools-after]} (formula-of recipe)]
+    (if-not (pos? (long cools-after))
+      (str "The contest is off: this order says cools_after 0, so nothing"
+           " below is weighted by what anybody has already been shown and"
+           " the seed alone decides. Turning it back on is a number in this"
+           " same form.")
+      (str "Below the crown and outside everything waiting on an answer, the"
+           " order is weighted by what you have already seen — and this is"
+           " the whole of it. A card that has been on your feed "
+           cools-after " day" (when (not= 1 (long cools-after)) "s")
+           " inside the last " window-days
+           " without being acted on cools one step and sits behind the"
+           " fresher cards IN ITS OWN LINE; " (* 2 (long cools-after))
+           " days is two steps, and the window lets a card go cold again"
+           " on its own. A card you have never been shown is fresh, and"
+           " ranks as unseen rather than as unloved. Cooling never removes"
+           " a card and never empties a line — the seed still decides"
+           " inside a step, and every line still shows as many cards as it"
+           " says. It reads your own rows and nobody else's, and it does"
+           " nothing at all until you turn the record of what you were"
+           " shown on."))))
 
 (defn order-as-written
   "The recipe's order in the shape the EDITOR takes — the wire spelling
@@ -2433,6 +2766,12 @@
   [recipe]
   {"guarantees" recipe-guarantees
    "order" (order-as-written recipe)
+   ;; the contest, as DATA and as a sentence (waymark-8um.3). Two keys
+   ;; because they answer different questions and neither answers the
+   ;; other's — `formula` is what a person copies into the form,
+   ;; `formula_says` is what they read before they decide to.
+   "formula" (formula-as-written recipe)
+   "formula_says" (formula-says recipe)
    "lines" (into []
                  (map-indexed
                   (fn [i e]
@@ -2443,7 +2782,14 @@
                              "population" (name (:population e))
                              "take" (:take e))
                       (seq (:kinds e))
-                      (assoc "kinds" (mapv name (:kinds e))))))
+                      (assoc "kinds" (mapv name (:kinds e)))
+                      ;; which line never ends — the guarantees sentence
+                      ;; promises exactly one, and until waymark-8um.3
+                      ;; the narrated half was the only place a reader
+                      ;; could not tell WHICH. `order` carried it all
+                      ;; along; this is the same fact said where the
+                      ;; prose is.
+                      (:bottomless e) (assoc "bottomless" true))))
                  (:order recipe))})
 
 (defn- drawn-says
@@ -2469,14 +2815,69 @@
          " this draw holds until you deal again."
          " it decides once a day.")))
 
+(defn- cooling-says
+  "What the contest did to THIS card, in the household's own words —
+  law 5's *a card's why says what lifted or held it*.
+
+  Three of the five sentences are the law rather than the arithmetic,
+  and they are said whether or not anybody is recording, because they
+  are true either way: the crown is held by its floor, and an
+  obligation is outside the contest. The other two are the formula
+  read back against this card with the recipe's own numbers in them.
+
+  ONE DEVIATION, RECORDED: law 5's illustrative sentence is *'shown
+  because you lingered here'*, and this file cannot honestly say it.
+  waymark-8um.1 refused to store a dwell time or an impression count on
+  purpose (*'the exposure is the fact and the number of times a thumb
+  scrolled back past it is not'*), so there is no lingering in the
+  record to cite. What the record holds is the other half of the same
+  law — how many mornings a card was in front of somebody and nothing
+  happened — and that is what these sentences say."
+  [section {:keys [formula seen step]}]
+  (cond
+    (= :outcomes section)
+    (str "Held by the floor: this section's take is a guaranteed slot, so"
+         " this card is here because the floor says so and not because it"
+         " won anything. Nothing about what you have already been shown"
+         " moves it — a contest nobody can measure is not a contest.")
+
+    (= :decide section)
+    (str "Outside the contest: something waiting on your answer appears"
+         " because it must — an ask that expires, a conflict, mail on your"
+         " shelf, a change staged for a tap — and what you have already"
+         " been shown never moves it.")
+
+    (nil? formula) nil
+
+    (zero? (long seen))
+    (str "Fresh — this card has not been on your feed in the last "
+         (:window-days formula) " days, so it ranks as unseen rather than"
+         " as unloved and the seed alone placed it.")
+
+    (zero? (long step))
+    (str "Shown " seen " day" (when (not= 1 (long seen)) "s") " in the last "
+         (:window-days formula) " with nothing done, which is not yet enough"
+         " to cool it: a card steps back after " (:cools-after formula)
+         ".")
+
+    :else
+    (str "Cooled — shown " seen " day" (when (not= 1 (long seen)) "s")
+         " in the last " (:window-days formula)
+         " with nothing done, so it sits " step " step"
+         (when (not= 1 (long step)) "s") " back in its own line. Cooling"
+         " reorders inside a line and never empties one, the seed still"
+         " decides inside a step, and this reads your own rows and nobody"
+         " else's.")))
+
 (defn card-says
   "The whole citation for one card, as sentences a parent reads.
 
-  Four parts and each is somebody's declaration rather than this
+  Five parts and each is somebody's declaration rather than this
   function's opinion: the RECIPE LINE that admitted it, the DECLARED
   TRAITS that population reads (in the kind's own words, quoted back
   against this row), the section's own extra bargain where it has one,
-  and the SEED's draw."
+  what the CONTEST did to it (waymark-8um.3 — the recipe's own two
+  numbers, read back), and the SEED's draw."
   [entry rdef row {:keys [section] :as draw}]
   (into []
         (remove nil?)
@@ -2494,6 +2895,7 @@
           (when (= :archive section)
             (str "It is below the seam because its work is over as the row"
                  " stands now, not merely because it moved a while ago."))
+          (cooling-says section draw)
           (drawn-says draw)])))
 
 ;; ── the mixer ───────────────────────────────────────────────────────
@@ -2551,6 +2953,14 @@
         of-kind? (if (seq kinds) (comp (set kinds) :kind) (constantly true))
         unseen (remove #(contains? seen [(:kind %) (:id %)]) candidates)
         claimed-above (- (count candidates) (count unseen))
+        cid (fn ^String [c] (card-id section (:kind c) (:id c)))
+        ;; the contest, where it is allowed to operate at all
+        ;; (waymark-8um.3). Nil is the default and the inert case, and
+        ;; the branch below is what makes *inert means unchanged* a
+        ;; structural claim: with no cooler the sort is the two-key
+        ;; sort it has always been, not a three-key sort whose third
+        ;; key happens to be zero.
+        cool (cooler ctx section)
         ordered (->> unseen
                      (filter of-kind?)
                      ;; the LANE first, the hash inside it (waymark-
@@ -2560,9 +2970,22 @@
                      ;; carries lane 0 and this is the sort it always
                      ;; was. Nothing is compared to anything: the lane
                      ;; is composition, the hash is the order.
-                     (sort-by (juxt #(long (:lane % 0))
-                                    #(rank seed (card-id section (:kind %)
-                                                          (:id %))))))
+                     ;;
+                     ;; …AND THE COOLING STEP BETWEEN THEM, when the
+                     ;; reader is recording and this section is one of
+                     ;; the three the contest may weight. The spread
+                     ;; stays outermost — the formula weights WITHIN a
+                     ;; lane, so no kind can cool its way out of its
+                     ;; turn — and the hash stays innermost, so the
+                     ;; seed still decides inside a step and the whole
+                     ;; answer is a pure function of (member, day,
+                     ;; draw, this reader's own view rows).
+                     (sort-by (if cool
+                                (juxt #(long (:lane % 0))
+                                      #(cool (cid %))
+                                      #(rank seed (cid %)))
+                                (juxt #(long (:lane % 0))
+                                      #(rank seed (cid %))))))
         claimed (into #{} (map (juxt :kind :id)) ordered)
         offered (count ordered)
         off (long (or offset 0))
@@ -2577,17 +3000,31 @@
         ;; a card on archive page three is drawn 19th of 40, not 1st
         ;; of 6), and the sentences when the reader asked for them
         cite (fn [c cand ^long i]
-               (let [draw {:rank (inc (+ off i)) :of offered
-                           :lane (:lane cand 0) :kind (:kind cand)
-                           :section section :day (:day ctx)
-                           ;; …and which draw's order these numbers
-                           ;; belong to, where the person dealt again
-                           :draw (:draw ctx)
-                           :seeded-for (:seeded-for ctx "you")}
+               (let [;; the contest's own two numbers for THIS card, or
+                     ;; nothing at all when it is inert or this section
+                     ;; is outside the contest (waymark-8um.3). Both
+                     ;; ride the always-on `why`, because a card that
+                     ;; moved for a reason and would not say so on a
+                     ;; plain read is the thing law 5 forbids; together
+                     ;; they are about twenty bytes.
+                     seen (when cool
+                            (long (get-in (:cooling ctx) [:counts (cid cand)] 0)))
+                     step (when cool (long (cool (cid cand))))
+                     draw (cond-> {:rank (inc (+ off i)) :of offered
+                                   :lane (:lane cand 0) :kind (:kind cand)
+                                   :section section :day (:day ctx)
+                                   ;; …and which draw's order these
+                                   ;; numbers belong to, where the
+                                   ;; person dealt again
+                                   :draw (:draw ctx)
+                                   :seeded-for (:seeded-for ctx "you")}
+                            cool (assoc :formula (:formula (:cooling ctx))
+                                        :seen seen :step step))
                      rdef (get (resources ctx) (:kind cand))]
                  (assoc c "why"
                         (cond-> {"line" (:line entry)
                                  "rank" (:rank draw) "of" offered}
+                          cool (assoc "seen" seen "cooled" step)
                           explain?
                           (assoc "says"
                                  (card-says entry rdef
@@ -2706,6 +3143,16 @@
               ;; optimistic advertisement, and the cache keeps the
               ;; repeated probe of one member row to a single query
               (:probe-reads eng) (assoc :render-hooks (inv/render-hooks eng)))
+        ;; the view switch, asked ONCE and answered twice: `views`
+        ;; below says whether this reader's SCREEN may report what it
+        ;; showed, and the contest reads the rows that switch let be
+        ;; written. Two questions, one indexed row read.
+        recording (recording? ctx)
+        ;; the contest's state for this read, or nil — and nil is what
+        ;; a household that has said nothing gets, which is everybody
+        ;; until somebody chooses otherwise (waymark-8um.3)
+        cooling (reader-cooling ctx recipe recording)
+        ctx (cond-> ctx cooling (assoc :cooling cooling))
         archive-only? (some? offset)
         lines (into [] (map-indexed (fn [i e] (assoc e :line i)))
                     (:order recipe))
@@ -2788,7 +3235,7 @@
         ;; switch is either way. Computed here rather than left to the
         ;; client because the PREVIEW half has to be the server's — see
         ;; views-doc
-        views (views-doc ctx preview)
+        views (views-doc ctx preview recording)
         recipe-doc (cond-> (update (recipe-view recipe) "lines"
                                    (fn [ls] (mapv (fn [l]
                                                     (merge l (get counts (get l "line"))))
@@ -2847,6 +3294,35 @@
                             " and recipe below narrates the order itself. Add"
                             " ?explain=1 to have each card spell its citation"
                             " out in sentences."))
+                     ;; …and whether the contest weighted THIS read
+                     ;; (waymark-8um.3). Said only when it did, and for
+                     ;; the same reason the sentence above is: a
+                     ;; surface that explained an inert mechanism every
+                     ;; morning would be advertising it. When it is
+                     ;; inert the recipe view still carries the formula
+                     ;; and its sentence, for whoever asks.
+                     (when cooling
+                       (let [{:keys [window-days cools-after]} (:formula cooling)]
+                         (str "This order was weighted by what you have"
+                              " already been shown: a card that has been on"
+                              " your feed " cools-after " day"
+                              (when (not= 1 (long cools-after)) "s")
+                              " inside the last " window-days
+                              " with nothing done cools"
+                              " a step and sits behind the fresher cards in"
+                              " its own line. It reads your own rows and"
+                              " nobody else's, it never empties a line, and"
+                              " the crown and everything waiting on your"
+                              " answer are outside it. Every card says which"
+                              " of those it is; recipe.formula is the whole"
+                              " of the arithmetic; stop the record and this"
+                              " stops with it.")))
+                     (when (:reached-cap cooling)
+                       (str "The contest read to its cap and stopped — the"
+                            " newest " view-scan-cap " of your own view rows."
+                            " Older days in the window are unread, so a card"
+                            " may read as WARMER than it has earned, never"
+                            " cooler."))
                      ;; …and whether this read is being remembered
                      ;; (waymark-8um.1). Said out loud only when it IS,
                      ;; because a surface that announced its own

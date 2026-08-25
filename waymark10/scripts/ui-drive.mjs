@@ -1015,6 +1015,23 @@ async function feedStory() {
      })()`));
   console.log("    recipe, line 1: " +
     await evaljs(`document.querySelector("ol.feed-recipe li").textContent.trim()`));
+  /* …and the contest, right there beside the order (waymark-8um.3,
+     law 5). It is on every answer whether or not it is weighting THIS
+     read, because a formula a household can only read once it has
+     already been affected by it is not a formula a household can
+     read. */
+  const contest = await evaljs(`(() => {
+    const d = document.querySelector(".feed-why");
+    if (!d) return "";
+    const p = [...d.querySelectorAll("p.prose")]
+      .find(p => p.textContent.includes("cools one step") ||
+                 p.textContent.includes("contest is off"));
+    return p ? p.textContent.trim() : ""; })()`);
+  ok("…and into the contest's own two numbers, narrated",
+     contest.length > 40 &&
+     (contest.includes("your own rows and nobody else's") ||
+      contest.includes("the seed alone decides")));
+  console.log("    the contest: " + contest);
   const asked = await evaljs(`(() => {
     const d = document.querySelector(
       '.fcard[data-population="next_actions"] details.fcard-why');

@@ -35,11 +35,12 @@
   row read beside the dozen population queries the same request
   already runs.
 
-  ── the four assembly checks, unchanged, moved to the doors ──
+  ── the assembly checks, unchanged, moved to the doors ──
 
   `feed/check-recipe!` is the same function it always was — exactly
   one seam, at most one bottomless and it is last, sections in census
-  order, every population one this engine holds — and it now runs as a
+  order, every population one this engine holds, and (waymark-8um.3)
+  the contest's two numbers are numbers — and it now runs as a
   GUARD at create and at revise (`the-assembly-checks-pass`), refusing
   with the sentences it already knew. An invalid recipe therefore
   cannot be stored, and the feed cannot break at read time from a bad
@@ -48,6 +49,23 @@
   tradition: a redeploy that retires a population strands a row, and a
   stranded row must not take the morning down with it. The stamp says
   so out loud when it happens.
+
+  ── AND THE CONTEST'S TWO NUMBERS (waymark-8um.3) ──
+
+  Laws v3 law 5: *the ranking formula is DATA the owner can read.* The
+  formula is `{:window_days :cools_after}` — how far back the contest
+  counts a member's own looking, and how many days a card may sit
+  untouched before it steps back inside its own line — and it lives
+  HERE, on the row, because this is where data the household reads is
+  kept. Riding the recipe rather than an engine opt is what makes it
+  tunable through the form that already exists, diffable by
+  `recipe_proposal`, walled by `written-by-a-person` below, and
+  revertible out of this row's own transitions. None of those four had
+  to be built.
+
+  Absent leaves the deployment's own numbers standing; the way to say
+  NO contest is `cools_after 0`, which is a number a person can see
+  rather than a key they have to know to delete.
 
   ── HUMAN-WRITABLE ONLY ──
 
@@ -93,8 +111,18 @@
   the write gate judges, so what is stored is exactly what was judged.
   `:scope` and `:owner` stay OUT: a row never changes whose morning it
   arranges, and the owner is the engine's stamp rather than anybody's
-  input."
-  [:label :order])
+  input.
+
+  `:formula` joined with waymark-8um.3 and it belongs here for the
+  reason the whole kind exists: law 5 says the contest's rule is DATA
+  the household can read, and this is where data the household reads is
+  kept. Riding this row rather than an engine opt is what makes the
+  contest tunable through the form that already exists, diffable by
+  `recipe_proposal`, walled by `written-by-a-person`, and revertible
+  out of the row's own transitions — four properties nobody had to
+  build a second time. `:revise` prefills it, so a person editing the
+  order never silently clears the numbers."
+  [:label :order :formula])
 
 ;; ── the wire shape ↔ the recipe map ─────────────────────────────────
 
@@ -137,9 +165,26 @@
   taste the morning is tuned by. It stayed an engine opt, where a
   deployment states it once. (The battery agreed from the other
   direction: a free-text zone box is a blank rectangle a guard judges
-  against a vocabulary the JVM enumerates exhaustively.)"
+  against a vocabulary the JVM enumerates exhaustively.)
+
+  `:formula` IS here (waymark-8um.3), and the difference from those two
+  is the difference law 5 draws: the salt is the seed's input and the
+  zone is where the house stands, but *how long a card I have already
+  scrolled past keeps its place* is a taste, said in two numbers, in
+  the household's own hand. Absent leaves the deployment's own numbers
+  standing (`usable` merges over the built-in); the way to say NO
+  contest is `cools_after 0`, which is a number a person can see rather
+  than a key they have to know to delete."
   [data]
-  {:order (mapv line-of (:order data))})
+  (cond-> {:order (mapv line-of (:order data))}
+    (map? (:formula data))
+    (assoc :formula
+           (into {}
+                 (keep (fn [[k v]]
+                         (when (some? v)
+                           [k (if (string? v) (parse-long v) v)])))
+                 {:window-days (get-in data [:formula :window_days])
+                  :cools-after (get-in data [:formula :cools_after])}))))
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
@@ -157,9 +202,17 @@
     (t/allow)))
 
 (g/defguard the-assembly-checks-pass
+  ;; :judges names :order alone even though check-recipe! now judges
+  ;; the formula too (waymark-8um.3). `:judges` beside an `:open` is a
+  ;; claim that this guard holds legal tokens the schema could not
+  ;; publish — and the formula's are published: two ints, 1–365 and
+  ;; 0–365, in the form's own schema. Naming it here would claim a gap
+  ;; that is not there and earn an effort-honesty warning nobody could
+  ;; ever clear, which is 0k4's own sentence about `:open` on a shape
+  ;; wall, one door over.
   {:judges [:order]
    :vars [:problems]
-   :open "The law is feed/check-recipe! — the same four assembly checks that used to refuse the BOOT: exactly one seam, the archive last and bottomless, sections in census order, every population one this engine holds."
+   :open "The law is feed/check-recipe! — the same assembly checks that used to refuse the BOOT: exactly one seam, the archive last and bottomless, sections in census order, every population one this engine holds, and the contest's two numbers are numbers."
    :explain "This order will not assemble: {problems}"}
   [_row inp _ctx]
   ;; the schema has already validated the SHAPE (invoke validates
@@ -383,6 +436,26 @@
                               :help "This line pages forever, walked by the cursor. At most one line may say so, and it is the last one."}}
      [:maybe :boolean]]]])
 
+(def formula-schema
+  "The contest, as two numbers (waymark-8um.3, laws v3 law 5). It is a
+  MAP of exactly two integers and it will never be anything else — the
+  moment this schema needs a third field, somebody is building the
+  hidden model law 5 forbids, and the epic's own paragraph is the
+  citation.
+
+  The bounds are the same ones `feed/check-recipe!`'s fifth check
+  applies, said here so the FORM refuses a nonsense number before
+  anybody has to read a guard's sentence about it."
+  [:map
+   [:window_days {:optional true
+                  :x-display {:label "How far back it counts"
+                              :help "How many days of your own looking the contest reads. Outside this window a card is unseen again — something you scrolled past in June is not something you are bored of in August."}}
+    [:maybe [:int {:min 1 :max 365}]]]
+   [:cools_after {:optional true
+                  :x-display {:label "Days before a card cools a step"
+                              :help "How many days a card may sit on your feed untouched before it steps back behind the fresher cards in its own line. Twice that many days is two steps. Zero turns the contest off entirely and the seed alone decides."}}
+    [:maybe [:int {:min 0 :max 365}]]]])
+
 (def ^:private prose
   "The household's own words for the authored fields, spelled ONCE and
   worn by all three doors — the row schema, the create form's narrower
@@ -396,6 +469,9 @@
    :owner {:x-display {:raw true
                        :label "Whose"
                        :help "The member whose own order this is, stamped by the engine when the scope is mine. A household order carries none."}}
+   :formula {:examples [{:window_days 14 :cools_after 3}]
+             :x-display {:label "The contest"
+                         :help "Two numbers, and the whole of how the order is weighted by what you have already been shown: how far back it counts, and how many days a card may sit untouched before it steps back inside its own line. It reads your own rows and nobody else's, it never empties a line, and the crown and everything waiting on your answer are outside it. Leave it empty for this deployment's own numbers; set cools_after to 0 to turn it off."}}
    :order {:examples [order-example]
            :x-display {:label "The order, line by line"
                        :help "The whole feed, top to bottom: one entry per line, and the vector's order IS the page's order. The house's current order rides the feed document at recipe.order in exactly this shape — copy it and edit a line. Exactly one line is the seam; the bottomless line is last; the sections keep census order; every population is one this engine holds. A line that breaks any of those is refused here, with the sentence that says which."}}})
@@ -416,7 +492,8 @@
   the same value under the same name, no longer behind a `^:private`."
   [:map
    (entry :label {} [:string {:min 1 :max 60}])
-   (entry :order {} order-schema)])
+   (entry :order {} order-schema)
+   (entry :formula {:optional true} [:maybe formula-schema])])
 
 ;; ── the law, written down ───────────────────────────────────────────
 ;; The one sentence this kind most wants checked, and the reason it
@@ -480,13 +557,15 @@
                    [:enum "household" "mine"])
             (entry :owner {:optional true :filter #{:eq}}
                    [:maybe [:string {:max 128}]])
-            (entry :order {} order-schema)]
+            (entry :order {} order-schema)
+            (entry :formula {:optional true} [:maybe formula-schema])]
    ;; the client states whose order and what it says; the OWNER is the
    ;; engine's stamp (dashboard_slot's split, and dwelling's reason)
    :create-schema [:map
                    (entry :label {} [:string {:min 1 :max 60}])
                    (entry :scope {} [:enum "household" "mine"])
-                   (entry :order {} order-schema)]
+                   (entry :order {} order-schema)
+                   (entry :formula {:optional true} [:maybe formula-schema])]
    ;; scope and owner carry their own :filter on the schema entries
    ;; above — one concern, one home — so only the machine's own column
    ;; is spelled here
@@ -499,7 +578,12 @@
    :actions
    {:revise {:from #{:active} :to :active
              :input recipe-input
-             :edit {:prefill [:label :order]}
+             ;; the prefill carries the FORMULA too (waymark-8um.3),
+             ;; and it must: :revise overwrites recipe-fields
+             ;; wholesale, so a form that did not hand the contest's
+             ;; numbers back would clear them every time somebody moved
+             ;; a line
+             :edit {:prefill [:label :order :formula]}
              ;; the overwrite writes the whole authored surface and is
              ;; non-reversible, so the log carries what was written —
              ;; which is what makes the transitions the tuning history

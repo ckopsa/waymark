@@ -17,6 +17,20 @@
   household — two buttons. The wall is untouched. The write still
   belongs to a person.
 
+  ── AND THE CONTEST RIDES THE SAME CHANGE (waymark-8um.3) ──
+
+  Laws v3 law 8: *larger changes to the contest's rules arrive as
+  staged proposals for the owner's tap.* The contest is two numbers on
+  the same recipe row (`feed/default-formula`), so it arrives here for
+  free in every sense but one — `:revise` overwrites `feed_recipe`'s
+  authored surface WHOLESALE, so a proposal that knew nothing about the
+  formula would have cleared it on every apply. Hence `formula` and
+  `current_formula` beside `order` and `current_order`: the diff says
+  what changes about the contest in the same sentences it says what
+  changes about the order, both staleness walls ask about both, and a
+  proposal that carries neither is exactly the proposal this kind was
+  the day it was written.
+
   ── THE ASYMMETRY IS THE WHOLE POINT ──
 
   An agent may CREATE one of these and may not create a `feed_recipe`.
@@ -174,13 +188,35 @@
   [a b]
   (= (as-recipe-order a) (as-recipe-order b)))
 
+(defn- as-formula
+  "One formula in the EDITOR's wire shape → the recipe-map shape, or nil
+  for *whatever the deployment says*. `feed-recipe/recipe-of` is the one
+  converter here too, so a proposal and a recipe row cannot disagree
+  about what a formula IS."
+  [wire-formula]
+  (:formula (feed-recipe/recipe-of {:formula wire-formula})))
+
+(defn- same-formula?
+  "Do two formulas say the same thing? Compared after the deployment's
+  own numbers are filled in (`feed/formula-of`), because an absent
+  formula and a formula spelling the built-in's numbers are the same
+  contest and a proposal refused for the difference would be a refusal
+  nobody could act on — `same-order?`'s sentence, one field over."
+  [a b]
+  (= (feed/formula-of {:formula (as-formula a)})
+     (feed/formula-of {:formula (as-formula b)})))
+
 (defn diff-of
-  "The staged diff: what changes, line by line, in the household's own
-  words. Public because it is what the create hook writes and what a
-  test reads back — and pure, so the same two orders answer the same
+  "The staged diff: what changes — line by line in the order, and
+  number by number in the contest — in the household's own words.
+  Public because it is what the create hook writes and what a test
+  reads back, and pure, so the same two recipes answer the same
   sentences in a scenario, in a suite and in the house."
-  [current proposed]
-  (feed/order-diff (as-recipe-order current) (as-recipe-order proposed)))
+  [current proposed current-formula proposed-formula]
+  (feed/recipe-diff {:order (as-recipe-order current)
+                     :formula (as-formula current-formula)}
+                    {:order (as-recipe-order proposed)
+                     :formula (as-formula proposed-formula)}))
 
 ;; ── addresses, read rather than guessed ─────────────────────────────
 
@@ -233,25 +269,33 @@
 ;; earning a warning nobody could ever clear.
 
 (g/defguard the-prepared-input-fits-the-door
-  {:judges [:label :order]
+  {:judges [:label :order :formula]
    :vars [:problems]
    :explain "That is not something feed_recipe's revise door would take, so nobody could ever apply it: {problems}"}
   [_row inp _ctx]
   ;; feed-recipe/recipe-input IS the revise input — the same value,
   ;; not a copy — so this cannot drift away from the door it is about
   (if-some [errs (schema/errors feed-recipe/recipe-input
-                                {:label (:label inp) :order (:order inp)})]
+                                (cond-> {:label (:label inp) :order (:order inp)}
+                                  (some? (:formula inp))
+                                  (assoc :formula (:formula inp))))]
     (t/deny {:vars {:problems (pr-str errs)}})
     (t/allow)))
 
 (g/defguard the-order-will-assemble
+  ;; :order alone, for feed_recipe's own reason one file over: the
+  ;; formula's legal values are two bounded ints the published schema
+  ;; already carries, so naming it beside an `:open` would claim a gap
+  ;; that is not there
   {:judges [:order]
    :vars [:problems]
-   :open "The law is feed/check-recipe! — the same four assembly checks that refuse a recipe at its own doors: exactly one seam, the archive last and bottomless, sections in census order, every population one this engine holds."
+   :open "The law is feed/check-recipe! — the same assembly checks that refuse a recipe at its own doors: exactly one seam, the archive last and bottomless, sections in census order, every population one this engine holds, and the contest's two numbers are numbers."
    :explain "That order will not assemble, so nobody could ever apply it: {problems}"}
   [_row inp _ctx]
   (try
-    (feed/check-recipe! {:order (as-recipe-order (:order inp))})
+    (feed/check-recipe! (cond-> {:order (as-recipe-order (:order inp))}
+                          (some? (:formula inp))
+                          (assoc :formula (as-formula (:formula inp)))))
     (t/allow)
     (catch clojure.lang.ExceptionInfo e
       (if (:waymark10/definition-error (ex-data e))
@@ -335,6 +379,19 @@
             (deny (str "/api/feed_recipes/" tid " does not say today what"
                        " this proposal says it says. Read recipe.order out"
                        " of the feed document again and stage against that."))
+
+            ;; …and the same sentence about the contest (waymark-8um.3).
+            ;; It is asked whether or not this proposal changes the two
+            ;; numbers, because `:revise` overwrites the whole authored
+            ;; surface: a proposal staged against a house whose contest
+            ;; has moved would carry the old numbers back in with it.
+            (not (same-formula? (:current_formula inp)
+                                (get-in row [:data :formula])))
+            (deny (str "/api/feed_recipes/" tid " reads a different contest"
+                       " today than this proposal says it does. Read"
+                       " recipe.formula out of the feed document and stage"
+                       " against that — applying would carry the old numbers"
+                       " back in."))
 
             :else (t/allow)))
         ;; NO TARGET: the proposal stages a CREATE against the order
@@ -443,6 +500,11 @@
             (deny (str "/api/feed_recipes/" tid " reads differently now"
                        " than it did when this was staged."))
 
+            (not (same-formula? (:current_formula d)
+                                (get-in target [:data :formula])))
+            (deny (str "/api/feed_recipes/" tid " weights its order"
+                       " differently now than it did when this was staged."))
+
             :else (t/allow)))
         (let [held (when find'
                      (find' :feed_recipe {:scope "household" :state "active"}
@@ -469,7 +531,8 @@
         (assoc-in [:data :expires_at]
                   (.plusSeconds ^Instant (:now ctx)
                                 (* 86400 (long leash-days))))
-        (assoc-in [:data :diff] (diff-of (:current_order d) (:order d))))))
+        (assoc-in [:data :diff] (diff-of (:current_order d) (:order d)
+                                         (:current_formula d) (:formula d))))))
 
 (defhandler apply-the-order
   [row _inp ctx]
@@ -480,7 +543,15 @@
   ;; writing. Same transaction, so a refusal inside rolls the whole
   ;; tap back and the proposal does not read as applied.
   (let [d (:data row)
-        input {:label (:label d) :order (:order d)}
+        ;; the contest rides the write when this proposal named one,
+        ;; and the CURRENT numbers ride it when it did not — :revise
+        ;; overwrites recipe-fields wholesale, so an order-only
+        ;; proposal that handed over nothing would silently reset the
+        ;; two numbers the house is reading. `the-order-has-not-moved`
+        ;; has already proved current_formula is what the target says.
+        input (cond-> {:label (:label d) :order (:order d)}
+                (some? (or (:formula d) (:current_formula d)))
+                (assoc :formula (or (:formula d) (:current_formula d))))
         tid (some-> (:target_id d) str str/trim not-empty)
         res (if tid
               ;; feed_recipe's :revise declares an :edit, and an edit
@@ -660,6 +731,16 @@
    {:x-display
     {:label "What you read"
      :help "The rows this proposal is built on, as addresses — /api/tasks/01H… — one per row you actually looked at. At least one, always: the house can follow them, and a change to the order everybody reads in should be answerable by somebody who wants to check."}}
+   :current_formula
+   {:examples [{:window_days 14 :cools_after 3}]
+    :x-display
+    {:label "The contest as it stands today"
+     :help "The two numbers the house reads today, copied out of the feed document at recipe.formula. Leave it out if you are not proposing to change them — but if the house has its own numbers and you leave it out, this is refused, for the same reason a stale order is: the diff a person taps under has to describe the world they are reading it in."}}
+   :formula
+   {:examples [{:window_days 14 :cools_after 3}]
+    :x-display
+    {:label "The contest you propose in its place"
+     :help "How the order is weighted by what a member has already been shown: how far back it counts, and how many days a card may sit untouched before it steps back inside its own line. Zero turns it off. Leave it out to leave the numbers exactly as they are."}}
    :diff
    {:x-display
     {:label "What changes"
@@ -702,6 +783,13 @@
            [:maybe [:string {:max 64}]])
     (entry :current_order {} feed-recipe/order-schema)
     (entry :order {} feed-recipe/order-schema)
+    ;; the contest's two numbers, staged the same way the order is
+    ;; (waymark-8um.3): what the house reads today, and what this
+    ;; proposes in its place. Both optional, and a proposal that names
+    ;; neither is exactly the proposal this kind has always been.
+    (entry :current_formula {:optional true}
+           [:maybe feed-recipe/formula-schema])
+    (entry :formula {:optional true} [:maybe feed-recipe/formula-schema])
     (entry :evidence {:optional true}
            [:maybe [:vector [:string {:min 1 :max 200}]]])
     ;; ENGINE-WRITTEN, all four. They are in the row schema because
@@ -722,6 +810,9 @@
     (entry :target_id {:optional true} [:maybe [:string {:max 64}]])
     (entry :current_order {} feed-recipe/order-schema)
     (entry :order {} feed-recipe/order-schema)
+    (entry :current_formula {:optional true}
+           [:maybe feed-recipe/formula-schema])
+    (entry :formula {:optional true} [:maybe feed-recipe/formula-schema])
     (entry :evidence {:optional true}
            [:maybe [:vector [:string {:min 1 :max 200}]]])]
    :filterable {:state #{:eq :in}}
