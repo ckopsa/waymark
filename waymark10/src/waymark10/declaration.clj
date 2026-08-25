@@ -30,6 +30,14 @@
   site, which is the point."
   [;; identity & machine
    :kind :states :initial :terminal :plural :nav :domain :adoption
+   ;; how a row's work ENDS, in the household's own words (spec-feed.md,
+   ;; waymark-iqa.24/.25): which states — or, for a mirror kind whose
+   ;; lifecycle is data rather than machine, which values of which
+   ;; field — mean the work was ACCOMPLISHED, and which mean it was LET
+   ;; GO. Read-side only (the feed asks it; no door consults it), so it
+   ;; is not fingerprinted law — the :nav precedent, and the reason a
+   ;; household can teach the difference without minting a revision
+   :over
    ;; data
    :schema :create-schema :fields :shape :upcasts
    ;; behavior

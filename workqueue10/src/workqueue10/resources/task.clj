@@ -161,6 +161,16 @@
   (resource
    (mirror/declaration
     {:kind :task
+     ;; WHERE THIS KIND KEEPS ITS ENDINGS, said out loud (waymark-
+     ;; iqa.15). The sync machine's states are freshness, so a reader
+     ;; asking "is this still work?" of the MACHINE gets yes forever —
+     ;; which is how a task the house finished last month stayed a
+     ;; do-now card and never reached the archive. :status is the
+     ;; lifecycle, and these are its two endings: done is the one the
+     ;; house stands behind, dropped is the authority letting go. The
+     ;; feed used to hold the word "done" itself, which made every
+     ;; other vocabulary in the household a deviation.
+     :over {:field :status :accomplished #{"done"} :let-go #{"dropped"}}
      :summary "{data.title} · {data.status}"
      :label-template "{data.title}"
      :schema [:map

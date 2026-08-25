@@ -560,6 +560,227 @@
           (is (nil? (get-in (last pages) [:links :next]))
               "the tail is honest: the walk runs out and says so"))))))
 
+;; ── what the first real read found (waymark-iqa.24, .15, .25) ───────
+;;
+;; Four corrections, and every one of them was invisible to a smoke
+;; test because a smoke test has three rows in it. What a household
+;; has is a HUNDRED — lopsided by kind, half of it finished, some of
+;; it let go — and the shapes below are that world in miniature.
+
+(def ^:private chore-run
+  "A kind whose two endings are NOT terminal, because both have an
+  honest way back — choreplan10's own shape. The machine reads a run
+  skipped a fortnight ago as work still waiting; `:over` is the
+  household saying which states are endings and what they meant."
+  (r/resource
+   {:kind :fd_run :plural "fd_runs"
+    :states [:due :done :skipped] :initial :due
+    :over {:accomplished #{:done} :let-go #{:skipped}}
+    :summary "{data.title} · {state}"
+    :display {:title "{data.title}"}
+    :schema [:map [:title [:string {:min 1 :max 60}]]]
+    :actions {:complete {:from #{:due} :to :done :undo :reopen
+                         :safety {:idempotent true :reversible true
+                                  :confirm false}}
+              :skip {:from #{:due} :to :skipped :undo :unskip
+                     :safety {:idempotent true :reversible true
+                              :confirm false}}
+              :reopen {:from #{:done} :to :due :undo :complete
+                       :safety {:idempotent true :reversible true
+                                :confirm false}}
+              :unskip {:from #{:skipped} :to :due :undo :skip
+                       :safety {:idempotent true :reversible true
+                                :confirm false}}}}))
+
+(def ^:private queued
+  "A MIRROR-shaped kind: the machine is the sync machine (nothing is
+  terminal, ever) and the lifecycle is a field. `:over` says where the
+  words live and what they mean, so the framework holds no
+  application's enum."
+  (r/resource
+   {:kind :fd_queued :plural "fd_queueds"
+    :states [:fresh] :initial :fresh
+    :over {:field :status :accomplished #{"finished"} :let-go #{"abandoned"}}
+    :summary "{data.title} · {data.status}"
+    :display {:title "{data.title}"}
+    :schema [:map
+             [:title [:string {:min 1 :max 60}]]
+             [:status {:optional true}
+              [:maybe [:enum "queued" "active" "finished" "abandoned"]]]]
+    :actions {:finish {:from #{:fresh} :to :fresh
+                       :safety {:idempotent true :reversible false
+                                :confirm false :one-way "Finished."}
+                       :handler (fn [row _ _] (assoc-in row [:data :status]
+                                                        "finished"))}
+              :abandon {:from #{:fresh} :to :fresh
+                        :safety {:idempotent true :reversible false
+                                 :confirm false :one-way "Let go."}
+                        :handler (fn [row _ _] (assoc-in row [:data :status]
+                                                         "abandoned"))}}}))
+
+(def ^:private listing
+  "A kind with two TERMINAL endings the machine cannot tell apart: the
+  trip taken and the list nobody used."
+  (r/resource
+   {:kind :fd_list :plural "fd_lists"
+    :states [:draft :done :discarded] :initial :draft
+    :terminal #{:done :discarded}
+    :over {:accomplished #{:done} :let-go #{:discarded}}
+    :summary "{data.title} · {state}"
+    :display {:title "{data.title}"}
+    :schema [:map [:title [:string {:min 1 :max 60}]]]
+    :actions {:finish {:from #{:draft} :to :done
+                       :safety {:idempotent true :reversible false
+                                :confirm false :one-way "Done is done."}}
+              :discard {:from #{:draft} :to :discarded
+                        :safety {:idempotent true :reversible false
+                                 :confirm false
+                                 :one-way "The list is let go."}}}}))
+
+(defn- boot-house [& [opts]]
+  (engine/engine (merge {:storage (memory/storage)
+                         :resources [errand parcel chore-run queued listing
+                                     caps/capability]}
+                        opts)))
+
+(defn- post! [eng plural body]
+  (get-in (call! eng :post (str "/api/" plural) :body body) [:doc :self]))
+
+(defn- kinds-in [doc section]
+  (into [] (comp (filter #(= section (str (:section %))))
+                 (map (comp str :kind)))
+        (:cards doc)))
+
+(deftest do-now-spreads-across-the-kinds-instead-of-going-by-volume
+  (testing "thirty of one kind and two of another: the seeded draw was
+            a lottery weighted by row count, so the small kind lost
+            every morning. The lane is composition, not a score —
+            every kind's first row is considered before any kind's
+            second"
+    (let [eng (boot-house)]
+      (dotimes [i 30] (post! eng "fd_errands" {:title (str "errand " i)}))
+      (dotimes [i 2] (post! eng "fd_parcels" {:title (str "parcel " i)}))
+      (let [do-now (kinds-in (:doc (feed! eng)) "do_now")]
+        (is (= 5 (count do-now)))
+        (is (some #{"fd_parcel"} do-now)
+            "the two-row kind reaches the five slots beside the thirty-row one")
+        (is (some #{"fd_errand"} do-now))
+        (is (>= 2 (count (filter #{"fd_parcel"} do-now)))
+            "and it takes no more than it has")))))
+
+(deftest a-recipe-line-may-be-dedicated-to-particular-kinds
+  (let [recipe (assoc feed/default-recipe
+                      :order [{:section :do_now :population :next_actions
+                               :take 2 :kinds [:fd_parcel]}
+                              {:section :do_now :population :next_actions
+                               :take 3}
+                              {:seam true :sentence "That's the house, caught up."}])
+        eng (boot-house {:feed recipe})]
+    (dotimes [i 20] (post! eng "fd_errands" {:title (str "errand " i)}))
+    (dotimes [i 4] (post! eng "fd_parcels" {:title (str "parcel " i)}))
+    (let [do-now (kinds-in (:doc (feed! eng)) "do_now")]
+      (is (= 5 (count do-now)))
+      (is (= 2 (count (filter #{"fd_parcel"} do-now)))
+          "the dedicated line is the household saying so in static data —
+           two of the five slots are the parcels' before anything else is
+           considered")
+      (is (= 3 (count (filter #{"fd_errand"} do-now))))
+      (testing "and no row is served twice: the first line CLAIMS every
+                parcel, shown or not, so the general line has none left"
+        (let [ids (mapv :card_id (:cards (:doc (feed! eng))))]
+          (is (= (count ids) (count (set ids)))))))
+    (testing "a :kinds that is not a vector of kinds refuses at assembly"
+      (is (str/includes?
+           (str (refused [{:section :do_now :population :next_actions
+                           :take 1 :kinds "task"}
+                          {:seam true}]))
+           ":kinds is a non-empty vector")))))
+
+(deftest work-that-is-over-is-not-a-next-action-however-it-ended
+  (let [eng (boot-house)]
+    (call! eng :post (str (post! eng "fd_runs" {:title "Bins, last Tuesday"})
+                          "/-/skip"))
+    (call! eng :post (str (post! eng "fd_runs" {:title "Dishes, Monday"})
+                          "/-/complete"))
+    (post! eng "fd_runs" {:title "Sweep the porch"})
+    (let [doc (:doc (feed! eng))
+          do-now (filterv #(= "do_now" (str (:section %))) (:cards doc))]
+      (testing "the run still due is the morning's; the skipped and the
+                done ones are history, undo doors or not"
+        (is (= 1 (count do-now)))
+        (is (= "Sweep the porch" (get-in (first do-now) [:display :title]))))
+      (testing "and what is over is where history lives: the turn taken
+                is this week's fuel, the turn let go is a memory"
+        (is (= ["fd_run"] (kinds-in doc "fuel")))
+        (is (= "Dishes, Monday"
+               (get-in (first (section-cards doc "fuel")) [:display :title])))
+        (is (= "Bins, last Tuesday"
+               (get-in (first (section-cards doc "archive"))
+                       [:display :title])))))))
+
+(deftest a-mirror-shaped-kind-keeps-its-endings-in-its-own-data
+  (let [eng (boot-house)]
+    (call! eng :post (str (post! eng "fd_queueds" {:title "The long film"
+                                                   :status "active"})
+                          "/-/finish"))
+    (post! eng "fd_queueds" {:title "The one we are watching"
+                             :status "active"})
+    (let [doc (:doc (feed! eng))]
+      (testing "the sync machine says fresh for both; the STATUS is what
+                says the work is over, and the kind declares the word"
+        (is (= ["fd_queued"] (kinds-in doc "do_now")))
+        (is (= "The one we are watching"
+               (get-in (first (:cards doc)) [:display :title]))))
+      (testing "and the finished one reaches the archive — the epic's own
+                photo of the thing you finished, which the do-now claim
+                used to swallow before anybody saw it"
+        (is (= ["fd_queued"] (kinds-in doc "archive")))))))
+
+(deftest fuel-is-deeds-and-a-list-nobody-used-is-not-one
+  (let [eng (boot-house)]
+    (call! eng :post (str (post! eng "fd_lists" {:title "Saturday's shop"})
+                          "/-/discard"))
+    (post! eng "fd_lists" {:title "Next Saturday"})
+    (let [doc (:doc (feed! eng))
+          fuel (section-cards doc "fuel")]
+      (is (empty? (filter #(= "fd_list" (str (:kind %))) fuel))
+          "terminal was the old question and it was one word too wide")
+      (testing "and it is still remembered — the archive keeps what the
+                house let go, it simply does not congratulate anybody"
+        (is (some #(= "fd_list" (str (:kind %))) (section-cards doc "archive")))))
+    (testing "the trip actually taken IS a deed"
+      (let [eng2 (boot-house)]
+        (call! eng2 :post (str (post! eng2 "fd_lists" {:title "Sunday's shop"})
+                               "/-/finish"))
+        (post! eng2 "fd_lists" {:title "Still a draft"})
+        (is (some #(= "fd_list" (str (:kind %)))
+                  (section-cards (:doc (feed! eng2)) "fuel")))))))
+
+(deftest the-archive-never-cards-a-row-that-is-still-live
+  (testing "memories match on what MOVED, and a row that moved and is
+            still open is not a memory — four shows the household is
+            halfway through carded as history, wearing their verbs"
+    (let [eng (boot-house)]
+      ;; a row that moves twice and stays open: the log has it, and
+      ;; the do-now claim is not what keeps it out of the archive —
+      ;; the archive asks the row where it stands NOW
+      (dotimes [i 8]
+        (let [self (post! eng "fd_queueds" {:title (str "show " i)
+                                            :status "queued"})]
+          (call! eng :post (str self "/-/finish"))))
+      (dotimes [i 3]
+        (post! eng "fd_queueds" {:title (str "watching " i)
+                                 :status "active"}))
+      (let [doc (:doc (feed! eng))
+            archive (section-cards doc "archive")]
+        (is (seq archive) "an empty archive would prove nothing")
+        (is (every? #(= "finished" (get-in % [:fields :status])) archive)
+            "every card below the seam is a row whose work is over")
+        (is (not-any? #(= "active" (get-in % [:fields :status])) archive)
+            "and never one the house is halfway through")
+        (is (= 3 (count (section-cards doc "do_now")))
+            "the live ones are where a live row belongs")))))
+
 ;; ── the cursor ──────────────────────────────────────────────────────
 
 (deftest the-cursor-serves-the-archive-and-rolls-at-midnight

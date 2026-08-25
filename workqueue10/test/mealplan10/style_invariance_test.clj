@@ -512,6 +512,11 @@
    :states [:draft :ready :done :discarded]
    :initial :draft
    :terminal #{:done :discarded}
+   ;; which ending the family stands behind and which it let go
+   ;; (waymark-iqa.25): the trip taken is a deed, the list nobody used
+   ;; is not. Read-side only — the :nav precedent — so it rides both
+   ;; spellings without moving the hash, and the pin below proves it
+   :over {:accomplished #{:done} :let-go #{:discarded}}
    :summary "Groceries · {state}"
    ;; the trip's own name — advertisement, not law, so it rides both
    ;; spellings without moving the hash

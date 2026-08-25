@@ -811,6 +811,37 @@
            (fn [tx] (store/query-rows (:storage eng) tx :member
                                       {:subject subject} {:limit 1})))))
 
+(defn spellings-of
+  "Every id this principal ANSWERS TO, principal id first
+  (waymark-1zq). The gate's own resolution read BACKWARDS: `gate!`
+  finds a member by id and then by bound `:subject`, so the ids that
+  reach the same inhabitant are the principal id itself and the row
+  id of the member whose `:subject` is that principal — the id a
+  binding left behind, and the id a person reads off the roster
+  screen when they go looking for somebody to address.
+
+  It exists because an ADDRESSED row is matched by whatever spelling
+  it was stored with, and a surface that only ever asked for one of
+  them silently swallowed the rest. Letters resolve `:to` at the door
+  (letters.clj) so new mail carries the delivery identity; this is
+  what makes the mail that is ALREADY on the shelf reachable, and
+  what lets the shelf and the reader agree without either of them
+  guessing.
+
+  One query on top of the caller's own id, and nothing is written.
+  Engines with no member kind answer `[pid]`, which is the honest
+  answer for a house with no roster."
+  [eng pid]
+  (let [pid (str pid)]
+    (if (or (str/blank? pid) (nil? (get (inv/resources eng) :member)))
+      [pid]
+      (into [pid]
+            (comp (map (comp str :id)) (remove #(= pid %)) (distinct))
+            (try (store/with-tx (:storage eng)
+                   (fn [tx] (store/query-rows (:storage eng) tx :member
+                                              {:subject pid} {:limit 8})))
+                 (catch Exception _ []))))))
+
 (defn invited-by-token
   "The still-INVITED member row a presented token names, nil when the
   token matches nothing invited — the bind! lookup, public for the

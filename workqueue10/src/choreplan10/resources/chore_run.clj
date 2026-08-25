@@ -31,6 +31,15 @@
   {:kind :chore_run
    :states [:due :done :skipped]
    :initial :due
+   ;; NEITHER ENDING IS TERMINAL — :reopen and :unskip are what made
+   ;; the triage deck honest — so the machine alone reads a run that
+   ;; was skipped three weeks ago as work still waiting, and the feed
+   ;; put one at the top of the house's morning (waymark-iqa.24). The
+   ;; two endings, said plainly: done is the turn taken, skipped is the
+   ;; turn let go. Both are over; the undo doors stay exactly where
+   ;; they are, on the run's own screen, for the mis-swipe they were
+   ;; built for.
+   :over {:accomplished #{:done} :let-go #{:skipped}}
    :summary "{data.chore_name} · {data.due_date} · {state}"
    ;; a run has no name of its own, and the raw id is what a ref picker
    ;; would otherwise show — the chore's maintained label copy plus the

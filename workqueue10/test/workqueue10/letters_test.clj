@@ -53,7 +53,16 @@
         ;; member, role, grant, approval-request, job — so the
         ;; to-is-a-member guard has a roster and the grant wall has
         ;; both doors
-        (let [eng (engine/engine {:storage st :resources [letter]})]
+        ;; :probe-reads mirrors the boot production actually runs
+        ;; (workqueue10.main/start!, waymark-1pq): the render probe
+        ;; carries the read hooks, so a guard that judges against a ROW
+        ;; of another kind — opener-is-recipient reading the member the
+        ;; address names (waymark-1zq) — answers honestly in the
+        ;; envelope instead of being advertised optimistically. A feed
+        ;; card's verbs come from that same projection, so without it
+        ;; this fixture would judge a surface the house does not serve.
+        (let [eng (engine/engine {:storage st :resources [letter]
+                                  :probe-reads true})]
           (binding [*eng* eng
                     *h* (engine/handler eng)]
             (f)))
@@ -491,6 +500,71 @@
         (is (= 200 (:status (open! (id-of r) bound))))))
     (testing "the shelf carries both — the welcome delivers what it stamped"
       (is (some? (:home (welcome bound)))))))
+
+(deftest a-letter-carrying-the-row-id-spelling-still-reaches-its-reader
+  ;; PRODUCTION'S OWN SHAPE (waymark-1zq). letters/f5415d68 was written
+  ;; to Colton's member ROW id and sat unopened for two days: the feed
+  ;; asked for {:to <principal-id>} and nothing else, so mail carrying
+  ;; any other accepted spelling was invisible to the person it was
+  ;; for while sitting in plain sight on its own row.
+  ;;
+  ;; The door resolves :to now, so no create can MINT this shape any
+  ;; more — which is exactly why the fixture writes it straight into
+  ;; the store. The letters already on the shelf are the ones this
+  ;; test is about, and a house cannot re-address them: a letter, once
+  ;; sent, is sent.
+  ;;
+  ;; THE READER IS A HUMAN, and that is the production case rather
+  ;; than a convenience: an inhabitant reads unscoped, so what is
+  ;; being proved is that the FEED's population asks for the row-id
+  ;; spelling and that the open guard agrees with it. An AGENT
+  ;; addressed the old way is still concealed one layer lower —
+  ;; grants/own-ids pushes down `to = pid` and nothing else — which is
+  ;; a real gap with a bead of its own (waymark-27j) and not something
+  ;; to paper over here.
+  (let [token "letters-legacy-token-cccccccc"
+        rid (id-of (req :post "/api/members"
+                        {:display "Legacy Wren" :actor_type "human"
+                         :bind_token token}
+                        colton-admin))
+        pid "wren-legacy-principal"
+        _ (req :get "/api/letters"
+               (assoc (human-headers pid) "x-waymark-invite" token))
+        bound (human-headers pid)
+        lid (str (random-uuid))]
+    (is (not= rid pid) "row id and principal id differ, or this proves nothing")
+    (store/with-tx (:storage *eng*)
+      (fn [tx]
+        (store/insert-row! (:storage *eng*) tx :letter
+                           {:id lid :state :waiting :version 1
+                            :data {:owner "quill-legacy-address" :to rid
+                                   :title "The dispatch"
+                                   :body "Four things the preview found."}
+                            :shape 1 :owner "quill-legacy-address"})))
+    (testing "the feed's decide section carries it, addressed the old way"
+      (let [doc (json (req :get "/api/-/feed" nil bound))
+            card (first (filter #(= "letter" (str (:kind %))) (:cards doc)))]
+        (is (some? card)
+            (str "the shelf swallowed it: " (pr-str (mapv :card_id (:cards doc)))))
+        (is (= "decide" (str (:section card))))
+        (is (= "The dispatch" (get-in card [:fields :title])))
+        (is (some? (get-in card [:actions :open :href]))
+            "and the card's Open is a door, not a decoration")))
+    (testing "and it really opens — the reading side and the guard agree"
+      (is (= 200 (:status (open! lid bound)))))
+    (testing "a stranger is still nobody's recipient"
+      (let [l2 (str (random-uuid))]
+        (store/with-tx (:storage *eng*)
+          (fn [tx]
+            (store/insert-row! (:storage *eng*) tx :letter
+                               {:id l2 :state :waiting :version 1
+                                :data {:owner "quill-legacy-address" :to rid
+                                       :title "Also for Wren"
+                                       :body "not for the neighbour"}
+                                :shape 1 :owner "quill-legacy-address"})))
+        (is (not= 200 (:status (open! l2 (human-headers "neighbour-legacy"))))
+            "another inhabitant sees the row — the house is transparent —
+             and still cannot open somebody else's mail")))))
 
 (deftest a-letter-to-an-unclaimed-invitation-is-refused
   (let [quill (agent-headers "quill-unclaimed")

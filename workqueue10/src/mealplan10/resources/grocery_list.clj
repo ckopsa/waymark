@@ -555,6 +555,12 @@
   {:kind :grocery_list
    :initial :draft
    :terminal #{:done :discarded}
+   ;; two terminal states, and the machine cannot tell them apart:
+   ;; :done is the shopping trip taken, :discarded is the list nobody
+   ;; used. Fuel read "the last terminal row" and congratulated the
+   ;; house on a list it threw away (waymark-iqa.25); this is the
+   ;; sentence that stops it, and the archive still keeps both.
+   :over {:accomplished #{:done} :let-go #{:discarded}}
    :summary "Groceries · {state}"
    ;; a list is known by the trip it is for — covers_from IS the trip
    ;; date (era 4). A list with no window covers the whole plan and

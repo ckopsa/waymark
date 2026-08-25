@@ -1469,6 +1469,57 @@
 (def ^:private worksheet-column-keys
   #{:field :action :param :ref :on-set :on-clear :create-only})
 
+(defn- check-over!
+  "The `:over` declaration's def-site gate (waymark-iqa.24/.25).
+
+  `:over` is how a kind says what its ENDINGS mean, because the
+  machine cannot tell them apart: `:done` and `:skipped` are both
+  places a chore run comes to rest, `:done` and `:discarded` are both
+  terminal states of a grocery list, and only the household knows
+  which one it stands behind.
+
+    :over {:accomplished #{:done} :let-go #{:skipped}}
+    :over {:field :status :accomplished #{\"done\"} :let-go #{\"dropped\"}}
+
+  The second spelling is the mirror's: a mirrored kind's machine is
+  the SYNC machine, its lifecycle is data (task.clj's own rule), so
+  the words are values of a data field rather than states. That one
+  optional key is why the framework holds no app's status enum — the
+  kind that speaks the vocabulary is the kind that declares it.
+
+  Unspelled means what it has always meant: a terminal state is an
+  ending the household stands behind, and nothing else is an ending
+  at all."
+  [rmap]
+  (when-some [o (:over rmap)]
+    (let [err (fn [msg] (throw (t/definition-error
+                                (str (some-> (:kind rmap) name)
+                                     " [over] " msg))))]
+      (when-not (and (map? o) (every? #{:field :accomplished :let-go} (keys o)))
+        (err "is {:accomplished #{…} :let-go #{…}} with an optional :field"))
+      (let [field (:field o)
+            words (fn [k] (let [s (get o k)]
+                            (when-not (or (nil? s) (set? s))
+                              (err (str k " is a set of "
+                                        (if field "field values" "states"))))
+                            (set s)))
+            acc (words :accomplished)
+            let-go (words :let-go)]
+        (when (and field (not (keyword? field)))
+          (err ":field names a data field, as a keyword"))
+        (when-some [both (seq (sort-by str (filter let-go acc)))]
+          (err (str (vec both) " are named ACCOMPLISHED and LET GO at once"
+                    " — one ending means one thing")))
+        (if field
+          (when-not (every? string? (concat acc let-go))
+            (err (str ":field " field " makes these WORDS in the data, so"
+                      " they are strings")))
+          (let [declared (set (:states rmap))]
+            (when-not (every? keyword? (concat acc let-go))
+              (err "without :field these are declared STATES, so they are keywords"))
+            (when-some [bad (seq (sort (remove declared (concat acc let-go))))]
+              (err (str (vec bad) " are not declared states")))))))))
+
 (defn- check-worksheet!
   "The worksheet declaration's def-site gate: every column names a
   declared field; an editable column's :action (or :on-set/:on-clear
@@ -1756,6 +1807,7 @@
     (check-worksheet! rmap)
     (when-not (contains? #{:primary :secondary :system} (:nav rmap :primary))
       (throw (t/definition-error ":nav is :primary, :secondary, or :system")))
+    (check-over! rmap)
     (when-some [d (:domain rmap)]
       (when-not (and (keyword? d) (re-matches #"[a-z][a-z0-9_]*" (name d)))
         (throw (t/definition-error

@@ -121,10 +121,26 @@
 ;; Shape alone cannot close that (a real recipient still answers 201),
 ;; so the refusal stops NARRATING and letters-are-paced below stops
 ;; the sweep.
+;; THE SENTENCE NAMES THE SHAPE OF A GOOD ADDRESS, NOT THE FATE OF
+;; THIS ONE (waymark-1zq). The dispatch letter that sat unopened for
+;; two days was addressed to a member ROW that answered to nobody, and
+;; the door's answer — "should name a member of this household" — is
+;; true and teaches nothing: a sender reading it cannot tell whether
+;; they used the wrong id, the wrong person, or the wrong kind of
+;; string. So the refusal now says what a deliverable address LOOKS
+;; like, which is a fact about the household's roster in general and
+;; not about the id in the caller's hand. It still narrates no
+;; roster: every unresolvable recipient — an id nobody holds, an
+;; unbound invitation, a row no principal answers to — renders this
+;; ONE body, and the pace above still stops the sweep.
 (defn- undeliverable! []
   (throw (p/schema-invalid
           :create
-          {:to ["should name a member of this household"]})))
+          {:to [(str "should name a member of this household — either the"
+                     " member's id as the roster shows it, or the id they"
+                     " sign in under; a letter lands on one shelf and"
+                     " nowhere else, and there is no way to re-address it"
+                     " once it is sent")]})))
 
 ;; the delivery identity of a named recipient: the PRINCIPAL id the
 ;; own-surface, the open guard and the welcome shelf all match on.
@@ -272,8 +288,27 @@
 
 ;; ── the recipient's two acts ────────────────────────────────────────
 
+;; WHOEVER THE LETTER IS FOR, HOWEVER IT WAS SPELLED (waymark-1zq).
+;; The stamp resolves :to at the door, so mail sent from here always
+;; carries the delivery identity and the first line is the whole
+;; answer. The second line is for the mail that is ALREADY on the
+;; shelf: a letter addressed to a member ROW, sitting in a house whose
+;; feed now surfaces it. Offering a card whose Open the guard would
+;; refuse is a dead end wearing a verb, so the reading side and the
+;; opening side ask ONE question — does this principal answer to the
+;; address on the envelope — and the row's own :subject is the fact
+;; that decides it, exactly as delivery-id decides it going the other
+;; way.
 (defn- recipient? [row ctx]
-  (= (:id (:principal ctx)) (get-in row [:data :to])))
+  (let [pid (:id (:principal ctx))
+        to (some-> (get-in row [:data :to]) str)]
+    (boolean
+     (or (= pid to)
+         (when-some [read' (and to (:read ctx))]
+           (let [m (read' :member to)
+                 subject (some-> (get-in m [:data :subject]) str str/trim
+                                 not-empty)]
+             (= pid subject)))))))
 
 ;; the open wall: only the principal a letter is ADDRESSED to may open
 ;; it — not the author (sending is not landing), not a curator: it is

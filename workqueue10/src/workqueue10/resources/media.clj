@@ -109,6 +109,16 @@
    (mirror/declaration
     {:kind :media
      :plural "media"
+     ;; the consumption lifecycle's two endings, in this kind's OWN
+     ;; words (waymark-iqa.15): finished is the film we watched to the
+     ;; credits, abandoned is the one we gave up on at the halfway
+     ;; mark. Both are over — neither is tonight's next action — and
+     ;; only the first is anybody's deed. Declaring it here is what
+     ;; keeps :status a vocabulary this kind chose rather than a
+     ;; deviation from a word the framework happened to hold.
+     :over {:field :status
+            :accomplished #{"finished"}
+            :let-go #{"abandoned"}}
      :summary "{data.title} · {data.medium} · {data.status}"
      :label-template "{data.title}"
      :schema [:map

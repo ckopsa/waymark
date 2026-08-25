@@ -117,6 +117,7 @@
             [waymark10.server.collections :as coll]
             [waymark10.server.history :as history]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.members :as members]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.seasons :as seasons]
@@ -307,6 +308,69 @@
   [rdef row]
   (not (contains? (:terminal rdef #{}) (keyword (:state row)))))
 
+;; ── how a row's work ends (waymark-iqa.24, .25) ─────────────────────
+;;
+;; The machine knows a row is TERMINAL and nothing more. It cannot
+;; know that a skipped chore run is over while a due one is not (both
+;; are non-terminal, because un-skip is a real verb), nor that a
+;; DISCARDED grocery list is not an accomplishment (both endings are
+;; terminal), nor that a mirrored task whose `:status` says `done` is
+;; finished while its sync state says `fresh`. Those are the
+;; household's own words, so the DECLARATION says them (`:over`) and
+;; this is the one place that reads it. Two questions, and they are
+;; deliberately different:
+;;
+;;   work-over?    — is this row's work OVER? Nothing over is anybody's
+;;                   next action, and only what is over is a memory.
+;;   accomplished? — did the house FINISH it, rather than let it go?
+;;                   Fuel is deeds; a discarded list is not one.
+;;
+;; A kind that declares nothing keeps exactly the old meaning: its
+;; terminal states are its endings and every one of them counts.
+
+(defn over-vocabulary
+  "The kind's declared `:over`, with the machine's own defaults filled
+  in — `{:field :accomplished :let-go}`. Public because the feed's
+  populations, the archive's gate and `set-aside?` must all read one
+  vocabulary; a second opinion about what 'finished' means would let
+  one section card what another calls history."
+  [rdef]
+  (let [o (:over rdef)]
+    {:field (:field o)
+     :accomplished (set (if o (:accomplished o) (:terminal rdef)))
+     :let-go (set (:let-go o))}))
+
+(defn- ending-word
+  "The word this row's ending would be spelled with: its machine state,
+  or — when the kind declared a `:field` — the value that field holds.
+  A mirror's lifecycle is data (task.clj's own rule), so a mirrored
+  row's ending is read off the document the authority sent."
+  [rdef row]
+  (let [{:keys [field]} (over-vocabulary rdef)]
+    (if field
+      (some-> (get-in row [:data field]) str not-empty)
+      (keyword (:state row)))))
+
+(defn work-over?
+  "Is this row's work OVER — terminal by the machine, or resting in an
+  ending the kind declared? A row that is over is never a next action
+  and never anything but history."
+  [rdef row]
+  (let [{:keys [accomplished let-go]} (over-vocabulary rdef)
+        w (ending-word rdef row)]
+    (boolean (or (not (open? rdef row))
+                 (and w (or (contains? accomplished w)
+                            (contains? let-go w)))))))
+
+(defn accomplished?
+  "Did the household FINISH this row, rather than let it go? Fuel's
+  question, and the narrower one: every accomplishment is over, and a
+  discarded list, an abandoned book and a skipped chore are over
+  without being deeds."
+  [rdef row]
+  (boolean (contains? (:accomplished (over-vocabulary rdef))
+                      (ending-word rdef row))))
+
 (defn- dedupe-by
   "Keep the first sighting of each key — the archive's one-card-per-row
   rule, applied where the log is still newest-first."
@@ -334,8 +398,13 @@
   engine with no vocabulary for a due date. There is none: waymark
   declares no `:due`, and inventing one to rank by would be the
   scoring function the third law forbids. So do-now is the front-door
-  kinds' OPEN rows and the seed picks; a context-aware do-now waits
-  for the spine the epic parks in its v2 lot."
+  kinds' rows whose work is not over, spread across the kinds and
+  picked by the seed; a context-aware do-now waits for the spine the
+  epic parks in its v2 lot.
+
+  It answers the FUEL question too, one nav level narrower
+  (`fuel-kinds`): a deed is a front door's, and a kind nobody
+  navigates to is a line item inside somebody else's row."
   [ctx levels]
   (->> (resources ctx)
        (keep (fn [[k rdef]] (when (contains? levels (:nav rdef :primary)) k)))
@@ -343,18 +412,47 @@
        vec))
 
 (defn next-actions
-  "do-now: open rows of the front-door kinds, seeded. The card builder
-  keeps only those whose projected envelope actually OFFERS something —
-  a next action with no verb is a row, not an action — so a reader
-  whose grant confers sight but no doors gets a shorter do-now rather
-  than a page of dead ends."
+  "do-now: the front-door kinds' rows whose work is NOT over, seeded
+  and SPREAD across the kinds. The card builder keeps only those whose
+  projected envelope actually OFFERS something — a next action with no
+  verb is a row, not an action — so a reader whose grant confers sight
+  but no doors gets a shorter do-now rather than a page of dead ends.
+
+  TWO CORRECTIONS THE FIRST REAL READ FORCED (waymark-iqa.24, .15),
+  and neither is a ranking:
+
+  1. `work-over?` rather than `open?`. `open?` asks the FRAMEWORK
+     machine, and a mirror kind's machine is the sync machine — so a
+     task whose `:status` says `done` and a movie the house finished
+     were do-now candidates forever, and worse, the mixer's total
+     claim then barred them from the archive. The kind's own `:over`
+     is the one vocabulary; the framework holds no app's enum.
+  2. A SPREAD, so no kind crowds out another by volume. Every
+     candidate carries the `:lane` it occupies in its OWN kind's
+     seeded order — its first row is lane 0, its second lane 1 — and
+     the mixer orders by lane before hash. Five slots therefore draw
+     from five kinds when five kinds have work, instead of from
+     whichever kind happens to hold the most rows. A house with two
+     hundred queued movies and thirty-three open errands had a do-now
+     of movies, which is arithmetic, not a household's morning.
+
+     It is COMPOSITION, not a score: nothing is compared to anything.
+     Within a lane the order is still `hash(seed ‖ card_id)` and
+     within a kind the order is untouched. The recipe can go further
+     and dedicate a line to particular kinds (`:kinds`), which is the
+     household saying so in static data rather than the engine
+     inferring it."
   [ctx]
-  (into []
-        (mapcat (fn [k]
-                  (let [rdef (get (resources ctx) k)]
-                    (candidates-of k (filterv #(open? rdef %)
-                                              (rows-of ctx k {}))))))
-        (nav-kinds ctx #{:primary})))
+  (let [seed (:seed ctx)]
+    (into []
+          (mapcat (fn [k]
+                    (let [rdef (get (resources ctx) k)]
+                      (->> (rows-of ctx k {})
+                           (remove #(work-over? rdef %))
+                           (candidates-of k)
+                           (sort-by #(rank seed (card-id :do_now k (:id %))))
+                           (map-indexed (fn [i c] (assoc c :lane i)))))))
+          (nav-kinds ctx #{:primary}))))
 
 (defn asks
   "decide: access asks awaiting SOMEBODY ELSE's verdict — core's own
@@ -381,12 +479,28 @@
   `welcome-home` precedent exactly — a core reader naming an optional
   application kind and answering with nothing when the engine holds
   none — and own-surface law makes the query its own gate: a letter is
-  addressed, and `data.to` is the address."
+  addressed, and `data.to` is the address.
+
+  IT ASKS FOR EVERY SPELLING THE READER ANSWERS TO (waymark-1zq), not
+  only the principal id. `members/spellings-of` is the one definition
+  — the gate's own two-step read backwards: the principal id, plus
+  the member ROW whose `:subject` is that principal, whose id is a
+  perfectly ordinary way for a person to have addressed a letter (it
+  is the id on the roster screen). A letter carrying that spelling was
+  invisible here while sitting in plain sight on the row, which is a
+  shelf that swallows mail: the recipient never learns there was
+  anything to open. The letter kind's own guards read the same
+  function, so a card this population offers is a card whose Open
+  really opens."
   [ctx]
-  (let [pid (:id (:principal ctx))]
-    (if-not (get (resources ctx) :letter)
-      []
-      (candidates-of :letter (rows-of ctx :letter {:to pid :state "waiting"})))))
+  (if-not (get (resources ctx) :letter)
+    []
+    (into []
+          (comp (mapcat (fn [addr]
+                          (rows-of ctx :letter {:to addr :state "waiting"})))
+                (dedupe-by :id)
+                (map (fn [r] {:kind :letter :id (:id r) :row r})))
+          (members/spellings-of (:eng ctx) (:id (:principal ctx))))))
 
 (defn- load-raw
   "One row of any kind, straight from the store — no decode, no
@@ -399,16 +513,6 @@
     (try
       (store/with-tx st #(store/load-row st % kind (str id) {}))
       (catch Exception _ nil))))
-
-(def set-aside-status
-  "The mirror convention's own word for finished work. `task`'s
-  docstring states the rule this reads — *'every source's own states
-  normalize to :status open|done|dropped; the machine here is the sync
-  machine'* — so a mirrored row's DOMAIN state is data and its
-  framework state is the authority's freshness. A tickler over such a
-  row must ask the data, or it would call a done task set-aside
-  forever because its sync state says `fresh`."
-  "done")
 
 (defn set-aside?
   "Is a tickler's subject still something the house could pick up?
@@ -424,14 +528,20 @@
   - the row is TERMINAL. A finished row is history, and history is
     the archive's business; asking whether to carry it further is
     asking about work that is over.
-  - the row carries the mirror's `status` and it says `done`.
+  - the row rests in an ending the kind declared as ACCOMPLISHED
+    (`over-vocabulary`) — the state, or the field a mirror keeps its
+    lifecycle in. Until waymark-iqa.15 this was the literal string
+    `\"done\"` in this namespace: one application's enum, held by the
+    framework, which every other application's vocabulary then read
+    as a deviation. The word now belongs to the kind that speaks it.
 
-  Everything else is still set aside, and the deliberate consequence
-  is worth saying: a dropped task somebody REOPENED and left open
-  keeps its tickler, because 'still not done' is exactly what a
-  someday/maybe list is for. The household's own way to say
-  otherwise is the `take_it_back` verdict, which is a person
-  answering rather than the engine inferring.
+  A row the house LET GO is deliberately still set aside, and this is
+  the one place the two questions part company: `work-over?` (do-now's
+  and the archive's) counts a skipped chore and a dropped task as
+  over, while a someday/maybe marker over one of them stands, because
+  'still not done' is exactly what a someday list is for. The
+  household's own way to say otherwise is the `take_it_back` verdict,
+  which is a person answering rather than the engine inferring.
 
   It never asks the reader's GRANT. The marker is its own row with
   its own visibility and `card` projects it; whether this reader may
@@ -442,8 +552,7 @@
   (boolean
    (when-some [rdef (and kind (get (resources ctx) kind))]
      (when-some [raw (load-raw ctx kind id)]
-       (and (open? rdef raw)
-            (not= set-aside-status (str (get-in raw [:data :status]))))))))
+       (and (open? rdef raw) (not (accomplished? rdef raw)))))))
 
 (defn ticklers
   "decide: the house's someday/maybe list, the items whose date has
@@ -598,6 +707,21 @@
   (let [d (LocalDate/parse ^String (:day ctx))]
     (.toInstant (.atStartOfDay d ZoneOffset/UTC))))
 
+(defn- fuel-kinds
+  "The kinds fuel speaks about at all: the FRONT-DOOR kinds
+  (`:nav :primary`) and no others (waymark-iqa.25).
+
+  Fuel is deeds — what the house got done — and `:nav` is already the
+  household's own answer to which rows are things a person does. A
+  meal's ingredient line, a substitution, a plan day: those are
+  `:secondary` precisely because nobody navigates to them, and a card
+  reading *you finished 'Ingredient: 2 tbsp butter'* is the surface
+  congratulating somebody on a row that moved. The archive keeps the
+  wider list — a memory may be of anything a person can reach — but
+  a deed is a front door's."
+  [ctx]
+  (nav-kinds ctx #{:primary}))
+
 (defn- whole-kinds
   "The kinds a fuel AGGREGATE may speak about: the household's own,
   seen WHOLE. `seasons/whole-kind-sight?` is the one definition of
@@ -608,7 +732,7 @@
   [ctx]
   (let [vis (:visibility ctx)]
     (filterv #(or (nil? vis) (seasons/whole-kind-sight? vis %))
-             (nav-kinds ctx #{:primary :secondary}))))
+             (fuel-kinds ctx))))
 
 (defn- week-starts
   "The `fuel-weeks` UTC week buckets ending with the feed's own day,
@@ -654,6 +778,20 @@
 
 (defn- terminal-names [rdef] (mapv name (:terminal rdef)))
 
+(defn- accomplished-names
+  "The STATE names a fuel row may rest in: the endings this kind
+  stands behind (waymark-iqa.25). Unspelled, that is the terminal set
+  and fuel reads exactly as it did; a kind that declares an
+  abandonment — a discarded grocery list, an abandoned book — takes it
+  out of the deeds without taking it out of the archive.
+
+  A kind whose endings live in a data field (a mirror's) has no state
+  to query and answers none: its finished rows reach the archive
+  through the log, which is where a finished movie belonged all along."
+  [rdef]
+  (let [{:keys [field accomplished]} (over-vocabulary rdef)]
+    (if field [] (mapv name accomplished))))
+
 (defn- open-state-names [rdef]
   (into [] (comp (remove (set (:terminal rdef))) (map name)) (:states rdef)))
 
@@ -685,11 +823,17 @@
         (catch Exception _ [])))))
 
 (defn- last-finished
-  "The kind's most recently moved terminal row, or nil. `:updated_at`
-  is one of the two engine columns `store/sortable-timestamps` admits,
-  so this is an ordered LIMIT 1 rather than a scan."
+  "The kind's most recently moved ACCOMPLISHED row, or nil.
+  `:updated_at` is one of the two engine columns
+  `store/sortable-timestamps` admits, so this is an ordered LIMIT 1
+  rather than a scan.
+
+  Terminal was the old question and it was too wide by exactly one
+  word: a grocery list the household DISCARDED is terminal, and it
+  carded as *what you got done this week* (waymark-iqa.25). Fuel asks
+  the narrower one."
   [ctx kind]
-  (first (in-states ctx kind (terminal-names (get (resources ctx) kind))
+  (first (in-states ctx kind (accomplished-names (get (resources ctx) kind))
                     {:order-by :updated_at :desc true :limit 1})))
 
 (defn cleared
@@ -717,7 +861,7 @@
                   (let [rdef (get (resources ctx) k)
                         n (reduce + 0 (vals (get done k)))]
                     (when (and (pos? n)
-                               (seq (terminal-names rdef))
+                               (seq (accomplished-names rdef))
                                (empty? (in-states ctx k (open-state-names rdef)
                                                   {:limit 1})))
                       (when-some [row (last-finished ctx k)]
@@ -781,8 +925,8 @@
   own summary is already the sentence, which is the whole reason the
   card is `envelope-summary` and not a rendering of its own.
 
-  It reads the wider kind list rather than `whole-kinds`, and that is
-  the aggregate/row line: this card claims nothing about rows the
+  It reads the fuel kinds without `whole-kinds`' sight test, and that
+  is the aggregate/row line: this card claims nothing about rows the
   reader cannot see, so `card`'s `:row?` gate is the only one it
   needs."
   [ctx]
@@ -792,7 +936,7 @@
                   (when-some [row (last-finished ctx k)]
                     (when (some-> ^Instant (:updated-at row) (.isAfter cutoff))
                       {:kind k :id (:id row) :row row :at (:updated-at row)}))))
-          (nav-kinds ctx #{:primary :secondary}))))
+          (fuel-kinds ctx))))
 
 (defn events
   "archive: the household's rows that moved lately, one card per row,
@@ -940,11 +1084,19 @@
   A population is `(fn [ctx])` over {:eng :principal :visibility :now
   :seed :day}, answering CANDIDATES — `{:kind :id}` maps, optionally
   carrying the raw `:row` it already read, the `:at` its card should
-  show and the `:sentence` the card says on its own behalf. It may
-  answer a bare vector, or {:candidates […] :reached-cap bool} when it
-  scanned to a cap and the document should say so. It never renders,
-  never projects and never sorts: the mixer does all three, once, so
-  the fourth law is enforced in one place.
+  show, the `:sentence` the card says on its own behalf, and the
+  `:lane` it holds in a SPREAD. It may answer a bare vector, or
+  {:candidates […] :reached-cap bool} when it scanned to a cap and the
+  document should say so. It never renders, never projects and never
+  sorts: the mixer does all three, once, so the fourth law is enforced
+  in one place.
+
+  `:lane` is the one addition since `.2` and it is not an ordering of
+  its own (waymark-iqa.24). Every candidate is lane 0 unless a
+  population says otherwise, and a population that draws from several
+  kinds hands each candidate its place in its OWN kind's seeded order.
+  The mixer then sorts by lane and, inside a lane, by the same hash it
+  always used — a round-robin, which is composition, not a score.
 
   The registry is complete against docs/spec-feed.md's census as of
   waymark-iqa.6, and it grew one entry at a time: each bead added its
@@ -981,6 +1133,16 @@
     3. at most one `:bottomless`, and it is last;
     4. sections appear in census order.
 
+  Plus the shape of `:kinds`, the one entry key that arrived after
+  `.2` (waymark-iqa.24): an optional vector of kind keywords
+  narrowing that LINE's candidates. A household with a work queue it
+  means to see every morning writes two do-now lines — the queue's,
+  then everything else — and the mixer's total claim makes them
+  disjoint for free, because the first line claims every task whether
+  it showed one or five. It is the recipe doing the only thing the
+  recipe has ever done: saying, in static data, what this house reads
+  first.
+
   Returns the recipe, so a build site reads
   `(feed/check-recipe! (:feed eng feed/default-recipe))` and has both."
   [recipe]
@@ -1004,7 +1166,13 @@
         (refuse (str (pr-str (:population e))
                      " must declare a positive :take — how many cards it"
                      " contributes to one page")
-                {:entry e})))
+                {:entry e}))
+      (when-some [ks (:kinds e)]
+        (when-not (and (sequential? ks) (seq ks) (every? keyword? ks))
+          (refuse (str (pr-str (:population e))
+                       " :kinds is a non-empty vector of kind keywords —"
+                       " the line a household dedicates to particular rows")
+                  {:entry e}))))
     (let [seams (filterv :seam order)]
       (when-not (= 1 (count seams))
         (refuse (str "exactly one entry carries :seam true, found "
@@ -1243,11 +1411,26 @@
   resolve through. `router/render-opts` for a route that answers a
   document instead of an envelope."
   [ctx]
-  {:principal (:principal ctx)
-   :now (:now ctx)
-   :services (:services (:eng ctx))
-   :visibility (:visibility ctx)
-   :resources (resources ctx)})
+  (cond-> {:principal (:principal ctx)
+           :now (:now ctx)
+           :services (:services (:eng ctx))
+           :visibility (:visibility ctx)
+           :resources (resources ctx)}
+    ;; …and the probe's read hooks when the engine carries them
+    ;; (waymark-1pq, waymark-1zq). `router/render-opts` has always
+    ;; merged these and this map was a hand-built twin that forgot
+    ;; them, so a card's verbs were the OPTIMISTIC advertisement while
+    ;; the row's own screen showed the honest one — two surfaces
+    ;; disagreeing about the same door. It bit where a guard judges
+    ;; against another ROW: the letter whose address names a member
+    ;; row (`opener-is-recipient`) carded with no Open at all, on the
+    ;; one reader's feed it was written for.
+    ;;
+    ;; ONE instance per READ, minted in `document` and carried in the
+    ;; ctx — the router mints one per request for its cache's scope,
+    ;; and a fresh cache per card would pay for the same member row
+    ;; once a card instead of once a page.
+    (:render-hooks ctx) (merge (:render-hooks ctx))))
 
 (defn- load-decoded [ctx rdef id]
   (let [st (:storage (:eng ctx))]
@@ -1311,6 +1494,31 @@
   [c]
   (seq (get c "actions")))
 
+(defn- finished-history?
+  "The ARCHIVE's own gate (waymark-iqa.25): is this candidate's row
+  over AS IT STANDS NOW?
+
+  The archive's two ways of remembering both look at the PAST — a
+  transition from a year ago, a row that moved lately — and neither
+  of them says a word about where the row is today. So four shows the
+  household is halfway through carded as memories, under the seam,
+  wearing their full verb sets: an active row dressed as history,
+  which reads as the surface having lost track of what is going on.
+  `.5`'s own report claimed the archive was 'effectively the rows the
+  household finished'; this is that sentence made true rather than
+  merely hoped for.
+
+  It is a POINT READ per candidate WALKED, not per candidate named —
+  the mixer's `keep-indexed` is lazy and `take` short-circuits it — so
+  a page of six pays for six or seven, exactly as the card renders
+  do. A row that vanished between the scan and this read is no card
+  either way."
+  [ctx {:keys [kind id row]}]
+  (boolean
+   (when-some [rdef (get (resources ctx) kind)]
+     (when-some [raw (or row (load-raw ctx kind id))]
+       (work-over? rdef raw)))))
+
 ;; ── the mixer ───────────────────────────────────────────────────────
 
 (defn- entry-cards
@@ -1346,17 +1554,31 @@
   `:render? false` is how a cursor page pays for that: the populations
   above the seam run for their CANDIDATES — one query each, no
   envelopes — and contribute nothing but their claim."
-  [ctx {:keys [section population take* offset bottomless render?]} seen]
+  [ctx {:keys [section population take* offset bottomless render? kinds]} seen]
   (let [out ((get populations population) ctx)
         {:keys [candidates reached-cap]} (if (map? out)
                                            out
                                            {:candidates out})
         seed (:seed ctx)
+        of-kind? (if (seq kinds) (comp (set kinds) :kind) (constantly true))
         ordered (->> candidates
                      (remove #(contains? seen [(:kind %) (:id %)]))
-                     (sort-by #(rank seed (card-id section (:kind %) (:id %)))))
+                     (filter of-kind?)
+                     ;; the LANE first, the hash inside it (waymark-
+                     ;; iqa.24). A population that spreads its
+                     ;; candidates hands each one the place it holds
+                     ;; in its own kind's order; everything else
+                     ;; carries lane 0 and this is the sort it always
+                     ;; was. Nothing is compared to anything: the lane
+                     ;; is composition, the hash is the order.
+                     (sort-by (juxt #(long (:lane % 0))
+                                    #(rank seed (card-id section (:kind %)
+                                                          (:id %))))))
         claimed (into #{} (map (juxt :kind :id)) ordered)
         ordered (cond->> ordered bottomless (drop (long (or offset 0))))
+        admits? (if (= :archive section)
+                  #(finished-history? ctx %)
+                  (constantly true))
         keep? (if (= :do_now section) offers-something? (constantly true))
         n (long take*)
         ;; [candidate-index card] pairs, one past the page: the index
@@ -1367,8 +1589,9 @@
                 (into []
                       (comp (keep-indexed
                              (fn [i cand]
-                               (when-some [c (card ctx section population cand)]
-                                 (when (keep? c) [(long i) c]))))
+                               (when (admits? cand)
+                                 (when-some [c (card ctx section population cand)]
+                                   (when (keep? c) [(long i) c])))))
                             (take (inc n)))
                       ordered))
         page (mapv second (take n taken))]
@@ -1418,8 +1641,14 @@
   (let [day (today eng recipe)
         pid (:id principal)
         seed (seed-of recipe pid day)
-        ctx {:eng eng :principal principal :visibility visibility
-             :now ((:now-fn eng)) :seed seed :day day}
+        ctx (cond-> {:eng eng :principal principal :visibility visibility
+                     :now ((:now-fn eng)) :seed seed :day day}
+              ;; one render-probe instance for the whole read (the
+              ;; router's own posture, one per request): a card's
+              ;; verbs are then the honest ones rather than the
+              ;; optimistic advertisement, and the cache keeps the
+              ;; repeated probe of one member row to a single query
+              (:probe-reads eng) (assoc :render-hooks (inv/render-hooks eng)))
         archive-only? (some? offset)
         {:keys [cards more? capped walked]}
         (reduce
@@ -1439,6 +1668,7 @@
                                     {:section (:section e)
                                      :population (:population e)
                                      :take* (:take e)
+                                     :kinds (:kinds e)
                                      :offset (when (:bottomless e) offset)
                                      :bottomless (:bottomless e)
                                      :render? (or (not archive-only?)

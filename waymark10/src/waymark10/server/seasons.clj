@@ -98,10 +98,22 @@
   something would make one week's bar and one week's card disagree."
   [rdef]
   (let [terminal (set (:terminal rdef))
+        ;; the endings a kind declared it LET GO of (waymark-iqa.25):
+        ;; :discarded is as terminal as :done and it is not a week's
+        ;; work. Unspelled, nothing is subtracted and this reads
+        ;; exactly as it did — the household teaches the difference,
+        ;; the framework infers none of it.
+        let-go (set (when-not (:field (:over rdef)) (:let-go (:over rdef))))
         closing (into #{"complete" "close" "accept"}
-                      (comp (filter #(contains? terminal (:to (val %))))
+                      (comp (filter #(and (contains? terminal (:to (val %)))
+                                          (not (contains? let-go (:to (val %))))))
                             (map (comp name key)))
-                      (:actions rdef))]
+                      (:actions rdef))
+        closing (into #{}
+                      (remove (fn [a] (contains? let-go
+                                                 (:to (get (:actions rdef)
+                                                           (keyword a))))))
+                      closing)]
     (fn [action]
       (cond
         (= "create" action) :created

@@ -118,3 +118,28 @@
            (set warned))
         (str "the formless residue is this census and no wider; when a kind "
              "leaves it, delete it from here — when one JOINS it, ask why"))))
+
+(deftest how-a-kinds-work-ends-is-read-side-and-mints-no-revision
+  ;; waymark-iqa.24/.25: `:over` says which of a kind's endings the
+  ;; house STANDS BEHIND and which it let go — the sentence the feed
+  ;; needed and the machine could not infer. No door reads it, only
+  ;; the read side does, so it takes the `:nav` posture: not in
+  ;; fingerprint-of's projection, and therefore not a law revision on
+  ;; anybody's rows.
+  ;;
+  ;; That is a promise about a deployed engine, not a preference: four
+  ;; declarations gained the key at once, and had it been law, every
+  ;; task, movie, chore run and grocery list at work.kopsa.info would
+  ;; have woken up citing a revision minted by a sentence about the
+  ;; past. This is the assertion that keeps it that way.
+  (let [declaring (filter :over (main/check-resources))]
+    (is (seq declaring) "no kind declares :over — this test has gone stale")
+    (doseq [res declaring]
+      (testing (name (:kind res))
+        (is (= (fp/fingerprint-hash (r/fingerprint (dissoc res :over)))
+               (fp/fingerprint-hash (r/fingerprint res)))
+            (str (name (:kind res))
+                 ": declaring how its work ENDS moved its fingerprint —"
+                 " either :over joined fingerprint-of's projection or"
+                 " something reads it as law; if that is deliberate, this"
+                 " test is the place to argue it"))))))

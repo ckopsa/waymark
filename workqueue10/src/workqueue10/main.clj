@@ -77,6 +77,7 @@
             [waymark10.saved-view :refer [saved-view]]
             [waymark10.server.capabilities :as cap :refer [capability]]
             [waymark10.server.engine :as engine]
+            [waymark10.server.feed :as feed]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.oidc :as oidc]
             [waymark10.server.oidc-rp :as oidc-rp]
@@ -341,6 +342,34 @@
   the planner's week board."
   (into [day-board] mealplan/surfaces))
 
+(def feed-recipe
+  "This household's feed order (waymark-iqa.24). The default recipe
+  with ONE line added, and the line is the whole point.
+
+  The first read of the real feed found do-now holding three movies
+  and a chore run somebody skipped a fortnight ago, and not one of
+  the thirty-three open tasks — sixteen of them overdue, a brake
+  booster and a caregiving cluster and an insurance policy among
+  them. The framework's spread now keeps any one kind from crowding
+  the others out by sheer count, and that alone would have let the
+  queue in. This says the rest out loud: in THIS house the queue is
+  what the morning is for, so two of do-now's five slots are the
+  queue's before anything else is considered.
+
+  It is static data and it ranks nothing. The mixer's claim is total,
+  so the second line never re-offers a task the first one named — the
+  two lines are disjoint by construction, and a house with an empty
+  queue simply reads a do-now of five other things."
+  (assoc feed/default-recipe
+         :order
+         (into []
+               (mapcat (fn [e]
+                         (if (= :next_actions (:population e))
+                           [(assoc e :take 2 :kinds [:task])
+                            (assoc e :take 3)]
+                           [e])))
+               (:order feed/default-recipe))))
+
 (defn check-resources
   "Zero-arg so the declaration gate needs no env — every kind over
   the offline fakes."
@@ -498,6 +527,10 @@
                              :report-pass (connections/pass-reporter
                                            engine-ref {:event "calendar"})
                              :surfaces surfaces
+                             ;; the household's own feed order — the
+                             ;; recipe is an engine opt, read once at
+                             ;; the route's build site (waymark-iqa.24)
+                             :feed feed-recipe
                              :deploy-mode (deploy-mode)
                              ;; the render probe carries the read hooks
                              ;; (waymark-1pq): this is the boot prod

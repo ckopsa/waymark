@@ -1886,3 +1886,215 @@ Filed as **waymark-iqa.23.1** so the punt has an address.
   request would meet, rather than reading as *no such member*. A grant
   explicitly naming them is the reason: the previewer already knows the member
   exists, so concealing the suspension would only make the refusal confusing.
+
+## Built — the first real read, and the four things it found (2026-08-24, waymark-iqa.24, .15, .25, waymark-1zq)
+
+The feed shipped, deployed, and was read for the first time as the person who
+lives in it — Colton's own feed, through `feed.preview_as`. Everything worked
+and almost nothing was right.
+
+do-now held three movies, a chore run somebody skipped seventeen days earlier,
+and a Google task that had been done for a month. It held **none** of the
+household's thirty-three open tasks — sixteen of them overdue, a brake booster
+and a caregiving cluster and a lapsed insurance policy among them. Below the
+seam, four shows the family is halfway through carded as *memories*, wearing
+their full verb sets. Fuel congratulated the house on a grocery list it had
+thrown away and on an ingredient line inside a recipe. And a letter written to
+Colton two days earlier had never appeared anywhere at all.
+
+Each of those is a shape a smoke test cannot have, because a smoke test has
+three rows in it and a household has a hundred, lopsided by kind, half of them
+finished and some of them let go. So the first thing this bead built was the
+**world**, and everything else follows from reading the feed against it:
+`workqueue10/test/workqueue10/feed_shape_test.clj` boots the declarations
+production serves and the recipe production reads, seeds thirteen open tasks
+(five overdue) beside two done and one dropped, twenty media rows of which four
+are over, chore runs due and done and long skipped, a discarded grocery list, a
+removed meal line, and one unopened letter — and then asserts the shape of every
+section. That file is the regression net, and it is the deliverable of this
+bead as much as any line of feed.clj.
+
+### `:over` — the one thing the machine could not know
+
+Three of the four findings are the same missing sentence. The machine knows a
+row is TERMINAL and nothing else, and terminal is both too narrow and too wide:
+
+- too NARROW, because `chore_run`'s `:done` and `:skipped` are not terminal at
+  all (`:reopen` and `:unskip` are what made the triage deck honest), so a
+  three-week-old skip read as work still waiting; and because a mirror kind's
+  machine is the SYNC machine, so a task the authority calls `done` reads as
+  live forever;
+- too WIDE, because `grocery_list`'s `:done` and `:discarded` are both terminal
+  and only one of them is an accomplishment.
+
+So the declaration says it, in the household's own words:
+
+```clojure
+:over {:accomplished #{:done} :let-go #{:skipped}}                     ; states
+:over {:field :status :accomplished #{"done"} :let-go #{"dropped"}}    ; a mirror's data
+```
+
+The optional `:field` is the mirror seam waymark-iqa.15 asked for, and it is
+what keeps the framework from holding any application's enum: `feed.clj` used
+to carry the literal string `"done"` — one app's vocabulary, held by core,
+which made `media`'s honest `queued/active/finished/abandoned` read as a
+deviation from a word core happened to know. That literal is gone; the kind
+that speaks the vocabulary declares it.
+
+Unspelled, `:over` means exactly what the code meant before: terminal states are
+endings and every one of them counts. **It is not fingerprinted** — the `:nav`
+precedent, and for the same reason: no door consults it, only the read side
+does, so a household can teach the difference between finishing and giving up
+without minting a law revision.
+
+Two questions read it, and they are deliberately different:
+
+- **`work-over?`** — is this row's work over? Nothing over is a next action, and
+  only what is over is a memory. It counts *let go* as over.
+- **`accomplished?`** — did the house FINISH it? Fuel is deeds. A discarded
+  list, an abandoned book and a skipped chore are over without being deeds.
+
+`set-aside?` — the tickler's and the insight's retirement question — asks the
+NARROWER one on purpose, so a someday/maybe marker over a dropped task still
+stands. *Still not done* is precisely what a someday list is for, and the
+household's way to say otherwise is the `take_it_back` verdict: a person
+answering rather than an engine inferring.
+
+`seasons/classify` reads `:over` too, one line, for the same reason both had to
+agree about what finishing means: an action landing in a declared let-go state
+is no longer counted as `:completed`, so the weekly bars and the `cleared` card
+say the same thing about the same week.
+
+### The spread — composition, not a score
+
+do-now's five slots were drawn by `hash(seed ‖ card_id)` over every open row of
+every front-door kind, pooled. That is fair per ROW and therefore a lottery
+weighted by row count: two hundred queued films against thirty-three errands is
+a do-now of films, forever, and no amount of re-reading changes it because the
+seed is stable. Arithmetic, not a household's morning.
+
+Every `next_actions` candidate now carries the **`:lane`** it occupies in its
+OWN kind's seeded order — its kind's first row is lane 0, the second lane 1 —
+and the mixer sorts by lane before hash. Five slots therefore draw from five
+kinds when five kinds have work. Within a lane the order is the same hash it
+always was; within a kind nothing moved. **Nothing is compared to anything**,
+which is the line the third law draws: a spread is composition, a score is a
+claim that this row is better than that one, and only the second is forbidden.
+
+The recipe can go further, and this household does. A recipe entry may name
+`:kinds`, narrowing that LINE to particular rows, so `workqueue10/main` declares:
+
+```clojure
+{:section :do_now :population :next_actions :take 2 :kinds [:task]}
+{:section :do_now :population :next_actions :take 3}
+```
+
+Two of the five slots are the queue's before anything else is considered. It is
+static data saying what this house reads first — the recipe doing the only job
+the recipe has ever had — and the mixer's total claim makes the two lines
+disjoint for free: the first claims every task, shown or not, so the second
+never re-offers one.
+
+### The archive asks the row where it stands NOW
+
+`memories` matches on the PAST — a transition from a year ago, a row that moved
+lately — and said nothing about the present. An active show that moved last
+Tuesday was therefore a memory, with its verbs, below the seam. `.5`'s own
+report claimed the archive was *"effectively the rows the household finished"*;
+that was true only because do-now's claim happened to swallow the live ones
+first, and `row-scan-cap` is 100, so in a house with more than a hundred media
+rows it stopped being true silently.
+
+The archive SECTION now gates on `work-over?` — the row as it stands, not as it
+moved. The cost is one point read per candidate WALKED, not per candidate named:
+the mixer's `keep-indexed` is lazy and `take` short-circuits it, so a page of
+six usually pays for six or seven, exactly as the card renders already do. The
+honest worst case is a house whose every recent mover is still live — then the
+walk reads the whole ordering to fill a page, bounded by `log-scan-cap` and no
+worse than the scan the population already did. If that ever bites, it bites
+where waymark-iqa.16 is already watching.
+
+One thing the gate does not do, and it is worth stating rather than hiding: an
+archive card of a MIRROR kind still carries that kind's verbs, because a card's
+body is the row AS OF NOW (the departure `card` has always documented) and a
+finished film's `start` really is a door — *we changed our minds* is a thing
+households do. The archive is history; it is not read-only.
+
+### Fuel is deeds, and a line item is not one
+
+`finished` read *the last terminal row of every `:primary` or `:secondary`
+kind*, which is how *you finished 'Ingredient: 2 tbsp butter'* reached a
+household's feed. Two corrections, both using vocabulary that was already there:
+
+- fuel (`cleared`, `streaks`, `finished`) speaks only about **`:nav :primary`**
+  kinds. `:nav` is already the household's own answer to which rows a person
+  goes to; a line item is `:secondary` precisely because nobody navigates to
+  one. The archive keeps the wider list — a memory may be of anything a person
+  can reach — but a deed is a front door's.
+- `last-finished` asks for the last **accomplished** row rather than the last
+  terminal one, so the discarded grocery list is remembered without being
+  celebrated.
+
+### The letter that never arrived (waymark-1zq)
+
+`letters.clj` resolves `:to` at the door — a member ROW id becomes the delivery
+identity its `:subject` names — so mail sent from here has always carried the
+one spelling the shelf matches. What the door could not do was reach the mail
+already ON the shelf: the feed's `letters` population asked for
+`{:to <principal-id>}` and nothing else, so a letter carrying any other accepted
+spelling was invisible to the person it was for, sitting in plain sight on its
+own row. A shelf that swallows mail is worse than a shelf with no floor: the
+recipient never learns there was something to open.
+
+Three changes, and they are one idea:
+
+1. **`members/spellings-of`** — the gate's own resolution read backwards. The
+   ids a principal answers to are its principal id and the member row whose
+   `:subject` is that principal. One query, nothing written, and the one
+   definition of the question.
+2. **The feed's `letters` population asks for every one of them**, deduped by
+   row.
+3. **`opener-is-recipient` and `discarder-is-recipient` ask the same question**
+   — via the row's own `:subject`, the same fact `delivery-id` uses going the
+   other way. A card offering an Open the guard would refuse is a dead end
+   wearing a verb, so the reading side and the opening side had to agree.
+
+And the create door's refusal now says what a good address LOOKS like — *the
+member's id as the roster shows it, or the id they sign in under* — which is a
+fact about the household's roster in general and not about the id in the
+caller's hand. Every unresolvable recipient still renders that ONE body, so the
+door still narrates no roster, and `letters-are-paced` still stops the sweep.
+
+**The production letter is not fixed by any of this, and should not be.**
+`letters/f5415d68` is addressed to a member row; whether it becomes reachable
+depends on a fact only production holds — whether that row's `:subject` is the
+principal Colton actually signs in as. A letter has no amend and no re-address
+by design (*once sent, is sent*), so the honest remedy is a fresh letter to an
+address the door resolves, and the old one discarded by its recipient if it ever
+becomes theirs to discard.
+
+### Recorded here, for whoever comes next
+
+- **`:over` is read-side only, and the temptation to make it law should be
+  resisted deliberately, not by accident.** The moment a GUARD reads it — *you
+  may not reopen an accomplished row* — it becomes fingerprinted law and every
+  declaration that carries it mints a revision. It is a read trait today.
+- **Fuel is still silent about the WORK QUEUE, and that is a choice, not an
+  oversight.** A mirror kind has no accomplished STATE to query — its endings
+  live in a data field — and the obvious extension (query `status=done`, newest
+  `updated_at` first) would date the deed by the SYNC stamp: a row re-observed
+  today reads as *what you got done today* even if the authority marked it done
+  a month ago. Claiming a deed on the wrong day is the same over-claim
+  waymark-iqa.25 exists to stop, so the queue's finished rows reach the archive
+  and not the fuel line. Filed.
+- **`cleared`'s count still comes from `seasons/report`'s aggregate**, which is
+  now let-go-aware but is still an ACTION-level classification: a kind that
+  ends the same state through two different actions counts both. Filed rather
+  than fixed.
+- **The own-surface pushdown still matches one spelling.** An AGENT addressed by
+  a member row id sees its own letter only where the reader is unscoped; the
+  feed and the guards agree, `grants/own-ids` does not yet. Filed.
+- **`row-scan-cap` is still 100 per kind**, and the spread makes it matter less
+  (a kind now contributes its whole lane 0 whatever else exists) but not zero:
+  a household with more than a hundred open rows of one kind still has a window,
+  and waymark-iqa.16 is where that lives.
