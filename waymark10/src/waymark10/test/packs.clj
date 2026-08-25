@@ -1965,6 +1965,154 @@
   [doc]
   (into [] (remove #(= "seam" (:card_id %))) (feed-cards doc)))
 
+(defn- feed-citation-violations
+  "No publication without citation, turned on the feed's own editorial
+  choices (waymark-iqa.29). The owner found a movie in do-now and
+  could not learn why; the four layers that put it there — a framework
+  predicate, a declared trait, a recipe line and the day's seed — now
+  say so on the wire, and this is the claim that they say the TRUTH.
+
+  Five things, and the third is the one that matters:
+
+  1. The recipe reads back NARRATED — every line has a sentence, and
+     the four assembly checks' guarantees are one sentence beside it.
+  2. Every card carries a `why` naming a line the recipe actually
+     holds, and a place inside a draw it was actually part of.
+  3. THE CITATION MATCHES THE LAYER THAT ADMITTED IT. A card's line
+     must agree with the card about its section and its population,
+     and a line dedicated to particular `:kinds` must never be cited
+     by a card of another kind. A citation that named the wrong line
+     would be worse than none: it would be a confident wrong answer to
+     the one question this whole bead exists to answer.
+  4. `?explain=1` is a READ FLAG — the same cards, in the same order,
+     with sentences added. That is the law a client leans on when it
+     fetches the citation late and lines it up by `card_id`, so it is
+     asserted rather than assumed.
+  5. The sentences quote the DECLARATION. A card whose population
+     reads `:over` cites `:over` by name — spelled or unspelled — and
+     every citation ends at the seed rather than at an opinion."
+  [ctx]
+  (let [{:keys [doc]} (feed-doc ctx nil)
+        spelled (:doc (feed-doc ctx nil "explain=1"))
+        recipe (:recipe doc)
+        lines (vec (:lines recipe))
+        by-line (into {} (map (juxt :line identity)) lines)
+        cards (feed-cards doc)
+        rows (feed-row-cards spelled)
+        reads-over? #{"next_actions" "cleared" "streaks" "finished" "memories"}
+        said (fn [c] (str/join " " (:says (:why c))))]
+    {:covered (boolean (seq rows))
+     :violations
+     (cond-> []
+       (empty? lines)
+       (conj (str "feed: the document carries no narrated recipe — the order"
+                  " was hard-coded where no reader would ever see it, which"
+                  " is the half of waymark-iqa.29 that is not about any one"
+                  " card"))
+
+       (some #(str/blank? (str (:says %))) lines)
+       (conj (str "feed: a recipe line narrates nothing: "
+                  (pr-str (first (filter #(str/blank? (str (:says %))) lines)))))
+
+       (str/blank? (str (:guarantees recipe)))
+       (conj (str "feed: the narrated recipe carries no guarantees sentence —"
+                  " the four assembly checks run at the build site and a"
+                  " reader has no other way to learn that they did"))
+
+       (some #(nil? (:why %)) cards)
+       (conj (str "feed: a card carries no why at all: "
+                  (pr-str (:card_id (first (filter #(nil? (:why %)) cards))))))
+
+       (some #(nil? (get by-line (:line (:why %)))) cards)
+       (conj (str "feed: a card cites a recipe line the narrated recipe does"
+                  " not hold — "
+                  (pr-str (map :card_id
+                               (filter #(nil? (get by-line (:line (:why %))))
+                                       cards)))))
+
+       :always
+       (into
+        (comp (keep (fn [c]
+                      (let [l (get by-line (:line (:why c)))]
+                        (cond
+                          (nil? l) nil
+
+                          (not= (str (:section c)) (str (:section l)))
+                          (str "feed: card " (:card_id c) " is in section "
+                               (pr-str (str (:section c))) " and cites line "
+                               (:line (:why c)) ", which is "
+                               (pr-str (str (:section l))))
+
+                          (not= (str (:population c)) (str (:population l)))
+                          (str "feed: card " (:card_id c) " names population "
+                               (pr-str (str (:population c)))
+                               " and cites a line whose population is "
+                               (pr-str (str (:population l))))
+
+                          (and (seq (:kinds l))
+                               (not (contains? (set (map str (:kinds l)))
+                                               (str (:kind c)))))
+                          (str "feed: card " (:card_id c) " is a "
+                               (str (:kind c)) " and cites a line dedicated to "
+                               (pr-str (vec (map str (:kinds l))))
+                               " — a citation that named the wrong layer is a"
+                               " confident wrong answer to the one question"
+                               " this document exists to answer")
+
+                          (not (<= 1 (long (:rank (:why c) 0))
+                                   (long (:of (:why c) 0))))
+                          (str "feed: card " (:card_id c) " was drawn "
+                               (pr-str (:rank (:why c))) " of "
+                               (pr-str (:of (:why c)))
+                               " — a place outside its own draw")
+
+                          :else nil)))))
+        (feed-row-cards doc))
+
+       (not= (mapv :card_id (feed-cards doc)) (mapv :card_id (feed-cards spelled)))
+       (conj (str "feed: ?explain=1 answered different cards — it is a READ"
+                  " FLAG and the day's order is the day's order, which is"
+                  " exactly what lets a client fetch the citation late and"
+                  " line it up by card_id:\n  "
+                  (pr-str (mapv :card_id (feed-cards doc))) "\n  "
+                  (pr-str (mapv :card_id (feed-cards spelled)))))
+
+       (some #(empty? (:says (:why %))) rows)
+       (conj (str "feed: ?explain=1 left a card with no sentences: "
+                  (pr-str (:card_id (first (filter #(empty? (:says (:why %)))
+                                                   rows))))))
+
+       :always
+       (into
+        (comp (keep (fn [c]
+                      (let [s (said c)]
+                        (cond
+                          ;; prose counts from one, the wire's index from
+                          ;; zero — and a citation that opened on the
+                          ;; wrong line would be citing the wrong layer
+                          (not (str/includes?
+                                s (str "Recipe line "
+                                       (inc (long (:line (:why c) 0))))))
+                          (str "feed: card " (:card_id c) "'s citation opens "
+                               (pr-str (first (:says (:why c))))
+                               " and it cites line " (:line (:why c)))
+
+                          (and (reads-over? (str (:population c)))
+                               (not (str/includes? s ":over")))
+                          (str "feed: card " (:card_id c) " was admitted by "
+                               (str (:population c)) ", which reads the kind's"
+                               " :over, and its citation never names it: "
+                               (pr-str s))
+
+                          (not (str/includes? s "seed"))
+                          (str "feed: card " (:card_id c) "'s citation never"
+                               " reaches the seed — the draw is the last of"
+                               " the four layers and the only one a reader"
+                               " cannot see for themselves")
+
+                          :else nil)))))
+        rows))}))
+
 (defn- feed-light-violations
   "The first law, read off the wire: no entry in any card's `actions`
   demands more than a selection, and every `heavier` entry is a
@@ -2821,6 +2969,13 @@
     (feed-obligation :feed/projection feed-projection-violations)
     (feed-obligation :feed/cursor-rolls feed-cursor-violations)
     (feed-obligation :feed/archive-pages feed-archive-pages-violations)
+    ;; the last of the readers: every card cites the layer that
+    ;; actually admitted it, and the recipe reads back narrated
+    ;; (waymark-iqa.29). It reads TWICE — once plain, once with
+    ;; ?explain=1 — and one of its claims is that those two reads
+    ;; answer the same cards, which is the law a client leans on when
+    ;; it fetches a citation late.
+    (feed-obligation :feed/citations feed-citation-violations)
     ;; THE WRITERS GO LAST, and in this order for one reason each.
     ;; :verbs-are-light invokes a card verb for real, so the origin
     ;; convention is proved by the audit trail rather than by a

@@ -312,6 +312,58 @@
              (into [] (distinct) (map #(str (:section %)) (:cards doc))))
           "the census is law, and this house exercises all of it"))))
 
+(deftest every-card-says-why-it-is-here
+  ;; The read that started waymark-iqa.29: a movie in do-now, and no
+  ;; way to find out why. This asserts the four layers over the same
+  ;; world — the recipe line the household wrote, the traits the kind
+  ;; declares, the section's own bargain, and the day's draw.
+  (let [plain (json (req :get "/api/-/feed" nil colton))
+        spelled (json (req :get "/api/-/feed?explain=1" nil colton))
+        card-of (fn [d kind section]
+                  (first (filter #(and (= kind (str (:kind %)))
+                                       (= section (str (:section %))))
+                                 (:cards d))))]
+
+    (testing "the recipe reads back, and the household's own two lines
+              say what they are for"
+      (let [lines (get-in plain [:recipe :lines])]
+        (is (= (count (:order main/feed-recipe)) (count lines)))
+        (is (every? #(seq (str (:says %))) lines))
+        (is (str/includes? (:says (first lines)) "the work queue")
+            "the queue line is the household's own sentence, not the
+             framework's fallback")
+        (is (str/includes? (get-in plain [:recipe :guarantees])
+                           "exactly one card is the seam"))))
+
+    (testing "a task in do-now cites the line the household dedicated to it"
+      (let [c (card-of plain "task" "do_now")]
+        (is (some? c))
+        (is (= 0 (:line (:why c))) "line 0 is the queue's two slots")
+        (is (<= 1 (:rank (:why c)) (:of (:why c))))))
+
+    (testing "and a media card in do-now cites the OTHER line, its :nav,
+              and the :over that says a queued film is not over"
+      (let [c (card-of spelled "media" "do_now")]
+        (when c                       ; the seed may not draw one today
+          (let [s (str/join " " (:says (:why c)))]
+            (is (= 1 (:line (:why c)))
+                "the general do-now line, never the queue's")
+            (is (str/includes? s ":nav :primary"))
+            (is (str/includes? s ":over reads its status field")
+                "the movie's own declaration, quoted — this is the sentence
+                 the owner could not find anywhere")
+            (is (str/includes? s "which is neither, so its work is not over"))
+            (is (str/includes? s "verb light enough to tap"))
+            (is (str/includes? s "seed"))))))
+
+    (testing "and an archive card says it is below the seam because the
+              work is over as the row stands NOW"
+      (let [c (first (filter #(= "archive" (str (:section %)))
+                             (:cards spelled)))]
+        (is (some? c))
+        (is (str/includes? (str/join " " (:says (:why c)))
+                           "its work is over as the row stands now"))))))
+
 (deftest the-packs-own-promises-hold-over-this-world
   ;; The obligations judge whatever an application declared, and until
   ;; now the only world they had ever judged was the conformance
@@ -321,7 +373,7 @@
   ;; above is counting).
   (let [ctx (suite/context {:engine *eng* :handler *h* :kinds [:task :media]})
         readers #{:feed/recipe-order :feed/day-stable :feed/projection
-                  :feed/cursor-rolls :feed/archive-pages}]
+                  :feed/cursor-rolls :feed/archive-pages :feed/citations}]
     (doseq [{:keys [name run]} (:obligations packs/feed)
             :when (contains? readers name)]
       (testing (str name)

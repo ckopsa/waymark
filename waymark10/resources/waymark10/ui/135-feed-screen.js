@@ -124,10 +124,41 @@ async function renderFeedScreen(view, doc) {
         doc.summary || day),
       el("button", {class: "chip", title: "read the day again from the top",
                     onclick: () => render()}, "↻ Re-read")));
-  if ((doc.notes || []).length) {
+  /* WHY THIS ORDER opens into the RECIPE (waymark-iqa.29). The order
+     used to be a hard-coded vector in an application's main.clj that no
+     reader would ever see; the server now narrates it line by line, in
+     the household's own words where the household wrote them, and this
+     disclosure is where a person reads it. Viewing only — editing a
+     recipe is its own bead and wants the composition scaffolding a
+     saved_view has. The notes ride underneath it, because a note is
+     about this READ and a line is about the order itself. */
+  if ((doc.notes || []).length || (doc.recipe || {}).lines) {
     const why = el("details", {class: "feed-why"},
       el("summary", {}, "Why this order"));
-    for (const n of doc.notes)
+    const recipe = doc.recipe || {};
+    if ((recipe.lines || []).length) {
+      const ol = el("ol", {class: "feed-recipe"});
+      for (const line of recipe.lines) {
+        const counts = [];
+        if (typeof line.offered === "number")
+          counts.push(line.offered + " offered");
+        if (line.claimed_above > 0)
+          counts.push(line.claimed_above + " already claimed above");
+        if (typeof line.showed === "number")
+          counts.push(line.showed + " shown");
+        ol.append(el("li", {class: line.seam ? "feed-recipe-seam" : "",
+                            value: (line.line ?? 0) + 1},
+          el("span", {class: "prose"}, line.says || ""),
+          counts.length
+            ? el("span", {class: "muted feed-recipe-counts"},
+                " — " + counts.join(" · "))
+            : null));
+      }
+      why.append(ol);
+      if (recipe.guarantees)
+        why.append(el("p", {class: "prose muted"}, recipe.guarantees));
+    }
+    for (const n of doc.notes || [])
       why.append(el("p", {class: "prose muted"}, n));
     head.append(why);
   }
@@ -269,6 +300,67 @@ async function renderFeedScreen(view, doc) {
       ev.length > 6 ? el("span", {class: "muted"}, ` +${ev.length - 6}`) : null));
   }
 
+  /* ── why this card is here (waymark-iqa.29) ─────────────────────────
+     The citation is the SERVER's, always, and this page never derives
+     one: a why assembled here from predicates would be a second
+     opinion about what admitted a card, which is exactly the mistake
+     `heavier` exists to avoid on the verb side. What the page does is
+     ask.
+
+     Two halves, and the split is the wire's own cost decision. Every
+     card carries `why` — the recipe line that admitted it and where
+     the seed drew it — so the disclosure can open with something true
+     before any network happens, joined against the narrated recipe the
+     document already carries. The SENTENCES cost prose per card, so
+     they ride ?explain=1 and are fetched once per page, the first time
+     anybody actually asks. That late read is sound because the feed's
+     own law says so: two reads by one member on one day answer the
+     same cards in the same order (:feed/day-stable), so the answer
+     lines up by card_id and cannot be a different day's feed. */
+  const explainCache = new Map();          // page href → Promise<Map>
+  function explainOf(srcHref) {
+    if (!explainCache.has(srcHref)) {
+      const href = srcHref + (srcHref.includes("?") ? "&" : "?") + "explain=1";
+      explainCache.set(srcHref, api(href).then(({ok, body}) => {
+        const m = new Map();
+        if (ok) for (const c of (body || {}).cards || [])
+          if (c && c.card_id && (c.why || {}).says) m.set(c.card_id, c.why.says);
+        return m;
+      }, () => new Map()));
+    }
+    return explainCache.get(srcHref);
+  }
+
+  function whyDisclosure(card, srcHref) {
+    const why = card.why;
+    if (!why) return null;
+    const line = ((doc.recipe || {}).lines || [])[why.line];
+    const box = el("div", {class: "fcard-why-body"});
+    /* the honest opening line, from parts the card and the document
+       already carry: the recipe's own sentence for the line that
+       admitted this card, and the size of the draw it came out of */
+    if (line && line.says)
+      box.append(el("p", {class: "prose"},
+        "Recipe line " + (why.line + 1) + " — " + line.says));
+    if (typeof why.rank === "number")
+      box.append(el("p", {class: "muted"},
+        "Drawn #" + why.rank + " of " + why.of + " this line offered today."));
+    const details = el("details", {class: "fcard-why"},
+      el("summary", {}, "Why this card?"), box);
+    let asked = false;
+    details.addEventListener("toggle", async () => {
+      if (!details.open || asked) return;
+      asked = true;
+      const says = (await explainOf(srcHref)).get(card.card_id);
+      if (!says || !says.length || !box.isConnected) return;
+      /* the server's own sentences replace the opening two: same
+         citation, spelled out, and every trait word in it is the
+         declaration's own */
+      box.replaceChildren(...says.map(s => el("p", {class: "prose"}, s)));
+    });
+    return details;
+  }
+
   /* the card, by the shape the WIRE gives it rather than by any kind
      name this generic page could not know: a card carrying an `offer`
      link is a finding with a next step attached; a card with a
@@ -277,7 +369,7 @@ async function renderFeedScreen(view, doc) {
      degrades into that last shape rather than into a blank — and a
      card that throws is a problem panel wearing its own refusal,
      never its neighbours' problem (the dashboard's posture). */
-  function cardArticle(card, hints) {
+  function cardArticle(card, hints, srcHref) {
     const kind = card.kind || "";
     const article = el("article",
       /* section and population ride as DATA — the two names the recipe
@@ -400,12 +492,18 @@ async function renderFeedScreen(view, doc) {
           (l.download ? "⭳ " : l.external ? "↗ " : "") + title(rel)
           + (l.external || l.download ? "" : " ↗")));
     if (bar.childElementCount) article.append(bar);
+    const cite = whyDisclosure(card, srcHref);
+    if (cite) article.append(cite);
     article.append(el("div", {"data-feed-problem": ""}));
     return article;
   }
 
   /* ── appending, section by section ──────────────────────────────── */
-  function appendCards(cards) {
+  /* `srcHref` is the door THIS batch came through, and it travels with
+     the cards because a citation is fetched from the same page that
+     served them: an archive card on page four is explained by page
+     four's own read, never by the top of the feed. */
+  function appendCards(cards, srcHref) {
     for (const card of cards || []) {
       if (!card || !card.card_id || seen.has(card.card_id)) continue;
       seen.add(card.card_id);
@@ -420,7 +518,7 @@ async function renderFeedScreen(view, doc) {
       }
       count++;
       try {
-        list.append(cardArticle(card, feedHints[card.kind] || {}));
+        list.append(cardArticle(card, feedHints[card.kind] || {}, srcHref));
       } catch (e) {
         /* degrade alone: one card that cannot render is a problem
            panel wearing its own refusal, never a broken page */
@@ -476,6 +574,7 @@ async function renderFeedScreen(view, doc) {
     paintEnd();
     let problem = null;
     try {
+      const came = nextHref;
       const {ok, status, body} = await api(nextHref);
       if (!list.isConnected) return;
       if (!ok) {
@@ -487,7 +586,7 @@ async function renderFeedScreen(view, doc) {
       } else {
         await learnKinds(body.cards);
         if (!list.isConnected) return;
-        appendCards(body.cards);
+        appendCards(body.cards, came);
         nextHref = (body.links || {}).next?.href || null;
       }
     } finally { loading = false; }
@@ -514,7 +613,7 @@ async function renderFeedScreen(view, doc) {
 
   await learnKinds(doc.cards);
   if (!list.isConnected) return;     // a newer render superseded us
-  appendCards(doc.cards);
+  appendCards(doc.cards, doc.self || "/api/-/feed");
   paintEnd();
 }
 

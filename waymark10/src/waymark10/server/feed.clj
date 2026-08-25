@@ -85,6 +85,21 @@
   Recorded honestly as a smuggle: the key's declared job is replay
   identity and this reads it as provenance too.
 
+  ── NO PUBLICATION WITHOUT CITATION ──
+
+  The rule `insight` imposes at its create door binds this surface's
+  own editorial choices (waymark-iqa.29): every card carries a `why`
+  naming the recipe line that admitted it and where the day's seed
+  drew it, the document carries the `recipe` narrated line by line,
+  and `?explain=1` spells the whole citation out in sentences — the
+  declared traits included, in the DECLARATION's own words. It is a
+  projection like everything else here: the population is named, the
+  traits are declared, the recipe is data, the seed already decided.
+  See § 'the citation' below for the cost split and why the prose is
+  the opt-in half. Explaining ABSENCE is not attempted and the reason
+  is filed (waymark-ck7): *why is this card here* is a projection,
+  *why is some other row not* is a search over everything.
+
   ── NO DISCOVERY, TWICE ──
 
   The recipe is DATA and the populations are CODE, and neither is
@@ -1143,6 +1158,13 @@
   recipe has ever done: saying, in static data, what this house reads
   first.
 
+  …and of `:says`, the second such key (waymark-iqa.29): the line's
+  own sentence in the household's own words, for the narrated recipe
+  the feed now serves. Optional — a line with none narrates itself
+  from its section, its take, its `:kinds` and its population's own
+  sentence — and free of any fingerprint, because the recipe is an
+  engine opt and not a declaration.
+
   Returns the recipe, so a build site reads
   `(feed/check-recipe! (:feed eng feed/default-recipe))` and has both."
   [recipe]
@@ -1172,6 +1194,13 @@
           (refuse (str (pr-str (:population e))
                        " :kinds is a non-empty vector of kind keywords —"
                        " the line a household dedicates to particular rows")
+                  {:entry e})))
+      (when-some [s (:says e)]
+        (when-not (and (string? s) (seq (str/trim s)))
+          (refuse (str (pr-str (:population e))
+                       " :says is a sentence in the household's own words,"
+                       " or absent — the line then narrates itself"
+                       " (waymark-iqa.29)")
                   {:entry e}))))
     (let [seams (filterv :seam order)]
       (when-not (= 1 (count seams))
@@ -1519,6 +1548,278 @@
      (when-some [raw (or row (load-raw ctx kind id))]
        (work-over? rdef raw)))))
 
+;; ── the citation: why this card is here (waymark-iqa.29) ────────────
+;;
+;; The owner opened the feed, found a movie in do-now, and could not
+;; find out why. Four layers had agreed to put it there — a framework
+;; predicate (`work-over?`), a declared trait (`:nav`, `:over`), a
+;; recipe line, and the day's seed — and not one of them said so
+;; anywhere a person could read. In an engine whose signature move is
+;; that refusals narrate themselves, that is a surface publishing
+;; without citing.
+;;
+;; So every card cites itself, and the whole of it is a PROJECTION:
+;; the population is named, the traits are declared, the recipe is
+;; data, and the seed already decided the order. Nothing below infers
+;; anything, and nothing below invents prose a declaration does not
+;; carry — where a trait is spelled, the sentence quotes the spelling.
+;;
+;; THE COST, DECIDED. The citation's inputs split cleanly in two: the
+;; RECIPE half is one narration per line, identical for every card
+;; that line admitted, and the CARD half is three or four numbers. So
+;; the recipe half rides the document ONCE (`recipe` below) and the
+;; card half rides every card always (`why` — line, rank, of), which
+;; costs about thirty bytes. The PROSE half — the assembled sentences,
+;; which would repeat one kind's `:over` on every card of that kind —
+;; is `?explain=1`, and the law that makes an opt-in read sound is the
+;; feed's own: `:feed/day-stable` says two reads by one member on one
+;; day answer the same cards in the same order, so a citation fetched
+;; late lines up by `card_id` and cannot be a different day's feed.
+;; Always-on would have doubled a fuel card, which is mostly a
+;; sentence already, for a disclosure most reads never open.
+
+(def population-says
+  "What each population goes looking for, in household words. It is
+  the framework describing its own code — a population is a `defn` up
+  this file, so this is the one place its intent can be said in a
+  sentence a parent reads on a phone. A recipe line may override the
+  whole narration with `:says`; this is what a line that says nothing
+  falls back to."
+  {:next_actions "rows nobody has finished yet, from the kinds this house goes to"
+   :asks "access somebody has asked for and somebody else must answer"
+   :letters "mail on your shelf you have not opened"
+   :ticklers "things you set aside, whose date has come round again"
+   :conflicts "rows where the outside authority and this house disagree"
+   :insights "findings an agent published that nobody has answered"
+   :cleared "a queue that went all the way to zero"
+   :streaks "the weeks in a row this house finished something"
+   :finished "the last thing each front door finished this week"
+   :events "every row that has moved lately, newest move first"
+   :memories "what this house was doing a year ago this week, and behind it everything that has moved"})
+
+(def population-reads
+  "Which DECLARED traits a population consults, so a card's citation
+  can quote the kind's own declaration rather than describe it from
+  outside. A population reading none of them is not a gap: `asks`,
+  `letters`, `ticklers`, `conflicts` and `insights` all choose by a
+  STATE their own kind declares and by whose row it is, which the
+  line's own sentence already says and the card's own `state` already
+  shows."
+  {:next_actions [:nav :machine :over]
+   :cleared [:nav :over]
+   :streaks [:nav :over]
+   :finished [:nav :over]
+   :memories [:over]
+   :events [:nav]})
+
+(defn- ordinal ^String [^long n]
+  (str n (if (<= 11 (mod n 100) 13)
+           "th"
+           (get {1 "st" 2 "nd" 3 "rd"} (mod n 10) "th"))))
+
+(defn- words
+  "A set of state keywords or field strings, as one readable list."
+  ^String [xs]
+  (str/join ", " (map #(str (if (keyword? %) (name %) %)) (sort-by str xs))))
+
+(defn- nav-says
+  "`:nav`, in its own words. It is the only trait this framework
+  declares about who a kind is FOR, and it is the whole of do-now's
+  and fuel's answer to which rows belong to a person."
+  [rdef]
+  (let [k (name (:kind rdef))]
+    (case (:nav rdef :primary)
+      :primary (str k " is a front door in this house — its declaration says"
+                    " :nav :primary — and do-now and fuel are made of front"
+                    " doors.")
+      :secondary (str k " is :nav :secondary — a line inside somebody else's"
+                      " row. The archive remembers those; fuel does not"
+                      " celebrate them.")
+      :system (str k " is :nav :system — house machinery rather than anybody's"
+                   " next step.")
+      nil)))
+
+(defn- machine-says
+  "The kind's own state machine, read against this row. `open?` is the
+  predicate; this is the sentence it would have said."
+  [rdef row]
+  (let [terminal (:terminal rdef #{})
+        k (name (:kind rdef))
+        st (some-> (:state row) name)]
+    (cond
+      (and (empty? terminal) (:mirror rdef))
+      (str k " is mirrored, so its machine is the SYNC machine — "
+           (or st "its state") " is a word about the last time this house and"
+           " the authority spoke, never about the work. What ended lives in"
+           " its data, which is what :over reads.")
+
+      (empty? terminal)
+      (str k "'s machine declares no ending at all: every state it can reach"
+           " has a way back out, which is exactly why :over is the thing that"
+           " says when the work is over.")
+
+      (contains? terminal (keyword st))
+      (str "State " st " is an ending by " k "'s own machine.")
+
+      :else
+      (str "State " st " is live work by " k "'s own machine — its endings are "
+           (words terminal) ", and this row is in none of them."))))
+
+(defn- over-says
+  "`:over`, in the declaration's own words, read against this row. This
+  is the sentence the movie in do-now was missing: a kind whose
+  lifecycle lives in a data field says so, names the word it finishes
+  on and the word it lets go on, and the row's own word is quoted back."
+  [rdef row]
+  (let [{:keys [field accomplished let-go]} (over-vocabulary rdef)
+        k (name (:kind rdef))
+        w (ending-word rdef row)
+        w' (when w (if (keyword? w) (name w) (str w)))]
+    (cond
+      (not (:over rdef))
+      (str k " spells no :over, so the machine's endings are the endings and"
+           " every one of them counts as finished.")
+
+      field
+      (str k "'s :over reads its " (name field) " field: " (words accomplished)
+           " is a deed"
+           (when (seq let-go) (str ", " (words let-go) " is let go"))
+           ". This row's " (name field) " says "
+           (if w' w' "nothing at all") ", which is "
+           (cond (contains? accomplished w) "an ending it stands behind."
+                 (contains? let-go w) "one it let go."
+                 :else "neither, so its work is not over."))
+
+      :else
+      (str k "'s :over says " (words accomplished) " is a deed"
+           (when (seq let-go) (str " and " (words let-go) " is let go"))
+           ". This row is " (or w' "nowhere named") ", which is "
+           (cond (contains? accomplished w) "an ending it stands behind."
+                 (contains? let-go w) "one it let go."
+                 :else "neither, so its work is not over.")))))
+
+(defn- trait-says
+  "The declared traits this population read, each in the declaration's
+  own words, against this row."
+  [rdef row traits]
+  (if-not (and rdef row)
+    ;; a row that vanished between the scan and this read has no
+    ;; declaration to quote, and a citation that guessed would be
+    ;; worse than one that is short
+    []
+    (into []
+          (comp (map (fn [t]
+                       (case t
+                         :nav (nav-says rdef)
+                         :machine (machine-says rdef row)
+                         :over (over-says rdef row)
+                         nil)))
+                (remove nil?))
+          traits)))
+
+(defn line-says
+  "One recipe line, narrated. A household may write the whole sentence
+  itself (`:says` on the entry — the recipe is an engine opt and its
+  entries are data, so this costs no declaration a fingerprint), and
+  otherwise the line narrates itself from what it already carries: the
+  section, the take, the kinds it dedicates itself to, and the
+  population's own sentence."
+  ^String [entry]
+  (or (:says entry)
+      (if (:seam entry)
+        (str "The seam: " (:sentence entry "That's the house, caught up.")
+             " Exactly one card in the answer says that, and everything below"
+             " it is history.")
+        (let [n (long (:take entry 0))
+              sect (str/replace (name (:section entry)) "_" " ")]
+          (str (str/upper-case (subs sect 0 1)) (subs sect 1)
+               ", up to " n " card" (when (not= 1 n) "s") ": "
+               (population-says (:population entry)
+                                (str "the " (name (:population entry))
+                                     " population"))
+               (when-some [ks (seq (:kinds entry))]
+                 (str " — and this line is " (str/join " and " (map name ks))
+                      "'s alone"))
+               ".")))))
+
+(def recipe-guarantees
+  "The four assembly checks, as the one sentence they buy a reader.
+  `check-recipe!` runs them at the route's build site, so a recipe
+  that broke any of them refused the boot rather than this request —
+  which is why this can be said in the present tense."
+  (str "The sections always come in this order — do now, decide, fuel,"
+       " the seam, the archive; exactly one card is the seam; the archive"
+       " is last and bottomless; and every line names a population this"
+       " engine actually holds. A recipe that broke any of those would have"
+       " refused to start rather than serve you a surprise."))
+
+(defn recipe-view
+  "The household's declared order, narrated — the deliverable half of
+  waymark-iqa.29 that is not about any one card.
+
+  It is a pure function of the recipe, so a reader (or a test, or the
+  pack) can read the order without a request, and the counts a real
+  read knows — how many candidates a line was offered, how many a
+  section above had already claimed, how many it showed — are merged
+  in by `document`. Viewing only: a recipe EDITOR is its own bead, and
+  it needs the composition scaffolding the saved_view precedent has."
+  [recipe]
+  {"guarantees" recipe-guarantees
+   "lines" (into []
+                 (map-indexed
+                  (fn [i e]
+                    (cond-> {"line" i "says" (line-says e)}
+                      (:seam e) (assoc "seam" true "section" "seam")
+                      (not (:seam e))
+                      (assoc "section" (name (:section e))
+                             "population" (name (:population e))
+                             "take" (:take e))
+                      (seq (:kinds e))
+                      (assoc "kinds" (mapv name (:kinds e))))))
+                 (:order recipe))})
+
+(defn- drawn-says
+  "The seed's own half of the citation, honestly: which of how many,
+  and — where a population SPREAD its candidates — whose turn it was.
+  Nothing here compares two cards; `rank` is the place
+  `hash(seed ‖ card_id)` put this one and `lane` is the place it holds
+  in its own kind's order, which is composition and not a score."
+  [{:keys [rank of lane kind day seeded-for]}]
+  (str "Drawn " (ordinal rank) " of " of " this line offered today, by ("
+       seeded-for ", " day ")'s seed."
+       (when (and lane (pos? (long lane)))
+         (str " It came up on " (name kind) "'s turn — lane " lane " of its"
+              " own kind's order, so the slots go round the kinds rather than"
+              " to whichever kind holds the most rows."))
+       " Nothing was ranked against anything: the seed decides the order, and"
+       " it decides once a day."))
+
+(defn card-says
+  "The whole citation for one card, as sentences a parent reads.
+
+  Four parts and each is somebody's declaration rather than this
+  function's opinion: the RECIPE LINE that admitted it, the DECLARED
+  TRAITS that population reads (in the kind's own words, quoted back
+  against this row), the section's own extra bargain where it has one,
+  and the SEED's draw."
+  [entry rdef row {:keys [section] :as draw}]
+  (into []
+        (remove nil?)
+        (concat
+         ;; the line is numbered as a READER counts, from one; the wire's
+         ;; own `why.line` stays a zero-based index into `recipe.lines`
+         [(str "Recipe line " (inc (long (:line entry 0))) " — "
+               (line-says entry))]
+         (trait-says rdef row (population-reads (:population entry)))
+         [(when (= :do_now section)
+            (str "It kept its place in do now because it still has a verb"
+                 " light enough to tap — a next action with nothing under"
+                 " the thumb is a row on a list, and drops out."))
+          (when (= :archive section)
+            (str "It is below the seam because its work is over as the row"
+                 " stands now, not merely because it moved a while ago."))
+          (drawn-says draw)])))
+
 ;; ── the mixer ───────────────────────────────────────────────────────
 
 (defn- entry-cards
@@ -1553,16 +1854,28 @@
 
   `:render? false` is how a cursor page pays for that: the populations
   above the seam run for their CANDIDATES — one query each, no
-  envelopes — and contribute nothing but their claim."
-  [ctx {:keys [section population take* offset bottomless render? kinds]} seen]
+  envelopes — and contribute nothing but their claim.
+
+  IT ALSO CITES ITSELF (waymark-iqa.29). Every card leaves here with a
+  `why` — the line that admitted it, its place in the day's draw, and
+  the size of the draw — and the entry reports back the two counts a
+  reader wants about the LINE: how many candidates it was offered, and
+  how many a section above had already claimed. That last one is the
+  cheap half of explaining ABSENCE, and it is the only half this
+  document attempts: *why is this card here* is a projection, *why is
+  some other row not* is a search over everything."
+  [ctx {:keys [section population take* offset bottomless render? kinds
+               entry explain?]}
+   seen]
   (let [out ((get populations population) ctx)
         {:keys [candidates reached-cap]} (if (map? out)
                                            out
                                            {:candidates out})
         seed (:seed ctx)
         of-kind? (if (seq kinds) (comp (set kinds) :kind) (constantly true))
-        ordered (->> candidates
-                     (remove #(contains? seen [(:kind %) (:id %)]))
+        unseen (remove #(contains? seen [(:kind %) (:id %)]) candidates)
+        claimed-above (- (count candidates) (count unseen))
+        ordered (->> unseen
                      (filter of-kind?)
                      ;; the LANE first, the hash inside it (waymark-
                      ;; iqa.24). A population that spreads its
@@ -1575,12 +1888,34 @@
                                     #(rank seed (card-id section (:kind %)
                                                           (:id %))))))
         claimed (into #{} (map (juxt :kind :id)) ordered)
-        ordered (cond->> ordered bottomless (drop (long (or offset 0))))
+        offered (count ordered)
+        off (long (or offset 0))
+        ordered (cond->> ordered bottomless (drop off))
         admits? (if (= :archive section)
                   #(finished-history? ctx %)
                   (constantly true))
         keep? (if (= :do_now section) offers-something? (constantly true))
         n (long take*)
+        ;; the citation's own numbers: the line, the place the seed put
+        ;; this candidate in the whole ordering (never in the page —
+        ;; a card on archive page three is drawn 19th of 40, not 1st
+        ;; of 6), and the sentences when the reader asked for them
+        cite (fn [c cand ^long i]
+               (let [draw {:rank (inc (+ off i)) :of offered
+                           :lane (:lane cand 0) :kind (:kind cand)
+                           :section section :day (:day ctx)
+                           :seeded-for (:seeded-for ctx "you")}
+                     rdef (get (resources ctx) (:kind cand))]
+                 (assoc c "why"
+                        (cond-> {"line" (:line entry)
+                                 "rank" (:rank draw) "of" offered}
+                          explain?
+                          (assoc "says"
+                                 (card-says entry rdef
+                                            (or (:row cand)
+                                                (load-raw ctx (:kind cand)
+                                                          (:id cand)))
+                                            draw))))))
         ;; [candidate-index card] pairs, one past the page: the index
         ;; is what the cursor advances by and the card is what the
         ;; page shows
@@ -1591,12 +1926,16 @@
                              (fn [i cand]
                                (when (admits? cand)
                                  (when-some [c (card ctx section population cand)]
-                                   (when (keep? c) [(long i) c])))))
+                                   (when (keep? c)
+                                     [(long i) (cite c cand (long i))])))))
                             (take (inc n)))
                       ordered))
         page (mapv second (take n taken))]
     {:cards page
      :claimed claimed
+     :offered offered
+     :claimed-above claimed-above
+     :showed (count page)
      :more? (> (count taken) n)
      :consumed (if (< (count page) n)
                  ;; the ordering ran out inside this page: everything
@@ -1636,13 +1975,25 @@
   feed and who is looking, in the document, in the summary, and in the
   first note. A preview is never quiet. `{:of {…} :by {…} :grant id}`;
   the grant id is there because the grant IS the durable record of
-  this reading (the read itself writes nothing — the feed is a GET)."
-  [eng recipe {:keys [principal visibility offset preview]}]
+  this reading (the read itself writes nothing — the feed is a GET).
+
+  `:explain?` (waymark-iqa.29) is the other opt that changes nothing
+  about WHICH cards are answered — the day's order is the day's order
+  — and only what each one says about itself. Off, a card carries the
+  citation's numbers (`why`: the line, the rank, the size of the
+  draw); on, it carries the sentences too. The narrated `recipe` rides
+  the document either way, because it is one narration per LINE rather
+  than one per card and the counts beside it are the read's own."
+  [eng recipe {:keys [principal visibility offset preview explain?]}]
   (let [day (today eng recipe)
         pid (:id principal)
         seed (seed-of recipe pid day)
         ctx (cond-> {:eng eng :principal principal :visibility visibility
-                     :now ((:now-fn eng)) :seed seed :day day}
+                     :now ((:now-fn eng)) :seed seed :day day
+                     ;; whose seed this is, in the citation's own
+                     ;; sentence — under a preview "you" is a lie, the
+                     ;; same correction the first note already makes
+                     :seeded-for (or (get-in preview [:of :display]) "you")}
               ;; one render-probe instance for the whole read (the
               ;; router's own posture, one per request): a card's
               ;; verbs are then the honest ones rather than the
@@ -1650,7 +2001,9 @@
               ;; repeated probe of one member row to a single query
               (:probe-reads eng) (assoc :render-hooks (inv/render-hooks eng)))
         archive-only? (some? offset)
-        {:keys [cards more? capped walked]}
+        lines (into [] (map-indexed (fn [i e] (assoc e :line i)))
+                    (:order recipe))
+        {:keys [cards more? capped walked counts]}
         (reduce
          (fn [acc e]
            (cond
@@ -1659,10 +2012,15 @@
              (:seam e) (cond-> acc
                          (not archive-only?)
                          (update :cards conj
-                                 (seam-card
-                                  (count (:cards acc))
-                                  (:sentence e
-                                             "That's the house, caught up."))))
+                                 (assoc (seam-card
+                                         (count (:cards acc))
+                                         (:sentence e
+                                                    "That's the house, caught up."))
+                                        "why"
+                                        (cond-> {"line" (:line e)}
+                                          explain?
+                                          (assoc "says" [(line-says e)
+                                                         recipe-guarantees])))))
              :else
              (let [got (entry-cards ctx
                                     {:section (:section e)
@@ -1671,18 +2029,24 @@
                                      :kinds (:kinds e)
                                      :offset (when (:bottomless e) offset)
                                      :bottomless (:bottomless e)
+                                     :entry e
+                                     :explain? explain?
                                      :render? (or (not archive-only?)
                                                   (boolean (:bottomless e)))}
                                     (:seen acc))]
                (cond-> (-> acc
                            (update :cards into (:cards got))
                            (update :seen into (:claimed got))
-                           (update :capped #(or % (:reached-cap got))))
+                           (update :capped #(or % (:reached-cap got)))
+                           (assoc-in [:counts (:line e)]
+                                     {"offered" (:offered got)
+                                      "claimed_above" (:claimed-above got)
+                                      "showed" (:showed got)}))
                  (:bottomless e)
                  (-> (assoc :more? (:more? got))
                      (update :walked + (long (:consumed got 0))))))))
-         {:cards [] :seen #{} :more? false :capped false :walked 0}
-         (:order recipe))
+         {:cards [] :seen #{} :more? false :capped false :walked 0 :counts {}}
+         lines)
         bottomless (some :bottomless (:order recipe))
         next-offset (+ (long (or offset 0)) (long walked))
         sections (into [] (distinct) (map #(get % "section") cards))
@@ -1692,9 +2056,22 @@
         ;; out, or page two of an archive walk would silently become
         ;; the PREVIEWER's own feed — the one place a stamp could be
         ;; told the truth and the hrefs a lie
-        base (if preview
-               (str "/api/-/feed?preview_as=" (url-encode (str (get-in preview [:of :id]))))
-               "/api/-/feed")
+        base (str "/api/-/feed"
+                  (when preview
+                    (str "?preview_as="
+                         (url-encode (str (get-in preview [:of :id])))))
+                  ;; an explained read stays explained page after page:
+                  ;; a `links.next` that dropped the parameter would
+                  ;; hand a reader who asked why an archive that would
+                  ;; not say
+                  (when explain? (if preview "&explain=1" "?explain=1")))
+        ;; the narrated recipe, with the read's own counts folded in —
+        ;; the static half is a pure function of the recipe and the
+        ;; counts are what THIS read saw each line offered
+        recipe-doc (update (recipe-view recipe) "lines"
+                           (fn [ls] (mapv (fn [l]
+                                            (merge l (get counts (get l "line"))))
+                                          ls)))
         notes (into []
                     (remove nil?)
                     [(when preview
@@ -1720,6 +2097,17 @@
                             " grant confers: a preview that projected through"
                             " the previewer's leash would answer a feed"
                             " nobody has."))
+                     (if explain?
+                       (str "Every card says why it is here: recipe carries"
+                            " the order line by line, and each card's why"
+                            " names the line that admitted it, the traits its"
+                            " own declaration spells, and where today's seed"
+                            " drew it.")
+                       (str "Every card carries a why — the recipe line that"
+                            " admitted it and where today's seed drew it —"
+                            " and recipe below narrates the order itself. Add"
+                            " ?explain=1 to have each card spell its citation"
+                            " out in sentences."))
                      (when capped
                        (str "The archive read to its cap and stopped — the"
                             " newest " log-scan-cap " transitions for what"
@@ -1739,12 +2127,14 @@
                                      (str " · PREVIEW of " of " · read by "
                                           by)))
                      :sections sections
+                     :recipe recipe-doc
                      :notes notes}
               preview (assoc :preview preview)
               (and bottomless more?)
               (assoc :links
                      {:next {:href (str base
-                                        (if preview "&" "?") "cursor="
+                                        (if (str/includes? base "?") "&" "?")
+                                        "cursor="
                                         (encode-cursor
                                          {:day day :seed seed
                                           :offset next-offset}))}})))

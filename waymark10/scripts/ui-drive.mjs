@@ -911,11 +911,22 @@ async function feedStory() {
      await evaljs(`[...document.querySelectorAll('.fcard[data-section="archive"]')]
        .every(c => !c.querySelector("button") &&
                    !!c.querySelector('a[href^="#/api/"]'))`));
-  /* the bottomless half, walked to its end: the observer takes the
-     next page when the sentinel comes within a screenful, and the
-     tail's own button is the same door for a thumb that got there
-     first. */
+  /* the bottomless half, walked to its end. The tail is TWO doors on
+     one hinge — an IntersectionObserver that takes the next page when
+     the sentinel comes within a screenful, and a button for a thumb
+     that got there first — so on a page whose sentinel is already in
+     view the observer wins every race and the button never appears.
+     Waiting for the tail to settle and then judging what LANDED is the
+     honest claim; counting button clicks was counting one of the two
+     doors and calling the other one a failure. */
+  const firstPage = await (await fetch(BASE + "/api/-/feed",
+                                       {headers: H("colton")})).json();
+  const onPageOne = (firstPage.cards || [])
+    .filter(c => c.section === "archive").length;
+  const settled = `!document.querySelector(".feed-endbox").textContent
+                     .includes("reading further back")`;
   let pages = 0;
+  await waitFor(settled, "the tail to settle", 15000);
   while (pages < 8 &&
          await evaljs(`!!document.querySelector(".feed-endbox button")`)) {
     const had = await evaljs(`document.querySelectorAll(".fcard").length`);
@@ -923,10 +934,15 @@ async function feedStory() {
     await waitFor(`document.querySelectorAll(".fcard").length > ${had} ||
                    !document.querySelector(".feed-endbox button")`,
                   "the next archive page", 10000);
+    await waitFor(settled, "the tail to settle", 10000);
     pages++;
   }
-  ok(`the archive walks: ${pages} page(s) followed off links.next`,
-     pages > 0);
+  const archived = await evaljs(
+    `document.querySelectorAll('.fcard[data-section="archive"]').length`);
+  ok(`the archive walks: ${archived} archive cards landed, ` +
+     `${onPageOne} of them on page one (${pages} taken by the button, ` +
+     `the rest by the sentinel)`,
+     (firstPage.links || {}).next ? archived > onPageOne : archived === onPageOne);
   ok("no card_id repeats, however many pages have landed",
      await evaljs(`(() => {
        const ids = [...document.querySelectorAll("[data-card-id]")]
@@ -944,6 +960,46 @@ async function feedStory() {
        return t.includes("Further back") || t.includes("archive") ||
               t.includes("quiet") || t.includes("reading");
      })()`));
+
+  /* ── the citation: why this order, and why this card (iqa.29) ───
+     The recipe used to be a vector in an application's main.clj that
+     no reader would ever see, and a card said nothing at all about
+     the four layers that put it there. Both are disclosures now, and
+     both are the SERVER's prose: the page joins, it never derives. */
+  console.log("· the feed explains itself");
+  ok("Why this order opens into the narrated recipe, line by line",
+     await evaljs(`(() => {
+       const d = document.querySelector(".feed-why");
+       if (!d) return false;
+       d.open = true;
+       const lis = [...d.querySelectorAll("ol.feed-recipe li")];
+       return lis.length > 3 &&
+              lis.every(li => li.textContent.trim().length > 20) &&
+              d.textContent.includes("exactly one card is the seam");
+     })()`));
+  console.log("    recipe, line 1: " +
+    await evaljs(`document.querySelector("ol.feed-recipe li").textContent.trim()`));
+  const asked = await evaljs(`(() => {
+    const d = document.querySelector(
+      '.fcard[data-population="next_actions"] details.fcard-why');
+    if (!d) return false;
+    window.__why = d;                 /* the ONE disclosure we opened */
+    d.querySelector("summary").click();
+    return true; })()`);
+  await waitFor(`(() => {
+    const b = window.__why && window.__why.querySelector(".fcard-why-body");
+    return !!b && b.textContent.includes("seed"); })()`,
+    "the card's own citation, fetched once with ?explain=1");
+  const cite = await evaljs(
+    `[...window.__why.querySelectorAll(".fcard-why-body p")]
+       .map(p => p.textContent)`);
+  ok("a card cites its recipe line, the declaration's own trait words, " +
+     "and the day's draw",
+     asked && cite.length >= 3 && cite[0].startsWith("Recipe line") &&
+     cite.some(s => s.includes(":nav")) &&
+     cite.some(s => s.includes(":over")) &&
+     cite.some(s => s.includes("seed")));
+  console.log("    why this card:\n      " + cite.join("\n      "));
 
   /* ── the tap: one chip, one origin key, one settled card ───────── */
   console.log("· a verb, from the card");

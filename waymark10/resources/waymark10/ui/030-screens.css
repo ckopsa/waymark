@@ -320,6 +320,18 @@
   .feed-why { margin-top: 8px; font-size: 12.5px; }
   .feed-why summary { color: var(--muted); cursor: pointer; }
   .feed-why p { margin: 6px 0 0; font-size: 13px; line-height: 1.45; }
+  /* the recipe, narrated (waymark-iqa.29): the order the household
+     declared, one numbered line at a time, with what each line was
+     offered and what it showed */
+  .feed-recipe { margin: 8px 0 4px; padding-left: 22px; }
+  .feed-recipe li { margin: 5px 0; font-size: 13px; line-height: 1.45; }
+  .feed-recipe li.feed-recipe-seam { list-style: none; margin-left: -14px; }
+  .feed-recipe-counts { font-size: 11.5px; }
+  /* and the per-card citation, quiet until somebody asks */
+  .fcard-why { margin-top: 10px; font-size: 12.5px; }
+  .fcard-why summary { color: var(--muted); cursor: pointer; }
+  .fcard-why p { margin: 6px 0 0; font-size: 13px; line-height: 1.45; }
+  .fcard-why[open] { border-top: 1px dashed var(--line); padding-top: 8px; }
   .feedcards { display: flex; flex-direction: column; gap: 10px; }
   /* the section heading is painted from the CARD STREAM, never from
      the census: an empty population contributes nothing */

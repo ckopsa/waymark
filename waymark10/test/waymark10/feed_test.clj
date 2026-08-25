@@ -966,3 +966,167 @@
       (is (= 403 (:status r)))
       (is (str/includes? (str (get-in r [:doc :detail])) "no filter")
           (pr-str (:doc r))))))
+
+;; ── the feed explains itself (waymark-iqa.29) ───────────────────────
+;;
+;; The owner found a movie in do-now and could not find out why. Four
+;; layers had agreed to put it there — a framework predicate, a
+;; declared trait, a recipe line and the day's seed — and none of them
+;; said so anywhere a person could read. What belongs in THIS file
+;; rather than in the pack is the half a driver with one world cannot
+;; arrange: one fixture kind DECLARED TWO WAYS, so the claim 'break a
+;; trait and the citation changes' is proved by changing a trait
+;; rather than by reading a docstring.
+
+(defn- shelf-kind
+  "One fixture kind, declared with `:over` and without it. Breaking a
+  trait means declaring it differently HERE; a household's own kind is
+  never edited to make a test go red."
+  [over?]
+  (r/resource
+   (cond-> {:kind :fd_shelf :plural "fd_shelves"
+            :states [:open :done :shelved] :initial :open
+            :terminal #{:done :shelved}
+            :summary "{data.title} · {state}"
+            :display {:title "{data.title}"}
+            :schema [:map [:title [:string {:min 1 :max 60}]]]
+            :actions {:finish {:from #{:open} :to :done
+                               :safety {:idempotent true :reversible false
+                                        :confirm false :one-way "Done."}}
+                      :shelve {:from #{:open} :to :shelved
+                               :safety {:idempotent true :reversible false
+                                        :confirm false :one-way "Shelved."}}}}
+     over? (assoc :over {:accomplished #{:done} :let-go #{:shelved}}))))
+
+(def ^:private shelf-recipe
+  {:salt "waymark-feed" :zone "UTC"
+   :order [{:section :do_now :population :next_actions :take 3}
+           {:seam true :sentence "That's the house, caught up."}]})
+
+(defn- shelf-eng [over?]
+  (engine/engine {:storage (memory/storage)
+                  :resources [(shelf-kind over?)]
+                  :feed shelf-recipe}))
+
+(defn- says-of [doc card-id]
+  (str/join " " (:says (:why (first (filter #(= card-id (:card_id %))
+                                            (:cards doc)))))))
+
+(deftest break-a-trait-and-the-citation-changes
+  (testing "the citation quotes the DECLARATION, so a kind that spells
+            :over reads differently from one that does not — and the
+            only thing that moved between these two engines is the
+            trait"
+    (let [spelled (shelf-eng true)
+          mute (shelf-eng false)]
+      (doseq [eng [spelled mute]]
+        (call! eng :post "/api/fd_shelves" :body {:title "Half a novel"}))
+      (let [a (:doc (feed! spelled :query "explain=1"))
+            b (:doc (feed! mute :query "explain=1"))
+            said (fn [doc] (says-of doc (:card_id (first (:cards doc)))))]
+        (is (= (mapv :section (:cards a)) (mapv :section (:cards b)))
+            "same fixture, same shape of feed — the trait is the only
+             variable, and it moves the CITATION rather than the order")
+        (is (str/includes? (said a) ":over says done is a deed"))
+        (is (str/includes? (said a) "shelved is let go"))
+        (is (str/includes? (said a) "which is neither")
+            "and the row's own word is quoted back at it")
+        (is (str/includes? (said b) "spells no :over")
+            "unspelled, the machine's endings are the endings — which is
+             exactly what the code meant before the trait existed")
+        (is (not (str/includes? (said b) "let go")))))))
+
+(deftest a-card-cites-the-recipe-line-that-actually-admitted-it
+  (testing "two do-now lines and only one of them is the parcels': a
+            citation that named the wrong one would be a citation of a
+            layer that did not decide anything"
+    (let [recipe (assoc feed/default-recipe
+                        :order [{:section :do_now :population :next_actions
+                                 :take 2 :kinds [:fd_parcel]
+                                 :says "Do now, first two: the parcels."}
+                                {:section :do_now :population :next_actions
+                                 :take 3}
+                                {:seam true
+                                 :sentence "That's the house, caught up."}])
+          eng (boot-house {:feed recipe})]
+      (dotimes [i 20] (post! eng "fd_errands" {:title (str "errand " i)}))
+      (dotimes [i 4] (post! eng "fd_parcels" {:title (str "parcel " i)}))
+      (let [doc (:doc (feed! eng))
+            rows (remove #(= "seam" (:card_id %)) (:cards doc))]
+        (doseq [c rows]
+          (is (= (if (= "fd_parcel" (str (:kind c))) 0 1)
+                 (:line (:why c)))
+              (str (:card_id c) " cites line " (:line (:why c)))))
+        (testing "and the draw is honest: a place inside the size of the
+                  draw, never a place inside the page"
+          (doseq [c rows]
+            (is (<= 1 (:rank (:why c)) (:of (:why c))))))
+        (is (= 4 (:of (:why (first (filter #(= "fd_parcel" (str (:kind %)))
+                                           rows)))))
+            "the parcels line was offered every parcel, not every row")
+        (testing "the seam cites its own line too"
+          (is (= 2 (:line (:why (first (filter #(= "seam" (:card_id %))
+                                               (:cards doc)))))))))))
+
+  (testing "and the second line reports what the first one had already
+            claimed — the one cheap half of explaining absence"
+    (let [recipe (assoc feed/default-recipe
+                        :order [{:section :do_now :population :next_actions
+                                 :take 1 :kinds [:fd_parcel]}
+                                {:section :do_now :population :next_actions
+                                 :take 3}
+                                {:seam true
+                                 :sentence "That's the house, caught up."}])
+          eng (boot-house {:feed recipe})]
+      (dotimes [i 4] (post! eng "fd_parcels" {:title (str "parcel " i)}))
+      (dotimes [i 2] (post! eng "fd_errands" {:title (str "errand " i)}))
+      (let [lines (:lines (:recipe (:doc (feed! eng))))]
+        (is (= 4 (:offered (first lines))))
+        (is (= 1 (:showed (first lines))))
+        (is (= 4 (:claimed_above (second lines)))
+            "every parcel was the first line's, shown or not — the mixer's
+             total claim, said out loud")
+        (is (= 2 (:offered (second lines))))))))
+
+(deftest the-recipe-reads-back-narrated
+  (let [eng (boot-house {:feed (assoc feed/default-recipe
+                                      :order
+                                      [{:section :do_now
+                                        :population :next_actions :take 2
+                                        :says "Two from the queue, first."}
+                                       {:seam true
+                                        :sentence "That's the house, caught up."}
+                                       {:section :archive :population :memories
+                                        :take 3 :bottomless true}])})
+        recipe (:recipe (:doc (feed! eng)))]
+    (is (= 3 (count (:lines recipe))))
+    (is (every? (comp seq :says) (:lines recipe))
+        "every line narrates itself, whether or not the household wrote it")
+    (is (= "Two from the queue, first." (:says (first (:lines recipe))))
+        "a household's own sentence wins — the recipe is an engine opt and
+         its entries are data, so this costs no declaration a fingerprint")
+    (is (str/includes? (:says (nth (:lines recipe) 2))
+                       "what this house was doing a year ago this week")
+        "and a line with no sentence of its own gets the population's")
+    (is (str/includes? (:says (second (:lines recipe))) "The seam"))
+    (is (str/includes? (:guarantees recipe) "exactly one card is the seam")
+        "the four assembly checks, as the one sentence they buy a reader")))
+
+(deftest explain-is-a-read-flag-and-nothing-else
+  (testing "the cards, the order and the seed are identical with the
+            sentences and without them — which is the law that lets a
+            client fetch the citation LATE and line it up by card_id"
+    (let [eng (boot-house)]
+      (dotimes [i 6] (post! eng "fd_errands" {:title (str "errand " i)}))
+      (let [plain (:doc (feed! eng))
+            spelled (:doc (feed! eng :query "explain=1"))]
+        (is (= (card-ids plain) (card-ids spelled)))
+        (is (= (:seed plain) (:seed spelled)))
+        (is (every? #(nil? (:says (:why %))) (:cards plain))
+            "a plain read carries the citation's NUMBERS and no prose")
+        (is (every? #(or (= "seam" (:card_id %)) (seq (:says (:why %))))
+                    (:cards spelled)))
+        (testing "and links.next keeps the parameter, so a reader who
+                  asked why is not answered a silent archive"
+          (let [href (str (get-in spelled [:links :next :href]))]
+            (is (or (str/blank? href) (str/includes? href "explain=1")))))))))

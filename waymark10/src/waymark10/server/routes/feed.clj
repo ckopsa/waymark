@@ -42,7 +42,15 @@
   expiry and the revoke door are all the ordinary capability
   machinery, unchanged and un-special-cased, and the only thing that
   is different is that the system standing in front of the data is
-  the same process reading the grant."
+  the same process reading the grant.
+
+  …AND ONE READ FLAG, `?explain=1` (waymark-iqa.29). It changes no
+  card, no order and no seed — only what each card says about itself,
+  which is why it is a parameter rather than a second document and why
+  a client may fetch it LATE and line the answer up by `card_id`. The
+  narrated recipe rides every answer either way: it is one narration
+  per LINE, and the prose that would have repeated once per card is
+  the half this flag buys."
   (:require [clojure.string :as str]
             [waymark10.server.capabilities :as cap]
             [waymark10.server.feed :as feed]
@@ -195,9 +203,9 @@
                 (= (:id principal) (:id t/anonymous)))
         (throw (p/problem :not-found 404 "Not found"
                           {:detail "No such route."})))
-      (let [preview (preview-target eng req)
-            cursor (some-> (get (router/query-params req) "cursor")
-                           feed/decode-cursor)
+      (let [params (router/query-params req)
+            preview (preview-target eng req)
+            cursor (some-> (get params "cursor") feed/decode-cursor)
             today (feed/today eng recipe)]
         (when (and cursor (not= today (:day cursor)))
           (throw (feed/rolled (:day cursor) today)))
@@ -206,7 +214,21 @@
          (feed/document eng recipe
                         (merge {:principal principal
                                 :visibility (router/visibility-of req)
-                                :offset (:offset cursor)}
+                                :offset (:offset cursor)
+                                ;; ?explain=1 — the citation spelled out
+                                ;; on every card (waymark-iqa.29). It is
+                                ;; a READ FLAG and nothing more: the
+                                ;; day's order, the seed and the cards
+                                ;; are identical with it and without it,
+                                ;; which is why the UI may fetch it late
+                                ;; and line the answer up by card_id.
+                                ;; An unrecognised value is simply not
+                                ;; an explained read — there is nothing
+                                ;; here to get wrong and no reason to
+                                ;; refuse a reader their own feed over
+                                ;; a query string.
+                                :explain? (contains? #{"1" "true" "yes"}
+                                                     (str (get params "explain")))}
                                preview)))))))
 
 (defn routes [eng]

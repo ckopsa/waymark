@@ -2098,3 +2098,224 @@ becomes theirs to discard.
   (a kind now contributes its whole lane 0 whatever else exists) but not zero:
   a household with more than a hundred open rows of one kind still has a window,
   and waymark-iqa.16 is where that lives.
+
+## Built — `.29`, the feed explains itself (2026-08-24, waymark-iqa.29)
+
+The owner opened the feed, found a movie in do-now, and could not find out
+why. Four layers had agreed to put it there — a framework predicate
+(`work-over?`), a declared trait (`:nav`, `:over`), a recipe line, and the
+day's seed — and not one of them said so anywhere a person could read; the
+recipe itself was a vector in `workqueue10/main.clj` that no reader would
+ever see. In an engine whose signature move is that refusals narrate
+themselves, that is a surface **publishing without citing**. The rule the
+`insight` kind imposes at its create door — *no publication without
+citation* — now binds the feed's own editorial choices.
+
+Nothing below infers anything. The population is named, the traits are
+declared, the recipe is data and the seed already decided the order, so the
+whole of this bead is a **projection** — the same claim `.2` made about the
+feed itself, one turn in.
+
+### The cost, decided: factor the prose, don't repeat it
+
+The bead named the trade as always-on citations against `?explain=1`. The
+answer is neither, and it falls out of looking at what a citation is made
+of: the **recipe half** is one narration per LINE, identical for every card
+that line admitted, and the **card half** is three numbers.
+
+So the halves ride differently.
+
+- **`recipe` rides every answer, always.** One narrated line per recipe
+  entry, plus the four assembly checks as one sentence, plus what this read
+  saw each line offered. It is paid once per read, not once per card.
+- **`why` rides every card, always, and it is thirty bytes** —
+  `{"line": 1, "rank": 2, "of": 19}`. The line is the thing that cannot be
+  recovered any other way: this household writes TWO `next_actions` lines,
+  so `section` and `population` do not identify which one admitted a card.
+- **`?explain=1` is the prose.** `why.says` — the assembled sentences,
+  including the kind's declared traits quoted back against this row. That
+  is the half that would have repeated one kind's `:over` on every card of
+  that kind, and it more than doubles a fuel card, which is mostly a
+  sentence already.
+
+**The law that makes the opt-in sound is the feed's own.**
+`:feed/day-stable` says two reads by one member on one day answer the same
+cards in the same order, so a citation fetched LATE lines up by `card_id`
+and cannot be a different day's feed. That is exactly what the screen does,
+and it is asserted rather than assumed (`:feed/citations`, claim 4). The
+parameter rides `links.next` too: an explained read stays explained page
+after page, or a reader who asked why would be handed an archive that would
+not say.
+
+`?explain=1` is a **read flag** and nothing else — same cards, same seed,
+same order — which is also why it needs no refusal for a value it does not
+recognise. There is nothing here to get wrong and no reason to refuse a
+reader their own feed over a query string.
+
+### The trait words are the declaration's own
+
+```
+-- do_now/media/8a3523a6-… | Show 5 · show · queued
+   Recipe line 2 — Do now, three more: anything else the house goes to and has
+     not finished — a chore run, a film, an errand — one kind at a time so no
+     pile crowds the others out.
+   media is a front door in this house — its declaration says :nav :primary —
+     and do-now and fuel are made of front doors.
+   media is mirrored, so its machine is the SYNC machine — fresh is a word
+     about the last time this house and the authority spoke, never about the
+     work. What ended lives in its data, which is what :over reads.
+   media's :over reads its status field: finished is a deed, abandoned is let
+     go. This row's status says queued, which is neither, so its work is not
+     over.
+   It kept its place in do now because it still has a verb light enough to tap
+     — a next action with nothing under the thumb is a row on a list, and
+     drops out.
+   Drawn 2nd of 19 this line offered today, by (you, 2026-08-24)'s seed.
+     Nothing was ranked against anything: the seed decides the order, and it
+     decides once a day.
+```
+
+That is the movie, answered. **No prose was added to any declaration**, and
+that was the point of writing the sentences this way: they are assembled
+from the trait's own spelling — the field name, the enum words, the state,
+the terminal set — so a kind that changes its `:over` changes its citation
+without anybody remembering to update a sentence. `population-reads` is the
+small map that says which traits a population consults (`:nav :machine
+:over` for do-now, `:nav :over` for fuel, `:over` for the archive), and a
+population that reads none of them is not a gap: `asks`, `letters`,
+`ticklers`, `conflicts` and `insights` choose by a STATE their own kind
+declares and by whose row it is, which the line's own sentence already says.
+
+The one prose a household may write is **`:says` on a recipe entry** — the
+line's own sentence, in the household's own words. It is free of any
+fingerprint because the recipe is an **engine opt** and not a declaration,
+and `workqueue10/main` uses it for exactly the two lines that encode a
+decision the framework would never have inferred:
+
+```
+1. Do now, first two slots: the work queue. In this house the queue is what the
+   morning is for, so two cards are the queue's before anything else is
+   considered.   [13 offered, 0 claimed above, 2 shown]
+2. Do now, three more: anything else the house goes to and has not finished —
+   a chore run, a film, an errand — one kind at a time so no pile crowds the
+   others out.   [19 offered, 13 claimed above, 3 shown]
+…
+11. The seam: That's the house, caught up. Exactly one card in the answer says
+    that, and everything below it is history.
+12. Archive, up to 6 cards: what this house was doing a year ago this week, and
+    behind it everything that has moved.   [19 offered, 33 claimed above, 6 shown]
+GUARANTEES: The sections always come in this order — do now, decide, fuel, the
+seam, the archive; exactly one card is the seam; the archive is last and
+bottomless; and every line names a population this engine actually holds. A
+recipe that broke any of those would have refused to start rather than serve
+you a surprise.
+```
+
+A line with no `:says` narrates itself from what it already carries — the
+section, the take, its `:kinds`, and the population's own sentence — so the
+recipe reads whole on any engine, household prose or not.
+
+### The one cheap half of ABSENCE, and the rest is a punt
+
+*Why is this card here* is a projection. *Why is some other row NOT here* is
+a **search over everything** — every population's candidate set, every
+line's `:kinds` narrowing, the mixer's seen-set, the seed's ordering, the
+grant's `:row?` gate and each section's own filter — asked about a row the
+reader has to name first. It is a different door with a different cost and
+it is filed rather than built (**waymark-ck7**), with the grant hazard named
+in the bead: an absence explainer is the natural place to break concealment,
+which is supposed to be silent.
+
+What DID ship is the half the seen-set makes cheap, and it is per LINE
+rather than per row: every narrated line reports `claimed_above`, the count
+of its own candidates a section above had already claimed. *The queue line
+took all thirteen* is the most common absence question in this house, and
+`[19 offered, 13 claimed above, 3 shown]` answers it without a search. It is
+the mixer's total claim, said out loud for the first time.
+
+### The screen
+
+`Why this order` was already a disclosure over the document's `notes`; it
+now **opens into the recipe** — the numbered lines, their counts, the
+guarantees sentence, and the notes underneath, because a note is about this
+READ and a line is about the order itself. Editing is explicitly not here
+(**waymark-4yn**): the recipe is an engine opt read once at the route's
+build site, so an edited recipe is a stored row and the `saved_view`
+precedent's composition scaffolding, which is its own bead.
+
+Each card grew a **`Why this card?`** disclosure that opens with something
+true before any network happens — the line's own sentence, joined out of
+`why.line` against the recipe the document already carries, and the size of
+the draw — and replaces it with the server's sentences the first time
+anybody actually asks. The explain read is fetched **once per page** and
+cached by the href the cards came through, so an archive card on page four
+is explained by page four's own read. **The page authors no prose and
+derives no citation**: `.3`'s lesson about re-deriving a server decision in
+the client is exactly the mistake a client-side "why" would be, so what the
+client does is concatenate server strings.
+
+### The obligation, and where the trait gets broken
+
+**`:feed/citations`** is the pack's last READER, above the three that write.
+Five claims: the recipe reads back narrated with its guarantees; every card
+cites a line the recipe actually holds and a place inside a draw it was
+actually part of; **the citation matches the layer that admitted it** (the
+line agrees with the card about section and population, and a line dedicated
+to particular `:kinds` is never cited by a card of another kind);
+`?explain=1` answers the same cards in the same order; and the sentences
+quote the declaration — a card whose population reads `:over` names `:over`,
+and every citation reaches the seed. It reports `:covered`, because an
+engine whose feed has no row card has proved nothing.
+
+*Break a trait, the citation changes* could not be a conformance claim —
+the pack judges whatever an application declared and may not edit it — so it
+is `feed_test.clj`'s, with a **fixture kind declared twice**:
+`break-a-trait-and-the-citation-changes` boots two engines whose only
+difference is whether `fd_shelf` spells `:over`, and reads the same card out
+of both. Spelled: *"fd_shelf's :over says done is a deed and shelved is let
+go. This row is open, which is neither…"*. Unspelled: *"fd_shelf spells no
+:over, so the machine's endings are the endings and every one of them counts
+as finished."* A household's own kind is never edited to make a test go red.
+
+`workqueue10/feed_shape_test.clj` — the world `.24` built — carries
+`every-card-says-why-it-is-here`, which is where the movie case is asserted
+against a house that actually has movies in it, and `:feed/citations` joined
+the five readers that run there.
+
+### Verified by hand, and one of `.7`'s own checks was wrong
+
+`waymark10/scripts/feed-smoke.sh` grew two checks and reads **21**, no console
+errors: *Why this order* opens into the numbered recipe with its guarantees
+sentence, and a do-now card's *Why this card?* opens into the six sentences
+above — printed into the run, so the walk is a record and not a memory.
+
+Fixing a red run found a defect in `.7`'s **own** archive check, and it was
+the check rather than the screen. The tail is two doors on one hinge — the
+`IntersectionObserver` and the *Further back ↓* button — and on a page whose
+sentinel starts in view the observer wins every race, so the button never
+appears and *"0 page(s) followed off links.next"* was counting one door and
+calling the other a failure. It now waits for the tail to settle and judges
+what LANDED: nineteen archive cards against the six page one carried, with
+`links.next`'s presence deciding which way the claim points. Same law, a
+claim that can actually see it.
+
+### Recorded here, for whoever comes next
+
+- **An explained read pays one extra point read per card whose candidate did
+  not already carry its row** (`memories`, mostly). It is per card SHOWN,
+  never per candidate named, and only on `?explain=1`. If it ever matters it
+  matters where waymark-iqa.16 is already watching.
+- **`why.line` is a zero-based index into `recipe.lines`; the PROSE counts
+  from one.** A reader counts lines from one and a client indexes from zero,
+  and the two spellings must not be confused — `:feed/citations` asserts the
+  prose against `(inc line)` for exactly that reason.
+- **The citation's seed sentence says whose seed it is.** Under a preview
+  *"you"* is a lie, so `:seeded-for` carries the previewed member's display
+  name — the same correction the first note has always made.
+- **No declaration moved and no fingerprint could.** `feed.clj`,
+  `routes/feed.clj` and `packs.clj` are engine-side; the household's change
+  is two `:says` strings on a recipe entry, and the recipe is an engine opt.
+  `make check-queue` is unmoved at **32 kinds, 11 warnings, 16 scenarios**.
+- **The recipe view is READ-ONLY on purpose and the editor is filed**
+  (waymark-4yn). `check-recipe!` is already the write gate an editor would
+  need, which is the half that is done.

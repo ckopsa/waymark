@@ -359,14 +359,33 @@
   It is static data and it ranks nothing. The mixer's claim is total,
   so the second line never re-offers a task the first one named — the
   two lines are disjoint by construction, and a house with an empty
-  queue simply reads a do-now of five other things."
+  queue simply reads a do-now of five other things.
+
+  BOTH LINES SAY WHAT THEY ARE FOR (waymark-iqa.29). `:says` is the
+  household's own sentence for a recipe line, and the feed's narrated
+  recipe reads it back to whoever asks why a card is here. A line
+  without one narrates itself perfectly well; these two earn theirs,
+  because *the queue comes first* is a decision this house made and
+  not a shape the framework would have inferred."
   (assoc feed/default-recipe
          :order
          (into []
                (mapcat (fn [e]
                          (if (= :next_actions (:population e))
-                           [(assoc e :take 2 :kinds [:task])
-                            (assoc e :take 3)]
+                           [(assoc e :take 2 :kinds [:task]
+                                   :says (str "Do now, first two slots: the"
+                                              " work queue. In this house the"
+                                              " queue is what the morning is"
+                                              " for, so two cards are the"
+                                              " queue's before anything else"
+                                              " is considered."))
+                            (assoc e :take 3
+                                   :says (str "Do now, three more: anything"
+                                              " else the house goes to and"
+                                              " has not finished — a chore"
+                                              " run, a film, an errand — one"
+                                              " kind at a time so no pile"
+                                              " crowds the others out."))]
                            [e])))
                (:order feed/default-recipe))))
 
