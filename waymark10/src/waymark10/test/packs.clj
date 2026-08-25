@@ -105,6 +105,7 @@
             [waymark10.server.presence :as presence]
             [waymark10.server.router :as router]
             [waymark10.server.seams :as seams]
+            [waymark10.summary :as summary]
             [waymark10.test.conformance :as conf]
             [waymark10.wire :as wire]))
 
@@ -3876,6 +3877,15 @@
 ;; feed's origin on the transition; does a decline settle only itself;
 ;; and does the grant conceal a piece exactly as it conceals a card.
 ;;
+;; AND SINCE waymark-jfv.17: does every piece still on offer state the
+;; ENGINE's reading of its own tap, in words the composer could not
+;; have written — naming the row the tap would create, and saying so
+;; when that row also lands at an authority the household mirrors. The
+;; bundle states the union of them, the union moves as pieces are
+;; answered, and an answered piece stops making the offer. Those six
+;; claims are the owner's discomfort turned into an obligation: *I'm
+;; not sure what impact the actions will have.*
+;;
 ;; TWO PRINCIPALS AND A THIRD LOOKING ON, and none of them decoration.
 ;; A COMPOSER (an agent, leashed to two create doors and nothing else)
 ;; stages the bundle; a MEMBER (a human actor type) is the only one
@@ -3970,6 +3980,19 @@
         ;; 3. THE PIECES. Three, so the partial accept is a real shape
         ;; rather than a story: one declined, one taken by its own tap,
         ;; and one left for the bundle's own verb to take.
+        ;;
+        ;; The prepared bodies are minted ONCE and kept, because the
+        ;; impact-line claims below (waymark-jfv.17) need to know what
+        ;; the composer actually prepared: the sentence has to name the
+        ;; row the tap would create, and an obligation that could not
+        ;; say what that name was could not tell a derived sentence
+        ;; from a plausible one.
+        prepped (into {}
+                      (map (fn [n]
+                             [n (when target
+                                  (create-body ctx (keyword target)
+                                               (+ 4100 (long n))))]))
+                      [1 2 3])
         piece (fn [n]
                 (when (and oid target)
                   (stage :outcome_piece
@@ -3977,8 +4000,7 @@
                           :says (str "Piece " n " of " tag
                                      " — twenty minutes, already prepared")
                           :target_kind target
-                          :prepared (create-body ctx (keyword target)
-                                                 (+ 4100 (long n)))})))
+                          :prepared (get prepped n)})))
         pieces (into [] (keep piece) [1 2 3])
         pids (mapv #(some-> (:doc %) :self id-of) pieces)
         ;; 4. WHO SEES IT. The member does; the composer must not (the
@@ -4000,6 +4022,19 @@
         make-it-so (declared-name ctx :outcome :make_it_so)
         origin (fn [c] (feed/origin-key day (str (:card_id c))
                                         (subs (str (random-uuid)) 0 8)))
+        ;; 4b. THE ANSWER KEY FOR THE IMPACT LINE (waymark-jfv.17).
+        ;; The engine names the row a tap would create by rendering the
+        ;; TARGET's own :label-template over the prepared body; this
+        ;; renders the same template here, independently, so the claim
+        ;; below is a witness rather than a second call to the thing
+        ;; under test. A target that labels its rows some other way
+        ;; simply yields no key and the naming claim stands down.
+        trdef (when target (rdef ctx (keyword target)))
+        label-of (fn [n]
+                   (when-some [tpl (:label-template trdef)]
+                     (let [s (str/trim (summary/render
+                                        tpl {:data (get prepped n)}))]
+                       (when (and (seq s) (not= "—" s)) s))))
         ;; 5. THE DECLINE, from the piece's own chip: it settles ITSELF
         ;; and leaves the rest of the bundle standing.
         pc1 (when card (piece-of card (nth pids 0 nil)))
@@ -4142,6 +4177,52 @@
                   " verb, so the piece needs an id of its own or the audit"
                   " trail will read the tap as the bundle's"))
 
+       ;; ── the impact line (waymark-jfv.17) ──────────────────────
+       ;; The owner's own discomfort, made a claim: *I'm not sure what
+       ;; impact the actions will have.* Four sentences below, and the
+       ;; load-bearing one is the second — that the line NAMES what
+       ;; the tap would create. A line that said "this creates a task"
+       ;; and nothing more would pass the first claim while telling
+       ;; the household nothing it did not already know.
+       (and card pc1 (str/blank? (str (:impact pc1))))
+       (conj (str "feed: a piece still on offer carries no impact line —"
+                  " `says` is the COMPOSER's prose about what the piece"
+                  " is, and a card that carries only that asks the"
+                  " household to take an agent's word for what its own"
+                  " tap will do"))
+
+       (and card pc1 (label-of 1)
+            (not (str/includes? (str (:impact pc1)) (label-of 1))))
+       (conj (str "feed: the impact line never names the row this tap"
+                  " would create (" (pr-str (label-of 1)) "): "
+                  (pr-str (:impact pc1))
+                  " — the sentence is DERIVED from the prepared input"
+                  " and the target's own label template, and one that"
+                  " could be written without reading either is a"
+                  " reassurance rather than a reading"))
+
+       (and card pc1 trdef (:create-push (:mirror trdef))
+            (not (str/includes? (str (:impact pc1)) "mirror")))
+       (conj (str "feed: the target kind is a MIRROR whose local births"
+                  " are pushed to its authority, and the impact line"
+                  " never says so: " (pr-str (:impact pc1))
+                  " — a row that also lands somewhere the household"
+                  " keeps its life is two records, and a sentence that"
+                  " mentioned one of them would be the honest half of a"
+                  " lie"))
+
+       (and card (str/blank? (str (:impact card))))
+       (conj (str "feed: the BUNDLE states no impact of its own — 'make"
+                  " it so' is the union of the pieces still on offer,"
+                  " and a verb whose reach a person has to assemble by"
+                  " reading down a list is a verb they will not tap"))
+
+       (and card (:impact card)
+            (not (str/includes? (str (:impact card)) "3")))
+       (conj (str "feed: the bundle's impact line does not say how many"
+                  " pieces its verb would take: " (pr-str (:impact card))
+                  " — three are on offer, and the count IS the union"))
+
        (and oid (outcome-card theirs oid))
        (conj (str "feed: the bundle carded to its own COMPOSER — the"
                   " four-eyes wall means the stager is structurally"
@@ -4210,6 +4291,31 @@
                   " shows the piece still on offer — a partial accept is"
                   " the state of the piece rows at the moment of the tap,"
                   " and the card has to show what is left"))
+
+       ;; …and the union MOVES with the answers, which is why the
+       ;; bundle's line cannot be stored at staging the way a piece's
+       ;; is: one declined and one taken leaves exactly one piece for
+       ;; the bundle's own verb, and the sentence above that verb has
+       ;; to say one.
+       (and card' (:impact card')
+            (not (str/includes? (str (:impact card')) "one piece")))
+       (conj (str "feed: after one decline and one tap the bundle still"
+                  " says " (pr-str (:impact card'))
+                  " — the union is over the pieces STILL OFFERED at the"
+                  " read, and a count that stood still would promise a"
+                  " tap that lands more than it does"))
+
+       ;; …and an ANSWERED piece carries none at all. The line is what
+       ;; the tap WILL do; a declined piece has no tap left, and a
+       ;; sentence in the future tense over a settled row would read
+       ;; as an offer the card is no longer making.
+       (and card' (piece-of card' (nth pids 0 nil))
+            (not (str/blank? (str (:impact (piece-of card'
+                                                     (nth pids 0 nil)))))))
+       (conj (str "feed: an ANSWERED piece still carries an impact line ("
+                  (pr-str (:impact (piece-of card' (nth pids 0 nil))))
+                  ") — the sentence describes a tap, and that piece has"
+                  " no tap left to describe"))
 
        (and card' (not= 200 (:status accepted)))
        (conj (str "feed: 'make it so' answered " (:status accepted) ": "

@@ -179,6 +179,7 @@
             [waymark10.server.seasons :as seasons]
             [waymark10.server.store :as store]
             [waymark10.schema :as schema]
+            [waymark10.summary :as summary]
             [waymark10.types :as t]
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
@@ -1244,6 +1245,143 @@
   of that bead."
   2)
 
+;; ── the impact line (waymark-jfv.17) ────────────────────────────────
+;;
+;; THE OWNER'S DISCOMFORT, verbatim, is what this is downstream of:
+;; *I'm not yet comfortable using the crown because I'm not sure what
+;; impact the actions will have.* A piece card carried the COMPOSER's
+;; prose — `says`, what the piece IS — and nothing the ENGINE said
+;; about what the tap DOES. This is that sentence, and the whole of
+;; its integrity is that it is COMPUTED rather than authored: a
+;; function of {the target kind's own declaration, the prepared
+;; input}, with no clause the stager can reach. waymark-jfv.9's
+;; ruling is the reason it has to be that way — *the impact statement
+;; is engine-written; the agent's description never stands alone.*
+;;
+;; IT IS WRITTEN AT STAGING onto the piece row (`recipe_proposal`'s
+;; `diff` posture, one kind over: the engine's reading, written at
+;; birth, so the sentence a person taps under is never the stager's),
+;; and it is the SAME function here — so a piece staged before this
+;; law existed reads its line at the READ rather than waiting for a
+;; backfill. `piece-impact` is public for exactly those two callers.
+;;
+;; THE SHAPE IS A FUNCTION OF THE PIECE'S TARGET FORM, one arm per
+;; form, and today the enum closes at one: `:create`. waymark-jfv.9's
+;; general piece — {kind, row id, action, prepared} — slots its own
+;; arm in beside this one ("Yes will <action> <that row>: <the
+;; engine's diff>") without touching it, which is why the create arm
+;; is spelled as an arm rather than as the whole function.
+
+(defn- affirming-verb
+  "The word the household will actually tap, read off the kind's own
+  declaration: the label of its primary-styled action. `Yes` and
+  `Make it so` are an application's words and this is the framework's
+  page, so the sentence BORROWS them rather than spelling them."
+  [rdef]
+  (some (fn [[_ a]]
+          (when (= :primary (get-in a [:display :style]))
+            (some-> (get-in a [:display :label]) str str/trim not-empty)))
+        (sort-by key (:actions rdef))))
+
+(defn- kind-noun
+  "The household's word for ONE row of a kind: its `:display :title`
+  when that heading is a static noun, and the kind's own name
+  otherwise. A TEMPLATED title is the ROW's name rather than the
+  kind's, and a sentence that dropped one in would name the same row
+  twice."
+  [rdef]
+  (let [t (str/trim (str (get-in rdef [:display :title])))]
+    (if (and (seq t) (not (str/includes? t "{")))
+      t
+      (str/replace (name (:kind rdef)) "_" " "))))
+
+(defn- prepared-label
+  "What the prepared input will BE CALLED once it is a row — the
+  target's own `:label-template` rendered over the prepared body, the
+  same template `invoke/label-of` writes into every labelled ref, so
+  the name in the sentence is the name the house will read on the row
+  it lands as. Keys are keywordized shallowly because a piece's
+  `prepared` crosses the wire as an object and arrives either way."
+  [trdef prepared]
+  (when-some [tpl (or (:label-template trdef)
+                      (when (contains? (set (schema/entry-keys (:schema trdef)))
+                                       :name)
+                        "{data.name}"))]
+    (let [d (into {} (map (fn [[k v]] [(keyword k) v])) prepared)
+          s (str/trim (summary/render tpl {:data d}))]
+      (when (and (seq s) (not= "—" s))
+        (if (< 200 (count s)) (str (subs s 0 199) "…") s)))))
+
+(defn- mirror-clause
+  "The mirrored-kind consequence, which is PART OF THE TRUTH about a
+  tap and not a footnote: a `task` born here is pushed to the
+  authority it mirrors, so a person answering the piece is answering
+  for two records rather than one.
+
+  Read off the `:mirror` DECLARATION and nothing else. What that
+  declaration actually holds is machinery — adapter, cadences,
+  document mode, `:push-on-write`, `:create-push` — and NO display
+  name for the authority: `mirror/declaration` mints a `Spec` whose
+  keys `fingerprint/authority-fp` reads by name, and none of them is
+  prose. So the clause names the source WITHOUT naming it, because
+  hard-coding `Google Tasks` here would be the framework's own page
+  saying a word only one deployment's adapter knows. The day a
+  declaration carries a household name for its authority, this is the
+  one line that has to change.
+
+  `:create-push` is the exact condition and not `:mirror`: a
+  pull-only mirror could not have been born by this tap at all, and a
+  push-on-write kind without it pushes EDITS rather than births."
+  [trdef noun]
+  (when (:create-push (:mirror trdef))
+    (str ", and at the source it mirrors to, the way any " noun " does")))
+
+(defn piece-impact
+  "The engine's reading of one still-offered piece's tap, in the
+  household's own words — the CREATE arm, which is the whole of the
+  target form enum today.
+
+  Every word of it is derived: the verb from the piece kind's primary
+  action, the noun from the target's declaration, the name from the
+  target's `:label-template` over the prepared body, and the mirror
+  clause from the target's `:mirror`. nil when the target kind is not
+  one this engine serves, which is the same answer the card gives —
+  no line rather than a guess."
+  [prdef trdef prepared]
+  (when (and prdef trdef (map? prepared))
+    (let [noun (kind-noun trdef)
+          label (prepared-label trdef prepared)]
+      (str (or (affirming-verb prdef) "This") " will create one " noun
+           (when label (str ": " (pr-str label)))
+           " — in this house's own record"
+           (mirror-clause trdef noun)
+           ". Nothing else."))))
+
+(defn- bundle-impact
+  "The bundle's own line: `make_it_so` is the UNION of the pieces
+  still on offer and nothing more — the confirmation story this epic
+  owed, said on the card rather than in a dialog.
+
+  It cannot be stored at staging the way a piece's can, and the
+  reason is structural rather than a preference: the parent row is
+  born before any piece exists (`a-bundle-is-small`'s floor has the
+  same problem), and the union CHANGES as pieces are answered. So it
+  is computed at the read, from the pieces still standing at that
+  read — which is the same thing `take-the-rest` will count inside
+  the transaction.
+
+  It states a COUNT and never a piece's content, so it says the same
+  true thing to a reader whose leash names the bundle and not its
+  parts: that reader's own tap really would take all of them."
+  [rdef n]
+  (when (pos? n)
+    (str (or (affirming-verb rdef) "This") " = "
+         (if (= 1 n)
+           "the one piece still on offer in this bundle"
+           (str "all " n " pieces still on offer in this bundle, taken"
+                " together"))
+         " — and nothing that has already been answered.")))
+
 (defn- outcome-says
   "One offered outcome's card sentence — the four things its summary
   line cannot say.
@@ -1312,6 +1450,33 @@
     (when-some [vid (some-> (get-in d [:data :value_id]) str not-empty)]
       (when-some [raw (load-raw ctx :value vid)]
         (#{:declared :observed} (keyword (name (:state raw))))))))
+
+(defn- offered?
+  "Is this piece still asking? The one spelling, because three
+  populations of one card read it now: the bundle's own candidacy,
+  its union line, and whether a piece's impact line has a tap left to
+  describe."
+  [p]
+  (= :offered (keyword (name (:state p)))))
+
+(defn- piece-impact-of
+  "One piece's impact line: the one WRITTEN AT STAGING when the row
+  carries it, and the same derivation run at the READ when it does
+  not.
+
+  The fallback is not a courtesy — it is the honest answer to the
+  rows that already exist. Four pieces were offered in production
+  before this law, staged with no such field, and a backfill would
+  have written the engine's sentence onto them from outside the
+  staging door it belongs to. Both paths call one function over one
+  pair of declarations, so a stored line and a derived line are the
+  same sentence, and a piece keeps whichever it was born with."
+  [ctx prdef pd]
+  (or (some-> (get-in pd [:data :impact]) str not-empty)
+      (piece-impact prdef
+                    (get (resources ctx)
+                         (keyword (str (get-in pd [:data :target_kind]))))
+                    (get-in pd [:data :prepared]))))
 
 (defn- bundle-parts
   "The pieces of one bundle, oldest first — the order `take-the-rest`
@@ -1396,16 +1561,27 @@
                         (when (and (not= pid (get-in d [:data :composed_by]))
                                    (or (nil? good) (pos? (compare good now)))
                                    (<= (long bundle-floor) (count parts))
-                                   (some #(= :offered (keyword (name (:state %))))
-                                         parts)
+                                   (some offered? parts)
                                    (some? standing))
                           {:kind :outcome :id (:id raw) :row raw
                            :sentence (outcome-says d (= :observed standing))
+                           ;; the union, said out loud (waymark-jfv.17)
+                           :impact (bundle-impact
+                                    rdef
+                                    (count (filter offered? parts)))
                            :parts (mapv
                                    (fn [p]
-                                     {:kind :outcome_piece :id (:id p) :row p
-                                      :says (str (get-in (inv/decode-row prdef p)
-                                                         [:data :says]))})
+                                     (let [pd (inv/decode-row prdef p)]
+                                       {:kind :outcome_piece :id (:id p) :row p
+                                        :says (str (get-in pd [:data :says]))
+                                        ;; ONLY ON A PIECE STILL ON
+                                        ;; OFFER: the line is what the
+                                        ;; tap WILL do, and a piece
+                                        ;; already answered has no tap
+                                        ;; left to describe
+                                        :impact (when (offered? p)
+                                                  (piece-impact-of
+                                                   ctx prdef pd))}))
                                    parts)}))))
               (rows-of ctx :outcome {:state "offered"}))))))
 
@@ -2267,8 +2443,16 @@
 
   The `says` is the population's, the `sentence` precedent one row
   down: a piece's whole claim is what it IS, and the summary line the
-  wire projects wears the state on the end of it."
-  [ctx section {:keys [kind id row says]}]
+  wire projects wears the state on the end of it.
+
+  And `impact` beside it (waymark-jfv.17) is the OTHER voice on the
+  same line: `says` is the composer's prose and `impact` is the
+  engine's reading of the tap, computed at staging from the prepared
+  input and stored on the row. Both carry the prepared work's own
+  words, so they are one sensitivity class and this gate is the right
+  one for both — a piece a reader does not hold is absent, sentence
+  and all."
+  [ctx section {:keys [kind id row says impact]}]
   (let [rdef (get (resources ctx) kind)
         vis (:visibility ctx)]
     (when (and rdef (or (nil? vis) ((:row? vis) kind id)))
@@ -2278,7 +2462,8 @@
                            "waymark" "unavailable")]
           (cond-> (assoc (split-verbs body (get body "self"))
                          "card_id" (card-id section kind id))
-            (not (str/blank? (str says))) (assoc "says" says)))))))
+            (not (str/blank? (str says))) (assoc "says" says)
+            (not (str/blank? (str impact))) (assoc "impact" impact)))))))
 
 (defn- card
   "One card, or nil — the ONE place a row becomes wire, so the fourth
@@ -2311,7 +2496,7 @@
   are all concealed carries no `pieces` key at all rather than an
   empty one, because a client that saw `pieces: []` would have to
   decide whether the bundle was empty or hidden."
-  [ctx section population {:keys [kind id row at sentence parts]}]
+  [ctx section population {:keys [kind id row at sentence parts impact]}]
   (let [rdef (get (resources ctx) kind)
         vis (:visibility ctx)]
     (when (and rdef (or (nil? vis) ((:row? vis) kind id)))
@@ -2331,6 +2516,13 @@
             ;; PROSE rather than a projection, and a fuel card says
             ;; the thing its row cannot say about itself
             sentence (assoc "sentence" sentence)
+            ;; the ENGINE's line beside the composer's (waymark-jfv.17):
+            ;; on a bundle it is the union its own verb would take. It
+            ;; is not gated on the pieces surviving projection, and
+            ;; that is the honest way round: it states what THIS
+            ;; reader's tap would do, which is the same true thing
+            ;; whether or not their leash lets them read the parts
+            (not (str/blank? (str impact))) (assoc "impact" impact)
             (seq pieces) (assoc "pieces" pieces)))))))
 
 (defn- offers-something?

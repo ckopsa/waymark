@@ -414,6 +414,16 @@
                 flex-wrap: wrap; }
   .fpiece-say { font-family: var(--serif); font-size: 15px;
                 line-height: 1.4; color: var(--ink); flex: 1 1 12rem; }
+  /* ── the impact line (waymark-jfv.17): the ENGINE's statement of
+     what the tap does, under the composer's prose and above the
+     chips. Quieter than the say-line and in the SANS face, because
+     the difference between them is whose sentence it is — the serif
+     is somebody's writing; this is the machine reading itself back.
+     Visible rather than disclosed, which is the bead's own ruling. */
+  .fpiece-impact { font-size: 12.5px; color: var(--muted); line-height: 1.45;
+                   margin: 5px 0 0; }
+  .fcard-impact { font-size: 12.5px; color: var(--muted); line-height: 1.45;
+                  margin: 10px 0 0; }
   .fpiece-verbs { display: flex; flex-wrap: wrap; gap: 6px;
                   margin-top: 6px; align-items: center; }
   .fpiece-verbs button.chip.verb { font-family: var(--sans);

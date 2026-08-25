@@ -1146,6 +1146,46 @@ async function feedStory() {
         '.fcard[data-section="outcomes"] .fpiece-verbs button')]
        .every(b => b.dataset.effort === "assent")`));
 
+  /* THE IMPACT LINE (waymark-jfv.17), and the whole reason it is here
+     rather than behind a disclosure: the owner would not tap what he
+     could not read. It is the ENGINE's sentence, computed at staging
+     from the prepared input and the target's own declaration, so the
+     claim is that it names the row the tap would create — a line that
+     only said "this makes a task" would render and teach nothing. */
+  ok("every piece states what its own tap will do, in the engine's words",
+     await evaljs(`(() => {
+       const ps = [...document.querySelectorAll(
+         '.fcard[data-section="outcomes"] .fpiece')];
+       return ps.length === 2 && ps.every(p => {
+         const i = p.querySelector(".fpiece-impact");
+         return i && i.textContent.startsWith("Yes will create one task:") &&
+                i.textContent.includes("Nothing else.");
+       });
+     })()`));
+  ok("…and it NAMES the row: the prepared title, not a category",
+     await evaljs(`(() => {
+       const ps = [...document.querySelectorAll(
+         '.fcard[data-section="outcomes"] .fpiece-impact')]
+         .map(n => n.textContent);
+       return ps.some(t => t.includes(
+                ${JSON.stringify("Cut the box stock to length " + tag)})) &&
+              ps.some(t => t.includes(
+                ${JSON.stringify("Clear the bench Friday evening " + tag)}));
+     })()`));
+  ok("…and says the mirrored consequence, because a task lands twice",
+     await evaljs(`[...document.querySelectorAll(
+        '.fcard[data-section="outcomes"] .fpiece-impact')]
+       .every(n => n.textContent.includes("at the source it mirrors to"))`));
+  ok("the bundle states the UNION its own verb would take",
+     await evaljs(`(() => {
+       const n = document.querySelector(
+         '.fcard[data-section="outcomes"] .fcard-impact');
+       return !!n && n.textContent.startsWith("Make it so = all 2 pieces");
+     })()`));
+  console.log("    the piece says: " + await evaljs(
+    `document.querySelector(
+       '.fcard[data-section="outcomes"] .fpiece-impact').textContent`));
+
   /* the tap itself: one piece, its OWN origin key, a real row at the
      other end, and the rest of the bundle left standing */
   const pieceId = await evaljs(`(() => {

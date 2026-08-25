@@ -2234,3 +2234,266 @@ so the row-level wall has to be declared.**
   `/#/api/verdict_reasons` is always there and takes the same four
   fields, so the path exists; it is simply not a thumb. That is the
   honest v1 and it is written down rather than discovered later.
+
+## Built — jfv.17, the impact line (2026-08-25, waymark-jfv.17)
+
+The owner's discomfort, verbatim, is what this bead is downstream of:
+*I'm not yet comfortable using the crown because I'm not sure what
+impact the actions will have.* Every piece card carried the
+**composer's** prose — `says`, what the piece IS — and nothing the
+**engine** said about what the tap DOES. It landed as **one derivation
+function, one optional field, and two quiet lines on the card**, and
+no fingerprint moved.
+
+### The rule it is built on, and why the function had to be shared
+
+`waymark-jfv.9`'s ruling: *the IMPACT STATEMENT is engine-written at
+staging (the `recipe_proposal` diff posture — the engine's reading of
+what the tap will do, in household words; the agent's description
+never stands alone).* Two consequences, and both are structural.
+
+**It is written at STAGING, onto the row.** `stamp-the-composer` — the
+piece's on-create hook — now writes two stamps rather than one, and
+the second is `impact`. It runs *after* `the-prepared-input-fits-the-
+door`, which is the whole reason it can be trusted: create guards are
+judged before `:on-create`, so by the time the hook reads `prepared`
+that map has already been decoded, defaulted and closed against the
+very create model the tap will knock on. A sentence about an input the
+door would refuse is a sentence that never gets written, because the
+row does not.
+
+**But the same function has to be reachable at the READ**, and that is
+what decided where it lives. `feed.clj` is the framework and
+`outcome.clj` is an application, so the derivation went into the
+framework — `waymark10.server.feed/piece-impact`, beside `outcome-
+says`, which is the other engine sentence on this same card — and the
+application resource requires it. `waymark10.recipe_proposal` already
+reaches for `feed/recipe-diff` from a resource namespace for exactly
+this reason, one kind over.
+
+### The derivation, and every word of it read off a declaration
+
+```clojure
+(defn piece-impact [prdef trdef prepared]
+  (when (and prdef trdef (map? prepared))
+    (let [noun  (kind-noun trdef)
+          label (prepared-label trdef prepared)]
+      (str (or (affirming-verb prdef) "This") " will create one " noun
+           (when label (str ": " (pr-str label)))
+           " — in this house's own record"
+           (mirror-clause trdef noun)
+           ". Nothing else."))))
+```
+
+and the real sentence a piece carries today:
+
+> Yes will create one task: "Cut the box stock to length" — in this
+> house's own record, and at the source it mirrors to, the way any
+> task does. Nothing else.
+
+Four private helpers, and none of them spells an application's word:
+
+- **`affirming-verb`** — the label of the kind's own **primary-styled**
+  action. `Yes` and `Make it so` are workqueue10's words and this is
+  the framework's page, so the sentence *borrows* them. Rename the tap
+  and the sentence renames with it.
+- **`kind-noun`** — `:display :title` when that heading is a **static**
+  noun, and the kind's own name otherwise. A templated title
+  (`{data.title}`) is the ROW's name rather than the kind's, and a
+  sentence that dropped one in would name the same row twice. `task`
+  and `event` both template, so both read their keyword.
+- **`prepared-label`** — the target's own `:label-template` rendered
+  over the prepared body, which is the same template `invoke/label-of`
+  writes into every labelled ref: **the name in the sentence is the
+  name the house will read on the row it lands as.** Both
+  materializable kinds declare `{data.title}`, verified rather than
+  assumed. Keys are keywordized shallowly (a `prepared` map crosses
+  the wire as an object and arrives either way) and the label is
+  clamped at 200 characters.
+- **`mirror-clause`** — below.
+
+**The shape is a function of the piece's TARGET FORM, one arm per
+form, and the enum closes at one today: `:create`.** jfv.9's general
+piece — `{kind, row id, action, prepared}` — slots its own arm in
+beside this one (*"Yes will `<action>` `<that row>`: `<the engine's
+diff>`"*) without touching it, which is why the create arm is written
+as an arm rather than as the whole function.
+
+### The mirror clause: what a `:mirror` declaration actually holds
+
+The bead asked for the clause to name the authority if the declaration
+carried a display name for it, and to say something honest if it did
+not. **It does not.** `mirror/declaration` mints a `Spec` whose keys
+are `adapter / ttl-seconds / discover-every / document / push-on-write
+/ create-push / local-rows / priority / on-gone / resync-every` —
+machinery, every one of them, and `fingerprint/authority-fp` reads
+them by name. There is no household word for *Google Tasks* anywhere
+in it; the adapter is a protocol object. So the clause **names the
+source without naming it**:
+
+> …and at the source it mirrors to, the way any task does…
+
+Hard-coding `Google Tasks` here would have been the framework's own
+page saying a word only one deployment's adapter knows. **The day a
+mirror declaration carries a household name for its authority,
+`mirror-clause` is the one line that has to change** — recorded here
+so it is a one-line change and not an archaeology.
+
+**The condition is `:create-push`, not `:mirror`.** A pull-only mirror
+could not have been born by this tap at all, and a `:push-on-write`
+kind without `:create-push` pushes *edits* rather than births. `task`
+and `event` both declare it, which is exactly why the clause is true
+of them.
+
+### The bundle's own line, and why it cannot be stored
+
+`make_it_so`'s confirmation story is a second line, on the bundle
+card, in the same voice:
+
+> Make it so = all 3 pieces still on offer in this bundle, taken
+> together — and nothing that has already been answered.
+
+**It is computed at the read and not at staging, and the reason is
+structural rather than a preference:** the parent row is born before
+any piece exists (`a-bundle-is-small`'s floor has this same problem
+and `bundle-floor` is where it landed), and the union CHANGES as
+pieces are answered. `bundle-impact` counts the pieces still `offered`
+at that read — the same set `take-the-rest` will fan out over inside
+the transaction — so one decline and one tap leaves it reading *the
+one piece still on offer*. That is a claim in the pack.
+
+**It states a COUNT and never a piece's content**, which is what lets
+it ride ungated: a reader whose leash names the bundle and not its
+parts sees no `pieces` key at all, and telling that reader their own
+`make_it_so` would take three is a true statement about **their own
+tap** rather than a projection of rows they do not hold. Gating it on
+the surviving pieces was considered and refused — the tap really does
+take all three, and a line that said *two* would be the card lying to
+make a projection tidy.
+
+### Where it renders, and the decision that it renders at all
+
+**Visibly, on the card, not behind a disclosure** — the bead's own
+ruling and the owner's discomfort's own answer: a sentence behind a
+toggle is a sentence nobody read. A piece's line sits in `pieceLine`
+between the composer's prose and the chips (`.fpiece-impact`); the
+bundle's sits between the pieces list and the bundle's own verbs
+(`.fcard-impact`), directly above the button it describes. Both are
+quieter than the say-line and in the **sans** face, because the
+difference between them is whose sentence it is — the serif is
+somebody's writing, this is the machine reading itself back.
+
+**`impact` is one wire key at both levels**, beside `says`, so
+`135-feed-screen.js` renders one thing in two places and jfv.9's
+future arm needs no new key. **The battery stays at zero**: the field
+is out of the create model, so `demand/effort` never sees it and no
+verb's weight moved. `make check-queue` reads **36 kinds, 11 warnings,
+47 scenarios judged** — every number unmoved.
+
+### The pieces already on offer, and the answer that needed no backfill
+
+**Four pieces were offered in production when this law landed**,
+staged before it existed and carrying no such sentence. The field is
+therefore **optional**, and `feed/piece-impact-of` runs the identical
+derivation at the read for any piece that has none:
+
+```clojure
+(or (some-> (get-in pd [:data :impact]) str not-empty)
+    (piece-impact prdef (get (resources ctx) target-kind) prepared))
+```
+
+So the four live pieces gained their line on the next morning's feed
+and **nothing was written to get it there.** A backfill was the
+alternative and it was refused by name: writing the engine's reading
+onto those rows from *outside* the staging door that owns it is
+precisely the property this bead exists to establish. `outcome-test`'s
+`the-engine-says-what-the-tap-will-do` manufactures the case —
+`store/update-data!` strips the stored line, no transition, no version
+bump — and reads the card back.
+
+**The line is only on a piece still OFFERED.** It describes a tap, and
+an answered piece has no tap left to describe; a future-tense sentence
+over a settled row would read as an offer the card is no longer
+making. Also a pack claim.
+
+### Staleness needs nothing new, and here is why
+
+The stored line plus the existing re-judge at the tap already cover
+the world moving, and the reason is that **the line is a function of
+`{target_kind, prepared}` and neither of those can change after
+staging.** `prepared` is written once at birth and has no door that
+edits it; `target_kind` likewise. So there is no world-state the
+sentence could go stale *about*: what can go stale is whether the
+target's own guards will still let the row be born, and that is judged
+at the tap by those guards, whose refusal is what the household reads
+(`materialize`, and § *Validated at staging, judged again at the tap*).
+A second staleness oracle over another kind's law is the thing this
+file has refused twice already. Nothing more was needed and this
+paragraph is the record of asking.
+
+### Where the law is proved
+
+- **Six claims added to `:feed/outcomes`** rather than a new
+  obligation, because they are claims about the crown's own card and a
+  second bundle would have been a second crown in the deck the
+  counting obligations read. Every piece still on offer carries a
+  line; **it names the row the tap would create** (the load-bearing
+  one — a line saying only *this makes a task* would render and teach
+  nothing, and the obligation renders the target's `:label-template`
+  itself so it is a witness rather than a second call to the thing
+  under test); a mirrored target's push is named; the bundle states
+  the union; the union **moves** to *the one piece* after a decline
+  and a tap; and an answered piece carries no line at all. The naming
+  claim was proved to FIRE by deliberately dropping the label from the
+  derivation and watching the obligation refuse.
+- **`workqueue10.outcome-test/the-engine-says-what-the-tap-will-do`**,
+  over the real ring handler, for the half a wire document cannot
+  answer: the line is on the ROW (written at staging, not at the
+  read); it names the prepared title, opens with the verb the
+  household will tap, carries the mirror clause and closes with
+  *Nothing else*; **a composer that puts `impact` in its own create
+  body gets 422** — the field is out of the create model, so the door
+  refuses it rather than ignoring it, which is what makes *the
+  engine's reading* a fact about the row instead of a promise about
+  the composer; and the read-time fallback over a row whose line has
+  been stripped.
+- **`ui-drive.mjs`'s feed walk**, extended by four checks: both pieces
+  state what their own tap will do, the two prepared titles appear in
+  the two lines, the mirrored consequence is named on both, and the
+  bundle's own line reads *Make it so = all 2 pieces*. Run against a
+  fresh dev database: **53 checks passed, no console errors.**
+
+### Recorded here, for whoever comes next
+
+- **No fingerprint moved, and it was computed both ways rather than
+  argued.** The whole census — 36 kinds — is **byte-identical** to
+  `HEAD`, `outcome_piece` included. `impact` declares no `:filter` and
+  no `:sort`, and only `filterable ∪ sortable` becomes a generated
+  column, so `store/kind-projection` renders the same table, the same
+  columns and the same indexes; the storage facet is the only one a
+  plain schema field can reach, and `:display`, `:x-display` and prose
+  ride none. (442.9's witnesses, applied: a schema change that adds no
+  column adds no law.)
+- **The migrate plan is EMPTY.** `impact` lands in the `data` jsonb.
+  `make migrate-queue` against a `workqueue10_dev` whose
+  `outcome_pieces` predates this bead prints *storage matches the
+  declarations — empty plan*, and the table still carries exactly
+  `f_composed_by / f_outcome_id / f_target_kind`. **Production needs
+  no DDL for this deploy.**
+- **`impact` is the same sensitivity class as `says`, and the gate was
+  already right.** Both carry the prepared work's own words — in fact
+  `impact` carries the prepared TITLE, which `says` does not — so both
+  ride `piece-card`'s three gates, and a piece a reader does not hold
+  is absent, sentence and all. The bundle's line is the exception and
+  it is a count, argued above.
+- **A kind with no primary action, or no label template, still gets a
+  sentence.** `affirming-verb` falls back to *This* and the naming
+  clause simply drops. Neither arm fires for `task` or `event`, but a
+  future materializable kind that labels its rows some other way will
+  read *This will create one thing — in this house's own record.
+  Nothing else.* rather than crashing or lying, and that is the
+  correct failure: less said, nothing false.
+- **`offered?` is now spelled once in `feed.clj`** and read by three
+  things about one card: the bundle's candidacy, its union line, and
+  whether a piece's line has a tap left to describe. It was inline
+  before and would have been inline three times after.

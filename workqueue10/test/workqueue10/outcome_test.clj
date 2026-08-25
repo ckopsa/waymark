@@ -422,3 +422,83 @@
     (testing "and is offered no verdict on it: the four-eyes wall means every one of those doors answers 409"
       (is (not-any? #{"make_it_so" "not_this_week"}
                     (map (comp str :name) (:actions (json own))))))))
+
+;; ── 10. the impact line, and the rows that predate it ───────────────
+;;
+;; The owner's own discomfort (waymark-jfv.17): *I'm not yet
+;; comfortable using the crown because I'm not sure what impact the
+;; actions will have.* What the pack proves over the wire is that the
+;; line reaches the card and names the row. What only a live engine
+;; can answer is the OTHER half of the law — that the line is written
+;; at STAGING onto the row, and that a piece staged before the law
+;; existed still reads one, because both paths run one function.
+
+(defn- clear-impact!
+  "Strip the stored line off a piece row, in place — the only way to
+  manufacture the four pieces that were already on offer in
+  production when this law landed. It writes DATA and nothing else:
+  no transition, no version bump, so the row that comes back out is
+  as close to a pre-jfv.17 row as this tree can make one."
+  [id]
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (let [row (store/load-row (:storage *eng*) tx :outcome_piece id {})]
+        (store/update-data! (:storage *eng*) tx :outcome_piece id
+                            (dissoc (:data row) "impact" :impact)
+                            nil)))))
+
+(deftest the-engine-says-what-the-tap-will-do
+  (let [v (declare-value! "colton-impact" "an inspectable Saturday"
+                          ["the shop"])
+        o (id-of (stage-outcome! "composer-impact" (vid v)))
+        p (id-of (stage-piece! "composer-impact" o
+                               "Cut the stock Friday evening"
+                               "task" {:title "Cut the box stock to length"}))
+        q (id-of (stage-piece! "composer-impact" o
+                               "Put the afternoon on the calendar"
+                               "task" {:title "Book the shop afternoon"}))
+        d (fields (req :get (str "/api/outcome_pieces/" p)
+                       (human "colton-impact")))]
+    (testing "the line is on the ROW, written at staging"
+      (is (not (str/blank? (str (:impact d))))))
+    (testing "and it is the ENGINE's sentence: it names the row the tap would create"
+      (is (str/includes? (str (:impact d)) "Cut the box stock to length")))
+    (testing "…says the verb the household will actually tap"
+      (is (str/starts-with? (str (:impact d)) "Yes will create one task")))
+    (testing "…names the mirrored consequence, because a task lands twice"
+      (is (str/includes? (str (:impact d)) "mirror")))
+    (testing "…and closes the door on everything else"
+      (is (str/includes? (str (:impact d)) "Nothing else.")))
+    (testing "no composer can write it, and no composer can overwrite it"
+      ;; `impact` is out of the create model, so a body carrying one is
+      ;; refused by the door's own closed-errors rather than quietly
+      ;; ignored — which is what makes 'the engine's reading' a fact
+      ;; about the row instead of a promise about the composer
+      (let [forged (req :post "/api/outcome_pieces"
+                        {:outcome_id o :says "A piece with its own story"
+                         :target_kind "task" :prepared {:title "Forged"}
+                         :impact "Yes will create nothing at all."}
+                        (human "composer-impact"))]
+        (is (= 422 (:status forged)))))
+    (testing "a piece staged BEFORE this law reads its line at the read, with no backfill"
+      (clear-impact! q)
+      (let [bare (fields (req :get (str "/api/outcome_pieces/" q)
+                              (human "colton-impact")))
+            feed' (json (req :get "/api/-/feed" (human "colton-impact")))
+            card (some #(when (and (= "outcome" (str (:kind %)))
+                                   (str/ends-with? (str (:self %)) o)) %)
+                       (:cards feed'))
+            piece (some #(when (str/ends-with? (str (:self %)) q) %)
+                        (:pieces card))]
+        (is (str/blank? (str (:impact bare)))
+            "the row really has no stored line")
+        (is (some? piece) "the piece is on the card")
+        (is (str/includes? (str (:impact piece)) "Book the shop afternoon")
+            "and the card carries the same sentence, derived at the read")))
+    (testing "the bundle states the union its own verb would take"
+      (let [feed' (json (req :get "/api/-/feed" (human "colton-impact")))
+            card (some #(when (and (= "outcome" (str (:kind %)))
+                                   (str/ends-with? (str (:self %)) o)) %)
+                       (:cards feed'))]
+        (is (some? card))
+        (is (str/includes? (str (:impact card)) "Make it so = all 2 pieces"))))))

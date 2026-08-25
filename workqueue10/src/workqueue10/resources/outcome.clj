@@ -189,6 +189,15 @@
                                    defscenario]]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
+            ;; the impact line's one derivation (waymark-jfv.17), which
+            ;; lives beside `outcome-says` because it is the OTHER
+            ;; engine sentence on this same card and both callers —
+            ;; this door at staging, the population at the read — have
+            ;; to run the identical function or a stored line and a
+            ;; derived one would drift. `waymark10.recipe_proposal`
+            ;; reaches for `feed/recipe-diff` from a resource ns for
+            ;; the same reason, one kind over.
+            [waymark10.server.feed :as feed]
             [waymark10.server.store :as store]
             [waymark10.types :as t]
             [workqueue10.resources.tickler :as tickler])
@@ -832,12 +841,46 @@
         (assoc-in [:data :declined_count] said)
         (assoc-in [:data :not_before] (tickler/next-offer (:now ctx) said)))))
 
-;; The piece's one birth stamp: who staged it. Its own, rather than
-;; the parent's copy, because the four-eyes wall on a PIECE has to
-;; read the piece — a wall that reached up to the bundle would be a
-;; wall a piece staged by somebody else walked straight through.
+;; THE PIECE'S TWO BIRTH STAMPS, and neither is the caller's to give.
+;;
+;; WHO STAGED IT, its own rather than the parent's copy, because the
+;; four-eyes wall on a PIECE has to read the piece — a wall that
+;; reached up to the bundle would be a wall a piece staged by somebody
+;; else walked straight through.
+;;
+;; AND WHAT THE TAP WILL DO (waymark-jfv.17), which is the owner's own
+;; discomfort answered on the record: *I'm not yet comfortable using
+;; the crown because I'm not sure what impact the actions will have.*
+;; It is computed HERE, at staging, from the prepared input and the
+;; target kind's own declaration — `recipe_proposal`'s `diff` posture
+;; exactly, and for its reason: the sentence a person taps under has
+;; to be the engine's reading and never the stager's description of
+;; it. `says` is the composer's prose and stays the composer's; this
+;; line is beside it and the composer cannot reach a word of it.
+;;
+;; IT RUNS AFTER `the-prepared-input-fits-the-door`, which is the
+;; whole reason it can be trusted: create guards are judged before
+;; :on-create, so by the time this reads `prepared` that map has
+;; already been decoded, defaulted and closed against the very create
+;; model the tap will knock on. A line about an input the door would
+;; refuse is a line that never gets written, because the row does not.
 (defhandler stamp-the-composer [row ctx]
-  (assoc-in row [:data :composed_by] (:id (:principal ctx))))
+  (let [rdef-of (:rdef-of ctx)
+        k (some-> (get-in row [:data :target_kind]) str str/trim not-empty)
+        trdef (when (and rdef-of k) (rdef-of k))
+        ;; this kind's own declaration, read off the registry rather
+        ;; than reached for by name: the verb in the sentence is the
+        ;; label of whatever action this piece advertises as primary,
+        ;; so renaming the tap renames it in the sentence too
+        prdef (when rdef-of (rdef-of "outcome_piece"))]
+    (cond-> (assoc-in row [:data :composed_by] (:id (:principal ctx)))
+      ;; the storage-free probe carries no registry (the same nil
+      ;; `the-prepared-input-fits-the-door` allows optimistically);
+      ;; it also never runs :on-create, so this arm is the belt
+      (and trdef prdef)
+      (assoc-in [:data :impact]
+                (feed/piece-impact prdef trdef
+                                   (get-in row [:data :prepared]))))))
 
 (defhandler record-the-verdict [row _inp ctx]
   (assoc-in row [:data :decided_by] (:id (:principal ctx))))
@@ -1127,6 +1170,11 @@
    {:x-display
     {:label "The row, already filled in"
      :help "Exactly the body the target's own create door will take — this is where the friction is pre-paid, and it is checked against that door when the piece is staged rather than when somebody taps it."}}
+   :impact
+   {:x-display
+    {:widget "prose"
+     :label "What the tap will do"
+     :help "The engine's own reading of this piece, in the household's words: what one tap creates, what it is called, where it lands, and what it does not touch. Written when the piece was staged, from the prepared input and the target kind's own declaration — nobody types it and nobody can edit it, which is the point. The composer says what the piece IS; this says what saying yes to it DOES."}}
    :materialized
    {:x-display
     {:raw true
@@ -1328,6 +1376,23 @@
     ;; will judge it against, and again by that door's own guards at
     ;; the tap.
     (pe :prepared {} [:map-of :keyword :any])
+    ;; ENGINE-WRITTEN (waymark-jfv.17), and OPTIONAL for a reason that
+    ;; is about the rows already standing rather than about the field.
+    ;; Four pieces were on offer in production when this law landed,
+    ;; staged before it existed and carrying no such sentence. A
+    ;; required field would have demanded a backfill — the engine's
+    ;; reading written onto them from OUTSIDE the staging door that
+    ;; owns it, which is the one property this whole bead is about. So
+    ;; absent is legal, and `feed/piece-impact-of` runs the identical
+    ;; derivation at the read for any piece that has none: the four
+    ;; live pieces gained their line on the next morning's feed and
+    ;; nothing was written to get it there.
+    ;;
+    ;; NO :filter AND NO :sort, deliberately — only
+    ;; `filterable ∪ sortable` becomes a generated column, so this
+    ;; moves no column, no index, and therefore no storage facet and
+    ;; no fingerprint. Nothing queries a sentence.
+    (pe :impact {:optional true} [:maybe [:string {:max 600}]])
     (pe :materialized {:optional true} [:maybe [:string {:max 200}]])
     (pe :composed_by {:optional true :filter #{:eq}}
         [:maybe [:string {:max 128}]])

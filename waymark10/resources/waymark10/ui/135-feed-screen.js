@@ -712,6 +712,17 @@ async function renderFeedScreen(view, doc) {
         href: feedScreenHref(h.href),
         title: `${h.label} asks for a screen — effort ${h.effort}`},
         h.label + " ↗"));
+    /* THE IMPACT LINE (waymark-jfv.17), and it is VISIBLE rather than
+       disclosed. The owner's discomfort was not knowing what the tap
+       would do, and a sentence behind a toggle is a sentence nobody
+       read — so it sits under the composer's prose and above the
+       chips, quiet, in the server's own words. Two voices, one line
+       apart: `says` is what the piece IS and whoever composed it
+       wrote that; `impact` is what saying yes DOES and only the
+       engine writes that. */
+    const impact = piece.impact
+      ? el("div", {class: "fpiece-impact", "data-impact": ""}, piece.impact)
+      : null;
     return el("li", {class: "fpiece", "data-card-id": piece.card_id,
                      "data-kind": piece.kind || ""},
       el("div", {class: "fpiece-top"},
@@ -719,6 +730,7 @@ async function renderFeedScreen(view, doc) {
         el("a", {class: "fpiece-say prose", href: "#" + piece.self,
                  title: piece.self},
           piece.says || piece.summary || "this piece")),
+      impact,
       bar.childElementCount ? bar : null,
       box);
   }
@@ -810,6 +822,13 @@ async function renderFeedScreen(view, doc) {
     if (bundle)
       article.append(el("ul", {class: "fcard-pieces"},
         bundle.map(p => pieceLine(card, article, p))));
+
+    /* …and the BUNDLE's own impact line under them: the union its own
+       verb would take, said once, directly above the chip that takes
+       it. Same key as a piece's, same voice, one level up. */
+    if (card.impact)
+      article.append(el("div", {class: "fcard-impact", "data-impact": ""},
+        card.impact));
 
     /* the evidence, on the two cards that CLAIM something: a finding
        cites what it read, and so does a bundle — an outcome sits on
