@@ -1,0 +1,103 @@
+# Builds the workqueue10 image and publishes it to GHCR (waymark-27y).
+#
+# WHY GHCR AND NOT docker.kopsa.info, the Makefile's default: a hosted
+# runner cannot reach the home cluster's registry, and a public repo is
+# the wrong place to keep cluster credentials. GHCR is free for public
+# repos and authenticates with the built-in GITHUB_TOKEN — nothing to
+# rotate, no secret to leak in a world-readable log. QUEUE_IMAGE was
+# always an override, so `make image-queue` keeps pushing to the home
+# registry from a laptop exactly as before.
+#
+# WHY arm64 NATIVELY: the cluster's only node is ARM64, which locally
+# means cross-building under qemu binfmt — the one-time-per-boot install
+# the Makefile warns about. Public repos get free arm64 runners, so the
+# runner IS the target architecture and qemu never enters it.
+#
+# THE TAG IS THE BARE SHORT SHA, matching the Makefile's IMAGE_TAG. A
+# CI-built image is therefore addressable by exactly the string
+# `make deploy-queue` would have computed, and the nomad var it writes
+# needs no translation.
+
+name: image
+
+on:
+  push:
+    branches: [main]
+    # Only the three modules the Dockerfile COPYs can change the image.
+    # A docs or .beads commit rebuilding it would be noise.
+    paths:
+      - 'waymark10/**'
+      - 'calendar10/**'
+      - 'workqueue10/**'
+      - 'Dockerfile.workqueue10'
+      - '.github/workflows/image.yml'
+  pull_request:
+    paths:
+      - 'waymark10/**'
+      - 'calendar10/**'
+      - 'workqueue10/**'
+      - 'Dockerfile.workqueue10'
+      - '.github/workflows/image.yml'
+  workflow_dispatch:
+
+# A second push to the same branch makes the first build's image
+# unwanted before it finishes.
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Skipped on pull_request: a fork's PR has no write token, and a
+      # PR's job here is to prove the image still builds, not to publish
+      # one. Login would be the step that fails, so it does not run.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/workqueue10
+          # `prefix=` strips the action's default `sha-`, leaving the
+          # bare 7-character short SHA `git rev-parse --short HEAD`
+          # produces. CI checkouts are never dirty, so the Makefile's
+          # `-dirty` suffix has no counterpart here by construction.
+          tags: |
+            type=sha,format=short,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.workqueue10
+          platforms: linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The dependency layer (`clojure -P -M:dev`) downloads the
+          # world; the Dockerfile already isolates it behind the three
+          # deps.edn copies so a source-only change reuses it. mode=max
+          # keeps the intermediate layers, which is the whole point —
+          # without it that layer is the only thing NOT cached.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # A single-platform image wants a plain manifest, not the
+          # index buildx otherwise wraps it in to carry attestations.
+          provenance: false
