@@ -79,11 +79,13 @@
         world (roots nses)
         before (hashes)]
     (try
-      ;; 32 since waymark-iqa.6 added :insight (31 since .4's
-      ;; :tickler). The count is a census, not a law: it moves when the
-      ;; house gains a kind and never otherwise, which is exactly the
-      ;; change it is here to notice.
-      (is (= 32 (count before)) "the whole household is under the lens")
+      ;; 33 since waymark-jfv.2 added :value — what the house cares
+      ;; about, declared by the person who cares about it (32 since
+      ;; waymark-iqa.6's :insight, 31 since .4's :tickler). The count
+      ;; is a census, not a law: it moves when the house gains a kind
+      ;; and never otherwise, which is exactly the change it is here to
+      ;; notice.
+      (is (= 33 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)

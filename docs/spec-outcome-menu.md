@@ -761,3 +761,164 @@ The risk is not the code and it is not the walls. It is that two beautifully
 staged plans land in front of the owner and he reads them the way he read the
 first feed: everything worked and almost nothing was right. That is why `.5`
 ends by writing down what he actually said.
+
+## Built — jfv.2, the value kind (2026-08-24, waymark-jfv.2)
+
+The first row in this tree whose content is **what a person cares about**
+rather than what the house has to do. One file,
+`workqueue10/src/workqueue10/resources/value.clj`, and its entry in
+`main.clj`'s resources vector. **No framework file was touched**, which is
+what the landing order promised of this bead and of `.3`.
+
+### The declaration, as it landed
+
+```clojure
+(defresource value
+  {:kind :value
+   :plural "values"
+   :nav :secondary                     ; ← load-bearing, see the spec above
+   :states [:declared :retired] :initial :declared :terminal #{}
+   :summary "{data.name} · {data.scope} · {state}"
+   :label-template "{data.name}"
+   :display {:title "Value"}
+   :schema [:map
+            (entry :name  {:sort :default}          [:string {:min 1 :max 80}])
+            (entry :says  {}                        [:string {:min 1 :max 2000}])
+            (entry :loved {:optional true}
+                   [:maybe [:vector {:max 12} [:string {:min 1 :max 40}]]])
+            (entry :scope {:filter #{:eq}}          [:enum "household" "mine"])
+            (entry :owner {:optional true :filter #{:eq}}
+                   [:maybe [:string {:max 128}]])
+            (entry :reviewed_at {:optional true :sort true}
+                   [:maybe :waymark/instant])
+            (entry :reviewed_by {:optional true :filter #{:eq}}
+                   [:maybe [:string {:max 128}]])]
+   :create-schema [:map … name, says, loved, scope …]   ; owner is the stamp
+   :filterable {:state #{:eq :in}}
+   :create-guards [written-by-a-person]
+   :on-create stamp-owner
+   :actions
+   {:revise       {:from #{:declared} :to :declared
+                   :input revise-input :edit {:prefill [:name :says :loved]}
+                   :record true :waives #{:large-effort}
+                   :guards [written-by-a-person this-is-yours-to-declare]
+                   :handler apply-revision}
+    :still_stands {:from #{:declared} :to :declared      ; NO :input
+                   :guards [written-by-a-person]
+                   :handler stamp-the-review}
+    :retire  {:from #{:declared} :to :retired :undo :restore
+              :guards [written-by-a-person this-is-yours-to-declare]}
+    :restore {:from #{:retired} :to :declared :undo :retire
+              :guards [written-by-a-person this-is-yours-to-declare]}}})
+```
+
+The design section above is the decision record and nothing in it was
+re-opened. What follows is only what the landing itself decided or found.
+
+### The states, decided: the smallest honest machine
+
+`declared` and `retired`, neither terminal, reversible both ways. No
+`proposed` — nothing but a person may declare one, and a person declaring one
+has already decided. No `amended` — an amendment is a **revision of a standing
+law**, not a different state of it, and `:record true` on `revise` puts the
+prior words, the actor and the law revision in the transitions log, which is
+the amendment history the epic asked for. `still_stands` is the self-loop that
+stamps `reviewed_at` / `reviewed_by`; it does not mint a state either, because
+*reviewed* is a date, not a condition.
+
+### The petition flow, as it actually works now
+
+1. An agent reads the house through its leash, notices something, and
+   publishes an **`insight`**: the finding in one sentence, `evidence` naming
+   the rows it read, and its offer set to `{"offer_kind": "value",
+   "offer_action": "still_stands", "offer_href": "/api/values/<id>"}`.
+2. `offers-something-light` **admits it**, and that is the whole reason
+   `still_stands` takes no input: an offer must be no heavier than
+   `selection`, `demand/effort` answers `"assent"` for an action with no
+   `:input`, and every door that could take the new wording takes a string,
+   which is `recall`. This is proved rather than asserted — a new
+   conformance-tier scenario on `insight`, `a-value-may-be-petitioned`, files
+   exactly that insight through the real door.
+3. The owner reads the card and does one of two things. **Tap** — one tap, no
+   form, `reviewed_by` and `reviewed_at` stamped, meaning *I read the evidence
+   and it stands anyway*, which is the signal that separates *the value is
+   wrong* from *the plan is wrong*. Or **open the value and reword it** —
+   `revise`, prefilled, by his own hand, which is the ratification.
+
+### The agent wall, and its sentence
+
+`written-by-a-person` stands at **every** door this kind has — create,
+`revise`, `still_stands`, `retire`, `restore` — and it names the lawful path
+rather than merely closing:
+
+> What this house cares about is written by a person. An agent that could
+> declare or reword a value would be a composer grading its own homework —
+> publish an insight instead, citing the rows you read, and offer this value's
+> own "these still stand" as the one next step; the owner answers with a tap
+> and does his own rewording.
+
+`this-is-yours-to-declare` is the second wall, on the three doors that change
+the declaration:
+
+> This one is somebody else's to say. A value scoped "mine" belongs to the
+> member the engine stamped on it; a value the whole house holds is scoped
+> "household", and anybody here may write that one.
+
+Both read only the principal and the row, so both are judged with **no
+database at all**.
+
+### Where the law is proved
+
+Five scenarios on `value`, all check tier, and the two refusing guards are
+both named by one:
+
+- `an-agent-does-not-declare-a-value` — create, as an agent, refused by
+  `written-by-a-person`, `:because "publish an insight instead"`.
+- `an-agent-does-not-amend-one` — `revise`, as an agent, same wall. This is
+  the half that matters, because rewording is the quiet way to author.
+- `a-person-amends-what-the-house-declared` — allowed; the wall bars the
+  composer, not the family.
+- `somebody-elses-value-is-not-yours-to-reword` — `revise` of a `"mine"` value
+  by another adult, refused by `this-is-yours-to-declare`.
+- `a-petition-is-answered-with-one-tap` — `still_stands`, allowed, no input.
+
+And one scenario on `insight`, deferred to the suite because
+`offers-something-light` consults the registry: `a-value-may-be-petitioned`.
+
+`make check-queue` goes from **32 to 33 kinds** and **27 to 32 scenarios
+judged**, with the battery's warning count unchanged at 11 — `value` reports
+clean.
+
+### Recorded here, for whoever comes next
+
+- **A new kind is a new table.** Production needs `values` created before the
+  deploy that serves it. `make migrate-queue-prod` prints the plan (read-only,
+  and it refuses `APPLY` on purpose); a person runs the statements through
+  `nomad alloc exec -task postgres <alloc> psql -U workqueue -d workqueue10`.
+  Nothing here touched production.
+- **Exactly one fingerprint appeared and nothing moved.** `value` is new;
+  every other kind's hash is byte-identical. `insight` gained a scenario and
+  did **not** move, because `fingerprint-of` is a whitelist that never names
+  `:scenarios`. The census in
+  `workqueue10/test/workqueue10/fingerprint_stability_test.clj` went 32 → 33.
+- **`revise` waives `:large-effort`, on the journal's own reasoning.** `says`
+  is required prose, but the door prefills the paragraph that already stands
+  and is `:record true`, so a mis-click loses an in-progress edit and not the
+  declaration. A shared live draft is not warranted for a law one person
+  writes.
+- **`loved` stayed a plain vector of strings, and `:waymark/vocab` is the
+  question left open.** The tree has a first-class vocabulary token type
+  (`meal/theme-schema`, `ingredient`'s tags) which self-merges into
+  `:filterable` and `:faceted` — observed facets over the household's own
+  loved words, plus a GIN index, for one keyword. That is arguably the honest
+  partial answer to **waymark-90k** for this field. It was not taken here
+  because the spec decided the schema literally and a facet surface is a
+  read-side decision this bead did not own. Filed rather than done.
+- **`still_stands` carries only the agent wall, and the spec chose that.** A
+  `"mine"` value can therefore be affirmed by another adult in the house, who
+  is then named in `reviewed_by`. Whether the affirmation of a private value
+  should be owner-only is a real question and it is filed, not decided here.
+- **`:plan` is already taken.** `mealplan10` declares `:kind :plan` — the
+  week's meal plan — and `.3`'s parent bundle cannot have that name. Filed
+  before `.3` starts, because renaming a kind after it has a table is not a
+  rename.

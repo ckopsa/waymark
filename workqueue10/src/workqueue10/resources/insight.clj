@@ -340,6 +340,29 @@
    :expect  {:refused :out-of-state
              :because "Published"}})
 
+(defscenario a-value-may-be-petitioned
+  "The petition path of waymark-jfv.2, proved at the door it depends
+   on. An agent may not touch a `value` — declared is law — so the way
+   it asks for an amendment is this: a finding, the rows it read, and
+   the value's own `still_stands` as the one next step.
+   `offers-something-light` admits it because that action asks for
+   NOTHING and renders `assent`; the tap means 'I have read this', and
+   the rewording is the owner's own `revise` on the value's own
+   screen. Every door that could take the new wording takes a string,
+   and a string is `recall` — which is exactly why the petition offers
+   the reading and not the words."
+  {:kind    :insight
+   :attempt :create
+   :at      "2026-08-24T09:00:00Z"
+   :as      {:id "petitioner" :type :agent}
+   :input   {:finding "Six weeks of evenings went to building; the shop has not been opened since June"
+             :evidence ["/api/values/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :offer_kind "value"
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_action "still_stands"
+             :offer_href "/api/values/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"}
+   :expect  {:allowed true}})
+
 ;; ── :insight — the finding, with a next step attached ───────────────
 
 (defresource insight
@@ -447,5 +470,6 @@
                    insights-are-capped]
    :scenarios [no-citation-no-publish
                no-offered-action-no-publish
+               a-value-may-be-petitioned
                the-finder-does-not-decide
                a-dismissed-finding-does-not-come-back]})

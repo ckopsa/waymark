@@ -64,6 +64,7 @@
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.resources.tickler :refer [tickler]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
+            [workqueue10.resources.value :refer [value]]
             [workqueue10.resources.weather :refer [weather]]
             [workqueue10.sources.choreplan :as chores]
             [workqueue10.sources.flickr :as flickr]
@@ -333,8 +334,25 @@
        ;; beside queue/chores/meals. The compiler is not in the tree
        ;; and must not be (docs/spec-feed.md § 'The compiler
        ;; contract'); this kind is the engine's half of its leash.
+       ;; :value rides last (waymark-jfv.2): what this house actually
+       ;; CARES about, written down by the person who cares about it —
+       ;; "making memories with the family", "Grandpa is cared for",
+       ;; "building", each beside the activities he loves. Domainless
+       ;; for the same family reason the rest are, and the clearest
+       ;; case of it: what a household values is not a domain of
+       ;; logistics beside queue/chores/meals, it is what the
+       ;; logistics are FOR. Hand-written rather than a :decision — a
+       ;; value is long-lived law, not a one-shot verdict — and
+       ;; :nav :secondary on purpose, because a permanently-open row
+       ;; on a :primary kind would card in do-now forever and get
+       ;; congratulated as a deed when it retired. Declared is law;
+       ;; learned is evidence that files asks: an agent may not touch
+       ;; a value at any door, and petitions it by publishing an
+       ;; insight whose one next step is the value's own
+       ;; "these still stand" (docs/spec-outcome-menu.md § 'The value
+       ;; kind').
        (into (into [saved-view capability connection self journal weather letter
-                    permission-slip tickler insight]
+                    permission-slip tickler insight value]
                    dashboard/resources)))))
 
 (def surfaces
