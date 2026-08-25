@@ -317,6 +317,79 @@
       ;; contributes nothing and the seam moves up
       (catch Exception _ []))))
 
+;; ── the view door's own two names (waymark-8um.1) ───────────────────
+;;
+;; Named here as KEYWORDS and nowhere else, the way `insight`,
+;; `tickler` and `recipe_proposal` are already named by the populations
+;; above: this namespace reads kinds the feed module enrols without
+;; requiring the namespaces that declare them, because
+;; `waymark10.feed-view` requires nothing from here and must be free to
+;; require this file later if it ever needs to.
+
+(def view-consent-kind
+  "The per-member switch that decides whether a screen may report what
+  it showed (waymark10.feed-view)."
+  :feed_view_consent)
+
+(def view-kind
+  "The record a screen posts when the switch is on."
+  :feed_view)
+
+(defn- collection-of
+  "The address of a kind's collection, or nil when this engine holds no
+  such kind. Read off the declaration's own `:plural` rather than
+  spelled here, so the one place a plural is decided stays the one
+  place."
+  [ctx kind]
+  (some->> (get (resources ctx) kind) :plural (str "/api/")))
+
+(defn recording?
+  "Has this reader turned their own view record on? One indexed read
+  per feed, and the answer is FALSE for every member who has never
+  said anything — which is the whole of the seventh law's second half.
+
+  Public because `document` is not the only honest caller: anything
+  that wants to know whether a screen may beacon should ask the same
+  question of the same rows rather than keep a second opinion."
+  [ctx]
+  (boolean
+   (and (get (resources ctx) view-consent-kind)
+        (seq (rows-of ctx view-consent-kind
+                      {:member (:id (:principal ctx)) :state "recording"})))))
+
+(defn- views-doc
+  "What this document says about the record of itself — or nil, when
+  the engine holds no view kinds at all and there is nothing to say.
+
+  Under a PREVIEW it is always `recording false`, and that is the
+  preview exclusion's server-side half rather than a courtesy the
+  client is trusted with: a previewer's screen is handed a document
+  that gives it nothing to beacon about, and the door would refuse the
+  attribution anyway (`feed-view/a-view-is-your-own`). The two halves
+  are belt and braces on purpose — a promise kept only in a client is
+  a promise kept only until somebody writes a second client."
+  [ctx preview]
+  (when-some [switch (collection-of ctx view-consent-kind)]
+    (let [on (and (nil? preview) (recording? ctx))]
+      {:recording on
+       :switch switch
+       :post_to (collection-of ctx view-kind)
+       :says (cond
+               preview
+               (str "A preview records nothing. This is somebody else's"
+                    " feed read through their sight, and what THEY were"
+                    " shown is not something your looking gets to write.")
+               on
+               (str "This screen tells the house which cards it showed"
+                    " you — you turned that on, and " switch " is where"
+                    " you turn it off again. The read itself still"
+                    " writes nothing; the screen posts, once per card"
+                    " per day, and you can read every row it wrote.")
+               :else
+               (str "Nothing is being recorded about what you were"
+                    " shown. It is off for everybody until each person"
+                    " turns their own on, at " switch "."))})))
+
 (defn- candidates-of
   "Raw rows → candidates, carrying the row so the card builder need not
   read it twice."
@@ -2203,6 +2276,13 @@
   the document either way, because it is one narration per LINE rather
   than one per card and the counts beside it are the read's own.
 
+  `:views` (waymark-8um.1) is not an opt at all but an answer: whether
+  this reader's screen may report the cards it showed, and where the
+  switch lives either way. The GET still writes nothing — this key is
+  what lets the SCREEN write, through its own declared door, and it
+  reads `recording false` on every preview so a previewer's page has
+  nothing to beacon about.
+
   `:recipe-source` (waymark-4yn) is the third such opt and the one that
   makes the other two honest once the recipe is EDITABLE: the stamp
   saying which recipe answered — a stored row by id and version, or
@@ -2296,6 +2376,12 @@
         ;; the narrated recipe, with the read's own counts folded in —
         ;; the static half is a pure function of the recipe and the
         ;; counts are what THIS read saw each line offered
+        ;; the view door's standing (waymark-8um.1): whether this
+        ;; reader's screen may report what it showed, and where the
+        ;; switch is either way. Computed here rather than left to the
+        ;; client because the PREVIEW half has to be the server's — see
+        ;; views-doc
+        views (views-doc ctx preview)
         recipe-doc (cond-> (update (recipe-view recipe) "lines"
                                    (fn [ls] (mapv (fn [l]
                                                     (merge l (get counts (get l "line"))))
@@ -2337,6 +2423,12 @@
                             " and recipe below narrates the order itself. Add"
                             " ?explain=1 to have each card spell its citation"
                             " out in sentences."))
+                     ;; …and whether this read is being remembered
+                     ;; (waymark-8um.1). Said out loud only when it IS,
+                     ;; because a surface that announced its own
+                     ;; silence on every read would be asking for a
+                     ;; permission it was right not to have.
+                     (when (:recording views) (:says views))
                      ;; whose order this was, and how to change it
                      ;; (waymark-4yn) — one sentence, because a surface
                      ;; that narrates its order and will not say where
@@ -2365,6 +2457,7 @@
                      :recipe recipe-doc
                      :notes notes}
               preview (assoc :preview preview)
+              views (assoc :views views)
               (and bottomless more?)
               (assoc :links
                      {:next {:href (str base

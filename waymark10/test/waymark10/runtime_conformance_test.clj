@@ -96,6 +96,10 @@
 (def ^:private tables
   ["rt_errands" "jobs" "subscriptions" "attachments" "definitions"
    "members" "roles" "grants" "approval_requests"
+   ;; the feed module's view door (waymark-8um.1): a leftover consent
+   ;; row would have this fixture's engine recording before its
+   ;; obligation says so
+   "feed_views" "feed_view_consents"
    "waymark10_transitions" "waymark10_idempotency" "waymark10_cursors"
    "waymark10_job_leases" "waymark10_drafts" "waymark10_observations"])
 
@@ -202,4 +206,16 @@
           (str ":feed/staged-proposals did not run; skipped for "
                (pr-str (get skipped :feed/staged-proposals))))
       (is (pos? (suite/coverage report :feed/staged-proposals))
-          "a member's tap landed the staged change"))))
+          "a member's tap landed the staged change")
+      ;; waymark-8um.1: the same argument one law over. The feed module
+      ;; enrols feed_view and feed_view_consent :always, so every
+      ;; engine that serves the feed owes this obligation — and it is
+      ;; the only place the whole view door is walked from the wire (a
+      ;; member turns their own recording on, one card leaves one row,
+      ;; a second person cannot file one under them, and a preview of a
+      ;; recording member hands the previewer nothing to record with).
+      (is (contains? ran :feed/view-events)
+          (str ":feed/view-events did not run; skipped for "
+               (pr-str (get skipped :feed/view-events))))
+      (is (pos? (suite/coverage report :feed/view-events))
+          "a card that was shown left exactly one row"))))

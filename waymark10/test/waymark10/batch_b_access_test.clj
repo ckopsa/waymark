@@ -416,7 +416,7 @@
                 and (waymark-0k4) the recipe proposals it staged itself"
         (let [b (json (req :get "/api/.well-known/waymark" nil own-scoped))]
           (is (= #{"approval_request" "grant" "job" "plan"
-                   "recipe_proposal"}
+                   "recipe_proposal" "feed_view" "feed_view_consent"}
                  (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"

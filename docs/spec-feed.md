@@ -156,6 +156,108 @@ verbatim: *an as-of read must project through the SAME visibility, or time
 travel becomes a disclosure channel.* Every fuel and archive card is a
 historical read. The clause binds them all.
 
+## Amendment — the laws, version three (2026-08-26, waymark-8um)
+
+Ratified by the owner in conversation and carried here verbatim, because it is
+law and not design. **It supersedes the four above where they conflict, and
+only where they conflict; everything else stands.** The feed becomes a fair
+contest for attention over an intentional pool, with the AI accountable for
+making high-value outcomes competitive by lowering their friction.
+
+> 1. The pool is declared. Every source is intentional. (Unchanged.)
+> 2. Obligations with deadlines stand outside the contest — a conflict needing
+>    a verdict, an ask that expires, a letter waiting. They appear because
+>    they must.
+> 3. Value outcomes keep an EXPOSURE FLOOR — guaranteed slots, not to protect
+>    them from the contest but so the contest can be measured (a learner
+>    cannot learn about a card it never shows). The recipe's `:kinds`
+>    take-lines are the mechanism.
+> 4. NO BURIAL WITHOUT A DIAGNOSIS: when a high-value card keeps losing, the
+>    system must first produce a friction diagnosis — an insight proposing a
+>    recomposition (smaller step, routed through a loved activity, better
+>    time) — before the old form may fade. Non-engagement is the composer's
+>    work order. The signal feeds two consumers: the ranker (show differently)
+>    and the composer (build differently); the composer's duty fires first.
+> 5. The ranking formula is DATA the owner can read — a declared formula over
+>    view/verdict counts, never a hidden model. A card's why says what lifted
+>    or held it: *"shown because you lingered here"* / *"held by the floor"*.
+> 6. The person spins; the system never spins for them. A deal-again tap draws
+>    fresh; each draw is stable with honest pages. No notifications, no
+>    auto-refresh from the feed.
+> 7. The feed READ writes nothing; the screen reports views through its own
+>    declared door. Per member, by choice — the owner opts in; each other
+>    member is off until they choose. Preview reads never count as the
+>    member's views.
+> 8. Larger changes to the contest's rules arrive as staged proposals for the
+>    owner's tap (waymark-0k4's machinery). Agents still cannot write the
+>    recipe.
+> 9. Every card cites why. Grants project every card. A preview is stamped.
+>    (Unchanged.)
+
+### The reasoning, recorded
+
+These three sentences are the owner's ratified argument, not a summary of it,
+and a bead that finds one inconvenient is arguing with the epic:
+
+> The harm of the social slot machine is **the pool, not the spin**. A stale
+> feed loses the evening to worse feeds. Engagement-learning over an
+> intentional pool is safe ONLY with the floor (measurement) and the diagnosis
+> duty (accountability) — without them it amplifies low-friction loves and
+> starves high-friction values, **rebuilding the exact evening problem waymark
+> exists to fix.**
+
+### What is superseded, and how
+
+Three of the original four move. The fourth — *every card is grant-projected
+through the reader's own surface* — is untouched, and so is the effort ceiling.
+
+**Day-stability becomes per-draw stability.** The old third law said the
+recipe is seeded *"by (member, day) so the feed is stable within a day"*. Law 6
+keeps the stability and moves what it is measured against: **a draw** is
+stable, with honest pages, and the daily seed is simply the **default first
+draw**. A deal-again tap draws fresh, on purpose, because the person spun —
+the system still never spins for them, and `:feed/day-stable`'s claim survives
+as the claim about *one* draw. The mechanism is waymark-8um.2's; nothing here
+pre-empts its shape.
+
+**The no-engagement rule splits into three.** The old third law's other half —
+*"no ranking model, no per-card analytics feeding order"* — was one sentence
+carrying three different fears, and laws v3 separates them so each can be
+answered:
+
+- The **exposure floor** (law 3) answers *"a learner starves what it never
+  shows."* The floor is the recipe's own take-lines, which are already static
+  data a person writes.
+- The **diagnosis duty** (law 4) answers *"a learner buries what is hard."*
+  Non-engagement becomes a work order for the composer before it may become a
+  reason to fade anything.
+- The **readable formula** (law 5) answers *"a model nobody can read is a model
+  nobody can argue with."* The order may be computed, and the computation is
+  DATA in the recipe the household can read, edit and roll back through
+  `feed_recipe`'s own doors. A hidden model is still refused — that refusal
+  did not weaken, it got a name.
+
+The wall against *"an implementation that finds itself writing a scoring
+function"* therefore moves rather than falls: what is forbidden is a scoring
+function **the household cannot read**. The epistemic-status paragraph above
+is left standing as written, because it is a true account of what the feed was
+when it was built and of the danger it was built against.
+
+**The no-write-on-read law splits into two, and both halves are kept.** The
+old sentence — *"no per-card seen row, and it must never grow one"* — is
+superseded by law 7:
+
+- **The GET writes nothing.** Unchanged, permanent, and the stronger half.
+  `/api/-/feed` is a read. A cursor page is a read. A preview is a read. None
+  of them writes.
+- **The screen reports views through its own door**, per member, by choice.
+  This is a different mechanism with a different consent story: the member
+  turns it on for themselves, the record is theirs to read at its own address,
+  and a preview never counts as the previewed member's view. Built below.
+
+The second suspicion above — *"the feed is not the notifier"* — is unchanged
+and unchallenged. Laws v3 adds no badge, no unread state, and no push.
+
 ## The design
 
 ### The document is a `feed`, not an envelope
@@ -2957,3 +3059,299 @@ unchanged at 11.
   whose four-eyes field is written by `:on-create` must prove that wall on a
   door whose every guard is offline, or in a pack. Worth knowing before the
   next decision kind is written.
+
+## Built — 8um.1, the laws and the view-event door (2026-08-26, waymark-8um.1)
+
+Two halves. The amendment above is the first: laws v3 written into this spec
+verbatim, with the reasoning and with what it supersedes said out loud rather
+than left for a reader to infer from a contradiction.
+
+The second is law 7's new clause, built. **The feed's GET still writes
+nothing.** What can write now is the SCREEN, through a door of its own, only
+for a member who turned it on, and never about a feed that was not theirs.
+
+### Two kinds, because it is one law
+
+`feed_view_consent` is the switch and `feed_view` is the record. They live in
+one namespace (`waymark10/feed_view.clj`) and enrol together on the `:feed`
+module, `:always`, beside `feed_recipe` and `recipe_proposal` — a record
+enrolled without its switch would be a door with the wall left in the other
+jar.
+
+```clojure
+(defresource feed-view-consent
+  {:kind :feed_view_consent
+   :plural "feed_view_consents"
+   :nav :system
+   :states [:recording :stopped]
+   :initial :recording
+   :terminal #{}                       ; both ways, always
+   :unique [[:member]]                 ; one switch per member, in the storage
+   :schema [:map [:member …]]          ; engine-written
+   :create-schema [:map [:member …]]   ; …and refused when it names another
+   :create-guards [a-switch-is-your-own]
+   :on-create stamp-the-member
+   :own-surface {:by :member :actions #{:stop :resume}}
+   :actions {:stop   {:from #{:recording} :to :stopped
+                      :guards [the-switch-is-your-own-hand]}
+             :resume {:from #{:stopped} :to :recording
+                      :guards [the-switch-is-your-own-hand]}}})
+
+(defresource feed-view
+  {:kind :feed_view
+   :plural "feed_views"
+   :nav :system
+   ;; born finished: a view is not a thing that happens to a row over time
+   :states [:recorded] :initial :recorded :terminal #{:recorded}
+   :unique [[:card_id :day :member]]   ; one row per card per day, and the
+                                       ; only index this declaration can ask
+                                       ; for — spent on the formula's read
+   :schema
+   [:map [:member …]                   ; engine-written from the principal
+         [:card_id …]                  ; "section/kind/id", kept WHOLE
+         [:population …]               ; the recipe line that drew it
+         [:day …]]                     ; the feed's own day, :waymark/date
+   :create-schema [:map [:member …] [:card_id …] [:population …] [:day …]]
+   :create-guards [a-view-is-your-own              ; shape
+                   the-member-turned-this-on       ; world
+                   this-card-is-counted-once-a-day]
+   :on-create stamp-the-viewer
+   :own-surface {:by :member :actions #{}}
+   :actions {}})
+```
+
+`:nav :system` on both, and it is load-bearing rather than tidy: every feed
+population draws from `:nav :primary`/`:secondary` kinds, so a view row can
+never become a card. A surface that carded its own record of itself would be
+the strangest mirror in the house.
+
+### Where the switch lives, and the door it did not take
+
+The obvious home was a `member` field with two doors, exactly like the
+presence curtain — which is the closest precedent in the tree and whose
+comment, one line above where the field would have gone, reads *"NO gaze
+history rides this kind, by design."*
+
+It was refused, and the reason is `spec-modularization.md`'s rather than the
+hash's: **a module may not put a door on a core kind.** The contribution table
+is closed at four columns, and *"a module that wanted to add an envelope key
+would be a core change wearing a module's clothes; refuse it"* is the same
+sentence one register over. The `:feed` module adding a field and two actions
+to `member` would be a core change wearing a module's clothes, and the price
+would have been real: `member`'s `machine.actions` facet is fingerprinted, so
+every application in the tree would wake up citing a fresh law revision for a
+feature most of them do not serve.
+
+So it is a kind of its own, and the cheapness came back a different way: one
+row, one field, two verbs, and **`:unique [[:member]]`** so the storage — not
+a wall — is what keeps *off* from ever being half-true. Both of its walls read
+only the caller, so the whole switch is judged with no database in the room.
+
+Turning it on is the generic form at `/#/api/feed_view_consents`. There is no
+bespoke screen and there should not be: this is a switch a person flips twice
+in their life, and building a page for it would be building a page to argue
+with.
+
+### `member` is stamped, and it is in the create model anyway
+
+`:on-create` writes the posting principal into `member` on both kinds — the
+`recipe_proposal`/`proposed_by` precedent, for the reason that precedent gives:
+*a row that could name somebody else as its author is a row that can frame
+them.* Nobody's screen can file a view under a member who did not do the
+looking.
+
+The field is nonetheless **in the create model**, guarded by
+`a-view-is-your-own`, and the redundancy is the decision. Left out, a body
+naming somebody else would be refused by the closed schema as a stray key —
+and *"unknown field"* is not the sentence this law wants to say. In, the wall
+has a name, a household sentence, and a scenario:
+
+> This would file a view under "colton", and you are "iris". A screen reports
+> what IT showed, and it can only ever have shown its own reader — a preview
+> of somebody else's feed is your read of their page, never their read of it.
+
+### The switch's own refusal
+
+`the-member-turned-this-on` is the wall the whole clause rests on, and it says
+where the key is, because a door that refuses without saying so has told a
+person only that they failed:
+
+> This house is not keeping a record of what you were shown, and nothing was
+> written. It is off for everybody until each person turns their own on, at
+> /api/feed_view_consents — and the same row is where you turn it off again.
+
+It reads storage, so the whole create door is conformance tier. That is the
+`recipe_proposal` pattern exactly, and the two scenarios written for this door
+are chosen the same way: the ones whose claim is true whatever rows the engine
+they meet is holding.
+
+### Whether an action followed is a JOIN, not a field
+
+Decided, and it is the one place this bead could have grown a second write.
+Every verb fired from a card already rides `Idempotency-Key:
+feed/<day>/<card_id>/<nonce>`, and `feed/origin-of` reads `{:day :card-id}`
+back out of the audit trail with no join key invented for it. A view row
+carries **those same two names, spelled by the same source** — which is why
+`card_id` is stored WHOLE rather than decomposed, and why `day` is the
+document's own day string rather than a re-derivation from `created_at`.
+
+So *"did an action follow this exposure?"* is a join on (day, card_id), and
+the screen is never asked to report it. A client-supplied *"and then I tapped
+it"* would be a fact about the world that only the client could vouch for,
+sitting one column away from the audit trail that already knows. The formula
+(waymark-8um.3) is that join's caller; this bead makes it possible and does
+not compute it. `feed-view-test` asserts the round trip so the two spellings
+cannot drift apart quietly.
+
+What is **not** stored, each for its own reason: `section` (the first segment
+of `card_id` — reading it out is a `split`, not a query), an `at` beside
+`created_at` (the engine's clock is the engine's column, and a copy would be a
+second truth), a dwell time, and an impression count.
+
+### The document says whether it is being remembered
+
+The feed document grows one key, which a module may do because it mints its
+own document type (the escape this spec already recorded):
+
+```json
+"views": {"recording": false,
+          "switch": "/api/feed_view_consents",
+          "post_to": "/api/feed_views",
+          "says": "Nothing is being recorded about what you were shown. It is
+                   off for everybody until each person turns their own on, at
+                   /api/feed_view_consents."}
+```
+
+`recording` is computed server-side and is **false on every preview**, whether
+or not the previewed member is recording. That is the preview exclusion's
+first half, and it is deliberately the server's: a previewer's page is handed
+nothing to beacon about, and the door would refuse the attribution anyway.
+Belt and braces, because a promise kept only in a client is a promise kept
+only until somebody writes a second client.
+
+When recording is ON, the `says` sentence rides `notes`, so the fact appears
+in the same disclosure the recipe does. When it is OFF, it appears only inside
+that collapsed disclosure, with a link to the switch — a screen that asked
+every morning for a permission it was right not to have would be nagging, and
+a switch nobody can find is not a choice.
+
+### The screen: dwell, dedupe, debounce
+
+`135-feed-screen.js` already had the observer. It grew a second one, armed
+only when `doc.views.recording` is true and `doc.preview` is absent:
+
+- **Dwell.** Half the card, for a full second. A card flicked past on the way
+  to the archive was not shown to anybody, and counting it would be
+  manufactured engagement measured instead of manufactured.
+- **Dedupe.** One report per `card_id` per page life. The seam is never
+  reported — it has no row and no verb.
+- **Debounce.** 1.5s, one flush.
+
+One POST per card, and that is the batching decision rather than a shortcut:
+the row is per card because the formula aggregates by card, and a screenful
+row carrying a vector of ids would put the counted thing inside a JSONB array
+with no index on it. A typical page reports two to four cards a flush.
+
+### Volume, honestly
+
+**The table is bounded and the punt is recorded with the arithmetic.** One row
+per member per card per day, so a five-person household in which everybody
+opted in and everybody read to the third archive page writes on the order of
+5 × 40 × 365 ≈ **73,000 rows a year** — tens of megabytes, on a table with
+four promoted columns and a unique index. No purge sweep, no cap, no roll-up.
+The attachments janitor was the available precedent and it is declined: it
+exists because bytes on a disk outlive the row that named them, and nothing
+here outlives anything.
+
+**The finding that actually costs something is the transition log, not the
+table.** `feed/events` folds the newest `log-scan-cap` (500) transitions
+*unfiltered* and only then keeps household kinds, and `actions-from-feed`
+scans the same window. Every view row is a create, so it is a transition: one
+member recording ~40 views a day, against a household that writes perhaps
+20–50 rows a day, roughly **halves how far back the archive's window reaches**
+before it announces its cap. The archive already says so out loud when it
+truncates, which is why this is a cost and not a bug. The fix is a narrowing
+on `store/transitions` (a `:kinds` argument, or a system-nav exclusion pushed
+into SQL) and it is filed rather than done — it is a change to a protocol four
+stores implement, and the honest moment to make it is when a second member
+turns the switch on (**waymark-4r8**).
+
+**Turning it off does not erase.** `stop` stops the writing; the rows already
+written stay, at their own address, readable by the person they are about.
+A `forget` door is filed (**waymark-akz**). This is said plainly on the action's own
+`:description`, because a switch that quietly meant two different things would
+be worse than either.
+
+### Grantable, read-only, for the diagnosis
+
+`feed_view` is not one of the private own-surface trio, so a household may
+approve `{:kind "feed_view", :actions []}` for the composer that owes law 4's
+diagnosis. The insight precedent, and the same shape `recipe_proposal` takes:
+the grant confers reading and nothing else, because there is nothing else to
+confer — the kind has no verbs at all. A member's own views are theirs without
+any grant, through `:own-surface {:by :member}`.
+
+### Where the law is proved
+
+- **Check tier (2 scenarios, no database):** the switch is nobody else's hand,
+  in both directions — refused at the create door for a body naming another
+  member, and at `stop` for a row that is not yours. `make check-queue` goes
+  from **25 to 27 scenarios judged**; battery warnings unchanged at **11**.
+- **Conformance tier (2 scenarios):** the two refusals at the record's create
+  door — the wrong member, and the switch that was never turned on. Both
+  refuse before any row-reading wall is reached, so what they claim is true
+  whatever the engine they meet is holding.
+- **`:feed/view-events`, the pack's new last obligation:** the whole door from
+  the wire. A member who has said nothing reads `views.recording false` and is
+  REFUSED BY NAME; they turn their own on; the feed says so; one card leaves
+  one row naming them; the same card again is refused by name and the house
+  still holds exactly one row; a second person cannot file a view under the
+  first; a preview of a *recording* member still reads `views.recording
+  false`; and the switch goes back where it was found. It runs last of all,
+  after the staged proposal, because it mints a member and because it is the
+  only obligation that writes about a READ.
+- **And the obligation is pinned as having RUN.** `runtime-conformance-test`
+  asserts `:feed/view-events` is in the report's `ran` set with positive
+  coverage, exactly as `:feed/staged-proposals` is.
+- **`feed-view-test`:** the claims a driver with one world cannot make — the
+  join's two names round-tripping through `origin-key`/`origin-of`, the
+  promoted columns and the unique index the formula's reads will use, the
+  absence of any verb on a record of what somebody was shown, and the walls
+  standing in shape-then-world order.
+
+### Recorded here, for whoever comes next
+
+- **A new kind is a new table, and this is two.** Production needs
+  `feed_views` and `feed_view_consents` created before the deploy that serves
+  them — `make migrate-queue-prod` prints the plan, and a person runs it
+  through `nomad alloc exec … psql`. Nothing here touched production. The plan
+  includes both unique indexes; they are the law, not a tuning.
+- **Only the two new kinds' fingerprints are new, and nothing else moved.**
+  Not one existing declaration changed: `member` was left alone (see the
+  switch's home above), and so were `feed_recipe` and `recipe_proposal`.
+  `fingerprint-stability-test` holds the other half of the claim, and it is
+  the half worth having — its census is still **32**, and every one of those
+  32 prints the same twice across a simulated reboot. It counts app kinds
+  only, because `check-resources` is the application's own vector; the two
+  new prints are framework prints and belong to the `:feed` module.
+- **The own surface got wider for every principal, and that is the cost of
+  `:always`.** Both kinds carry `:own-surface {:by :member}`, so
+  `.well-known/waymark` now lists `feed_view` and `feed_view_consent` for
+  every named principal behind any leash — four census assertions moved to say
+  so. It is the `recipe_proposal` precedent taken twice, and it is honest:
+  a principal that can read its own views should be told the address.
+- **A per-population index has no declarative spelling.** `:unique` is the
+  only index a declaration in this engine can ask for beyond `state`, `law`
+  and the sortable clocks, and its one group is spent on `(card_id, day,
+  member)` for the formula's by-card read. Aggregating by population — and a
+  member reading their own rows — is a scan of a bounded table until somebody
+  measures it and the declaration grows an `:index` (**waymark-fab**).
+- **The `day` is the client's word, checked for shape and not for truth.** It
+  is a bucket label, and the field that could frame somebody is the one the
+  engine stamps. A screen that lied about the day would mislabel its own
+  member's own views and nothing else — and the join it would break is the
+  join about itself.
+- **`:nav :system` is what keeps this out of the feed.** Every population
+  draws from `:nav :primary`/`:secondary`, so neither kind can card. Worth
+  knowing before the next framework kind that is written to *be* read rather
+  than to be worked.

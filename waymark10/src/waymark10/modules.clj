@@ -143,6 +143,7 @@
             [waymark10.server.coherence :as coherence]
             [waymark10.server.curtain :as curtain]
             [waymark10.feed-recipe :as feed-recipe]
+            [waymark10.feed-view :as feed-view]
             [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
@@ -397,11 +398,22 @@
    ;; `:always` too — the asymmetry (an agent may stage what it may
    ;; not write) is the wall's other half, and half a wall is not a
    ;; thing to opt into.
+   ;; …and since waymark-8um.1 a THIRD and FOURTH, which are one law in
+   ;; two kinds: `feed_view_consent`, the per-member switch, and
+   ;; `feed_view`, the record it lets exist. `:always` for the reason
+   ;; the other two are — they name this module's own card ids and its
+   ;; own populations — and both together or neither, because a record
+   ;; enrolled without its switch would be a door with the wall left in
+   ;; the other jar.
    {:module :feed
     :enrols [{:kind :feed_recipe :enroll :always
               :kinds (fn [_] [feed-recipe/feed-recipe])}
              {:kind :recipe_proposal :enroll :always
-              :kinds (fn [_] [recipe-proposal/recipe-proposal])}]
+              :kinds (fn [_] [recipe-proposal/recipe-proposal])}
+             {:kind :feed_view_consent :enroll :always
+              :kinds (fn [_] [feed-view/feed-view-consent])}
+             {:kind :feed_view :enroll :always
+              :kinds (fn [_] [feed-view/feed-view])}]
     :routes feed-routes/routes :pack packs/feed}
 
    ;; named, contributing nothing through this seam

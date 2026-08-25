@@ -342,7 +342,8 @@
               a declined one, but staging itself takes an ordinary
               grant)"
       (let [b (json (req :get "/api/.well-known/waymark" nil (scoped gid)))]
-        (is (= ["approval_request" "grant" "job" "plan" "recipe_proposal"]
+        (is (= ["approval_request" "feed_view" "feed_view_consent"
+                "grant" "job" "plan" "recipe_proposal"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]

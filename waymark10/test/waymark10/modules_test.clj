@@ -54,8 +54,13 @@
   ;; and only a person may apply. Both enroll :always, because both
   ;; compose the FEED module's vocabulary rather than an
   ;; application's, so there is nothing left for an app to opt into.
+  ;; …and its view door's pair (waymark-8um.1): :feed_view_consent is
+  ;; the per-member switch, :feed_view the record it lets exist. They
+  ;; enroll together or not at all — a record whose wall was in another
+  ;; jar would be a door with no switch on it.
   (is (= #{:definition :member :role :grant :approval_request
-           :attachment :subscription :job :feed_recipe :recipe_proposal}
+           :attachment :subscription :job :feed_recipe :recipe_proposal
+           :feed_view :feed_view_consent}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled

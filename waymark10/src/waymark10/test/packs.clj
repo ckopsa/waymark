@@ -3488,6 +3488,225 @@
                   " doors, and a change that cannot be undone is not"
                   " tuning")))}))
 
+;; ── the view door (waymark-8um.1) ───────────────────────────────────
+
+(defn- post-row!
+  "One row through its own create door, as whoever the headers name."
+  [ctx kind body hs]
+  (let [resp (req ctx :post (str "/api/" (:plural (rdef ctx kind))) body hs)]
+    {:status (:status resp) :doc (json ctx resp)}))
+
+(defn- feed-views-of
+  "How many view rows this house holds for one member, off the
+  collection's own filtered read."
+  [ctx member hs]
+  (long (get-in (json ctx (get-with-query
+                           ctx (str "/api/" (:plural (rdef ctx :feed_view)))
+                           (str "member=" member)))
+                [:data :total] 0)))
+
+(defn- feed-view-violations
+  "The seventh law's second half, from the wire: the GET writes
+  nothing, the SCREEN reports through its own door, per member and by
+  choice, and a preview leaves no trace on the previewed member.
+
+  Six claims, in the order a household would meet them:
+
+  1. **Off is the default and it is not a suggestion.** A member who
+     has said nothing reads `views.recording false` and a POST to the
+     view door is REFUSED BY NAME — not accepted quietly, not dropped.
+  2. **The switch is the member's own and it works.** One consent row,
+     created by the member, and the next feed read says so.
+  3. **The record is the member's, stamped by the engine.** The body
+     names nobody; the row comes back naming the poster.
+  4. **A card counts once a day.** The same card reported twice leaves
+     one row, refused by name the second time — the exposure is the
+     fact, not the impression count.
+  5. **Nobody files a view under somebody else.** A second person
+     posting a view that names the first is refused, and this is the
+     wall that makes the preview exclusion structural rather than
+     polite.
+  6. **A preview hands the previewer nothing to record with.** The
+     previewed member is RECORDING at this point, and the previewed
+     document still reads `views.recording false` — so the screen has
+     no beacon to send, and the previewer could not attribute one
+     anyway (claim 5).
+
+  …and then it puts the switch back, because an obligation that left a
+  member recording would leave every later read of this engine writing
+  rows nobody asked for."
+  [ctx]
+  (let [tag (subs (str (random-uuid)) 0 8)
+        made (req ctx :post (str "/api/" (:plural (rdef ctx :member)))
+                  {:display (str "view-door-subject-" tag)
+                   :actor_type "human"})
+        member (some-> (:self (json ctx made)) id-of)
+        as-member {"x-waymark-principal" member}
+        ;; a SECOND person, unscoped like the first: the wrong-member
+        ;; wall is about the BODY, so it says the same thing to whoever
+        ;; wrote it — and written as an agent it would have met the
+        ;; router's own 404 and proved concealment instead of law
+        other (str "view-door-other-" tag)
+        as-other {"x-waymark-principal" other "x-waymark-actor-type" "human"}
+        before (when member (:doc (feed-doc ctx as-member)))
+        day (str (:day before))
+        card (first (remove #(= "seam" (str (:card_id %)))
+                            (feed-cards before)))
+        card-id (str (:card_id card))
+        population (str (:population card))
+        body (fn [extra] (merge {:card_id card-id :population population
+                                 :day day}
+                                extra))
+        shut (when card (post-row! ctx :feed_view (body {}) as-member))
+        switch (when member
+                 (post-row! ctx :feed_view_consent {} as-member))
+        switch-id (some-> (:doc switch) :self id-of)
+        on (when (= 201 (:status switch)) (:doc (feed-doc ctx as-member)))
+        posted (when (and card (= 201 (:status switch)))
+                 (post-row! ctx :feed_view (body {}) as-member))
+        row (when (= 201 (:status posted))
+              (json ctx (req ctx :get (str "/api/"
+                                           (:plural (rdef ctx :feed_view))
+                                           "/" (id-of (:self (:doc posted))))
+                             nil as-member)))
+        twice (when (= 201 (:status posted))
+                (post-row! ctx :feed_view (body {}) as-member))
+        theirs (when card (post-row! ctx :feed_view
+                                     (body {:member member}) as-other))
+        ;; the preview, read while the member IS recording. The
+        ;; capability is a ROW, so an engine that serves no registry
+        ;; cannot be previewed at all and this leg simply does not
+        ;; happen — it is not in `:needs`, because the other five
+        ;; claims are owed by every engine that serves the feed and a
+        ;; missing registry must not take them down with it.
+        previewer (str "view-door-previewer-" tag)
+        registry? (ensure-preview-capability! ctx)
+        held (when (and member registry?)
+               (mint-preview-grant! ctx previewer member))
+        preview (when held
+                  (:doc (feed-doc ctx (:headers held)
+                                  (str "preview_as=" member))))
+        kept (when (= 201 (:status posted)) (feed-views-of ctx member as-member))
+        ;; and the switch goes back where it was found
+        stop (declared-name ctx :feed_view_consent :stop)
+        stopped (when switch-id
+                  (invoke-http ctx :feed_view_consent switch-id stop nil
+                               {:headers as-member}))
+        after (when (= 200 (:status stopped))
+                (:doc (feed-doc ctx as-member)))
+        shut-again (when (and card (= 200 (:status stopped)))
+                     (post-row! ctx :feed_view (body {}) as-member))]
+    {:covered (if (= 201 (:status posted)) 1 0)
+     :violations
+     (cond-> []
+       (nil? member)
+       (conj (str "feed: the view-door obligation could not mint a member ("
+                  (:status made) "): " (pr-str (json ctx made))))
+
+       (and before (nil? (:views before)))
+       (conj (str "feed: the feed document carries no `views` key — the"
+                  " screen has no way to know whether it may report what it"
+                  " showed, and a client left to guess that would guess"))
+
+       (and before (:views before) (true? (get-in before [:views :recording])))
+       (conj (str "feed: a member who has never said anything reads"
+                  " views.recording true — the switch is OFF for everybody"
+                  " until each person turns their own on, and a default that"
+                  " is not off is not a choice"))
+
+       (and shut (not= 409 (:status shut)))
+       (conj (str "feed: a view posted with the switch OFF answered "
+                  (:status shut) ": " (pr-str (:doc shut))
+                  " — the door must refuse, out loud, rather than lean on"
+                  " the screen's manners"))
+
+       (and shut (= 409 (:status shut))
+            (not= :the-member-turned-this-on (refused-guard shut)))
+       (conj (str "feed: the switched-off view was refused by "
+                  (pr-str (:guard (:doc shut)))
+                  ", not by the wall that names the switch"))
+
+       (and switch (not= 201 (:status switch)))
+       (conj (str "feed: a member could not turn their own recording on ("
+                  (:status switch) "): " (pr-str (:doc switch))
+                  " — the switch is the member's own hand and there is no"
+                  " other hand that reaches it"))
+
+       (and on (not (true? (get-in on [:views :recording]))))
+       (conj (str "feed: the switch is on and the feed document still reads"
+                  " views.recording " (pr-str (get-in on [:views :recording]))
+                  " — the screen reads this key and nothing else"))
+
+       (and card (= 201 (:status switch)) (not= 201 (:status posted)))
+       (conj (str "feed: a view posted with the switch ON answered "
+                  (:status posted) ": " (pr-str (:doc posted))))
+
+       (and row (not= member (str (get-in row [:data :member]))))
+       (conj (str "feed: the view row names "
+                  (pr-str (get-in row [:data :member]))
+                  " and the member who posted it is " (pr-str member)
+                  " — `member` is ENGINE-STAMPED, and a row that could name"
+                  " somebody else is a row that can frame them"))
+
+       (and row (not= card-id (str (get-in row [:data :card_id]))))
+       (conj (str "feed: the view row remembers card "
+                  (pr-str (get-in row [:data :card_id])) " and the card it"
+                  " was posted for was " (pr-str card-id) " — the card id is"
+                  " kept WHOLE because it is the name the audit trail"
+                  " already uses when a verb is fired from a card"))
+
+       (and twice (not= 409 (:status twice)))
+       (conj (str "feed: the same card reported twice on one day answered "
+                  (:status twice)
+                  " — one row per member per card per day; an exposure is a"
+                  " fact and an impression count is not"))
+
+       (and kept (not= 1 kept))
+       (conj (str "feed: the house holds " kept " view rows for a member who"
+                  " was shown one card — the door's own dedupe is what keeps"
+                  " a high-volume table bounded"))
+
+       (and theirs (not= 409 (:status theirs)))
+       (conj (str "feed: one person filed a view under ANOTHER member and"
+                  " the door answered " (:status theirs) ": "
+                  (pr-str (:doc theirs))
+                  " — this is the wall that makes 'a preview never counts'"
+                  " structural rather than a promise a client keeps"))
+
+       (and theirs (= 409 (:status theirs))
+            (not= :a-view-is-your-own (refused-guard theirs)))
+       (conj (str "feed: the foreign view was refused by "
+                  (pr-str (:guard (:doc theirs)))
+                  ", not by the wall about whose view it is"))
+
+       (and registry? (nil? held))
+       (conj (str "feed: a " cap/feed-preview-as-token " grant could not be"
+                  " minted for the view-door obligation — this engine holds"
+                  " the registry row, so what refused is the scope"
+                  " machinery, and the preview half of this law cannot be"
+                  " watched without it"))
+
+       (and preview (true? (get-in preview [:views :recording])))
+       (conj (str "feed: a PREVIEW of a recording member reads"
+                  " views.recording true — a previewer's screen would then"
+                  " beacon about somebody else's page, and the one thing"
+                  " this door must never do is file a preview under the"
+                  " member being previewed"))
+
+       (and switch-id (not= 200 (:status stopped)))
+       (conj (str "feed: the member could not stop their own recording ("
+                  (:status stopped) ") — a switch that only goes one way is"
+                  " a trap rather than a choice"))
+
+       (and after (true? (get-in after [:views :recording])))
+       (conj (str "feed: the recording was stopped and the feed still reads"
+                  " views.recording true"))
+
+       (and shut-again (not= 409 (:status shut-again)))
+       (conj (str "feed: a view posted after the member stopped recording"
+                  " answered " (:status shut-again)
+                  " — off has to mean off the moment it is said")))}))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -3556,7 +3775,21 @@
     ;; engine it hands on is the engine it found.
     {:name :feed/staged-proposals
      :needs #{[:route :feed] [:kind :feed_recipe] [:kind :recipe_proposal]}
-     :run feed-proposal-violations}]
+     :run feed-proposal-violations}
+    ;; …and the view door last of all (waymark-8um.1), for two reasons
+    ;; in the same sequence. It MINTS A MEMBER, like the preview
+    ;; obligation above it — one more row on a nav kind that every
+    ;; obligation ahead of it would have had to share a deck with — and
+    ;; it is the only obligation that WRITES ABOUT A READ: it turns a
+    ;; member's recording on, posts view rows against whatever cards
+    ;; that engine happens to be serving, and turns it off again. Run
+    ;; higher, its rows would be in the transition log the archive
+    ;; folds. It leaves the switch stopped, so the engine it hands on
+    ;; is the engine it found.
+    {:name :feed/view-events
+     :needs #{[:route :feed] [:kind :member]
+              [:kind :feed_view] [:kind :feed_view_consent]}
+     :run feed-view-violations}]
    ;; Every obligation spec-feed § 'Where the law is proved' names is
    ;; here now, each having landed with the bead that landed the
    ;; mechanism it judges rather than ahead of it.

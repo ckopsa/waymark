@@ -51,7 +51,18 @@
    chip and never as an <img src>: this page is self-contained by
    declaration (020-base.css), and an image element pointed at a third
    party is a beacon wearing a picture's clothes. The link is honest
-   and the row's own screen is one tap away. */
+   and the row's own screen is one tap away.
+
+   AND THE ONE BEACON THIS PAGE DOES SEND IS THE READER'S OWN
+   (waymark-8um.1). The feed GET writes nothing and never will. What
+   the SCREEN may do — only when doc.views.recording is true, which is
+   false for every member who has not turned their own on and false on
+   every preview — is post a `feed_view` per card it actually showed:
+   a card must hold half the viewport for a full second, is reported
+   at most once in this page's life, and the posts go out on one
+   debounce rather than one per card per frame. Nothing is sent from a
+   preview, because a preview of somebody else's feed is your looking
+   and not theirs. */
 
 /* the census, for the section rules and their headings — the recipe's
    own order, read off the CARDS rather than off doc.sections: an
@@ -160,6 +171,17 @@ async function renderFeedScreen(view, doc) {
     }
     for (const n of doc.notes || [])
       why.append(el("p", {class: "prose muted"}, n));
+    /* the view door, when it is SHUT (waymark-8um.1). The open case
+       already rides doc.notes above, said once by the server. This is
+       the closed one, and it lives inside the collapsed disclosure
+       rather than on the page: a screen that asked every morning for a
+       permission it was right not to have would be nagging, and a
+       switch nobody can find is not a choice. */
+    if ((doc.views || {}).says && !(doc.views || {}).recording)
+      why.append(el("p", {class: "prose muted"}, doc.views.says + " ",
+        doc.views.switch
+          ? el("a", {href: "#" + doc.views.switch}, "the switch ↗")
+          : null));
     head.append(why);
   }
   view.append(head);
@@ -172,6 +194,75 @@ async function renderFeedScreen(view, doc) {
      refetched on every household write would re-roll under the
      reader's thumb, and the day's order is supposed to hold still */
   watchScope({});
+
+  /* ── the view door (waymark-8um.1) ──────────────────────────────────
+     The server says whether this reader's screen may report what it
+     showed. It is FALSE unless the member turned their own on, and it
+     is false on every preview — so this page never has to decide who
+     the beacon would be about, and it never sends one for somebody
+     else's feed. `doc.preview` is checked as well, and the redundancy
+     is deliberate: two independent reasons to stay quiet, because the
+     one thing this must never do is file a preview under the member
+     being previewed.
+
+     The door refuses anyway, by name, and that is not a reason for
+     this page to be careless — it is why being careless here would
+     only ever produce a refusal nobody reads. */
+  const viewDoor = doc.views || {};
+  const recordingViews = viewDoor.recording === true && !doc.preview;
+  const viewPostTo = viewDoor.post_to || "/api/feed_views";
+  const reported = new Set();      // card_id — reported once, ever
+  let pendingViews = new Map();    // card_id → population
+  let viewFlush = null;
+
+  /* one POST per card, and the batching the epic asked for is bought
+     with DWELL and DEDUPE rather than with a bulk door: a row is per
+     card because the ranking formula aggregates by card, and a
+     screenful carrying a vector of ids would put the thing being
+     counted inside a JSON array with no index on it. */
+  function flushViews() {
+    viewFlush = null;
+    const batch = pendingViews;
+    pendingViews = new Map();
+    for (const [cardId, population] of batch)
+      api(viewPostTo, {method: "POST",
+                       body: JSON.stringify({card_id: cardId,
+                                             population: population,
+                                             day: day})});
+  }
+
+  function reportShown(cardId, population) {
+    if (!recordingViews || !cardId || cardId === "seam") return;
+    if (reported.has(cardId)) return;
+    reported.add(cardId);
+    pendingViews.set(cardId, population || "");
+    if (!viewFlush) viewFlush = setTimeout(flushViews, 1500);
+  }
+
+  /* half the card, for a full second. A card flicked past on the way
+     to the archive was not shown to anybody, and counting it would be
+     the manufactured engagement the third law forbids, measured
+     instead of manufactured. */
+  const dwelling = new Map();      // element → timer
+  const viewIo = recordingViews && "IntersectionObserver" in window
+    ? new IntersectionObserver(entries => {
+        for (const e of entries) {
+          const card = e.target;
+          if (e.isIntersecting) {
+            if (dwelling.has(card)) continue;
+            dwelling.set(card, setTimeout(() => {
+              dwelling.delete(card);
+              viewIo.unobserve(card);
+              reportShown(card.getAttribute("data-card-id"),
+                          card.getAttribute("data-population"));
+            }, 1000));
+          } else {
+            clearTimeout(dwelling.get(card));
+            dwelling.delete(card);
+          }
+        }
+      }, {threshold: 0.5})
+    : null;
 
   /* ── the card renderers ─────────────────────────────────────────── */
   /* the seam: prose, not a projection, and the one element of this
@@ -518,7 +609,9 @@ async function renderFeedScreen(view, doc) {
       }
       count++;
       try {
-        list.append(cardArticle(card, feedHints[card.kind] || {}, srcHref));
+        const article = cardArticle(card, feedHints[card.kind] || {}, srcHref);
+        list.append(article);
+        if (viewIo) viewIo.observe(article);
       } catch (e) {
         /* degrade alone: one card that cannot render is a problem
            panel wearing its own refusal, never a broken page */

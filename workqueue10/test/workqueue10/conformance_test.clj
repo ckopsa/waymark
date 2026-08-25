@@ -66,6 +66,12 @@
    ;; this only matters after a run that did not finish — which is
    ;; exactly the run whose residue is hardest to read.
    "feed_recipes" "recipe_proposals"
+   ;; …and the view door's pair (waymark-8um.1), for a third reason of
+   ;; its own: a consent row left RECORDING would have every feed read
+   ;; in the run after it writing rows nobody asked for, and the whole
+   ;; claim of that obligation is that nothing is written until
+   ;; somebody says so.
+   "feed_views" "feed_view_consents"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 

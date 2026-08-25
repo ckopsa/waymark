@@ -59,7 +59,10 @@
    ;; recipe would re-order this test's whole page and a leftover
    ;; offered proposal is a decide card, so both fall under the rule
    ;; above rather than beside it
-   "feed_recipes" "recipe_proposals"
+   ;; …and the view door's pair (waymark-8um.1): a leftover recording
+   ;; consent would put a `views.recording true` on a document this
+   ;; test reads for its shape
+   "feed_recipes" "recipe_proposals" "feed_views" "feed_view_consents"
    "activities" "evening_plans" "evening_sessions"
    "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"

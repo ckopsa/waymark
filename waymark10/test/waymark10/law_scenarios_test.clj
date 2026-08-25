@@ -324,10 +324,12 @@
         mine (first (filter #(= :core/law-scenarios (:name %)) report))]
     (is (some? mine) "core's pack owes the obligation")
     (is (= [] (:violations mine)))
-    (is (= 3 (:covered mine))
+    (is (= 5 (:covered mine))
         (str "exactly the scenarios the check tier could not judge, and no"
              " more: errand's one, plus the two recipe_proposal staging"
              " scenarios the :feed module enrols into every engine"
              " (waymark-0k4 — their create door carries a wall that reads"
-             " the house's own recipe rows). The other three of errand's"
-             " are not re-run here"))))
+             " the house's own recipe rows), plus the two feed_view ones"
+             " (waymark-8um.1 — the same shape, one door over: its create"
+             " reads the member's switch and this member's own day). The"
+             " other three of errand's are not re-run here"))))

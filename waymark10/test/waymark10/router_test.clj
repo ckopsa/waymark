@@ -100,8 +100,11 @@
     ;; waymark-4yn: the feed module's own feed_recipe — the engine opt
     ;; authored at runtime, enrolled wherever the feed is served;
     ;; waymark-0k4: its sibling recipe_proposal, the staged change an
-    ;; agent may prepare and only a person may apply
+    ;; agent may prepare and only a person may apply;
+    ;; waymark-8um.1: and its view door's pair — feed_view_consent, the
+    ;; per-member switch, and feed_view, the record it lets exist
     (is (= ["approval_request" "attachment" "definition" "feed_recipe"
+            "feed_view" "feed_view_consent"
             "grant" "job" "meal" "member" "plan" "recipe_proposal"
             "role" "subscription" "task"]
            (:kinds b)))
