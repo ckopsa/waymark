@@ -61,6 +61,7 @@
             [workqueue10.resources.letters :refer [letter]]
             [workqueue10.resources.permission-slip :refer [permission-slip]]
             [workqueue10.resources.media :refer [media-resource]]
+            [workqueue10.resources.outcome :refer [outcome outcome-piece]]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.resources.tickler :refer [tickler]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
@@ -351,8 +352,25 @@
        ;; insight whose one next step is the value's own
        ;; "these still stand" (docs/spec-outcome-menu.md § 'The value
        ;; kind').
+       ;; :outcome and :outcome_piece ride last (waymark-jfv.3): the
+       ;; composed bundle and the pieces it is made of — the goal in a
+       ;; value's own terms, the routing citation, the rows the
+       ;; composer read, and two to five concrete units each already
+       ;; prepared to the shape its own door will take. Domainless for
+       ;; the same family reason value is: what this week COULD hold
+       ;; is not a domain of logistics beside queue/chores/meals, it is
+       ;; the arbitrage the logistics are for. Two kinds and not one
+       ;; because a verdict carrying a selection is inexpressible in
+       ;; the card grammar — so consent is per piece, one thumb at a
+       ;; time, and a decline can name WHICH part was wrong. The
+       ;; composer only proposes: every verdict on both kinds is
+       ;; walled against the principal that staged it and against
+       ;; agents in general, and materialization happens under the
+       ;; accepting member's own name through the target kinds' own
+       ;; create doors (docs/spec-outcome-menu.md § 'The outcome and
+       ;; its pieces').
        (into (into [saved-view capability connection self journal weather letter
-                    permission-slip tickler insight value]
+                    permission-slip tickler insight value outcome outcome-piece]
                    dashboard/resources)))))
 
 (def surfaces

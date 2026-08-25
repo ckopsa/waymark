@@ -922,3 +922,230 @@ clean.
   week's meal plan — and `.3`'s parent bundle cannot have that name. Filed
   before `.3` starts, because renaming a kind after it has a table is not a
   rename.
+
+## Built — jfv.3, the outcome and its pieces (2026-08-25, waymark-jfv.3)
+
+The composed bundle, and the pieces the household answers one thumb at
+a time. One file, `workqueue10/src/workqueue10/resources/outcome.clj`,
+holding **both** kinds, plus their entry in `main.clj`'s resources
+vector. **No framework file was touched**, which is what the landing
+order promised of this bead.
+
+### The name, and everything this section supersedes
+
+**The kind is `:outcome`; its child is `:outcome_piece`.** `mealplan10`
+has declared `:kind :plan` since era 1 — the week's meal plan, with
+`plan_day`, `prep_task` and `grocery_list` all carrying refs to it —
+and one engine means one registry. **waymark-5c4** decided the name
+before this bead staged a row, because renaming a kind after it has a
+table is not a rename but a migration plus a law revision on every row
+that ever cited it.
+
+Everything above this section that reads `plan` as *the composed
+bundle* is superseded, and the substitution is mechanical:
+
+| the spec above says | as it landed |
+|---|---|
+| `:kind :plan`, `plans` | `:kind :outcome`, `outcomes` |
+| `:kind :plan_piece`, `plan_pieces` | `:kind :outcome_piece`, `outcome_pieces` |
+| `plan_id` | `outcome_id` |
+| `plans-are-few` | `outcomes-are-few` (the cap) + `a-recomposition-waits-its-turn` (the floor) |
+| `the-plan-is-still-offered` | `the-outcome-is-still-open` |
+| the grant scope's `"plan"` / `"plan_piece"` | `"outcome"` / `"outcome_piece"` |
+
+`mealplan10`'s `:plan` is untouched. `jfv.4`'s population, card key and
+census entry, and `jfv.5`'s grant scope, read the new keywords.
+
+Three other names moved with it, all cosmetic: the parent's leash field
+is `good_until` (as the design section had it), the piece's verdicts are
+`take` / `not_this` / `moot` and the parent's are `make_it_so` /
+`not_this_week` / `expire` (unchanged), and the composer stamp is
+`composed_by` on **both** kinds — the piece carries its own rather than
+reaching up to the bundle's, because a four-eyes wall that read the
+parent would be a wall a piece staged by somebody else walked straight
+through.
+
+### What the landing decided that the design section did not
+
+**The materializable set is `[:task :event]`, and the smallness is the
+decision.** The design section wrote `task`, `chore_run`, `event`,
+`grocery_list`, `media`, `…`; the reference composition composed
+exactly three sorts of thing — errands, calendar holds, grocery lines —
+and only two of them are rows a composer can honestly birth:
+
+- **`grocery_list` is out** because a grocery *line* is not a row at
+  all. It is an item inside a list, added by that kind's own
+  `add_item`, and `target_action` is `:create` in v1 — so the honest
+  spelling of *buy the stock* today is a task that says so. The list
+  itself also demands a `plan_id` ref into mealplan10 and passes
+  `plan-is-planned`, which is a meal-planning door rather than a
+  composer's.
+- **`chore_run` is out** because a run is an occurrence of a chore the
+  house **declared**, and its schedule is the chore's own law. A
+  composer birthing one-off runs would be editing that schedule
+  sideways.
+- **`media` is out** because a shelf entry is a wish, not friction
+  pre-paid. Adding one costs the household nothing and moves no
+  gradient, which is the whole test this epic applies.
+
+It grows by law revision, which is the point of it being declared:
+widening the set is a change a reader can see, not a field a composer
+fills in. `:touches` is built from the same vector
+(`touched-creates`), so the advertisement and the enum cannot drift.
+
+**The weekly cap's boundary is Monday 00:00 UTC** —
+`store/utc-week-start`, called by name so there is never a second
+truncation, and the refusal names the next Monday. Two per **author**,
+counting rows, `insights-are-capped`'s shape one window up. The
+alternative (a rolling 168 hours) was cheaper and would have made the
+sentence a lie: the house reads *two a week* and means the week it is
+in.
+
+**`plans-are-few` split into two guards.** The design section gave one
+wall both jobs — the weekly cap and the supersession floor. They landed
+as `outcomes-are-few` and `a-recomposition-waits-its-turn`, because
+each refusal names exactly one fix, which is the tree's own habit
+(`recipe_proposal` has five create walls, not one with five arms). The
+floor also refuses a superseding outcome whose predecessor is **still
+offered** — recomposing something nobody has declined yet is asking the
+same question twice.
+
+**The backoff chain is carried in `declined_count`, inherited at
+birth.** `not_this_week` stamps `not_before` from
+`tickler/next-offer` — the same pure function, `now` handed in — and
+`stage-the-outcome` reads the superseded row through `ctx :read` so the
+count carries down the chain instead of resetting each time the
+composer rephrases. A week, three weeks, two months, half a year, then
+half a year forever.
+
+**`a-bundle-is-small` is a CEILING only, and the floor has no door.**
+The parent is born before any piece exists, so no create door can count
+what has not been written yet. The ceiling (refuse the sixth piece)
+stands at the piece's create door, counting siblings. The floor — *an
+outcome with one piece is a finding; publish an insight* — is the
+composer's duty in prose (`jfv.5`) and the population's judgment at
+offer time (`jfv.4`), and it is filed rather than smuggled into a door
+that could not hold it honestly.
+
+**A new wall the design section did not name: `something-is-still-on-offer`.**
+`make_it_so` on an outcome whose every piece has been answered would be
+a tap that landed nothing while the row read `accepted` — waymark-0k4's
+first recorded decision, met from the other side. It refuses by name
+and points at the answer that teaches: *if the whole bundle was wrong,
+say not this week*.
+
+**No fence is supplied for the fan-out, and the absence is the rule
+rather than a waiver.** 0k4 handed `feed_recipe`'s `:revise` an
+`:if-match` because *an `:edit` implies the fence*. A piece's `take`
+declares no edit and takes no input, so `:safety :fence` is absent and
+there is nothing to waive — the piece's own terminal state is the
+boundary, and the engine's natural replay answers a double tap with the
+first tap's own response rather than a second task.
+
+**`the-outcome-is-still-open` carries no `:judges`.** It stands at the
+piece's create door (where the outcome arrives in the input) *and* at
+`take` (where it is already on the row and the action takes no input at
+all), and `check-guard-declarations` refuses a `:judges` on an
+input-free action — rightly. Its subject is named as what it truly is,
+the outcome **row**, through `:reads`.
+
+### The two declines, proved
+
+| tap | the row it moves | what the composer learns |
+|---|---|---|
+| `not_this` on a **piece** | that piece → `declined` | the composition was wrong — do not bring this part back |
+| `moot` on a **piece** | that piece → `moot` | nothing, deliberately: beside the point now |
+| `not_this_week` on the **outcome** | outcome → `declined`, every still-offered piece → `moot` | the **timing** was wrong; no piece is graded, and `not_before` says when the house will hear it recomposed |
+| `make_it_so` | outcome → `accepted`, every still-offered piece → `taken` | the pieces still standing were right |
+
+`moot` is offered on a piece in its own right and carries **only** the
+agent wall — no four-eyes, because nothing is created and nothing is
+refused, so there is nothing there for a stager to grade. Whether the
+card shows it as a third chip is `jfv.4`'s shape question.
+
+### Where the law is proved
+
+**Seven check-tier scenarios**, judged with no database in the same
+breath as the usability warnings, all on the **decline** doors — which
+is not a soft choice. A conformance-tier *action* scenario stages its
+subject through the kind's own create door **as the walker**, which
+would stamp the walker's id into `composed_by` and make the four-eyes
+wall answer about the wrong person (`recipe_proposal` recorded this
+exactly). So the two verdict walls are proved where they can be proved
+honestly, one guard object across five doors:
+
+- `the-composer-does-not-answer-its-own-outcome` / `…-its-own-piece`
+- `an-agent-does-not-answer-an-outcome` / `…-a-piece`
+- `an-answered-outcome-does-not-come-back`, `a-taken-piece-does-not-come-back`
+- `a-live-outcome-is-not-expired-out-of-the-way`
+
+**Three conformance-tier scenarios**, attempted **as a person**
+deliberately (the staging walls judge the body, so they say the same
+thing to whoever wrote it; who may reach the door at all is the grant's
+question and a different sentence): `an-outcome-with-nothing-behind-it-is-refused`,
+`an-outcome-names-a-value-this-house-holds`, and
+`a-piece-fits-the-door-it-will-knock-on` — a composer that invented a
+field name the calendar has never heard of.
+
+**Ten deftests in `workqueue10/test/workqueue10/outcome_test.clj`**, over
+the real ring handler and the household's whole registry, for
+everything a declaration-time world cannot answer: the routing checked
+against a real value's own loved words; a retired value taking its
+outcomes with it; the cap Monday to Monday; the tap materializing a
+task with the **member** on its create transition and the composer
+nowhere in it; the partial accept (decline one, `Make it so`, the
+declined one untouched); `not this week` mooting the rest and stamping
+the floor; and **atomicity** — a piece the target's own `one-due` guard
+refuses at the tap rolls the whole thing back, so the outcome is still
+`offered` and both pieces still `offered`, and the way out is the two
+taps the design promised.
+
+`make check-queue` goes from **33 to 35 kinds** and **32 to 39
+scenarios judged**, with the battery's warning count unchanged at 11 —
+both kinds report clean.
+
+### Recorded here, for whoever comes next
+
+- **Two new kinds are two new tables.** Production needs `outcomes` and
+  `outcome_pieces` created before the deploy that serves them.
+  `make migrate-queue-prod` prints the plan (read-only, and it refuses
+  `APPLY` on purpose); a person runs the statements through
+  `nomad alloc exec -task postgres <alloc> psql -U workqueue -d workqueue10`.
+  Two `CREATE TABLE`s and eight `CREATE INDEX`es, with promoted columns
+  `f_composed_by / f_value_id / f_supersedes / f_good_until /
+  f_not_before` on the parent and `f_composed_by / f_outcome_id /
+  f_target_kind` on the child. Nothing here touched production.
+- **Exactly two fingerprints appeared and nothing moved.** `outcome`
+  and `outcome_piece` are new; every other kind's hash is
+  byte-identical, verified by computing the whole census with and
+  without this bead's two files. The census in
+  `workqueue10/test/workqueue10/fingerprint_stability_test.clj` went
+  33 → 35.
+- **`prepared` is `[:map-of :keyword :any]`, the first free-form map in
+  a row schema anywhere in this tree.** It is safe because the enum
+  above it closes the KIND: the shape varies, the target does not. It
+  is judged at staging by the target's own create model in the target
+  door's own three steps and order — decode, `apply-defaults`,
+  `closed-errors` — read off `ctx :rdef-of` rather than copied, so it
+  cannot drift from the door it is about. `demand/field-class` reads an
+  object as `recall`, which is correct and costs nothing: the create
+  form is an agent's, not a card's.
+- **A fan-out refusal names the target kind's guard, not which piece.**
+  When `make_it_so`'s inner create is refused, the household reads the
+  target's own sentence (`one-due`, `ends-after-it-starts`) — which is
+  right, because that is the law that actually refused — but nothing
+  says *which of the four pieces*. A handler has no refusal spelling to
+  attribute it with, and rewriting another kind's problem document
+  would be the second-opinion anti-pattern this bead is careful about.
+  The way through is the pieces' own taps. Filed.
+- **An outcome nobody answered stamps no floor.** `not_before` follows
+  a **decline** only; an `expired` outcome may be recomposed the next
+  morning. That is deliberate for v1 — non-engagement is
+  `waymark-8um.1`'s signal and `8um` law 4's work order, not a clock's
+  — but it is the one gap in the backoff and it is written down here
+  rather than discovered later.
+- **Neither kind declares `:owns`.** A piece's lifecycle is answered by
+  its own doors and the parent's fan-out; a cascade edge would have
+  made `make_it_so`'s `:touches` a lie by omission and given `moot` a
+  second, silent driver. The `pieces` link is a filtered collection
+  href, which is what the household's own screen wants anyway.

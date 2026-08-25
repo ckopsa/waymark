@@ -79,13 +79,15 @@
         world (roots nses)
         before (hashes)]
     (try
-      ;; 33 since waymark-jfv.2 added :value — what the house cares
-      ;; about, declared by the person who cares about it (32 since
-      ;; waymark-iqa.6's :insight, 31 since .4's :tickler). The count
-      ;; is a census, not a law: it moves when the house gains a kind
-      ;; and never otherwise, which is exactly the change it is here to
-      ;; notice.
-      (is (= 33 (count before)) "the whole household is under the lens")
+      ;; 35 since waymark-jfv.3 added :outcome and :outcome_piece — the
+      ;; composed bundle and the pieces it is made of, TWO kinds
+      ;; because consent is per piece and a verdict carrying a
+      ;; selection is inexpressible in the card grammar (33 since
+      ;; waymark-jfv.2's :value, 32 since waymark-iqa.6's :insight, 31
+      ;; since .4's :tickler). The count is a census, not a law: it
+      ;; moves when the house gains a kind and never otherwise, which
+      ;; is exactly the change it is here to notice.
+      (is (= 35 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)
