@@ -342,15 +342,19 @@
 
 (defscenario a-value-may-be-petitioned
   "The petition path of waymark-jfv.2, proved at the door it depends
-   on. An agent may not touch a `value` — declared is law — so the way
-   it asks for an amendment is this: a finding, the rows it read, and
-   the value's own `still_stands` as the one next step.
+   on — and it is the same path after jfv.10 moved the value kind's
+   wall. An agent may now WRITE a value, but it may not AFFIRM one:
+   `still_stands` is the one door on that kind still walled against
+   agents, because an observer marking its own reading confirmed
+   would be speaking in the owner's voice. So the way an agent asks
+   for an amendment is unchanged: a finding, the rows it read, and the
+   value's own `still_stands` as the one next step.
    `offers-something-light` admits it because that action asks for
-   NOTHING and renders `assent`; the tap means 'I have read this', and
-   the rewording is the owner's own `revise` on the value's own
-   screen. Every door that could take the new wording takes a string,
-   and a string is `recall` — which is exactly why the petition offers
-   the reading and not the words."
+   NOTHING and renders `assent`; the tap means 'yes, this one is
+   ours', and the rewording is the owner's own `revise` on the value's
+   own screen. Every door that could take the new wording takes a
+   string, and a string is `recall` — which is exactly why the
+   petition offers the tap and not the words."
   {:kind    :insight
    :attempt :create
    :at      "2026-08-24T09:00:00Z"

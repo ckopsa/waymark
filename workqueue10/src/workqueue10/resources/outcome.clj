@@ -329,11 +329,29 @@
     (when-some [vid (some-> (:value_id inp) str str/trim not-empty)]
       (read' :value vid))))
 
+(def ^:private held-states
+  "The value states an outcome may be staged against — waymark-jfv.10
+  widened this from the one state jfv.2 had.
+
+  `observed` is admitted deliberately: a value an agent wrote down is
+  a value this house may still spend a Saturday on, and refusing to
+  compose against one would have made the owner's ruling
+  (`there's nothing wrong with you learning what my values are`) a
+  permission with nothing behind it. What an observed value does NOT
+  get is silence about its standing — `feed/outcome-says` puts it on
+  the card in the household's own words, so the person answering the
+  bundle knows whether the value under it is his or somebody's
+  reading of him.
+
+  `retired` stays out, and that covers a dismissed guess as well as an
+  abandoned law: both mean the house is not holding it."
+  #{"observed" "declared"})
+
 (defguardfn names-a-value
   {:judges [:value_id]
    :reads [:value]
    :vars [:problem]
-   :open "Every outcome serves one value this house has declared and still holds — that is what makes it an outcome rather than a good idea."
+   :open "Every outcome serves one value this house is holding — declared by a member, or observed in its record and not yet answered. That is what makes it an outcome rather than a good idea."
    :explain "That is not a value this house is holding: {problem}"}
   [_row inp ctx]
   (let [read' (:read ctx)
@@ -350,13 +368,14 @@
       (let [row (read' :value vid)]
         (cond
           (nil? row)
-          (deny (str "this house has declared no value " vid
+          (deny (str "this house has no value " vid
                      " — read /api/values and name one of those."))
 
-          (not= "declared" (name (:state row)))
+          (not (held-states (name (:state row))))
           (deny (str "the value " (pr-str (get-in row [:data :name]))
-                     " is retired. The house stopped holding that one,"
-                     " and retiring a value is exactly how it stops"
+                     " is retired. The house stopped holding that one"
+                     " — or answered it as a reading that was wrong —"
+                     " and either way that is exactly how a value stops"
                      " being offered outcomes that serve it."))
 
           :else (t/allow))))))
@@ -841,7 +860,7 @@
              :routing "It uses the shop."
              :evidence ["/api/tasks/01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]}
    :expect  {:refused :names-a-value
-             :because "has declared no value"}})
+             :because "this house has no value"}})
 
 (defscenario the-composer-does-not-answer-its-own-piece
   "The same wall, one row down, and it has to be here as well as on

@@ -1188,17 +1188,29 @@
   2)
 
 (defn- outcome-says
-  "One offered outcome's card sentence — the three things its summary
+  "One offered outcome's card sentence — the four things its summary
   line cannot say.
 
   The GOAL is the row's own summary and the card's heading, so it is
   not repeated here. What this adds is WHICH value the week would be
-  spent on, WHY it is cheap to start (the routing citation, in the
-  household's own words, written by whoever composed it), and HOW MANY
-  rows were read before any of it was claimed. The routing is READ,
-  never re-derived: a card that paraphrased the composer's claim would
-  be a second author on somebody else's sentence."
-  [d]
+  spent on, WHETHER THIS HOUSE HAS ACTUALLY SAID SO, WHY it is cheap
+  to start (the routing citation, in the household's own words,
+  written by whoever composed it), and HOW MANY rows were read before
+  any of it was claimed. The routing is READ, never re-derived: a card
+  that paraphrased the composer's claim would be a second author on
+  somebody else's sentence.
+
+  THE OBSERVED CLAUSE (waymark-jfv.10) is the second of those and it
+  is not a garnish. An agent may write a value now, and a value an
+  agent wrote is born `observed` — nobody's law yet, just somebody's
+  reading of this house. An outcome may be composed against one, which
+  means a card can arrive asking for a Saturday on the strength of a
+  guess. It says so, here, where the person answering it is looking:
+  a value the house never affirmed is named as one, and the way to
+  settle it is one tap on the value's own door. Silence would have
+  been the composer borrowing the owner's voice through the card
+  instead of through the value."
+  [d observed?]
   (let [data (:data d)
         v (some-> (:value_name data) str not-empty)
         routing (str/trim (str (:routing data)))
@@ -1210,27 +1222,39 @@
                   (str "."))
         ev (count (remove str/blank? (map str (:evidence data))))]
     (str/trim
-     (str (when v (str "For " v ". "))
+     (str (when v
+            (str "For " v
+                 (when observed?
+                   (str " — a value observed in your record, not yet"
+                        " affirmed, so say whether it is yours before a"
+                        " week goes to it"))
+                 ". "))
           routing
           (when (pos? ev)
             (str " " ev " row" (when (not= 1 ev) "s") " behind it."))))))
 
-(defn- value-still-held?
-  "Does the house still hold the value this bundle serves? A retired
-  value is exactly how a household stops being offered outcomes that
-  serve it (`names-a-value` says so at the create door), and this is
-  the same law read at offer time — no sweeper, no write, the
-  tickler's own posture.
+(defn- value-standing
+  "How the value this bundle serves stands right now — `:declared`
+  when a person put their name to it, `:observed` when it is still
+  something an agent noticed and nobody has answered, and NIL when
+  this house is not holding it at all (retired, dismissed, or gone).
+
+  A retired value is exactly how a household stops being offered
+  outcomes that serve it (`names-a-value` says so at the create door),
+  and this is the same law read at offer time — no sweeper, no write,
+  the tickler's own posture. The `observed` arm is waymark-jfv.10's:
+  the bundle stands, and `outcome-says` puts the standing on its card
+  in the household's own words.
 
   An engine with no `value` kind cannot answer, so it does not
-  pretend to: the bundle stands, and its own create door was the wall."
+  pretend to: `:declared`, and the bundle's own create door was the
+  wall."
   [ctx d]
   (if-not (get (resources ctx) :value)
-    true
-    (boolean
-     (when-some [vid (some-> (get-in d [:data :value_id]) str not-empty)]
-       (when-some [raw (load-raw ctx :value vid)]
-         (= :declared (keyword (name (:state raw)))))))))
+    :declared
+    (when-some [vid (some-> (get-in d [:data :value_id]) str not-empty)]
+      (when-some [raw (load-raw ctx :value vid)]
+        (#{:declared :observed} (keyword (name (:state raw))))))))
 
 (defn- bundle-parts
   "The pieces of one bundle, oldest first — the order `take-the-rest`
@@ -1263,8 +1287,13 @@
   - THE LEASH IS STILL ON. Past `good_until` the week the bundle was
     for is over; `expire` is bookkeeping anybody may run, and nothing
     here sweeps.
-  - THE VALUE IS STILL HELD, and EVERY PIECE IS NOT ALREADY ANSWERED.
-    Both retire at offer time, the way a tickler's finished subject
+  - THE VALUE IS STILL HELD — declared by a member, or observed in
+    this house's record and not yet answered (waymark-jfv.10). An
+    observed value does not hide behind the card: its bundle's
+    sentence names it as observed, so the person deciding whether to
+    spend a Saturday knows whose sentence he is spending it on.
+  - EVERY PIECE IS NOT ALREADY ANSWERED. That one and the value both
+    retire at offer time, the way a tickler's finished subject
     does. A bundle with nothing left on offer would card `Make it so`
     over a tap that could land nothing — `something-is-still-on-offer`
     refuses it at the door, and a card that offered it anyway would be
@@ -1305,15 +1334,16 @@
               (keep (fn [raw]
                       (let [d (inv/decode-row rdef raw)
                             good (get-in d [:data :good_until])
-                            parts (bundle-parts ctx (:id raw))]
+                            parts (bundle-parts ctx (:id raw))
+                            standing (value-standing ctx d)]
                         (when (and (not= pid (get-in d [:data :composed_by]))
                                    (or (nil? good) (pos? (compare good now)))
                                    (<= (long bundle-floor) (count parts))
                                    (some #(= :offered (keyword (name (:state %))))
                                          parts)
-                                   (value-still-held? ctx d))
+                                   (some? standing))
                           {:kind :outcome :id (:id raw) :row raw
-                           :sentence (outcome-says d)
+                           :sentence (outcome-says d (= :observed standing))
                            :parts (mapv
                                    (fn [p]
                                      {:kind :outcome_piece :id (:id p) :row p

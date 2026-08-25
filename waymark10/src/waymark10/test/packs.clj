@@ -3926,9 +3926,12 @@
         member (get as-member "x-waymark-principal")
         composer (get (composer-headers tag) "x-waymark-principal")
         loved (str "the shop " tag)
-        ;; 1. THE VALUE, and a person declares it. `written-by-a-person`
-        ;; stands at this door, so the composer could not have written
-        ;; what its own outcome is about to cite.
+        ;; 1. THE VALUE, and a MEMBER declares it — so it is born
+        ;; `declared` and the bundle's sentence carries no observed
+        ;; clause. Since waymark-jfv.10 an agent may write one too, but
+        ;; it would be born `observed`; this obligation wants the plain
+        ;; case, where the card is about a value the house has said out
+        ;; loud is its own.
         value (req ctx :post (str "/api/" (:plural (rdef ctx :value)))
                    {:name (str "Making things with the boys " tag)
                     :says (str "The evenings that are worth remembering are"

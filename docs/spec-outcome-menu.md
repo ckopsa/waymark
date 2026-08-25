@@ -1458,3 +1458,221 @@ accumulating for weeks it passed by accident. It retires eight now.
   the answer is yes, because the projection offered it and a page that
   dropped a door the reader holds would be lying in the direction `heavier`
   exists to prevent.
+
+## Built — jfv.10, values learned in the open (2026-08-25, waymark-jfv.10)
+
+**The owner's ruling, verbatim, 2026-08-25:**
+
+> Discovering what you value and what you love to do is a process and there's
+> nothing wrong with you learning what my values are and writing them to
+> waymark — just so long as I can adjust them too.
+
+It overrules the first law of § *The value kind* and of `value.clj`'s
+own docstring — *declared is law, learned is evidence that files asks*,
+enforced by `written-by-a-person` at every door the kind had. The
+§ *Built — jfv.2* section above stands as history and is not edited;
+what follows supersedes it wherever the two disagree.
+
+**What is superseded, exactly:**
+
+| jfv.2 said | as it stands after jfv.10 |
+|---|---|
+| `written-by-a-person` at **every** door | off `create`; still on `revise`, `still_stands`, `retire`, `restore`, `dismiss` |
+| `:states [:declared :retired]`, `:initial :declared` | `[:observed :declared :retired]`, `:initial :observed` |
+| `reviewed_at` / `reviewed_by` (the petition stamp) | `affirmed_at` / `affirmed_by` (the same tap, its honest name) |
+| an agent's only path is an `insight` | an agent WRITES the value; the insight is still its only path to **affirming** one |
+| `names-a-value` admits `declared` only | admits `observed` too, and the card says which |
+| the grant scope's `{"kind": "value", "actions": []}`, *never `value` create or revise* | `{"kind": "value", "actions": ["create", "restate"]}`; **never `still_stands`, never `revise`, never `retire`** |
+| the `an-agent-does-not-declare-a-value` scenario | inverted to `an-agent-writes-what-it-observes` |
+
+The rest of jfv.2 — `:nav :secondary`, free-word `loved`, scope and the
+owner stamp, the insight-shaped petition, the `still_stands` tap taking
+no input — is untouched.
+
+### The affirmation is a STATE, and the weighing is the bead
+
+A stamp was the cheaper answer and it lost. `affirmed_by` / `affirmed_at`
+alone (the `reviewed_by` shape jfv.2 already had) would have kept **one**
+`revise` door and cost nothing. It loses on the requirement that decided
+the bead — *an unaffirmed value must SAY so wherever it is cited*:
+
+1. **`summary/render` has no conditional.** A missing field renders an
+   em-dash, never a sentence, so a value's own summary line cannot speak a
+   stamp's absence. `{state}` speaks it for free, in household words, on
+   every envelope, every list line and every transition record.
+2. **The affirmation becomes a TRANSITION**, which is how the row shows
+   *both hands*: `create` by the agent, `still_stands` by the member, on
+   one row's log. A stamp would have left the row reading `declared` from
+   birth with no machine memory of having been a guess.
+3. **`:filterable {:state #{:eq :in}}` already exists**, so *what has been
+   observed and not yet affirmed* is a query this house already owns. A
+   stamp would want a null-filter the framework does not have.
+4. **`outcome/names-a-value` and `feed/value-still-held?` already read
+   state**, so admitting an observed value widens a check rather than
+   adding a field read.
+
+`:on-create` branching the birth state is the framework's own spelling
+(`definitions`: a held revision is born `:proposed`). **The initial is
+`observed` and a person's create promotes out of it**, deliberately: a
+birth nobody's hand can be found on reads as a guess, which is the safe
+direction for a bug to fail in. The engine's own actors — a seed, a
+migration, the conformance walker — land `observed` for the same reason.
+
+### The cost, paid in the open: the wording door splits by hand
+
+`:to` is a static keyword, so **one door cannot land in two states**. A
+single `revise` open to both hands would have had an agent's own
+rewording land in `declared` — the observer affirming its own guess,
+which is the one thing this bead exists to forbid. So:
+
+- **`revise`** — *Reword*, `#{:observed :declared} → :declared`, walled by
+  `written-by-a-person` and `this-is-yours-to-declare`. A person's hand,
+  and rewording an observed value **claims it in the same stroke** — the
+  ruling read literally.
+- **`restate`** — *Correct what was observed*, `:observed → :observed`,
+  walled by the new `only-the-observer-restates` (the mirror: it refuses a
+  PERSON). The observer's own door. The same input, the same overwrite, no
+  affirmation stamp: the row is still a guess when the handler is done.
+
+Both walls are pure functions of the principal, so the render probe and
+the invoke read the same fact and **each hand is offered exactly one
+wording door** rather than two that look alike. That is the recorded
+deviation from the bead's point 1, which asked for the wall to come off
+`revise`: it could not, because `revise` is where the affirmation
+happens.
+
+**Agent revise on an affirmed row: refused, and the sentence points at
+the petition.** The bead asked this to be decided honestly and the answer
+is no — rewording an affirmed value overwrites the owner's chosen words.
+`restate` covers the legitimate case (the observer learns more) without
+touching anything a person said.
+
+### The one remaining wall, and its new sentence
+
+`written-by-a-person` now guards the affirmation rather than the writing:
+
+> Affirming is a person's word. You may write down what you observed —
+> that row is born observed and says so wherever this house cites it — but
+> marking your own reading affirmed would be speaking in the owner's voice
+> about the owner's own life. Leave it observed and say what you found:
+> publish an insight, cite the rows you read, and offer this value's own
+> "yes, this one's ours" as the one next step. The owner answers with a
+> tap, or rewords it himself, and either way the row becomes his.
+
+`still_stands` is now one tap doing two jobs, and both are honest: from
+`observed` it is the whole affirmation; from `declared` it is jfv.2's
+*I read the evidence and it stands anyway*. Its label moved to **"Yes —
+this one's ours"** so it reads truthfully from either side.
+
+### A hole the ruling opened, closed by its own wall
+
+`stamp-owner` writes the WRITER's id, so an agent writing a `"mine"`
+value would own a sentence about somebody else's life — and
+`this-is-yours-to-declare` would then refuse the very person it is about,
+breaking the ruling's one condition. **`a-private-value-is-a-persons-own`**
+stands at the create door: an observer writes what the HOUSE holds, and
+if it turns out to be one member's alone he says so when he claims it.
+Every `observed` row in this engine is therefore `household`-scoped by
+construction, which is why `restate` carries no ownership wall.
+
+### `dismiss` — the other answer to a guess
+
+`retire`'s `:undo :restore` must return exactly where it departed from,
+and `restore` lands in `declared`, so an action leaving from either
+`observed` or `declared` could not declare one. The household's reason is
+the better one anyway: **retiring a value you held and telling an observer
+it read you wrong are different sentences**, and the composer reading the
+log should be able to tell them apart. `dismiss` runs
+`:observed → :retired`, label *Not one of ours*. Both land in `retired`,
+because a value this house is not holding is a value this house is not
+holding — and `names-a-value` refuses either with one sentence.
+
+A restored value comes back **`declared`**, not `observed`: a person
+reaching for `restore` has held it again with his own hand, so it stamps
+like every other landing in `declared`.
+
+### The observed clause, where the person answering is looking
+
+`feed/outcome-says` gained one clause, and `feed/value-still-held?`
+became `feed/value-standing` (`:declared` / `:observed` / nil) so the
+population reads the standing once and hands it to the sentence. A real
+card sentence, off the wire:
+
+> For unhurried Saturdays — a value observed in your record, not yet
+> affirmed, so say whether it is yours before a week goes to it. It runs
+> through the shop, which this house wrote down as something it loves.
+> 1 row behind it.
+
+Silence would have been the composer borrowing the owner's voice through
+the card instead of through the value. The moment the owner taps, the
+same bundle stops saying it — nothing about the outcome changed, only
+what is true about the value under it.
+
+### Where the law is proved
+
+**Nine check-tier scenarios on `value`** (was five), and all four
+refusing guards are now named by one:
+
+- `an-agent-writes-what-it-observes` — create, as an agent, **allowed**.
+  The inversion of jfv.2's `an-agent-does-not-declare-a-value`.
+- `an-agent-does-not-affirm` — `still_stands` as an agent, refused.
+- `an-agent-does-not-reword-what-the-owner-affirmed` — `revise` as an
+  agent, refused.
+- `an-agent-corrects-what-it-observed` — `restate`, allowed.
+- `a-person-rewords-rather-than-restates` — `restate` as a person,
+  refused by `only-the-observer-restates`.
+- `an-observed-value-is-the-houses` — an agent's `"mine"` create, refused.
+- `a-person-amends-what-the-house-declared`,
+  `somebody-elses-value-is-not-yours-to-reword`,
+  `a-petition-is-answered-with-one-tap` — jfv.2's, unchanged.
+
+**Six deftests in `workqueue10/test/workqueue10/value_test.clj`**, over
+the real ring handler and the whole registry, for everything a
+declaration-time world cannot answer: the birth state and its stamps; the
+affirmation with **both hands in the transition log**; the two wording
+doors and neither hand reaching the other's; the private-value wall; the
+**observed clause on a real outcome card**, appearing and then
+disappearing when the owner taps; and `dismiss` retiring a wrong reading
+so `names-a-value` stops composing against it. **Every agent in that file
+holds a leash** — `packs/leash!`'s own sentence: an unleashed agent is
+already 404 by the router's default deny, which proves nothing about any
+wall.
+
+`make check-queue` goes from **39 to 43 scenarios judged**; 35 kinds and
+11 warnings, both unchanged. `value` reports clean.
+
+### Recorded here, for whoever comes next
+
+- **Exactly one fingerprint moved.** `value`:
+  `e6943e49…` → `39108e56…`, one legitimate law revision carrying the new
+  state, the split wording doors, the new walls and the renamed stamps.
+  Every other kind is **byte-identical**, verified by computing the whole
+  35-kind census with and without this bead.
+- **`outcome` did NOT move, and that is a finding rather than a relief.**
+  `names-a-value` is a **create** guard, and `fingerprint-of` projects
+  only `machine.actions.*.guards.*` — a create door's law changes mint no
+  revision and show in no diff. **waymark-442.9** already files it; this
+  bead is a second witness and did not fix it here.
+- **Production: 5 migration steps, no state work, and no rows at risk.**
+  `make migrate-queue-prod` prints `ADD COLUMN f_affirmed_at / f_affirmed_by
+  / f_written_by` and `DROP COLUMN f_reviewed_at / f_reviewed_by` on
+  `values` — all five generated columns, regenerable from the document.
+  **The `values` table holds zero rows in production** (confirmed by
+  count), so the `reviewed_*` → `affirmed_*` rename is free. Adding a state
+  token needs no DDL at all: `state` is plain text and the boot's
+  `check-state-tokens` compares live tokens against the declaration, and
+  `observed` is an addition rather than a removal.
+- **A value's scope cannot be changed after birth.** `authored-fields` is
+  `[:name :says :loved]`, so an observed household value the owner wants
+  as *his own alone* can only be retired and re-declared. Filed.
+- **waymark-04t got sharper and was not decided here.** *Should a private
+  value's `still_stands` be owner-only?* is no longer only a question about
+  a stamp: the tap now MOVES the row into `declared`. Its two readings are
+  unchanged; the stakes are not.
+- **The composer's grant scope for jfv.5 widens by exactly two actions.**
+  `value: ["create", "restate"]`. Never `still_stands`, never `revise`,
+  never `retire` or `dismiss` — the affirmation and the owner's own words
+  stay behind the one wall this bead left standing. jfv.5's walk step 1
+  (*the owner declares his values first, by hand*) is now optional rather
+  than a precondition: a composer may write what it observes and compose
+  against it the same day, and the card will say so until he answers.
