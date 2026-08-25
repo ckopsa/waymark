@@ -376,12 +376,16 @@
   ;; The obligations judge whatever an application declared, and until
   ;; now the only world they had ever judged was the conformance
   ;; walker's — a handful of rows, all of them fresh. These are the
-  ;; five that READ (the two that MINT rows are conformance_test's, so
+  ;; six that READ (the two that MINT rows are conformance_test's, so
   ;; a tickler minted here could not become a card the shape test
-  ;; above is counting).
+  ;; above is counting). :feed/deal-again joined them with waymark-8um.2
+  ;; and belongs here for the same reason the rest do: a draw is a
+  ;; nonce in a query string, so it spins this world and leaves it
+  ;; exactly as it found it.
   (let [ctx (suite/context {:engine *eng* :handler *h* :kinds [:task :media]})
         readers #{:feed/recipe-order :feed/day-stable :feed/projection
-                  :feed/cursor-rolls :feed/archive-pages :feed/citations}]
+                  :feed/cursor-rolls :feed/archive-pages :feed/citations
+                  :feed/deal-again}]
     (doseq [{:keys [name run]} (:obligations packs/feed)
             :when (contains? readers name)]
       (testing (str name)

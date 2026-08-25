@@ -1729,7 +1729,13 @@
   "Two reads, one day, one order. The seed is a hash over (salt,
   member, local date) and nothing is stored, so this is the whole of
   'stable within a day' — and if it ever fails, the thing that failed
-  is determinism, not caching."
+  is determinism, not caching.
+
+  Laws v3 moved what this is measured against (waymark-8um.2):
+  stability is per DRAW, and the daily order is the default draw. This
+  obligation is the claim about that default one, unchanged, and it is
+  still the claim a reader who never taps depends on. `:feed/deal-again`
+  makes the same claim about a draw a person asked for."
   [ctx]
   (let [a (:doc (feed-doc ctx nil))
         b (:doc (feed-doc ctx nil))]
@@ -1957,6 +1963,121 @@
                   " — the cleared queue and the streak are folds over the"
                   " log, and a fold that drifted within a day would make"
                   " the whole recipe something other than static data")))}))
+
+(defn- feed-deal-again-violations
+  "Law 6, from the wire: **the person spins; the system never spins for
+  them** (waymark-8um.2). A `draw` is a nonce a person's tap mints; it
+  joins the seed; and what comes back is a fresh order that is exactly
+  as stable as the day's.
+
+  Six claims, and the second is the one the whole amendment rests on:
+
+  1. **A draw draws differently.** The seed under a draw is not the
+     day's seed. (The ORDER may coincide on a house holding two cards,
+     and this obligation refuses to lie about that — it claims the
+     seed, which is the mechanism, and it reports whether the order
+     moved rather than demanding that it did.)
+  2. **A draw is stable, with honest pages.** The same draw read twice
+     answers the same seed and the same cards, and `links.next`
+     continues THE SAME DRAW — page two of a spin is page two of that
+     spin, never of the daily order and never of a fresh one. A feed
+     that re-rolled between pages would be the slot machine the epic
+     refuses, wearing a cursor.
+  3. **The daily order is the default draw, untouched.** A read with no
+     parameter answers the day's own seed whether or not anybody has
+     dealt again — the draw is in the address and nowhere else, so
+     there is nothing to reset and no state to leak between readers.
+  4. **The document says a person dealt again**, in the household's own
+     words, and names the draw. A surface that quietly reordered itself
+     would be the one thing law 6 forbids even when a person asked.
+  5. **A mangled draw is refused by name**, rather than quietly
+     answering the daily order — a client handed the same order twice
+     would conclude that dealing again does not work.
+  6. **One read, one draw.** A cursor from one draw beside a different
+     `draw` parameter is refused rather than guessed at."
+  [ctx]
+  (let [daily (:doc (feed-doc ctx nil))
+        drawn (feed-doc ctx nil "draw=packA1")
+        a (:doc drawn)
+        b (:doc (feed-doc ctx nil "draw=packA1"))
+        other (:doc (feed-doc ctx nil "draw=packB2"))
+        after (:doc (feed-doc ctx nil))
+        ids (fn [d] (mapv :card_id (feed-cards d)))
+        next-href (get-in a [:links :next :href])
+        page2 (when next-href
+                (feed-doc ctx nil (second (str/split (str next-href) #"\?" 2))))
+        garbage (feed-doc ctx nil "draw=not%20a%20draw")
+        crossed (when-some [c (some-> next-href (str/split #"cursor=") second)]
+                  (feed-doc ctx nil (str "draw=packB2&cursor=" c)))]
+    (cond-> []
+      (not= 200 (:status drawn))
+      (conj (str "feed: dealing again answered " (:status drawn)
+                 " — a draw is a READ, and the person spinning is the one"
+                 " thing law 6 permits"))
+
+      (= (:seed daily) (:seed a))
+      (conj (str "feed: a draw answered the DAY's seed — the nonce never"
+                 " reached the hash, so the tap changed nothing"))
+
+      (= (:seed a) (:seed other))
+      (conj "feed: two different draws answered one seed")
+
+      (not= "packA1" (str (:draw a)))
+      (conj (str "feed: the document names its draw " (pr-str (:draw a))
+                 " and the request asked for \"packA1\" — a spin the"
+                 " document will not name is a spin a reader cannot"
+                 " bookmark, share or come back to"))
+
+      (some? (:draw daily))
+      (conj (str "feed: a read with no draw named one (" (pr-str (:draw daily))
+                 ") — the day's own order is the ABSENCE of a draw, not a"
+                 " draw with a name"))
+
+      (not= (:seed a) (:seed b))
+      (conj "feed: one draw read twice answered two seeds")
+
+      (not= (ids a) (ids b))
+      (conj (str "feed: one draw read twice answered two orders:\n  "
+                 (pr-str (ids a)) "\n  " (pr-str (ids b))
+                 " — a draw is as stable as the day, or it is a slot"
+                 " machine with a nonce"))
+
+      (not= (:seed daily) (:seed after))
+      (conj (str "feed: the daily order changed after somebody dealt again"
+                 " — a draw lives in the address, and a read that carries"
+                 " none is the day's own order for everybody, always"))
+
+      (not= (ids daily) (ids after))
+      (conj "feed: dealing again moved the DAILY order underneath it")
+
+      (and next-href (not (str/includes? (str next-href) "draw=packA1")))
+      (conj (str "feed: links.next under a draw dropped it: "
+                 (pr-str next-href)))
+
+      (and page2 (not= 200 (:status page2)))
+      (conj (str "feed: page two of a draw answered " (:status page2)))
+
+      (and page2 (not= "packA1" (str (:draw (:doc page2)))))
+      (conj (str "feed: page two of a draw came back as draw "
+                 (pr-str (:draw (:doc page2)))
+                 " — a cursor carries its own draw so that a page"
+                 " continues the spin it came from"))
+
+      (not (some #(str/includes? (str %) "dealt again") (:notes a)))
+      (conj (str "feed: nothing in the document says a person dealt again."
+                 " The notes are: " (pr-str (vec (:notes a)))))
+
+      (not= 422 (:status garbage))
+      (conj (str "feed: a draw this door cannot spell answered "
+                 (:status garbage) ", not 422 — a mangled nonce quietly"
+                 " answering the daily order reads as deal-again being"
+                 " broken"))
+
+      (and crossed (not= 422 (:status crossed)))
+      (conj (str "feed: a cursor from one draw beside another draw's"
+                 " parameter answered " (:status crossed)
+                 " — one read, one draw, and neither half of a request"
+                 " that disagrees with itself gets to be guessed at")))))
 
 (defn- feed-row-cards
   "Every card of one feed answer that stands for a row — the seam has
@@ -3719,6 +3840,12 @@
     (feed-obligation :feed/projection feed-projection-violations)
     (feed-obligation :feed/cursor-rolls feed-cursor-violations)
     (feed-obligation :feed/archive-pages feed-archive-pages-violations)
+    ;; law 6, and it reads only (waymark-8um.2): a draw is a nonce in a
+    ;; query string, so this obligation spins the feed as often as it
+    ;; likes and leaves nothing behind — the engine it hands on is the
+    ;; engine it found, which is why it sits among the readers rather
+    ;; than below with the writers.
+    (feed-obligation :feed/deal-again feed-deal-again-violations)
     ;; the last of the readers: every card cites the layer that
     ;; actually admitted it, and the recipe reads back narrated
     ;; (waymark-iqa.29). It reads TWICE — once plain, once with

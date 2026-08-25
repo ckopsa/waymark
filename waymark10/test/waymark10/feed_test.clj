@@ -820,7 +820,109 @@
     (is (= c (feed/decode-cursor token)))
     (is (not (str/includes? token "2026"))
         "opaque: a client that could edit the seed could re-roll its
-         own feed until it liked the order")))
+         own feed until it liked the order")
+    (testing "and it carries a draw where one is riding (waymark-8um.2)"
+      (let [d (assoc c :draw "abc123")]
+        (is (= d (feed/decode-cursor (feed/encode-cursor d))))
+        (is (= token (feed/encode-cursor (dissoc d :draw)))
+            "a daily-order cursor is the token this engine always minted")))))
+
+;; ── deal again: the person spins (waymark-8um.2, laws v3 § 6) ───────
+
+(deftest the-draw-is-the-last-ingredient-and-the-daily-seed-is-unchanged
+  (let [recipe feed/default-recipe]
+    (testing "no draw hashes exactly what it always hashed"
+      (is (= (feed/seed-of recipe "mom" "2026-08-24")
+             (feed/seed-of recipe "mom" "2026-08-24" nil))
+          "the daily order is not the default draw by convention — it is
+           the same hash, so nothing moves for a reader who never taps"))
+    (testing "a draw joins the seed, and two draws are two orders"
+      (is (not= (feed/seed-of recipe "mom" "2026-08-24")
+                (feed/seed-of recipe "mom" "2026-08-24" "aaa")))
+      (is (not= (feed/seed-of recipe "mom" "2026-08-24" "aaa")
+                (feed/seed-of recipe "mom" "2026-08-24" "bbb"))))
+    (testing "and one draw is as stable as the day"
+      (is (= (feed/seed-of recipe "mom" "2026-08-24" "aaa")
+             (feed/seed-of recipe "mom" "2026-08-24" "aaa"))))
+    (testing "the day is still in the hash under a draw — midnight rolls
+              every draw, which is why a stale cursor is still a 409"
+      (is (not= (feed/seed-of recipe "mom" "2026-08-24" "aaa")
+                (feed/seed-of recipe "mom" "2026-08-25" "aaa"))))
+    (testing "a nonce this door cannot spell is refused rather than
+              quietly read as the daily order"
+      (is (nil? (feed/parse-draw nil)))
+      (is (nil? (feed/parse-draw "  ")))
+      (is (= "a-B_9.z" (feed/parse-draw " a-B_9.z ")))
+      (doseq [bad ["with space" "semi;colon" (apply str (repeat 65 "a"))]]
+        (is (thrown? clojure.lang.ExceptionInfo (feed/parse-draw bad))
+            (str (pr-str bad) " is not a draw"))))))
+
+(deftest dealing-again-answers-a-fresh-order-and-leaves-the-day-alone
+  (let [eng (boot)]
+    (dotimes [i 10]
+      (let [self (make! eng :fd_parcel (str "parcel " i))]
+        (call! eng :post (str self "/-/finish"))))
+    (dotimes [i 6] (make! eng :fd_errand (str "errand " i)))
+    (let [daily (:doc (feed! eng))
+          drawn (:doc (feed! eng :query "draw=spin1"))
+          again (:doc (feed! eng :query "draw=spin1"))
+          other (:doc (feed! eng :query "draw=spin2"))
+          after (:doc (feed! eng))]
+      (testing "the draw reaches the seed"
+        (is (not= (:seed daily) (:seed drawn)))
+        (is (not= (:seed drawn) (:seed other))))
+      (testing "the document names the draw, and a daily read names none"
+        (is (= "spin1" (:draw drawn)))
+        (is (nil? (:draw daily)))
+        (is (str/includes? (str (:self drawn)) "draw=spin1"))
+        (is (str/includes? (str (:summary drawn)) "draw spin1")))
+      (testing "and says so in the household's own words"
+        (is (some #(str/includes? (str %) "You dealt again") (:notes drawn)))
+        (is (not-any? #(str/includes? (str %) "dealt again") (:notes daily))))
+      (testing "one draw is stable, with the same cards in the same order"
+        (is (= (:seed drawn) (:seed again)))
+        (is (= (card-ids drawn) (card-ids again))))
+      (testing "the day's own order is untouched — a draw lives in the
+                address and nowhere else"
+        (is (= (:seed daily) (:seed after)))
+        (is (= (card-ids daily) (card-ids after)))))))
+
+(deftest the-pages-of-a-draw-continue-that-draw
+  (let [eng (boot)]
+    (dotimes [i 10]
+      (let [self (make! eng :fd_parcel (str "parcel " i))]
+        (call! eng :post (str self "/-/finish"))))
+    (let [p1 (:doc (feed! eng :query "draw=spin1"))
+          href (get-in p1 [:links :next :href])
+          p2 (:doc (feed! eng :query (second (str/split (str href) #"\?" 2))))
+          daily (:doc (feed! eng))
+          d-href (get-in daily [:links :next :href])]
+      (testing "links.next carries the draw, in the href and in the cursor"
+        (is (str/includes? (str href) "draw=spin1"))
+        (is (= "spin1" (:draw (feed/decode-cursor
+                               (second (str/split (str href) #"cursor="))))))
+        (is (not (str/includes? (str d-href) "draw=")))
+        (is (nil? (:draw (feed/decode-cursor
+                          (second (str/split (str d-href) #"cursor=")))))))
+      (testing "and page two is page two of THAT draw"
+        (is (= "spin1" (:draw p2)))
+        (is (= #{"archive"} (set (map :section (:cards p2)))))
+        (let [all (concat (card-ids p1) (card-ids p2))]
+          (is (= (count all) (count (set all))))))
+      (testing "a cursor alone continues its own draw — a client may drop
+                the parameter and still walk the spin it started"
+        (let [bare (str "cursor=" (second (str/split (str href) #"cursor=")))]
+          (is (= "spin1" (:draw (:doc (feed! eng :query bare)))))))
+      (testing "but two halves that disagree are refused, never guessed at"
+        (let [crossed (feed! eng :query
+                             (str "draw=spin2&cursor="
+                                  (second (str/split (str href) #"cursor="))))]
+          (is (= 422 (:status crossed)))
+          (is (some? (get-in crossed [:doc :errors :draw])))))
+      (testing "and a mangled nonce is a 422 that names the parameter"
+        (let [r (feed! eng :query "draw=not%20a%20draw")]
+          (is (= 422 (:status r)))
+          (is (some? (get-in r [:doc :errors :draw]))))))))
 
 ;; ── the door's own posture ──────────────────────────────────────────
 
@@ -913,6 +1015,32 @@
           (is (str/includes? (str (:self doc)) "preview_as=")
               "the address a client would re-fetch keeps the preview, or
                a reload would quietly become the caller's own feed")))
+
+      (testing "a previewer may deal again, because dealing again is a
+                READ — the draw rides the preview, the order is the
+                member's own re-drawn, and nothing is written
+                (waymark-8um.2)"
+        (let [spun (feed! eng :headers worn
+                          :query (str "preview_as=" member "&draw=spin1"))
+              doc (:doc spun)
+              theirs-spun (feed! eng :headers as-member :query "draw=spin1")]
+          (is (= 200 (:status spun)))
+          (is (= "spin1" (:draw doc)))
+          (is (not= (:seed (:doc preview)) (:seed doc))
+              "the tap reached the seed")
+          (is (= (:seed (:doc theirs-spun)) (:seed doc))
+              "and it is still (salt, THE MEMBER, today, draw) — a preview
+               of a spin is the member's spin, not the previewer's")
+          (is (= (card-ids (:doc theirs-spun)) (card-ids doc)))
+          (is (= member (get-in doc [:preview :of :id]))
+              "still stamped: a preview is never quiet, spun or not")
+          (is (str/includes? (str (:self doc)) "preview_as="))
+          (is (str/includes? (str (:self doc)) "draw=spin1"))
+          (is (not (true? (get-in doc [:views :recording])))
+              "and a previewer's page still has nothing to beacon about")
+          (is (= (card-ids (:doc theirs))
+                 (card-ids (:doc (feed! eng :headers as-member))))
+              "…and the member's own daily order is where it was")))
 
       (testing "the verbs render and they are the MEMBER's — a previewer
                 who fires one is judged as themselves"

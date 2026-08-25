@@ -218,4 +218,10 @@
           (str ":feed/view-events did not run; skipped for "
                (pr-str (get skipped :feed/view-events))))
       (is (pos? (suite/coverage report :feed/view-events))
-          "a card that was shown left exactly one row"))))
+          "a card that was shown left exactly one row")
+      ;; waymark-8um.2: law 6, and the cheapest of the three to skip by
+      ;; accident — it needs no kind at all, only the route, so a silent
+      ;; skip here would mean the door itself had gone missing.
+      (is (contains? ran :feed/deal-again)
+          (str ":feed/deal-again did not run; skipped for "
+               (pr-str (get skipped :feed/deal-again)))))))

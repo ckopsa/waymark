@@ -100,6 +100,20 @@
   is filed (waymark-ck7): *why is this card here* is a projection,
   *why is some other row not* is a search over everything.
 
+  ── THE PERSON SPINS, AND THIS FILE NEVER DOES ──
+
+  Law 6 (laws v3, waymark-8um): *the person spins; the system never
+  spins for them.* The mechanism is one optional ingredient of the
+  seed — a `draw`, a nonce the CLIENT mints on a tap — and everything
+  else about it is a refusal. Nothing here invents a draw; nothing
+  here suggests one; the document does not carry an affordance to
+  spin, because a document that offered one on every read would be
+  the system asking. With no draw the seed, the cards, the notes and
+  the cursor are byte-for-byte what they were before the parameter
+  existed, so the daily order is not the default draw by convention:
+  it is the same hash. See `parse-draw`, `seed-of` and `document`'s
+  `:draw`.
+
   ── NO DISCOVERY, TWICE ──
 
   The recipe is DATA and the populations are CODE, and neither is
@@ -230,14 +244,60 @@
   (str (LocalDate/ofInstant ^Instant ((:now-fn eng))
                             (ZoneId/of (:zone recipe "UTC")))))
 
+(def ^:private draw-pattern
+  "What a draw may be spelled with (waymark-8um.2). A draw is a NONCE:
+  the client mints it, the seed hashes it, and nothing anywhere reads
+  a meaning out of it — it is not a page number, not a count, and not
+  a secret. So the only rule is that it stay a short safe token, long
+  enough never to collide by accident and bounded so a megabyte of
+  query string cannot arrive as an ingredient of a hash."
+  #"[A-Za-z0-9._-]{1,64}")
+
+(defn parse-draw
+  "The `draw` parameter, read. Absent or blank is the DAILY draw and
+  answers nil — the day's own order is what a reader who never taps
+  gets, which is law 6's whole promise that the system never spins for
+  anybody.
+
+  A value this pattern refuses is a 422 naming the parameter rather
+  than a quiet fall back to the daily order: a client that mangled its
+  nonce and was handed the day's order twice would conclude that
+  dealing again does not work.
+
+  It lives here rather than at the door because the door is only a
+  transport — a second one asking for a second draw asks this same
+  question and gets this same answer."
+  [s]
+  (when-some [v (some-> s str str/trim not-empty)]
+    (when-not (re-matches draw-pattern v)
+      (throw (p/schema-invalid
+              :query
+              {"draw" [(str "must be 1–64 characters of letters, digits,"
+                            " dot, dash or underscore — a draw is a nonce"
+                            " your own tap mints, and leaving it off reads"
+                            " the day's own order")]})))
+    v))
+
 (defn seed-of
-  "sha256(salt ‖ member-principal-id ‖ local-date). Same member, same
-  day, same feed; midnight rolls it; two members on the same day see
+  "sha256(salt ‖ member-principal-id ‖ local-date[ ‖ draw]). Same
+  member, same day, same feed; midnight rolls it; two members see
   different worlds because the id is in the hash. It stores NOTHING,
   which is the whole of 'stable within a day' and the answer to the
-  materializing job the spec declined to build."
-  ^String [recipe pid ^String day]
-  (wire/sha256-hex (str (:salt recipe "waymark-feed") "\u001f" pid "\u001f" day)))
+  materializing job the spec declined to build.
+
+  THE DRAW IS THE LAST INGREDIENT, AND IT IS OPTIONAL (waymark-8um.2,
+  law 6: the person spins, the system never spins for them). A tap
+  mints a nonce, the nonce joins the seed, and what comes back is a
+  fresh order exactly as stable as the day's — same member, same day,
+  same draw, same feed, page after page. With NO draw the string
+  hashed is byte-for-byte the string this function has always hashed,
+  so the daily seed is not the default draw by convention: it IS the
+  same hash, and a reader who never taps reads the order they would
+  have read before this parameter existed."
+  (^String [recipe pid ^String day] (seed-of recipe pid day nil))
+  (^String [recipe pid ^String day draw]
+   (wire/sha256-hex (str (:salt recipe "waymark-feed") "\u001f" pid "\u001f" day
+                         (when draw (str "\u001f" draw))))))
 
 (defn- rank
   "A candidate's place in the day's order: hash(seed ‖ card_id). Every
@@ -256,21 +316,39 @@
 ;; ── the cursor ──────────────────────────────────────────────────────
 
 (defn encode-cursor
-  "One opaque base64 token over {:day :seed :offset}. Opaque because a
-  client that could edit the seed could re-roll its own feed until it
-  liked the order, which is the ranking model coming in through a
-  query parameter."
-  ^String [{:keys [day seed offset]}]
+  "One opaque base64 token over {:day :seed :offset} — and `:draw`
+  where a draw is riding (waymark-8um.2). Opaque because a client that
+  could edit the SEED could re-roll its own feed until it liked the
+  order, which is the ranking model coming in through a query
+  parameter. That reason survives law 6 intact and is worth saying
+  again now that re-rolling is a legitimate tap: a person may deal
+  again as often as they like, and what they get is a whole fresh
+  draw, honestly labelled, from the top. What nobody gets is a
+  half-draw — page four of one order spliced onto pages one to three
+  of another — and that is exactly what an editable seed would buy.
+
+  THE CURSOR CARRIES ITS DRAW, so a page continues the draw it came
+  from even if the client drops the query parameter on the floor. A
+  cursor minted under the daily draw carries no `draw` key at all and
+  is byte-identical to the token this function has always minted."
+  ^String [{:keys [day seed offset draw]}]
   (.encodeToString (.withoutPadding (Base64/getUrlEncoder))
-                   (.getBytes (wire/write-json {"day" day "seed" seed
-                                                "offset" (long offset)})
+                   (.getBytes (wire/write-json
+                               (cond-> {"day" day "seed" seed
+                                        "offset" (long offset)}
+                                 draw (assoc "draw" draw)))
                               StandardCharsets/UTF_8)))
 
 (defn decode-cursor
   "The token, read back. A token this engine did not mint is a 422 that
   names the parameter rather than a silent fall back to the top of the
   feed — a cursor that quietly answered page one would make deep paging
-  look like an infinite loop of the same six cards."
+  look like an infinite loop of the same six cards.
+
+  A token with no `draw` is a page of the DAILY draw, which is what
+  every cursor this engine minted before waymark-8um.2 is — so old
+  tokens read exactly as they always did, and the absent key means the
+  same thing here that an absent parameter means at the door."
   [^String s]
   (let [bad (fn [] (throw (p/schema-invalid
                            :query
@@ -282,9 +360,13 @@
                            StandardCharsets/UTF_8))
                  (catch Exception _ (bad)))]
       (when-not (and (map? m) (string? (:day m)) (string? (:seed m))
-                     (int? (:offset m)) (nat-int? (:offset m)))
+                     (int? (:offset m)) (nat-int? (:offset m))
+                     (or (nil? (:draw m))
+                         (and (string? (:draw m))
+                              (re-matches draw-pattern (:draw m)))))
         (bad))
-      {:day (:day m) :seed (:seed m) :offset (long (:offset m))})))
+      (cond-> {:day (:day m) :seed (:seed m) :offset (long (:offset m))}
+        (:draw m) (assoc :draw (:draw m))))))
 
 (defn rolled
   "The refusal a stale cursor earns. Serving yesterday's seed today
@@ -297,6 +379,26 @@
                            " yesterday's order. Read /api/-/feed again from"
                            " the top.")
               :day now}))
+
+(defn draw-mismatch
+  "The refusal a cursor from ANOTHER draw earns beside an explicit
+  `draw` (waymark-8um.2). The two halves of one request disagreed
+  about which order is being walked, and there is no honest way to
+  guess: honouring the parameter would serve page four of the tapped
+  draw at an offset counted in the cursor's, and honouring the cursor
+  would answer a page of an order the caller did not ask for.
+
+  It is a 422 and not the roll's 409 because nothing moved — every
+  `links.next` this engine mints carries both halves and carries them
+  agreeing, so a request in which they differ was composed by hand."
+  [cursor-draw asked]
+  (p/schema-invalid
+   :query
+   {"draw" [(str "this cursor walks the " (or cursor-draw "daily")
+                 " draw and the request asks for the " (or asked "daily")
+                 " one — one read, one draw. Follow links.next, which"
+                 " carries both and carries them agreeing, or read"
+                 " /api/-/feed again from the top with the draw you want.")]}))
 
 ;; ── the reader's own row reads ──────────────────────────────────────
 
@@ -1715,7 +1817,11 @@
 ;; is `?explain=1`, and the law that makes an opt-in read sound is the
 ;; feed's own: `:feed/day-stable` says two reads by one member on one
 ;; day answer the same cards in the same order, so a citation fetched
-;; late lines up by `card_id` and cannot be a different day's feed.
+;; late lines up by `card_id` and cannot be a different day's feed —
+;; and `:feed/deal-again` says the same of a DRAW (waymark-8um.2), so
+;; a late read of an address that carries one lines up too, provided
+;; the client asks the address it was answered at (`self` carries the
+;; draw for exactly this reason).
 ;; Always-on would have doubled a fuel card, which is mostly a
 ;; sentence already, for a disclosure most reads never open.
 
@@ -2074,16 +2180,23 @@
   and — where a population SPREAD its candidates — whose turn it was.
   Nothing here compares two cards; `rank` is the place
   `hash(seed ‖ card_id)` put this one and `lane` is the place it holds
-  in its own kind's order, which is composition and not a score."
-  [{:keys [rank of lane kind day seeded-for]}]
+  in its own kind's order, which is composition and not a score.
+
+  Under a DRAW (waymark-8um.2) the numbers are this draw's and the
+  sentence says so — the draw joins the seed, so `rank` and `of` are
+  as true here as they are on the daily order, and the only thing that
+  changed is which order they are true of."
+  [{:keys [rank of lane kind day seeded-for draw]}]
   (str "Drawn " (ordinal rank) " of " of " this line offered today, by ("
-       seeded-for ", " day ")'s seed."
+       seeded-for ", " day (when draw (str ", draw " draw)) ")'s seed."
        (when (and lane (pos? (long lane)))
          (str " It came up on " (name kind) "'s turn — lane " lane " of its"
               " own kind's order, so the slots go round the kinds rather than"
               " to whichever kind holds the most rows."))
        " Nothing was ranked against anything: the seed decides the order, and"
-       " it decides once a day."))
+       (if draw
+         " this draw holds until you deal again."
+         " it decides once a day.")))
 
 (defn card-says
   "The whole citation for one card, as sentences a parent reads.
@@ -2195,6 +2308,9 @@
                (let [draw {:rank (inc (+ off i)) :of offered
                            :lane (:lane cand 0) :kind (:kind cand)
                            :section section :day (:day ctx)
+                           ;; …and which draw's order these numbers
+                           ;; belong to, where the person dealt again
+                           :draw (:draw ctx)
                            :seeded-for (:seeded-for ctx "you")}
                      rdef (get (resources ctx) (:kind cand))]
                  (assoc c "why"
@@ -2290,14 +2406,24 @@
   ever saying whose, and a mid-day edit would be invisible to the
   surface whose whole job is explaining itself. The route resolves it
   (`waymark10.feed-recipe/for-reader`); this function is handed the
-  answer, exactly as it is handed the recipe."
+  answer, exactly as it is handed the recipe.
+
+  `:draw` (waymark-8um.2) is the fourth, and the only one that changes
+  the ORDER — which is why it exists at all and why nothing but a
+  person's tap ever supplies it. It joins the seed; the answer is a
+  fresh order, as stable as the day's, walked by cursors that carry
+  the draw with them. Nil is the daily draw, and a nil draw computes
+  the byte-identical document this function computed before the
+  parameter existed: same seed, same cards, same notes, same cursor.
+  The person spins; the system never spins for them, and a document
+  that advertised the spin on every read would be the system asking."
   [eng recipe {:keys [principal visibility offset preview explain?
-                      recipe-source]}]
+                      recipe-source draw]}]
   (let [day (today eng recipe)
         pid (:id principal)
-        seed (seed-of recipe pid day)
+        seed (seed-of recipe pid day draw)
         ctx (cond-> {:eng eng :principal principal :visibility visibility
-                     :now ((:now-fn eng)) :seed seed :day day
+                     :now ((:now-fn eng)) :seed seed :day day :draw draw
                      ;; whose seed this is, in the citation's own
                      ;; sentence — under a preview "you" is a lie, the
                      ;; same correction the first note already makes
@@ -2368,11 +2494,20 @@
                   (when preview
                     (str "?preview_as="
                          (url-encode (str (get-in preview [:of :id])))))
+                  ;; …and the DRAW rides them too (waymark-8um.2), for
+                  ;; the same reason one register over: `self` is the
+                  ;; address of THIS read, and a self that dropped the
+                  ;; draw would name the daily order while the cards
+                  ;; below it were somebody's tap. It is in the cursor
+                  ;; as well, and the two must agree — see draw-mismatch
+                  (when draw (str (if preview "&" "?") "draw="
+                                  (url-encode (str draw))))
                   ;; an explained read stays explained page after page:
                   ;; a `links.next` that dropped the parameter would
                   ;; hand a reader who asked why an archive that would
                   ;; not say
-                  (when explain? (if preview "&explain=1" "?explain=1")))
+                  (when explain? (if (or preview draw)
+                                   "&explain=1" "?explain=1")))
         ;; the narrated recipe, with the read's own counts folded in —
         ;; the static half is a pure function of the recipe and the
         ;; counts are what THIS read saw each line offered
@@ -2400,9 +2535,26 @@
                             " the lasting record of it is the grant itself ("
                             (:grant preview) ") — its ask, its approval, its"
                             " expiry and the door that revokes it."))
-                     (str "One order, seeded by (" (or of "you") ", " day
-                          ") — stable until midnight and stored nowhere. Two"
-                          " members read two different feeds on the same day.")
+                     ;; the seed's own sentence — and where somebody
+                     ;; DEALT AGAIN (waymark-8um.2), the sentence says
+                     ;; so plainly and says how to come back. The daily
+                     ;; half is unchanged to the byte: a reader who
+                     ;; never taps is told exactly what they were told
+                     ;; before this parameter existed, because a
+                     ;; surface that mentioned the spin on every read
+                     ;; would be the system asking a person to spin.
+                     (if draw
+                       (str "You dealt again — this is draw " draw " of ("
+                            (or of "you") ", " day "), a fresh order over the"
+                            " same house. It holds while you read it and the"
+                            " pages below continue THIS draw. The house's"
+                            " usual order for today is one read away — drop"
+                            " the draw — and it comes back on its own"
+                            " tomorrow. Nothing about the spin was written"
+                            " down.")
+                       (str "One order, seeded by (" (or of "you") ", " day
+                            ") — stable until midnight and stored nowhere. Two"
+                            " members read two different feeds on the same day."))
                      (when (and visibility (not preview))
                        (str "Read through your grant: a row your leash does not"
                             " confer is ABSENT here, never narrowed and never"
@@ -2450,12 +2602,17 @@
                      :seed seed
                      :summary (str "Feed · " day " · " (count cards)
                                    " card" (when (not= 1 (count cards)) "s")
+                                   (when draw (str " · draw " draw))
                                    (when preview
                                      (str " · PREVIEW of " of " · read by "
                                           by)))
                      :sections sections
                      :recipe recipe-doc
                      :notes notes}
+              ;; the draw, named in the document that answered it —
+              ;; absent on the daily order, because the daily order is
+              ;; the absence of a draw and not a draw with a name
+              draw (assoc :draw draw)
               preview (assoc :preview preview)
               views (assoc :views views)
               (and bottomless more?)
@@ -2464,6 +2621,7 @@
                                         (if (str/includes? base "?") "&" "?")
                                         "cursor="
                                         (encode-cursor
-                                         {:day day :seed seed
-                                          :offset next-offset}))}})))
+                                         (cond-> {:day day :seed seed
+                                                  :offset next-offset}
+                                           draw (assoc :draw draw))))}})))
            "cards" cards)))

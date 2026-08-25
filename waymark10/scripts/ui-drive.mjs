@@ -1025,6 +1025,105 @@ async function feedStory() {
      /^[0-9a-f]{12}$/.test(keys[0][1].split("/").pop()));
   console.log("    key sent: " + keys[0][1]);
 
+  /* ── deal again: the person spins (waymark-8um.2, law 6) ────────
+     Four claims, one per half of the law. ↻ Re-read asks the SAME
+     address again and answers the same order. A deal-again tap puts a
+     nonce in the ADDRESS and answers a different one. The pages of
+     that draw continue THAT draw — proved on the wire, where
+     links.next can be read. And the way back to the day's own order is
+     a tap too, because the draw lives in the address and nowhere
+     else. */
+  console.log("· dealing again");
+  /* page one's own cards, above the archive: the archive walks itself
+     as the sentinel scrolls, so how DEEP a page happens to be when it
+     settles is a fact about the viewport rather than about the draw */
+  const idsNow = () => evaljs(
+    `[...document.querySelectorAll('[data-card-id]')]
+       .filter(n => n.dataset.section !== "archive")
+       .map(n => n.dataset.cardId)`);
+  /* every re-render replaces the head, and the old one is still on the
+     page while the new document is in flight — so the head is STAMPED
+     before each tap and the walk waits for an unstamped one. Without
+     it every claim below would be read off the page it was meant to
+     replace, and every one of them would pass. */
+  const chip = async label => {
+    const hit = await evaljs(
+      `(() => { const h = document.querySelector(".feed-head");
+                if (h) h.dataset.stale = "1";
+                const b = [...document.querySelectorAll(".feed-head button.chip")]
+                  .find(b => b.textContent.includes(${JSON.stringify(label)}));
+                if (!b) return false; b.click(); return true; })()`);
+    if (!hit) return false;
+    await waitFor(`!!document.querySelector(".feed-head:not([data-stale])")`,
+                  "a fresh read after " + label, 15000);
+    await waitFor(`document.querySelectorAll(".feedcards .fcard").length > 3`,
+                  "the cards after " + label);
+    await waitFor(settled, "the tail to settle", 15000);
+    return true;
+  };
+  /* a fresh read first: the tap above finished a row, so the DOM this
+     block inherits is a page from before that landed */
+  await evaljs(`location.hash = "#/api/-/feed"; true`);
+  await chip("Re-read");
+  const daily = await idsNow();
+  ok("the daily read carries no draw — the day's order is the absence of one",
+     !(await evaljs(`location.hash`)).includes("draw=") &&
+     !(await evaljs(
+       `!!document.querySelector(".feed-head").textContent.match(/draw /)`)));
+
+  ok("↻ Re-read is not a spin: same address, same order",
+     await chip("Re-read") &&
+     JSON.stringify(await idsNow()) === JSON.stringify(daily) &&
+     daily.length > 3);
+
+  /* a small deck can deal itself the same order twice — that is the
+     hash telling the truth, not a failure — so the tap is allowed
+     three spins before the claim is judged */
+  let dealt = null, spins = 0;
+  while (spins < 3 && (dealt === null ||
+                       JSON.stringify(dealt) === JSON.stringify(daily))) {
+    await chip("Deal again");
+    await waitFor(`location.hash.includes("draw=")`, "the draw, in the address");
+    dealt = await idsNow();
+    spins++;
+  }
+  const drew = (await evaljs(`location.hash`)).split("draw=")[1].split("&")[0];
+  ok(`a tap draws a fresh order (${spins} spin${spins === 1 ? "" : "s"}), ` +
+     `and the draw is in the address: ${drew}`,
+     JSON.stringify(dealt) !== JSON.stringify(daily));
+  ok("the screen says a person dealt again, in the household's own words",
+     await evaljs(`(() => { const d = document.querySelector(".feed-why");
+       if (!d) return false; d.open = true;
+       return d.textContent.includes("You dealt again"); })()`));
+  ok("the same draw, read twice, is the same order (stability is per DRAW)",
+     await (async () => {
+       const a = await (await fetch(`${BASE}/api/-/feed?draw=${drew}`,
+                                    {headers: H("colton")})).json();
+       const b = await (await fetch(`${BASE}/api/-/feed?draw=${drew}`,
+                                    {headers: H("colton")})).json();
+       return a.draw === drew && a.seed === b.seed &&
+         JSON.stringify(a.cards.map(c => c.card_id)) ===
+         JSON.stringify(b.cards.map(c => c.card_id));
+     })());
+  ok("links.next continues the SAME draw, page after page",
+     await (async () => {
+       let href = `/api/-/feed?draw=${drew}`, walked = 0;
+       for (let i = 0; i < 4 && href; i++) {
+         const page = await (await fetch(BASE + href,
+                                         {headers: H("colton")})).json();
+         if (page.draw !== drew) return false;
+         if (i > 0 && !href.includes(`draw=${drew}`)) return false;
+         href = (page.links || {}).next?.href || null;
+         walked++;
+       }
+       return walked > 1;
+     })());
+
+  ok("the way back is a tap, and it lands on the day's own order",
+     await chip("Today's order") &&
+     !(await evaljs(`location.hash`)).includes("draw=") &&
+     JSON.stringify(await idsNow()) === JSON.stringify(daily));
+
   /* ── a refusal speaks in the engine's own words, on the card ──── */
   console.log("· a refusal, on the card that asked for it");
   await evaljs(`location.hash = "#/api/-/feed"; true`);

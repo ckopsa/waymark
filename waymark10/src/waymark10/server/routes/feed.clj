@@ -181,16 +181,46 @@
                      :grant (:grant-id vis)}})))))
 
 (defn- feed-doc
-  "GET /api/-/feed[?preview_as=…][&cursor=…] — the day's mixed feed, or
-  the archive page a cursor names.
+  "GET /api/-/feed[?preview_as=…][&draw=…][&cursor=…] — the day's mixed
+  feed, the draw a person's tap asked for, or the archive page a
+  cursor names.
 
   The cursor's day is judged BEFORE a single row is read: a cursor
   minted yesterday is a 409 whose sentence says the feed rolled, never
   a page served under yesterday's seed. The seed is re-derived from
-  (salt, this principal, today) rather than trusted from the token, so
-  a forged cursor buys an offset into the reader's OWN feed and
-  nothing else — and under a preview, 'the reader' is the previewed
+  (salt, this principal, today, draw) rather than trusted from the
+  token, so a forged cursor buys an offset into the reader's OWN feed
+  and nothing else — and under a preview, 'the reader' is the previewed
   member, so the same sentence holds one identity over.
+
+  …AND `?draw=<nonce>` IS THE PERSON SPINNING (waymark-8um.2, law 6).
+  The nonce is the CLIENT's — it taps, it mints, the server hashes it
+  into the seed and hands back a fresh order with the draw named in
+  the document, in `self`, and in `links.next`. Absent means the day's
+  own order, which is what every reader who never taps keeps getting,
+  to the byte. Three rules live at this door and nowhere else:
+
+  - The draw is read through `feed/parse-draw`, so a mangled nonce is
+    a 422 naming the parameter rather than a silent daily order.
+  - **The cursor's draw wins**, because the cursor is the page's own
+    memory of which order it is walking; a client that drops the query
+    parameter while following `links.next` still gets its own draw.
+  - Both halves speaking and disagreeing is refused (`draw-mismatch`)
+    rather than guessed at. Every link this engine mints carries them
+    agreeing, so the disagreement is always hand-composed.
+
+  A rolled DAY still 409s under a draw, unchanged and for the
+  unchanged reason: the day is an ingredient of the seed either way,
+  and yesterday's draw is yesterday's order.
+
+  And a previewer may deal again, because dealing again is a READ. The
+  draw rides the preview exactly as `?explain=1` does — it changes
+  which order the previewed member's own cards come back in, it is
+  stamped in that member's own `self` link, and it writes nothing at
+  all. There is nothing here for a preview to make dangerous: no row
+  moves, no view is counted (`views.recording` is false on every
+  preview), and the member whose feed it is will never know it
+  happened, exactly as with any other preview read.
 
   THE VERBS RENDER, and they are the member's. A previewed card
   carries the actions the MEMBER holds, because `document` is called
@@ -225,9 +255,18 @@
             reader (or (:principal preview) principal)
             {:keys [recipe source]} (recipe/for-reader eng built-in reader)
             cursor (some-> (get params "cursor") feed/decode-cursor)
-            today (feed/today eng recipe)]
+            today (feed/today eng recipe)
+            ;; the draw (waymark-8um.2): the person's tap, spelled on
+            ;; the wire. The CURSOR's draw wins when there is one, so a
+            ;; page continues the draw it came from even if the client
+            ;; dropped the parameter — and when both halves speak and
+            ;; disagree, neither is guessed at.
+            asked (feed/parse-draw (get params "draw"))
+            draw (if cursor (:draw cursor) asked)]
         (when (and cursor (not= today (:day cursor)))
           (throw (feed/rolled (:day cursor) today)))
+        (when (and cursor (get params "draw") (not= (:draw cursor) asked))
+          (throw (feed/draw-mismatch (:draw cursor) asked)))
         (router/json-response
          200
          (feed/document eng recipe
@@ -235,6 +274,12 @@
                                 :recipe-source source
                                 :visibility (router/visibility-of req)
                                 :offset (:offset cursor)
+                                ;; ?draw=<nonce> — the person dealt
+                                ;; again (waymark-8um.2). Absent is
+                                ;; the day's own order, and the seed
+                                ;; it hashes is byte-identical to the
+                                ;; one every reader has always read.
+                                :draw draw
                                 ;; ?explain=1 — the citation spelled out
                                 ;; on every card (waymark-iqa.29). It is
                                 ;; a READ FLAG and nothing more: the

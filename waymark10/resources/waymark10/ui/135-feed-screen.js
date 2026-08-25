@@ -62,7 +62,17 @@
    at most once in this page's life, and the posts go out on one
    debounce rather than one per card per frame. Nothing is sent from a
    preview, because a preview of somebody else's feed is your looking
-   and not theirs. */
+   and not theirs.
+
+   AND A NEW DRAW IS A NEW PAGE LIFE (waymark-8um.2). Dealing again
+   navigates, so `renderFeedScreen` runs afresh and the dedupe set is
+   rebuilt — a card that comes up in two draws on one day is reported
+   in both, which is what actually happened. The day-level truth is
+   the door's, not this page's: `feed_view`'s :unique [[:card_id :day
+   :member]] means the second report is refused by name and the house
+   still holds exactly one row for that card that day. The dedupe here
+   is a politeness about network traffic; the counting law is storage's
+   and was never this page's to keep. */
 
 /* the census, for the section rules and their headings — the recipe's
    own order, read off the CARDS rather than off doc.sections: an
@@ -123,6 +133,45 @@ async function renderFeedScreen(view, doc) {
   let loading = false;
   let count = 0;
 
+  /* ── DEAL AGAIN (waymark-8um.2, law 6) ──────────────────────────────
+     The person spins; the system never spins for them.
+
+     THE NONCE IS MINTED HERE, on the tap, and it goes into the
+     ADDRESS. That is the whole decision and it has three consequences
+     worth wanting: a draw is bookmarkable, shareable and replayable
+     (the same address always answers the same order — a draw is not a
+     secret); the server stays a pure function of (member, day, draw)
+     and stores nothing, exactly as it does for the daily order; and
+     the document never has to carry a suggested nonce, which would
+     have made every read of the feed different from every other read
+     of the same feed.
+
+     ↻ RE-READ IS NOT A SPIN. The two chips stand side by side so the
+     difference is legible: re-read asks THE SAME ADDRESS again — same
+     draw, fresh rows — and deal again asks a new one. Nothing else on
+     this page mints a draw: no timer, no poll, no pull-to-refresh, and
+     the ledger deliberately watches nothing (see watchScope below), so
+     a household write cannot re-roll the order under a reader's thumb.
+     Leaving the screen and coming back reads the day's own order,
+     because the draw lives in the address and nowhere else. */
+  function feedDrawNonce() {
+    return uuid().replace(/-/g, "").slice(0, 10);
+  }
+  /* built from doc.self rather than from location.hash, because self
+     is the SERVER's address for this read and already carries the
+     preview a previewer is inside of */
+  function feedAddress(draw) {
+    const [path, q] = String(doc.self || "/api/-/feed").split("?");
+    const p = new URLSearchParams(q || "");
+    p.delete("draw");
+    if (draw) p.set("draw", draw);
+    return path + (p.toString() ? "?" + p : "");
+  }
+  function goToFeed(href) {
+    if (location.hash === "#" + href) render();
+    else location.hash = "#" + href;
+  }
+
   /* ── chrome ─────────────────────────────────────────────────────── */
   /* the day rides the head as data, not as a second copy of the
      sentence: doc.summary already says "Feed · <day> · N cards", and
@@ -133,8 +182,21 @@ async function renderFeedScreen(view, doc) {
       el("span", {class: "muted", title: "the day this order was seeded for"
                                        + " — it rolls at midnight"},
         doc.summary || day),
-      el("button", {class: "chip", title: "read the day again from the top",
-                    onclick: () => render()}, "↻ Re-read")));
+      el("button", {class: "chip",
+                    title: "read this same order again from the top — the same"
+                         + " draw, with whatever the house has done since",
+                    onclick: () => render()}, "↻ Re-read"),
+      el("button", {class: "chip",
+                    title: "a fresh order over the same house. You spin it;"
+                         + " nothing here ever spins it for you.",
+                    onclick: () => goToFeed(feedAddress(feedDrawNonce()))},
+        "🂠 Deal again"),
+      doc.draw
+        ? el("button", {class: "chip",
+                        title: "back to the house's usual order for today",
+                        onclick: () => goToFeed(feedAddress(null))},
+            "↩ Today's order")
+        : null));
   /* WHY THIS ORDER opens into the RECIPE (waymark-iqa.29). The order
      used to be a hard-coded vector in an application's main.clj that no
      reader would ever see; the server now narrates it line by line, in
@@ -405,9 +467,12 @@ async function renderFeedScreen(view, doc) {
      document already carries. The SENTENCES cost prose per card, so
      they ride ?explain=1 and are fetched once per page, the first time
      anybody actually asks. That late read is sound because the feed's
-     own law says so: two reads by one member on one day answer the
-     same cards in the same order (:feed/day-stable), so the answer
-     lines up by card_id and cannot be a different day's feed. */
+     own law says so: two reads of one DRAW answer the same cards in
+     the same order (:feed/day-stable, :feed/draw-stable), so the
+     answer lines up by card_id and cannot be a different day's feed —
+     or, since waymark-8um.2, a different draw's. `srcHref` is
+     `doc.self`, which carries the draw, so the late read is the same
+     spin the page is showing. */
   const explainCache = new Map();          // page href → Promise<Map>
   function explainOf(srcHref) {
     if (!explainCache.has(srcHref)) {

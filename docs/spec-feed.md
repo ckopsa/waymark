@@ -3355,3 +3355,251 @@ any grant, through `:own-surface {:by :member}`.
   draws from `:nav :primary`/`:secondary`, so neither kind can card. Worth
   knowing before the next framework kind that is written to *be* read rather
   than to be worked.
+
+## Built — 8um.2, deal again (2026-08-25, waymark-8um.2)
+
+Law 6, built: **the person spins; the system never spins for them.** A tap
+mints a draw, the draw joins the seed, and the answer is a fresh order that is
+exactly as stable as the day's — with honest pages, cited the same way, and
+stored nowhere. Nothing in the engine, the screen or the document ever mints a
+draw on its own, and the daily order a reader who never taps gets is not
+merely the default: it is the same hash, to the byte.
+
+### The wire: `?draw=<nonce>`, and absent means the day
+
+```
+GET /api/-/feed                       → the day's own order (unchanged)
+GET /api/-/feed?draw=9f3c1a2b7d       → a fresh order over the same house
+GET /api/-/feed?draw=9f3c1a2b7d&cursor=…  → page two of THAT draw
+```
+
+`draw` is a nonce of 1–64 characters from `[A-Za-z0-9._-]`, read by
+`feed/parse-draw`. Blank or absent is the daily draw. A value the pattern
+refuses is a **422 naming the parameter**, not a silent fall back to the daily
+order — a client that mangled its nonce and was handed the same order twice
+would conclude that dealing again does not work.
+
+The seed grew one optional ingredient and nothing else:
+
+```
+seed = sha256(salt ‖ member-principal-id ‖ local-date[ ‖ draw])
+```
+
+**The default draw hashes identically, and this was proved rather than
+asserted.** The same six-row world was built on `HEAD` and on the working
+tree with row ids pinned (`random-uuid` redefined to a counter) and the wall
+clock scrubbed from `updated_at`; both runs' `GET /api/-/feed`, `GET
+/api/-/feed?explain=1`, `seed-of` and `encode-cursor` were written out and
+compared. **25,601 bytes, byte-identical, same md5.** The daily order is not
+the default draw by convention — it is the same hash, so nothing at all moves
+for a reader who never taps.
+
+### The client mints the nonce, and that is the decision
+
+The alternative — a bare `?deal_again=1` the server answers with a nonce it
+minted — was weighed and refused three times over:
+
+- **A draw is not a secret.** A client-minted nonce lives in the ADDRESS,
+  which makes a draw bookmarkable, shareable and replayable: the same address
+  always answers the same order, today. *"Look at what the feed gave me"* is a
+  link, and coming back to a spin is the browser's own Back.
+- **The server stays a pure function of (member, day, draw) and stores
+  nothing** — exactly the property the daily seed has, which is the whole
+  reason the original spec declined to materialize anything. A server that
+  minted draws would have to either write them down or hand out something it
+  could not recognise later, and the first of those is a per-read row on a
+  surface whose first law is that the GET writes nothing.
+- **A minted nonce would have to ride every document.** To offer a spin, the
+  server would have to suggest a nonce on every read — and then no two reads
+  of one feed would be identical, which would break the byte-identity above,
+  the late `?explain=1` join, and every cache in front of the door.
+
+Replayability is the point rather than a leak: a draw confers no access, is
+projected through the reader's own grant like everything else, and names
+nothing that is not already the reader's own.
+
+### The document says it plainly, and only when somebody spun
+
+Under a draw the document grows `"draw": "<nonce>"`, names it in `summary`
+(`Feed · 2026-08-25 · 14 cards · draw 9f3c1a2b7d`) and in `self`, and replaces
+the seed's own note with the household sentence:
+
+> You dealt again — this is draw 9f3c1a2b7d of (you, 2026-08-25), a fresh
+> order over the same house. It holds while you read it and the pages below
+> continue THIS draw. The house's usual order for today is one read away —
+> drop the draw — and it comes back on its own tomorrow. Nothing about the
+> spin was written down.
+
+**The daily document says nothing about dealing again, and that is
+deliberate.** It would have been easy to add *"add ?draw= to deal again"* to
+`notes` beside the `?explain=1` sentence. It is not there, because a surface
+that mentions the spin on every read is the system asking a person to spin,
+and law 6 says the system never spins for them. The affordance is a chip on
+the screen, where a person's thumb already is; the document explains a draw
+once somebody has taken one. This is also what keeps the byte-identity proof
+above honest, and the two reasons point the same way.
+
+`?explain=1`'s citations stay truthful under a draw, because the numbers were
+always the seed's: `rank` and `of` are this draw's order, and `drawn-says`
+names it — *"Drawn 3rd of 6 this line offered today, by (you, 2026-08-25, draw
+9f3c1a2b7d)'s seed… the seed decides the order, and this draw holds until you
+deal again."* The daily sentence is unchanged, including its tail (*"it decides
+once a day"*).
+
+### The cursor carries its draw
+
+`{:day :seed :offset}` became `{:day :seed :offset :draw?}`. A cursor minted
+under the daily order carries **no `draw` key at all** and is byte-identical
+to the token this engine has always minted, so every cursor in a client's hand
+from before this bead reads exactly as it did.
+
+Three rules, all at the door:
+
+1. **The cursor's draw wins.** A page continues the draw it came from even if
+   the client drops the query parameter on the floor, because the cursor is
+   the page's own memory of which order it is walking.
+2. **`links.next` carries both halves** — `?draw=…&cursor=…` — so `self` is a
+   true address of this read and the parameter never has to be re-derived.
+3. **Two halves that disagree are refused**, not guessed at (`draw-mismatch`,
+   422 naming `draw`). Honouring the parameter would serve a page of the
+   tapped draw at an offset counted in the cursor's; honouring the cursor
+   would answer an order the caller did not ask for. Every link this engine
+   mints carries them agreeing, so a disagreement was always composed by hand.
+
+**The stale-day rule needed no extension.** The day is an ingredient of the
+seed either way, so a cursor whose day is not today is the same 409 it always
+was: yesterday's draw is yesterday's order, and there is no draw that outlives
+a midnight.
+
+### View events under a redraw: the door already had it right
+
+The same card seen in two draws on one day is **one row**, and nothing was
+added to make that true. `feed_view`'s `:unique [[:card_id :day :member]]` is
+the day-level truth, and `this-card-is-counted-once-a-day` refuses the second
+report by name.
+
+What the screen does is the honest half: **a new draw is a new page life**, so
+the in-page dedupe set is rebuilt — a card that comes up in two draws is
+reported in both, which is what actually happened — and the door collapses
+them. Had the set persisted across a redraw, views would have *under*-counted:
+a card shown twice in one evening would have been reported once, and law 5's
+formula reads these counts. The dedupe on the screen is a politeness about
+network traffic; the counting law is storage's and was never the page's.
+
+### The screen: two chips, and what neither of them does
+
+`135-feed-screen.js` grew `🂠 Deal again` beside the existing `↻ Re-read`, and
+a third chip — `↩ Today's order` — appears only when a draw is riding.
+
+- **↻ Re-read is not a spin.** It asks the SAME address again: same draw,
+  fresh rows. The two stand side by side precisely so the difference is
+  legible.
+- **🂠 Deal again** mints the nonce (10 hex characters off `uuid()`) and
+  navigates, building the address from `doc.self` so a previewer stays inside
+  their preview. The draw lives in `location.hash` and nowhere else.
+- **↩ Today's order** drops the parameter. Leaving the screen and coming back
+  also lands on the day's own order, because there is no state to leave
+  behind.
+
+**Audited for auto-redraw, and there is none.** `watchScope({})` already
+watches nothing (*"a feed that refetched on every household write would
+re-roll under the reader's thumb"*), there is no timer, no poll and no
+pull-to-refresh, the two `setTimeout`s belong to the view beacon's dwell and
+debounce, and the only calls to `render()` are on a chip and on the terminal
+panel's *Read from the top* button. The archive's `IntersectionObserver` takes
+the NEXT PAGE of the current draw, which is continuing a spin rather than
+starting one.
+
+### A previewer may deal again, because dealing again is a read
+
+The draw rides a preview exactly as `?explain=1` does. The seed is
+`(salt, THE MEMBER, today, draw)` — a preview of a spin is the member's spin,
+computed through the member's own sight — the stamp is unchanged, `self` keeps
+both parameters, and `views.recording` is still false on every preview, so the
+previewer's page still has nothing to beacon about. Nothing is written: the
+feed's GET writes nothing under a draw for the same reason it writes nothing
+without one.
+
+### Where the law is proved
+
+- **`:feed/deal-again`, the pack's new obligation** (a READER, so it sits among
+  the readers rather than below with the writers — a draw is a nonce in a
+  query string and leaves the engine exactly as it found it): a draw answers a
+  different seed than the day; two draws differ; one draw read twice answers
+  the same seed and the same cards; the daily order is unchanged before and
+  after somebody spun; the document names its draw and says *"You dealt
+  again"*; `links.next` carries the draw in the href AND in the cursor and page
+  two comes back as that draw; a mangled nonce is 422; a cursor from one draw
+  beside another draw's parameter is 422.
+
+  It claims the SEED rather than the order where the two could differ, and
+  says so: a house holding two cards can deal itself the same order twice, and
+  that is the hash telling the truth rather than a failure.
+- **`:feed/day-stable` is unchanged and still true** — it is now explicitly the
+  claim about the DEFAULT draw, which is the one a reader who never taps
+  depends on.
+- **`feed-test`** — the seed's arities (no draw hashes what it always hashed;
+  a draw joins it; two draws differ; one draw is stable; the day still rolls
+  every draw), `parse-draw`'s refusals, the cursor's round trip with and
+  without a draw, a full door walk (fresh order, stable draw, daily order
+  untouched, the household sentence), the pages of a draw (the cursor alone
+  continues its own draw; the crossed request is refused), and a previewer
+  dealing again on somebody else's feed.
+- **`runtime-conformance-test`** pins `:feed/deal-again` as having RUN, like
+  `:feed/staged-proposals` and `:feed/view-events`. It needs no kind at all,
+  only the route, so a silent skip would mean the door itself had gone.
+- **`feed_shape_test`** runs it over workqueue10's real world beside the other
+  five readers.
+- **`ui-drive.mjs feed`** — the hand walk, extended: the daily read carries no
+  draw; ↻ Re-read answers the same order; a tap puts a nonce in the address
+  and draws a fresh one (up to three spins, because a small deck may honestly
+  deal itself the same order twice); the screen says *"You dealt again"*; the
+  same draw read twice on the wire is the same order; `links.next` continues
+  the same draw four pages down; and ↩ Today's order lands back on the day's
+  own order, card for card. **28 checks, no console errors.**
+
+  It found one thing about the HARNESS rather than the feature, and it is
+  worth knowing before the next screen is driven: `render()` fetches before it
+  blanks the view, so for the length of one request the page it is replacing
+  is still standing. A walk that taps a chip and immediately asserts on
+  `.fcard` reads the page it meant to replace — and every claim passes,
+  including the ones that should not. The block stamps `data-stale` on
+  `.feed-head` before each tap and waits for an unstamped one. The first run
+  failed honestly (*"a tap draws a fresh order"*, after three spins that had
+  all read the same stale page) and that is the only reason it was found.
+
+### Recorded here, for whoever comes next
+
+- **No new kind, no migration, no fingerprint moved.** A draw is a query
+  parameter and a hash ingredient. Not one declaration changed, so the schema
+  plan is empty and production needs nothing before the deploy that serves
+  this.
+- **The cursor's opacity survives law 6, and the reason is worth restating.**
+  It was opaque because *"a client that could edit the seed could re-roll its
+  own feed until it liked the order"*. Re-rolling is now a legitimate tap — but
+  what a person gets is a WHOLE fresh draw, honestly labelled, from the top.
+  What nobody gets is a half-draw: page four of one order spliced onto pages
+  one to three of another. An editable seed would buy exactly that, so the
+  token stays shut.
+- **`?draw=` is the only way to spin, and there is no `POST /api/-/feed/deal`.**
+  A spin is a read of a different address, which is why it needs no door, no
+  write and no audit entry: the audit trail's `feed/<day>/<card_id>/<nonce>`
+  origin key already records what a person DID from a card, and which spin
+  they were looking at when they did it is not a fact about the house.
+- **A draw is not remembered, on purpose.** No cookie, no last-draw column, no
+  session key. Come back tomorrow and the house deals its own order; come back
+  in five minutes without the address and it deals the day's. A feed that
+  remembered your last spin would be spinning for you the next time you opened
+  it, which is the sentence law 6 exists to forbid.
+- **Three follow-ups are filed.** `waymark-caw` (the parameter is
+  undiscoverable to a client that is not the screen — decide whether it
+  belongs somewhere machine-readable that no human eye lands on),
+  `waymark-mbr` (the origin key does not name the draw an action was tapped
+  from), and `waymark-dtv` (the counting question below).
+- **The formula (waymark-8um.3) inherits a live question this bead did not
+  answer** (`waymark-dtv`): whether a card's view counts should be read per
+  draw or per day.
+  They are stored per day (the unique is `(card_id, day, member)`), which is
+  the answer for now and the cheaper one; if the ranker ever wants *"shown
+  three times today across three spins"* it is a schema change and a law
+  change, not a query.
