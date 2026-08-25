@@ -1676,3 +1676,281 @@ wall.
   (*the owner declares his values first, by hand*) is now optional rather
   than a precondition: a composer may write what it observes and compose
   against it the same day, and the card will say so until he answers.
+
+## Built — jfv.11, the person kind (2026-08-25, waymark-jfv.11)
+
+**Why it exists, in one incident.** A composer read this house's record,
+found a woodworking build, found a caregiver's name in the same
+neighbourhood of rows, and composed *build the finger-joint box with
+him* — a Saturday afternoon with a son. He is a grandparent's CNA.
+**Every row the composer read was correct**; the relationship it
+assembled out of them was invented, because relationships were nowhere
+in the record. The owner's own reaction — *we may even need a resource
+for this* — is this bead.
+
+`person` is a **roster**, not a genealogy and not an address book: their
+everyday name, how they relate to this house in the owner's own words,
+who they relate **through**, when they were born if the family knows,
+and whether they are in this house's life now or were. Its whole job is
+that a sentence with a name in it can be **checked**.
+
+### The declaration, as it landed
+
+```clojure
+{:kind :person
+ :plural "people"
+ :nav :secondary
+ :states [:observed :current :past]
+ :initial :observed
+ :terminal #{}
+ :summary "{data.name} · {data.relation} · {state}"
+ :label-template "{data.name}"
+ :links [{:rel "through" :kind :person
+          :href "/api/people/{data.through_id}"}]
+ :schema [:map
+          [:name        {:sort :default}                     [:string {:min 1 :max 80}]]
+          [:relation    {}                                   [:string {:min 1 :max 80}]]
+          [:through_id  {:optional true :kind :person
+                         :label :through_name :filter #{:eq}} [:maybe :waymark/ref]]
+          [:through_name {:optional true}                    [:maybe [:string {:max 80}]]]
+          [:born        {:optional true}                     [:maybe :waymark/date]]
+          [:written_by  {:optional true :filter #{:eq}}      [:maybe [:string {:max 128}]]]
+          [:affirmed_at {:optional true :sort true}          [:maybe :waymark/instant]]
+          [:affirmed_by {:optional true :filter #{:eq}}      [:maybe [:string {:max 128}]]]]
+ :create-schema [:map [:name …] [:relation …] [:through_id …] [:born …]]
+ :filterable {:state #{:eq :in}}
+ :create-guards [relates-through-somebody-here]
+ :on-create born-into
+ :actions
+ {:revise        {:from #{:observed :current} :to :current   ; "Put it in your words"
+                  :guards [only-a-person-says-who-we-know
+                           relates-through-somebody-here]}
+  :restate       {:from #{:observed}          :to :observed  ; "Correct what was observed"
+                  :guards [only-the-observer-corrects
+                           relates-through-somebody-here]}
+  :still_with_us {:from #{:observed :current} :to :current   ; "Yes — still with us"
+                  :guards [only-a-person-says-who-we-know]}
+  :now_past      {:from #{:observed :current} :to :past      ; "That's past now"
+                  :guards [only-a-person-says-who-we-know]}
+  :dismiss       {:from #{:observed}          :to :past      ; "Not somebody we know"
+                  :guards [only-a-person-says-who-we-know]}
+  :restore       {:from #{:past}              :to :current   ; "With us again"
+                  :guards [only-a-person-says-who-we-know]}}}
+```
+
+### `born`, not `age` — decided and recorded
+
+An age is a fact about the morning somebody typed it. *the middle boy,
+son, 7* is true today, quietly wrong next spring, embarrassingly wrong
+in three years — and this kind exists precisely so a composer stops
+working from numbers nobody checked. A **date** never goes stale, it is
+what a family already knows about its own children, and it is the only
+spelling that can answer the question a planner asks next (*is
+somebody's birthday inside this week?*). A birth **year** was the middle
+road and loses on the youngest person in a house: a year is ±12 months,
+and twelve months is the whole difference between a one-year-old and a
+two-year-old.
+
+**Optional, and the optionality is the honest half.** Nobody writes down
+a grandfather's birthday to satisfy a form. An empty `born` says *this
+house does not track that about them*; a guessed year would have said
+something false with a number's confidence. There is no `age` field at
+all — an age stored beside a date is a second answer waiting to
+disagree with the first.
+
+### `through` — a ref, not a name
+
+The caregiver does not relate to this house. He relates to the
+grandfather, and the house relates to the grandfather. **That is the
+fact the composer did not have**, and it is one optional ref carrying
+the maintained `through_name` garnish (`value_id`/`value_name`'s label
+doctrine, one field over) so a card reads `Bram · Odell's CNA · through
+Odell` without a join.
+
+A free-text `through` would have been *the same class of thing this bead
+is about* — a name in a sentence that nothing checks. The roster is
+small and is seeded in dependency order, so
+**`relates-through-somebody-here`** refuses a dangling ref at every door
+that can write one, and refuses a row that relates through **itself**.
+Deeper rings (A through B through A) are **not** walled and are recorded
+rather than pretended about. Filed (`waymark-jfv.15`).
+
+### The affirmation machine: two axes, one column
+
+`current` / `past` is the bead's own ruling — *a CNA who leaves is a
+transition worth a record*, not a boolean that flips in silence. jfv.10's
+observed/affirmed axis rides the **same column**, for jfv.10's own
+reason: `summary/render` has no conditional, so a missing stamp renders
+an em-dash and can never speak its own absence, while `{state}` speaks
+on every envelope, every list line and every transition record;
+`:filterable :state` then makes *who has been written down and not yet
+answered* a query this house already owns.
+
+The combination the column cannot hold is **`observed` AND `past`** — an
+unaffirmed departure — and it is not a loss, because nothing may plan
+with a `past` person and nothing may plan with an `observed` one either.
+`observed` means *somebody wrote this down and the house has not
+answered*; the house's answer is **which door the row walks out
+through**.
+
+**Inherited from jfv.10 whole:** the wording door splits by hand
+(`revise` is a person's and claims the row; `restate` is the observer's
+and leaves it a guess), both walls are pure functions of the principal
+so each hand is offered exactly one, and the birth state is a `:on-create`
+hook — an agent's row lands `observed`, a person's lands `current` and is
+stamped in the same breath.
+
+**Two costs paid differently from jfv.10:**
+
+1. **`now_past` leaves from `observed` too, and therefore carries no
+   `:undo`.** An `:undo` must return exactly where it departed from, so
+   jfv.10 split `retire` (from `declared`, with an undo) from `dismiss`
+   (from `observed`). Here the departure from `observed` is **the first
+   case, not an edge case**: the motivating row is a caregiver an agent
+   found in the record who has *already left*. Making the owner affirm
+   her as current on the way to past would write a lie for one
+   transaction. `restore` is its own door, landing in `current`.
+2. **`dismiss` survives for the household's reason rather than the
+   mechanical one.** *She left* and *that is not somebody we know* are
+   different sentences, and a composer reading the log must be able to
+   tell a **staffing change** from a **bad guess**. Both land in `past` —
+   the one place the mirror strains, since `past` carries a *was here
+   once* that a hallucination never earned. The doors keep them apart;
+   the state only keeps them out of plans.
+
+### What jfv.10 has that this kind does not, and why
+
+- **No scope.** A value carries `household` / `mine` because it is a
+  sentence about one member's inner life. A person is a fact about the
+  household's **world**, and there is no honest *mine* reading of *he is
+  the grandfather's CNA*. So no scope, no owner stamp, and no
+  `a-private-value-is-a-persons-own` — which is also why `restate` needs
+  no ownership wall. `written_by` stays; it answers the question scope
+  never did.
+- **No `member_id`.** Persons are **not** members: a member is a login
+  principal and most of these people will never log in. The link looks
+  like one cheap optional field and is not — setting it is an **identity
+  assertion**, and the hand most likely to reach for it is the
+  observer's, which is the one hand that must never make one. An honest
+  link needs its own wall, and that wall is worth writing when something
+  reads the link. **Filed** (`waymark-jfv.12`).
+- **No `:default-filters`.** A roster opening on `state=current` would
+  hide exactly the rows that need a person.
+
+### The composer contract hook: `outcome.companion_id`, checked
+
+**Decided: add the checked field now.** The miscomposition that filed
+this bead is the argument — prose alone would let it happen again, and a
+roster nothing consults is a document. `outcome` gains
+`companion_id` (optional ref to `:person`, with the `companion_name`
+label garnish) and one create wall, **`names-a-person`**:
+
+- **absent → allowed**, and that is the common case. Grandpa's paperwork
+  is nobody's afternoon but the owner's, and a door that *demanded* a
+  companion would teach the composer to invent one — which is the bug.
+- **not there → refused**, naming `/api/people` and the fix.
+- **`observed` → refused**, and **this is where jfv.10's widening
+  honestly stops.** `held-states` admits an observed *value* because
+  refusing would have made the owner's ruling a permission with nothing
+  behind it. That argument does not carry: a wrong value is a wrong
+  sentence about what somebody cares about; a wrong **person** is the
+  exact failure this wall exists to stop, and an agent that could compose
+  against its own unanswered reading of who somebody is would make the
+  wall paper. The refusal names the lawful path (publish an insight,
+  offer that row's own tap). **Consequence: no card sentence is needed
+  and no feed file was touched** — an observed person can never reach a
+  card.
+- **`past` → refused**, with the relation and the finding in the
+  sentence. This is the bead's own insight: the dropped cleaning cluster
+  of Aug 8–15 is assigned to a caregiver who left. *A plan built around
+  somebody who is gone is not a plan that needs pushing harder.*
+
+**What it does not check is FIT**, and saying so is the whole of the v1
+scope. Whether a CNA is the right person for a box in the shop is a
+judgment, not a predicate, and a guard that pretended otherwise would be
+a second opinion about the household's own life —
+`the-prepared-input-fits-the-door`'s own refusal, one kind over. The
+relation is on the row to be **read**, the wall's `:open` sentence says
+to read it, and holding a composer to it is **jfv.5's contract**.
+
+**`companion_id` carries no `:filter`, deliberately.** Only
+`filterable ∪ sortable` fields become generated columns, so a filter
+would move `outcome`'s **storage** facet and mint a law revision on a
+kind whose machine did not change — for a query nothing asks yet. Filed
+(`waymark-jfv.14`).
+
+### Where the law is proved
+
+**Six scenarios on `person`** — three check-tier (`still_with_us` twice,
+`now_past` once) and three deferred to the suite (`restate` as a person,
+`revise` on a `past` row, and a dangling `through` at create). All three
+refusing guards are named by one.
+
+**A framework finding, recorded because it shaped the scenario set: a
+conformance-tier scenario cannot be attempted AS AN AGENT.** The walker
+presents no grant, the router default-denies with 404, and
+`packs/wire-verdict` reads a 404 as *unreadable* on purpose — a
+hide-flagged guard conceals rather than narrates, so no scenario may name
+one through the door. Every door this kind lets an agent **write**
+through checks the `through` ref, and checking it means reading the
+roster, so *an agent may write down somebody it found* and *an agent may
+correct what it observed* have **no expressible scenario**. They are
+proved over the real handler by an agent **holding a leash** instead,
+which is the stronger sentence anyway. Filed as `waymark-zs9`.
+
+**`names-a-person` names no scenario either, and that is structural
+too.** A scenario's `:input` is a literal map and a `:given` row's id is
+minted by the walker, so no scenario can cite a row it staged — the only
+arm reachable is a dangling companion, and `names-a-value` stands in
+front of it and refuses the same body first.
+
+**Eight deftests in `workqueue10/test/workqueue10/person_test.clj`**, over
+the real ring handler and the whole registry: the birth state and its
+stamps (including `born` round-tripping as a date); the answer with
+**both hands in the transition log**; the two correcting doors and
+neither hand reaching the other's; `through` checked at both ends
+(dangling refused, self refused, the good one carrying `through_name`,
+and dropping it really clearing); the departure straight out of
+`observed`; `dismiss` distinguished from `now_past` in the log; and
+**all three arms of `names-a-person`** plus the two allowed ones.
+
+`make check-queue` goes from **35 to 36 kinds** and **43 to 46 scenarios
+judged**; 11 warnings, unchanged. `person` reports clean.
+
+### Recorded here, for whoever comes next
+
+- **Exactly one fingerprint moved, and it is the new one.** `person`
+  lands at `12a4a98e…`; every other kind is **byte-identical**, verified
+  by computing the whole census before and after. **`outcome` did not
+  move** (`5de724bc…`) even though it gained two schema fields, a link
+  and a create guard: `fingerprint-of` projects
+  `machine.actions.*.guards.*` and a storage facet built only from
+  promoted columns, so a create door's law and an unfiltered field are
+  both invisible. **waymark-442.9** files that; jfv.10 was the second
+  witness and this bead is the third.
+- **Production: one new table, four steps, no state work, nothing at
+  risk.** `make migrate-queue-prod` prints
+  `create-table people: CREATE TABLE IF NOT EXISTS people (…)` with five
+  generated columns (`f_affirmed_at`, `f_affirmed_by`, `f_name`,
+  `f_through_id`, `f_written_by`) and three indexes (`ix_people_flip`,
+  `ix_people_law`, `ix_people_state`). **`outcomes` needs no DDL at
+  all** — `companion_id` and `companion_name` are document fields with
+  no promotion.
+- **The roster is seeded THROUGH THE DOOR, after the deploy, by the
+  family.** It is production data and appears in no file in this tree;
+  the cast in `person.clj` and `person_test.clj` is invented and says so.
+  Order matters: anybody who relates **through** somebody must be written
+  after them, because the ref is checked.
+- **The composer's grant scope for jfv.5 widens by exactly two actions
+  on this kind.** `person: ["create", "restate"]`. Never
+  `still_with_us`, never `revise`, never `now_past`, `dismiss` or
+  `restore` — who is in this family's life is the family's sentence, in
+  both directions.
+- **A person's `relation` carries no filter**, deliberately: exact-match
+  on free prose is a trap, and the words there are the family's rather
+  than a vocabulary.
+- **The roster does not populate the feed and owes no pack obligation.**
+  Nothing about a person is a thing to do, and the feed's job is what the
+  house could do next. A roster screen with the unanswered rows on top is
+  the obvious first ask; that is when a population and its obligation are
+  earned. Filed (`waymark-jfv.13`).

@@ -62,6 +62,7 @@
             [workqueue10.resources.permission-slip :refer [permission-slip]]
             [workqueue10.resources.media :refer [media-resource]]
             [workqueue10.resources.outcome :refer [outcome outcome-piece]]
+            [workqueue10.resources.person :refer [person]]
             [workqueue10.resources.task :refer [task-resource]]
             [workqueue10.resources.tickler :refer [tickler]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
@@ -369,8 +370,26 @@
        ;; accepting member's own name through the target kinds' own
        ;; create doors (docs/spec-outcome-menu.md § 'The outcome and
        ;; its pieces').
+       ;; :person rides last (waymark-jfv.11): the roster — who is who
+       ;; in this house, so plans stop guessing. It exists because a
+       ;; composer read correct rows and invented the relationship
+       ;; between them, pairing a woodworking Saturday with a caregiver
+       ;; as though he were a son. Their everyday name, how they
+       ;; relate in the owner's own words, who they relate THROUGH, when
+       ;; they were born if the house knows, and whether they are in
+       ;; this family's life now or were — current and past as STATES,
+       ;; because a CNA who leaves is a transition worth a record.
+       ;; Domainless for the same family reason value is: who this
+       ;; household's people are is not a domain of logistics beside
+       ;; queue/chores/meals, it is who the logistics are ABOUT. NOT
+       ;; members: a member is a login principal and most of these
+       ;; people will never log in. :nav :secondary and no population,
+       ;; for value's reason — a roster is not a thing to do. What
+       ;; reads it is `outcome/names-a-person` at the composer's create
+       ;; door (docs/spec-outcome-menu.md § 'Built — jfv.11').
        (into (into [saved-view capability connection self journal weather letter
-                    permission-slip tickler insight value outcome outcome-piece]
+                    permission-slip tickler insight value outcome outcome-piece
+                    person]
                    dashboard/resources)))))
 
 (def surfaces

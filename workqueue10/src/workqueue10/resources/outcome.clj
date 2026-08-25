@@ -93,6 +93,36 @@
      no edit and takes no input, so no fence is implied — there is
      nothing here to waive.
 
+  ── AND NEITHER IS THE COMPANION (waymark-jfv.11) ──
+
+  A composer read this house's record, found a woodworking build, found
+  a caregiver's name in the same neighbourhood of rows, and composed
+  `build the finger-joint box with him` — a Saturday afternoon with a
+  son. HE IS A GRANDPARENT'S CNA. Every row it read was correct; the
+  relationship it assembled out of them was invented, because
+  relationships were nowhere in the record.
+
+  So `companion_id` is a CHECKED ref into the `person` roster, with the
+  `value_id`/`value_name` label doctrine one field over, and
+  `names-a-person` at the create door. Absent is allowed and is the
+  common case — Grandpa's paperwork is nobody's afternoon but the
+  owner's, and a door that demanded a companion would teach the
+  composer to invent one, which is the bug. What the wall checks is
+  that the companion EXISTS and that this house currently HOLDS them:
+  an `observed` guess is refused (the composer may write a person down;
+  it may not compose against its own unanswered reading of who somebody
+  is) and so is a `past` one — the bead's own finding, where a dropped
+  cleaning cluster still names a CNA who left.
+
+  WHAT IT DOES NOT CHECK IS FIT, and the honesty of saying so is the
+  whole of the v1 scope. Whether a CNA is the right person for a box in
+  the shop is a judgment, not a predicate, and a guard that pretended
+  otherwise would be a second opinion about the household's own life —
+  the same refusal `the-prepared-input-fits-the-door` makes about
+  another kind's guards. The relation is on the person's row for the
+  composer to READ, the wall's own `:open` sentence says to read it,
+  and holding a composer to it is waymark-jfv.5's contract.
+
   ── THE TARGET IS NOT FREE DATA ──
 
   `insight` recorded the one cross-write no declaration could name:
@@ -424,6 +454,93 @@
                                         " precisely the high-friction value"
                                         " the whole idea is about. Leave the"
                                         " routing empty and say so."))}}))))))
+
+(def ^:private in-our-lives
+  "The person states an outcome may name as a companion — ONE, and the
+  narrowness is the decision (waymark-jfv.11).
+
+  waymark-jfv.10 widened `held-states` to admit an OBSERVED value, and
+  the reasoning was good there: refusing to compose against a value an
+  agent wrote down would have made the owner's ruling a permission with
+  nothing behind it, and the card says which. THAT ARGUMENT DOES NOT
+  CARRY ACROSS, and the difference is the whole of waymark-jfv.11.
+
+  A wrong value is a wrong sentence about what somebody cares about; a
+  wrong PERSON is the exact failure this wall exists to stop. An agent
+  may write a person row — that is jfv.10's ruling, honoured — but if
+  it could then compose against its own unanswered guess, it could
+  still write `the caregiver, son` and build a Saturday on it, and the
+  wall would be paper. So an `observed` companion is refused, and the
+  refusal names the lawful path: publish an insight, offer that row's
+  own tap, and compose with them once the house has answered.
+
+  `past` is refused for the household's reason, and it is the finding
+  the bead was filed on: the dropped cleaning cluster of Aug 8–15 is
+  assigned to a CNA who left. A plan built around somebody who is gone
+  is not a plan that needs pushing harder — it is a staffing change the
+  rotation never heard about."
+  #{"current"})
+
+(defguardfn names-a-person
+  {:judges [:companion_id]
+   :reads [:person]
+   :vars [:problem]
+   :open "A plan may name somebody to do it WITH, and when it does it names a person off this house's roster — one the house has answered and still holds. Read /api/people first: the relation written there is how you learn whether the pairing you are about to compose is one this family would recognise."
+   :explain "That is not somebody this house can build an afternoon around: {problem}"}
+  [_row inp ctx]
+  ;; THE WALL THE MISCOMPOSITION WOULD HAVE HIT. A composer read
+  ;; correct rows, found a caregiver's name among them, and paired a
+  ;; woodworking Saturday with him as though he were a son — he is a
+  ;; grandparent's CNA. Every row it read was right; the relationship
+  ;; it assembled was invented, because relationships were nowhere in
+  ;; the record.
+  ;;
+  ;; What this guard can honestly check is that the companion EXISTS
+  ;; and that this house currently holds them. It cannot check that the
+  ;; pairing FITS — whether a CNA is the right person for a box in the
+  ;; shop is a judgment, not a predicate — and pretending otherwise
+  ;; would be a second opinion about the household's own life. So the
+  ;; relation is on the row for the composer to read and for jfv.5's
+  ;; contract to be held to, and the :open sentence says where to look.
+  (let [read' (:read ctx)
+        pid (some-> (:companion_id inp) str str/trim not-empty)
+        deny (fn [problem] (t/deny {:vars {:problem problem}}))]
+    (cond
+      ;; ABSENT IS ALLOWED, ON PURPOSE, and it is the common case.
+      ;; Grandpa's paperwork is nobody's afternoon but the owner's, and
+      ;; a door that demanded a companion would teach the composer to
+      ;; invent one — which is the precise bug this wall is for.
+      (nil? pid) (t/allow)
+      (nil? read') (t/allow)
+
+      :else
+      (let [row (read' :person pid)
+            nm (pr-str (str (get-in row [:data :name])))
+            rel (str (get-in row [:data :relation]))]
+        (cond
+          (nil? row)
+          (deny (str "this house has nobody at " pid
+                     " — read /api/people and name one of those. If the"
+                     " person is real and simply not written down, write"
+                     " them down first: their name, and how they relate"
+                     " to this house in the household's own words."))
+
+          (= "observed" (name (:state row)))
+          (deny (str nm " is in the roster as observed — somebody wrote"
+                     " the name down (\"" rel "\") and nobody here has"
+                     " answered yet. A week is not spent on the strength"
+                     " of a guess about who somebody is. Publish an"
+                     " insight, offer that row's own \"yes — still with"
+                     " us\", and compose this once the house has said so."))
+
+          (not (in-our-lives (name (:state row))))
+          (deny (str nm " is past — " rel ", and not one now. A plan may"
+                     " not be built around somebody who has left; if this"
+                     " house still has work standing in their name, that"
+                     " is a finding about the rotation rather than an"
+                     " afternoon to offer."))
+
+          :else (t/allow))))))
 
 (defguardfn a-recomposition-waits-its-turn
   {:judges [:supersedes]
@@ -862,6 +979,18 @@
    :expect  {:refused :names-a-value
              :because "this house has no value"}})
 
+;; NO SCENARIO NAMES `names-a-person`, AND THE ABSENCE IS STRUCTURAL
+;; RATHER THAN AN OMISSION (waymark-jfv.11). A scenario's `:input` is a
+;; literal map and a `:given` row's id is minted by the walker, so no
+;; scenario can cite a row it staged — which means the only arm a
+;; scenario could reach is a DANGLING companion, and `names-a-value`
+;; stands in front of it and refuses the same body first for its own
+;; reason. All three of this wall's arms (nobody there, an observed
+;; guess, somebody who has left) want a live engine holding real
+;; person rows anyway, so they are proved by workqueue10.person-test
+;; over the real ring handler — `take` and `make_it_so`'s own posture,
+;; two kinds up, for the same reason.
+
 (defscenario the-composer-does-not-answer-its-own-piece
   "The same wall, one row down, and it has to be here as well as on
    the parent: the pieces are where the consent actually happens, so a
@@ -952,6 +1081,15 @@
    {:x-display
     {:label "What you read"
      :help "The rows this outcome was built from, as addresses — /api/tasks/01H… — one per row you actually looked at. At least one, always: an outcome sits on top of the household's own ledger, and the house can follow the citations down into it."}}
+   :companion_id
+   {:x-display
+    {:label "Who it is with"
+     :help "Somebody off this house's roster, when the outcome is one done WITH a person — /api/people. Leave it empty when it is nobody's afternoon but the owner's; most of the valuable ones are. The relation written on their row is how you learn whether the pairing is one this family would recognise: a grandparent's caregiver is not a son, and a plan that gets that wrong is wrong in the way nobody notices until Saturday."}}
+   :companion_name
+   {:x-display
+    {:raw true
+     :label "With"
+     :help "Their name, copied by the engine so the card reads without a second lookup."}}
    :supersedes
    {:x-display
     {:label "The outcome this recomposes"
@@ -1035,7 +1173,10 @@
             :summary "The pieces this bundle is made of"}
            {:rel "supersedes" :kind :outcome
             :href "/api/outcomes/{data.supersedes}"
-            :summary "The outcome this one recomposes"}]
+            :summary "The outcome this one recomposes"}
+           {:rel "companion" :kind :person
+            :href "/api/people/{data.companion_id}"
+            :summary "Who this outcome is with, off the house's roster"}]
    :schema
    [:map
     (oe :goal {} [:string {:min 1 :max 240}])
@@ -1047,6 +1188,25 @@
     (oe :value_name {:optional true} [:maybe [:string {:max 80}]])
     (oe :routing {} [:string {:min 1 :max 600}])
     (oe :routes_through {:optional true} [:maybe [:string {:min 1 :max 40}]])
+    ;; THE COMPANION (waymark-jfv.11), and it is a CHECKED ref rather
+    ;; than a name in the goal sentence. The bead's own argument for
+    ;; the check is the miscomposition that filed it: a plan may not
+    ;; name a companion the roster does not hold, and a roster nothing
+    ;; consults is a document. The garnish beside it is the label
+    ;; doctrine `value_id`/`value_name` already wears, one field over.
+    ;;
+    ;; NO :filter, and the omission is deliberate rather than an
+    ;; oversight. Only `filterable ∪ sortable` fields become generated
+    ;; columns, so a filter here would move this kind's STORAGE facet
+    ;; and mint a law revision on an outcome whose machine did not
+    ;; change — for a query nothing asks yet. "Every outcome that ever
+    ;; named one particular person" is a real question and a cheap
+    ;; follow-up (waymark-jfv.14); it is not this bead's, and buying it
+    ;; now would cost
+    ;; the whole household a revision at the next boot.
+    (oe :companion_id {:optional true :kind :person :label :companion_name}
+        [:maybe :waymark/ref])
+    (oe :companion_name {:optional true} [:maybe [:string {:max 80}]])
     (oe :evidence {:optional true}
         [:maybe [:vector [:string {:min 1 :max 200}]]])
     (oe :supersedes {:optional true :kind :outcome :filter #{:eq}}
@@ -1068,6 +1228,7 @@
     (oe :value_id {:kind :value} :waymark/ref)
     (oe :routing {} [:string {:min 1 :max 600}])
     (oe :routes_through {:optional true} [:maybe [:string {:min 1 :max 40}]])
+    (oe :companion_id {:optional true :kind :person} [:maybe :waymark/ref])
     (oe :evidence {:optional true}
         [:maybe [:vector [:string {:min 1 :max 200}]]])
     (oe :supersedes {:optional true :kind :outcome} [:maybe :waymark/ref])]
@@ -1090,6 +1251,7 @@
    ;; because the cap counts ROWS a refused create spends nothing
    :create-guards [cites-what-it-read
                    names-a-value
+                   names-a-person
                    routes-through-something-loved
                    a-recomposition-waits-its-turn
                    outcomes-are-few]

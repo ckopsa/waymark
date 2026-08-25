@@ -78,7 +78,7 @@
    ;; a run's own bundle could be crowded off the page by a run that
    ;; did not finish. The value beneath it is what keeps it there, and
    ;; a value is never terminal, so it outlives everything.
-   "outcome_pieces" "outcomes" "values"
+   "outcome_pieces" "outcomes" "values" "people"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 

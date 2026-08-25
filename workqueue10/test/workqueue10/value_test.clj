@@ -58,7 +58,7 @@
   ;; outcome_test's list verbatim: this engine boots every kind
   ;; main/check-resources declares, so a fixture that dropped only its
   ;; own would boot into whatever shape another suite left behind.
-  ["outcome_pieces" "outcomes" "values"
+  ["outcome_pieces" "outcomes" "values" "people"
    "tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
