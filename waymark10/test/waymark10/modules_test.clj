@@ -48,8 +48,12 @@
   (into #{} (map :kind) (modules/enrolled resources modules)))
 
 (deftest the-table-enrols-exactly-what-the-literal-did
+  ;; …plus :feed_recipe, the one kind added since (waymark-4yn): the
+  ;; feed's own engine opt authored at runtime, enrolled :always
+  ;; because it composes the FEED module's vocabulary rather than an
+  ;; application's, so there is nothing left for an app to opt into.
   (is (= #{:definition :member :role :grant :approval_request
-           :attachment :subscription :job}
+           :attachment :subscription :job :feed_recipe}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled

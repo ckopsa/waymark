@@ -142,6 +142,7 @@
   (:require [waymark10.server.attachments :as attachments]
             [waymark10.server.coherence :as coherence]
             [waymark10.server.curtain :as curtain]
+            [waymark10.feed-recipe :as feed-recipe]
             [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
@@ -367,11 +368,10 @@
 
    ;; the feed (waymark-iqa.2): one GET answering a mixed, seeded,
    ;; grant-projected read of the house — do-now, decide, the caught-up
-   ;; seam, the archive. Two columns only: it enrols no kind (its
-   ;; populations are projections over rows that already exist) and
-   ;; starts nothing (fork (a): read-time seeded queries, no
-   ;; materializing job, because a daily job is a whole extra failure
-   ;; mode and the seed already delivers what it was for).
+   ;; seam, the archive. It starts nothing (fork (a): read-time seeded
+   ;; queries, no materializing job, because a daily job is a whole
+   ;; extra failure mode and the seed already delivers what it was
+   ;; for).
    ;;
    ;; Its RECIPE is an engine opt read at the route's build site with
    ;; its default — `(:feed eng feed/default-recipe)`, the same
@@ -379,7 +379,19 @@
    ;; fifth contribution column. The table is closed at four and this
    ;; module is the first one built after that closure to want
    ;; something; it wanted an opt, and an opt is what it took.
-   {:module :feed :routes feed-routes/routes :pack packs/feed}
+   ;;
+   ;; …and since waymark-4yn it enrols ONE KIND: `feed_recipe`, the
+   ;; same opt authored at runtime, so a household tunes its own order
+   ;; without a deploy. `:always` rather than saved_view's
+   ;; `:app-opt-in`, and the difference is whose vocabulary is being
+   ;; composed: a saved view names APP kinds and an app may reasonably
+   ;; not want the surface, while a feed recipe names this module's own
+   ;; census and its own population registry. An engine that serves the
+   ;; feed serves the feed's recipe; there is nothing left to opt into.
+   {:module :feed
+    :enrols [{:kind :feed_recipe :enroll :always
+              :kinds (fn [_] [feed-recipe/feed-recipe])}]
+    :routes feed-routes/routes :pack packs/feed}
 
    ;; named, contributing nothing through this seam
    {:module :postgres-store}

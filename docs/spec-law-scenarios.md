@@ -287,3 +287,24 @@ Two more were added by building it:
   `engine/full-registry`). Widening `check` to the full registry would make
   every app's gate report core's law, which is a decision about what `check`
   is *for* and deserves its own line rather than a side effect of this one.
+
+  **DECIDED, and widened — waymark-442.8, closed by waymark-4yn.** The
+  decision is *yes*: `check` judges an ENROLLED kind's scenarios too. What
+  forced it was building a framework kind whose most load-bearing wall is an
+  actor-type refusal (`feed_recipe`'s agent wall): the scenario proving it is
+  storage-free by construction, and the one place it belonged — where the
+  author looks — was the one place that would not read it. The gap was
+  narrower and worse than it looked from here: `:core/law-scenarios`
+  deliberately skips whatever the check tier can judge for free, so a
+  CHECK-TIER scenario on an ENROLLED kind was judged by neither side.
+  `approval_request`'s four-eyes pair had been in that hole since the day it
+  was written.
+
+  What widened is only the scenarios (and the row that prints them); the
+  `kinds` tally still counts the application's own declarations, so *"32
+  kinds"* still means what it always did. `make check-queue` went from 16 to
+  21 scenarios judged with no new law: three of `feed_recipe`'s and two of
+  `approval_request`'s. The framework suite's own
+  `core-kinds-keep-their-own-scenarios` stays — it asks the same question of
+  a different caller — and the burndown the widening exposed (most enrolled
+  kinds have written no wall down at all) is `waymark-a2b`.

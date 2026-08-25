@@ -93,11 +93,24 @@
                 :deviations (vec (:deviations r))
                 :scenarios (scenario/report r)
                 :coverage (scenario/coverage r)})
+        ;; …and their SCENARIOS (waymark-4yn). An enrolled kind's
+        ;; declared law used to be judged nowhere at all: check
+        ;; walked only the application's own resources, and the
+        ;; :core/law-scenarios obligation deliberately skips whatever
+        ;; the check tier can judge for free ("re-running them here
+        ;; would be the same evaluator answering the same question
+        ;; twice"). Both halves were right and the gap between them
+        ;; swallowed approval_request's four-eyes scenario and every
+        ;; other framework wall written down this way. A kind earns a
+        ;; row here when the battery has something to say about it OR
+        ;; when it wrote its law down.
         enrolled (for [r (modules/enrolled resources nil)
-                       :let [u (usability/warnings r)]
-                       :when (seq u)]
+                       :let [u (usability/warnings r)
+                             s (scenario/report r)]
+                       :when (or (seq u) (pos? (long (or (:total s) 0))))]
                    {:kind (:kind r) :enrolled true :warnings []
-                    :usability u :deviations []})
+                    :usability u :deviations []
+                    :scenarios s :coverage (scenario/coverage r)})
         all-rows (concat rows enrolled)]
     (doseq [{:keys [kind enrolled warnings usability deviations scenarios
                     coverage]}
@@ -139,8 +152,8 @@
                   (reduce + 0 (map (comp count :usability) all-rows))
                   (count assembly-warnings)
                   (count enrollment-warnings))
-     :scenarios (reduce + 0 (map (comp :checked :scenarios) rows))
-     :broken (reduce + 0 (map (comp count :violations :scenarios) rows))}))
+     :scenarios (reduce + 0 (map (comp :checked :scenarios) all-rows))
+     :broken (reduce + 0 (map (comp count :violations :scenarios) all-rows))}))
 
 (defn -main [& args]
   (when (empty? args)

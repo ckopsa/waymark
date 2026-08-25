@@ -2957,6 +2957,209 @@
                     " preview that could also ACT would be impersonation"
                     " with a stamp on it")))})))
 
+;; ── the recipe is a row (waymark-4yn) ───────────────────────────────
+;;
+;; The bead's whole claim, over the wire, in one walk: a household
+;; changes the order it reads in WITHOUT A DEPLOY, the document says
+;; which recipe answered, a mid-day revise lands on the next read, an
+;; AGENT cannot write one, and a recipe that would not assemble is
+;; refused at the door rather than at a boot nobody watched.
+;;
+;; The seam's sentence is the observable, and it is chosen because it
+;; is the one recipe field that appears VERBATIM on a card: the seam
+;; card is the recipe's own words, so "the feed changed" needs no
+;; inference about which rows a population happened to hold today.
+
+(defn- recipe-source [doc] (get-in doc [:recipe :source]))
+
+(defn- seam-sentence [doc]
+  (some #(when (= "seam" (str (:card_id %))) (str (:sentence %)))
+        (feed-cards doc)))
+
+(defn- make-recipe!
+  "One recipe, through its own create door, as whoever the headers
+  name."
+  [ctx body & [hs]]
+  (let [resp (req ctx :post (str "/api/" (:plural (rdef ctx :feed_recipe)))
+                  body hs)]
+    {:status (:status resp) :doc (json ctx resp)}))
+
+(defn- mint-recipe-grant!
+  "A leash over feed_recipe that NAMES the write doors, offered to one
+  composer. The wall this obligation is about is not concealment — an
+  agent holding no grant is already answered 404 by the router's
+  default deny, which proves nothing about the recipe — so the agent
+  is given exactly the grant a careless human might approve, and the
+  refusal it then meets is the one the bead is about."
+  [ctx audience]
+  (let [made (req ctx :post "/api/grants"
+                  {:audience audience
+                   :scope [{:kind "feed_recipe" :actions ["create" "revise"]}]})]
+    (when (= 201 (:status made)) (id-of (:self (json ctx made))))))
+
+(defn- reseam
+  "The house's current order with one word changed — the seam's own
+  sentence. `recipe.order` is the document's copy of the order in the
+  EDITOR's shape (the create-from-current affordance), so this is
+  literally what a person does: read the order you have, edit one
+  line, post it back."
+  [doc sentence]
+  (mapv (fn [l] (cond-> l (= "seam" (str (:section l)))
+                        (assoc :sentence sentence)))
+        (get-in doc [:recipe :order])))
+
+(defn- feed-recipe-violations
+  [ctx]
+  (let [before (:doc (feed-doc ctx nil))
+        was (seam-sentence before)
+        tag (subs (str (random-uuid)) 0 8)
+        first-words (str "That's the house, caught up · " tag)
+        second-words (str "Everything the house had, and that is all · " tag)
+        made (make-recipe! ctx {:label (str "Conformance order " tag)
+                                :scope "household"
+                                :order (reseam before first-words)})
+        id (some-> (:self (:doc made)) id-of)
+        after (when id (:doc (feed-doc ctx nil)))
+        revise (declared-name ctx :feed_recipe :revise)
+        retire (declared-name ctx :feed_recipe :retire)
+        revised (when id
+                  (invoke-http ctx :feed_recipe id revise
+                               {:label (str "Conformance order " tag)
+                                :order (reseam before second-words)}))
+        mid-day (when (= 200 (:status revised)) (:doc (feed-doc ctx nil)))
+        ;; the third law's wall: a composer HOLDING A RECIPE-WRITE
+        ;; GRANT may still not edit the frame it is composed into
+        composer (str "conformance-composer-" tag)
+        as-composer {"x-waymark-principal" composer
+                     "x-waymark-actor-type" "agent"}
+        gid (mint-recipe-grant! ctx composer)
+        took (when gid ((:invoke ctx) :grant gid :accept {}
+                        {:headers as-composer}))
+        leashed (when (= 200 (:status took))
+                  (assoc as-composer "x-waymark-grant" gid))
+        by-agent (when leashed
+                   (make-recipe! ctx {:label (str "Findings first " tag)
+                                      :scope "household"
+                                      :order (reseam before "Caught up.")}
+                                 leashed))
+        ;; and the four assembly checks, at the door rather than the boot
+        twice (make-recipe! ctx {:label (str "Twice caught up " tag)
+                                 :scope "household"
+                                 :order (conj (vec (reseam before "Caught up."))
+                                              {:section "seam"
+                                               :sentence "Really, caught up."})}
+                            nil)
+        ;; …and the way back, before anything below reads a feed again
+        gone (when id (invoke-http ctx :feed_recipe id retire nil))
+        reverted (when (= 200 (:status gone)) (:doc (feed-doc ctx nil)))]
+    {:covered (if (= 200 (:status gone)) 1 0)
+     :violations
+     (cond-> []
+       (not= "built-in" (str (:source (recipe-source before))))
+       (conj (str "feed: with no recipe row stored, the document's"
+                  " recipe.source says " (pr-str (recipe-source before))
+                  " — the built-in IS the household default until somebody"
+                  " deliberately overrides it, and a document that will not"
+                  " say which recipe answered cannot explain itself"))
+
+       (empty? (get-in before [:recipe :order]))
+       (conj (str "feed: recipe.order is empty — the order in the EDITOR's"
+                  " shape is the create-from-current affordance, and without"
+                  " it a first edit starts from a blank rectangle"))
+
+       (not= 201 (:status made))
+       (conj (str "feed: creating a household recipe answered "
+                  (:status made) ": " (pr-str (:doc made))
+                  " — a house that cannot change its own order without a"
+                  " deploy is the bead"))
+
+       (and after (not= first-words (seam-sentence after)))
+       (conj (str "feed: the stored recipe's seam says "
+                  (pr-str first-words) " and the feed answered "
+                  (pr-str (seam-sentence after))
+                  " — the row is the order, or it is decoration"))
+
+       (and after (not= "household" (str (:source (recipe-source after)))))
+       (conj (str "feed: a household row answered and the stamp says "
+                  (pr-str (recipe-source after))))
+
+       (and after id (not= id (str (:id (recipe-source after)))))
+       (conj (str "feed: the stamp names recipe " (pr-str (:id (recipe-source after)))
+                  " and the row that answered is " (pr-str id)
+                  " — the stamp is what makes a mid-day edit visible"))
+
+       (and after (nil? (:version (recipe-source after))))
+       (conj (str "feed: the stamp carries no version: "
+                  (pr-str (recipe-source after))
+                  " — id and version together are what let a reader tell"
+                  " which EDIT of the order they are looking at"))
+
+       (and revised (not= 200 (:status revised)))
+       (conj (str "feed: revising the recipe answered " (:status revised)
+                  ": " (pr-str (json ctx revised))))
+
+       (and mid-day (not= second-words (seam-sentence mid-day)))
+       (conj (str "feed: a revise landed and the next read still says "
+                  (pr-str (seam-sentence mid-day))
+                  " — the recipe is resolved per READ and never cached,"
+                  " because an editor whose change shows up tomorrow is"
+                  " an editor that feels broken"))
+
+       (nil? leashed)
+       (conj (str "feed: a feed_recipe write grant could not be minted and"
+                  " accepted for a composer (" (pr-str gid) ", accept "
+                  (pr-str (:status took)) ") — the third law's wall is"
+                  " untested without one, because an UNLEASHED agent is"
+                  " already answered 404 by concealment and that proves"
+                  " nothing about the recipe"))
+
+       (= 201 (:status by-agent))
+       (conj (str "feed: an AGENT holding a feed_recipe write grant created"
+                  " one — a composer that can rewrite the order it is read"
+                  " in is a ranking model editing its own editorial frame,"
+                  " which is the one backdoor this whole surface exists to"
+                  " keep shut. A grant is not supposed to be enough."))
+
+       (and by-agent (not= :written-by-a-person (refused-guard by-agent)))
+       (conj (str "feed: a leashed agent's create was refused by "
+                  (pr-str (refused-guard by-agent)) " (" (:status by-agent)
+                  "), not by the actor-type wall: " (pr-str (:doc by-agent))
+                  " — a refusal that does not say WHY cannot point at the"
+                  " lawful path, which is to publish an insight and let a"
+                  " member answer it"))
+
+       (and by-agent
+            (not (str/includes? (str (:detail (:doc by-agent))) "insight")))
+       (conj (str "feed: the agent refusal never names the lawful path: "
+                  (pr-str (:detail (:doc by-agent)))))
+
+       (= 201 (:status twice))
+       (conj (str "feed: a recipe carrying two seams was STORED — the four"
+                  " assembly checks moved to the doors, so a feed that says"
+                  " 'that's everything' twice must refuse at the write and"
+                  " never at the read"))
+
+       (and (not= 201 (:status twice))
+            (not= :the-assembly-checks-pass (refused-guard twice)))
+       (conj (str "feed: a two-seam recipe was refused by "
+                  (pr-str (refused-guard twice)) " (" (:status twice) "): "
+                  (pr-str (:doc twice))))
+
+       (and id (not= 200 (:status gone)))
+       (conj (str "feed: retiring the recipe answered " (:status gone)
+                  " — the way back is the row's own doors, and a tuning"
+                  " that cannot be undone is not tuning"))
+
+       (and reverted (not= "built-in" (str (:source (recipe-source reverted)))))
+       (conj (str "feed: the recipe was retired and the stamp still says "
+                  (pr-str (recipe-source reverted))))
+
+       (and reverted was (not= was (seam-sentence reverted)))
+       (conj (str "feed: after the retire the seam says "
+                  (pr-str (seam-sentence reverted)) " and the deployment's"
+                  " own order says " (pr-str was)
+                  " — retiring the override is how a house goes back")))}))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -3005,7 +3208,17 @@
     ;; cleaner answer key at the bottom of the run than the top.
     {:name :feed/preview-as
      :needs #{[:route :feed] [:kind :capability] [:kind :member]}
-     :run feed-preview-violations}]
+     :run feed-preview-violations}
+    ;; …and the recipe LAST of all (waymark-4yn), for a fourth reason
+    ;; in the same sequence and the strongest of them: it is the only
+    ;; obligation that changes the ORDER ITSELF. Every claim above is
+    ;; about a feed read under the deployment's own recipe, and one
+    ;; run above this one would be reading a feed this obligation
+    ;; wrote. It retires its row before it returns, so the engine it
+    ;; leaves behind is the engine it found.
+    {:name :feed/recipe-is-a-row
+     :needs #{[:route :feed] [:kind :feed_recipe]}
+     :run feed-recipe-violations}]
    ;; Every obligation spec-feed § 'Where the law is proved' names is
    ;; here now, each having landed with the bead that landed the
    ;; mechanism it judges rather than ahead of it.

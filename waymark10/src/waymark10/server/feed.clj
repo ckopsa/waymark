@@ -1753,6 +1753,34 @@
        " engine actually holds. A recipe that broke any of those would have"
        " refused to start rather than serve you a surprise."))
 
+(defn order-as-written
+  "The recipe's order in the shape the EDITOR takes — the wire spelling
+  of `waymark10.feed-recipe`'s `order` field, which is `line-of`'s
+  inverse (waymark-4yn).
+
+  It rides the document beside the narrated `lines` because the two
+  answer different questions and neither answers the other's. `lines`
+  is prose plus this read's own counts, for a person asking why a card
+  is here; this is DATA a person copies into the create form when they
+  want to start from what the house already reads. That copy is the
+  whole of `create-from-current`: no new door, no prefill machinery,
+  and the starting point is the order actually in force rather than
+  whatever the framework happened to ship."
+  [recipe]
+  (into []
+        (map (fn [e]
+               (if (:seam e)
+                 (cond-> {"section" "seam"}
+                   (:sentence e) (assoc "sentence" (:sentence e))
+                   (:says e) (assoc "says" (:says e)))
+                 (cond-> {"section" (name (:section e))}
+                   (:population e) (assoc "population" (name (:population e)))
+                   (:take e) (assoc "take" (:take e))
+                   (seq (:kinds e)) (assoc "kinds" (mapv name (:kinds e)))
+                   (:says e) (assoc "says" (:says e))
+                   (:bottomless e) (assoc "bottomless" true)))))
+        (:order recipe)))
+
 (defn recipe-view
   "The household's declared order, narrated — the deliverable half of
   waymark-iqa.29 that is not about any one card.
@@ -1761,10 +1789,13 @@
   pack) can read the order without a request, and the counts a real
   read knows — how many candidates a line was offered, how many a
   section above had already claimed, how many it showed — are merged
-  in by `document`. Viewing only: a recipe EDITOR is its own bead, and
-  it needs the composition scaffolding the saved_view precedent has."
+  in by `document`. Since waymark-4yn it is no longer viewing only:
+  `order` below is the same order in the editor's own shape, and
+  `source` — stamped in by `document`, because only a READ knows which
+  recipe answered it — names the row that wrote it."
   [recipe]
   {"guarantees" recipe-guarantees
+   "order" (order-as-written recipe)
    "lines" (into []
                  (map-indexed
                   (fn [i e]
@@ -1983,8 +2014,18 @@
   citation's numbers (`why`: the line, the rank, the size of the
   draw); on, it carries the sentences too. The narrated `recipe` rides
   the document either way, because it is one narration per LINE rather
-  than one per card and the counts beside it are the read's own."
-  [eng recipe {:keys [principal visibility offset preview explain?]}]
+  than one per card and the counts beside it are the read's own.
+
+  `:recipe-source` (waymark-4yn) is the third such opt and the one that
+  makes the other two honest once the recipe is EDITABLE: the stamp
+  saying which recipe answered — a stored row by id and version, or
+  the built-in. Without it, `recipe` would narrate an order without
+  ever saying whose, and a mid-day edit would be invisible to the
+  surface whose whole job is explaining itself. The route resolves it
+  (`waymark10.feed-recipe/for-reader`); this function is handed the
+  answer, exactly as it is handed the recipe."
+  [eng recipe {:keys [principal visibility offset preview explain?
+                      recipe-source]}]
   (let [day (today eng recipe)
         pid (:id principal)
         seed (seed-of recipe pid day)
@@ -2068,10 +2109,11 @@
         ;; the narrated recipe, with the read's own counts folded in —
         ;; the static half is a pure function of the recipe and the
         ;; counts are what THIS read saw each line offered
-        recipe-doc (update (recipe-view recipe) "lines"
-                           (fn [ls] (mapv (fn [l]
-                                            (merge l (get counts (get l "line"))))
-                                          ls)))
+        recipe-doc (cond-> (update (recipe-view recipe) "lines"
+                                   (fn [ls] (mapv (fn [l]
+                                                    (merge l (get counts (get l "line"))))
+                                                  ls)))
+                     recipe-source (assoc "source" recipe-source))
         notes (into []
                     (remove nil?)
                     [(when preview
@@ -2108,6 +2150,12 @@
                             " and recipe below narrates the order itself. Add"
                             " ?explain=1 to have each card spell its citation"
                             " out in sentences."))
+                     ;; whose order this was, and how to change it
+                     ;; (waymark-4yn) — one sentence, because a surface
+                     ;; that narrates its order and will not say where
+                     ;; the order came from is explaining the wrong half
+                     (get recipe-source "says")
+                     (get recipe-source "stranded")
                      (when capped
                        (str "The archive read to its cap and stopped — the"
                             " newest " log-scan-cap " transitions for what"

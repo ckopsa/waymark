@@ -63,12 +63,12 @@
    brings the plan back to planned before them), and the ported-page
    additions below seed uniquely-named rows per run — but the meal
    sections assume the fresh world of step 1. */
-const MODE = ["batch-a", "feed"].includes(process.argv[2])
+const MODE = ["batch-a", "feed", "recipe"].includes(process.argv[2])
   ? process.argv[2] : "story";
 const DEBUG_PORT = process.env.CDP_PORT || "9223";
 const BASE = process.env.BASE ||
   (MODE === "batch-a" ? "http://localhost:8123"
-   : MODE === "feed" ? "http://localhost:8014"
+   : MODE === "feed" || MODE === "recipe" ? "http://localhost:8014"
    : "http://localhost:8010");
 
 const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json`)).json();
@@ -1042,8 +1042,161 @@ async function feedStory() {
      await evaljs(`!document.querySelector('.fcard[data-kind="insight"]')`));
 }
 
+
+/* RECIPE (waymark-4yn) — the feed's order is a ROW now, and this is
+   the walk that proves a household can change it without a deploy,
+   through the GENERIC form and nothing else. It needs no seeding: the
+   observable is the SEAM's own sentence, which is the one recipe field
+   that reaches a card verbatim, so what a population happens to hold
+   today never enters the claim. It creates one household recipe,
+   revises it mid-day, and RETIRES it before it returns — the engine it
+   leaves behind is the engine it found.
+
+     make dev-queue
+     BASE=http://localhost:8014 node waymark10/scripts/ui-drive.mjs recipe */
+async function recipeStory() {
+  const tag = Math.random().toString(36).slice(2, 8);
+  const words = "Caught up, and a person said so · " + tag;
+  const words2 = "That is the whole house · " + tag;
+  const asColton = `{headers:{"x-waymark-principal":"colton","x-waymark-actor-type":"human"}}`;
+  const feed = q => evaljs(
+    `fetch("${BASE}/api/-/feed" + ${JSON.stringify(q || "")}, ${asColton}).then(r=>r.json())`);
+  const seamOf = doc => (doc.cards.find(c => c.card_id === "seam") || {}).sentence;
+
+  /* a FRESH document — the tab persists between runs and a hash-only
+     change never reloads — then route by hash the way a person clicks */
+  console.log("\n· the feed before any row");
+  await send("Page.navigate", {url: "about:blank"});
+  await sleep(300);
+  await send("Page.navigate", {url: `${BASE}/`});
+  await sleep(2500);
+  await evaljs(`location.hash = "#/api/-/feed"; true`);
+  await sleep(1200);
+
+  const before = await feed("");
+  ok("with no row stored, recipe.source says built-in",
+     before.recipe.source.source === "built-in");
+  ok("recipe.order carries the order in the EDITOR's own shape",
+     Array.isArray(before.recipe.order) && before.recipe.order.length > 0);
+  const wasSeam = seamOf(before);
+
+  console.log("\n· the create form, in the generic UI");
+  await evaljs(`location.hash = "#/api/feed_recipes"; true`);
+  await waitFor(`[...document.querySelectorAll('button,a')].some(n => /new|create|add/i.test(n.textContent||""))`,
+                "the feed_recipes collection screen");
+  await sleep(1200);
+  await evaljs(`[...document.querySelectorAll('button,a')]
+                  .find(n => /new|create|add/i.test(n.textContent||"")).click(); true`);
+  await sleep(1200);
+  ok("the create form has an order box",
+     await evaljs(`!!document.querySelector('[name="order"]')`));
+  const chips = await evaljs(`(() => {
+    const ta = document.querySelector('[name="order"]');
+    const panel = ta && ta.nextElementSibling;
+    if (!panel || !panel.classList.contains("opt-chips")) return [];
+    return [...panel.querySelectorAll(".opt-row")].map(r => ({
+      field: ((r.querySelector(".muted")||{}).textContent||"").trim(),
+      chips: [...r.querySelectorAll(".chip")].map(c => c.textContent)}));
+  })()`);
+  console.log("    chip rows: " +
+    chips.map(r => r.field + " " + r.chips.length).join(", "));
+  ok("the entry list offers pickers, not recall", chips.length >= 3);
+  ok("section offers the census (an enum, no fetch)",
+     !!chips.find(r => r.chips.includes("do_now") && r.chips.includes("seam")));
+  ok("population offers the registry (an enum, no fetch)",
+     !!chips.find(r => r.chips.includes("next_actions")));
+  ok("kinds fetched its own vocabulary (an x-options recipe)",
+     !!chips.find(r => /kinds/i.test(r.field) && r.chips.length > 3));
+
+  console.log("\n· edit one line of the order the house already reads, and submit");
+  const order = JSON.parse(JSON.stringify(before.recipe.order));
+  for (const l of order) if (l.section === "seam") l.sentence = words;
+  const missing = await evaljs(`(() => {
+    const set = (n, v) => {
+      const el = document.querySelector('[name="'+n+'"]');
+      if (!el) return "no " + n;
+      el.value = v;
+      el.dispatchEvent(new Event("input", {bubbles:true}));
+      el.dispatchEvent(new Event("change", {bubbles:true}));
+      return null; };
+    return [set("label", ${JSON.stringify("Hand-verified order " + tag)}),
+            set("scope", "household"),
+            set("order", ${JSON.stringify(JSON.stringify(order, null, 1))})]
+           .filter(Boolean); })()`);
+  ok("every field of the create form was fillable", missing.length === 0);
+  await sleep(300);
+  await evaljs(`[...document.querySelectorAll('button')]
+                  .find(n => /^(create|save|submit)$/i.test((n.textContent||"").trim()))
+                  .click(); true`);
+  await sleep(2000);
+  const mine = await evaljs(
+    `fetch("${BASE}/api/feed_recipes?state=active", ${asColton}).then(r=>r.json())`);
+  const row = (mine.data.items || []).find(i => (i.summary||"").includes(tag));
+  ok("the generic form created the row", !!row);
+
+  console.log("\n· the feed, next read");
+  const after = await feed("");
+  ok("the house reads in the row's order", seamOf(after) === words);
+  ok("the document names which recipe answered",
+     after.recipe.source.source === "household" &&
+     after.recipe.source.id === row.self.split("/").pop() &&
+     typeof after.recipe.source.version === "number");
+
+  console.log("\n· revise it mid-day, through the row's own form");
+  await evaljs(`location.hash = "#${row.self}"; true`);
+  await waitFor(`[...document.querySelectorAll('button,a')].some(n => /revise/i.test(n.textContent||""))`,
+                "the recipe's own screen");
+  await sleep(900);
+  await evaljs(`[...document.querySelectorAll('button,a')]
+                  .find(n => /revise/i.test((n.textContent||"").trim())).click(); true`);
+  await sleep(1200);
+  ok("revise prefills the order it is editing",
+     await evaljs(`(document.querySelector('[name="order"]')||{}).value.length > 10`));
+  const order2 = JSON.parse(JSON.stringify(before.recipe.order));
+  for (const l of order2) if (l.section === "seam") l.sentence = words2;
+  await evaljs(`(() => {
+    const el = document.querySelector('[name="order"]');
+    el.value = ${JSON.stringify(JSON.stringify(order2, null, 1))};
+    el.dispatchEvent(new Event("input", {bubbles:true})); })(); true`);
+  await sleep(300);
+  await evaljs(`(() => { const b = [...document.querySelectorAll('button')]
+      .find(n => /^(revise|save|submit|confirm)$/i.test((n.textContent||"").trim()));
+    if (b) b.click(); })(); true`);
+  await sleep(2000);
+  const mid = await feed("?explain=1");
+  ok("a mid-day revise lands on the very next read (nothing is cached)",
+     seamOf(mid) === words2);
+  ok("the stamp's version moved with it",
+     mid.recipe.source.version > after.recipe.source.version);
+  ok("and explain says whose order it narrated",
+     (mid.notes||[]).some(n => n.includes("order answered this read")));
+
+  console.log("\n· retire it, and the house goes back");
+  const gone = await evaljs(`fetch("${BASE}${row.self}/-/retire",
+    {method:"POST",headers:{"content-type":"application/json",
+     "x-waymark-principal":"colton","x-waymark-actor-type":"human"},
+     body:"{}"}).then(r=>r.status)`);
+  ok("retire answered 200", gone === 200);
+  const back = await feed("");
+  ok("the built-in answers again", back.recipe.source.source === "built-in");
+  ok("and the seam is the deployment's own", seamOf(back) === wasSeam);
+
+  console.log("\n· the third law's wall");
+  const byAgent = await evaljs(`fetch("${BASE}/api/feed_recipes",
+    {method:"POST",headers:{"content-type":"application/json",
+     "x-waymark-principal":"composer-${tag}","x-waymark-actor-type":"agent"},
+     body:${JSON.stringify(JSON.stringify({label: "Findings first", scope: "household", order}))}
+    }).then(r=>r.status)`);
+  /* an UNLEASHED agent never reaches the guard — the router's default
+     deny conceals the collection first, which is the honest answer
+     here; the leashed refusal (a composer holding a feed_recipe write
+     grant, refused by written-by-a-person) is the pack's obligation */
+  ok("an agent cannot write the order it is read in", byAgent !== 201);
+}
+
 if (MODE === "batch-a") await batchAStory();
 else if (MODE === "feed") await feedStory();
+else if (MODE === "recipe") await recipeStory();
 else await mealplanStory();
 
 console.log(`\nUI drive (${MODE}): ${passed} checks passed` +

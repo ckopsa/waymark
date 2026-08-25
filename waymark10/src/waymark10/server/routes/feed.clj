@@ -13,13 +13,22 @@
   namespace with a different wrapper, and this file is the only thing
   it would not reuse.
 
-  THE RECIPE IS READ ONCE, HERE. `(:feed eng feed/default-recipe)` is
-  the modules.clj spelling — opts are read off the engine at the start
-  site with their defaults, one engine, one opts map — and
-  `check-recipe!` runs at BUILD time, so a recipe that names an unknown
-  population or forgets its seam refuses the boot rather than the
-  request. A definition error at assembly is the same refusal
-  `modules/selected` gives an unknown module label.
+  THE BUILT-IN RECIPE IS READ ONCE, HERE. `(:feed eng
+  feed/default-recipe)` is the modules.clj spelling — opts are read off
+  the engine at the start site with their defaults, one engine, one
+  opts map — and `check-recipe!` runs at BUILD time, so a recipe that
+  names an unknown population or forgets its seam refuses the boot
+  rather than the request. A definition error at assembly is the same
+  refusal `modules/selected` gives an unknown module label.
+
+  …AND THE STORED RECIPE IS READ PER REQUEST (waymark-4yn). The engine
+  opt is now the FALLBACK rather than the whole answer: a household
+  tunes its own order at runtime through the `feed_recipe` kind, and
+  `feed-recipe/for-reader` resolves member row → household row →
+  built-in, once per read, uncached on purpose. The build-time check
+  stays exactly where it was, because the built-in is still a
+  DECLARATION and a broken one should still refuse the boot; a stored
+  row is judged at its own doors instead, by the same four checks.
 
   AUTH IS THE ROUTER'S, UNCHANGED. `wrap-identity` has already run:
   the principal is resolved and the presented X-Waymark-Grant has
@@ -52,6 +61,7 @@
   per LINE, and the prose that would have repeated once per card is
   the half this flag buys."
   (:require [clojure.string :as str]
+            [waymark10.feed-recipe :as recipe]
             [waymark10.server.capabilities :as cap]
             [waymark10.server.feed :as feed]
             [waymark10.server.grants :as grants]
@@ -195,8 +205,15 @@
   with none. So they render, disabled by truth rather than by a flag:
   every href is the member's own door, the router judges the ACTUAL
   caller at it, and a previewer who POSTs one is judged as themselves
-  and refused. The note says so in the document; the pack proves it."
-  [eng recipe]
+  and refused. The note says so in the document; the pack proves it.
+
+  AND THE RECIPE IS THE READER'S (waymark-4yn). `for-reader` is asked
+  about the member whose feed this is — the PREVIEWED member under a
+  preview, not the previewer — for the same reason the visibility is
+  theirs: a preview computed through the reader's own order would be a
+  preview of a feed nobody has. The stamp it answers with rides the
+  document, so a previewer can see which order the member reads in."
+  [eng built-in]
   (fn [req]
     (let [principal (router/principal-of req)]
       (when (or (nil? principal)
@@ -205,6 +222,8 @@
                           {:detail "No such route."})))
       (let [params (router/query-params req)
             preview (preview-target eng req)
+            reader (or (:principal preview) principal)
+            {:keys [recipe source]} (recipe/for-reader eng built-in reader)
             cursor (some-> (get params "cursor") feed/decode-cursor)
             today (feed/today eng recipe)]
         (when (and cursor (not= today (:day cursor)))
@@ -213,6 +232,7 @@
          200
          (feed/document eng recipe
                         (merge {:principal principal
+                                :recipe-source source
                                 :visibility (router/visibility-of req)
                                 :offset (:offset cursor)
                                 ;; ?explain=1 — the citation spelled out
@@ -232,6 +252,6 @@
                                preview)))))))
 
 (defn routes [eng]
-  (let [recipe (feed/check-recipe! (:feed eng feed/default-recipe))]
+  (let [built-in (feed/check-recipe! (:feed eng feed/default-recipe))]
     {:module :feed
-     :static [["/api/-/feed" {:get (feed-doc eng recipe)}]]}))
+     :static [["/api/-/feed" {:get (feed-doc eng built-in)}]]}))

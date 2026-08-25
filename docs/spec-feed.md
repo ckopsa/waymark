@@ -2319,3 +2319,325 @@ claim that can actually see it.
 - **The recipe view is READ-ONLY on purpose and the editor is filed**
   (waymark-4yn). `check-recipe!` is already the write gate an editor would
   need, which is the half that is done.
+
+## Built — 4yn, the recipe becomes a row (2026-08-24, waymark-4yn)
+
+`.29` made the recipe **readable**: `GET /api/-/feed` carries `recipe`, every
+line narrated in household words, and *Why this order* opens into it. Viewing
+only, deliberately — and the moment a person can read the order, the next
+thing they want is to change it. *Do not put films in do-now. Give the queue
+three slots, not two.* Every one of those was a code edit in `main.clj` plus
+a deploy.
+
+It is a row now.
+
+### The kind
+
+`feed_recipe` — the saved_view precedent, followed line for line: a developer
+declares the order once per deploy (`feed/default-recipe`, or the app's
+`:feed` opt), and a `feed_recipe` row is the same shape authored at RUNTIME by
+a person, with storage, forms, grants, events and transitions coming free.
+
+```clojure
+(defresource feed-recipe
+  {:kind :feed_recipe
+   :plural "feed_recipes"
+   :states [:active :retired] :initial :active :terminal #{}
+   :summary "{data.label} · {data.scope} · {state}"
+   :schema [:map
+            [:label …  [:string {:min 1 :max 60}]]
+            [:scope …  [:enum "household" "mine"]]   ; whose morning
+            [:owner …  [:maybe [:string {:max 128}]]] ; the ENGINE's stamp
+            [:order …  order-schema]]
+   :create-schema  …                                  ; label, scope, order
+   :filterable {:state #{:eq :in}}
+   :scenarios [an-agent-does-not-write-the-order
+               a-person-writes-the-order
+               a-feed-with-two-seams-is-refused]
+   :on-create stamp-owner
+   :create-guards [written-by-a-person the-assembly-checks-pass]
+   :actions {:revise  {… :guards [written-by-a-person the-assembly-checks-pass]}
+             :retire  {… :undo :restore :guards [written-by-a-person]}
+             :restore {… :undo :retire  :guards [written-by-a-person]}}})
+```
+
+`order-schema` is one entry per recipe line, and the vector's order is the
+feed's order — the same sentence `default-recipe` has always carried:
+
+```clojure
+[:vector
+ [:map
+  [:section …    (into [:enum] (map name) feed/census)]
+  [:population … [:maybe (into [:enum] (map name) (sort (keys feed/populations)))]]
+  [:take …       [:maybe [:int {:min 1 :max 50}]]]
+  [:kinds  {:x-options {:from :kinds} …} [:maybe [:vector [:string …]]]]
+  [:says   {:x-display {:widget "prose"} …} [:maybe [:string {:max 400}]]]
+  [:sentence …   [:maybe [:string {:max 200}]]]   ; the seam's own words
+  [:bottomless … [:maybe :boolean]]]]
+```
+
+Three shape decisions, each with a reason:
+
+- **`section "seam"` IS the seam.** `line-of` sets `:seam true` from it, so
+  nobody ticks a box beside a word that already says it — one fewer way to
+  get a recipe half-right.
+- **The two closed vocabularies are `:enum`s, not `:x-options` recipes.** The
+  census and the population registry are literals a reviewer reads on one
+  screen, so their legal words belong in the published schema itself rather
+  than behind a fetch. `:kinds` is the one genuinely runtime vocabulary and
+  wears the ordinary `{:from :kinds}` recipe. (The consequence is honest and
+  wanted: adding a population now moves this kind's fingerprint, because the
+  set of legal populations is part of its law.)
+- **No `:salt` and no `:zone`.** Salt is the seed's input, and a recipe that
+  could rewrite it would be a re-roll button — the ranking model arriving
+  through the editor instead of through a query parameter. Zone is a fact
+  about where the house *is*, not a taste the morning is tuned by; it stayed
+  an engine opt, and the usability battery agreed from the other side (a
+  free-text zone box is a blank rectangle judged against a vocabulary the JVM
+  enumerates exhaustively).
+
+**One kind, not two.** The dashboard/dashboard_slot pair was the obvious
+shape for an ordered composition and it was refused: the four assembly checks
+are properties of a WHOLE recipe — exactly one seam, the bottomless line last,
+the census order — and a parent-plus-parts spelling would have had to
+re-assemble the set at every door of both kinds to ask them. One row is one
+whole recipe is one atomic judgment, which is what lets `check-recipe!` move
+to the doors *unchanged*.
+
+### Enrollment: `:always`, on the `:feed` module
+
+The kind rides `modules.clj`'s `:feed` entry, which grew its first `:enrols`
+column. `:always` rather than saved_view's `:app-opt-in`, and the difference
+is whose vocabulary is being composed: a saved view names APP kinds and an app
+may reasonably not want the surface at all, while a feed recipe names this
+module's own census and its own population registry. An engine that serves
+the feed serves the feed's recipe; there is nothing left to opt into.
+
+### The resolution, and the cache decision
+
+`feed-recipe/for-reader`, once per read:
+
+1. the reading member's own ACTIVE row (`scope "mine"`, `owner` = the
+   principal id), newest first;
+2. the household's ACTIVE default (`scope "household"`);
+3. the engine opt — the **built-in**, which stays the ultimate fallback so an
+   engine holding no rows at all still serves.
+
+Under a preview it is asked about the **previewed member**, not the previewer,
+for the same reason the visibility is theirs: a preview computed through the
+reader's own order would be a preview of a feed nobody has.
+
+**No cache, and the trade is recorded.** The day-stable law would make a
+per-day memo safe against the *seed*, but a recipe is edited in the middle of
+a morning and the whole point of this bead is that the next read shows the
+change. A cache measured in hours would make the editor feel broken. What it
+saves is one indexed row read beside the dozen population queries the same
+request already runs.
+
+**No singleton guard, either, and that one bought something.** Two active
+rows in one scope do not fight in the dark — the newest wins and the STAMP
+names it by id and version — and a singleton would have had to read storage,
+which would have dropped this kind's whole create door out of the no-database
+check tier. The agent wall is a sentence worth proving where the author looks.
+
+`for-reader` also re-judges the stored row and **degrades leniently** (the
+saved_view render tradition): a redeploy that retires a population strands a
+row, and a stranded row must not take the morning down with it. It is skipped,
+the next recipe down answers, and the stamp says which row was skipped and why.
+
+### The four assembly checks, at the doors
+
+`the-assembly-checks-pass` calls `feed/check-recipe!` — the same function,
+unchanged — on `recipe-of` the input, and denies with the sentence it already
+knew:
+
+> *exactly one entry carries :seam true, found 2 — a feed with no seam never
+> finishes, and a feed with two says 'that's everything' twice*
+
+The build-time check stays exactly where it was, because the built-in is still
+a DECLARATION and a broken one should still refuse the boot. An invalid recipe
+therefore cannot be stored, and the feed cannot break at read time from a bad
+row.
+
+### The third-law wall
+
+```clojure
+(g/defguard written-by-a-person
+  {:reads [:principal]
+   :explain "The feed's order is written by a person. An agent that could
+             rewrite the recipe would be a ranking model editing its own
+             editorial frame — publish an insight instead, with its citations
+             and its one next step, and a member answers it with a tap."}
+  [_row _inp ctx]
+  (if (= :agent (:type (:principal ctx))) (t/deny) (t/allow)))
+```
+
+It stands at create, revise, retire and restore. A pure function of the
+principal's kind, so the render probe and the real invoke read the same fact
+and no probe path opens a door. `:system` is deliberately not walled — that
+is the engine's own actor (a migration, the conformance walker), not the
+composer this wall is about.
+
+The refusal **names the lawful path**, which is the half that makes it
+usable: an agent that wants the order changed publishes an `insight`, with
+citations and one physical next step, and a member answers it with a tap. The
+sentence is asserted, not just written.
+
+**Four-eyes on the household default: NOT built, and the reason is
+`waymark-l81`.** A second-adult approval was weighed. Against it: the change
+is reversible through the row's own doors, visible to everyone on the next
+read (the stamp names it), and the wall a role would need cannot be assigned
+to anybody today because `assign_roles` is broken — a role wall here would be
+a wall against everybody, which is a wall against fixing your own morning
+before the other adult is awake. Filed rather than faked (**waymark-pcr**).
+
+The other half of that wall is filed too: the refusal points an agent at the
+insight path, and that path is honest but only half-built — an insight's offer
+cannot carry the PROPOSED ORDER as the input a member one-taps, so today the
+member reads the finding and retypes the order (**waymark-xw3**).
+
+### The stamp
+
+`recipe.source` rides every feed document:
+
+```json
+{"source": "household", "label": "The school-run morning",
+ "self": "/api/feed_recipes/01HZ…", "id": "01HZ…", "version": 3,
+ "says": "This house's own order answered this read: …"}
+```
+
+…or `{"source": "built-in", "says": "No stored recipe answered this read…"}`.
+The `says` sentence joins the document's `notes`, so a mid-day edit is visible
+and *explain* stays truthful about **whose** order it is narrating. The row's
+transitions are the tuning history — every edit, who made it, when — and the
+way back is `revise` or `retire`.
+
+### Seeding: no row until the first edit
+
+Decided, and the reasoning is the honest one: **the built-in IS the household
+default**, and a row is a deliberate override. A boot-time seed
+(`ensure-capabilities!`'s precedent) would have manufactured a row nobody
+asked for, made every deploy's recipe change a merge question, and put a
+household's order one bad migration away from an empty table.
+
+What that owes is a starting point for the first edit, and it is paid in the
+document rather than in a door: `recipe.order` is the order **in the editor's
+own shape** — `line-of`'s inverse — beside the narrated `lines`. Create-from-
+current is *read the order you have, edit one line, post it back*. No new
+door, no prefill machinery, and the starting point is the order actually in
+force rather than whatever the framework happened to ship. The `:examples`
+placeholder on the field is a legal four-line recipe, for the case where even
+that document is not in front of you.
+
+### The editor is the generic form, and one thing was missing
+
+`waymark-7rw` already taught the generic client to draw a list-of-entries as a
+JSON textarea with a row of `x-options` chips per item field. What it could
+not do was offer the words a DECLARATION already knows: an item property with
+an `:enum` got a blank textarea and a memory test. `itemEnumFields` closes
+that in `170-forms.js` — an enum'd item field earns the same row of chips,
+with nothing to fetch, because its legal words are already in the schema in
+front of the form. Section and population are pickers now; `kinds` fetches
+its chips the old way; `says` and `sentence` stay free prose.
+
+No bespoke editor was built and none is filed: the generic form does this.
+
+### Verified by hand, and the walk is written down
+
+`ui-drive.mjs` grew a fourth mode — **`node waymark10/scripts/ui-drive.mjs
+recipe`**, against `make dev-queue` on :8014 — so the next person takes the
+same walk. **19 checks, no console errors.** It needs no seeding, because the
+observable is the seam's own sentence: the one recipe field that reaches a
+card verbatim, so what a population happens to hold today never enters the
+claim. It retires its row before it returns.
+
+What the walk actually saw, in the browser:
+
+- the create form's `order` box is the JSON textarea, with **three rows of
+  chips** under it — *Section · 5* and *Population · 11* offered straight out
+  of the published schema with no fetch at all, *Only these kinds · 24*
+  fetched the ordinary `x-options` way;
+- the order was filled by pasting the document's own `recipe.order`, one seam
+  sentence changed — create-from-current, with no door built for it;
+- **Create** landed the row, and the very next `GET /api/-/feed` read in it,
+  with `recipe.source` naming the row by id and version;
+- **Revise** on the row's own screen prefilled the order it was editing, and
+  the read after it carried the new sentence and a bumped version — a mid-day
+  edit lands mid-day;
+- **Retire** put the deployment's own order back, seam sentence and all.
+
+One honest note from the walk: an **unleashed** agent's create is answered
+**404**, not the guard's 409 — the router's default deny conceals the
+collection before any guard runs, which is correct and proves nothing about
+the recipe. That is exactly why the pack mints the composer a `feed_recipe`
+write grant first; the wall this bead is about only becomes visible once the
+concealment is out of the way.
+
+### Where the law is proved
+
+- **`:feed/recipe-is-a-row`** (the pack, and it runs LAST of all the feed
+  obligations — it is the only one that changes the ORDER ITSELF, so every
+  claim above it reads a feed under the deployment's own recipe; it retires
+  its row before it returns). The seam's sentence is the observable, because
+  it is the one recipe field that appears verbatim on a card. It asserts:
+  the built-in answers when no row is stored; `recipe.order` is non-empty;
+  a created household row changes the next read; the stamp names it by id and
+  version; a revise lands on the read after it (no cache); an AGENT's create
+  is refused **by `written-by-a-person`** and the refusal names the insight
+  path; a two-seam recipe is refused **by `the-assembly-checks-pass`**; and a
+  retire puts the deployment's own order back.
+- **Three scenarios**, in the check tier, with no database at all:
+  `an-agent-does-not-write-the-order`, `a-person-writes-the-order`,
+  `a-feed-with-two-seams-is-refused`.
+
+### One thing this bead found: enrolled kinds' scenarios were judged nowhere
+
+`waymark10.check` walked only the application's own resources, and the
+`:core/law-scenarios` obligation deliberately skips whatever the check tier
+can judge for free (*"re-running them here would be the same evaluator
+answering the same question twice"*). Both halves were right, and the gap
+between them swallowed `approval_request`'s four-eyes scenario — core's own
+most-quoted wall — and every other framework scenario written the same way.
+
+The question was already filed — **waymark-442.8**, which asked for the
+decision to be made *on its own line rather than as a side effect*. It became
+a side effect anyway, and the reason is worth recording: this bead's most
+load-bearing wall is an actor-type refusal on an ENROLLED kind, its scenario
+is storage-free by construction, and the one place it belonged was the one
+place that would not read it. The decision is written up where the punt was,
+in `docs/spec-law-scenarios.md`.
+
+`check.clj` now judges an enrolled kind's scenarios too, and prints the kind
+when it has either a battery warning or a declared law. `make check-queue`
+goes from **16 to 21 scenarios judged** with no new law: three are this
+bead's, and two are `approval_request`'s, finally read where the author looks.
+The burndown it exposed — most enrolled framework kinds have written no wall
+down at all, `member` alone carrying five refusing guards nobody has stated as
+a sentence — is **waymark-a2b**.
+
+### Recorded here, for whoever comes next
+
+- **A new kind is a new table.** Production needs `feed_recipes` created
+  before the deploy that serves it — `make migrate-queue-prod` prints the
+  plan, and a person runs it through `nomad alloc exec … psql`. Nothing here
+  touched production.
+- **`recipe.order` and `recipe.lines` answer different questions.** `lines`
+  is prose plus this read's own counts, for a person asking *why is this card
+  here*; `order` is data a person copies into the form. Neither substitutes
+  for the other, and a client that renders `order` as prose has read the
+  wrong key.
+- **Adding a population moves `feed_recipe`'s fingerprint.** The population
+  enum is part of this kind's declared law, which is correct and worth saying
+  out loud: a new population is a law revision, and `boot-revise!` will write
+  one.
+- **Reverting is copy-and-paste.** `:revise` records its whole authored
+  surface, so the transitions log carries every order that was ever written —
+  which is the tuning history the kind's prose promises. Taking one back is
+  reading it out of the ledger and pasting it into the revise form. A one-tap
+  way back belongs to the LEDGER rather than to this kind (**waymark-by4**).
+- **A member's own recipe is household-visible, not own-surface.** The bead's
+  design said own-surface for `scope "mine"` rows; workqueue10's household
+  kinds are shared among humans and reached by agents only through the
+  ordinary grant machinery (main.clj says so of weather), and the wall that
+  actually matters — you cannot rearrange somebody else's morning — is the
+  engine's `owner` stamp, not concealment. Recorded as a deviation.

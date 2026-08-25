@@ -61,13 +61,22 @@
   ;; reports zero. The day a framework kind lands unkind again this
   ;; goes red, which is the burndown's standing guard — the tally is
   ;; the regression test the fix-list turned into.
+  ;;
+  ;; An enrolled kind takes a row for a SECOND reason since
+  ;; waymark-4yn — a declared scenario, judged here rather than
+  ;; nowhere — so the silence this asserts is the WARNING kind of
+  ;; silence, read off the tally, and the rows that appear are the
+  ;; framework kinds that wrote their law down.
   (let [out (with-out-str
-              (let [{:keys [kinds warnings]} (check/report [probe])]
+              (let [{:keys [kinds warnings broken]} (check/report [probe])]
                 (is (= 1 kinds))
-                (is (zero? warnings))))]
+                (is (zero? warnings))
+                (is (zero? broken))))]
     (is (re-find #"check_probe ✓" out))
-    (is (not (re-find #"\(enrolled\)" out))
-        "every enrolled kind is silent, so none of them takes a row")))
+    (is (not (re-find #"\(enrolled\) — " out))
+        "every enrolled kind is silent, so none of them takes a WARNING row")
+    (is (re-find #"approval_request \(enrolled\) ✓" out)
+        "and core's own four-eyes scenario is judged where the author looks")))
 
 (deftest the-usability-battery-reaches-the-kinds-nobody-declared
   ;; The widening this asserts — a kind NOBODY DECLARED is batteried

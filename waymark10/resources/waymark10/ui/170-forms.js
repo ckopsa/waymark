@@ -408,8 +408,32 @@ function attachOptions(form, input, xo) {
 function itemOptionFields(rawProp) {
   const items = schemaProp(schemaProp(rawProp).items || {});
   return Object.entries(items.properties || {})
-    .map(([name, p]) => [name, xoptionsOf(p)])
+    .map(([name, p]) => {
+      const xd = p["x-display"] || schemaProp(p)["x-display"] || {};
+      return [name, xoptionsOf(p), xd.label || name];
+    })
     .filter(([, xo]) => xo && xo.href);
+}
+/* …and the vocabularies the DECLARATION already knows (waymark-4yn).
+   A feed recipe's section and population are enums — the census and
+   the population registry are literals a reviewer reads on one screen
+   — so their legal words are already in the schema in front of this
+   form, one level down inside items. There is nothing to fetch, and a
+   list whose parts are enum'd deserves the same row of chips an
+   x-options part gets rather than a memory test. Same surface, same
+   manners: the chip inserts the WORD at the caret and the textarea
+   stays free text. */
+function itemEnumFields(rawProp) {
+  const items = schemaProp(schemaProp(rawProp).items || {});
+  return Object.entries(items.properties || {})
+    .map(([name, p]) => {
+      const leaf = schemaProp(p);
+      const toks = (leaf.enum || p.enum ||
+        (leaf.anyOf || leaf.oneOf || []).flatMap(b => b.enum || []));
+      const xd = p["x-display"] || leaf["x-display"] || {};
+      return [name, (toks || []).map(String), xd.label || name];
+    })
+    .filter(([, toks]) => toks.length);
 }
 function typedEntries(textarea) {
   try {
@@ -417,9 +441,20 @@ function typedEntries(textarea) {
     return Array.isArray(v) ? v.filter(e => e && typeof e === "object") : [];
   } catch (_e) { return []; }        /* half-typed JSON is the normal case */
 }
-function attachItemOptions(form, textarea, fields) {
+function attachItemOptions(form, textarea, fields, enums) {
   const panel = el("div", {class: "opt-chips"});
   textarea.after(panel);
+  const chipRow = (label, note, toks, insertFn) =>
+    el("div", {class: "opt-row"},
+      el("span", {class: "muted"}, label + " · "),
+      ...toks.slice(0, 24).map(t => {
+        const c = el("button", {type: "button", class: "chip", title: note}, t);
+        c.addEventListener("click", e => { e.preventDefault(); insertFn(t); });
+        return c;
+      }),
+      ...(toks.length > 24
+        ? [el("span", {class: "muted"}, " … " + (toks.length - 24) + " more")]
+        : []));
   const insert = tok => {
     const s = JSON.stringify(tok);
     const at = textarea.selectionStart ?? textarea.value.length;
@@ -434,7 +469,7 @@ function attachItemOptions(form, textarea, fields) {
     const mine = ++seq;
     const entries = typedEntries(textarea);
     const rows = [];
-    for (const [name, xo] of fields) {
+    for (const [name, xo, label] of fields) {
       const holes = optHoles(xo);
       /* hole-free: one fetch. With a hole: one per entry that has
          already answered it, unioned — "the actions of the kinds you
@@ -445,12 +480,16 @@ function attachItemOptions(form, textarea, fields) {
       const seen = new Set();
       for (const c of ctxs)
         for (const t of (await optionTokens(xo, c)) || []) seen.add(t);
-      rows.push([name, xo, [...seen], ctxs.length]);
+      rows.push([name, xo, [...seen], ctxs.length, label]);
     }
     if (mine !== seq) return;          /* a later keystroke won the race */
-    panel.replaceChildren(...rows.map(([name, xo, toks, n]) =>
+    panel.replaceChildren(
+      ...(enums || []).map(([name, toks, label]) =>
+        chipRow(label, "one of this kind's own declared words for " + name,
+                toks, insert)),
+      ...rows.map(([name, xo, toks, n, label]) =>
       el("div", {class: "opt-row"},
-        el("span", {class: "muted"}, name + " · "),
+        el("span", {class: "muted"}, (label || name) + " · "),
         ...(toks.length
           ? toks.slice(0, CAP).map(t => {
               const c = el("button", {type: "button", class: "chip",
@@ -533,11 +572,14 @@ function buildForm(schema, prefill, kind) {
       pendingOptions.push([widget, xo]);
     else if (widget.dataset && widget.dataset.array === "json") {
       const fields = itemOptionFields(rawProp);
-      if (fields.length) pendingItemOptions.push([widget, fields]);
+      const enums = itemEnumFields(rawProp);
+      if (fields.length || enums.length)
+        pendingItemOptions.push([widget, fields, enums]);
     }
   }
   for (const [widget, xo] of pendingOptions) attachOptions(form, widget, xo);
-  for (const [widget, fs] of pendingItemOptions) attachItemOptions(form, widget, fs);
+  for (const [widget, fs, es] of pendingItemOptions)
+    attachItemOptions(form, widget, fs, es);
   return form;
 }
 function collectValues(form, schema) {
