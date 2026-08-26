@@ -1192,7 +1192,10 @@
 
 (def reentry-door-log
   "The re-entry (homecoming) flow's rolling-hour window on /auth/agent,
-  process-local. Charged by body-token attempts. See the block above."
+  process-local. Charged by body-token attempts. See the block above.
+  This window and invite-door-log's STAY under waymark-1uv's ruling
+  (ranked, not capped) without argument: a pre-auth door is not a
+  write, and what it walls is guessing, never attention."
   (atom []))
 
 (def invite-door-log

@@ -608,7 +608,12 @@
 
 (def ask-pace-limit
   "Anchorless asks per rolling hour per principal — the generous
-  ceiling on the one create any named principal may issue."
+  ceiling on the one create any named principal may issue.
+
+  It STAYS under waymark-1uv's ruling (ranked, not capped) because the
+  write costs the household: an access ask is an obligation with a
+  deadline placed on an approver (laws v3 law 2, outside the contest)
+  and what it asks for is a leash on the house."
   20)
 
 (g/defguard asks-are-paced
@@ -640,7 +645,12 @@
 
 (def open-asks-cap
   "Open (offered) asks a requester may hold at once; a verdict on
-  those comes before a new one."
+  those comes before a new one.
+
+  It STAYS under waymark-1uv's ruling (ranked, not capped) for the
+  pace's own reason: each open ask is a verdict owed by a person on a
+  leash, outside the contest, and no rank stands between the asker
+  and the approver's fridge."
   10)
 
 (g/defguard asks-are-few

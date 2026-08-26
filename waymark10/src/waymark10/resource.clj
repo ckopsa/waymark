@@ -958,7 +958,14 @@
 
   Both ride ctx :find, per-process and unshared, inheriting
   grants.clj's own recorded punt about the unwired :rate hook.
-  Declaring pacing does not make it distributed."
+  Declaring pacing does not make it distributed.
+
+  Both STAY under waymark-1uv's ruling (ranked, not capped) because a
+  :decision ask is a write that costs the household directly — an
+  obligation with a deadline placed on a person, carded outside the
+  contest by laws v3 law 2, where no rank can protect the decider's
+  attention; a kind whose rows merely contend for attention wants a
+  rank, never :pacing."
   [kind by offered {:keys [limit per open-cap]}]
   (let [window (long (case (or per :hour) :hour 3600 :day 86400 :minute 60))]
     (cond-> []
