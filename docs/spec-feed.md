@@ -272,7 +272,11 @@ passed over*, and it fixes the agent's part in any rank as tuning through a
 proposal (A) then a quoted score-and-sentence as one input (M), never the rank
 itself (B). Nothing in the nine laws moves; the crown's own rank is
 waymark-1uv.2's to build, and it is held to law 5 like the three sections
-already in the contest.
+already in the contest. The v1 sketch's *"hard daily cap so the compiler must
+rank"* (the insight kind, above) is superseded on the same principle: the
+insight is the indexing the ruling was about, and its cap goes after its line
+gets a rank — `spec-outcome-menu.md` § *The other caps, answered*,
+waymark-1uv.8.
 
 ## The design
 
