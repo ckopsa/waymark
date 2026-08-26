@@ -921,7 +921,8 @@
                                       {:title (str "Rank piece " n " " tag)}))))))
 
 (deftest the-crown-ranks-what-it-shows-and-every-card-says-why
-  (let [who "colton-rank"
+  (let [switch (atom nil)
+        who "colton-rank"
         v (declare-value! who "a ranked week" ["the shop"])
         ;; a line of thinking the house turned down, IN WORDS
         x (id-of (stage-outcome! "composer-rank-x" (vid v)))
@@ -1007,6 +1008,7 @@
           (let [day (str (:day doc))
                 on (req :post "/api/feed_view_consents" {} (human who))]
             (is (= 201 (:status on)) (pr-str (json on)))
+            (reset! switch (id-of on))
             (doseq [d (map #(str (.minusDays (java.time.LocalDate/parse day) (long %)))
                            [1 2 3])]
               (is (= 201 (:status (req :post "/api/feed_views"
@@ -1029,7 +1031,11 @@
           ;; leave the house as found: the three bundles declined
           (doseq [oid [a y b]]
             (is (= 200 (:status (invoke! "outcomes" oid :not_this_week nil (human who))))))))
-      (finally (reset! clock nil)))))
+      (finally
+        ;; the record goes back off (waymark-8um.4's rule: *exposure
+        ;; unknown* is only claimable while nobody is recording)
+        (when @switch (invoke! "feed_view_consents" @switch :stop nil (human who)))
+        (reset! clock nil)))))
 
 ;; ── 17. the early recomposition: cooled, never refused ──────────────
 ;;

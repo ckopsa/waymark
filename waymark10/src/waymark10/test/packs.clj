@@ -5870,6 +5870,16 @@
         diagnosed' (when iid
                      (bundle (str "The same Saturday, diagnosed " tag)
                              {:supersedes oid :diagnosis_id iid}))
+        ;; …and it LANDS (waymark-1uv.10 took the date arm off the door:
+        ;; once the duty is done, nothing refuses and the date is the
+        ;; rank's cooling input), so the house is left as found — the
+        ;; recomposition declined under the member's name
+        diagnosed-id (when (= 201 (:status diagnosed'))
+                       (some-> (:doc diagnosed') :self id-of))
+        put-back (when diagnosed-id
+                   (invoke-http ctx :outcome diagnosed-id
+                                (declared-name ctx :outcome :not_this_week) nil
+                                {:headers as-member}))
         ;; and the switch goes back where it was found
         stop (declared-name ctx :feed_view_consent :stop)
         stopped (when switch-id
@@ -6005,16 +6015,16 @@
        (conj (str "feed: the composer could not publish its diagnosis ("
                   (:status insight) "): " (pr-str (:doc insight))))
 
-       (and diagnosed' (not= 409 (:status diagnosed')))
+       (and diagnosed' (not= 201 (:status diagnosed')))
        (conj (str "feed: a diagnosed recomposition staged the morning after"
-                  " the decline answered " (:status diagnosed')
-                  " — the floor still stands behind the diagnosis"))
+                  " the decline answered " (:status diagnosed') ": "
+                  (pr-str (:doc diagnosed'))
+                  " — once the duty is done nothing refuses; the date is the"
+                  " rank's cooling input, not the door's (waymark-1uv.10)"))
 
-       (and diagnosed' (= 409 (:status diagnosed'))
-            (not= :a-recomposition-waits-its-turn (refused-guard diagnosed')))
-       (conj (str "feed: with a diagnosis cited, the recomposition was refused"
-                  " by " (pr-str (:guard (:doc diagnosed')))
-                  " — once the duty is done the only wall left is the date"))
+       (and diagnosed-id (not= 200 (:status put-back)))
+       (conj (str "feed: the diagnosed recomposition could not be put back ("
+                  (:status put-back) ")"))
 
        (and switch-id (not= 200 (:status stopped)))
        (conj (str "feed: the member could not stop their own record ("
