@@ -505,7 +505,9 @@ engine's half of the contract is the `insight` kind's law:
   than inherited.
 - **A hard daily cap.** So the compiler must rank rather than dump. See the
   hazard in the bead note for `.6`: `:pacing {:per :day}` computes the right
-  window and prints the wrong sentence.
+  window and prints the wrong sentence. *Superseded 2026-08-26 (waymark-1uv.8):
+  the cap was a wall on the writer standing in for a rank on the reader, and
+  the reader now has the rank — `spec-outcome-menu.md` § Built — 1uv.8.*
 - **Authorship is visible.** `:by :authored_by` is a principal id, `:raw` by
   the sugar's own rule — a display layer must not dress it up as a person.
 
@@ -706,7 +708,8 @@ only one pair may run at once, run this one; if serial is affordable, `.4` then
   (`todo.phone_calls`, `todo.computer`) already encode them and a context-aware
   do-now section waits for the spine to exist. Not designed here on purpose.
 - **Automated compiler cadence.** `waymark-53u`. A manual probe is the v1, and
-  the daily cap holds either way.
+  the findings' rank reads either way (the daily cap it once leaned on left
+  with waymark-1uv.8).
 - **A materializing job for one expensive population.** Named in fork (a). The
   population registry is the seam; nothing else moves when one entry is swapped.
 - **No seen/unseen state, ever.** `spec-addressed-notice.md` already punted
@@ -1448,7 +1451,13 @@ strings). **This is the one place in the tree where the ≤-selection rule is a
 door rather than a projection**, because it is the one place a verb is
 *declared* — in data, by the author — rather than inherited from a row.
 
-**`insights-are-capped`** — three findings a day, per author, and `:pacing` is
+**`insights-are-capped`** — *superseded 2026-08-26 (waymark-1uv.8): the guard,
+its number and this paragraph's reasoning are history. The wall was the outcome
+cap's precedent and the same proxy; the `:insights` line now ranks what it
+shows by six numbers on the recipe row (`insight_rank`), `:take 2` is the
+exposure floor, and an author publishes as many findings as it finds —
+`spec-outcome-menu.md` § Built — 1uv.8.* As built: three findings a day, per
+author, and `:pacing` is
 NOT spelled. The bead's option (c), taken for the reason it gave: `:pacing
 {:limit 3 :per :day}` computes the right window and prints *"Asks are paced to
 {limit} an hour"* (`resource.clj:970`), and fixing that in the sugar would move
@@ -1526,7 +1535,10 @@ public because `.4`'s pack judges against it.
 The bound is the read-time posture's — at most `row-scan-cap` findings, and only
 the survivors of the first two filters cost a subject read. The daily cap is
 what keeps that number small **at the source**, which is the point of putting
-the wall at the door instead of in the query.
+the wall at the door instead of in the query. *(Since waymark-1uv.8 the bound
+is `insight-scan-cap` = 50, newest first, announced in the document when
+reached, and the door keeps nothing small — the population ranks what it
+reads; `spec-outcome-menu.md` § Built — 1uv.8.)*
 
 ### Where the law is proved
 
@@ -1565,7 +1577,11 @@ cannot be watched doing its work by one — and claims, from the wire:
    until the door says no, and asserts only that the refusal came and that it
    named `insights-are-capped`. How many a house allows is the house's to
    declare — the same restraint `:feed/ticklers` keeps about the backoff
-   schedule.
+   schedule. *Inverted 2026-08-26 (waymark-1uv.8): the obligation now
+   publishes six in one breath and asserts every one landed, then reads the
+   rank — `recipe.insight_rank` as six ints, `insight_rank_says` quoting them,
+   `why.insight` on the card, and the explained citation saying it is ranked
+   among findings while the section's other citizens are outside the contest.*
 5. **The card is real**: it lands in `decide`, offers both verdicts in `actions`
    (never in `heavier` — the note-free proof), and carries its `offer` link.
 6. **The finder cannot answer its own finding** — 409, by name — and the
@@ -2859,7 +2875,9 @@ proposals *and* recipes, the careless pair a household might actually approve
 
 An agent **needs** that grant, and this is where the kind departs from the
 insight precedent on purpose. `insight`'s own-surface carries `create`, so an
-unleashed agent may publish a finding and the daily cap is the only wall. A
+unleashed agent may publish a finding and nothing at the door counts how many
+(the daily cap left with waymark-1uv.8; the feed's rank is what protects the
+reader). A
 finding is a sentence the household reads; a proposal is a prepared WRITE a
 member enacts with one tap, and which agents may put one of those in front of
 the house is a decision the house should get to make. So `recipe_proposal`'s

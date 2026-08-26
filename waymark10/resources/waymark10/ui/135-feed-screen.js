@@ -246,6 +246,10 @@ async function renderFeedScreen(view, doc) {
        in the sentence, on every answer. */
     if (recipe.crown_rank_says)
       why.append(el("p", {class: "prose muted"}, recipe.crown_rank_says));
+    /* …and the findings' rank, the same way (waymark-1uv.8): six
+       numbers, narrated by the server, on every answer. */
+    if (recipe.insight_rank_says)
+      why.append(el("p", {class: "prose muted"}, recipe.insight_rank_says));
     for (const n of doc.notes || [])
       why.append(el("p", {class: "prose muted"}, n));
     /* the view door, when it is SHUT (waymark-8um.1). The open case
@@ -733,6 +737,27 @@ async function renderFeedScreen(view, doc) {
         c.days_left + " day" + (c.days_left === 1 ? "" : "s") + " left on its week"];
       box.append(el("p", {class: "muted"},
         "Ranked in the crown — lift " + c.lift + ": "
+        + parts.filter(Boolean).join("; ") + "."));
+    }
+    /* …and the findings' own numbers, from why.insight (waymark-1uv.8),
+       the same way. Present only on an insight card. */
+    if (why.insight && typeof why.insight.lift === "number") {
+      const i = why.insight;
+      const parts = [
+        i.diagnosis && i.diagnosis !== "none"
+          ? ("a diagnosis (" + i.diagnosis + ")") : "a plain finding",
+        i.value ? ("its next step serves a value " + i.value) : null,
+        (typeof i.seen === "number")
+          ? ("shown " + i.seen + " day" + (i.seen === 1 ? "" : "s")
+             + (i.cooled > 0 ? (", cooled " + i.cooled) : ""))
+          : null,
+        i.dismissed > 0
+          ? ("you dismissed " + i.dismissed + " on this same next step"
+             + (i.declined ? (" and said " + String(i.declined).replace(/_/g, " ")) : ""))
+          : null,
+        i.fresh_days + " day" + (i.fresh_days === 1 ? "" : "s") + " of freshness left"];
+      box.append(el("p", {class: "muted"},
+        "Ranked among findings — lift " + i.lift + ": "
         + parts.filter(Boolean).join("; ") + "."));
     }
     const details = el("details", {class: "fcard-why"},

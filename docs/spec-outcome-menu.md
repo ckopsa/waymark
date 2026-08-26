@@ -3360,7 +3360,7 @@ attention, and a wall on writing it is the proxy the ruling names.
 | kind | guard | what it walls | proxy or cost | recommendation |
 |---|---|---|---|---|
 | `outcome` | `outcomes-are-few` | two staged outcomes a week per composer | **proxy** — the epic's own subject | goes with **1uv.3**, never before **1uv.2**; nothing touched here |
-| `insight` | `insights-are-capped` | three findings a day per author | **proxy** — the precedent the outcome cap copied; the insight IS the indexing the ruling names; the write pushes nothing, mails nobody, and the offer is an address | becomes a rank; **waymark-1uv.8** names the inputs; the cap goes after the rank |
+| `insight` | `insights-are-capped` | three findings a day per author | **proxy** — the precedent the outcome cap copied; the insight IS the indexing the ruling names; the write pushes nothing, mails nobody, and the offer is an address | becomes a rank; **waymark-1uv.8** names the inputs; the cap goes after the rank — **built**, § Built — 1uv.8 |
 | `tickler` | the backoff (`backoff-days`, 7/21/60/180) | when a not-now'd marker comes back | **not a cap** — a person's own verdict written as a date (law 6), and already a read-side rank input (`next_offer_at`) | untouched; the sweep (`waymark-iqa.13`) gets **no per-sweep cap**; the due pile gets a rank — **waymark-1uv.9**; the dedupe iqa.13 wants is a law, not a cap |
 | `outcome` | `a-recomposition-waits-its-turn`, arm (c) | a superseding outcome before the prior's `not_before` | **proxy, but the person's** — a decline stamped as a date, then used as a wall on the composer's writing; 1uv.2 already names the verdict chain as the rank's input (4) | the date arm becomes the cooling input — **waymark-1uv.10**, with 1uv.3; arms (a) and (b) are shape and stay |
 | `letter` | `letters-are-paced` | 60 create *attempts* an hour per principal | **cost** — mail to a person lands on their shelf outside the contest (law 2, *a letter waiting*), and every refused attempt is a roster probe (L4) | stays; docstring says so |
@@ -4279,7 +4279,8 @@ as one map.
   number.
 - **`insights-are-capped` still stands** (waymark-1uv.8, after its rank).
   The two removals here are the outcome kind's; the principle is wider and
-  the order the epic set is still the order.
+  the order the epic set is still the order. *(It went, after its rank, in
+  § Built — 1uv.8 below.)*
 - **The decline's quick reason as a retire rather than a cool** is not
   built. `:declined` at `never_this` holds a bundle 8; the epic's own
   sentence *never_this retires the line* would want a tier below, not a
@@ -4297,3 +4298,291 @@ as one map.
 - **The tickler kind is untouched.** `next_offer_at` on a tickler is still a
   read-side rank input for the ticklers line and was never a wall
   (waymark-1uv.7's row); this bead borrowed its schedule and nothing else.
+
+## Built — 1uv.8, the findings' rank and the cap that followed it out (2026-08-26, waymark-1uv.8)
+
+**The owner's ruling, verbatim:** *Agents have infinite patience and time to
+sift through that data and index it. … I don't think it makes sense to limit
+the indexing. It makes more sense to just rank them.* 1uv.7 asked the ruling's
+question of `insights-are-capped` and answered it: the insight IS the
+indexing, the cap was the outcome cap's precedent and the same proxy, and the
+line was misfiled as *outside the contest*. This bead is the answer built —
+**in the epic's order: the rank first, the cap second, never the cap alone.**
+
+So the `:insights` line now **ranks what it shows**, in exactly the crown's
+shape one section down: **six numbers on the recipe row beside the crown's
+five, one line of arithmetic, one new key on every insight card's `why`, and a
+sentence that replaces the one that was never honestly about it.** The floor
+stays at `:take 2`. The seed still breaks ties. `insights-are-capped`, its
+number and its scenario-less wall are gone from the create door. No hash the
+household's own kinds carry moved.
+
+### The rank, as landed
+
+```clojure
+;; feed/default-insight-rank
+{:diagnosis 10   ; what a law-4 diagnosis is lifted over a plain finding
+ :declared 5     ; what a finding whose offered row serves a DECLARED value is lifted
+ :cooled 2       ; what each step the contest says it has cooled holds it back
+ :dismissed 3    ; what each finding the house DISMISSED on the same offer holds it back
+ :declined 2     ; what each RANK of the strongest word said on those holds it back
+ :fresh 1}       ; what each day of freshness left in the contest's window lifts it
+```
+
+```clojure
+;; feed/insight-lift — the whole of the arithmetic
+lift = diagnosis × [the finding is a law-4 diagnosis]
+     + declared  × [its offered row serves a declared value]
+     − cooled    × steps cooled
+     − dismissed × findings the house dismissed on the same offer
+     − declined  × weight of the strongest word said on those
+     + fresh     × days of freshness left in the window
+
+;; feed/insight-key — the sort, ascending. NO TIER.
+[−lift  hash(seed ‖ card_id)]
+```
+
+Six inputs, and each is a number a person reads on the card:
+
+| input | read off | as it rides `why.insight` |
+|---|---|---|
+| **a diagnosis** | the offer is a value's or a person's own affirmation (`feed/affirmation-doors`: `value.still_stands`, `person.still_with_us`); or the offer is on an outcome's own row; or the evidence cites an outcome the house `declined` (at most `evidence-read-cap` = 8 addresses followed) | `"diagnosis": "affirmation"` / `"recomposition"` / `"none"` — always present |
+| **the value its offered row serves** | the offered row itself when the offer is on a value, else the offered row's own `value_id`; `declared` / `observed` off the value's state | `"value": "observed"` — only when the row serves one at all |
+| **shown and passed over** | the same `feed_view` rows, window and `cooling-step` the contest reads | `"seen": 3, "cooled": 1` — only while recording |
+| **the house's verdict record on the same offer** | `dismissed` findings on the same `{offer_kind, offer_id, offer_action}`, newest `dismissal-record-cap` = 5, counted | `"dismissed": 2` — always present |
+| **the strongest word said on those** | the `verdict_reason` rows filed against each of them, the heaviest kept (`reason-weights`, the crown's own order) | `"declined": "wrong_time"` — only when a word was said |
+| **freshness** | `max(0, window_days − days since created)` — the contest's own `:window-days` (14) | `"days_old": 0, "fresh_days": 14` |
+
+…and the lift, `"lift": 24`, on the **plain read**, for the crown's reason.
+
+On the wire, on every read, beside `recipe.crown_rank`:
+
+```json
+"recipe": {
+  "guarantees": "… the contest is two numbers a person can read; the crown's rank is five; and the findings' rank is six. …",
+  "insight_rank": {"diagnosis": 10, "declared": 5, "cooled": 2, "dismissed": 3, "declined": 2, "fresh": 1},
+  "insight_rank_says": "Findings are ranked, not capped: an agent may publish as many as it finds, the line shows as many as its take says, and this is the whole of how it chooses which. A finding is the one card waiting on your answer that is not an obligation — it is the contest's own output — so unlike the ask, the conflict, the letter and the staged change beside it, it is ranked, by six numbers a person can read: a diagnosis — … — is lifted 10 over a plain finding; one whose next step serves a value this house declared is lifted 5; each step the contest says it has cooled — the same 3 days in 14 as the sections below, read off your own record — holds it 2; each finding you already dismissed on the same next step holds a new one 3, and the strongest quick word you said on those holds it 2 for wrong time, 4 for wrong piece, 6 for not this way and 8 for never this; and each day of freshness left in the same 14 lifts it 1, so a finding published today stands above one from last week and an old one sinks to the bottom and no further. The floor still holds — …"
+}
+```
+
+### No tier, and the diagnosis is a weight — decided and recorded
+
+The crown has a tier because a person's own `composition_request` is law 6
+read at the crown, and no number a household writes may put the machine's
+initiative above it. **Nothing in the findings' line is a person's.** Every
+insight is the machine's initiative by construction (`:by :authored_by`, the
+four-eyes wall), so `insight-key` is `[−lift hash]` and the pure test asserts
+there is nothing above the lift.
+
+1uv.7 said *law 4 first — the composer's duty fires first*, and the bead
+heading said *first or lifted*. **Lifted.** Law 4 is a duty on the SYSTEM, not
+a person's word, and a household should be able to turn a system's duty down
+where it could not turn a person's request down; a tier cannot be set to zero
+and a number can. At the deployment's numbers a fresh diagnosis (24) stands
+above every fresh plain finding (14) and a two-week-old diagnosis (10) still
+stands above a week-old plain one (7), which is the duty firing first in
+practice; a household that writes `diagnosis 0` has said the duty does not
+outrank the rest, and the diff tells them so in a sentence.
+
+### The dismissal record is two numbers, and *never this* is not a retire
+
+1uv.7's sentence was *a dismissed finding on the same offer cools hard, by its
+quick reason — never_this retires; wrong_time cools on the tickler schedule;
+not_this_way / wrong_piece cool the offer, not the subject.* What landed is
+the crown's own reading of the same words: `:dismissed` counts the record and
+`:declined` weighs the strongest word per rank, so a line dismissed twice with
+*wrong time* said once is held 6 + 2 and a line dismissed once with *never
+this* is held 3 + 8. **A retire is not built**, for 1uv.3's recorded reason —
+*never_this as a retire rather than a cool is a decision about the reason
+kind's meaning*, filed on waymark-1uv.11 — and a *tickler schedule* for *wrong
+time* would be a `not_before` on the insight kind that nothing stamps. The
+verdict record stays on the rank as numbers, which is where the epic put the
+crown's, and the same follow-up decides both.
+
+### The sentence that was never about it — what law 2 says now
+
+`cooling-says` told every decide card: *Outside the contest: something
+waiting on your answer appears because it must — an ask that expires, a
+conflict, mail on your shelf, a change staged for a tap.* That list is law 2's
+and it names no insight, because an insight is not an obligation with a
+deadline; law 4 calls the diagnosis *an insight*. The line was outside the
+contest by placement and not by nature.
+
+**Decided: the line stays in `:decide`, and `cooling-says` learns an insight
+is ranked.** The census does not move (a finding is still something to
+DECIDE, and the pack's own claim says so), `contested-sections` does not move
+(the contest's step is still never an insight's sort key — the rank reads the
+same rows as its own input, the crown's arrangement exactly, and
+`:feed/formula`'s walled claim stays literally true because the view count
+rides inside `why.insight` and never as `why.seen`), and the decide arm's
+sentence is **unchanged and still true of everything else in the section.**
+What changed is that an insight card no longer hears it. Its arm opens:
+
+```
+Ranked 1st of 2 among findings by recipe.insight_rank — six numbers this house
+can read — and this is the arithmetic for this card. A finding is not an
+obligation: the ask that expires, the conflict, the letter and the staged
+change beside it in this section stand outside the contest because they must
+appear; a finding is the contest's own output and is ranked instead. It is a
+diagnosis — its next step is a value's or a person's own affirmation, the
+composer's duty firing first — which lifts it 10. Its next step serves a value
+an agent observed and nobody has yet affirmed, so the 5 a declared value would
+lift it is not there. Nothing about what you have been shown moves it, because
+you are not recording what you were shown. Nothing on the record says you
+dismissed a finding on this same next step. Published 0 days ago, with 14 days
+of freshness left in the window, lifting it 14. Lift 24 in all; the seed
+decides between equals. The floor still holds: this line shows as many
+findings as its take says whenever that many exist, and the rank only chooses
+which.
+```
+
+So law 2's *outside the contest* now describes the decide section's OTHER
+citizens — asks, letters, conflicts, staged proposals — and the insight arm
+says so in its second sentence. (The ticklers line is waymark-1uv.9's, running
+beside this bead; nothing here touched it or the population, and its own
+answer to the same sentence is its own.)
+
+### The cost, decided: a bound with a note, the crown's answer again
+
+`feed/insight-scan-cap` = 50 published findings, newest first, and the
+document says when it is reached — *The findings' line read to its cap and
+stopped — the newest 50 published findings were ranked, and older ones were
+not read today. Those are the ones the rank's own freshness already places
+last; a house with more than 50 unanswered findings has an agent to talk to
+before it has a cap to raise.* Per candidate: a subject read (`set-aside?`, as
+before), one more raw load of the offered row, one dismissal query on the
+offer's three fields, a reason query per prior dismissal (at most five), a
+value read where the row names one, and — only for a finding that is neither
+an affirmation nor an outcome offer — up to eight citation reads looking for a
+declined outcome. A stored score was refused for 1uv.2's two reasons, which
+hold here unchanged: no honest writer, stale on every view row and every
+reason. The archive's, the crown's and the findings' caps are three bounds
+with three notes, folded by section for the crown and by POPULATION for the
+findings, because `:decide` holds several lines and only this one is ranked.
+
+### Where the numbers live, and what moved with them
+
+**On the `feed_recipe` row**, as `insight_rank` beside `crown_rank`: in
+`recipe-fields`, in all three schemas (`insight-rank-schema`, the crown's
+shape one field over), in `:revise`'s prefill, and in `recipe-of`'s wire→map
+spelling — single-line additions beside the crown's, so the same form, the
+same `written-by-a-person` wall and the same transitions govern it.
+`check-recipe!` grew a **seventh** assembly check (six ints, 0–100, zero legal
+for each); `recipe-guarantees` says so.
+
+**`feed/insight-rank-words` and `feed/insight-rank-diff`** are a SIBLING map
+and a sibling diff rather than a widening of `crown-rank-words`, on purpose:
+the two ranks are two fields with two sentences each, and a diff that walked
+one map for both would have to be told which field a key came from. The shape
+is identical and generic over the map's keys; `recipe-diff` folds the findings'
+sentences after the crown's (*Among findings, each finding the house already
+dismissed on the same next step holds a new one 5 instead of 3.* / *The
+findings' rank turns OFF …*). **A person tunes it today** through
+`feed_recipe`'s own create and revise. **The agent's path is not built**:
+`recipe_proposal` carries `crown_rank` / `current_crown_rank` and no
+`insight_rank`, so the diff is ready and the proposal cannot yet feed it —
+left out to keep `recipe_proposal.clj` untouched while 1uv.6 and 1uv.9 run
+beside this bead, and filed (waymark-bck), with one hazard named: `apply-the-order`'s
+carry-through reads only `crown_rank` off the target, so an order-only apply
+on a row that names `insight_rank` would reset the findings' six.
+
+**On the insight kind**, `daily-cap`, `insights-are-capped`, the `Instant` and
+`ChronoUnit` imports nothing else used, and the guard's place in
+`:create-guards` — gone. The ns docstring's *THREE A DAY* bullet is now
+*RANKED, NOT CAPPED* and says why; the create-walls comment no longer says
+*pace last*; `a-dismissed-finding-does-not-come-back`'s docstring no longer
+calls re-publishing *the cap doing its work* and says what the rank reads
+instead; `listed` no longer burns a cap. The screen (`135-feed-screen.js`)
+opens *Why this order* into `insight_rank_says` beneath the crown's sentence
+and an insight card's *Why this card?* with its own lift and inputs, the
+crown's two additions mirrored.
+
+### Where the law is proved
+
+- **`feed-test`**, two deftests, the crown's pair one section down: the
+  arithmetic as a **pure function** — eight findings ordered identically under
+  two unrelated seeds, `insight-key` two elements long with nothing above the
+  lift, all six at zero reducing to `[0 hash]` — and the field: six numbers on
+  the wire narrated with *ranked, not capped* and *8 for never this*, a row
+  naming some keeping the rest, a nonsense number refused at assembly by name,
+  the diff's sentences beside the crown's in one `recipe-diff`, a household
+  POSTing `insight_rank {diagnosis 40 fresh 0}` and the next read answered by
+  it with the crown's five untouched, and a revise to six zeros saying *The
+  findings' rank is off*.
+- **`workqueue10.insight-rank-test`** (new), over the live ring handler and the
+  household's own registry, one deftest of 61 assertions: a leashed finder
+  (`insight:create` + `value:create`) writes an OBSERVED value and publishes a
+  finding offering its `still_stands` beside a plain finding offering a task's
+  own light verb, under the member's `scope "mine"` recipe with the insights
+  line widened to ten; the diagnosis stands first at lift 24 with
+  `diagnosis "affirmation"` and `value "observed"`, the plain one at 14 with no
+  `value` key, both citations quoting the numbers, the plain card saying
+  *outside the contest because they must appear* of its neighbours and
+  carrying no `why.seen`. Then the member dismisses two findings on one task —
+  the first with `verdict_reason wrong_time` — and a third on the same offer
+  reads `dismissed 2, declined "wrong_time", lift 6` and stands below the
+  fresh plain finding. Then **six findings in one day, one author, one offer:
+  six 201s**, all six on the page beside the other three (`why.of` 9), the
+  diagnosis still first and the dismissed line still last; and with the line
+  narrowed back to the deployment's `:take 2`, the page shows exactly two —
+  the diagnosis and the freshest plain finding — with the dismissed line
+  below the floor rather than refused. Every finding is dismissed before the
+  test returns.
+- **`:feed/insights`**, inverted and widened: the fill loop that published
+  until the door said no and asserted `insights-are-capped` now publishes six
+  in one breath and asserts every one landed; eight claims added —
+  `recipe.insight_rank` is six ints, `insight_rank_says` quotes the `diagnosis`
+  number, *never this* and *not capped*, the carded finding's `why.insight`
+  carries an int `lift`, a `diagnosis` in {none, affirmation, recomposition},
+  int `dismissed` / `days_old` / `fresh_days`, reads `dismissed 0` on an offer
+  nobody dismissed, carries no `why.seen`, and its explained citation says
+  *Ranked*, *among findings* and *outside the contest*. The obligation still
+  answers whichever finding the day's order carded, now because six equals on
+  one offer are the seed's to place.
+
+### Recorded here, for whoever comes next
+
+- **`make check-queue` reads 37 kinds, 11 warnings, 49 scenarios judged** —
+  the numbers unmoved. One line under them moved: `insight` reads *3 refusing
+  guards, 3 named by a scenario* where it read 4/3, and its deferred reads no
+  longer name `:insight`. No scenario ever named the cap, the outcome cap's
+  own verdict one kind over.
+- **Fingerprints: nothing moved.** Computed over the household's 37 kinds plus
+  `feed_recipe`, `recipe_proposal` and `verdict_reason` on `main` (`842395d`)
+  and on this tree: **all 40 byte-identical.** `insight` is `d5b2724b…` on
+  both — create guards are outside `fingerprint-of`. `feed_recipe` is
+  `9e5ba71d…` on both (`:schema` is not a facet). `recipe_proposal` is
+  `908661e4…` on both, because this bead did not touch it.
+- **Suites:** framework 770 tests, 5856 assertions, green (private database
+  `wm_1uv8f`); household 253 tests, 2883 assertions, green (`wm_1uv8`) —
+  two deftests and one deftest more than the integration branch, and the
+  pack's eight new claims inside the household count.
+- **The insight arm reads `formula` off the cooling state when recording and
+  off the recipe's window otherwise** — the sentence needs `window_days`
+  whether or not anybody is recording, because freshness is the row's age and
+  not a view; `document` puts `:window-days` on the ctx for the population
+  for the same reason.
+- **`affirmation-doors` spells two application action names in the
+  framework**, as keywords, the way `reason-weights` spells four tokens and
+  the populations spell `:insight` / `:tickler` / `:outcome`. A third kind
+  with an affirmation door adds its pair there; a declared trait for it would
+  be the moment this map has three entries.
+- **The verdict record is read by the offer's three fields**, so a finding
+  on the same row with a DIFFERENT action is a different question and hears
+  no dismissal — *not_this_way / wrong_piece cool the offer, not the
+  subject*, 1uv.7's own words, by construction.
+- **Dedupe is not built** (one live finding per offer, a create guard reading
+  `(:find ctx)`) — filed as **waymark-1ag**. The pack and the live test both
+  publish six on one offer to prove *ranked, not capped*; with dedupe that
+  becomes one admitted and five refused by name, a different claim wanting
+  its own inversion.
+- **`insight_rank` through `recipe_proposal`** — filed as **waymark-bck**,
+  with the carry-through hazard named above.
+- **`insight-scan-cap` has arithmetic behind it and no measurement** — filed
+  as **waymark-czo**, beside waymark-1uv.12.
+- **The fixture comment in `conformance_test`** about dropping `insights` now
+  gives the surviving half of its reason (stale cards contending) and not the
+  spent-allowance half.
+- **`why.insight` is nested, not flattened**, for `why.crown`'s reason: the
+  contest's `why.seen` stays the contest's and absent on every insight card,
+  so `:feed/formula`'s walled claim over `decide` stays literally true.

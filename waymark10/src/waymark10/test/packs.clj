@@ -2632,8 +2632,9 @@
 ;; waymark-iqa.6's obligation, and the pack's new LAST one for the
 ;; same reason `:feed/ticklers` sits below the counting obligations:
 ;; it MINTS rows, and a minted finding is a card. It mints more than
-;; any other obligation does, because the daily cap is only provable
-;; by filling it.
+;; any other obligation does — six findings, since waymark-1uv.8,
+;; because *ranked, not capped* is only provable by publishing more
+;; than the line's take and watching every one land.
 ;;
 ;; TWO PRINCIPALS, and they are not decoration. The four-eyes wall is
 ;; the whole of 'it only ever offers', so the author has to be
@@ -2641,14 +2642,12 @@
 ;; its work: the finder publishes, the walker reads the feed and
 ;; answers, and the finder's own attempt to answer is refused by name.
 
-;; A FRESH FINDER EVERY RUN, and it is not hygiene — it is the only
-;; way to ask the cap a question. A daily cap counts ROWS, so unlike
-;; the in-process pacing atoms it survives a restart: an obligation
-;; with a fixed author id would spend the allowance on its first run
-;; and be refused at its first create on every run after, in a suite
-;; whose fixture is under no obligation to drop that table. A new
-;; author has a new allowance by the law's own shape, which is exactly
-;; what the claim below wants to watch fill.
+;; A FRESH FINDER EVERY RUN. It was born as the only way to ask the
+;; daily cap a question (a cap counts ROWS and survives a restart);
+;; the cap is gone (waymark-1uv.8) and the fresh author stays for the
+;; claim that outlived it — the finder's own feed never cards the
+;; finder's own findings, which is only a clean question when no
+;; earlier run's findings wear the same name.
 (defn- finder-headers []
   {"x-waymark-principal" (str "conformance-finder-"
                               (subs (str (random-uuid)) 0 8))
@@ -2676,8 +2675,10 @@
 
 (defn- feed-insight-violations
   "A finding cites what it read, offers something the house can tap,
-  runs out after three a day, and is answered by somebody other than
-  whoever found it — from the wire, in that order.
+  is admitted however many came before it today, is RANKED on the
+  page by numbers the house can read (waymark-1uv.8), and is answered
+  by somebody other than whoever found it — from the wire, in that
+  order.
 
   The subject is the feed's own first row card ABOVE THE SEAM, the
   same fixture `:feed/ticklers` uses and for the same reason: the
@@ -2734,42 +2735,42 @@
                         (make-insight! ctx hs
                                        (finding "This one wants a keyboard"
                                                 {:offer_action heavy})))
-            ;; 5. THE CAP, discovered rather than known. HOW MANY a
-            ;; house allows is the house's to declare — the obligation
-            ;; judges the LAW (that there IS a ceiling, and that the
-            ;; one past it is refused by name) exactly as
-            ;; `:feed/ticklers` judges the backoff without pinning the
-            ;; schedule. The bound is a bound and not a cap: a house
-            ;; that would publish twenty findings a day has not
-            ;; declared one.
+            ;; 5. RANKED, NOT CAPPED (waymark-1uv.8). Six well-formed
+            ;; findings in one day, one author, and every one of them
+            ;; is admitted — the inverse of the claim this obligation
+            ;; was born with, which published until the door said no
+            ;; and asserted the refusal named `insights-are-capped`.
+            ;; That wall was the outcome cap's precedent and the same
+            ;; proxy; what protects the reader now is the rank below,
+            ;; and the obligation watches it instead.
             filled (when light
-                     (loop [n 1 out []]
-                       (let [r (make-insight!
-                                ctx hs
-                                (finding (str "The house has not looked at this"
-                                              " in a while, and here is the"
-                                              " next step (" n ")")
-                                         {:offer_action light}))
-                             out (conj out r)]
-                         (if (and (= 201 (:status r)) (<= n 20))
-                           (recur (inc n) out)
-                           out))))
+                     (mapv (fn [n]
+                             (make-insight!
+                              ctx hs
+                              (finding (str "The house has not looked at this"
+                                            " in a while, and here is the"
+                                            " next step (" n ")")
+                                       {:offer_action light})))
+                           (range 1 7)))
             landed (filterv #(= 201 (:status %)) filled)
-            over (peek filled)
             mine (into #{} (keep #(some-> (:self (:doc %)) id-of)) landed)
             ;; the walker's own feed: the finder's findings are the
             ;; walker's to answer, and the finder's own are not.
             ;; WHICHEVER of them the day's order put on the page is the
-            ;; one answered — the recipe's `:take` is smaller than the
-            ;; cap on purpose, and hash(seed ‖ card_id) decides which
-            ;; two of three a member reads today. An obligation that
-            ;; insisted on the FIRST one published would be asserting a
-            ;; ranking the third law forbids.
+            ;; one answered — the recipe's `:take` is smaller than six
+            ;; on purpose, and the rank decides which: six findings on
+            ;; one offer, published in one breath, are equals to the
+            ;; formula, so hash(seed ‖ card_id) places them. An
+            ;; obligation that insisted on the FIRST one published
+            ;; would be asserting an order nobody declared.
             offered (:doc (feed-doc ctx nil))
+            explained (:doc (feed-doc ctx nil "explain=1"))
             card (first (filter #(and (= "insight" (str (:kind %)))
                                       (contains? mine (id-of (:self %))))
                                 (feed-cards offered)))
             first-id (some-> (:self card) id-of)
+            explained-card (when first-id (insight-card explained first-id))
+            rank-keys [:diagnosis :declared :cooled :dismissed :declined :fresh]
             finder-feed (:doc (feed-doc ctx hs))
             take' (declared-name ctx :insight :take)
             self-answer (when first-id
@@ -2814,17 +2815,71 @@
                       " is the one place that rule refuses rather than"
                       " moves a button: " (pr-str (:doc too-heavy))))
 
-           (and light (empty? landed))
-           (conj (str "feed: not one well-formed finding could be published"
-                      " — the cap is a ceiling and not a floor: "
-                      (pr-str (mapv :doc filled))))
+           (and light (not= 6 (count landed)))
+           (conj (str "feed: an agent published six well-formed findings in"
+                      " one day and " (count landed) " landed — ranked, not"
+                      " capped (waymark-1uv.8): no wall on writing stands at"
+                      " this door, and the rank below decides what the house"
+                      " is shown: "
+                      (pr-str (mapv (fn [r] [(:status r) (:guard (:doc r))])
+                                    filled))))
 
-           (and over (not= :insights-are-capped (refused-guard over)))
-           (conj (str "feed: " (count landed) " findings landed and the next"
-                      " answered " (:status over) " — a hard daily cap is"
-                      " what makes a compiler RANK rather than dump, and a"
-                      " surface that can be filled is a surface that will"
-                      " be: " (pr-str (:doc over))))
+           ;; ── the findings' rank (waymark-1uv.8) ────────────────────
+           ;; Law 5 at the insights line: six numbers on every answer, a
+           ;; sentence quoting them, and every insight card carrying the
+           ;; inputs that placed it — on the plain read as numbers, on
+           ;; the explained read as sentences.
+           (let [c (get-in offered [:recipe :insight_rank])]
+             (not (and (map? c) (every? #(int? (get c %)) rank-keys))))
+           (conj (str "feed: recipe.insight_rank reads "
+                      (pr-str (get-in offered [:recipe :insight_rank]))
+                      " — the findings' rank is six numbers the household can"
+                      " read, on every answer, or it is the hidden model law 5"
+                      " forbids"))
+
+           (let [c (get-in offered [:recipe :insight_rank])
+                 s (str (get-in offered [:recipe :insight_rank_says]))]
+             (not (and (str/includes? s (str (:diagnosis c)))
+                       (str/includes? s "never this")
+                       (str/includes? s "not capped"))))
+           (conj (str "feed: recipe.insight_rank_says does not quote its own"
+                      " numbers, the four words and the ruling back — "
+                      (pr-str (get-in offered [:recipe :insight_rank_says]))))
+
+           (and card (let [i (get-in card [:why :insight])]
+                       (not (and (int? (:lift i))
+                                 (contains? #{"none" "affirmation" "recomposition"}
+                                            (str (:diagnosis i)))
+                                 (int? (:dismissed i))
+                                 (int? (:days_old i))
+                                 (int? (:fresh_days i))))))
+           (conj (str "feed: the insight card's why.insight reads "
+                      (pr-str (get-in card [:why :insight]))
+                      " — every finding carries the rank's inputs on the plain"
+                      " read: the lift, whether it is a diagnosis, how many"
+                      " the house dismissed on the same offer, its age and"
+                      " its freshness"))
+
+           (and card (not= 0 (get-in card [:why :insight :dismissed])))
+           (conj (str "feed: a finding on an offer nobody has dismissed reads"
+                      " dismissed " (pr-str (get-in card [:why :insight :dismissed]))
+                      " — silence is read as silence"))
+
+           (and card (some? (get-in card [:why :seen])))
+           (conj (str "feed: the insight card carries the contest's own"
+                      " why.seen — the findings' rank reads the view rows"
+                      " inside why.insight, and the line stays outside the"
+                      " contest"))
+
+           (and explained-card
+                (not (some #(and (str/includes? (str %) "Ranked")
+                                 (str/includes? (str %) "among findings")
+                                 (str/includes? (str %) "outside the contest"))
+                           (get-in explained-card [:why :says]))))
+           (conj (str "feed: the explained insight card does not say it is"
+                      " ranked among findings, nor that the section's other"
+                      " citizens are the ones outside the contest: "
+                      (pr-str (get-in explained-card [:why :says]))))
 
            (and (seq mine) (nil? card))
            (conj (str "feed: " (count mine) " findings were published and not"
@@ -5496,10 +5551,11 @@
      :needs #{[:route :feed] [:kind :tickler]}
      :run feed-tickler-violations}
     ;; …and :insights below IT, for the same reason one turn further:
-    ;; it is the obligation that mints the MOST rows (the only honest
-    ;; way to watch a daily cap fill is to fill it), and a feed with
-    ;; three fresh findings in the decide section is a feed the two
-    ;; ticklers above would have had to share with them.
+    ;; it is the obligation that mints the MOST rows (six findings,
+    ;; because *ranked, not capped* is only provable past the line's
+    ;; take — waymark-1uv.8), and a feed with six fresh findings in
+    ;; the decide section is a feed the two ticklers above would have
+    ;; had to share with them.
     {:name :feed/insights
      :needs #{[:route :feed] [:kind :insight]}
      :run feed-insight-violations}

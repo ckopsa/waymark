@@ -127,8 +127,9 @@
   section up: the crown's rank is five numbers a person can read (four
   at 1uv.2; `:early` with waymark-1uv.10), and they live where the
   contest's two live so the same form, the same diff, the same wall
-  and the same transitions govern them."
-  [:label :order :formula :crown_rank])
+  and the same transitions govern them. `:insight_rank` joined with
+  waymark-1uv.8, the findings' six, for the same reason once more."
+  [:label :order :formula :crown_rank :insight_rank])
 
 ;; ── the wire shape ↔ the recipe map ─────────────────────────────────
 
@@ -202,7 +203,16 @@
                        :cooled (get-in data [:crown_rank :cooled])
                        :declined (get-in data [:crown_rank :declined])
                        :fresh (get-in data [:crown_rank :fresh])
-                       :early (get-in data [:crown_rank :early])})))))
+                       :early (get-in data [:crown_rank :early])}))
+      ;; …and the findings' six (waymark-1uv.8), the same way
+      (map? (:insight_rank data))
+      (assoc :insight-rank
+             (numbers {:diagnosis (get-in data [:insight_rank :diagnosis])
+                       :declared (get-in data [:insight_rank :declared])
+                       :cooled (get-in data [:insight_rank :cooled])
+                       :dismissed (get-in data [:insight_rank :dismissed])
+                       :declined (get-in data [:insight_rank :declined])
+                       :fresh (get-in data [:insight_rank :fresh])})))))
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
@@ -508,6 +518,40 @@
                         :help "How much each day a recomposition arrives before the day you said you would hear that line of thinking again holds it back. The day is your own not-this-week, stamped a week, three, two months or half a year out; a recomposition staged before it is shown last rather than not at all, and its card says how early it is."}}
     [:maybe [:int {:min 0 :max 100}]]]])
 
+(def insight-rank-schema
+  "The findings' rank, as six numbers (waymark-1uv.8, laws v3 law 5 at
+  the insights line) — `crown-rank-schema`'s shape one field over, and
+  no tier anywhere in it: nothing in the findings' line is a person's
+  own request. The bounds are the ones `feed/check-recipe!`'s seventh
+  check applies, said here so the FORM refuses a nonsense number
+  before anybody has to read a guard's sentence about it. Zero is
+  legal for every one of them; all six at zero is the seed alone."
+  [:map
+   [:diagnosis {:optional true
+                :x-display {:label "A diagnosis lifts"
+                            :help "How much a finding that is a diagnosis — one offering a value's or a person's own affirmation, a step on an outcome, or built on an outcome you declined — is lifted over a plain finding. The composer's duty firing first, as a number."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:declared {:optional true
+               :x-display {:label "A declared value lifts"
+                           :help "How much a finding whose next step serves a value a PERSON declared is lifted over one whose step serves a value an agent only observed, or none."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:cooled {:optional true
+             :x-display {:label "Each cooled step holds"
+                         :help "How much each step the contest says a finding has cooled — the same days-in-window arithmetic as the sections below, off your own record of what you were shown — holds it back."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:dismissed {:optional true
+                :x-display {:label "Each prior dismissal holds"
+                            :help "How much each finding you already dismissed on the same next step holds a new one back. The house's own verdict record on the same question, counted."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:declined {:optional true
+               :x-display {:label "Each rank of a quick word holds"
+                           :help "How much the strongest quick word you said on those dismissals holds a new finding back, per rank of the word: wrong time is one of these, wrong piece two, not this way three, never this four. One number, so the order of the words cannot be edited upside down."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:fresh {:optional true
+            :x-display {:label "Each day of freshness lifts"
+                        :help "How much each day of freshness a finding has left in the contest's window lifts it — published today is the whole window, two weeks ago is nothing, and older than that is simply old. Newer first, bounded so an old finding sinks to the bottom and no further."}}
+    [:maybe [:int {:min 0 :max 100}]]]])
+
 (def ^:private prose
   "The household's own words for the authored fields, spelled ONCE and
   worn by all three doors — the row schema, the create form's narrower
@@ -527,6 +571,9 @@
    :crown_rank {:examples [{:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}]
                 :x-display {:label "The crown's rank"
                             :help "Five numbers, and the whole of how the crown chooses which composed weeks fill its slots: what a declared value lifts a bundle, what each cooled step holds it, what each rank of the house's quick word about a line of thinking holds it, what each day left on its week lifts it, and what each day early a recomposition arrives — before the day you said you would hear that line again — holds it. A bundle answering your own request stands first whatever these say. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all five to 0 for the seed alone."}}
+   :insight_rank {:examples [{:diagnosis 10 :declared 5 :cooled 2 :dismissed 3 :declined 2 :fresh 1}]
+                  :x-display {:label "The findings' rank"
+                              :help "Six numbers, and the whole of how the findings line chooses which of an agent's findings fill its slots — there is no cap on how many it may publish: what a diagnosis is lifted over a plain finding, what a next step serving a value you declared lifts it, what each cooled step holds it, what each finding you already dismissed on the same next step holds a new one, what each rank of the quick word you said on those holds it, and what each day of freshness left in the window lifts it. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all six to 0 for the seed alone."}}
    :order {:examples [order-example]
            :x-display {:label "The order, line by line"
                        :help "The whole feed, top to bottom: one entry per line, and the vector's order IS the page's order. The house's current order rides the feed document at recipe.order in exactly this shape — copy it and edit a line. Exactly one line is the seam; the bottomless line is last; the sections keep census order; every population is one this engine holds. A line that breaks any of those is refused here, with the sentence that says which."}}})
@@ -549,7 +596,8 @@
    (entry :label {} [:string {:min 1 :max 60}])
    (entry :order {} order-schema)
    (entry :formula {:optional true} [:maybe formula-schema])
-   (entry :crown_rank {:optional true} [:maybe crown-rank-schema])])
+   (entry :crown_rank {:optional true} [:maybe crown-rank-schema])
+   (entry :insight_rank {:optional true} [:maybe insight-rank-schema])])
 
 ;; ── the law, written down ───────────────────────────────────────────
 ;; The one sentence this kind most wants checked, and the reason it
@@ -615,7 +663,8 @@
                    [:maybe [:string {:max 128}]])
             (entry :order {} order-schema)
             (entry :formula {:optional true} [:maybe formula-schema])
-            (entry :crown_rank {:optional true} [:maybe crown-rank-schema])]
+            (entry :crown_rank {:optional true} [:maybe crown-rank-schema])
+            (entry :insight_rank {:optional true} [:maybe insight-rank-schema])]
    ;; the client states whose order and what it says; the OWNER is the
    ;; engine's stamp (dashboard_slot's split, and dwelling's reason)
    :create-schema [:map
@@ -624,7 +673,9 @@
                    (entry :order {} order-schema)
                    (entry :formula {:optional true} [:maybe formula-schema])
                    (entry :crown_rank {:optional true}
-                          [:maybe crown-rank-schema])]
+                          [:maybe crown-rank-schema])
+                   (entry :insight_rank {:optional true}
+                          [:maybe insight-rank-schema])]
    ;; scope and owner carry their own :filter on the schema entries
    ;; above — one concern, one home — so only the machine's own column
    ;; is spelled here
@@ -641,9 +692,9 @@
              ;; and it must: :revise overwrites recipe-fields
              ;; wholesale, so a form that did not hand the contest's
              ;; numbers back would clear them every time somebody moved
-             ;; a line — and the crown's four (waymark-1uv.2), for the
-             ;; same reason
-             :edit {:prefill [:label :order :formula :crown_rank]}
+             ;; a line — and the crown's four (waymark-1uv.2) and the
+             ;; findings' six (waymark-1uv.8), for the same reason
+             :edit {:prefill [:label :order :formula :crown_rank :insight_rank]}
              ;; the overwrite writes the whole authored surface and is
              ;; non-reversible, so the log carries what was written —
              ;; which is what makes the transitions the tuning history
