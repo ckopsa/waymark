@@ -71,8 +71,29 @@ concurrency:
 env:
   # Pinned so a shard cannot start failing because upstream moved.
   CLOJURE_CLI_VERSION: '1.12.5.1664'
-  SHARDS_WAYMARK10: '4'
-  SHARDS_WORKQUEUE10: '2'
+  # Sized from measurement, not from file counts. Run 6 on GitHub-hosted
+  # gave ~20s of per-job overhead (job time minus test time) and 220s /
+  # 90s of total test work for the two suites. So
+  #
+  #   wall clock ~= 20 + work/shards
+  #
+  # and the free tier's 20-concurrent-job cap leaves ~18 for shards after
+  # quick and discover. Balancing the two suites (220/N1 = 90/N2, N1+N2
+  # = 18) puts the knee at 13 and 5:
+  #
+  #   4 + 2   ->  75s / 65s   (96s observed)
+  #   13 + 5  ->  37s / 38s
+  #   endless ->  22s / 22s   -- pure overhead, the floor
+  #
+  # Past this the cap binds and the 20s overhead dominates: doubling
+  # again would buy about five seconds. The floor drops only by making
+  # a job cheaper to start, not by splitting it further.
+  #
+  # This costs more total machine-time (18 jobs x 20s of overhead rather
+  # than 6), which is free on GitHub-hosted and is NOT free on the
+  # self-hosted node. Lower both if CI_RUNNER points at the cluster.
+  SHARDS_WAYMARK10: '13'
+  SHARDS_WORKQUEUE10: '5'
 
 jobs:
   # The cheap signal, first: neither of these needs a database, and a
@@ -158,8 +179,8 @@ jobs:
         # the job reads it back from job.services.postgres.ports.
         ports: ['5432']
         options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
+          --health-cmd "pg_isready -U ckopsa -d waymark10_test"
+          --health-interval 2s
           --health-timeout 5s
           --health-retries 12
     steps:
@@ -235,8 +256,8 @@ jobs:
         # the job reads it back from job.services.postgres.ports.
         ports: ['5432']
         options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
+          --health-cmd "pg_isready -U ckopsa -d waymark10_test"
+          --health-interval 2s
           --health-timeout 5s
           --health-retries 12
     steps:
