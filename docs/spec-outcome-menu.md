@@ -3501,3 +3501,309 @@ section.
 - **`make check-queue` after this bead reads 37 kinds, 11 warnings, 49
   scenarios judged** — the battery unmoved, because no guard's behavior moved
   and a docstring is not a facet.
+## Built — 1uv.2, the crown's rank (2026-08-26, waymark-1uv.2)
+
+**The owner's ruling, verbatim:** *I don't think it makes sense to limit the
+indexing. It makes more sense to just rank them.* The epic (waymark-1uv,
+*Ranked, not capped*) takes the weekly cap off the create door in its third
+bead; this is its second, and the epic's own order says it lands first and
+the cap comes off after, never the other way round — *with no cap and no
+rank the crown shows two of two hundred by seed, which is worse than today.*
+
+So the crown now **ranks what it shows**. Until this bead the outcomes
+section carded its `:take` bundles by the day's seed and every crown card's
+citation read *held by the floor … not because it won anything* — true while
+two a week was the most a composer could stage, and a lie the morning the cap
+comes off. It landed as **four numbers on the recipe row beside the contest's
+two, one line of arithmetic, one new key on every crown card's `why`, and a
+sentence that replaces the one that was about to become false.** The floor
+stays. The seed still breaks ties. No hash the household's own kinds carry
+moved.
+
+### The rank, as landed
+
+```clojure
+;; feed/default-crown-rank
+{:declared 10   ; what a value a PERSON declared lifts a bundle over an observed one
+ :cooled 2      ; what each step the contest says it has cooled holds it back
+ :declined 2    ; what each RANK of the house's strongest quick word holds it back
+ :fresh 1}      ; what each day left on its week lifts it
+```
+
+```clojure
+;; feed/crown-lift — the whole of the arithmetic
+lift = declared × [the value is declared]
+     − cooled   × steps cooled
+     − declined × weight of the strongest word on the supersedes chain
+     + fresh    × days left on the week
+
+;; feed/crown-key — the sort, ascending
+[asked-for-first?  −lift  hash(seed ‖ card_id)]
+```
+
+Five inputs, and each is a number a person reads on the card:
+
+| input | read off | as it rides `why.crown` |
+|---|---|---|
+| **asked for** | `outcome.request_id` names a `composition_request` (jfv.20) | `"asked": true` |
+| **the value's standing** | `feed/value-standing` — `declared` by a member, or `observed` by an agent and not yet affirmed (jfv.10) | `"value": "declared"` |
+| **shown and passed over** | the same `feed_view` rows, the same window and the same `cooling-step` the contest reads (8um.3) | `"seen": 3, "cooled": 1` — only while the reader is recording |
+| **the house's word about this line of thinking** | the `verdict_reason` rows filed against each outcome up the `supersedes` chain (jfv.16), the heaviest word kept | `"declined": "never_this"` — only when a word was said |
+| **freshness** | whole days until `good_until` | `"days_left": 5` |
+
+…and the lift they add up to, `"lift": 13`, on the **plain read**, for the
+contest's own reason: a card that stands where it stands for a reason and
+would not say so unless asked is the thing law 5 forbids. The sentences are
+still the `?explain=1` half.
+
+On the wire, on every read, beside `recipe.formula`:
+
+```json
+"recipe": {
+  "guarantees": "… the contest is two numbers a person can read; and the crown's rank is four. …",
+  "formula":    {"window_days": 14, "cools_after": 3},
+  "crown_rank": {"declared": 10, "cooled": 2, "declined": 2, "fresh": 1},
+  "crown_rank_says": "The crown ranks what it shows, and this is the whole of it. A bundle that answers a request you made stands above every one nobody asked for, and no number here changes that. Among the rest, four numbers a person can read: serving a value this house declared lifts a bundle 10 over one serving a value an agent only observed; each step the contest says it has cooled — the same 3 days in 14 as the sections below, read off your own record — holds it 2; the strongest quick word the house said about the line of thinking it recomposes holds it 2 for wrong time, 4 for wrong piece, 6 for not this way and 8 for never this; and each day left on its week lifts it 1, so a bundle nearer its lapse ranks lower. The floor still holds — the crown shows as many bundles as its take says whenever that many exist; the rank only chooses which, and the seed decides between equals. Until you turn the record of what you were shown on, nothing about seeing moves anything here."
+}
+```
+
+### Asked-for is a tier, not a weight — decided and recorded
+
+The bead listed *asked-for first* as the first input and said each input is a
+number. It is the first input and it is **not a number**, on purpose. A
+bundle citing a person's own `composition_request` sorts ahead of every
+uncited one before any lift is compared, and there is no field on the recipe
+that can move it below one — because that is waymark-8um law 6 read at the
+crown: *the person spins; the system never spins for them.* A household
+number that could put the machine's initiative above a person's own ask
+would be the recipe overruling the person through the form, and the pure
+test asserts the tier holds under a **negative** lift.
+
+That is why the recipe holds four numbers and not five, and why the four
+quick words are ONE number rather than four: `:declined` multiplies the
+word's rank — never this 4, not this way 3, wrong piece 2, wrong time 1
+(`feed/reason-weights`, the epic's own order, which is also the reason kind's
+own order read from the last word back) — so no edit can put *wrong time*
+above *never this*. A word the map does not know weighs one: any word said is
+at least *wrong time*, because the house turned the line down and said so.
+
+### Silence is read as silence
+
+A decline with no quick word leaves nothing on the rank. `crown-word` walks
+the `supersedes` chain (at most `supersedes-chain-cap` = 5 hops — half a year
+of recompositions on the tickler's own schedule) and reads only the reason
+rows; `declined_count` is not an input. That is jfv.16's own sentence — *not
+tapping is a complete answer* — kept rather than re-litigated: what a bare
+decline buys the house is the `not_before` floor at the create door, which is
+a different mechanism and stays one. A house that wants a line of thinking
+held back says so with a word, and the word is one optional tap on the card
+it already declined.
+
+### The cost, decided: a bound with a note, not a stored score
+
+The population already paid a value read and a piece query per candidate;
+the rank adds a walk up the chain with a reason query per hop. With the cap
+gone there is no door keeping the number of offered bundles small, so the
+bead asked for either a stored score or a bound. **The bound:**
+`feed/crown-scan-cap` = 50 offered bundles, newest first, and the document
+says so when it is reached —
+
+> The crown read to its cap and stopped — the newest 50 bundles on offer
+> were ranked, and older ones were not read today. Those are the ones nearest
+> their lapse, which the rank already places last; a house with more than 50
+> on offer at once has a composer to talk to before it has a cap to raise.
+
+— the archive's `log-scan-cap` posture and the contest's `view-scan-cap`
+posture, one section up. It fails in the fairest direction available: the
+bundles dropped are the oldest, which `:fresh` already places last.
+
+A stored score was weighed and refused **for this bead**, for two reasons
+that are structural rather than lazy. It needs a WRITER, and there is no
+honest one: the staging hook cannot know what the reader has been shown
+(three of the five inputs are the reader's own — their views, their words,
+their day), and a sweeper that wrote scores would be the feed writing, which
+law 7 forbids from the read side and nothing licenses from the other. And it
+goes STALE the moment a view row or a reason lands, which is exactly when it
+would matter. Fifty is a week of a busy household's composing several times
+over — a bundle stands seven days — and the note is the honest answer until
+somebody measures a house that reaches it (filed below).
+
+### The why sentences, as they actually read
+
+Two, and the second replaces the one that was about to become false. On a
+crown card, with the reader recording:
+
+```
+Ranked 2nd of 3 in the crown by recipe.crown_rank — four numbers this house
+can read — and this is the arithmetic for this card. Nobody asked for this
+one, so any bundle that answers a request stands above it. It serves a value
+this house declared, which lifts it 10. Shown 3 days in the last 14 with
+nothing done — 1 step cooled, holding it 2. The house said never this about
+the line of thinking it recomposes — the heaviest of the four words, holding
+it 8. 5 days left on its week, lifting it 5. Lift 5 in all; the seed decides
+between equals. The floor still holds: this section shows as many bundles as
+its take says whenever that many exist, and the rank only chooses which.
+```
+
+Every clause names an input and the number it contributed, and the clauses
+change with the inputs: *You asked for another and this is the composer's
+answer, so it stands above every bundle nobody asked for; no number here
+moves it below one* / *It serves a value an agent observed and nobody has yet
+affirmed, so the 10 a declared value would lift it is not there* / *Nothing
+about what you have been shown moves it, because you are not recording what
+you were shown* / *Nothing on its record says in words that the house turned
+this line of thinking down.* The floor's half of the old sentence survives at
+the end, because it is still true; the *not because it won anything* half is
+gone, because it is not. (A read that resolved no crown rank at all — none
+can today; `document` always resolves one — still says *held by the floor*.)
+
+### Where the numbers live, and what moved with them
+
+**On the `feed_recipe` row**, as `crown_rank` beside `formula`, in
+`recipe-fields`, in all three schemas, in `:revise`'s prefill, and in
+`recipe-of`'s wire→map spelling — so the same form, the same
+`written-by-a-person` wall, the same transitions history and the same
+one-tap revert govern it with nothing new built. `check-recipe!` grew a
+**sixth** assembly check (four ints, 0–100, zero legal for each) at the same
+door as the fifth; `recipe-guarantees` says so; `formula-schema`'s own
+*"the moment this needs a third field"* sentence is untouched, because the
+crown's rank is a **sibling** field for a different question — *which of
+these do you keep scrolling past* is the contest's, *which of these is worth
+your Saturday* is the crown's.
+
+`feed/recipe-diff` narrates the crown's numbers beside the contest's
+(`crown-rank-diff`: *In the crown, serving a value this house declared lifts a
+bundle 20 instead of 10.* / *The crown's rank turns OFF …*), so the
+proposal's diff is ready for waymark-1uv.5 to feed.
+
+**One thing that did not come free, met before it could bite.**
+`feed_recipe/:revise` overwrites `recipe-fields` wholesale — *an omitted
+optional clears, so the stored fields are exactly the set the guard judged* —
+which is the right law for a form and the exact clearing 8um.3 discovered for
+the contest: a `recipe_proposal` staged today has no word for `crown_rank`,
+so `apply-the-order` would have reset a household's four numbers to the
+deployment's on every order-only apply. It now reads the target's current
+`crown_rank` and carries it through unchanged. That is a change to what the
+apply door WRITES, and it is the one fingerprint that moved (below).
+
+### What this bead deliberately did not do
+
+- **`outcomes-are-few` stands.** Removing it is waymark-1uv.3 and the epic's
+  order forbids it landing first. Every docstring this bead touched says the
+  cap is *still there today and ruled out of the door*, in those words.
+- **The agent is not the rank.** Nothing here reads an agent's opinion. The
+  epic's A/M/never-B ruling is written into the block comment above
+  `default-crown-rank`, where the next person to add an input will read it.
+- **The crown chip's rule (`ask` rides only when the crown carded nothing) is
+  unchanged.** 1uv.3 re-reads it; with a rank, asking may mean *rank mine
+  first* rather than *let one more in*, and that is that bead's call.
+- **`contested-sections` is unchanged.** The crown is still outside the
+  contest — the contest's step is never its sort key — while its own rank
+  reads the same rows. The docstring says which is which.
+- **The screen joins, it does not derive.** *Why this order* opens into
+  `recipe.crown_rank_says` beneath the contest's sentence; a crown card's
+  *Why this card?* opens with the lift and the inputs off its own
+  `why.crown` before any network, replaced by the server's sentence when
+  anybody asks. `ui-drive.mjs` was not extended (filed).
+
+### Where the law is proved
+
+- **`feed-test`**, two deftests, for the half a driver with one world cannot
+  arrange: the arithmetic as a **pure function** — six bundles ordered
+  identically under two unrelated seeds, a request-answering bundle first
+  with a negative lift, all four at zero reducing to `[tier 0 hash]` — and the
+  field: the four numbers on the wire narrated with the numbers in the
+  sentence, a row naming some keeping the rest, a nonsense number refused at
+  assembly by name, the diff's sentences, and a household POSTing its own
+  `crown_rank`, the very next read answered by it with the contest's two
+  numbers untouched, and a revise to four zeros saying *The crown's rank is
+  off*.
+- **`workqueue10.outcome-test` § 16**, over the live ring handler and the
+  household's own registry: a bundle the house declined **in words**
+  (`verdict_reason never_this` against a `not_this_week`), the clock walked a
+  week and a day so the recomposition may be staged past `not_before`, then
+  three bundles on offer — one nobody asked for, one answering the member's
+  own `composition_request`, one superseding the declined line — under the
+  member's own `scope "mine"` recipe with the crown widened to ten. The cited
+  bundle stands first with `asked true`; the fresh line reads lift 17 and the
+  never-this line lift 9 with `declined "never_this"`, and both citations
+  quote the numbers; nobody recording means no `seen` and the sentence says
+  so; then the member turns their record on, is shown the fresh bundle three
+  mornings, and it reads `seen 3, cooled 1, lift 15` with *1 step cooled,
+  holding it 2* in the citation — still second, and all three still on the
+  page, which is the floor. The fixture's engine gained a `:now-fn` over an
+  atom for this test alone; the atom is nil — the real clock — for every
+  other test and is put back in a `finally`.
+- **`:feed/outcomes`**, nine claims added: `recipe.crown_rank` is four ints;
+  `crown_rank_says` quotes the `declared` number and *never this* back; a
+  crown card's `why.crown` carries an int `lift`, a boolean `asked`, a
+  `value` in {declared, observed} and an int `days_left`; an uncited bundle
+  reads `asked false` and a member-declared value reads `declared`; the
+  explained citation says *Ranked*; and — the load-bearing pair — with the
+  jfv.20 bundle that answers the member's own request and a new uncited
+  bundle both carded (two pieces each, the bundle floor), the cited one reads
+  `asked true`, stands **first** in the crown, and its citation says why.
+  Both are declined before the obligation returns, so the engine handed on is
+  the engine found. `:feed/formula`'s *walled* claim now names `decide`
+  alone, with the reason in a comment: the crown is no longer a witness that
+  a section can be untouched by the record.
+
+### Recorded here, for whoever comes next
+
+- **`make check-queue` is unmoved: 37 kinds, 11 warnings, 49 scenarios.**
+  This bead declared no scenario — everything it added is a READ over a live
+  engine and `scenario.clj` never writes — and no guard.
+- **No new kind, no new table, no migration.** `feed_recipe` grew a SCHEMA
+  field, and `:schema` is not one of `fingerprint-of`'s facets (0k4's
+  correction, re-verified rather than re-asserted): `feed_recipe` is
+  `9e5ba71d…` on `HEAD` and on this tree.
+- **ONE fingerprint moved, and it is the same one 8um.3 moved, for the same
+  kind of reason.** Computed over the whole 50-kind census — the household's
+  own plus everything the module table enrols — on `HEAD` (`0c34b8c`) and on
+  this tree: 49 byte-identical, including `outcome` `6f57c0d5…`,
+  `outcome_piece` `8db51a4b…`, `verdict_reason` `8213d8c5…`, `feed_view`
+  `c45ce1de…` and `composition_request` `eeb69200…`. `recipe_proposal` goes
+  `782e6b4e…` → `d26ac9e4…`, and the mover is `apply-the-order` — a
+  `defhandler` on `:apply`, so its body is inside `machine.actions`. The door
+  now writes one more thing (the target's own `crown_rank`, carried through),
+  which is a real change to what a tap lands, so a law revision is the honest
+  answer; `boot-revise!` writes one at the next boot. The bead predicted zero
+  movement; the prediction missed the carry-through, and the alternative —
+  letting an order-only apply silently reset a household's four numbers —
+  was not worth a clean census. waymark-1uv.5 will move this kind again when
+  the proposal learns the field, and that is fine.
+- **The rank reads the CHAIN's words and not the offered bundle's own
+  pieces' words.** A piece declined `not_this` with a quick word on the
+  bundle currently on offer is a said word about THIS bundle, and it is not
+  an input today — it would be one reason query per declined piece on top of
+  the per-candidate cost, for a signal the bundle's own `impact` union
+  already reflects (an answered piece is off the verb). Filed as
+  waymark-1uv.11.
+- **`not_before` and `declined_count` are on the row and are NOT inputs
+  yet.** That is waymark-1uv.10's design — the decline's date arm at
+  `a-recomposition-waits-its-turn` becomes the rank's cooling input when the
+  cap comes off, and it has to answer how a floor and a cooled-to-zero
+  recomposition meet. `crown-lift` takes an inputs map, so a sixth clause is
+  one key and one weight; nothing here has to be undone for it.
+- **`crown-scan-cap` has arithmetic behind it and no measurement**, exactly
+  `view-scan-cap`'s position at 8um.3 (waymark-hge). Filed beside it as
+  waymark-1uv.12; the screen walk is waymark-1uv.13.
+- **`why.crown` is nested, not flattened, on purpose.** The contest's
+  `why.seen` / `why.cooled` stay the contest's, absent on every crown card;
+  the crown's own `seen` / `cooled` ride inside `why.crown`, so a reader can
+  tell *the contest cooled this* from *the crown read the same rows*, and
+  `:feed/formula`'s existing claim that no crown card carries `why.seen`
+  stays literally true.
+- **Under a preview the rank reads the PREVIEWED member's rows and requests**,
+  because `:principal` is theirs — the contest's own sentence, and the crown
+  chip's. The previewer can therefore read `why.crown.asked` and
+  `why.crown.seen` about that member, inside the contract `feed.preview_as`
+  already has.
+- **A cursor page re-ranks the crown, and it must not matter:** the crown
+  lives on the day's first page (`render? false` on an archive walk), so the
+  archive offset never counts into it.
+- **`reason-weights` spells the four tokens as a literal.** The reason kind's
+  enum is read at runtime by `reasons-doc` for the chips; the WEIGHTS are law
+  from the epic's ruling, and reading them off the enum's order would make a
+  fifth word inserted in the middle re-weigh the others silently. The two
+  spellings should be kept in step by hand, and the docstring says so.

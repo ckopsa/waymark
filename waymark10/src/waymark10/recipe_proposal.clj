@@ -559,6 +559,18 @@
                 (some? (or (:formula d) (:current_formula d)))
                 (assoc :formula (or (:formula d) (:current_formula d))))
         tid (some-> (:target_id d) str str/trim not-empty)
+        ;; …and the crown's four numbers ride through UNCHANGED
+        ;; (waymark-1uv.2): a proposal has no word for them yet
+        ;; (waymark-1uv.5 gives it one), and :revise overwrites the
+        ;; whole authored surface, so an apply that handed over
+        ;; nothing would silently reset the crown's rank to the
+        ;; deployment's — the exact clearing 8um.3 found for the
+        ;; contest, met here before it could happen.
+        input (if-some [current (when (and tid (:read ctx))
+                                  (get-in ((:read ctx) :feed_recipe tid)
+                                          [:data :crown_rank]))]
+                (assoc input :crown_rank current)
+                input)
         res (if tid
               ;; feed_recipe's :revise declares an :edit, and an edit
               ;; IMPLIES the fence (resource.clj: "an Edit implies the

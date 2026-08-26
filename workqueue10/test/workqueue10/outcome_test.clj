@@ -76,6 +76,16 @@
 (def ^:dynamic *eng* nil)
 (def ^:dynamic *h* nil)
 
+(def ^:private clock
+  "The engine's clock, when a test needs to move it: nil is the real
+  one. The crown's rank test (§ 16) has to stage a recomposition of a
+  bundle the house declined, and `a-recomposition-waits-its-turn`
+  holds that door shut for a week — so the test walks the house a
+  week forward and puts the clock back when it is done. Kaocha runs
+  one namespace's tests sequentially, which is what makes an atom
+  honest here."
+  (atom nil))
+
 (use-fixtures :once
   (fn [f]
     (let [st (pg/storage db/dsn)]
@@ -102,6 +112,7 @@
         (let [eng (engine/engine {:storage st
                                   :resources (main/check-resources)
                                   :probe-reads true
+                                  :now-fn (fn [] (or @clock (Instant/now)))
                                   :suppress-mirror-refresh true})]
           (binding [*eng* eng
                     *h* (engine/handler eng)]
@@ -841,3 +852,132 @@
           (let [doc'' (json (req :get "/api/-/feed" (human who)))]
             (is (not-any? #(str/ends-with? (str (:self %)) rid)
                           (get-in doc'' [:crown :standing])))))))))
+
+;; ── 16. the crown's rank (waymark-1uv.2) ────────────────────────────
+;;
+;; The crown chooses WHICH bundles fill its slots by a formula the
+;; house can read, and every crown card says what placed it. Three
+;; bundles over one member: one nobody asked for, one that answers the
+;; member's own request, one that recomposes a line of thinking the
+;; house said NEVER THIS about — and then, after the member turns their
+;; record on, the first one again, three mornings cold. The reader's
+;; own recipe row widens the crown so every one of them cards, which is
+;; also the field proving the four numbers ride the row.
+
+(defn- feed-as [who & [query]]
+  (json (req :get (str "/api/-/feed" (when query (str "?" query))) (human who))))
+
+(defn- crown-of [doc]
+  (filterv #(= "outcome" (str (:kind %))) (:cards doc)))
+
+(defn- crown-card [doc oid]
+  (some #(when (str/ends-with? (str (:card_id %)) (str "/" oid)) %) (crown-of doc)))
+
+(defn- crown-ids [doc]
+  (mapv #(last (str/split (str (:card_id %)) #"/")) (crown-of doc)))
+
+(defn- two-pieces! [who oid tag]
+  (doseq [n [1 2]]
+    (is (= 201 (:status (stage-piece! who oid (str "Piece " n " " tag) "task"
+                                      {:title (str "Rank piece " n " " tag)}))))))
+
+(deftest the-crown-ranks-what-it-shows-and-every-card-says-why
+  (let [who "colton-rank"
+        v (declare-value! who "a ranked week" ["the shop"])
+        ;; a line of thinking the house turned down, IN WORDS
+        x (id-of (stage-outcome! "composer-rank-x" (vid v)))
+        declined (invoke! "outcomes" x :not_this_week nil (human who))
+        said (req :post "/api/verdict_reasons"
+                  {:subject_kind "outcome" :subject_id x
+                   :verdict "not_this_week" :reason "never_this"}
+                  (human who))
+        real-now (Instant/now)]
+    (is (= 200 (:status declined)) (pr-str (json declined)))
+    (is (= 201 (:status said)) (pr-str (json said)))
+    (try
+      ;; a week and a day on: the decline's floor has passed, so the
+      ;; recomposition may be staged, and everything staged from here
+      ;; is live at the same clock the feed reads
+      (reset! clock (.plusSeconds real-now (* 86400 8)))
+      (let [a (id-of (stage-outcome! "composer-rank-a" (vid v)))
+            y-resp (stage-outcome! "composer-rank-y" (vid v) {:supersedes x})
+            y (id-of y-resp)
+            rid (id-of (ask! who))
+            b (id-of (stage-outcome! "composer-rank-b" (vid v) {:request_id rid}))]
+        (is (= 201 (:status y-resp)) (pr-str (json y-resp)))
+        (two-pieces! "composer-rank-a" a "a")
+        (two-pieces! "composer-rank-y" y "y")
+        (two-pieces! "composer-rank-b" b "b")
+        ;; the reader's own recipe: the crown wide enough for all of
+        ;; them, with the deployment's four numbers left standing
+        (let [order (:order (:recipe (feed-as who)))
+              wide (mapv #(if (= "outcomes" (str (:section %))) (assoc % :take 10) %)
+                         order)
+              made (req :post "/api/feed_recipes"
+                        {:label "A wide crown" :scope "mine" :order wide}
+                        (human who))]
+          (is (= 201 (:status made)) (pr-str (json made))))
+        (let [doc (feed-as who "explain=1")
+              ids (crown-ids doc)
+              ca (crown-card doc a) cy (crown-card doc y) cb (crown-card doc b)
+              lift #(get-in % [:why :crown :lift])
+              says-of (fn [c s] (some #(str/includes? (str %) s) (get-in c [:why :says])))]
+          (testing "the recipe's four numbers ride the document, narrated"
+            (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1}
+                   (get-in doc [:recipe :crown_rank])))
+            (is (str/includes? (str (get-in doc [:recipe :crown_rank_says]))
+                               "8 for never this")))
+          (testing "all three card, and the declined one does not"
+            (is (= #{a y b} (set ids)) (pr-str ids))
+            (is (nil? (crown-card doc x))))
+          (testing "the bundle answering the member's own request stands first,
+                    above the uncited ones — asked-for is a tier, not a weight"
+            (is (= b (first ids)))
+            (is (true? (get-in cb [:why :crown :asked])))
+            (is (false? (get-in ca [:why :crown :asked])))
+            (is (says-of cb "You asked for another")))
+          (testing "a fresh line of thinking stands above one the house said
+                    NEVER THIS about, and both cards say the numbers"
+            (is (< (.indexOf ^java.util.List ids a) (.indexOf ^java.util.List ids y)))
+            (is (= 17 (lift ca)) "10 for a declared value + 7 days left")
+            (is (= 9 (lift cy)) "…minus 8 for never this")
+            (is (= "never_this" (get-in cy [:why :crown :declined])))
+            (is (nil? (get-in ca [:why :crown :declined])))
+            (is (= "declared" (get-in ca [:why :crown :value])))
+            (is (= 7 (get-in ca [:why :crown :days_left])))
+            (is (says-of cy "never this"))
+            (is (says-of cy "holding it 8"))
+            (is (says-of ca "Lift 17 in all"))
+            (is (says-of ca "Ranked")))
+          (testing "nobody is recording, so nothing about seeing rides the why —
+                    the contest's own inert posture, at the crown"
+            (is (nil? (get-in ca [:why :crown :seen])))
+            (is (says-of ca "you are not recording")))
+          ;; the member turns their record on and has been shown A three
+          ;; mornings running with nothing done
+          (let [day (str (:day doc))
+                on (req :post "/api/feed_view_consents" {} (human who))]
+            (is (= 201 (:status on)) (pr-str (json on)))
+            (doseq [d (map #(str (.minusDays (java.time.LocalDate/parse day) (long %)))
+                           [1 2 3])]
+              (is (= 201 (:status (req :post "/api/feed_views"
+                                       {:card_id (str (:card_id ca))
+                                        :population "outcomes" :day d}
+                                       (human who))))))
+            (let [doc' (feed-as who "explain=1")
+                  ca' (crown-card doc' a)]
+              (testing "the crown reads the same view rows the contest does —
+                        three days at cools_after 3 is one step, holding it 2"
+                (is (= 3 (get-in ca' [:why :crown :seen])))
+                (is (= 1 (get-in ca' [:why :crown :cooled])))
+                (is (= 15 (lift ca')))
+                (is (says-of ca' "1 step cooled, holding it 2")))
+              (testing "…and the order is still the rank's: asked, fresh, never"
+                (is (= [b a y] (crown-ids doc'))))
+              (testing "and the floor held throughout — every bundle on offer is
+                        on the page, the rank only chose the order"
+                (is (= 3 (count (crown-ids doc')))))))
+          ;; leave the house as found: the three bundles declined
+          (doseq [oid [a y b]]
+            (is (= 200 (:status (invoke! "outcomes" oid :not_this_week nil (human who))))))))
+      (finally (reset! clock nil)))))

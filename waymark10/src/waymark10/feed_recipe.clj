@@ -121,8 +121,13 @@
   `recipe_proposal`, walled by `written-by-a-person`, and revertible
   out of the row's own transitions — four properties nobody had to
   build a second time. `:revise` prefills it, so a person editing the
-  order never silently clears the numbers."
-  [:label :order :formula])
+  order never silently clears the numbers.
+
+  `:crown_rank` joined with waymark-1uv.2 for the same reason one
+  section up: the crown's rank is four numbers a person can read, and
+  they live where the contest's two live so the same form, the same
+  diff, the same wall and the same transitions govern them."
+  [:label :order :formula :crown_rank])
 
 ;; ── the wire shape ↔ the recipe map ─────────────────────────────────
 
@@ -174,17 +179,28 @@
   the household's own hand. Absent leaves the deployment's own numbers
   standing (`usable` merges over the built-in); the way to say NO
   contest is `cools_after 0`, which is a number a person can see rather
-  than a key they have to know to delete."
+  than a key they have to know to delete.
+
+  `:crown-rank` is here too (waymark-1uv.2), the same sentence at the
+  crown: *which of the composed weeks is worth my Saturday* is a taste,
+  said in four numbers, in the household's own hand."
   [data]
-  (cond-> {:order (mapv line-of (:order data))}
-    (map? (:formula data))
-    (assoc :formula
-           (into {}
-                 (keep (fn [[k v]]
-                         (when (some? v)
-                           [k (if (string? v) (parse-long v) v)])))
-                 {:window-days (get-in data [:formula :window_days])
-                  :cools-after (get-in data [:formula :cools_after])}))))
+  (let [numbers (fn [m] (into {}
+                              (keep (fn [[k v]]
+                                      (when (some? v)
+                                        [k (if (string? v) (parse-long v) v)])))
+                              m))]
+    (cond-> {:order (mapv line-of (:order data))}
+      (map? (:formula data))
+      (assoc :formula
+             (numbers {:window-days (get-in data [:formula :window_days])
+                       :cools-after (get-in data [:formula :cools_after])}))
+      (map? (:crown_rank data))
+      (assoc :crown-rank
+             (numbers {:declared (get-in data [:crown_rank :declared])
+                       :cooled (get-in data [:crown_rank :cooled])
+                       :declined (get-in data [:crown_rank :declined])
+                       :fresh (get-in data [:crown_rank :fresh])})))))
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
@@ -212,7 +228,7 @@
   ;; wall, one door over.
   {:judges [:order]
    :vars [:problems]
-   :open "The law is feed/check-recipe! — the same assembly checks that used to refuse the BOOT: exactly one seam, the archive last and bottomless, sections in census order, every population one this engine holds, and the contest's two numbers are numbers."
+   :open "The law is feed/check-recipe! — the same assembly checks that used to refuse the BOOT: exactly one seam, the archive last and bottomless, sections in census order, every population one this engine holds, the contest's two numbers are numbers, and so are the crown's four."
    :explain "This order will not assemble: {problems}"}
   [_row inp _ctx]
   ;; the schema has already validated the SHAPE (invoke validates
@@ -456,6 +472,35 @@
                               :help "How many days a card may sit on your feed untouched before it steps back behind the fresher cards in its own line. Twice that many days is two steps. Zero turns the contest off entirely and the seed alone decides."}}
     [:maybe [:int {:min 0 :max 365}]]]])
 
+(def crown-rank-schema
+  "The crown's rank, as four numbers (waymark-1uv.2, laws v3 law 5 at
+  the crown). Four and not five, because the fifth input — a bundle
+  answering a person's own request stands first — is a TIER and not a
+  weight: no number a household writes may put the machine's
+  initiative above a person's own ask.
+
+  The bounds are the ones `feed/check-recipe!`'s sixth check applies,
+  said here so the FORM refuses a nonsense number before anybody has
+  to read a guard's sentence about it. Zero is legal for every one of
+  them; all four at zero is the seed alone."
+  [:map
+   [:declared {:optional true
+               :x-display {:label "A declared value lifts"
+                           :help "How much serving a value a PERSON declared lifts a bundle over one serving a value an agent only observed and nobody has affirmed."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:cooled {:optional true
+             :x-display {:label "Each cooled step holds"
+                         :help "How much each step the contest says a bundle has cooled — the same days-in-window arithmetic as the sections below, off your own record of what you were shown — holds it back."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:declined {:optional true
+               :x-display {:label "Each rank of a quick word holds"
+                           :help "How much the strongest quick word the house said about the line of thinking a bundle recomposes holds it back, per rank of the word: wrong time is one of these, wrong piece two, not this way three, never this four. One number, so the order of the words cannot be edited upside down."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:fresh {:optional true
+            :x-display {:label "Each day left lifts"
+                        :help "How much each day still left on a bundle's week lifts it, so a bundle nearer its lapse ranks lower than one the composer just staged."}}
+    [:maybe [:int {:min 0 :max 100}]]]])
+
 (def ^:private prose
   "The household's own words for the authored fields, spelled ONCE and
   worn by all three doors — the row schema, the create form's narrower
@@ -472,6 +517,9 @@
    :formula {:examples [{:window_days 14 :cools_after 3}]
              :x-display {:label "The contest"
                          :help "Two numbers, and the whole of how the order is weighted by what you have already been shown: how far back it counts, and how many days a card may sit untouched before it steps back inside its own line. It reads your own rows and nobody else's, it never empties a line, and the crown and everything waiting on your answer are outside it. Leave it empty for this deployment's own numbers; set cools_after to 0 to turn it off."}}
+   :crown_rank {:examples [{:declared 10 :cooled 2 :declined 2 :fresh 1}]
+                :x-display {:label "The crown's rank"
+                            :help "Four numbers, and the whole of how the crown chooses which composed weeks fill its slots: what a declared value lifts a bundle, what each cooled step holds it, what each rank of the house's quick word about a line of thinking holds it, and what each day left on its week lifts it. A bundle answering your own request stands first whatever these say. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all four to 0 for the seed alone."}}
    :order {:examples [order-example]
            :x-display {:label "The order, line by line"
                        :help "The whole feed, top to bottom: one entry per line, and the vector's order IS the page's order. The house's current order rides the feed document at recipe.order in exactly this shape — copy it and edit a line. Exactly one line is the seam; the bottomless line is last; the sections keep census order; every population is one this engine holds. A line that breaks any of those is refused here, with the sentence that says which."}}})
@@ -493,7 +541,8 @@
   [:map
    (entry :label {} [:string {:min 1 :max 60}])
    (entry :order {} order-schema)
-   (entry :formula {:optional true} [:maybe formula-schema])])
+   (entry :formula {:optional true} [:maybe formula-schema])
+   (entry :crown_rank {:optional true} [:maybe crown-rank-schema])])
 
 ;; ── the law, written down ───────────────────────────────────────────
 ;; The one sentence this kind most wants checked, and the reason it
@@ -558,14 +607,17 @@
             (entry :owner {:optional true :filter #{:eq}}
                    [:maybe [:string {:max 128}]])
             (entry :order {} order-schema)
-            (entry :formula {:optional true} [:maybe formula-schema])]
+            (entry :formula {:optional true} [:maybe formula-schema])
+            (entry :crown_rank {:optional true} [:maybe crown-rank-schema])]
    ;; the client states whose order and what it says; the OWNER is the
    ;; engine's stamp (dashboard_slot's split, and dwelling's reason)
    :create-schema [:map
                    (entry :label {} [:string {:min 1 :max 60}])
                    (entry :scope {} [:enum "household" "mine"])
                    (entry :order {} order-schema)
-                   (entry :formula {:optional true} [:maybe formula-schema])]
+                   (entry :formula {:optional true} [:maybe formula-schema])
+                   (entry :crown_rank {:optional true}
+                          [:maybe crown-rank-schema])]
    ;; scope and owner carry their own :filter on the schema entries
    ;; above — one concern, one home — so only the machine's own column
    ;; is spelled here
@@ -582,8 +634,9 @@
              ;; and it must: :revise overwrites recipe-fields
              ;; wholesale, so a form that did not hand the contest's
              ;; numbers back would clear them every time somebody moved
-             ;; a line
-             :edit {:prefill [:label :order :formula]}
+             ;; a line — and the crown's four (waymark-1uv.2), for the
+             ;; same reason
+             :edit {:prefill [:label :order :formula :crown_rank]}
              ;; the overwrite writes the whole authored surface and is
              ;; non-reversible, so the log carries what was written —
              ;; which is what makes the transitions the tuning history

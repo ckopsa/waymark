@@ -1468,3 +1468,139 @@
                 "no card carries a cooling key, because nothing is cooling")
             (is (= (mapv :card_id (:cards before)) (mapv :card_id (:cards after)))
                 "and the order is the seeded one again")))))))
+
+;; ── the crown's rank (waymark-1uv.2) ────────────────────────────────
+;;
+;; This world holds no outcome kinds, so what can be proved here is the
+;; half a driver with one world cannot arrange anyway: the arithmetic
+;; as a PURE FUNCTION — seed-independent given its inputs — and the
+;; recipe's four numbers on the wire, narrated, checked at assembly and
+;; diffed. The live half (a real bundle, a real request, a real word
+;; said about a real decline) is workqueue10.outcome-test's, over the
+;; household's own registry.
+
+(deftest the-crown-ranks-by-four-numbers-and-the-seed-only-breaks-ties
+  (let [w feed/default-crown-rank
+        fresh {:asked false :value :declared :days-left 7}
+        observed {:asked false :value :observed :days-left 7}
+        cooled {:asked false :value :declared :seen 3 :cooled 1 :days-left 7}
+        never {:asked false :value :declared :declined "never_this" :days-left 7}
+        wrong-time {:asked false :value :declared :declined "wrong_time" :days-left 7}
+        lapsing {:asked false :value :declared :days-left 1}
+        pulled {:asked true :value :observed :declined "never_this" :days-left 0}]
+    (testing "the arithmetic, predictable from the four numbers a household reads"
+      (is (= 17 (feed/crown-lift w fresh)) "10 declared + 7 days left")
+      (is (= 7 (feed/crown-lift w observed)) "an observed value lifts nothing")
+      (is (= 15 (feed/crown-lift w cooled)) "one cooled step holds 2")
+      (is (= 9 (feed/crown-lift w never)) "never this holds 4 × 2")
+      (is (= 15 (feed/crown-lift w wrong-time)) "wrong time holds 1 × 2")
+      (is (= 11 (feed/crown-lift w lapsing)) "a day left lifts 1, not 7")
+      (is (= -8 (feed/crown-lift w pulled))
+          "the lift can go negative and the asked tier does not care"))
+    (testing "the four words weigh in the epic's order, and an unknown word
+              still says the house turned it down"
+      (is (> (feed/reason-weight "never_this") (feed/reason-weight "wrong_way")
+             (feed/reason-weight "wrong_piece") (feed/reason-weight "wrong_time")
+             (feed/reason-weight nil)))
+      (is (= 1 (feed/reason-weight "some_fifth_word"))))
+    (testing "the order is a pure function of the inputs; the seed only breaks
+              ties. Swap every hash and a strict order does not move"
+      (let [cands [[:fresh fresh] [:observed observed] [:cooled cooled]
+                   [:never never] [:lapsing lapsing] [:pulled pulled]]
+            order (fn [hash-of]
+                    (mapv first (sort-by (fn [[k in]] (feed/crown-key w in (hash-of k)))
+                                         cands)))
+            a (order #(wire/sha256-hex (str "seed-a" %)))
+            b (order #(wire/sha256-hex (str "seed-b" %)))]
+        (is (= [:pulled :fresh :cooled :lapsing :never :observed] a))
+        (is (= a b) "two seeds, one order — nothing here was tied")
+        (is (= :pulled (first a))
+            "a bundle answering the person's own request stands first with a
+             NEGATIVE lift — asked-for is a tier, never a weight")))
+    (testing "…and between equals the seed decides, both ways"
+      (let [twin {:asked false :value :declared :days-left 7}
+            key-a (fn [k] (feed/crown-key w twin (wire/sha256-hex (str "a" k))))
+            key-b (fn [k] (feed/crown-key w twin (wire/sha256-hex (str "b" k))))
+            names [:p :q :r :s :t :u]]
+        (is (not= (sort-by key-a names) (sort-by key-b names))
+            "given six equal keys some seed disagrees — or the hash is not
+             the last key")))
+    (testing "all four at zero is the seed alone, with the person's request
+              still first"
+      (let [off {:declared 0 :cooled 0 :declined 0 :fresh 0}]
+        (is (= 0 (feed/crown-lift off never)))
+        (is (= [0 0 "h"] (feed/crown-key off pulled "h")))
+        (is (= [1 0 "h"] (feed/crown-key off fresh "h")))))))
+
+(deftest the-crowns-rank-rides-the-recipe-and-refuses-at-assembly
+  (testing "law 5 at the crown: four numbers on every answer, in the editor's
+            shape, narrated with the numbers in the sentence"
+    (let [eng (boot-house)]
+      (post! eng "fd_errands" {:title "one"})
+      (let [recipe (:recipe (:doc (feed! eng)))]
+        (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1}
+               (:crown_rank recipe)))
+        (is (str/includes? (:crown_rank_says recipe) "lifts a bundle 10"))
+        (is (str/includes? (:crown_rank_says recipe) "8 for never this"))
+        (is (str/includes? (:crown_rank_says recipe) "stands above every one"))
+        (is (str/includes? (:guarantees recipe) "the crown's rank is four")))))
+  (testing "a row that names none keeps the deployment's, and one that names
+            some keeps the rest"
+    (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1} (feed/crown-rank-of {})))
+    (is (= {:declared 25 :cooled 2 :declined 2 :fresh 1}
+           (feed/crown-rank-of {:crown-rank {:declared 25}}))))
+  (testing "a number that is not one refuses at assembly, by name"
+    (is (str/includes? (str (try (feed/check-recipe!
+                                  (assoc feed/default-recipe
+                                         :crown-rank {:declined "lots"}))
+                                 (catch Exception e (ex-message e))))
+                       ":crown-rank :declined"))
+    (is (str/includes? (str (try (feed/check-recipe!
+                                  (assoc feed/default-recipe
+                                         :crown-rank {:fresh 101}))
+                                 (catch Exception e (ex-message e))))
+                       "0–100")))
+  (testing "the diff says what moved, in the household's words, beside the
+            contest's own"
+    (is (= [] (feed/crown-rank-diff nil {:declared 10})))
+    (is (= ["In the crown, serving a value this house declared lifts a bundle 20 instead of 10."]
+           (feed/crown-rank-diff nil {:declared 20})))
+    (is (str/includes? (first (feed/crown-rank-diff
+                               nil {:declared 0 :cooled 0 :declined 0 :fresh 0}))
+                       "turns OFF"))
+    (is (= ["The order itself is unchanged, line for line."
+            "In the crown, each day left on a bundle's week lifts it 3 instead of 1."]
+           (feed/recipe-diff {:order (:order feed/default-recipe)}
+                             {:order (:order feed/default-recipe)
+                              :crown-rank {:fresh 3}}))))
+  (testing "the household writes its own four numbers on the recipe row and the
+            next read is answered by them, and turning them off says so"
+    (let [eng (boot-house)]
+      (post! eng "fd_errands" {:title "one"})
+      (let [before (:doc (feed! eng))
+            made (call! eng :post "/api/feed_recipes"
+                        :body {:label "Declared values matter more"
+                               :scope "household"
+                               :order (get-in before [:recipe :order])
+                               :crown_rank {:declared 40 :fresh 0}})
+            after (:doc (feed! eng))]
+        (is (= 201 (:status made)) (pr-str (:doc made)))
+        (is (= {:declared 40 :cooled 2 :declined 2 :fresh 0}
+               (get-in after [:recipe :crown_rank])))
+        (is (str/includes? (get-in after [:recipe :crown_rank_says])
+                           "lifts a bundle 40"))
+        (is (= (get-in before [:recipe :formula])
+               (get-in after [:recipe :formula]))
+            "the contest's two numbers are untouched by a row that named only
+             the crown's")
+        (let [rid (last (str/split (str (:self (:doc made))) #"/"))
+              revised (call! eng :post (str "/api/feed_recipes/" rid "/-/revise")
+                             :body {:label "The seed alone"
+                                    :order (get-in before [:recipe :order])
+                                    :crown_rank {:declared 0 :cooled 0
+                                                 :declined 0 :fresh 0}}
+                             :headers {"if-match" (get-in made [:doc :meta :etag])})
+              off (:doc (feed! eng))]
+          (is (= 200 (:status revised)) (pr-str (:doc revised)))
+          (is (str/includes? (get-in off [:recipe :crown_rank_says])
+                             "The crown's rank is off")))))))
