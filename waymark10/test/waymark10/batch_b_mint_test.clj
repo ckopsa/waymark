@@ -261,8 +261,11 @@
               (and its own jobs, and — waymark-0k4 — its own staged
               recipe proposals: the own surface rides every leash)"
       (let [b (json (req :get "/api/.well-known/waymark" nil scoped))]
+        ;; …and (waymark-1uv.6) the ranking notes it wrote itself, by
+        ;; :judged_by — the own surface again
         (is (= ["approval_request" "feed_view" "feed_view_consent"
-                "grant" "job" "recipe_proposal" "verdict_reason"]
+                "grant" "job" "ranking_note" "recipe_proposal"
+                "verdict_reason"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))
           "the domain stays concealed")

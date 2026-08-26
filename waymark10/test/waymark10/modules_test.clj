@@ -63,9 +63,13 @@
   ;; door's own reason — the chips are drawn by the feed's generic
   ;; screen off a door the feed DOCUMENT names, so a house that serves
   ;; the feed serves the way to say why.
+  ;; …and :ranking_note (waymark-1uv.6): an agent's score and sentence
+  ;; about a ranked row, the crown's sixth input. :always for the
+  ;; reason kind's reason — it names no application vocabulary and
+  ;; the rank that reads it is the feed module's own.
   (is (= #{:definition :member :role :grant :approval_request
            :attachment :subscription :job :feed_recipe :recipe_proposal
-           :feed_view :feed_view_consent :verdict_reason}
+           :feed_view :feed_view_consent :verdict_reason :ranking_note}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled

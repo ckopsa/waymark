@@ -419,7 +419,10 @@
                    "recipe_proposal" "feed_view" "feed_view_consent"
                    ;; waymark-jfv.16: and the reasons it gave for its
                    ;; own declines — own-surface by :said_by
-                   "verdict_reason"}
+                   "verdict_reason"
+                   ;; waymark-1uv.6: and the judgments it wrote —
+                   ;; own-surface by :judged_by
+                   "ranking_note"}
                  (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"

@@ -1489,7 +1489,14 @@
         lapsing {:asked false :value :declared :days-left 1}
         early {:asked false :value :declared :days-left 7 :early 7 :turned-down 1}
         on-time {:asked false :value :declared :days-left 7 :early 0 :turned-down 3}
-        pulled {:asked true :value :observed :declined "never_this" :days-left 0}]
+        pulled {:asked true :value :observed :declined "never_this" :days-left 0}
+        ;; an agent's word (waymark-1uv.6): the same fresh bundle, scored
+        judged-up {:asked false :value :declared :days-left 7
+                   :judged {:score 0.9M :by "cairn" :says "This one."}}
+        judged-down {:asked false :value :declared :days-left 7
+                     :judged {:score 0.1M :by "cairn" :says "Not this one."}}
+        judged-half {:asked false :value :declared :days-left 7
+                     :judged {:score 0.5M :by "cairn" :says "No view."}}]
     (testing "the arithmetic, predictable from the four numbers a household reads"
       (is (= 17 (feed/crown-lift w fresh)) "10 declared + 7 days left")
       (is (= 7 (feed/crown-lift w observed)) "an observed value lifts nothing")
@@ -1502,6 +1509,21 @@
           "past the date nothing holds it, however long the chain")
       (is (= -8 (feed/crown-lift w pulled))
           "the lift can go negative and the asked tier does not care"))
+    (testing "an agent's score is one more weighted number, centred on a half
+              (waymark-1uv.6): 0.9 lifts one at the default weight, 0.1 holds
+              one, a half is silence and so is no score at all"
+      (is (= 18 (feed/crown-lift w judged-up)))
+      (is (= 16 (feed/crown-lift w judged-down)))
+      (is (= 17 (feed/crown-lift w judged-half)))
+      (is (= 1 (feed/judged-lift 1 0.9M)))
+      (is (= 0 (feed/judged-lift 1 0.6M)) "a nudge that rounds to nothing")
+      (is (= -1 (feed/judged-lift 1 0.1M)))
+      (is (= 0 (feed/judged-lift 1 nil)) "nobody's score is silence")
+      (is (= 0 (feed/judged-lift 0 1M)) "weight 0 makes it inert")
+      (is (= 5 (feed/judged-lift 10 0.75M)))
+      (is (= -10 (feed/judged-lift 10 0M)))
+      (is (= 17 (feed/crown-lift (assoc w :judged 0) judged-up))
+          "the weight turned down leaves the score unread"))
     (testing "the four words weigh in the epic's order, and an unknown word
               still says the house turned it down"
       (is (> (feed/reason-weight "never_this") (feed/reason-weight "wrong_way")
@@ -1512,13 +1534,13 @@
               ties. Swap every hash and a strict order does not move"
       (let [cands [[:fresh fresh] [:observed observed] [:cooled cooled]
                    [:never never] [:lapsing lapsing] [:pulled pulled]
-                   [:early early]]
+                   [:early early] [:judged-up judged-up]]
             order (fn [hash-of]
                     (mapv first (sort-by (fn [[k in]] (feed/crown-key w in (hash-of k)))
                                          cands)))
             a (order #(wire/sha256-hex (str "seed-a" %)))
             b (order #(wire/sha256-hex (str "seed-b" %)))]
-        (is (= [:pulled :fresh :cooled :lapsing :never :observed :early] a))
+        (is (= [:pulled :judged-up :fresh :cooled :lapsing :never :observed :early] a))
         (is (= a b) "two seeds, one order — nothing here was tied")
         (is (= :pulled (first a))
             "a bundle answering the person's own request stands first with a
@@ -1533,7 +1555,7 @@
              the last key")))
     (testing "all five at zero is the seed alone, with the person's request
               still first"
-      (let [off {:declared 0 :cooled 0 :declined 0 :fresh 0 :early 0}]
+      (let [off {:declared 0 :cooled 0 :declined 0 :fresh 0 :early 0 :judged 0}]
         (is (= 0 (feed/crown-lift off never)))
         (is (= [0 0 "h"] (feed/crown-key off pulled "h")))
         (is (= [1 0 "h"] (feed/crown-key off fresh "h")))))))
@@ -1544,17 +1566,19 @@
     (let [eng (boot-house)]
       (post! eng "fd_errands" {:title "one"})
       (let [recipe (:recipe (:doc (feed! eng)))]
-        (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}
+        (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}
                (:crown_rank recipe)))
         (is (str/includes? (:crown_rank_says recipe) "lifts a bundle 10"))
         (is (str/includes? (:crown_rank_says recipe) "8 for never this"))
         (is (str/includes? (:crown_rank_says recipe) "stands above every one"))
         (is (str/includes? (:crown_rank_says recipe) "recomposition arrives"))
-        (is (str/includes? (:guarantees recipe) "the crown's rank is five")))))
+        (is (str/includes? (:crown_rank_says recipe) "a score of 1 lifts it 1")
+            "the agent's number is narrated while it is non-zero (waymark-1uv.6)")
+        (is (str/includes? (:guarantees recipe) "the crown's rank is six")))))
   (testing "a row that names none keeps the deployment's, and one that names
             some keeps the rest"
-    (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2} (feed/crown-rank-of {})))
-    (is (= {:declared 25 :cooled 2 :declined 2 :fresh 1 :early 2}
+    (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1} (feed/crown-rank-of {})))
+    (is (= {:declared 25 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}
            (feed/crown-rank-of {:crown-rank {:declared 25}}))))
   (testing "a number that is not one refuses at assembly, by name"
     (is (str/includes? (str (try (feed/check-recipe!
@@ -1573,10 +1597,12 @@
     (is (= ["In the crown, serving a value this house declared lifts a bundle 20 instead of 10."]
            (feed/crown-rank-diff nil {:declared 20})))
     (is (str/includes? (first (feed/crown-rank-diff
-                               nil {:declared 0 :cooled 0 :declined 0 :fresh 0 :early 0}))
+                               nil {:declared 0 :cooled 0 :declined 0 :fresh 0 :early 0 :judged 0}))
                        "turns OFF"))
     (is (= ["In the crown, each day early a recomposition arrives — before the day the house said it would hear that line of thinking again — holds it 5 instead of 2."]
            (feed/crown-rank-diff nil {:early 5})))
+    (is (= ["In the crown, an agent's own score of a bundle — 0 to 1, with one sentence, quoted on the card as the agent's — moves it up to 3 either way instead of 1."]
+           (feed/crown-rank-diff nil {:judged 3})))
     (is (= ["The order itself is unchanged, line for line."
             "In the crown, each day left on a bundle's week lifts it 3 instead of 1."]
            (feed/recipe-diff {:order (:order feed/default-recipe)}
@@ -1594,7 +1620,7 @@
                                :crown_rank {:declared 40 :fresh 0}})
             after (:doc (feed! eng))]
         (is (= 201 (:status made)) (pr-str (:doc made)))
-        (is (= {:declared 40 :cooled 2 :declined 2 :fresh 0 :early 2}
+        (is (= {:declared 40 :cooled 2 :declined 2 :fresh 0 :early 2 :judged 1}
                (get-in after [:recipe :crown_rank])))
         (is (str/includes? (get-in after [:recipe :crown_rank_says])
                            "lifts a bundle 40"))
@@ -1608,12 +1634,25 @@
                                     :order (get-in before [:recipe :order])
                                     :crown_rank {:declared 0 :cooled 0
                                                  :declined 0 :fresh 0
-                                                 :early 0}}
+                                                 :early 0 :judged 0}}
                              :headers {"if-match" (get-in made [:doc :meta :etag])})
               off (:doc (feed! eng))]
           (is (= 200 (:status revised)) (pr-str (:doc revised)))
           (is (str/includes? (get-in off [:recipe :crown_rank_says])
-                             "The crown's rank is off")))))))
+                             "The crown's rank is off")))
+        ;; …and with only the agent's number at 0 (waymark-1uv.6) the
+        ;; sentence counts five and says nothing about a judgment
+        ;; nobody weighs — the member's own row, read ahead of the
+        ;; household's
+        (let [quiet (call! eng :post "/api/feed_recipes"
+                           :body {:label "No agent's word"
+                                  :scope "mine"
+                                  :order (get-in before [:recipe :order])
+                                  :crown_rank {:judged 0}})
+              said (get-in (:doc (feed! eng)) [:recipe :crown_rank_says])]
+          (is (= 201 (:status quiet)) (pr-str (:doc quiet)))
+          (is (str/includes? said "five numbers a person can read"))
+          (is (not (str/includes? said "may score it"))))))))
 
 ;; ── the findings' rank (waymark-1uv.8) ──────────────────────────────
 ;;
@@ -1840,8 +1879,8 @@
         (is (str/includes? (:tickler_rank_says recipe) "holds it 4"))
         (is (str/includes? (:tickler_rank_says recipe) "by their own hand stands above"))
         (is (str/includes? (:tickler_rank_says recipe) "Nothing here is a cap"))
-        (is (str/includes? (:guarantees recipe) "the crown's rank is five"))
-        (is (str/includes? (:guarantees recipe) "so is the fridge's")))))
+        (is (str/includes? (:guarantees recipe) "the crown's rank is six"))
+        (is (str/includes? (:guarantees recipe) "the fridge's is five")))))
   (testing "a row that names none keeps the deployment's, and one that names
             some keeps the rest"
     (is (= {:overdue 1 :not_now 4 :cooled 2 :front_door 5 :age 1}

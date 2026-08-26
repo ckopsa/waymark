@@ -29,7 +29,11 @@
     did not land;
   - the crown's rank over real rows (§ 16), and a recomposition staged
     before the house said it would hear it — admitted, cooled by every
-    day it is early, and still on the page (§ 17, waymark-1uv.10).
+    day it is early, and still on the page (§ 17, waymark-1uv.10);
+  - an agent's score and sentence on a bundle (§ 18, waymark-1uv.6):
+    one weighted input to the rank, the sentence quoted as the agent's,
+    the composer refused on its own bundle, and the weight turned down
+    to nothing.
 
   THE COMPOSER HERE IS A PERSON, and deliberately. The four-eyes wall
   is `g/not-the-field :composed_by` — it compares principal IDS, so a
@@ -69,7 +73,7 @@
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "activities" "evening_plans" "evening_sessions"
-   "letters" "weathers" "selves" "journals" "ticklers" "insights"
+   "letters" "weathers" "selves" "journals" "ticklers" "insights" "ranking_notes"
    "permission_slips" "saved_views" "dashboards" "dashboard_slots"
    "connections" "capabilities"
    "members" "roles" "grants" "approval_requests"
@@ -943,7 +947,7 @@
               lift #(get-in % [:why :crown :lift])
               says-of (fn [c s] (some #(str/includes? (str %) s) (get-in c [:why :says])))]
           (testing "the recipe's five numbers ride the document, narrated"
-            (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}
+            (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}
                    (get-in doc [:recipe :crown_rank])))
             (is (str/includes? (str (get-in doc [:recipe :crown_rank_says]))
                                "8 for never this")))
@@ -1068,5 +1072,211 @@
             (is (not (contains? (get-in ca [:why :crown]) :turned_down)))))
         ;; leave the house as found
         (doseq [oid [a y]]
+          (is (= 200 (:status (invoke! "outcomes" oid :not_this_week nil (human who)))))))
+      (finally (reset! clock nil)))))
+
+;; ── 18. the agent's score and sentence: one input, quoted as the agent's ──
+;;
+;; waymark-1uv.6, option M of the epic. An agent that read a bundle
+;; and cited it writes a `ranking_note` — a score, 0 to 1, and one
+;; sentence — and the crown reads the score as one more weighted
+;; number (`:judged`, 1 by default) while the card quotes the sentence
+;; under the agent's name, beside the engine's numbers and never inside
+;; the engine's impact line. The walls proved here are the ones no
+;; scenario can arrange: the composer scoring its OWN bundle (the
+;; four-eyes wall, read off the subject kind's own :own-surface), a
+;; second live note by the same author, an uncited score, a person
+;; writing one, and the weight turned down to nothing.
+
+(defn- leash-scope!
+  "An agent HOLDING a whole scope, minted through the real grant door
+  and accepted → the headers that present it (rank_tuning_test's
+  idiom, one kind over)."
+  [id scope]
+  (let [hs {"x-waymark-principal" id "x-waymark-actor-type" "agent"}
+        made (req :post "/api/grants" {:audience id :scope scope}
+                  (human "colton-leash"))
+        gid (id-of made)
+        took (invoke! "grants" gid :accept nil hs)]
+    (assert (= 201 (:status made)) (pr-str (json made)))
+    (assert (= 200 (:status took)) (pr-str (json took)))
+    (assoc hs "x-waymark-grant" gid)))
+
+(defn- etag-of [plural id who]
+  (get-in (req :get (str "/api/" plural "/" id) (human who)) [:headers "ETag"]))
+
+(deftest an-agents-score-is-one-input-and-its-sentence-is-quoted-as-the-agents
+  (let [who "colton-judge"
+        v (declare-value! who "a judged week" ["the shop"])
+        real-now (Instant/now)]
+    (try
+      (reset! clock real-now)
+      (let [;; THE SCORING AGENT is also a composer here, on purpose:
+            ;; it stages bundle A itself, so the four-eyes wall has a
+            ;; row to refuse it on, and it scores bundle B, which a
+            ;; different hand staged
+            cairn (leash-scope! "cairn-judge"
+                                [{:kind "outcome" :actions ["create"]}
+                                 {:kind "outcome_piece" :actions ["create"]}
+                                 {:kind "ranking_note" :actions ["create"]}])
+            a-resp (req :post "/api/outcomes"
+                        {:goal "One Saturday in the shop, staged by the judge itself"
+                         :value_id (vid v)
+                         :routing "It runs through the shop, which you said you love."
+                         :evidence [(str "/api/values/" (vid v))]}
+                        cairn)
+            a (id-of a-resp)
+            b (id-of (stage-outcome! "composer-judge-b" (vid v)))
+            said "This is the outcome he has been circling for a month."
+            note (fn [headers subject score evidence]
+                   (req :post "/api/ranking_notes"
+                        {:subject_kind "outcome" :subject_id subject
+                         :score score :says said :evidence evidence}
+                        headers))]
+        (is (= 201 (:status a-resp)) (pr-str (json a-resp)))
+        (doseq [n [1 2]]
+          (is (= 201 (:status (req :post "/api/outcome_pieces"
+                                   {:outcome_id a :says (str "Judge piece " n)
+                                    :form "create" :target_kind "task"
+                                    :prepared {:title (str "Judge piece " n)}}
+                                   cairn)))))
+        (two-pieces! "composer-judge-b" b "judge-b")
+
+        (testing "the agent reads the bundle it is about to score — the visibility
+                  half of the scoring scope is a read-only line over the kind"
+          (is (= 200 (:status (req :get (str "/api/outcomes/" b) cairn)))))
+
+        (testing "the composer's OWN bundle is refused by name — the note door reads
+                  the outcome kind's own :own-surface, so a composer cannot rank its
+                  own staging first"
+          (let [own (note cairn a 1M [(str "/api/outcomes/" a)])]
+            (is (= 409 (:status own)) (pr-str (json own)))
+            (is (= "not-your-own-row" (str (guard-of own))))
+            (is (str/includes? (detail own) "your own"))))
+
+        (testing "a score with nothing behind it is an opinion, and a listing is
+                  not an address"
+          (let [bare (note cairn b 0.9M [])
+                query (note cairn b 0.9M [(str "/api/outcomes?state=offered")])]
+            (is (= 409 (:status bare)))
+            (is (= "cites-what-it-read" (str (guard-of bare))))
+            (is (= 409 (:status query)))
+            (is (= "cites-what-it-read" (str (guard-of query))))))
+
+        (testing "a person does not write one — a person's answer is a verdict"
+          (let [mine (note (human who) b 0.9M [(str "/api/outcomes/" b)])]
+            (is (= 409 (:status mine)))
+            (is (= "a-judgment-is-an-agents" (str (guard-of mine))))))
+
+        (let [scored (note cairn b 0.9M [(str "/api/outcomes/" b)])
+              nid (id-of scored)]
+          (testing "the agent scores the other composer's bundle, and the stamp is
+                    the engine's"
+            (is (= 201 (:status scored)) (pr-str (json scored)))
+            (is (= "cairn-judge" (:judged_by (fields scored))))
+            (is (= "live" (:state (json scored)))))
+
+          (testing "one live note per row and author — the second is refused and
+                    told to restate"
+            (let [again (note cairn b 0.4M [(str "/api/outcomes/" b)])]
+              (is (= 409 (:status again)))
+              (is (= "one-live-note-per-row-and-author" (str (guard-of again))))
+              (is (str/includes? (detail again) "Restate"))))
+
+          ;; the reader's own recipe: the crown wide enough for both,
+          ;; the deployment's six numbers left standing
+          (let [order (:order (:recipe (feed-as who)))
+                wide (mapv #(if (= "outcomes" (str (:section %))) (assoc % :take 10) %)
+                           order)
+                made (req :post "/api/feed_recipes"
+                          {:label "A judged crown" :scope "mine" :order wide}
+                          (human who))
+                rid (id-of made)
+                says-of (fn [c s] (some #(str/includes? (str %) s) (get-in c [:why :says])))]
+            (is (= 201 (:status made)) (pr-str (json made)))
+
+            (let [doc (feed-as who "explain=1")
+                  ids (crown-ids doc)
+                  ca (crown-card doc a) cb (crown-card doc b)
+                  j (get-in cb [:why :crown :judged])]
+              (testing "two otherwise equal bundles: the scored one sits above the
+                        other, one place up at the default weight (relative order —
+                        another test's bundle may share the crown)"
+                (is (some #{a} ids) (pr-str ids))
+                (is (some #{b} ids) (pr-str ids))
+                (is (< (.indexOf ^java.util.List ids b) (.indexOf ^java.util.List ids a)))
+                (is (= 18 (get-in cb [:why :crown :lift])) "10 declared + 7 left + 1 for a 0.9")
+                (is (= 17 (get-in ca [:why :crown :lift]))))
+              (testing "the card carries the agent's word as {score, by, says} under
+                        the agent's name, and the unscored card carries no such key"
+                (is (== 0.9 (double (:score j))) (pr-str j))
+                (is (= "cairn-judge" (:by j)))
+                (is (= said (:says j)))
+                (is (not (contains? (get-in ca [:why :crown]) :judged))))
+              (testing "asked why, the card quotes the sentence AS THE AGENT'S — and
+                        the engine's impact line never carries it"
+                (is (says-of cb "cairn-judge scores this 0.9"))
+                (is (says-of cb said))
+                (is (says-of cb "lifting it 1"))
+                (is (not (str/includes? (str (:impact cb)) said)))
+                (is (not-any? #(str/includes? (str (:impact %)) said) (:pieces cb)))
+                (is (str/includes? (str (get-in doc [:recipe :crown_rank_says]))
+                                   "a score of 1 lifts it 1"))))
+
+            (testing "the agent restates — the same row, a new score — and the crown
+                      reads the new word: 0.2 holds it one, so the other stands first"
+              (let [re (req :post (str "/api/ranking_notes/" nid "/-/restate")
+                            {:score 0.2M :says "On a second read, not this week."}
+                            (assoc cairn "if-match"
+                                   (get-in (req :get (str "/api/ranking_notes/" nid) cairn)
+                                           [:headers "ETag"])))
+                    doc (feed-as who "explain=1")
+                    ids (crown-ids doc)
+                    cb (crown-card doc b)]
+                (is (= 200 (:status re)) (pr-str (json re)))
+                (is (< (.indexOf ^java.util.List ids a) (.indexOf ^java.util.List ids b)))
+                (is (= 16 (get-in cb [:why :crown :lift])))
+                (is (== 0.2 (double (get-in cb [:why :crown :judged :score]))))
+                (is (says-of cb "holding it 1"))
+                (is (says-of cb "On a second read"))))
+
+            (testing "weight 0 makes it inert — the word is still quoted, the
+                      number it moved is nothing, and the recipe's sentence stops
+                      mentioning a judgment nobody weighs"
+              (let [moved (req :post (str "/api/feed_recipes/" rid "/-/revise")
+                              {:label "A judged crown" :order wide
+                               :crown_rank {:judged 0}}
+                              (assoc (human who) "if-match" (etag-of "feed_recipes" rid who)))
+                    doc (feed-as who "explain=1")
+                    ca (crown-card doc a) cb (crown-card doc b)]
+                (is (= 200 (:status moved)) (pr-str (json moved)))
+                (is (= 17 (get-in cb [:why :crown :lift])))
+                (is (= 17 (get-in ca [:why :crown :lift])))
+                (is (= "cairn-judge" (get-in cb [:why :crown :judged :by])))
+                (is (says-of cb "weighs an agent's judgment 0"))
+                (is (not (str/includes? (str (get-in doc [:recipe :crown_rank_says]))
+                                        "may score it")))))
+
+            (testing "an agent does not dismiss; a person does — and the card then
+                      ranks without the word at all"
+              (let [by-agent (invoke! "ranking_notes" nid :dismiss nil cairn)
+                    by-person (invoke! "ranking_notes" nid :dismiss nil (human who))
+                    doc (feed-as who "explain=1")
+                    cb (crown-card doc b)]
+                ;; the create-only leash conceals the door (404) — the
+                ;; agent wall itself is the check-tier scenario's
+                (is (contains? #{404 409} (:status by-agent)) (pr-str (json by-agent)))
+                (is (= 200 (:status by-person)) (pr-str (json by-person)))
+                (is (= "dismissed" (:state (json by-person))))
+                (is (= who (:dismissed_by (fields by-person))))
+                (is (not (contains? (get-in cb [:why :crown]) :judged)))))
+
+            (testing "after a dismissal the same agent may judge the row again — a
+                      dismissal answers a note, not the agent"
+              (let [fresh (note cairn b 0.7M [(str "/api/outcomes/" b)])]
+                (is (= 201 (:status fresh)) (pr-str (json fresh)))))))
+
+        ;; leave the house as found: both bundles declined
+        (doseq [oid [a b]]
           (is (= 200 (:status (invoke! "outcomes" oid :not_this_week nil (human who)))))))
       (finally (reset! clock nil)))))

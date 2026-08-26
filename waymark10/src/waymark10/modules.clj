@@ -154,6 +154,7 @@
             [waymark10.server.members :as members]
             [waymark10.server.mirror :as mirror]
             [waymark10.server.presence :as presence]
+            [waymark10.ranking-note :as ranking-note]
             [waymark10.recipe-proposal :as recipe-proposal]
             [waymark10.server.roles :as roles]
             [waymark10.server.routes.attachments :as attachment-routes]
@@ -417,6 +418,14 @@
    ;; vocabulary at all ({subject_kind, subject_id, verdict}, the
    ;; tickler's shape), which is what lets one kind answer every
    ;; verdict in the house.
+   ;; …and since waymark-1uv.6 a SIXTH: `ranking_note`, an agent's
+   ;; score and one sentence about a ranked row, which the crown's
+   ;; rank reads as one weighted input and the card quotes as the
+   ;; agent's. `:always` for the reason kind's reason: it names no
+   ;; application vocabulary ({subject_kind, subject_id}, the same
+   ;; shape), and the rank that reads it is this module's own — a
+   ;; house that serves the crown serves the way an agent may speak
+   ;; to it.
    {:module :feed
     :enrols [{:kind :feed_recipe :enroll :always
               :kinds (fn [_] [feed-recipe/feed-recipe])}
@@ -427,7 +436,9 @@
              {:kind :feed_view :enroll :always
               :kinds (fn [_] [feed-view/feed-view])}
              {:kind :verdict_reason :enroll :always
-              :kinds (fn [_] [verdict-reason/verdict-reason])}]
+              :kinds (fn [_] [verdict-reason/verdict-reason])}
+             {:kind :ranking_note :enroll :always
+              :kinds (fn [_] [ranking-note/ranking-note])}]
     ;; …and since waymark-1uv.9 it STARTS one thing, the first this
     ;; module has ever started: the sweep over the dropped pile, which
     ;; sets a tickler aside for every row the house let go and nobody

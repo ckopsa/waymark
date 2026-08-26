@@ -124,15 +124,16 @@
   order never silently clears the numbers.
 
   `:crown_rank` joined with waymark-1uv.2 for the same reason one
-  section up: the crown's rank is five numbers a person can read (four
-  at 1uv.2; `:early` with waymark-1uv.10), and they live where the
-  contest's two live so the same form, the same diff, the same wall
-  and the same transitions govern them. `:insight_rank` joined with
-  waymark-1uv.8, the findings' six, for the same reason once more.
+  section up: the crown's rank is six numbers a person can read (four
+  at 1uv.2; `:early` with waymark-1uv.10; `:judged` with
+  waymark-1uv.6), and they live where the contest's two live so the
+  same form, the same diff, the same wall and the same transitions
+  govern them. `:insight_rank` joined with waymark-1uv.8, the findings'
+  six, for the same reason once more.
 
   `:tickler_rank` joined with waymark-1uv.9 for the same reason again:
   the ticklers line ranks its due pile by five numbers a person can
-  read, and they live where the crown's five live."
+  read, and they live where the crown's six live."
   [:label :order :formula :crown_rank :insight_rank :tickler_rank])
 
 ;; ── the wire shape ↔ the recipe map ─────────────────────────────────
@@ -207,7 +208,8 @@
                        :cooled (get-in data [:crown_rank :cooled])
                        :declined (get-in data [:crown_rank :declined])
                        :fresh (get-in data [:crown_rank :fresh])
-                       :early (get-in data [:crown_rank :early])}))
+                       :early (get-in data [:crown_rank :early])
+                       :judged (get-in data [:crown_rank :judged])}))
       ;; …and the findings' six (waymark-1uv.8), the same way
       (map? (:insight_rank data))
       (assoc :insight-rank
@@ -497,17 +499,19 @@
     [:maybe [:int {:min 0 :max 365}]]]])
 
 (def crown-rank-schema
-  "The crown's rank, as five numbers (waymark-1uv.2, laws v3 law 5 at
+  "The crown's rank, as six numbers (waymark-1uv.2, laws v3 law 5 at
   the crown; `:early` joined with waymark-1uv.10 when the decline's
-  date left the create door for the rank). Five and not six, because
-  the sixth input — a bundle answering a person's own request stands
-  first — is a TIER and not a weight: no number a household writes may
-  put the machine's initiative above a person's own ask.
+  date left the create door for the rank; `:judged` with
+  waymark-1uv.6, the weight of an agent's own score). Six and not
+  seven, because the seventh input — a bundle answering a person's
+  own request stands first — is a TIER and not a weight: no number a
+  household writes may put the machine's initiative above a person's
+  own ask.
 
   The bounds are the ones `feed/check-recipe!`'s sixth check applies,
   said here so the FORM refuses a nonsense number before anybody has
   to read a guard's sentence about it. Zero is legal for every one of
-  them; all five at zero is the seed alone."
+  them; all six at zero is the seed alone."
   [:map
    [:declared {:optional true
                :x-display {:label "A declared value lifts"
@@ -528,7 +532,8 @@
    [:early {:optional true
             :x-display {:label "Each day early holds"
                         :help "How much each day a recomposition arrives before the day you said you would hear that line of thinking again holds it back. The day is your own not-this-week, stamped a week, three, two months or half a year out; a recomposition staged before it is shown last rather than not at all, and its card says how early it is."}}
-    [:maybe [:int {:min 0 :max 100}]]]])
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:judged {:optional true :x-display {:label "An agent's judgment moves" :help "How far an agent's own score of a bundle — 0 to 1, with one sentence, quoted on the card as the agent's — may move it either way: a score of 1 lifts it this much, 0 holds it this much, and a half is silence. Low on purpose; a wrong judgment is a nudge, never a verdict, and 0 turns agents' judgments off without deleting a word of them."}} [:maybe [:int {:min 0 :max 100}]]]])
 
 (def insight-rank-schema
   "The findings' rank, as six numbers (waymark-1uv.8, laws v3 law 5 at
@@ -612,9 +617,9 @@
    :formula {:examples [{:window_days 14 :cools_after 3}]
              :x-display {:label "The contest"
                          :help "Two numbers, and the whole of how the order is weighted by what you have already been shown: how far back it counts, and how many days a card may sit untouched before it steps back inside its own line. It reads your own rows and nobody else's, it never empties a line, and the crown and everything waiting on your answer are outside it. Leave it empty for this deployment's own numbers; set cools_after to 0 to turn it off."}}
-   :crown_rank {:examples [{:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}]
+   :crown_rank {:examples [{:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}]
                 :x-display {:label "The crown's rank"
-                            :help "Five numbers, and the whole of how the crown chooses which composed weeks fill its slots: what a declared value lifts a bundle, what each cooled step holds it, what each rank of the house's quick word about a line of thinking holds it, what each day left on its week lifts it, and what each day early a recomposition arrives — before the day you said you would hear that line again — holds it. A bundle answering your own request stands first whatever these say. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all five to 0 for the seed alone."}}
+                            :help "Six numbers, and the whole of how the crown chooses which composed weeks fill its slots: what a declared value lifts a bundle, what each cooled step holds it, what each rank of the house's quick word about a line of thinking holds it, what each day left on its week lifts it, what each day early a recomposition arrives — before the day you said you would hear that line again — holds it, and how far an agent's own score of a bundle may move it either way. A bundle answering your own request stands first whatever these say. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all six to 0 for the seed alone."}}
    :insight_rank {:examples [{:diagnosis 10 :declared 5 :cooled 2 :dismissed 3 :declined 2 :fresh 1}]
                   :x-display {:label "The findings' rank"
                               :help "Six numbers, and the whole of how the findings line chooses which of an agent's findings fill its slots — there is no cap on how many it may publish: what a diagnosis is lifted over a plain finding, what a next step serving a value you declared lifts it, what each cooled step holds it, what each finding you already dismissed on the same next step holds a new one, what each rank of the quick word you said on those holds it, and what each day of freshness left in the window lifts it. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all six to 0 for the seed alone."}}

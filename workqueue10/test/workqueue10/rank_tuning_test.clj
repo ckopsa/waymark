@@ -46,7 +46,7 @@
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "activities" "evening_plans" "evening_sessions"
-   "letters" "weathers" "selves" "journals" "ticklers" "insights"
+   "letters" "weathers" "selves" "journals" "ticklers" "insights" "ranking_notes"
    "permission_slips" "saved_views" "dashboards" "dashboard_slots"
    "connections" "capabilities"
    "members" "roles" "grants" "approval_requests"
@@ -146,7 +146,7 @@
         before (feed-as who)]
     (is (= 201 (:status made)) (pr-str (json made)))
     (is (= rid (str (get-in before [:recipe :source :id]))))
-    (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}
+    (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}
            (get-in before [:recipe :crown_rank])))
 
     (testing "under that leash the agent READS what a tuning proposal cites —
@@ -174,7 +174,7 @@
                        :current_order order
                        :order order
                        :current_crown_rank (get-in before [:recipe :crown_rank])
-                       :crown_rank {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2}}
+                       :crown_rank {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1}}
                       tuner)]
       (testing "a citation with a query string is not an address — the
                 evidence wall reads the shape, and a filtered listing is not a
@@ -190,7 +190,7 @@
                        :current_order order
                        :order order
                        :current_crown_rank (get-in before [:recipe :crown_rank])
-                       :crown_rank {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2}}
+                       :crown_rank {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1}}
                       tuner)
           pid (id-of staged)]
       (is (= 201 (:status staged)) (pr-str (json staged)))
@@ -222,7 +222,7 @@
         (let [applied (invoke! "recipe_proposals" pid :apply nil (human who))
               after (feed-as who)]
           (is (= 200 (:status applied)) (pr-str (json applied)))
-          (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2}
+          (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1}
                  (get-in after [:recipe :crown_rank])))
           (is (str/includes? (str (get-in after [:recipe :crown_rank_says]))
                              "lifts a bundle 12"))
@@ -232,7 +232,7 @@
               "the order is untouched by a proposal that named only the crown")
           (is (= (get-in before [:recipe :formula]) (get-in after [:recipe :formula]))
               "and so is the contest")
-          (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2}
+          (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1}
                  (get-in (json (req :get (str "/api/feed_recipes/" rid) (human who)))
                          [:data :crown_rank])))))
 
@@ -245,13 +245,13 @@
                           :evidence [(str "/api/feed_recipes/" rid)]
                           :current_order order
                           :order order
-                          :current_crown_rank {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2}
-                          :crown_rank {:declared 20 :cooled 2 :declined 3 :fresh 1 :early 2}}
+                          :current_crown_rank {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1}
+                          :crown_rank {:declared 20 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1}}
                          tuner)
               sid (id-of again)
               moved (req :post (str "/api/feed_recipes/" rid "/-/revise")
                          {:label "Colton's own" :order order
-                          :crown_rank {:declared 15 :cooled 2 :declined 3 :fresh 1 :early 2}}
+                          :crown_rank {:declared 15 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1}}
                          (assoc (human who) "if-match" (etag-of "feed_recipes" rid who)))
               stale (invoke! "recipe_proposals" sid :apply nil (human who))]
           (is (= 201 (:status again)) (pr-str (json again)))
@@ -272,9 +272,9 @@
                         (assoc (human who) "if-match" (etag-of "feed_recipes" rid who)))
               restored (feed-as who)]
           (is (= "applied" (str (:state row))))
-          (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2} was))
+          (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1} was))
           (is (= 200 (:status back)) (pr-str (json back)))
-          (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}
+          (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}
                  (get-in restored [:recipe :crown_rank])))
           (is (str/includes? (str (get-in restored [:recipe :crown_rank_says]))
                              "lifts a bundle 10")))))))

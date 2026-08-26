@@ -344,9 +344,12 @@
       (let [b (json (req :get "/api/.well-known/waymark" nil (scoped gid)))]
         ;; …and verdict_reason beside them (waymark-jfv.16), for the
         ;; same reason and the same shape: a reason is the sayer's own,
-        ;; so the own surface carries it on every leash
+        ;; so the own surface carries it on every leash — and
+        ;; ranking_note (waymark-1uv.6), an agent's own judgments, by
+        ;; :judged_by, for the same reason again
         (is (= ["approval_request" "feed_view" "feed_view_consent"
-                "grant" "job" "plan" "recipe_proposal" "verdict_reason"]
+                "grant" "job" "plan" "ranking_note" "recipe_proposal"
+                "verdict_reason"]
                (:kinds b)))))
     (testing "the granted collection renders, its items projected"
       (let [b (json (req :get "/api/plans" nil (scoped gid)))]

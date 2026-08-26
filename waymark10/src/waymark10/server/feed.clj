@@ -450,12 +450,12 @@
 ;; (waymark-1uv.3, which landed after this and never could before).
 ;;
 ;; So the crown now RANKS what it shows, and the rank is the same kind
-;; of thing the contest below it is: DATA on the recipe row (five
+;; of thing the contest below it is: DATA on the recipe row (six
 ;; numbers beside the contest's two), one line of arithmetic
 ;; (`crown-lift`), narrated on every answer (`crown-rank-says`), and
 ;; read back on every crown card with the numbers that placed it. Law
 ;; 5 holds for the same reason it holds one section down: a household
-;; can read five numbers, and the moment this needs a model it cannot
+;; can read six numbers, and the moment this needs a model it cannot
 ;; read, somebody is building the thing the law forbids.
 ;;
 ;; THE FLOOR STAYS. `:take` is still a guaranteed slot; the rank only
@@ -465,15 +465,17 @@
 ;;
 ;; THE AGENT IS NOT THE RANK. The epic weighed three shapes for the
 ;; composer's part and ruled: an agent may TUNE these numbers through
-;; a staged proposal (waymark-1uv.5), and may later supply one
-;; readable judgment as an input beside these (waymark-1uv.6) — never
-;; be the rank itself, because the crown is the one place a person
-;; acts on a machine's word and that word must be readable.
+;; a staged proposal (waymark-1uv.5), and may supply one readable
+;; judgment as an input beside these (waymark-1uv.6: a score and a
+;; sentence on a `ranking_note` row, read at `:judged`'s weight and
+;; quoted on the card as the agent's) — never be the rank itself,
+;; because the crown is the one place a person acts on a machine's
+;; word and that word must be readable.
 
 (def default-crown-rank
-  "The crown's rank, as five numbers — the weights of the five inputs
-  a household can argue with. The sixth input, *asked for*, is a TIER
-  above all five and not a weight (see `crown-key`): no number a
+  "The crown's rank, as six numbers — the weights of the six inputs
+  a household can argue with. The seventh input, *asked for*, is a
+  TIER above all six and not a weight (see `crown-key`): no number a
   household writes may put the machine's initiative above a person's
   own request, because that is law 6 read at the crown.
 
@@ -518,14 +520,31 @@
   would be the house's verdict counted twice. Once the day has passed
   nothing here holds it, because that is what the house said.
 
-  All five at zero is *the seed alone*, with a person's own request
+  `:judged` — how far an AGENT'S OWN SCORE of a bundle may move it,
+  either way (waymark-1uv.6, option M of the epic). The score is a
+  `ranking_note` row: 0 to 1 and one sentence, written by an agent
+  that read the bundle and cited what it read, never by the agent
+  that staged it, and quoted on the card under the agent's own name.
+  The formula reads it CENTRED — a score of 1 lifts the whole weight,
+  0 holds the whole weight, ½ is silence, and a bundle nobody scored
+  reads as silence too (`judged-lift`) — so an agent can say *not this
+  one* as well as *this one*, and saying nothing is the middle. ONE
+  by default, which is the epic's own sentence: a wrong judgment is a
+  nudge, never a verdict. At 1 only a confident score moves anything
+  and it moves it one place among equals — less than a day of
+  freshness; a household that has learned to trust its agent's eye
+  raises it through the same form as every other number here, and one
+  that has not sets it to 0 without deleting a word the agent wrote.
+
+  All six at zero is *the seed alone*, with a person's own request
   still first — a number a person can see rather than a key they have
   to know to delete, the contest's own posture."
   {:declared 10
    :cooled 2
    :declined 2
    :fresh 1
-   :early 2})
+   :early 2
+   :judged 1})
 
 (def reason-weights
   "How much each of the household's four quick words weighs on the
@@ -584,11 +603,27 @@
   5)
 
 (defn crown-rank-of
-  "The crown's five numbers this recipe reads: the household's own,
+  "The crown's six numbers this recipe reads: the household's own,
   with the deployment's filled in for anything it did not state —
   `formula-of`'s shape, one field over."
   [recipe]
   (merge default-crown-rank (:crown-rank recipe)))
+
+(defn judged-lift
+  "What an agent's score does to a bundle at the recipe's `:judged`
+  weight (waymark-1uv.6): the score, 0 to 1, read CENTRED on a half
+  and scaled to the weight — `weight × (2·score − 1)`, rounded to the
+  nearest whole number, half away from zero — so 1 lifts the whole
+  weight, 0 holds the whole weight, ½ is nothing, and no score at all
+  is nothing too. Whole numbers because the lift is one and the card
+  quotes it; at the default weight of 1 only a score past ¾ or under
+  ¼ moves anything, which is what *a nudge, never a verdict* means in
+  arithmetic."
+  ^long [^long weight score]
+  (if (nil? score)
+    0
+    (let [x (* (double weight) (- (* 2.0 (double score)) 1.0))]
+      (long (* (Math/signum x) (Math/round (Math/abs x)))))))
 
 (defn crown-lift
   "THE CROWN'S ARITHMETIC, and this is the whole of it:
@@ -598,26 +633,32 @@
            − declined × weight of the strongest word on the chain
            + fresh    × days left on the week
            − early    × days before the house said it would hear it
+           + judged   × (2 × the agent's score − 1)
 
   over one bundle's inputs — `{:value :declared|:observed, :cooled n,
-  :declined word-or-nil, :days-left n, :early n}` — and the recipe's
-  five numbers. Higher stands higher. It is only ever a SORT KEY: the
-  crown still shows exactly as many bundles as its `:take` says
-  whenever that many exist, and there is no arithmetic here that can
-  drop one — a recomposition the house said not to hear yet is COOLED
-  by every day it is early (waymark-1uv.10), never hidden, and the
-  card says so.
+  :declined word-or-nil, :days-left n, :early n, :judged {:score s
+  :by who :says sentence}}` — and the recipe's six numbers. Higher
+  stands higher. It is only ever a SORT KEY: the crown still shows
+  exactly as many bundles as its `:take` says whenever that many
+  exist, and there is no arithmetic here that can drop one — a
+  recomposition the house said not to hear yet is COOLED by every day
+  it is early (waymark-1uv.10), never hidden, and the card says so.
+
+  The last line is the agent's (waymark-1uv.6, `judged-lift`): a
+  score nobody wrote is silence, a score of a half is silence, and
+  the weight is the household's to turn down to nothing.
 
   `:asked` is not in it, on purpose: a bundle that answers a person's
   own request is a tier above every uncited one (`crown-key`), and no
   weight a household writes moves it down."
-  ^long [weights {:keys [value cooled declined days-left early]}]
+  ^long [weights {:keys [value cooled declined days-left early judged]}]
   (let [w (fn ^long [k] (long (get weights k 0)))]
     (+ (if (= :declared value) (w :declared) 0)
        (- (* (w :cooled) (long (or cooled 0))))
        (- (* (w :declined) (reason-weight declined)))
        (* (w :fresh) (long (or days-left 0)))
-       (- (* (w :early) (long (or early 0)))))))
+       (- (* (w :early) (long (or early 0))))
+       (judged-lift (w :judged) (:score judged)))))
 
 (defn crown-key
   "One crown candidate's place in the order, as a vector `sort-by`
@@ -1004,6 +1045,12 @@
 (def view-kind
   "The record a screen posts when the switch is on."
   :feed_view)
+
+(def note-kind
+  "An agent's score and sentence about a ranked row
+  (waymark10.ranking-note, waymark-1uv.6) — the crown's sixth input,
+  named here by keyword for the reason kind's own reason."
+  :ranking_note)
 
 (def reason-kind
   "The row a SETTLED card posts when somebody taps one of the quick
@@ -2583,6 +2630,37 @@
                  (inc (long hops))
                  best))))))
 
+(defn- crown-judgment
+  "The agent's word about this bundle, or nil when no agent has said
+  one (waymark-1uv.6, the rank's sixth input): the NEWEST live
+  `ranking_note` naming the row, as `{:score :by :says}` — the score
+  `crown-lift` weighs, the name the card quotes it under, and the one
+  sentence it quotes. One query per candidate, limit one, inside the
+  bound `crown-scan-cap` already puts on the population.
+
+  THE NEWEST ONE, WHOEVER WROTE IT, and that is a decision rather
+  than an accident. Two agents scoring one bundle is a house running
+  two judges, and the honest reading of two opinions is not their
+  mean — it is that the card quotes ONE agent by name and the
+  household can read whether that agent was right. A dismissed note
+  is not live and is not read; a restated one is the same row with
+  its new score.
+
+  The note kind is the framework's and enrolled `:always`, but the
+  read still asks whether this engine holds it, `crown-word`'s own
+  courtesy."
+  [ctx oid]
+  (when (get (resources ctx) note-kind)
+    (when-some [raw (first (rows-of ctx note-kind
+                                    {:subject_kind "outcome"
+                                     :subject_id (str oid)
+                                     :state "live"}
+                                    1))]
+      (when-some [score (get-in raw [:data :score])]
+        {:score score
+         :by (str (get-in raw [:data :judged_by]))
+         :says (str (get-in raw [:data :says]))}))))
+
 (defn- days-left
   "Whole days between now and a bundle's `good_until`, never negative
   — the rank's freshness input, and zero for a bundle with no leash at
@@ -2662,7 +2740,9 @@
   of thinking it recomposes, how many days are left on its week, and
   — for a recomposition — how many days early it stands against the
   day the house said it would hear that line again, with how many
-  times the line was turned down beside it (waymark-1uv.10). The
+  times the line was turned down beside it (waymark-1uv.10) — and
+  what an agent said about it, when one did: the newest live
+  `ranking_note`'s score, author and sentence (waymark-1uv.6). The
   population READS; it does not rank. `entry-cards` adds the one
   input only a read knows — how many mornings THIS reader has been
   shown it, off the same view rows the contest reads — and sorts by
@@ -2683,8 +2763,9 @@
   The cost is the read-time posture's, and since no door keeps the
   number small the read bounds itself: at most
   `crown-scan-cap` bundles are scanned, newest first, each surviving
-  one costing a value read, a piece query and a walk up its
-  supersedes chain, and `a-bundle-is-small` caps the pieces at five.
+  one costing a value read, a piece query, a walk up its supersedes
+  chain and one note query, and `a-bundle-is-small` caps the pieces
+  at five.
   The answer says when the cap was reached, and `document` tells the
   reader — truncation announced beats totality implied."
   [ctx]
@@ -2726,7 +2807,10 @@
                                                                   str not-empty))
                                             :value standing
                                             :declined (crown-word ctx d)
-                                            :days-left (days-left now good)}
+                                            :days-left (days-left now good)
+                                            ;; the agent's word, when one
+                                            ;; was said (waymark-1uv.6)
+                                            :judged (crown-judgment ctx (:id raw))}
                                      ;; only a recomposition carries the
                                      ;; schedule: how early it stands and
                                      ;; how many times the line was turned
@@ -3469,22 +3553,23 @@
             (refuse (str ":formula " k " is " what ", " lo "–" hi
                          " — read " (pr-str v))
                     {:formula f})))))
-    ;; …and the sixth (waymark-1uv.2): the crown's five numbers are
+    ;; …and the sixth (waymark-1uv.2): the crown's six numbers are
     ;; numbers, for the fifth check's own reason. Zero is legal for
-    ;; every one of them — all five at zero is the seed alone, with a
+    ;; every one of them — all six at zero is the seed alone, with a
     ;; person's own request still first.
     (when-some [c (:crown-rank recipe)]
       (when-not (map? c)
         (refuse (str ":crown-rank is a map of {:declared :cooled :declined"
-                     " :fresh :early} — the five numbers the crown's rank is"
-                     " made of, or absent for the deployment's own")
+                     " :fresh :early :judged} — the six numbers the crown's"
+                     " rank is made of, or absent for the deployment's own")
                 {:crown-rank c}))
       (doseq [[k what]
               [[:declared "what a declared value lifts a bundle over an observed one"]
                [:cooled "what each cooled step holds a bundle back"]
                [:declined "what each rank of the house's quick word holds a bundle back"]
                [:fresh "what each day left on its week lifts a bundle"]
-               [:early "what each day early a recomposition arrives holds it back"]]]
+               [:early "what each day early a recomposition arrives holds it back"]
+               [:judged "how far an agent's own score, 0 to 1, moves a bundle either way"]]]
         (when-some [v (get c k)]
           (when-not (and (int? v) (<= 0 (long v) 100))
             (refuse (str ":crown-rank " k " is " what ", 0–100 — read "
@@ -4332,7 +4417,14 @@
    (fn [a b]
      (str "In the crown, each day early a recomposition arrives — before"
           " the day the house said it would hear that line of thinking"
-          " again — holds it " b " instead of " a "."))})
+          " again — holds it " b " instead of " a "."))
+   ;; the sixth number (waymark-1uv.6): how far an agent's own score of
+   ;; a bundle may move it, either way
+   :judged
+   (fn [a b]
+     (str "In the crown, an agent's own score of a bundle — 0 to 1, with"
+          " one sentence, quoted on the card as the agent's — moves it up"
+          " to " b " either way instead of " a "."))})
 
 (defn crown-rank-diff
   "The crown's numbers, read side by side (waymark-1uv.2) —
@@ -4696,8 +4788,8 @@
        "; exactly one card is the seam; the archive"
        " is last and bottomless; every line names a population this"
        " engine actually holds; the contest is two numbers a person can"
-       " read; the crown's rank is five, and so is the fridge's, for the"
-       " things set aside; the findings' rank is six. A recipe that broke"
+       " read; the crown's rank is six, the findings' rank is six, and the"
+       " fridge's is five, for the things set aside. A recipe that broke"
        " any of those would have refused to start rather than serve you a"
        " surprise."))
 
@@ -4741,7 +4833,7 @@
            " shown on."))))
 
 (defn crown-rank-as-written
-  "The crown's five numbers in the shape the EDITOR takes — the wire
+  "The crown's six numbers in the shape the EDITOR takes — the wire
   spelling of `waymark10.feed-recipe`'s `crown_rank` field, so what a
   person copies out of a feed document is what the form takes back
   (`formula-as-written`'s sentence, one field over)."
@@ -4751,18 +4843,24 @@
      "cooled" (:cooled c)
      "declined" (:declined c)
      "fresh" (:fresh c)
-     "early" (:early c)}))
+     "early" (:early c)
+     "judged" (:judged c)}))
 
 (defn crown-rank-says
   "The crown's rank, narrated in household words with its own numbers
   quoted back — the recipe view's half of law 5 at the crown
   (waymark-1uv.2). A pure function of the recipe, like `formula-says`:
   what the rank did to THIS card is the card's business
-  (`crown-card-says`), because only a read knows it."
+  (`crown-card-says`), because only a read knows it.
+
+  The agent's number (waymark-1uv.6) is narrated only while it is
+  non-zero: a house that turned it off is a house that does not want
+  the sentence, and the numbers it can still read are the five."
   ^String [recipe]
-  (let [{:keys [declared cooled declined fresh early]} (crown-rank-of recipe)
-        {:keys [window-days cools-after]} (formula-of recipe)]
-    (if (every? zero? (map long [declared cooled declined fresh early]))
+  (let [{:keys [declared cooled declined fresh early judged]} (crown-rank-of recipe)
+        {:keys [window-days cools-after]} (formula-of recipe)
+        judged (long (or judged 0))]
+    (if (every? zero? (map long [declared cooled declined fresh early judged]))
       (str "The crown's rank is off: every number in crown_rank is 0, so a"
            " bundle answering your own request still stands first and the"
            " seed alone places the rest. Turning it back on is a number in"
@@ -4770,7 +4868,8 @@
       (str "The crown ranks what it shows, and this is the whole of it. A"
            " bundle that answers a request you made stands above every one"
            " nobody asked for, and no number here changes that. Among the"
-           " rest, five numbers a person can read: serving a value this"
+           " rest, " (if (pos? judged) "six" "five")
+           " numbers a person can read: serving a value this"
            " house declared lifts a bundle " declared " over one serving a"
            " value an agent only observed; each step the contest says it has"
            " cooled — "
@@ -4788,7 +4887,14 @@
            " lower; and each day a recomposition arrives before the day the"
            " house said it would hear that line of thinking again holds it "
            early ", so a bundle the house said not to hear yet sits last"
-           " rather than out of sight. The floor still holds — the crown shows as many bundles"
+           " rather than out of sight"
+           (when (pos? judged)
+             (str "; and an agent that read a bundle may score it, 0 to 1,"
+                  " with one sentence the card quotes as the agent's — a"
+                  " score of 1 lifts it " judged ", 0 holds it " judged
+                  ", and a bundle nobody scored reads as a half, which is"
+                  " silence"))
+           ". The floor still holds — the crown shows as many bundles"
            " as its take says whenever that many exist; the rank only"
            " chooses which, and the seed decides between equals. Until you"
            " turn the record of what you were shown on, nothing about"
@@ -4975,10 +5081,13 @@
   only when a word was said, so a reader can tell *no word* from a
   word; `early`, `turned_down` and `not_before` ride only on a
   RECOMPOSITION (waymark-1uv.10), so a reader can tell *nothing to be
-  early for* from *on time*. Public because the packs assert the
-  shape."
+  early for* from *on time*; `judged` rides only when an agent said a
+  word (waymark-1uv.6), as `{score, by, says}` — the number the sort
+  read, the name the sentence is quoted under, and the sentence,
+  which is the agent's and never the engine's. Public because the
+  packs assert the shape."
   [weights {:keys [asked value seen cooled declined days-left
-                   early turned-down not-before] :as inputs}]
+                   early turned-down not-before judged] :as inputs}]
   (cond-> {"lift" (crown-lift weights inputs)
            "asked" (boolean asked)
            "value" (name (or value :declared))
@@ -4988,7 +5097,10 @@
     (some? early) (assoc "early" (long early)
                          "turned_down" (long (or turned-down 0)))
     (and (some? early) (pos? (long early)) not-before)
-    (assoc "not_before" (str not-before))))
+    (assoc "not_before" (str not-before))
+    (some? judged) (assoc "judged" {"score" (:score judged)
+                                    "by" (:by judged)
+                                    "says" (:says judged)})))
 
 (defn insight-as-cited
   "The findings' numbers as they ride an insight card's always-on
@@ -5020,17 +5132,26 @@
   the floor clause is the one place the person's dated verdict and the
   guaranteed slot meet (waymark-1uv.10): the card stands last, says
   how early it is, and is shown when the take reaches it, because a
-  rank that hid it would be the window the epic refused."
+  rank that hid it would be the window the epic refused.
+
+  THE AGENT'S CLAUSE IS QUOTED, NOT PARAPHRASED (waymark-1uv.6). When
+  an agent scored the bundle the sentence says who, the score, and the
+  agent's own words inside quotation marks, then what the house's
+  weight made of it — the way the card quotes the composer's routing
+  and never lets the engine's impact line blur into it. It is said
+  even when the weight is 0, because the word is still the agent's
+  and the household may want to read it; only the number it moved is
+  nothing then."
   ^String [{:keys [rank of crown crown-weights formula]}]
   (let [w (fn ^long [k] (long (get crown-weights k 0)))
         {:keys [asked value seen cooled declined days-left
-                early turned-down not-before]} crown
+                early turned-down not-before judged]} crown
         lift (crown-lift crown-weights crown)
         window (:window-days formula)
         after (long (or (:cools-after formula) 0))
         plural (fn [n word] (str n " " word (when (not= 1 (long n)) "s")))]
     (str "Ranked " (ordinal rank) " of " of " in the crown by recipe.crown_rank"
-         " — five numbers this house can read — and this is the arithmetic"
+         " — six numbers this house can read — and this is the arithmetic"
          " for this card. "
          (if asked
            (str "You asked for another and this is the composer's answer, so"
@@ -5089,6 +5210,17 @@
                   (str " " (plural turned-down "time")))
                 ", and the day the house said it would hear it again has"
                 " passed, so nothing holds it for that. "))
+         (when judged
+           (let [j (judged-lift (w :judged) (:score judged))]
+             (str (:by judged) " scores this " (:score judged) ": “"
+                  (str/trim (str (:says judged))) "” — "
+                  (cond
+                    (pos? j) (str "lifting it " j ". ")
+                    (neg? j) (str "holding it " (- j) ". ")
+                    (zero? (w :judged))
+                    "and this house weighs an agent's judgment 0, so it moves nothing. "
+                    :else (str "a nudge that rounds to nothing at a weight of "
+                               (w :judged) ". ")))))
          "Lift " lift " in all; the seed decides between equals. The floor"
          " still holds: this section shows as many bundles as its take"
          " says whenever that many exist, and the rank only chooses"
