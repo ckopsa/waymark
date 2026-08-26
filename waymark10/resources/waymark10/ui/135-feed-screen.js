@@ -241,6 +241,11 @@ async function renderFeedScreen(view, doc) {
        server's, the numbers are the recipe's. */
     if (recipe.formula_says)
       why.append(el("p", {class: "prose muted"}, recipe.formula_says));
+    /* …and the crown's rank, the same way (waymark-1uv.2): four
+       numbers, narrated by the server with the recipe's own numbers
+       in the sentence, on every answer. */
+    if (recipe.crown_rank_says)
+      why.append(el("p", {class: "prose muted"}, recipe.crown_rank_says));
     for (const n of doc.notes || [])
       why.append(el("p", {class: "prose muted"}, n));
     /* the view door, when it is SHUT (waymark-8um.1). The open case
@@ -709,6 +714,26 @@ async function renderFeedScreen(view, doc) {
                 ? (", so it steps back " + why.cooled
                    + " place" + (why.cooled === 1 ? "" : "s") + " in its line.")
                 : ", which has not cooled it yet."))));
+    /* the crown's own numbers, from the card's always-on why.crown
+       (waymark-1uv.2): the lift and the inputs that made it, before
+       any network happens. Present only on a crown card; the server's
+       full arithmetic replaces it when anybody asks. */
+    if (why.crown && typeof why.crown.lift === "number") {
+      const c = why.crown;
+      const parts = [
+        c.asked ? "answers your own request, so it stands first" : "nobody asked for it",
+        c.value === "declared" ? "serves a declared value" : "serves a value only observed so far",
+        (typeof c.seen === "number")
+          ? ("shown " + c.seen + " day" + (c.seen === 1 ? "" : "s")
+             + (c.cooled > 0 ? (", cooled " + c.cooled) : ""))
+          : null,
+        c.declined ? ("the house said " + String(c.declined).replace(/_/g, " ")
+                      + " about this line of thinking") : null,
+        c.days_left + " day" + (c.days_left === 1 ? "" : "s") + " left on its week"];
+      box.append(el("p", {class: "muted"},
+        "Ranked in the crown — lift " + c.lift + ": "
+        + parts.filter(Boolean).join("; ") + "."));
+    }
     const details = el("details", {class: "fcard-why"},
       el("summary", {}, "Why this card?"), box);
     let asked = false;

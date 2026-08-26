@@ -4034,6 +4034,10 @@
         ;; doors that answer 409); and a reader leashed to the BUNDLE
         ;; and not to its pieces reads a bundle with no pieces at all.
         mine (:doc (feed-doc ctx as-member))
+        ;; …and once more with the sentences (waymark-1uv.2): the
+        ;; crown's rank has to say what placed a card, in words, when
+        ;; anybody asks
+        explained (:doc (feed-doc ctx as-member "explain=1"))
         theirs (:doc (feed-doc ctx leashed))
         half (leash! ctx (str "conformance-halfsighted-" tag)
                      [{:kind "outcome" :actions []}])
@@ -4209,6 +4213,47 @@
                         :routing "Once was the deal."
                         :evidence [vself]
                         :request_id rid}))
+        ;; ── the crown's rank (waymark-1uv.2) ──────────────────────
+        ;; The cited bundle and an UNCITED one, both carded — two
+        ;; pieces each, which is the bundle floor — and the rank puts
+        ;; the person's own pull first whatever the seed says. The
+        ;; uncited one is the composer's second of the week, which the
+        ;; cap still admits (waymark-1uv.3 takes the cap away after
+        ;; this bead, never before it).
+        plain (when (and rid leashed vid (= 201 (:status answered)))
+                (stage :outcome
+                       {:goal (str "Nobody asked for this one " tag)
+                        :value_id vid
+                        :routing (str "It runs through " loved " too, and"
+                                      " nobody asked.")
+                        :routes_through loved
+                        :evidence [vself]}))
+        poid (some-> (:doc plain) :self id-of)
+        ranked-piece (fn [id n]
+                       (when (and id target)
+                         (stage :outcome_piece
+                                {:outcome_id id
+                                 :says (str "Ranked piece " n " of " tag)
+                                 :form "create"
+                                 :target_kind target
+                                 :prepared (create-body ctx (keyword target)
+                                                        (+ 4200 (long n)))})))
+        _ (doseq [[id n] [[aoid 1] [aoid 2] [poid 3] [poid 4]]]
+            (ranked-piece id n))
+        ranked (when (and aoid poid)
+                 (:doc (feed-doc ctx as-member "explain=1")))
+        crown-first (some->> (feed-cards ranked)
+                             (filter #(= "outcome" (str (:kind %))))
+                             first :card_id str)
+        asked-card (when ranked (outcome-card ranked aoid))
+        plain-card (when ranked (outcome-card ranked poid))
+        ;; …and both leave the feed the way the reason obligation's
+        ;; bundle does — declined, terminal — so the engine handed on
+        ;; is the engine found
+        not-this-week (declared-name ctx :outcome :not_this_week)
+        _ (doseq [id [aoid poid] :when id]
+            (invoke-http ctx :outcome id not-this-week nil
+                         {:headers as-member}))
         ;; and nobody answers one by hand — a person's tap, an agent's
         ;; post — because a request marked answered with no outcome
         ;; behind it would be the person's pull burned by a hand that
@@ -4647,7 +4692,78 @@
        (and minted (= 201 (:status minted)))
        (conj (str "feed: an AGENT minted a composition request — the cap"
                   " walls the machine's initiative, and a composer that can"
-                  " ask itself for a third has walked around it")))}))
+                  " ask itself for a third has walked around it"))
+
+       ;; ── the crown's rank (waymark-1uv.2) ──────────────────────
+       ;; Law 5 at the crown: the rank is DATA on every answer, a
+       ;; sentence quoting its own numbers, and every crown card
+       ;; carries the inputs that placed it — on the plain read as
+       ;; numbers, on the explained read as sentences.
+       (and mine (let [c (get-in mine [:recipe :crown_rank])]
+                   (not (and (map? c)
+                             (every? #(int? (get c %))
+                                     [:declared :cooled :declined :fresh])))))
+       (conj (str "feed: recipe.crown_rank reads "
+                  (pr-str (get-in mine [:recipe :crown_rank]))
+                  " — the crown's rank is four numbers the household can"
+                  " read, on every answer, or it is the hidden model law 5"
+                  " forbids"))
+
+       (and mine (let [c (get-in mine [:recipe :crown_rank])
+                       s (str (get-in mine [:recipe :crown_rank_says]))]
+                   (not (and (str/includes? s (str (:declared c)))
+                             (str/includes? s "never this")))))
+       (conj (str "feed: recipe.crown_rank_says does not quote its own"
+                  " numbers and the four words back — "
+                  (pr-str (get-in mine [:recipe :crown_rank_says]))))
+
+       (and card (let [c (get-in card [:why :crown])]
+                   (not (and (int? (:lift c))
+                             (boolean? (:asked c))
+                             (contains? #{"declared" "observed"} (str (:value c)))
+                             (int? (:days_left c))))))
+       (conj (str "feed: a crown card's why carries "
+                  (pr-str (get-in card [:why :crown]))
+                  " — every crown card names the rank's inputs and the lift"
+                  " they add up to on the plain read; a card that stands"
+                  " where it stands for a reason and would not say so unless"
+                  " asked is the thing law 5 forbids"))
+
+       (and card (true? (get-in card [:why :crown :asked])))
+       (conj (str "feed: a bundle nobody asked for reads asked true"))
+
+       (and card (not= "declared" (str (get-in card [:why :crown :value]))))
+       (conj (str "feed: a bundle serving a value a MEMBER declared reads"
+                  " value " (pr-str (get-in card [:why :crown :value]))))
+
+       (and oid explained
+            (not-any? #(str/includes? (str %) "Ranked")
+                      (get-in (outcome-card explained oid) [:why :says])))
+       (conj (str "feed: asked why, a crown card does not say it was ranked"
+                  " or by what: "
+                  (pr-str (get-in (outcome-card explained oid) [:why :says]))
+                  " — the citation names the inputs and the numbers, or the"
+                  " household is taking the rank's word for it"))
+
+       (and asked-card (not (true? (get-in asked-card [:why :crown :asked]))))
+       (conj (str "feed: the bundle that answers the member's own request"
+                  " reads asked " (pr-str (get-in asked-card [:why :crown :asked]))
+                  " — the person's pull is the rank's first input"))
+
+       (and asked-card plain-card
+            (not= (str "outcomes/outcome/" aoid) crown-first))
+       (conj (str "feed: with a bundle answering the member's own request and"
+                  " a bundle nobody asked for both on offer, the crown put "
+                  (pr-str crown-first) " first — a bundle that answers a"
+                  " person's request stands above every uncited one, and no"
+                  " seed and no number moves it below"))
+
+       (and asked-card plain-card
+            (not-any? #(str/includes? (str %) "asked for another")
+                      (get-in asked-card [:why :says])))
+       (conj (str "feed: the cited bundle's citation never says it stands"
+                  " first because the member asked: "
+                  (pr-str (get-in asked-card [:why :says])))))}))
 
 ;; ── the taps learn to speak (waymark-jfv.16) ────────────────────────
 ;;
@@ -5091,7 +5207,13 @@
         fresh (when (= 201 (:status switch)) (:doc (feed-doc ctx as-member)))
         contested? (fn [c] (contains? (into #{} (map name) feed/contested-sections)
                                       (str (:section c))))
-        walled (remove contested?
+        ;; the obligations, and only they: the contest's step is never
+        ;; their sort key. The CROWN is outside the contest too, but
+        ;; since waymark-1uv.2 it has a rank of its own that reads the
+        ;; same view rows through `why.crown` — so it is no longer a
+        ;; witness that a section can be untouched by the record, and
+        ;; the claim below is about `decide` alone
+        walled (filter #(= "decide" (str (:section %)))
                        (remove #(= "seam" (str (:card_id %))) (feed-cards fresh)))
         top (first (filter contested? (feed-cards fresh)))
         cid (str (:card_id top))
