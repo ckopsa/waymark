@@ -31,6 +31,13 @@ inputs:
       skips AOT entirely and the suites load from source.
     required: false
     default: ''
+  aot-enabled:
+    description: >-
+      Set to 'false' to skip AOT even when aot-project is named. Exists
+      so a dispatch can measure the same commit with and without it;
+      anything other than the literal 'false' leaves AOT on.
+    required: false
+    default: 'true'
 
 runs:
   using: composite
@@ -87,7 +94,7 @@ runs:
     # hash though — the bytecode and the jars it came from must expire
     # together.
     - name: Cache AOT library classes
-      if: inputs.aot-project != ''
+      if: inputs.aot-project != '' && inputs.aot-enabled != 'false'
       uses: actions/cache@v4
       with:
         path: ${{ inputs.aot-project }}/classes
@@ -98,6 +105,6 @@ runs:
         # slow build. Miss and recompile.
 
     - name: Precompile third-party libraries
-      if: inputs.aot-project != ''
+      if: inputs.aot-project != '' && inputs.aot-enabled != 'false'
       shell: bash
       run: ./.github/scripts/aot-libs.sh "${{ inputs.aot-project }}"
