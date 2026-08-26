@@ -921,6 +921,24 @@
   ^String [section kind id]
   (str (name section) "/" (name kind) "/" id))
 
+(defn card-ids
+  "Every card id ONE ROW can wear — one per census section, the seam
+  excluded because nothing rows there (waymark-8um.4).
+
+  A view row is keyed by the card id the screen actually showed, and
+  the section half of that id is the household's recipe to say: the
+  built-in cards the crown under `:outcomes`, but a stored
+  `feed_recipe` may line the same population up under another band,
+  and nothing in `check-recipe!` forbids it. So a reader asking *was
+  this row ever on a screen* — the composer's diagnosis, and the wall
+  that reads it — asks under every section rather than guessing one,
+  and the unique index on `(card_id, day, member)` makes each of the
+  five asks a prefix scan. `outcome-card`'s posture in the conformance
+  pack, one register over: which band the line sits in is the
+  recipe's, and the claim that it is `outcomes` is made separately."
+  [kind id]
+  (into [] (comp (remove #{:seam}) (map #(card-id % kind id))) census))
+
 ;; ── the cursor ──────────────────────────────────────────────────────
 
 (defn encode-cursor

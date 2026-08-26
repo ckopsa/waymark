@@ -177,6 +177,9 @@
                "/api/-/intents/answer" "/api/-/collab-ticket"
                "/api/-/mirrors/:plural/:action" "/api/-/welcome" "/api/-/mcp"
                "/api/-/feed"
+               ;; the composer's diagnosis (waymark-8um.4): the feed's
+               ;; second door, the feed's own three-segment shape
+               "/api/-/diagnosis"
                ;; the Gate proxy's two doors (waymark-q95): the
                ;; affordance document and the grant-checked forward
                "/api/-/gate" "/api/-/gate/:tool"
@@ -207,6 +210,9 @@
                  ;; own shape: mounted later, the feed would be read
                  ;; as row "feed" of a collection named "-"
                  "/api/-/feed"
+                 ;; …and the diagnosis beside it (waymark-8um.4), for
+                 ;; the same reason: three segments, mounted early
+                 "/api/-/diagnosis"
                  ;; the gate door shares the feed's shape and the
                  ;; same fate if mounted late (waymark-q95)
                  "/api/-/gate"
@@ -234,11 +240,13 @@
       (is (= 200 (get! full "/api/-/seasons")))
       (is (= 200 (get! full "/api/openapi.json")))
       (is (= 200 (get! full "/api/-/feed")))
+      (is (= 200 (get! full "/api/-/diagnosis")))
       (is (= 200 (get! full "/"))))
     (testing "left out, they are addresses nobody mounted — 404, not 405"
       (is (= 404 (get! core "/api/-/seasons")))
       (is (= 404 (get! core "/api/openapi.json")))
       (is (= 404 (get! core "/api/-/feed")))
+      (is (= 404 (get! core "/api/-/diagnosis")))
       (is (= 404 (get! core "/"))))
     ;; the MCP door answers POST; its GET is the deliberate 405 that
     ;; says this server pushes nothing (the streaming punt, on the
