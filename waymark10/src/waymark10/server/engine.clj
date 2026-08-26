@@ -170,6 +170,7 @@
                                       :webhook-timeout-ms :webhooks-poll-ms
                                       :jobs-poll-ms :jobs-batch-size
                                       :orphan-sweep-ms :purge-sweep-ms
+                                      :tickler-sweep-ms
                                       :role-retry-ms :law-refresh-debounce-ms
                                       :report-pass
                                       :members :collab-heartbeat-ms

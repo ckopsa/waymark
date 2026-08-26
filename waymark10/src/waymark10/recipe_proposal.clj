@@ -638,6 +638,22 @@
                     (get-in ((:read ctx) :feed_recipe tid)
                             [:data :crown_rank])))
         input (cond-> input (some? crown) (assoc :crown_rank crown))
+        ;; …and the fridge's five ride the write untouched (waymark-
+        ;; 1uv.9): a proposal has no word for tickler_rank yet, so the
+        ;; target's own always carries through — the same clearing
+        ;; 1uv.2 met, met before it could bite. Proposing them is
+        ;; filed under the epic.
+        fridge (when (and tid (:read ctx))
+                 (get-in ((:read ctx) :feed_recipe tid)
+                         [:data :tickler_rank]))
+        input (cond-> input (some? fridge) (assoc :tickler_rank fridge))
+        ;; …and the findings' six, the same way (waymark-1uv.8's own
+        ;; hazard, waymark-bck): until a proposal can name them, an
+        ;; order-only apply must not reset them to the deployment's
+        findings (when (and tid (:read ctx))
+                   (get-in ((:read ctx) :feed_recipe tid)
+                           [:data :insight_rank]))
+        input (cond-> input (some? findings) (assoc :insight_rank findings))
         res (if tid
               ;; feed_recipe's :revise declares an :edit, and an edit
               ;; IMPLIES the fence (resource.clj: "an Edit implies the

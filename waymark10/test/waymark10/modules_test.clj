@@ -274,7 +274,10 @@
             :attachments-purge :webhooks-deliverer
             :jobs-worker :jobs-orphan-sweeper
             :curtain :presence :intents
-            :discovery]
+            :discovery
+            ;; the feed module's one surface (waymark-1uv.9): the sweep
+            ;; over the dropped pile, gated on a tickler kind being served
+            :tickler-sweeper]
            (hook-order nil))))
   (testing "and no runtime key twice — a key names one surface"
     (let [ks (hook-order nil)]

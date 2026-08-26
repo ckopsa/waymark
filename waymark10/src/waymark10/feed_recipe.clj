@@ -128,8 +128,12 @@
   at 1uv.2; `:early` with waymark-1uv.10), and they live where the
   contest's two live so the same form, the same diff, the same wall
   and the same transitions govern them. `:insight_rank` joined with
-  waymark-1uv.8, the findings' six, for the same reason once more."
-  [:label :order :formula :crown_rank :insight_rank])
+  waymark-1uv.8, the findings' six, for the same reason once more.
+
+  `:tickler_rank` joined with waymark-1uv.9 for the same reason again:
+  the ticklers line ranks its due pile by five numbers a person can
+  read, and they live where the crown's five live."
+  [:label :order :formula :crown_rank :insight_rank :tickler_rank])
 
 ;; ── the wire shape ↔ the recipe map ─────────────────────────────────
 
@@ -212,7 +216,15 @@
                        :cooled (get-in data [:insight_rank :cooled])
                        :dismissed (get-in data [:insight_rank :dismissed])
                        :declined (get-in data [:insight_rank :declined])
-                       :fresh (get-in data [:insight_rank :fresh])})))))
+                       :fresh (get-in data [:insight_rank :fresh])}))
+      ;; …and the fridge's five (waymark-1uv.9), the same sentence
+      (map? (:tickler_rank data))
+      (assoc :tickler-rank
+             (numbers {:overdue (get-in data [:tickler_rank :overdue])
+                       :not_now (get-in data [:tickler_rank :not_now])
+                       :cooled (get-in data [:tickler_rank :cooled])
+                       :front_door (get-in data [:tickler_rank :front_door])
+                       :age (get-in data [:tickler_rank :age])})))))
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
@@ -552,6 +564,38 @@
                         :help "How much each day of freshness a finding has left in the contest's window lifts it — published today is the whole window, two weeks ago is nothing, and older than that is simply old. Newer first, bounded so an old finding sinks to the bottom and no further."}}
     [:maybe [:int {:min 0 :max 100}]]]])
 
+(def tickler-rank-schema
+  "The ticklers line's rank, as five numbers (waymark-1uv.9, laws v3
+  law 5 at the fridge). Five and not six, for the crown's reason: the
+  sixth input — an item a person set aside by their own hand stands
+  first — is a TIER and not a weight.
+
+  The bounds are the ones `feed/check-recipe!`'s seventh check
+  applies, said here so the FORM refuses a nonsense number before
+  anybody has to read a guard's sentence about it. Zero is legal for
+  every one of them; all five at zero is the seed alone."
+  [:map
+   [:overdue {:optional true
+              :x-display {:label "Each day past its date lifts"
+                          :help "How much each day a set-aside item has stood past its own date lifts it. The date is yours — set when you put it off, or written by your own not-now — and an item with no date is due today, not overdue."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:not_now {:optional true
+              :x-display {:label "Each not-now holds"
+                          :help "How much each time the house has already said not now to an item holds it back. The house keeps the count; the rank reads it as cooler, never louder."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:cooled {:optional true
+             :x-display {:label "Each cooled step holds"
+                         :help "How much each step the contest says an item has cooled — the same days-in-window arithmetic as the sections below, off your own record of what you were shown — holds it back."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:front_door {:optional true
+                 :x-display {:label "A front-door row lifts"
+                             :help "How much an item whose row is a kind this house goes to — a task, a film — is lifted over one whose row is a line inside somebody else's."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:age {:optional true
+          :x-display {:label "Each month on the pile lifts"
+                      :help "How much each month an item's row has sat on the dropped pile lifts it, so the things the house forgot longest come back first among equals."}}
+    [:maybe [:int {:min 0 :max 100}]]]])
+
 (def ^:private prose
   "The household's own words for the authored fields, spelled ONCE and
   worn by all three doors — the row schema, the create form's narrower
@@ -574,6 +618,9 @@
    :insight_rank {:examples [{:diagnosis 10 :declared 5 :cooled 2 :dismissed 3 :declined 2 :fresh 1}]
                   :x-display {:label "The findings' rank"
                               :help "Six numbers, and the whole of how the findings line chooses which of an agent's findings fill its slots — there is no cap on how many it may publish: what a diagnosis is lifted over a plain finding, what a next step serving a value you declared lifts it, what each cooled step holds it, what each finding you already dismissed on the same next step holds a new one, what each rank of the quick word you said on those holds it, and what each day of freshness left in the window lifts it. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all six to 0 for the seed alone."}}
+   :tickler_rank {:examples [{:overdue 1 :not_now 4 :cooled 2 :front_door 5 :age 1}]
+                  :x-display {:label "The fridge's rank"
+                              :help "Five numbers, and the whole of how the things you set aside are ranked when their date comes round: what each day past its own date lifts an item, what each not-now already said holds it, what each cooled step holds it, what a row this house goes to lifts it, and what each month on the dropped pile lifts it. An item a person set aside by their own hand stands first whatever these say. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all five to 0 for the seed alone."}}
    :order {:examples [order-example]
            :x-display {:label "The order, line by line"
                        :help "The whole feed, top to bottom: one entry per line, and the vector's order IS the page's order. The house's current order rides the feed document at recipe.order in exactly this shape — copy it and edit a line. Exactly one line is the seam; the bottomless line is last; the sections keep census order; every population is one this engine holds. A line that breaks any of those is refused here, with the sentence that says which."}}})
@@ -597,7 +644,8 @@
    (entry :order {} order-schema)
    (entry :formula {:optional true} [:maybe formula-schema])
    (entry :crown_rank {:optional true} [:maybe crown-rank-schema])
-   (entry :insight_rank {:optional true} [:maybe insight-rank-schema])])
+   (entry :insight_rank {:optional true} [:maybe insight-rank-schema])
+   (entry :tickler_rank {:optional true} [:maybe tickler-rank-schema])])
 
 ;; ── the law, written down ───────────────────────────────────────────
 ;; The one sentence this kind most wants checked, and the reason it
@@ -664,7 +712,8 @@
             (entry :order {} order-schema)
             (entry :formula {:optional true} [:maybe formula-schema])
             (entry :crown_rank {:optional true} [:maybe crown-rank-schema])
-            (entry :insight_rank {:optional true} [:maybe insight-rank-schema])]
+            (entry :insight_rank {:optional true} [:maybe insight-rank-schema])
+            (entry :tickler_rank {:optional true} [:maybe tickler-rank-schema])]
    ;; the client states whose order and what it says; the OWNER is the
    ;; engine's stamp (dashboard_slot's split, and dwelling's reason)
    :create-schema [:map
@@ -675,7 +724,9 @@
                    (entry :crown_rank {:optional true}
                           [:maybe crown-rank-schema])
                    (entry :insight_rank {:optional true}
-                          [:maybe insight-rank-schema])]
+                          [:maybe insight-rank-schema])
+                   (entry :tickler_rank {:optional true}
+                          [:maybe tickler-rank-schema])]
    ;; scope and owner carry their own :filter on the schema entries
    ;; above — one concern, one home — so only the machine's own column
    ;; is spelled here
@@ -692,9 +743,11 @@
              ;; and it must: :revise overwrites recipe-fields
              ;; wholesale, so a form that did not hand the contest's
              ;; numbers back would clear them every time somebody moved
-             ;; a line — and the crown's four (waymark-1uv.2) and the
-             ;; findings' six (waymark-1uv.8), for the same reason
-             :edit {:prefill [:label :order :formula :crown_rank :insight_rank]}
+             ;; a line — and the crown's four (waymark-1uv.2), the
+             ;; findings' six (waymark-1uv.8) and the fridge's five
+             ;; (waymark-1uv.9), for the same reason each time
+             :edit {:prefill [:label :order :formula :crown_rank :insight_rank
+                              :tickler_rank]}
              ;; the overwrite writes the whole authored surface and is
              ;; non-reversible, so the log carries what was written —
              ;; which is what makes the transitions the tuning history

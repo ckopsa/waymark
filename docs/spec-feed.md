@@ -1046,6 +1046,15 @@ job. **`next_offer_at` is optional and unset means NOW** — a tickler set aside
 with no date is already on the fridge — which is what lets the create door stay
 four fields wide. An automatic sweep of the dropped pile is filed, not built.
 
+*Cross-reference (2026-08-26, waymark-1uv.9):* the sweep is built —
+`feed/sweep-dropped!`, an elected hook on the `:feed` module, births a marker
+per let-go row under the engine's own hand with **no cap**, one live marker
+per subject is a **law** at the tickler's create door
+(`one-live-marker-per-subject`), and the `:ticklers` line **ranks** its due
+pile by five numbers on the recipe row with a person's own hand as a tier —
+`spec-outcome-menu.md` § *Built — 1uv.9*. Retire-at-offer-time below is
+unchanged.
+
 **Retired at offer time, by the population, with no sweeper and no write.**
 `feed/set-aside?` is the one spelling and it is public because the pack judges
 against it: a subject that is gone, terminal, or carries the mirror
