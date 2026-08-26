@@ -52,12 +52,16 @@ on:
       - 'calendar10/**'
       - 'workqueue10/**'
       - '.github/workflows/tests.yml'
+      # The composite action every job here runs through.
+      - '.github/actions/**'
   pull_request:
     paths:
       - 'waymark10/**'
       - 'calendar10/**'
       - 'workqueue10/**'
       - '.github/workflows/tests.yml'
+      # The composite action every job here runs through.
+      - '.github/actions/**'
   workflow_dispatch:
 
 concurrency:

@@ -42,6 +42,19 @@ runs:
         restore-keys: |
           cljdeps-${{ runner.os }}-${{ runner.arch }}-
 
+    # The JDK, pinned to the same major the production image runs
+    # (Dockerfile.workqueue10: temurin-21). GitHub's hosted image happens
+    # to carry a JDK; the self-hosted runner image carries none, and the
+    # Clojure CLI is a launcher that dies without one. setup-java is a
+    # first-party GitHub action like actions/cache above, not a
+    # marketplace dependency. On the self-hosted runner the tool cache is
+    # a host volume, so this is a download exactly once per version.
+    - name: Install JDK
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: "21"
+
     - name: Install Clojure CLI
       shell: bash
       env:
