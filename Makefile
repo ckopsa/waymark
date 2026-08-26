@@ -26,10 +26,15 @@ db:  ## start dockerized Postgres
 			-p $(PG_PORT):5432 postgres:16 >/dev/null
 	@until docker exec $(PG_CONTAINER) pg_isready -U $(PG_USER) -q; do sleep 0.5; done
 
+# The eight test databases live in scripts/test-databases.sh, shared
+# with .github/workflows/tests.yml so a database a new test needs cannot
+# be added to only one of them. This target used to create just
+# waymark10_test; the other seven existed on THIS machine because they
+# were made by hand once and the docker volume kept them, which is why
+# a suite that passed here could not pass on a clean checkout.
 db10: db  ## waymark10 databases on the shared :5433 container
-	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
-		"SELECT 1 FROM pg_database WHERE datname='waymark10_test'" | grep -q 1 || \
-		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE waymark10_test"
+	@./scripts/test-databases.sh | \
+		docker exec -i $(PG_CONTAINER) psql -q -U $(PG_USER) -d postgres -f -
 	@docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -tc \
 		"SELECT 1 FROM pg_database WHERE datname='workqueue10_dev'" | grep -q 1 || \
 		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE workqueue10_dev"

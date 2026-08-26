@@ -159,6 +159,9 @@ jobs:
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - name: Create the test databases
+        run: .github/scripts/create-test-databases.sh
+
       - name: Run shard
         env:
           # Character-for-character the Makefile's test10 DSN.
@@ -202,6 +205,9 @@ jobs:
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - name: Create the test databases
+        run: .github/scripts/create-test-databases.sh
+
       - name: Run shard
         env:
           # test-queue points at waymark10_test too — the Makefile's own
