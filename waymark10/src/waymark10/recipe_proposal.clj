@@ -325,7 +325,13 @@
   It is the OPEN cap rather than a rate, which is `pacing-guards`' own
   reading of which of the two a household actually feels: a verdict on
   what is already waiting comes before a new ask. It counts ROWS, so
-  unlike the in-process pacing atoms it is shared across processes."
+  unlike the in-process pacing atoms it is shared across processes.
+
+  It STAYS under waymark-1uv's ruling (ranked, not capped) because the
+  write costs the household directly: a proposal is a question put to
+  the owner about the contest's own rules (laws v3 law 8), carded
+  outside the contest (law 2), and the rank cannot be the judge of
+  proposals to replace the rank."
   3)
 
 (g/defguard staged-changes-are-few

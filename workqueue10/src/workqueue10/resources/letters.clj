@@ -231,7 +231,13 @@
   sweep — the second half of the L4 fix, and the half that actually
   bounds it: an unknown recipient stores NO row, so a ceiling counted
   in stored letters would leave the probe free. This counts what the
-  probe spends: attempts."
+  probe spends: attempts.
+
+  It STAYS under waymark-1uv's ruling (ranked, not capped) because the
+  write itself costs the household: a letter is mail to a person, it
+  lands on their shelf outside the contest (laws v3, law 2 — 'a letter
+  waiting'), so no rank can stand between the sender and the
+  recipient's attention, and every refused attempt is a roster probe."
   60)
 
 (def letter-pace-log

@@ -3085,3 +3085,207 @@ needed and the only one that could is walled to the staging's own hand.
   and never one that *made* one. The quick reasons (jfv.16) have been ridden
   under the origin key uncounted since they landed. One line in the framework;
   the column already existed.
+
+## The other caps, answered (2026-08-26, waymark-1uv.7)
+
+**The question, asked of every pace wall in the tree.** The epic's principle
+(`waymark-1uv`, the owner's ruling verbatim: *"Agents have infinite patience
+and time to sift through that data and index it. Compositions are a type of
+that indexing. I don't think it makes sense to limit the indexing. It makes
+more sense to just rank them."*) is wider than `outcomes-are-few`, and this
+section walks it past every other cap the tree holds, with one test per cap:
+**is the cap a proxy for a rank on attention** — then it should become a rank
+input and go — **or does the write itself cost the household** — a push to an
+authority, a letter to a person, a verdict owed by a date, a leash asked for —
+in which case the cap stays and its docstring now says so. The grep that
+found them: `pacing|are-capped|are-few|are-paced` over `workqueue10/src` and
+`waymark10/src`. Nothing here changes a guard's behavior; the answers are
+recorded, the follow-ups are filed, and the caps that stay each carry one new
+sentence naming the cost.
+
+**The test, stated once so every row below can be checked against it.** A
+write costs the household when something *outside the rank's reach* happens
+because of it. Three shapes qualify, and only three were found: the write
+calls an authority (`:push-on-write` — `task`, `event`, `media`, `prep_task`
+call Google or Home Assistant on a write, which is why fork (b) in
+`spec-feed.md` refused to let a tickler be a field on `task`); the write puts
+an **obligation on a person** that laws v3 law 2 places *outside the contest*
+(*a conflict needing a verdict, an ask that expires, a letter waiting* — these
+appear because they must, so no rank stands between the writer and the
+reader's attention); or the write is about the rank itself (law 8), which the
+rank cannot judge. Anything else that lands in the feed is contending for
+attention, and a wall on writing it is the proxy the ruling names.
+
+| kind | guard | what it walls | proxy or cost | recommendation |
+|---|---|---|---|---|
+| `outcome` | `outcomes-are-few` | two staged outcomes a week per composer | **proxy** — the epic's own subject | goes with **1uv.3**, never before **1uv.2**; nothing touched here |
+| `insight` | `insights-are-capped` | three findings a day per author | **proxy** — the precedent the outcome cap copied; the insight IS the indexing the ruling names; the write pushes nothing, mails nobody, and the offer is an address | becomes a rank; **waymark-1uv.8** names the inputs; the cap goes after the rank |
+| `tickler` | the backoff (`backoff-days`, 7/21/60/180) | when a not-now'd marker comes back | **not a cap** — a person's own verdict written as a date (law 6), and already a read-side rank input (`next_offer_at`) | untouched; the sweep (`waymark-iqa.13`) gets **no per-sweep cap**; the due pile gets a rank — **waymark-1uv.9**; the dedupe iqa.13 wants is a law, not a cap |
+| `outcome` | `a-recomposition-waits-its-turn`, arm (c) | a superseding outcome before the prior's `not_before` | **proxy, but the person's** — a decline stamped as a date, then used as a wall on the composer's writing; 1uv.2 already names the verdict chain as the rank's input (4) | the date arm becomes the cooling input — **waymark-1uv.10**, with 1uv.3; arms (a) and (b) are shape and stay |
+| `letter` | `letters-are-paced` | 60 create *attempts* an hour per principal | **cost** — mail to a person lands on their shelf outside the contest (law 2, *a letter waiting*), and every refused attempt is a roster probe (L4) | stays; docstring says so |
+| `permission_slip` (via `resource/pacing-guards`) | `asks-are-paced` (12/hour), `asks-are-few` (4 open) | a child's asks for a parent's signature | **cost** — an obligation with a deadline on a person, outside the contest by law 2, where no rank can protect the decider | stays; the sugar's docstring says so, and says when `:pacing` is the wrong spelling |
+| `approval_request` | `asks-are-paced` (20/hour), `asks-are-few` (10 open) | fresh access asks; anchored asks exempt | **cost** — a verdict owed on a leash, by a date, outside the contest; the thing asked for is access | stays; both limits' docstrings say so |
+| `recipe_proposal` | `staged-changes-are-few` | three staged proposals waiting per principal | **cost** — a question to the owner about the contest's own rules (law 8), carded outside the contest (law 2); the rank cannot judge proposals to replace the rank | stays; docstring says so — and 1uv.5 rides this door, three waiting being plenty for one agent tuning numbers |
+| `/auth/agent`, `/auth` knock | `reentry-door-log`, `invite-door-log`, `knock-log` | pre-auth attempts per rolling hour | **neither** — not a write and not attention; a wall against guessing beside 128-bit tokens | stays without argument; one sentence in the docstring |
+
+### `insights-are-capped` — the same proxy, one window up
+
+The cap's own recorded reasons are the outcome cap's three, said first: *a
+surface that can be filled is a surface that will be*; *the cap is what makes
+a compiler rank rather than dump*; and, in the population's docstring, the cap
+*is what keeps `row-scan-cap` small at the source*. The first two are one
+reason wearing two sentences — **a wall on the writer standing in for a rank
+on the reader** — and the epic has already answered it: the strongest form of
+that reason (*unanswered rows teach the composer the house ignores it*)
+stopped being true when `feed_view` (waymark-8um.1) made NEVER SHOWN
+distinguishable from SHOWN AND PASSED OVER. A finding the house was shown and
+declined now carries a quick reason (jfv.16); a finding the house was never
+shown carries no view row; the compiler can read the difference at its own
+address and rank on it. The third reason is about *where the bound lives*
+(a stored score or a bound on the read), not whether there is one — the same
+question 1uv.2 answers for the crown.
+
+**And the insight is misfiled.** The `:insights` line sits in `:decide`, and
+`cooling-says` tells every decide card it is *outside the contest: something
+waiting on your answer appears because it must — an ask that expires, a
+conflict, mail on your shelf, a change staged for a tap*. That sentence does
+not name the insight, and law 2's own list does not either, because an
+insight is not an obligation with a deadline. It is the contest's **output**:
+law 4 calls the diagnosis *an insight proposing a recomposition*. So the line
+is outside the contest by placement and not by nature, and the cap has been
+doing, badly, the job a rank does well.
+
+The write costs nothing the test recognises: no push (`insight` is a plain
+kind), no letter, no notification (*the feed is not the notifier*, unchanged
+and unchallenged), and the offer is an **address** that writes no other row —
+`.6` went to some length to make it so. The rank's inputs, each a number a
+person reads on the card's why, are recorded in **waymark-1uv.8**: the verdict
+record on the same offer (a dismissed finding on the same `{offer_kind,
+offer_id, offer_action}` cools hard, by its quick reason); law 4 first (a
+finding that offers a recomposition of a losing outcome outranks a plain
+finding, because the composer's duty fires first); the value the offered row
+serves, declared over observed; shown-and-passed-over cools, off the view
+record; freshness; and the agent's own score and sentence (1uv.6, option M).
+**Dedupe is a law, not a cap** — one live finding per offer — and `:take 2`
+stays as the exposure floor. The order is the epic's: the rank first, the cap
+second, never the cap alone.
+
+### The tickler — one thing that is not a cap, and one that must not become one
+
+**The backoff is not a cap on writing.** `backoff-days` is a person's own
+*not now* written down as a date — law 6's *the person spins* — and the
+machine writes nothing because of it. It is, in fact, the tree's first
+read-side rank input in disguise: `next_offer_at` past is the whole of the
+population's *due* filter (*a backed-off marker is simply not a candidate*).
+It stays exactly as it is, and its docstring is not touched because there is
+nothing to defend.
+
+**A cap on ticklers born per sweep would be the same mistake.** waymark-iqa.13
+wants a sweep over the dropped pile, and the temptation is a ceiling on how
+many markers one sweep may mint. The test says no: a tickler writes nothing
+to its subject (fork (b), reason 1 — no cascade into a `:push-on-write`
+mirror), it is no letter and no notification, and a marker over a dropped
+task is the machine **indexing the pile**, which is the ruling's own word for
+what must not be limited. Twenty-five markers born at once is a **rank
+question for the `:ticklers` line**, not a wall at the sweep. The dedupe
+iqa.13 already wants — one live marker per subject, a create guard over the
+`:filterable` `subject_kind` + `subject_id` — is a law and must land as one.
+
+**What the population hides, and the rank must not.** A person's dated
+tickler (*bring this back on the 3rd*) is an obligation the person set — it
+is outside the contest by law 2 and appears because they asked. A sweep-born
+marker (`set_aside_by` an agent, `next_offer_at` unset, which means *now*) is
+indexing and contends. Today both are *due* and the seed picks two. The
+rank's inputs are recorded in **waymark-1uv.9**: who set it aside (a person's
+own dated marker first, as the obligation it is); overdue-ness; `offer_count`
+(more not-nows cools — the household's own record, the tickler's whole reason
+for server-side state); the subject's kind and, when it has one, the value it
+serves; shown-and-passed-over, off the view record; and the subject's own age
+on the dropped pile. `:take 2` stays as the floor. With a swept pile every
+marker is due on day one, so the bound question is real and it is the same
+one: **a stored score or a bound on the read, never on the birth.**
+
+### `a-recomposition-waits-its-turn` — the person's verdict, used as a wall
+
+The grep found a third pace wall on `outcome`, and it is the subtle one. The
+guard has three arms. *No such outcome* and *still offered — asking the same
+question twice* are shape and a dedupe law; they stay. The third — *the house
+said not this week, and meant it until `not_before`* — takes a person's
+decline, stamped as a date off the tickler's own schedule, and uses it as a
+**wall on the composer's writing**: the recomposition may not even be staged
+until the date. That is a proxy with an honest face, because the verdict it
+honours is real; but 1uv.2 already names the verdict chain as the rank's
+input (4) — *the person's verdict reasons cool a line of thinking, read off
+the supersedes chain and the reason rows* — and a recomposition written early
+would be **cooled** by the fresh decline until the date, the card's why
+saying so, rather than refused at a door. Law 4 wants it written: the
+diagnosis is the composer's work order, and a wall that refuses the
+recomposition for two months is a wall against the diagnosis duty. Filed as
+**waymark-1uv.10**, to land with 1uv.3 and never before 1uv.2. It carries one
+real open question the bead records rather than hides: the exposure floor and
+a cooled-to-zero card collide precisely here — the crown's `:take` must not
+surface a recomposition the person said not to hear yet — and if that has no
+clean answer the fallback is to keep the arm and say why.
+
+### The caps that stay, and the sentence each now carries
+
+Each of these guards' nearest docstring gained one sentence saying it stays
+under this epic's ruling and naming the cost — so the next reader who arrives
+holding the principle finds the answer where the number is, not in this
+section.
+
+- **`letters-are-paced`** (`letter-pace-limit`): a letter is mail to a
+  person; it lands on their shelf outside the contest (law 2), so no rank can
+  stand between the sender and the recipient's attention — and the door's
+  refusals are a roster to enumerate, which is the L4 reason the pace counts
+  *attempts* and not rows. Two costs, and either alone would keep it.
+- **`resource/pacing-guards`** (`permission_slip`'s `:pacing`): a `:decision`
+  ask is an obligation with a deadline placed on a person, outside the contest
+  by law 2. The sentence also says the converse, because it is the useful
+  half: *a kind whose rows merely contend for attention wants a rank, never
+  `:pacing`* — the sugar is for obligations, and the insight was right not to
+  spell it (for the wrong reason, but right).
+- **`asks-are-paced` / `asks-are-few`** (`approval_request`, hand-written for
+  the anchored-ask exemption): a verdict owed on a leash, by a date; the thing
+  asked for is access. A rank over access asks would be a rank deciding which
+  leash the household hears about, and law 2 refuses that on purpose.
+- **`staged-changes-are-few`** (`recipe_proposal`): its docstring argues both
+  ways — *a composer with three proposals already on the fridge has a ranking
+  problem* is the proxy's tell — but the write is a question put to the owner
+  about the contest's own rules, and it costs a person a verdict the moment it
+  is written. The rank cannot be the judge of proposals to replace the rank:
+  the incumbent formula ranking its own successor is the one conflict of
+  interest a readable formula cannot read its way out of. **1uv.5** rides
+  this door, and three waiting is plenty for one agent tuning numbers.
+- **The `/auth/agent` and knock windows**: not a write, not attention. Outside
+  the principle rather than an exception to it.
+
+### Recorded here, for whoever comes next
+
+- **The v1 law bullet is superseded for insights, not deleted.** *"Hard daily
+  cap so the compiler must rank"* stands in `spec-feed.md`'s original four as
+  a true account of what the feed was; the owner's ruling supersedes it the
+  way laws v3 superseded day-stability, and **1uv.1**'s pointer in the laws is
+  where that is said. The compiler must still rank — the ruling moves *where*:
+  into a formula the household can read, with the compiler's own score as one
+  input (1uv.6), instead of into a wall the compiler meets at the door.
+- **Two ceilings the grep found are not caps and were not asked the
+  question.** `bundle-ceiling` (`a-bundle-is-small`, five pieces) is a size,
+  and `asks-are-short` / `:expires :max` are leash lengths; neither walls how
+  often anything is written. `outcomes-are-few`'s sibling `the-request-is-open`
+  is a wall on *citing*, not on writing, and 1uv.3 keeps it.
+- **`:push-on-write` kinds carry no cap today, and that is worth saying so
+  nobody adds one thinking the principle requires it.** They are the reference
+  case of a write that costs — a call to Google on every action — and the sync
+  machine, not a pace, is what bounds them. If a cap is ever wanted there it
+  stays for that reason, and its docstring should say so from the first line.
+- **Three of the four proxies share one bound question.** The insight
+  population, the ticklers population and the crown all read at most
+  `row-scan-cap` rows and pay a subject read per candidate; each cap was, in
+  its third reason, the thing keeping that number small at the source. 1uv.2
+  answers the question for the crown (a stored score or a bound, and which);
+  1uv.8 and 1uv.9 must answer it the same way rather than each inventing a
+  second spelling.
+- **`make check-queue` after this bead reads 37 kinds, 11 warnings, 49
+  scenarios judged** — the battery unmoved, because no guard's behavior moved
+  and a docstring is not a facet.
