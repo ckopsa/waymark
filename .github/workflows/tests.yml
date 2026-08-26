@@ -111,7 +111,37 @@ env:
   # the 26s fixed cost itself, which only AOT would move.
   #
   # Run the workflow with profile=true to collect the per-namespace
-  # durations a duration-weighted split would need.
+  # durations a duration-weighted split would need. Each shard then
+  # prints its table at the end of its log as well as uploading it.
+  #
+  # ── WHERE THE TIME ACTUALLY GOES, MEASURED (runs 26 and 27) ─────────
+  #
+  # Run 26, 13+5 pinned to GitHub-hosted: 20 jobs, all started within a
+  # second of each other, shard steps 25-60s, WALL CLOCK 97s.
+  # Run 27, 8+3 on the self-hosted cluster: 11 test jobs onto 8 runners
+  # so three queued (one waited 9m32s), shard steps 317-453s,
+  # WALL CLOCK 17m22s.
+  #
+  # Same commit content, ~10x apart, and the cluster is the slow side.
+  # Run 27's shard 3 says why — 352s in the step, of which:
+  #
+  #   ~147s  JVM boot and compile before the first line of output
+  #   ~107s  loading declarations (the usability warnings, timestamped)
+  #    ~92s  the tests themselves
+  #
+  # 74% of a shard is fixed cost that every shard re-pays. A perfectly
+  # weighted split of the remaining 92s cannot beat 260s, so IMBALANCE
+  # IS NOT WHAT BINDS HERE and the weighted split is not worth building
+  # yet. AOT compilation is the change that would move the 147s; the
+  # 107s is the framework's own load, and belongs to the framework.
+  #
+  # So the shard count barely matters on GitHub-hosted (both splits sit
+  # near the ~40s of job setup plus the slowest shard) and 8+3 is kept
+  # for using eight fewer of the 20 concurrent jobs. What matters is
+  # WHICH RUNNER: leaving CI_RUNNER unset is worth ~10x here, and the
+  # cluster earns its keep as a fallback for when GitHub stops
+  # scheduling (which it did, for the better part of an hour, on the
+  # day this was written) rather than as the fast path.
   SHARDS_WAYMARK10: '8'
   SHARDS_WORKQUEUE10: '3'
 
@@ -263,6 +293,17 @@ jobs:
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
           cd waymark10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
 
+      # The timings, at the END of the log, where a `tail` finds them.
+      # The artifact keeps the full output; this keeps the part anyone
+      # actually reads, and reaches a caller who cannot fetch artifacts
+      # from blob storage. always(), so a failing shard still reports.
+      - name: Namespace timings
+        if: inputs.profile && always()
+        run: |
+          set -euo pipefail
+          echo "=== namespace timings (seconds, tests, ns) — shard ${{ matrix.shard.id }} ==="
+          ./.github/scripts/namespace-timings.sh shard-output.txt
+
       # Only when asked. v4 requires a unique artifact name per job.
       - name: Upload timings
         if: inputs.profile && always()
@@ -351,6 +392,17 @@ jobs:
           fi
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
           cd workqueue10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+
+      # The timings, at the END of the log, where a `tail` finds them.
+      # The artifact keeps the full output; this keeps the part anyone
+      # actually reads, and reaches a caller who cannot fetch artifacts
+      # from blob storage. always(), so a failing shard still reports.
+      - name: Namespace timings
+        if: inputs.profile && always()
+        run: |
+          set -euo pipefail
+          echo "=== namespace timings (seconds, tests, ns) — shard ${{ matrix.shard.id }} ==="
+          ./.github/scripts/namespace-timings.sh shard-output.txt
 
       # Only when asked. v4 requires a unique artifact name per job.
       - name: Upload timings
