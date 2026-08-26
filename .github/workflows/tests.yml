@@ -177,9 +177,22 @@ jobs:
         env:
           SERVICE_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
-          echo "PGHOST=${CI_SERVICE_HOST:-localhost}" >> "$GITHUB_ENV"
-          echo "PGPORT=${SERVICE_PORT}" >> "$GITHUB_ENV"
-          echo "postgres service at ${CI_SERVICE_HOST:-localhost}:${SERVICE_PORT}"
+          host="${CI_SERVICE_HOST:-localhost}"
+          {
+            echo "PGHOST=${host}"
+            echo "PGPORT=${SERVICE_PORT}"
+            # The suite's other databases. Each of these tests falls back
+            # to localhost:5433/<its db> when its variable is unset, which
+            # was silently true on GitHub-hosted runners (fixed port, own
+            # VM) and is false anywhere else. Name them all, from the one
+            # host:port the service actually got. The list of databases
+            # is scripts/test-databases.sh; the names are the getenv sites
+            # in waymark10/test.
+            echo "WAYMARK10_D_DSN=jdbc:postgresql://${host}:${SERVICE_PORT}/waymark10_d_test?user=ckopsa"
+            echo "WAYMARK10_INTENTS_DSN=jdbc:postgresql://${host}:${SERVICE_PORT}/waymark10_intents_test?user=ckopsa"
+            echo "WAYMARK10_PRESENCE_DSN=jdbc:postgresql://${host}:${SERVICE_PORT}/waymark10_presence_test?user=ckopsa"
+          } >> "$GITHUB_ENV"
+          echo "postgres service at ${host}:${SERVICE_PORT}"
       - name: Create the test databases
         run: .github/scripts/create-test-databases.sh
 
@@ -241,9 +254,22 @@ jobs:
         env:
           SERVICE_PORT: ${{ job.services.postgres.ports['5432'] }}
         run: |
-          echo "PGHOST=${CI_SERVICE_HOST:-localhost}" >> "$GITHUB_ENV"
-          echo "PGPORT=${SERVICE_PORT}" >> "$GITHUB_ENV"
-          echo "postgres service at ${CI_SERVICE_HOST:-localhost}:${SERVICE_PORT}"
+          host="${CI_SERVICE_HOST:-localhost}"
+          {
+            echo "PGHOST=${host}"
+            echo "PGPORT=${SERVICE_PORT}"
+            # The suite's other databases. Each of these tests falls back
+            # to localhost:5433/<its db> when its variable is unset, which
+            # was silently true on GitHub-hosted runners (fixed port, own
+            # VM) and is false anywhere else. Name them all, from the one
+            # host:port the service actually got. The list of databases
+            # is scripts/test-databases.sh; the names are the getenv sites
+            # in waymark10/test.
+            echo "WAYMARK10_D_DSN=jdbc:postgresql://${host}:${SERVICE_PORT}/waymark10_d_test?user=ckopsa"
+            echo "WAYMARK10_INTENTS_DSN=jdbc:postgresql://${host}:${SERVICE_PORT}/waymark10_intents_test?user=ckopsa"
+            echo "WAYMARK10_PRESENCE_DSN=jdbc:postgresql://${host}:${SERVICE_PORT}/waymark10_presence_test?user=ckopsa"
+          } >> "$GITHUB_ENV"
+          echo "postgres service at ${host}:${SERVICE_PORT}"
       - name: Create the test databases
         run: .github/scripts/create-test-databases.sh
 
