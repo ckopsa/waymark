@@ -246,6 +246,10 @@ async function renderFeedScreen(view, doc) {
        in the sentence, on every answer. */
     if (recipe.crown_rank_says)
       why.append(el("p", {class: "prose muted"}, recipe.crown_rank_says));
+    /* …and the fridge's (waymark-1uv.9): the things set aside, ranked
+       when their date comes round, five numbers the same way. */
+    if (recipe.tickler_rank_says)
+      why.append(el("p", {class: "prose muted"}, recipe.tickler_rank_says));
     for (const n of doc.notes || [])
       why.append(el("p", {class: "prose muted"}, n));
     /* the view door, when it is SHUT (waymark-8um.1). The open case
@@ -733,6 +737,28 @@ async function renderFeedScreen(view, doc) {
         c.days_left + " day" + (c.days_left === 1 ? "" : "s") + " left on its week"];
       box.append(el("p", {class: "muted"},
         "Ranked in the crown — lift " + c.lift + ": "
+        + parts.filter(Boolean).join("; ") + "."));
+    }
+    /* …and the fridge's own numbers, from a tickler card's always-on
+       why.tickler (waymark-1uv.9), the crown's opener one line down. */
+    if (why.tickler && typeof why.tickler.lift === "number") {
+      const t = why.tickler;
+      const parts = [
+        t.own ? "you set it aside yourself, so it stands first"
+              : "the house's sweep set it aside",
+        t.overdue > 0 ? (t.overdue + " day" + (t.overdue === 1 ? "" : "s")
+                         + " past its date") : null,
+        t.not_now > 0 ? ("not now said " + t.not_now + " time"
+                         + (t.not_now === 1 ? "" : "s")) : null,
+        (typeof t.seen === "number")
+          ? ("shown " + t.seen + " day" + (t.seen === 1 ? "" : "s")
+             + (t.cooled > 0 ? (", cooled " + t.cooled) : ""))
+          : null,
+        t.front_door ? "a row this house goes to" : null,
+        t.age > 0 ? (t.age + " month" + (t.age === 1 ? "" : "s")
+                     + " on the dropped pile") : null];
+      box.append(el("p", {class: "muted"},
+        "Ranked on the fridge — lift " + t.lift + ": "
         + parts.filter(Boolean).join("; ") + "."));
     }
     const details = el("details", {class: "fcard-why"},

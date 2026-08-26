@@ -1614,3 +1614,159 @@
           (is (= 200 (:status revised)) (pr-str (:doc revised)))
           (is (str/includes? (get-in off [:recipe :crown_rank_says])
                              "The crown's rank is off")))))))
+
+;; ── the ticklers line's rank (waymark-1uv.9) ────────────────────────
+;;
+;; This world holds no tickler kind, so what can be proved here is the
+;; crown's own half: the arithmetic as a PURE FUNCTION — seed-
+;; independent given its inputs, a person's own hand a tier — and the
+;; recipe's five numbers on the wire, narrated, checked at assembly and
+;; diffed. The live half (a real dropped row, a real sweep, a real
+;; not-now) is workqueue10.tickler-rank-test's, over the household's
+;; own registry.
+
+(deftest the-fridge-ranks-by-five-numbers-and-a-persons-own-hand-is-a-tier
+  (let [w feed/default-tickler-rank
+        swept {:own false :overdue 0 :not-now 0 :front-door true :age 0}
+        aged {:own false :overdue 0 :not-now 0 :front-door true :age 3}
+        put-off {:own false :overdue 0 :not-now 3 :front-door true :age 0}
+        overdue {:own false :overdue 5 :not-now 0 :front-door true :age 0}
+        cooled {:own false :overdue 0 :not-now 0 :seen 3 :cooled 1
+                :front-door true :age 0}
+        inner {:own false :overdue 0 :not-now 0 :front-door false :age 0}
+        mine {:own true :overdue 0 :not-now 4 :front-door false :age 0}]
+    (testing "the arithmetic, predictable from the five numbers a household reads"
+      (is (= 5 (feed/tickler-lift w swept)) "a front-door row, found this morning")
+      (is (= 8 (feed/tickler-lift w aged)) "…three months on the pile lift 3")
+      (is (= -7 (feed/tickler-lift w put-off)) "three not-nows hold 12")
+      (is (= 10 (feed/tickler-lift w overdue)) "five days past its date lift 5")
+      (is (= 3 (feed/tickler-lift w cooled)) "one cooled step holds 2")
+      (is (= 0 (feed/tickler-lift w inner)) "a line inside somebody's row lifts nothing")
+      (is (= -16 (feed/tickler-lift w mine))
+          "the lift can go negative and the tier does not care"))
+    (testing "the order is a pure function of the inputs; the seed only breaks
+              ties. Swap every hash and a strict order does not move"
+      (let [cands [[:swept swept] [:aged aged] [:put-off put-off]
+                   [:overdue overdue] [:cooled cooled] [:inner inner]
+                   [:mine mine]]
+            order (fn [hash-of]
+                    (mapv first (sort-by (fn [[k in]] (feed/tickler-key w in (hash-of k)))
+                                         cands)))
+            a (order #(wire/sha256-hex (str "seed-a" %)))
+            b (order #(wire/sha256-hex (str "seed-b" %)))]
+        (is (= [:mine :overdue :aged :swept :cooled :inner :put-off] a))
+        (is (= a b) "two seeds, one order — nothing here was tied")
+        (is (= :mine (first a))
+            "a marker a person set aside by their own hand stands first with
+             a NEGATIVE lift — the hand is a tier, never a weight")
+        (is (< (.indexOf ^java.util.List a :swept) (.indexOf ^java.util.List a :put-off))
+            "offer_count 3 cools below offer_count 0, everything else equal")))
+    (testing "…and between equals the seed decides, both ways"
+      (let [twin {:own false :overdue 0 :not-now 0 :front-door true :age 0}
+            key-a (fn [k] (feed/tickler-key w twin (wire/sha256-hex (str "a" k))))
+            key-b (fn [k] (feed/tickler-key w twin (wire/sha256-hex (str "b" k))))
+            names [:p :q :r :s :t :u]]
+        (is (not= (sort-by key-a names) (sort-by key-b names))
+            "given six equal keys some seed disagrees — or the hash is not
+             the last key")))
+    (testing "all five at zero is the seed alone, with a person's own hand
+              still first"
+      (let [off {:overdue 0 :not_now 0 :cooled 0 :front_door 0 :age 0}]
+        (is (= 0 (feed/tickler-lift off put-off)))
+        (is (= [0 0 "h"] (feed/tickler-key off mine "h")))
+        (is (= [1 0 "h"] (feed/tickler-key off overdue "h")))))
+    (testing "the card's own numbers ride in the wire's spelling, and a date
+              rides only when the marker carries one"
+      (let [cited (feed/tickler-as-cited w overdue)]
+        (is (= 10 (get cited "lift")))
+        (is (false? (get cited "own")))
+        (is (= 5 (get cited "overdue")))
+        (is (= 0 (get cited "not_now")))
+        (is (true? (get cited "front_door")))
+        (is (not (contains? cited "seen")) "nobody is recording")
+        (is (not (contains? cited "next_offer_at")) "no date on this one"))
+      (is (contains? (feed/tickler-as-cited
+                      w (assoc cooled :next-offer-at
+                               (java.time.Instant/parse "2026-08-01T00:00:00Z")))
+                     "next_offer_at"))
+      (is (= 3 (get (feed/tickler-as-cited w cooled) "seen"))))))
+
+(deftest the-fridges-rank-rides-the-recipe-and-refuses-at-assembly
+  (testing "law 5 at the fridge: five numbers on every answer, in the editor's
+            shape, narrated with the numbers in the sentence"
+    (let [eng (boot-house)]
+      (post! eng "fd_errands" {:title "one"})
+      (let [recipe (:recipe (:doc (feed! eng)))]
+        (is (= {:overdue 1 :not_now 4 :cooled 2 :front_door 5 :age 1}
+               (:tickler_rank recipe)))
+        (is (str/includes? (:tickler_rank_says recipe) "holds it 4"))
+        (is (str/includes? (:tickler_rank_says recipe) "by their own hand stands above"))
+        (is (str/includes? (:tickler_rank_says recipe) "Nothing here is a cap"))
+        (is (str/includes? (:guarantees recipe) "the crown's rank is five"))
+        (is (str/includes? (:guarantees recipe) "so is the fridge's")))))
+  (testing "a row that names none keeps the deployment's, and one that names
+            some keeps the rest"
+    (is (= {:overdue 1 :not_now 4 :cooled 2 :front_door 5 :age 1}
+           (feed/tickler-rank-of {})))
+    (is (= {:overdue 1 :not_now 9 :cooled 2 :front_door 5 :age 1}
+           (feed/tickler-rank-of {:tickler-rank {:not_now 9}}))))
+  (testing "a number that is not one refuses at assembly, by name"
+    (is (str/includes? (str (try (feed/check-recipe!
+                                  (assoc feed/default-recipe
+                                         :tickler-rank {:not_now "lots"}))
+                                 (catch Exception e (ex-message e))))
+                       ":tickler-rank :not_now"))
+    (is (str/includes? (str (try (feed/check-recipe!
+                                  (assoc feed/default-recipe
+                                         :tickler-rank {:age 101}))
+                                 (catch Exception e (ex-message e))))
+                       "0–100")))
+  (testing "the diff says what moved, in the household's words, beside the
+            crown's own — a NEW words map, so the fridge never says 'in the crown'"
+    (is (= [] (feed/tickler-rank-diff nil {:not_now 4})))
+    (is (= ["On the fridge, each time the house has already said not now holds an item 8 instead of 4."]
+           (feed/tickler-rank-diff nil {:not_now 8})))
+    (is (str/includes? (first (feed/tickler-rank-diff
+                               nil {:overdue 0 :not_now 0 :cooled 0 :front_door 0 :age 0}))
+                       "turns OFF"))
+    (is (str/includes? (first (feed/tickler-rank-diff nil {:some_sixth 3}))
+                       "tickler_rank some_sixth is 3"))
+    (is (= ["The order itself is unchanged, line for line."
+            "In the crown, each day left on a bundle's week lifts it 3 instead of 1."
+            "On the fridge, each month an item's row has sat on the dropped pile lifts it 2 instead of 1."]
+           (feed/recipe-diff {:order (:order feed/default-recipe)}
+                             {:order (:order feed/default-recipe)
+                              :crown-rank {:fresh 3}
+                              :tickler-rank {:age 2}}))))
+  (testing "the household writes its own five numbers on the recipe row and the
+            next read is answered by them, the crown's untouched, and turning
+            them off says so"
+    (let [eng (boot-house)]
+      (post! eng "fd_errands" {:title "one"})
+      (let [before (:doc (feed! eng))
+            made (call! eng :post "/api/feed_recipes"
+                        :body {:label "Not-nows weigh more"
+                               :scope "household"
+                               :order (get-in before [:recipe :order])
+                               :tickler_rank {:not_now 10 :age 0}})
+            after (:doc (feed! eng))]
+        (is (= 201 (:status made)) (pr-str (:doc made)))
+        (is (= {:overdue 1 :not_now 10 :cooled 2 :front_door 5 :age 0}
+               (get-in after [:recipe :tickler_rank])))
+        (is (str/includes? (get-in after [:recipe :tickler_rank_says])
+                           "holds it 10"))
+        (is (= (get-in before [:recipe :crown_rank])
+               (get-in after [:recipe :crown_rank]))
+            "the crown's five are untouched by a row that named only the fridge's")
+        (let [rid (last (str/split (str (:self (:doc made))) #"/"))
+              revised (call! eng :post (str "/api/feed_recipes/" rid "/-/revise")
+                             :body {:label "The seed alone"
+                                    :order (get-in before [:recipe :order])
+                                    :tickler_rank {:overdue 0 :not_now 0
+                                                   :cooled 0 :front_door 0
+                                                   :age 0}}
+                             :headers {"if-match" (get-in made [:doc :meta :etag])})
+              off (:doc (feed! eng))]
+          (is (= 200 (:status revised)) (pr-str (:doc revised)))
+          (is (str/includes? (get-in off [:recipe :tickler_rank_says])
+                             "The fridge's rank is off")))))))

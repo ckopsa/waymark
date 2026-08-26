@@ -2512,7 +2512,14 @@
 
   It reports `:covered`, because an engine whose feed has no row card
   at all has nothing to set aside and should say so rather than pass
-  quietly."
+  quietly.
+
+  …AND THE FRIDGE'S RANK (waymark-1uv.9): law 5 at the fridge. The
+  recipe carries `tickler_rank` as five numbers and a sentence that
+  quotes them; the marker's card carries `why.tickler` with the lift
+  and every input on the plain read, and says *Ranked* when asked;
+  the walker is a SYSTEM hand, so its marker reads `own false` — a
+  person's own hand is the tier, and the walker is not one."
   [ctx]
   (let [{:keys [doc]} (feed-doc ctx nil)
         subject (first (remove #(or (= "tickler" (str (:kind %)))
@@ -2531,6 +2538,10 @@
             ghost-id (some-> (:self (:doc ghost)) id-of)
             offered (:doc (feed-doc ctx nil))
             card (when id (tickler-card offered id))
+            ;; the same read, explained (waymark-1uv.9): the fridge's
+            ;; rank has to say what placed a card, in words, when asked
+            explained (when card (:doc (feed-doc ctx nil "explain=1")))
+            ecard (when (and id explained) (tickler-card explained id))
             verbs (set (map (comp name key) (:actions card)))
             not-now (declared-name ctx :tickler :not_now)
             let-go (declared-name ctx :tickler :let_it_go)
@@ -2625,7 +2636,64 @@
            (conj (str "feed: 'not now' on a let-go tickler answered "
                       (:status again) ", not 409 — a let-go item never"
                       " returns, and the machine itself is what refuses"
-                      " the question")))}))))
+                      " the question"))
+
+           ;; ── the fridge's rank (waymark-1uv.9) ─────────────────────
+           ;; Law 5 at the fridge: the rank is DATA on every answer, a
+           ;; sentence quoting its own numbers, and every tickler card
+           ;; carries the inputs that placed it — on the plain read as
+           ;; numbers, on the explained read as sentences.
+           (let [c (get-in offered [:recipe :tickler_rank])]
+             (not (and (map? c)
+                       (every? #(int? (get c %))
+                               [:overdue :not_now :cooled :front_door :age]))))
+           (conj (str "feed: recipe.tickler_rank reads "
+                      (pr-str (get-in offered [:recipe :tickler_rank]))
+                      " — the fridge's rank is five numbers the household can"
+                      " read, on every answer, or it is the hidden model law 5"
+                      " forbids"))
+
+           (let [c (get-in offered [:recipe :tickler_rank])
+                 s (str (get-in offered [:recipe :tickler_rank_says]))]
+             (not (and (str/includes? s (str (:not_now c)))
+                       (str/includes? s "own hand")
+                       (str/includes? s "is a cap"))))
+           (conj (str "feed: recipe.tickler_rank_says does not quote its own"
+                      " numbers, the person's own hand and the absence of a"
+                      " cap back — "
+                      (pr-str (get-in offered [:recipe :tickler_rank_says]))))
+
+           (and card (let [t (get-in card [:why :tickler])]
+                       (not (and (int? (:lift t))
+                                 (boolean? (:own t))
+                                 (int? (:overdue t))
+                                 (int? (:not_now t))
+                                 (boolean? (:front_door t))
+                                 (int? (:age t))))))
+           (conj (str "feed: a tickler card's why carries "
+                      (pr-str (get-in card [:why :tickler]))
+                      " — every tickler card names the rank's inputs and the"
+                      " lift they add up to on the plain read; a card that"
+                      " stands where it stands for a reason and would not say"
+                      " so unless asked is the thing law 5 forbids"))
+
+           (and card (true? (get-in card [:why :tickler :own])))
+           (conj (str "feed: a marker the walker set aside by its SYSTEM hand"
+                      " reads own true — a person's own hand is the tier, and"
+                      " the walker is not a person"))
+
+           (and card (not= 0 (get-in card [:why :tickler :not_now])))
+           (conj (str "feed: a marker nobody has put off yet reads not_now "
+                      (pr-str (get-in card [:why :tickler :not_now]))))
+
+           (and ecard
+                (not-any? #(str/includes? (str %) "Ranked")
+                          (get-in ecard [:why :says])))
+           (conj (str "feed: asked why, a tickler card does not say it was"
+                      " ranked or by what: "
+                      (pr-str (get-in ecard [:why :says]))
+                      " — the citation names the inputs and the numbers, or"
+                      " the household is taking the rank's word for it")))}))))
 
 ;; ── the insight: no finding without a citation and an offer ─────────
 ;;

@@ -184,9 +184,10 @@
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
            (java.nio.charset StandardCharsets)
-           (java.time Instant LocalDate ZoneId ZoneOffset)
+           (java.time Duration Instant LocalDate ZoneId ZoneOffset)
            (java.time.temporal ChronoUnit)
            (java.time.zone ZoneRulesException)
+           (java.util.concurrent CountDownLatch TimeUnit)
            (java.util Base64)))
 
 (set! *warn-on-reflection* true)
@@ -1282,6 +1283,398 @@
      (when-some [raw (load-raw ctx kind id)]
        (and (open? rdef raw) (not (accomplished? rdef raw)))))))
 
+;; ── the ticklers line's rank: the due pile, ranked not capped ───────
+;; (waymark-1uv.9, the epic 'Ranked, not capped'; the crown's rank one
+;; section up is the model, and the shape is deliberately the same)
+;;
+;; waymark-iqa.13 wants a sweep over the dropped pile, and the
+;; temptation was a ceiling on how many markers one sweep may mint.
+;; waymark-1uv.7 said no: a tickler writes nothing to its subject
+;; (spec-feed fork (b), reason 1 — no cascade into a :push-on-write
+;; mirror), it is no letter and no notification, and a marker over a
+;; dropped task is the machine INDEXING the pile, which is the owner's
+;; own word for what must not be limited. Twenty-five markers born at
+;; once is a rank question for the :ticklers line, and this is the
+;; rank: five numbers on the recipe row beside the crown's five, one
+;; line of arithmetic (`tickler-lift`), narrated on every answer
+;; (`tickler-rank-says`), and read back on every tickler card with
+;; the numbers that placed it (`why.tickler`).
+;;
+;; WHAT THE POPULATION HID. A person's own marker — 'bring this back
+;; on the 3rd', or 'this, and now' — is an obligation the person set:
+;; law 2 puts it outside the contest, and it appears because they
+;; asked. A sweep-born marker (the engine's own hand, next_offer_at
+;; unset, which means now) is indexing, and contends. Until this bead
+;; both were merely DUE and the seed picked two. So a person's own
+;; hand is a TIER above every machine-born marker (`tickler-key`),
+;; the way asked-for is a tier in the crown, and no number a
+;; household writes moves a machine's marker above a person's — law
+;; 6 read at the fridge. The five numbers rank the rest.
+;;
+;; NOT A CAP, AND UNTOUCHED: the backoff. `next_offer_at` is a
+;; person's own not-now written as a date, a backed-off marker is
+;; simply not a candidate, and that was the tree's first read-side
+;; rank input all along. The DEDUPE iqa.13 asked for — one live
+;; marker per subject — is a LAW and lands as one, at the tickler's
+;; own create door (workqueue10.resources.tickler, `one-live-marker-
+;; per-subject`), where it refuses a second sweep and a second hand
+;; alike; the sweep below asks first only so it does not knock on a
+;; door it knows is shut.
+;;
+;; THE AGENT IS NOT THE RANK, here as at the crown: an agent may tune
+;; these numbers through a staged proposal once `recipe_proposal`
+;; carries this field (waymark-1uv.5's door, filed under the epic),
+;; and never be the rank.
+
+(def default-tickler-rank
+  "The ticklers line's rank, as five numbers — the weights of the five
+  inputs a household can argue with. The sixth input, *a person's own
+  hand*, is a TIER above all five and not a weight (see `tickler-key`):
+  no number a household writes may put the machine's indexing above a
+  person's own asking, because that is law 6 read at the fridge.
+
+  `:overdue` — what each whole day past `next_offer_at` lifts a marker.
+  The date is the person's own — set by hand at birth, or written by
+  their own not-now off the backoff — and it is honoured before the
+  sweep's *now*: a marker with no date is due today and not overdue,
+  so a hand-dated marker the house has walked past for a week stands
+  above one the sweep found this morning.
+
+  `:not_now` — what each not-now the house has already said holds a
+  marker back. `offer_count` is the household's own record — the
+  tickler's whole reason for server-side state — and a marker the
+  house has put off three times has been answered three times; the
+  rank reads that as cooler, not as louder.
+
+  `:cooled` — what each step the contest's own arithmetic says a
+  marker has cooled holds it back: `cooling-step` over the same view
+  rows, the same window and the same `cools-after` as the sections
+  below, so the household's two contest numbers govern this cooling
+  too, and only while the reader is recording.
+
+  `:front_door` — what a subject this house goes to (`:nav :primary`,
+  the one trait the framework declares about who a kind is FOR) lifts
+  a marker over one whose subject is a line inside somebody else's
+  row. The other half of waymark-1uv.9's fourth input — the VALUE a
+  subject serves — is not read, because no kind a tickler marks names
+  a value today; the day one does, `value-standing` is the read and a
+  sixth number is its weight.
+
+  `:age` — what each thirty days the subject has sat unmoved on the
+  dropped pile lifts a marker: oldest dropped first among equals,
+  because the someday list exists for the things the house forgot.
+  Read off the subject row's own last write, which for a dropped
+  mirror row is when the authority let it go — or the last resync that
+  touched it, which is the honest bound on the word *age* here.
+
+  All five at zero is *the seed alone*, with a person's own hand still
+  first — a number a person can see rather than a key they have to
+  know to delete, the contest's own posture. Overdue and age are per
+  day and per month and neither is capped: a marker a year past its
+  date is a year's worth of the house walking past a note it wrote,
+  and that is exactly what should stand first among the machine's."
+  {:overdue 1
+   :not_now 4
+   :cooled 2
+   :front_door 5
+   :age 1})
+
+(def tickler-scan-cap
+  "Offered markers the ticklers line ranks on one read, newest first.
+  The population's cost is per DUE candidate — a subject read and a
+  read of the marker's own create transition — and with a swept pile
+  every marker is due on day one, so the bound is the read's and never
+  the birth's (waymark-1uv.9's own sentence: *a stored score or a cap
+  on the read, never on the birth*). A stored score was weighed and
+  refused for the crown's reason: it would need a writer and would go
+  stale on every view row and every not-now. The document says so
+  when the cap is reached, in the crown's own posture."
+  100)
+
+(defn tickler-rank-of
+  "The ticklers line's five numbers this recipe reads: the household's
+  own, with the deployment's filled in for anything it did not state —
+  `crown-rank-of`'s shape, one field over."
+  [recipe]
+  (merge default-tickler-rank (:tickler-rank recipe)))
+
+(defn tickler-lift
+  "THE TICKLERS LINE'S ARITHMETIC, and this is the whole of it:
+
+      lift = overdue    × whole days past next_offer_at
+           − not_now    × times the house has said not now
+           − cooled     × steps cooled
+           + front_door × [the subject is a kind this house goes to]
+           + age        × months the subject has sat on the dropped pile
+
+  over one marker's inputs — `{:overdue n, :not-now n, :cooled n,
+  :front-door bool, :age n}` — and the recipe's five numbers. Higher
+  stands higher. It is only ever a SORT KEY: the line still shows
+  exactly as many markers as its `:take` says whenever that many are
+  due, and there is no arithmetic here that can drop one.
+
+  `:own` is not in it, on purpose: a marker a person set aside by
+  their own hand is a tier above every machine-born one
+  (`tickler-key`), and no weight a household writes moves it down."
+  ^long [weights {:keys [overdue not-now cooled front-door age]}]
+  (let [w (fn ^long [k] (long (get weights k 0)))]
+    (+ (* (w :overdue) (long (or overdue 0)))
+       (- (* (w :not_now) (long (or not-now 0))))
+       (- (* (w :cooled) (long (or cooled 0))))
+       (if front-door (w :front_door) 0)
+       (* (w :age) (long (or age 0))))))
+
+(defn tickler-key
+  "One due marker's place in the order, as a vector `sort-by` reads
+  ascending: a person's own hand first, then the lift (higher first),
+  then the seed's hash — so the answer is a pure function of (the
+  recipe's numbers, this marker's inputs, the seed) and two markers
+  the formula cannot tell apart are still placed by the day rather
+  than by arrival."
+  [weights inputs ^String hash]
+  [(if (:own inputs) 0 1)
+   (- (tickler-lift weights inputs))
+   hash])
+
+(defn- whole-days
+  "Whole days from one instant to a later one; zero when `to` is not
+  later. The unit both `:overdue` and `:age` count in."
+  ^long [^Instant from ^Instant to]
+  (max 0 (.toDays (Duration/between from to))))
+
+(defn- born-by
+  "Who created this marker, as the log's own actor `{:id :type}` — the
+  create transition is the marker's first, and the actor's TYPE is what
+  the tier reads: a human's hand is a person's own asking; an agent's
+  or the engine's is indexing. Read off the log rather than off
+  `set_aside_by`, because that field holds an id and an id does not
+  say whose kind of hand wrote it. One indexed read per DUE, standing
+  marker, and none for the rest; nil when the log cannot answer, which
+  the tier reads as *not a person's own* rather than guessing."
+  [ctx id]
+  (let [st (:storage (:eng ctx))]
+    (try
+      (:actor (first (store/with-tx
+                       st (fn [tx] (store/transitions
+                                    st tx {:kind :tickler :resource-id (str id)}
+                                    {:limit 1})))))
+      (catch Exception _ nil))))
+
+(defn- standing-subject
+  "The subject's raw row when the house could still pick it up, else
+  nil — `set-aside?` handing the row back instead of a boolean, spelled
+  with the same three predicates in the same order, because the rank
+  reads two facts off the row the population is already paying to
+  load: its kind's `:nav` and its own last write."
+  [ctx kind id]
+  (when-some [rdef (and kind (get (resources ctx) kind))]
+    (when-some [raw (load-raw ctx kind id)]
+      (when (and (open? rdef raw) (not (accomplished? rdef raw)))
+        raw))))
+
+(defn- tickler-inputs
+  "One due marker's inputs for `tickler-lift`, read here and weighed in
+  `entry-cards` — the crown's own split: the population READS, it does
+  not rank. `:seen` and `:cooled` are the one input only a read knows
+  and are filled in there, off the reader's own view rows."
+  [ctx d subject skind ^Instant now]
+  (let [at (get-in d [:data :next_offer_at])
+        srdef (get (resources ctx) skind)
+        moved (or (:updated-at subject) (:created-at subject))]
+    {:own (= "human" (some-> (born-by ctx (:id d)) :type str))
+     :overdue (if at (whole-days at now) 0)
+     :not-now (long (or (get-in d [:data :offer_count]) 0))
+     :front-door (= :primary (:nav srdef :primary))
+     :age (if moved (quot (whole-days moved now) 30) 0)
+     ;; carried for the card's sentence, not for the arithmetic
+     :next-offer-at at
+     :subject-kind (name skind)}))
+
+;; ── the sweep: the dropped pile births its own markers ──────────────
+;;
+;; The someday/maybe list the epic opened with — twenty-five dropped
+;; of a hundred and thirteen — was not a list until somebody swept it
+;; once (waymark-iqa.13). This is the sweep, and it is the elected
+;; kind of job the orphan sweeper is (`jobs/start-orphan-sweeper!`,
+;; waymark-db9.4's shape): one process per storage, a loop on a
+;; latch, a function a test can call by name with no loop at all.
+;;
+;; WHAT IT WALKS: every row whose kind declares a `:let-go` word in
+;; its `:over` and which rests on that word — a task the authority
+;; dropped, a film the house abandoned, a chore run somebody skipped —
+;; and which `set-aside?` would still card, so the sweep births
+;; nothing the population would retire at offer time. The vocabulary
+;; is the kind's own (`over-vocabulary`), never a string held here.
+;;
+;; WHAT IT WRITES: one tickler per subject, through the tickler's own
+;; create door under the engine's own actor, so `set_aside_by` says
+;; the sweep did it and the log says so too. The marker's `what` is
+;; the subject's own label, as the by-hand door asks a person to
+;; spell it — denormalized at birth so the card reads when the row
+;; behind it is gone. No date: unset means now, and a swept marker is
+;; on the fridge the morning the sweep found it. NO CAP on births —
+;; that was the whole of waymark-1uv.9's answer — and the dedupe is
+;; the door's own guard; the read of standing markers below is only
+;; the sweep declining to knock on a door it knows is shut.
+;;
+;; WHAT IT NEVER DOES: write the subject (fork (b), reason 1), mint a
+;; marker over a row the population would not card, or run under a
+;; test's feet — the first pass is one interval after election, the
+;; orphan sweeper's own posture, so a boot mints nothing.
+
+(def sweep-actor
+  "The engine's own hand on the dropped pile: the principal every
+  swept marker is born under, so `set_aside_by` names the sweep and
+  the tier reads it as the machine's."
+  (t/principal {:id "waymark10-tickler-sweep" :type :system
+                :display "Tickler sweep"}))
+
+(def dropped-scan-cap
+  "Rows one sweep reads per (kind, let-go word), newest first. A
+  bound on the READ and never on the birth: every row the read
+  reaches and no marker yet names is born a marker. A house with more
+  than five hundred dropped rows of one kind has a pile the next pass
+  keeps walking, and the pass says when it stopped short."
+  500)
+
+(defn- let-go?
+  "Does this row rest on a word its kind declared as LET GO, while the
+  machine still holds it open? The sweep's own question — narrower
+  than `work-over?`, which counts the accomplished too, and the same
+  as `set-aside?` restricted to the let-go half."
+  [rdef raw]
+  (let [{:keys [let-go]} (over-vocabulary rdef)
+        w (ending-word rdef raw)]
+    (boolean (and (open? rdef raw) w (contains? let-go w)))))
+
+(defn dropped-pile
+  "Every row this house let go and could still pick up, across every
+  kind whose `:over` names a let-go word: `{:rows [{:kind :id :row
+  :rdef} …] :reached-cap bool}`. Kinds in name order, rows newest
+  first, at most `dropped-scan-cap` per (kind, word). Public because
+  the live tests and a REPL read the pile the sweep will walk."
+  [ctx]
+  (reduce
+   (fn [acc [k rdef]]
+     (let [{:keys [field let-go]} (over-vocabulary rdef)]
+       (reduce
+        (fn [acc w]
+          (let [where (if field
+                        {field (if (keyword? w) (name w) (str w))}
+                        {:state (if (keyword? w) (name w) (str w))})
+                rows (rows-of ctx k where (inc (long dropped-scan-cap)))]
+            (-> acc
+                (update :reached-cap
+                        #(or % (> (count rows) (long dropped-scan-cap))))
+                (update :rows into
+                        (comp (take dropped-scan-cap)
+                              (filter #(let-go? rdef %))
+                              (map (fn [r] {:kind k :id (:id r)
+                                            :row r :rdef rdef})))
+                        rows))))
+        acc
+        (sort-by str let-go))))
+   {:rows [] :reached-cap false}
+   (sort-by (comp name key) (resources ctx))))
+
+(defn- swept-what
+  "The marker's `what`, denormalized from the subject the way the
+  by-hand door asks a person to spell it: the row's own label, or its
+  summary line when the kind declares no label, cut to the field's own
+  ceiling."
+  [rdef decoded]
+  (let [s (str/trim (str (or (some-> (:label-template rdef)
+                                     (summary/render decoded))
+                             (some-> (:summary rdef)
+                                     (summary/render decoded)))))
+        s (if (str/blank? s) (str (name (:kind rdef)) " " (:id decoded)) s)]
+    (subs s 0 (min 200 (count s)))))
+
+(defn serves-ticklers?
+  "Does this engine hold a tickler kind at all? The feed module's
+  `:when` gate for the sweep (`waymark10.modules`, the mirror
+  module's discovery precedent): an engine that serves no tickler
+  starts no sweeper and pays nothing for it."
+  [eng]
+  (some? (get (inv/resources eng) :tickler)))
+
+(defn sweep-dropped!
+  "One pass over the dropped pile: a marker per let-go row nobody has
+  yet set aside, born through the tickler's own create door under
+  `sweep-actor`, with no cap. → `{:born n :standing n :refused n
+  :scanned n :reached-cap bool}` — `standing` is how many rows already
+  carried a live marker and were passed over, `refused` how many the
+  door itself turned away (the dedupe guard winning a race this pass
+  did not see, or any other wall the kind grew). Zero everything on an
+  engine that serves no tickler kind.
+
+  A test drives this directly (`workqueue10.tickler-rank-test`), the
+  way batch_f_jobs_test drives `sweep-orphans!`: the loop below is
+  only the clock."
+  [eng]
+  (let [ctx {:eng eng}]
+    (if-not (get (inv/resources eng) :tickler)
+      {:born 0 :standing 0 :refused 0 :scanned 0 :reached-cap false}
+      (let [{:keys [rows reached-cap]} (dropped-pile ctx)
+            live (into #{}
+                       (map (fn [r] [(str (get-in r [:data :subject_kind]))
+                                     (str (get-in r [:data :subject_id]))]))
+                       (rows-of ctx :tickler {:state "offered"} 5000))]
+        (reduce
+         (fn [acc {:keys [kind id row rdef]}]
+           (if (contains? live [(name kind) (str id)])
+             (update acc :standing inc)
+             (let [d (inv/decode-row rdef row)
+                   body {:what (swept-what rdef d)
+                         :subject_kind (name kind)
+                         :subject_id (str id)
+                         :subject_href (str "/api/" (:plural rdef) "/" id)}]
+               (try
+                 (inv/create! eng :tickler body {:principal sweep-actor})
+                 (update acc :born inc)
+                 (catch Exception e
+                   (if (inv/refusal? e)
+                     (update acc :refused inc)
+                     (do (binding [*out* *err*]
+                           (println "waymark10 feed: tickler sweep could not"
+                                    " set aside " (name kind) " " id ": "
+                                    (ex-message e)))
+                         acc)))))))
+         {:born 0 :standing 0 :refused 0
+          :scanned (count rows) :reached-cap (boolean reached-cap)}
+         rows)))))
+
+(defn start-tickler-sweeper!
+  "The sweep's loop: every `:interval-ms` (default an hour),
+  `sweep-dropped!` walks the pile. Returns the handle
+  `stop-tickler-sweeper!` takes. One process per storage runs it, and
+  that is decided where the orphan sweeper's is: the feed module's
+  lifecycle hook carries `:elected :tickler-sweeper`. The first pass
+  is one interval after the start — a boot mints nothing, so no test
+  finds markers it did not make, and a household's first morning
+  waits an hour, which the marker's own *unset means now* then
+  honours."
+  [eng {:keys [interval-ms] :or {interval-ms 3600000}}]
+  (let [stop (CountDownLatch. 1)
+        t (Thread. ^Runnable
+                   (fn []
+                     (loop []
+                       (when-not (.await stop (long interval-ms)
+                                         TimeUnit/MILLISECONDS)
+                         (try (sweep-dropped! eng)
+                              (catch Exception e
+                                (binding [*out* *err*]
+                                  (println "waymark10 feed: tickler sweep"
+                                           " failed: " (ex-message e)))))
+                         (recur))))
+                   "waymark10-tickler-sweep")]
+    (doto ^Thread t (.setDaemon true) (.start))
+    {:thread t :stop stop}))
+
+(defn stop-tickler-sweeper! [{:keys [^CountDownLatch stop]}]
+  (some-> stop .countDown)
+  nil)
+
 (defn ticklers
   "decide: the house's someday/maybe list, the items whose date has
   come (waymark-iqa.4). The `letters` precedent exactly — a core
@@ -1304,25 +1697,45 @@
     that quietly withdrew on a clock would be worse than one that
     stayed on the fridge.
 
-  The cost is bounded the way every read-time population's is: at
-  most `row-scan-cap` markers are read, and only the DUE ones cost a
-  subject read. A household with a hundred ticklers due on one day
-  has a filing problem the feed cannot fix."
+  EACH CANDIDATE CARRIES THE RANK'S INPUTS (waymark-1uv.9), under
+  `:tickler`: whose hand set it aside, how many days past its own
+  date it stands, how many times the house has said not now, whether
+  its subject is a kind this house goes to, and how long that subject
+  has sat on the dropped pile. The population READS; it does not
+  rank. `entry-cards` adds the one input only a read knows — how many
+  mornings THIS reader has been shown it — and sorts by
+  `tickler-key`, so the arithmetic lives in one place and the card's
+  citation quotes the same numbers the sort used.
+
+  The cost is the read-time posture's, and since the sweep
+  (`sweep-dropped!`) keeps no cap on births the read bounds itself:
+  at most `tickler-scan-cap` markers are scanned, newest first, and
+  only the DUE ones whose subject still stands cost a subject read
+  and a log read. The answer says when the cap was reached, and
+  `document` tells the reader."
   [ctx]
   (if-some [rdef (get (resources ctx) :tickler)]
     (let [now (:now ctx)
-          due? (fn [t] (or (nil? t) (not (pos? (compare t now)))))]
-      (into []
-            (keep (fn [raw]
-                    (let [d (inv/decode-row rdef raw)]
-                      (when (and (due? (get-in d [:data :next_offer_at]))
-                                 (set-aside?
-                                  ctx
-                                  (some-> (get-in d [:data :subject_kind])
-                                          str not-empty keyword)
-                                  (get-in d [:data :subject_id])))
-                        {:kind :tickler :id (:id raw) :row raw}))))
-            (rows-of ctx :tickler {:state "offered"})))
+          due? (fn [t] (or (nil? t) (not (pos? (compare t now)))))
+          scanned (rows-of ctx :tickler {:state "offered"}
+                           (inc (long tickler-scan-cap)))]
+      {:reached-cap (> (count scanned) (long tickler-scan-cap))
+       :candidates
+       (into []
+             (keep (fn [raw]
+                     (let [d (inv/decode-row rdef raw)
+                           skind (some-> (get-in d [:data :subject_kind])
+                                         str not-empty keyword)]
+                       (when (due? (get-in d [:data :next_offer_at]))
+                         (when-some [subject (standing-subject
+                                              ctx skind
+                                              (get-in d [:data :subject_id]))]
+                           {:kind :tickler :id (:id raw) :row raw
+                            ;; the rank's inputs, read here and weighed
+                            ;; in `entry-cards` (waymark-1uv.9)
+                            :tickler (tickler-inputs ctx d subject skind
+                                                     now)})))))
+             (take tickler-scan-cap scanned))})
     []))
 
 (defn insights
@@ -2777,6 +3190,28 @@
             (refuse (str ":crown-rank " k " is " what ", 0–100 — read "
                          (pr-str v))
                     {:crown-rank c})))))
+    ;; …and the seventh (waymark-1uv.9): the fridge's five numbers are
+    ;; numbers, for the sixth check's own reason. Zero is legal for
+    ;; every one of them — all five at zero is the seed alone, with a
+    ;; person's own hand still first.
+    (when-some [c (:tickler-rank recipe)]
+      (when-not (map? c)
+        (refuse (str ":tickler-rank is a map of {:overdue :not_now :cooled"
+                     " :front_door :age} — the five numbers the ticklers"
+                     " line's rank is made of, or absent for the"
+                     " deployment's own")
+                {:tickler-rank c}))
+      (doseq [[k what]
+              [[:overdue "what each day past its own date lifts a set-aside item"]
+               [:not_now "what each not-now already said holds a set-aside item back"]
+               [:cooled "what each cooled step holds a set-aside item back"]
+               [:front_door "what a subject this house goes to lifts a set-aside item"]
+               [:age "what each month on the dropped pile lifts a set-aside item"]]]
+        (when-some [v (get c k)]
+          (when-not (and (int? v) (<= 0 (long v) 100))
+            (refuse (str ":tickler-rank " k " is " what ", 0–100 — read "
+                         (pr-str v))
+                    {:tickler-rank c})))))
     (reduce (fn [seen e]
               (let [s (if (:seam e) :seam (:section e))
                     r (census-rank s)]
@@ -3612,6 +4047,215 @@
                                y " instead of " x "."))))))
             ks))))
 
+;; ── the ticklers line's rank, narrated (waymark-1uv.9) ──────────────
+;; The crown's four sentences, one line down: the words a diff says
+;; for each moved number, the numbers as the editor takes them, the
+;; recipe view's narration, and what the rank did to THIS card.
+
+(def tickler-rank-words
+  "The household's own sentence for a change to each of the ticklers
+  line's numbers, keyed the way `default-tickler-rank` is: a function
+  of the number before and the number after. A NEW map rather than
+  entries in `crown-rank-words`, because the two ranks are two fields
+  on the recipe row and a diff that read one map for both would say
+  *in the crown* about the fridge. Read generically by
+  `tickler-rank-diff`, `crown-rank-diff`'s rule: a key with no words
+  here still says which number moved, by its wire name."
+  {:overdue
+   (fn [a b]
+     (str "On the fridge, each day a set-aside item stands past its own"
+          " date lifts it " b " instead of " a "."))
+   :not_now
+   (fn [a b]
+     (str "On the fridge, each time the house has already said not now"
+          " holds an item " b " instead of " a "."))
+   :cooled
+   (fn [a b]
+     (str "On the fridge, each step an item has cooled holds it "
+          b " instead of " a "."))
+   :front_door
+   (fn [a b]
+     (str "On the fridge, an item whose row is a kind this house goes to"
+          " is lifted " b " instead of " a "."))
+   :age
+   (fn [a b]
+     (str "On the fridge, each month an item's row has sat on the dropped"
+          " pile lifts it " b " instead of " a "."))})
+
+(defn tickler-rank-diff
+  "The ticklers line's numbers, read side by side — `crown-rank-diff`'s
+  shape one field over, and empty when nothing moved. Both arguments
+  are recipe-map tickler ranks, nil for *whatever the deployment
+  says*. It walks the KEYS of the two maps, the deployment's first in
+  `default-tickler-rank`'s own order, so the rank may grow a number
+  without this function learning its name."
+  [was now]
+  (let [a (tickler-rank-of {:tickler-rank was})
+        b (tickler-rank-of {:tickler-rank now})
+        ks (distinct (concat (keys default-tickler-rank)
+                             (sort (keys a)) (sort (keys b))))
+        num (fn ^long [m k] (long (or (get m k) 0)))
+        off? (fn [m] (every? #(zero? (num m %)) ks))]
+    (cond
+      (and (off? b) (not (off? a)))
+      [(str "The fridge's rank turns OFF: every one of its " (count ks)
+            " numbers is 0, so an item you set aside by your own hand"
+            " still stands first and the seed alone places the rest.")]
+
+      :else
+      (into []
+            (keep (fn [k]
+                    (let [x (num a k) y (num b k)]
+                      (when (not= x y)
+                        (if-some [say (get tickler-rank-words k)]
+                          (say x y)
+                          (str "On the fridge, tickler_rank " (name k) " is "
+                               y " instead of " x "."))))))
+            ks))))
+
+(defn tickler-rank-as-written
+  "The ticklers line's five numbers in the shape the EDITOR takes — the
+  wire spelling of `waymark10.feed-recipe`'s `tickler_rank` field, so
+  what a person copies out of a feed document is what the form takes
+  back (`crown-rank-as-written`'s sentence, one field over)."
+  [recipe]
+  (let [c (tickler-rank-of recipe)]
+    {"overdue" (:overdue c)
+     "not_now" (:not_now c)
+     "cooled" (:cooled c)
+     "front_door" (:front_door c)
+     "age" (:age c)}))
+
+(defn tickler-rank-says
+  "The ticklers line's rank, narrated in household words with its own
+  numbers quoted back — the recipe view's half of law 5 at the fridge
+  (waymark-1uv.9). A pure function of the recipe, like
+  `crown-rank-says`: what the rank did to THIS card is the card's
+  business (`tickler-card-says`), because only a read knows it."
+  ^String [recipe]
+  (let [{:keys [overdue not_now cooled front_door age]} (tickler-rank-of recipe)
+        {:keys [window-days cools-after]} (formula-of recipe)]
+    (if (every? zero? (map long [overdue not_now cooled front_door age]))
+      (str "The fridge's rank is off: every number in tickler_rank is 0,"
+           " so an item you set aside by your own hand still stands first"
+           " and the seed alone places the rest. Turning it back on is a"
+           " number in this same form.")
+      (str "The things you set aside are ranked when their date comes"
+           " round, and this is the whole of it. An item a person set aside"
+           " by their own hand stands above every one the house's sweep"
+           " set aside for you, and no number here changes that. Among the"
+           " rest, five numbers a person can read: each day an item stands"
+           " past its own date lifts it " overdue "; each time the house"
+           " has already said not now holds it " not_now "; each step the"
+           " contest says it has cooled — "
+           (if (pos? (long cools-after))
+             (str "the same " cools-after " day"
+                  (when (not= 1 (long cools-after)) "s") " in " window-days
+                  " as the sections below, read off your own record —")
+             "nothing, while the contest is off at cools_after 0 —")
+           " holds it " cooled "; an item whose row is a kind this house"
+           " goes to is lifted " front_door "; and each month its row has"
+           " sat on the dropped pile lifts it " age ", so the things the"
+           " house forgot longest come back first among equals. The floor"
+           " still holds — the line shows as many items as its take says"
+           " whenever that many are due; the rank only chooses which, and"
+           " the seed decides between equals. Nothing here is a cap: the"
+           " sweep sets aside every dropped row it finds, and a not-now"
+           " pushes an item's date out rather than counting against a"
+           " limit. Until you turn the record of what you were shown on,"
+           " nothing about seeing moves anything here."))))
+
+(defn tickler-as-cited
+  "The ticklers line's numbers as they ride a card's always-on
+  `why.tickler` (waymark-1uv.9): the lift, and every input that went
+  into it, in the wire's spelling. `seen`/`cooled` ride only when the
+  reader is recording, the contest's own posture one key over;
+  `next_offer_at` rides only when the marker carries a date, so a
+  reader can tell *due today* from *overdue by nothing*. Public
+  because the packs assert the shape."
+  [weights {:keys [own overdue not-now seen cooled front-door age
+                   next-offer-at] :as inputs}]
+  (cond-> {"lift" (tickler-lift weights inputs)
+           "own" (boolean own)
+           "overdue" (long (or overdue 0))
+           "not_now" (long (or not-now 0))
+           "front_door" (boolean front-door)
+           "age" (long (or age 0))}
+    (some? seen) (assoc "seen" seen "cooled" cooled)
+    next-offer-at (assoc "next_offer_at" (str next-offer-at))))
+
+(defn- tickler-card-says
+  "What the ticklers line's rank did to THIS card, in the household's
+  own words and with the recipe's own numbers quoted back — law 5's
+  *a card's why says what lifted or held it*, at the fridge. Every
+  clause names an input and the number it contributed, and the last
+  clause is the floor, because the floor is still true."
+  ^String [{:keys [rank of tickler tickler-weights formula]}]
+  (let [w (fn ^long [k] (long (get tickler-weights k 0)))
+        {:keys [own overdue not-now seen cooled front-door age
+                next-offer-at subject-kind]} tickler
+        lift (tickler-lift tickler-weights tickler)
+        window (:window-days formula)
+        after (long (or (:cools-after formula) 0))
+        plural (fn [n word] (str n " " word (when (not= 1 (long n)) "s")))]
+    (str "Ranked " (ordinal rank) " of " of " on the fridge by"
+         " recipe.tickler_rank — five numbers this house can read — and"
+         " this is the arithmetic for this card. "
+         (if own
+           (str "A person set this aside by their own hand, so it stands"
+                " above everything the house's sweep set aside; no number"
+                " here moves it below one. ")
+           (str "The house's sweep set this aside, not a person, so anything"
+                " a person set aside by hand stands above it. "))
+         (cond
+           (nil? next-offer-at)
+           (str "It carries no date — unset means now — so nothing lifts it"
+                " for standing past one. ")
+           (zero? (long (or overdue 0)))
+           (str "Its date came round today, so nothing lifts it for standing"
+                " past one yet. ")
+           :else
+           (str "It has stood " (plural overdue "day") " past its own date,"
+                " lifting it " (* (w :overdue) (long overdue)) ". "))
+         (if (pos? (long (or not-now 0)))
+           (str "The house has said not now to it " (plural not-now "time")
+                ", holding it " (* (w :not_now) (long not-now)) ". ")
+           (str "Nobody has said not now to it yet, so nothing holds it"
+                " for that. "))
+         (cond
+           (nil? seen)
+           (str "Nothing about what you have been shown moves it, because"
+                " you are not recording what you were shown. ")
+           (zero? (long seen))
+           (str "You have not been shown it in the last " window " days, so"
+                " nothing holds it there. ")
+           (zero? after)
+           (str "Shown " (plural seen "day") " in the last " window
+                ", and nothing cools while the contest is off (cools_after"
+                " 0). ")
+           (zero? (long cooled))
+           (str "Shown " (plural seen "day") " in the last " window
+                " with nothing done, which is not yet a step: it cools one"
+                " after " after ". ")
+           :else
+           (str "Shown " (plural seen "day") " in the last " window
+                " with nothing done — " (plural cooled "step")
+                " cooled, holding it " (* (long cooled) (w :cooled)) ". "))
+         (if front-door
+           (str "Its row is a " (or subject-kind "row") ", a kind this house"
+                " goes to, lifting it " (w :front_door) ". ")
+           (str "Its row is a " (or subject-kind "row") ", a line inside"
+                " somebody else's row rather than a front door, so the "
+                (w :front_door) " a front door would lift it is not there. "))
+         (if (pos? (long (or age 0)))
+           (str "That row has sat on the dropped pile " (plural age "month")
+                ", lifting it " (* (w :age) (long age)) ". ")
+           (str "That row was let go less than a month ago, so nothing"
+                " lifts it for age yet. "))
+         "Lift " lift " in all; the seed decides between equals. The floor"
+         " still holds: this line shows as many items as its take says"
+         " whenever that many are due, and the rank only chooses which.")))
+
 (defn recipe-diff
   "The whole of a staged change, in the household's own words: what
   moves in the ORDER, what moves in the CONTEST, and what moves in the
@@ -3625,8 +4269,10 @@
   [was now]
   (let [moves (order-diff (:order was) (:order now))
         moved? (not= moves [order-unchanged])
-        f (into (formula-diff (:formula was) (:formula now))
-                (crown-rank-diff (:crown-rank was) (:crown-rank now)))]
+        f (-> (formula-diff (:formula was) (:formula now))
+              (into (crown-rank-diff (:crown-rank was) (:crown-rank now)))
+              ;; …and the fridge's (waymark-1uv.9)
+              (into (tickler-rank-diff (:tickler-rank was) (:tickler-rank now))))]
     (cond
       (and (not moved?) (empty? f)) [order-unchanged]
       (not moved?) (into ["The order itself is unchanged, line for line."] f)
@@ -3647,7 +4293,8 @@
        "; exactly one card is the seam; the archive"
        " is last and bottomless; every line names a population this"
        " engine actually holds; the contest is two numbers a person can"
-       " read; and the crown's rank is five. A recipe that broke any of"
+       " read; the crown's rank is five; and so is the fridge's, for the"
+       " things set aside. A recipe that broke any of"
        " those would have refused to start rather than serve you a"
        " surprise."))
 
@@ -3796,6 +4443,9 @@
    ;; …and the crown's rank, the same two ways (waymark-1uv.2)
    "crown_rank" (crown-rank-as-written recipe)
    "crown_rank_says" (crown-rank-says recipe)
+   ;; …and the fridge's rank, the same two ways (waymark-1uv.9)
+   "tickler_rank" (tickler-rank-as-written recipe)
+   "tickler_rank_says" (tickler-rank-says recipe)
    "lines" (into []
                  (map-indexed
                   (fn [i e]
@@ -3978,7 +4628,7 @@
   record to cite. What the record holds is the other half of the same
   law — how many mornings a card was in front of somebody and nothing
   happened — and that is what these sentences say."
-  [section {:keys [formula seen step crown] :as draw}]
+  [section {:keys [formula seen step crown tickler] :as draw}]
   (cond
     ;; the crown, RANKED (waymark-1uv.2): the five numbers, the inputs
     ;; and the arithmetic for this card. The sentence this replaced —
@@ -3995,6 +4645,13 @@
          " this card is here because the floor says so. Nothing ranked it"
          " — this read resolved no crown rank, so the seed alone placed"
          " it.")
+
+    ;; the fridge, RANKED (waymark-1uv.9): the five numbers, the
+    ;; inputs and the arithmetic for this card. The decide sentence
+    ;; below stays true of it — a set-aside item appears because it
+    ;; must — and the rank only says WHICH of the due ones.
+    (and (= :decide section) tickler)
+    (tickler-card-says draw)
 
     (= :decide section)
     (str "Outside the contest: something waiting on your answer appears"
@@ -4132,6 +4789,18 @@
                              (assoc in :seen seen
                                     :cooled (cooling-step formula seen)))
                            in)))
+        ;; THE TICKLERS LINE'S OWN RANK (waymark-1uv.9): the crown's
+        ;; posture at the fridge, keyed by POPULATION because decide
+        ;; holds several lines and only this one ranks. The same read
+        ;; fills in the same one input, off the same view rows.
+        tickler-w (when (= :ticklers population) (:tickler-rank ctx))
+        tickler-inputs (fn [c]
+                         (let [in (:tickler c)]
+                           (if-some [{:keys [formula counts]} (:cooling ctx)]
+                             (let [seen (long (get counts (cid c) 0))]
+                               (assoc in :seen seen
+                                      :cooled (cooling-step formula seen)))
+                             in)))
         ordered (->> unseen
                      (filter of-kind?)
                      ;; the LANE first, the hash inside it (waymark-
@@ -4164,6 +4833,12 @@
                                 crown-w
                                 (fn [c] (crown-key crown-w (crown-inputs c)
                                                    (rank seed (cid c))))
+                                ;; …or the fridge's (waymark-1uv.9):
+                                ;; a person's own hand where the lane
+                                ;; was, the lift where the step was
+                                tickler-w
+                                (fn [c] (tickler-key tickler-w (tickler-inputs c)
+                                                     (rank seed (cid c))))
                                 cool
                                 (juxt #(long (:lane % 0))
                                       #(cool (cid %))
@@ -4202,6 +4877,8 @@
                      ;; where it stands for a reason and would not say
                      ;; so unless asked is the thing law 5 forbids
                      crown (when crown-w (crown-inputs cand))
+                     ;; …and the fridge's for THIS card (waymark-1uv.9)
+                     tickler (when tickler-w (tickler-inputs cand))
                      draw (cond-> {:rank (inc (+ off i)) :of offered
                                    :lane (:lane cand 0) :kind (:kind cand)
                                    :section section :day (:day ctx)
@@ -4214,13 +4891,18 @@
                                         :seen seen :step step)
                             crown (assoc :crown crown
                                          :crown-weights crown-w
-                                         :formula (:formula (:cooling ctx))))
+                                         :formula (:formula (:cooling ctx)))
+                            tickler (assoc :tickler tickler
+                                           :tickler-weights tickler-w
+                                           :formula (:formula (:cooling ctx))))
                      rdef (get (resources ctx) (:kind cand))]
                  (assoc c "why"
                         (cond-> {"line" (:line entry)
                                  "rank" (:rank draw) "of" offered}
                           cool (assoc "seen" seen "cooled" step)
                           crown (assoc "crown" (crown-as-cited crown-w crown))
+                          tickler (assoc "tickler"
+                                         (tickler-as-cited tickler-w tickler))
                           explain?
                           (assoc "says"
                                  (card-says entry rdef
@@ -4353,10 +5035,12 @@
         ;; (waymark-1uv.2) — `entry-cards` sorts the crown by them and
         ;; every crown card quotes them back
         ctx (assoc ctx :crown-rank (crown-rank-of recipe))
+        ;; …and the fridge's five (waymark-1uv.9), the same way
+        ctx (assoc ctx :tickler-rank (tickler-rank-of recipe))
         archive-only? (some? offset)
         lines (into [] (map-indexed (fn [i e] (assoc e :line i)))
                     (:order recipe))
-        {:keys [cards more? capped crown-capped walked counts]}
+        {:keys [cards more? capped crown-capped ticklers-capped walked counts]}
         (reduce
          (fn [acc e]
            (cond
@@ -4394,8 +5078,9 @@
                            ;; different bounds with two different
                            ;; notes, so the crown's is folded by
                            ;; section (waymark-1uv.2)
-                           (update (if (= :outcomes (:section e))
-                                     :crown-capped :capped)
+                           (update (cond (= :outcomes (:section e)) :crown-capped
+                                         (= :ticklers (:population e)) :ticklers-capped
+                                         :else :capped)
                                    #(or % (:reached-cap got)))
                            (assoc-in [:counts (:line e)]
                                      {"offered" (:offered got)
@@ -4405,7 +5090,7 @@
                  (-> (assoc :more? (:more? got))
                      (update :walked + (long (:consumed got 0))))))))
          {:cards [] :seen #{} :more? false :capped false :crown-capped false
-          :walked 0 :counts {}}
+          :ticklers-capped false :walked 0 :counts {}}
          lines)
         bottomless (some :bottomless (:order recipe))
         next-offset (+ (long (or offset 0)) (long walked))
@@ -4566,6 +5251,15 @@
                             " with more than " crown-scan-cap " on offer at"
                             " once has a composer to talk to before it has"
                             " a cap to raise."))
+                     ;; …and whether the fridge ranked every marker
+                     ;; on offer (waymark-1uv.9), the crown's note one
+                     ;; line down
+                     (when ticklers-capped
+                       (str "The fridge read to its cap and stopped — the"
+                            " newest " tickler-scan-cap " set-aside markers"
+                            " were ranked, and older ones were not read"
+                            " today. Nothing was dropped: they stand, and a"
+                            " morning with fewer due will reach them."))
                      (when capped
                        (str "The archive read to its cap and stopped — the"
                             " newest " log-scan-cap " transitions for what"

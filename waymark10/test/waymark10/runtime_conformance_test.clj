@@ -169,7 +169,11 @@
     (is (nil? (runtime/surface *eng* :discovery))
         "no kind here declares a :mirror, so the mirror module's
          when-declared discovery starts nothing — the `:when` gate
-         from waymark-db9.4, paying nothing for an unused module")))
+         from waymark-db9.4, paying nothing for an unused module")
+    (is (nil? (runtime/surface *eng* :tickler-sweeper))
+        "no tickler kind here, so the feed module's sweep over the
+         dropped pile starts nothing either (waymark-1uv.9) — the same
+         `:when` gate, the second surface to wear it")))
 
 ;; ── the driver, over the started engine ─────────────────────────────
 

@@ -4297,3 +4297,274 @@ as one map.
 - **The tickler kind is untouched.** `next_offer_at` on a tickler is still a
   read-side rank input for the ticklers line and was never a wall
   (waymark-1uv.7's row); this bead borrowed its schedule and nothing else.
+
+## Built — 1uv.9, the fridge's rank and the dropped pile's sweep (2026-08-26, waymark-1uv.9, for waymark-iqa.13)
+
+**The question, as filed:** waymark-iqa.13 wanted a sweep over the dropped
+pile — *25 dropped of 113* was not a someday/maybe list until somebody swept it
+once — and waymark-1uv.7 answered the cap question before the sweep existed:
+**a cap on ticklers born per sweep would be the same mistake the outcome cap
+was.** A marker writes nothing to its subject (fork (b), reason 1), it is no
+letter and no notification, and a marker over a dropped task is the machine
+*indexing* the pile — the owner's own word for what must not be limited.
+Twenty-five markers born at once is a **rank question for the `:ticklers`
+line**, and the dedupe iqa.13 wanted is a **law, not a cap**.
+
+So three things landed together, and the order they are written in here is
+the order they depend on: the rank (so a swept pile is a ranked pile the
+morning it arrives), the dedupe law (so a sweep cannot double itself), and
+the sweep (which now has nowhere to be a cap). The crown's rank
+(§ *Built — 1uv.2*) is the model throughout, and the shape is deliberately
+the same: five numbers on the recipe row, one line of arithmetic, `why` on
+every card, a sentence on every answer, a diff in the household's words. The
+spec calls the ticklers line **the fridge** in its sentences, because that is
+where a household pins the note.
+
+### The rank, as landed
+
+```clojure
+;; feed/default-tickler-rank
+{:overdue 1      ; what each whole day past next_offer_at lifts a marker
+ :not_now 4      ; what each not-now the house has already said holds it back
+ :cooled 2       ; what each step the contest says it has cooled holds it back
+ :front_door 5   ; what a subject this house goes to (:nav :primary) lifts it
+ :age 1}         ; what each thirty days the subject has sat on the pile lifts it
+```
+
+```clojure
+;; feed/tickler-lift — the whole of the arithmetic
+lift = overdue    × whole days past next_offer_at
+     − not_now    × times the house has said not now (offer_count)
+     − cooled     × steps cooled
+     + front_door × [the subject is a kind this house goes to]
+     + age        × months the subject has sat on the dropped pile
+
+;; feed/tickler-key — the sort, ascending
+[a-person's-own-hand-first?  −lift  hash(seed ‖ card_id)]
+```
+
+Six inputs, each a number or a word a person reads on the card:
+
+| input | read off | as it rides `why.tickler` |
+|---|---|---|
+| **a person's own hand** | the marker's **create transition's actor type** in the log — `human` is a person's own asking; `agent` and `system` are indexing | `"own": true` — the **tier** |
+| **overdue-ness** | whole days from `next_offer_at` to now; a marker with no date is *due today*, never overdue | `"overdue": 5`, `"next_offer_at": "…"` only when a date exists |
+| **the house's not-nows** | `offer_count`, the household's own record | `"not_now": 3` |
+| **shown and passed over** | the same `feed_view` rows, window and `cooling-step` the contest reads | `"seen": 3, "cooled": 1` — only while the reader is recording |
+| **the subject's kind** | its declaration's `:nav` — the one trait the framework declares about who a kind is FOR | `"front_door": true` |
+| **age on the pile** | whole months since the subject row's own last write | `"age": 2` |
+
+…and the lift they add up to, `"lift": 7`, on the **plain read**, for the
+crown's reason. The sentences are the `?explain=1` half (`tickler-card-says`):
+*Ranked 2nd of 3 on the fridge by recipe.tickler_rank … The house's sweep set
+this aside, not a person, so anything a person set aside by hand stands above
+it. It carries no date — unset means now … The house has said not now to it 3
+times, holding it 12 … Its row is a task, a kind this house goes to, lifting
+it 5 … Lift −5 in all; the seed decides between equals.*
+
+On the wire, on every read, beside `recipe.crown_rank`:
+
+```json
+"recipe": {
+  "guarantees": "… the crown's rank is five; and so is the fridge's, for the things set aside. …",
+  "tickler_rank": {"overdue": 1, "not_now": 4, "cooled": 2, "front_door": 5, "age": 1},
+  "tickler_rank_says": "The things you set aside are ranked when their date comes round, and this is the whole of it. An item a person set aside by their own hand stands above every one the house's sweep set aside for you, and no number here changes that. Among the rest, five numbers a person can read: …"
+}
+```
+
+### A person's own hand is a tier, not a weight — decided and recorded
+
+1uv.7 named the split the population hid: a person's dated tickler is an
+obligation the person set, outside the contest by law 2; a sweep-born one is
+indexing and contends. This bead makes the split a **tier** — `tickler-key`'s
+first element — exactly as *asked for* is a tier in the crown, and for the
+same reason: no number a household writes may put the machine's indexing
+above a person's own asking (law 6 read at the fridge). Two refinements to
+1uv.7's sentence, both recorded:
+
+- **The hand, not the date, is what makes a marker the person's.** A person
+  who sets something aside *now* (no date) has asked as surely as one who
+  dated it; the date is `:overdue`'s business. So the tier reads **who
+  created the marker**, and it reads it off the **log** — the create
+  transition's actor type — rather than off `set_aside_by`, because that
+  field holds an id and an id does not say whose kind of hand wrote it. One
+  indexed read per due, standing marker; none for the rest.
+- **An agent's hand is the machine's.** A marker an agent set aside at the MCP
+  door contends with the sweep's rather than standing above them, which is
+  what 1uv.7 said (*set_aside_by an agent … is indexing*) and what the live
+  test proves. A person saying *not now* to a sweep-born marker does not
+  promote it — the not-now is a dismissal, not an asking, and it is what
+  `:not_now` counts.
+
+### What is NOT a cap, and what is a law
+
+- **The backoff is untouched.** `backoff-days`, `next-offer`,
+  `push-the-offer-out` — not a byte moved. `next_offer_at` past is still the
+  whole of the population's *due* filter, and now it is also `:overdue`'s
+  input: a person's own date is honoured before the sweep's *now*.
+- **`:take 2` stays as the floor.** The line shows as many markers as its take
+  says whenever that many are due; the rank chooses which.
+- **One live marker per subject is a LAW**, at the tickler's own create door:
+  `workqueue10.resources.tickler/one-live-marker-per-subject`, a `defguardfn`
+  reading `:tickler` through `(:find ctx)` for an `offered` marker naming the
+  same `subject_kind` + `subject_id`, refusing with the standing marker's id
+  in the sentence (*That row is already on the fridge — tickler … is still
+  asking about it. Answer that one … rather than pinning a second note beside
+  it*). LIVE means `offered`: a row the house let go or took back may be set
+  aside again by a later hand, and that is a new asking, not a duplicate. It
+  is a conformance-tier wall (it reads a kind), so it is a deftest and not a
+  scenario; the storage-free probe answers allow, `insights-are-capped`'s own
+  discipline. Create guards are outside `fingerprint-of`, so the tickler's
+  hash is unmoved.
+
+### The sweep, as landed — and where it lives
+
+`feed/sweep-dropped!` is the pass and `feed/start-tickler-sweeper!` is the
+clock, in the orphan sweeper's shape (`jobs/start-orphan-sweeper!`,
+waymark-db9.4): a function a test drives by name, a loop on a latch, and an
+**elected** lifecycle hook on the `:feed` module (`:hook :tickler-sweeper`,
+`:elected :tickler-sweeper`, `:tickler-sweep-ms` engine opt, an hour by
+default) — the first thing the feed module has ever started, and `:when`-gated
+on a tickler kind being served (`feed/serves-ticklers?`, the mirror module's
+discovery precedent), so an engine with no tickler starts nothing and pays
+nothing. Elected for the orphan sweeper's reason: two processes sweeping one pile would knock on the
+dedupe guard twice for nothing. db9.9's finding was read and does not bite
+here: the orphan sweeper's obligation needed a process with no *worker* in it
+because the worker races the sweep; nothing races this one, so the live proof
+drives the pass directly, `batch_f_jobs_test`'s own posture.
+
+**What it walks** (`feed/dropped-pile`): every kind whose `:over` names a
+`:let-go` word — `task`'s `dropped`, `media`'s `abandoned`, a skipped chore
+run — and every row resting on that word while the machine still holds it
+open (`let-go?`), which is exactly the set `set-aside?` would still card. The
+vocabulary is the kind's own; the framework holds no string. Rows newest
+first, at most `dropped-scan-cap` (500) per (kind, word), and the pass says
+when it stopped short — **a bound on the read and never on the birth.**
+
+**What it writes:** one tickler per subject, through the tickler's own create
+door, under the engine's own actor (`feed/sweep-actor`,
+`waymark10-tickler-sweep`, `:system`), so `set_aside_by` says the sweep did it
+and the log's actor says so too — which is what the tier reads. The marker's
+`what` is the subject's own `:label-template` (its summary line when a kind
+declares none), cut to the field's ceiling — denormalized at birth, as the
+by-hand door asks a person to spell it. `subject_href` is the row's own
+address. No date: *unset means now*, and a swept marker is on the fridge the
+morning the sweep found it. **No cap on births.** The pass reads the standing
+markers once before it starts, only so it does not knock on a door it knows is
+shut; the door's guard is the law, and a refusal there is counted, not
+retried.
+
+**The first pass is one interval after election.** A boot mints nothing, so
+no test finds markers it did not make; a household's first morning waits an
+hour, which the marker's own *unset means now* then honours.
+
+### Where the numbers live, and what moved with them
+
+On the `feed_recipe` row as `tickler_rank` beside `crown_rank`, in
+`recipe-fields`, `tickler-rank-schema`, `prose`, all three schemas,
+`:revise`'s prefill and `recipe-of`. `check-recipe!` grew a **seventh** check
+(five ints, 0–100, zero legal); `recipe-guarantees` says so; `recipe-view`
+carries `tickler_rank` and `tickler_rank_says`; `recipe-diff` folds
+`tickler-rank-diff`, which reads a **new** `tickler-rank-words` map — new
+rather than entries in `crown-rank-words`, because a diff that read one map
+for both would say *in the crown* about the fridge, and generic over its keys
+for 1uv.5's one rule. `entry-cards` keys the rank by **population**
+(`:ticklers`) rather than by section, because decide holds several lines and
+only this one ranks; `cooling-says` gained its arm before the decide sentence,
+which stays true of a tickler — it appears because it must; the rank only
+says which of the due ones. The population now scans to `tickler-scan-cap`
+(100), reports it, and `document` notes it in the crown's posture.
+
+**One thing that did not come free, met before it could bite** — the same one
+1uv.2 met: `recipe_proposal/apply-the-order` writes `feed_recipe/:revise`
+wholesale, so an order-only apply would have reset a household's `tickler_rank`
+to the deployment's. It now reads the target's own `tickler_rank` and carries
+it through, one clause beside the crown's. That is the **one fingerprint that
+moved** (below). A proposal cannot *propose* `tickler_rank` yet — the field on
+`recipe_proposal`, its four staleness guards and its diff-of are 1uv.5's wiring
+one field over — filed under the epic rather than smuggled in beside three
+other agents' edits to the same file.
+
+### Where the law is proved
+
+- **`feed-test`**, two deftests: the arithmetic as a pure function — seven
+  markers ordered identically under two unrelated seeds, a person's own hand
+  first with a negative lift, `offer_count 3` below `offer_count 0` with
+  everything else equal, all five at zero reducing to `[tier 0 hash]`,
+  `tickler-as-cited`'s shape — and the field: five numbers on the wire
+  narrated, a row naming some keeping the rest, a nonsense number refused at
+  assembly by name, the diff's sentences beside the crown's, and a household
+  POSTing its own `tickler_rank` with the crown's untouched.
+- **`workqueue10.tickler-rank-test`** (new, live), over the household's own
+  registry with the authority's fakes so a task can really be dropped: three
+  todos the authority dropped and one it holds open; `dropped-pile` names the
+  three and not the open one; one sweep births three markers under
+  `waymark10-tickler-sweep` with the task's own title and address on them and
+  no date; a second sweep births none and passes three over; every swept
+  marker cards with `own false`, `front_door true`, lift 5, and says *sweep
+  set this aside* when asked; a person's own marker over the open task, dated
+  by hand and put off once (lift 1), stands **first** above every swept one
+  (lift 5) — the tier; three not-nows on one swept marker and the clock walked
+  to its day back: lift −5 below its twin's 7, *said not now to it 3 times,
+  holding it 12*; the member turns their record on and is shown the twin three
+  mornings: `seen 3, cooled 1`, lift 5, still above the put-off one; a second
+  marker over the fence answers **409 `one-live-marker-per-subject`** naming
+  the standing marker; after `let_it_go` a new one is admitted; an agent's
+  marker reads `own false` and stands below the person's. The fixture's clock
+  is an atom, nil — the real clock — for everything else, put back in a
+  `finally`.
+- **`:feed/ticklers`**, six claims added: `recipe.tickler_rank` is five ints;
+  `tickler_rank_says` quotes `not_now`'s number, *own hand* and *not a cap*;
+  a tickler card's `why.tickler` carries an int `lift`, a boolean `own`, ints
+  `overdue`/`not_now`/`age` and a boolean `front_door`; the walker's own
+  marker — a SYSTEM hand — reads `own false`; a marker nobody has put off
+  reads `not_now 0`; the explained citation says *Ranked*.
+
+### Fingerprints, and what did not move
+
+Computed over `engine/full-registry` of `main/check-resources` (50 kinds) on
+`main` (`842395d`) and on this tree: **49 byte-identical.** `tickler` is
+unmoved — a create guard is outside `fingerprint-of`, and no verdict, handler
+or schedule was touched. `feed_recipe` grew a field and `:schema` is not a
+facet. **One moved:** `recipe_proposal` `908661e4…` → `721b1e7a…`, mover
+`apply-the-order` (defhandler body: carries `tickler_rank` through) — a real
+change to what the apply writes, the same mover 1uv.2 and 1uv.5 recorded;
+`boot-revise!` mints one revision.
+
+`make check-queue`: 37 kinds, 11 warnings, 49 scenarios judged — unmoved.
+The tickler now reads *1 refusing guard, 0 named by a scenario*, which is the
+dedupe wall deferring to the suite as a `:reads` guard must.
+
+### Recorded here, for whoever comes next
+
+- **`recipe_proposal` cannot propose `tickler_rank` yet.** The apply carries it
+  through; proposing it is the field, four guards and `diff-of` one field
+  over from the crown's — filed under the epic. `tickler-rank-diff` and its
+  words map are ready for it, the way 1uv.2 left `crown-rank-diff` for 1uv.5.
+- **The value a subject serves is not an input.** 1uv.7's fourth input was
+  *the subject's kind and, when it has one, the value it serves*; no kind a
+  tickler marks names a value today, so the kind half landed (`:front_door`,
+  off `:nav`) and the value half is recorded, not faked: the day a mirror kind
+  carries a `value_id`, `value-standing` is the read and a sixth number is
+  its weight.
+- **`age` reads the subject row's last write.** For a dropped mirror row that
+  is when the authority let it go — or the last resync that touched it. That
+  is the honest bound on the word; a resync that rewrites an unchanged row
+  would reset a subject's age, and whether resync does that is the mirror's
+  business to say.
+- **`:overdue` and `:age` are uncapped.** A hand-dated marker a year past its
+  date is a year of the house walking past a note it wrote, and it stands
+  first among the machine's for exactly that reason; a household that wants
+  the slope flatter writes a smaller number.
+- **The sweep's first pass waits an interval.** Deliberate (a boot mints
+  nothing under a test's feet); a household that wants the pile swept on the
+  first morning sets `:tickler-sweep-ms` short or calls `feed/sweep-dropped!`
+  from the REPL once.
+- **`tickler-scan-cap` (100) and `dropped-scan-cap` (500)** have arithmetic
+  behind them and no measurement — waymark-1uv.12's question, asked of two
+  more numbers. With a swept pile every marker is due on day one, so the
+  first number is the one to watch.
+- **The screen joins, it does not derive.** *Why this order* opens into
+  `recipe.tickler_rank_says` beneath the crown's; a tickler card's *Why this
+  card?* opens with the lift and the inputs off its own `why.tickler` before
+  any network, replaced by the server's sentence when anybody asks.

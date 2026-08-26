@@ -65,7 +65,9 @@
   engine's own `:now` and the count of not-nows already said; the
   schedule is data, one vector, and a scenario or a test can judge it
   without a database and without waiting."
-  (:require [waymark10.dsl :refer [defhandler defresource defscenario]])
+  (:require [waymark10.dsl :refer [defguardfn defhandler defresource
+                                   defscenario]]
+            [waymark10.types :as t])
   (:import (java.time Instant)))
 
 ;; ── the backoff, as data ────────────────────────────────────────────
@@ -115,6 +117,41 @@
         (assoc-in [:data :offer_count] said)
         (assoc-in [:data :next_offer_at] (next-offer (:now ctx) said))
         (assoc-in [:data :answered_by] (get-in ctx [:principal :id])))))
+
+;; ── one live marker per subject (waymark-1uv.9, for waymark-iqa.13) ─
+;;
+;; A LAW, NOT A CAP — and the difference is the whole of the epic
+;; 'Ranked, not capped'. Nothing here limits how many markers the
+;; house may carry or how many a sweep may mint; it says that ONE
+;; row is set aside ONCE, so a second sweep cannot double the first,
+;; a person cannot pin a second note beside the sweep's, and the feed
+;; cards each subject one time. LIVE means `offered`: a marker the
+;; house let go or took back is history, and a row that was let go
+;; may be set aside again by a later hand — that is a new asking, not
+;; a duplicate.
+;;
+;; It reads the tickler kind itself (:reads [:tickler]), so it is a
+;; CONFORMANCE-tier wall: the check tier's offline world cannot say
+;; whether a marker already stands, and the storage-free probe
+;; answers allow so a rendered create form never advertises a
+;; refusal it cannot know. The live proof is
+;; workqueue10.tickler-rank-test.
+(defguardfn one-live-marker-per-subject
+  {:judges [:subject_kind :subject_id]
+   :reads [:tickler]
+   :vars [:standing]
+   :open "One live marker per subject — a row is set aside once, so a sweep cannot double itself and the feed cards each row one time. This is a law and not a cap: nothing limits how many rows are set aside, only how many notes one row wears."
+   :explain "That row is already on the fridge — tickler {standing} is still asking about it. Answer that one (not now, let it go, take it back) rather than pinning a second note beside it."}
+  [_row inp ctx]
+  (if (nil? (:find ctx))
+    (t/allow)
+    (if-some [live (first ((:find ctx) :tickler
+                           {:state "offered"
+                            :subject_kind (str (:subject_kind inp))
+                            :subject_id (str (:subject_id inp))}
+                           {:limit 1}))]
+      (t/deny {:vars {:standing (str (:id live))}})
+      (t/allow))))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;; All three are CHECK-TIER: no :given rows, and the verdict doors
@@ -293,6 +330,11 @@
     [:next_offer_at {:optional true
                      :x-display {:label "Bring it back on"}}
      [:maybe :waymark/instant]]]
+   ;; the one law at the birth door (waymark-1uv.9): a row is set
+   ;; aside once. The :decision sugar keeps whatever create guards a
+   ;; kind spells and adds its own beside them; this is the first one
+   ;; a tickler spells.
+   :create-guards [one-live-marker-per-subject]
    :scenarios [a-let-go-item-never-returns
                a-taken-back-item-stops-asking
                anyone-in-the-house-answers-a-tickler]})

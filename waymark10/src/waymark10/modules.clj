@@ -144,6 +144,7 @@
             [waymark10.server.curtain :as curtain]
             [waymark10.feed-recipe :as feed-recipe]
             [waymark10.feed-view :as feed-view]
+            [waymark10.server.feed :as feed]
             [waymark10.server.definitions :as defs]
             [waymark10.server.events :as events]
             [waymark10.server.grants :as grants]
@@ -427,6 +428,23 @@
               :kinds (fn [_] [feed-view/feed-view])}
              {:kind :verdict_reason :enroll :always
               :kinds (fn [_] [verdict-reason/verdict-reason])}]
+    ;; …and since waymark-1uv.9 it STARTS one thing, the first this
+    ;; module has ever started: the sweep over the dropped pile, which
+    ;; sets a tickler aside for every row the house let go and nobody
+    ;; has yet marked. Elected for the orphan sweeper's reason — two
+    ;; processes sweeping one pile would knock on the dedupe guard
+    ;; twice for nothing — and it is a loop on a clock rather than a
+    ;; read with a side effect, because the feed is a GET (fork (a)).
+    ;; `:when`-gated on a tickler kind being served — the mirror
+    ;; module's discovery precedent, the second surface to wear it —
+    ;; so an engine with no tickler starts nothing and pays nothing.
+    :hooks [{:hook :tickler-sweeper
+             :elected :tickler-sweeper
+             :when feed/serves-ticklers?
+             :start (fn [eng _]
+                      (feed/start-tickler-sweeper!
+                       eng {:interval-ms (:tickler-sweep-ms eng 3600000)}))
+             :stop feed/stop-tickler-sweeper!}]
     :routes feed-routes/routes :pack packs/feed}
 
    ;; the Gate hypermedia proxy (waymark-q95): two bespoke doors —
