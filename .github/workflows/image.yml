@@ -1,5 +1,4 @@
-# Builds the workqueue10 image, publishes it to GHCR, and points the
-# nomad job at it (waymark-27y).
+# Builds the workqueue10 image, migrates the schema, then rolls the job.
 #
 # WHY GHCR AND NOT docker.kopsa.info, the Makefile's default: a hosted
 # runner cannot reach the home cluster's registry, and a public repo is
@@ -12,12 +11,38 @@
 # WHY arm64 NATIVELY: the cluster's only node is ARM64, which locally
 # means cross-building under qemu binfmt — the one-time-per-boot install
 # the Makefile warns about. Public repos get free arm64 runners, so the
-# runner IS the target architecture and qemu never enters it. One
-# platform, because the cluster has exactly one.
+# runner IS the target architecture and qemu never enters it.
 #
 # THE TAG IS THE BARE SHORT SHA, computed by the same command the
 # Makefile's IMAGE_TAG runs, so the image CI pushes and the var CI
 # writes cannot drift from what a laptop would have produced.
+#
+# ── THE MIGRATION, AND WHY IT IS SHAPED LIKE THIS ──────────────────────
+#
+# Production leaves WAYMARK10_AUTO_MIGRATE unset, so a server whose
+# schema moved refuses to boot and names its plan. That posture stays.
+# Automating the roll without automating the migration would mean a
+# schema change rolls a container that cannot start — and prod Postgres
+# is published on the LAN only, so nobody could fix it from away.
+#
+# CI cannot reach Postgres. CI CAN reach Nomad. So the migration does not
+# travel to CI: CI asks the cluster to run it, beside the database, from
+# the SAME image about to be deployed (terraform/nomad-jobs/
+# workqueue10-migrate.hcl in ckopsa/home-infrastructure).
+#
+# waymark-yqs says reading the plan and running it deserve different
+# friction. That still holds here. The read is free and automatic. The
+# apply costs a human tap in the `production-migrate` environment. The
+# difference is you now pay that only when the schema actually moves,
+# instead of on every deploy.
+#
+#   plan empty  → deploy, nobody woken
+#   plan waiting → hold at `apply` until a reviewer approves
+#   destructive  → migrate refuses; a person runs those from the LAN
+#
+# !! The `apply` job's gate IS the `production-migrate` environment. An
+# !! environment with no required reviewer approves instantly and the
+# !! migration runs unattended. Configure it before trusting this.
 
 name: image
 
@@ -33,6 +58,7 @@ on:
       - 'workqueue10/**'
       - 'Dockerfile.workqueue10'
       - '.github/workflows/image.yml'
+      - '.github/scripts/dispatch-migrate.sh'
   pull_request:
     paths:
       - 'waymark10/**'
@@ -40,12 +66,13 @@ on:
       - 'workqueue10/**'
       - 'Dockerfile.workqueue10'
       - '.github/workflows/image.yml'
+      - '.github/scripts/dispatch-migrate.sh'
   workflow_dispatch:
 
 # A second push to the same branch makes the first build's image
-# unwanted before it finishes. Deploys are not cancelled mid-flight:
-# the nomad step is the last one, and by then the build it would race
-# has already been superseded.
+# unwanted before it finishes. Note this can also cancel a run waiting
+# at the approval gate — deliberate: the newer commit's plan is the one
+# worth approving.
 concurrency:
   group: image-${{ github.ref }}
   cancel-in-progress: true
@@ -56,6 +83,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      tag: ${{ steps.tag.outputs.sha }}
 
     steps:
       - uses: actions/checkout@v4
@@ -111,36 +140,66 @@ jobs:
           # index buildx otherwise wraps it in to carry attestations.
           provenance: false
 
-      # ---- the deploy half ----
-      #
-      # Writing the var is the whole deploy: the nomad job template
-      # reads nomad/jobs/workqueue10/deploy and restarts the server task
-      # on the new tag. Same path and same `-force` as the Makefile's
-      # deploy-queue target, so a laptop deploy and a CI deploy are the
-      # same act by two hands.
-      #
-      # GUARDED TO MAIN, not merely to non-PR: workflow_dispatch can be
-      # aimed at any branch, and a manual build of a side branch must
-      # not roll the house.
-      #
-      # The migrate gate the Dockerfile names still stands and is NOT
-      # here: boot REFUSES on schema drift because WAYMARK10_AUTO_MIGRATE
-      # stays unset, so a deploy whose schema moved fails loudly at the
-      # task rather than migrating itself. `clojure -M:migrate` (APPLY=1)
-      # remains a deliberate act before pushing such a change.
-
-      - name: Setup Nomad CLI
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        uses: hashicorp/setup-nomad@v1.0.0
-
-      - name: Point the job at the new image
-        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+  # Ask the cluster what this image's schema needs. Read-only: the job is
+  # dispatched without apply=1, so migrate! prints and exits.
+  plan:
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04-arm
+    outputs:
+      empty: ${{ steps.plan.outputs.plan_empty }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-nomad@v1.0.0
+      - name: Dispatch the migration in dry-run
+        id: plan
         env:
           NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
           NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
+        run: .github/scripts/dispatch-migrate.sh '${{ needs.build.outputs.tag }}'
+
+  # Only runs when the plan is NOT empty. The environment is the gate:
+  # give `production-migrate` a required reviewer, or this approves
+  # itself and the point is lost.
+  apply:
+    needs: [build, plan]
+    if: needs.plan.outputs.empty == 'false'
+    runs-on: ubuntu-24.04-arm
+    environment: production-migrate
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-nomad@v1.0.0
+      - name: Apply the schema plan
+        env:
+          NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
+          NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
+        run: .github/scripts/dispatch-migrate.sh '${{ needs.build.outputs.tag }}' apply
+
+  # Writing the var is the whole deploy: the job template reads
+  # nomad/jobs/workqueue10/deploy and restarts the server task on the new
+  # tag. Same path and same `-force` as the Makefile's deploy-queue, so a
+  # laptop deploy and a CI deploy are the same act by two hands.
+  #
+  # `always()` plus explicit results, because `apply` is SKIPPED on the
+  # common path (empty plan) and a plain `needs:` would skip this too.
+  deploy:
+    needs: [build, plan, apply]
+    if: >-
+      always()
+      && needs.build.result == 'success'
+      && needs.plan.result == 'success'
+      && (needs.apply.result == 'success' || needs.apply.result == 'skipped')
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: hashicorp/setup-nomad@v1.0.0
+      - name: Point the job at the new image
+        env:
+          NOMAD_ADDR: ${{ secrets.NOMAD_ADDR }}
+          NOMAD_TOKEN: ${{ secrets.NOMAD_TOKEN }}
+          TAG: ${{ needs.build.outputs.tag }}
         run: |
           set -euo pipefail
           nomad var put -force \
             nomad/jobs/workqueue10/deploy \
-            image_tag='${{ steps.tag.outputs.sha }}' >/dev/null
-          echo "deploying ghcr.io/${{ github.repository_owner }}/workqueue10:${{ steps.tag.outputs.sha }}"
+            image_tag="$TAG" >/dev/null
+          echo "deploying ghcr.io/${{ github.repository_owner }}/workqueue10:${TAG}"
