@@ -26,6 +26,24 @@
 (defn- fixture-x []
   (some-> (resolve 'waymark10-watch-fixture.alpha/x) deref))
 
+(defn- save!
+  "An editor's save: write beside the file, then rename over it, so the
+  watcher never sees the file between truncate and write. `spit` does
+  see that window — it truncates first — and the watcher stamps on
+  [mtime length], so a poll landing inside it load-files an EMPTY
+  source (defines nothing, refuses nothing) and reboots on it. On an
+  idle laptop the window is microseconds; on a loaded 8-core node
+  running six shards it was caught, and the suite read the old value
+  after a reboot that had loaded nothing."
+  [^java.io.File f ^String content]
+  (let [tmp (io/file (.getParentFile f) (str "." (.getName f) ".saving"))]
+    (spit tmp content)
+    (java.nio.file.Files/move
+     (.toPath tmp) (.toPath f)
+     (into-array java.nio.file.CopyOption
+                 [java.nio.file.StandardCopyOption/ATOMIC_MOVE
+                  java.nio.file.StandardCopyOption/REPLACE_EXISTING]))))
+
 (deftest watch-reloads-then-reboots
   (let [dir (temp-dir)
         src (io/file dir "waymark10_watch_fixture" "alpha.clj")
@@ -40,21 +58,21 @@
                               :restart! #(swap! reboots inc)}))]
     (try
       (testing "a good save load-files the source, then reboots"
-        (spit src "(ns waymark10-watch-fixture.alpha) (def x 2)")
+        (save! src "(ns waymark10-watch-fixture.alpha) (def x 2)")
         (is (await-until #(= 1 @reboots)))
         (is (= 2 (fixture-x))))
       (testing "a refused save reboots nothing and keeps the old defs"
-        (spit src "(ns waymark10-watch-fixture.alpha) (def x")
+        (save! src "(ns waymark10-watch-fixture.alpha) (def x")
         (is (await-until #(re-find #"REFUSED" (str out))))
         (is (= 1 @reboots))
         (is (= 2 (fixture-x))))
       (testing "the next good save heals — reload and reboot resume"
-        (spit src "(ns waymark10-watch-fixture.alpha) (def x 3)")
+        (save! src "(ns waymark10-watch-fixture.alpha) (def x 3)")
         (is (await-until #(= 2 @reboots)))
         (is (= 3 (fixture-x))))
       (testing "a new file is picked up, not only edits"
         (let [beta (io/file dir "waymark10_watch_fixture" "beta.clj")]
-          (spit beta "(ns waymark10-watch-fixture.beta) (def y 41)")
+          (save! beta "(ns waymark10-watch-fixture.beta) (def y 41)")
           (is (await-until #(= 3 @reboots)))
           (is (= 41 (some-> (resolve 'waymark10-watch-fixture.beta/y) deref)))))
       (finally
