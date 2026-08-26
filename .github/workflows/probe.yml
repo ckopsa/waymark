@@ -1,0 +1,11 @@
+# Throwaway control: is GitHub scheduling anything at all right now?
+# Delete once the tests workflow is proven.
+name: probe
+on:
+  push:
+    branches: ['claude/ci-probe']
+jobs:
+  hello:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "runner alive at $(date -u)"
