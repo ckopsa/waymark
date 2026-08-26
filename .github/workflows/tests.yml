@@ -152,7 +152,11 @@ jobs:
           POSTGRES_USER: ckopsa
           POSTGRES_DB: waymark10_test
           POSTGRES_HOST_AUTH_METHOD: trust
-        ports: ['5433:5432']
+        # No fixed host port: on a self-hosted runner the host is shared
+        # with every other shard and with the household's own services
+        # (5433 there is immich's postgres). Docker picks a free one and
+        # the job reads it back from job.services.postgres.ports.
+        ports: ['5432']
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -163,13 +167,27 @@ jobs:
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      # Where the service container is. CI_SERVICE_HOST comes from the
+      # self-hosted runner's environment (home-infrastructure's
+      # github-runner.hcl) because that host's docker daemon publishes
+      # on its LAN address, not loopback; a GitHub-hosted VM leaves it
+      # unset and localhost is right there. create-test-databases.sh
+      # and the DSN below both read PGHOST/PGPORT.
+      - name: Locate the postgres service
+        env:
+          SERVICE_PORT: ${{ job.services.postgres.ports['5432'] }}
+        run: |
+          echo "PGHOST=${CI_SERVICE_HOST:-localhost}" >> "$GITHUB_ENV"
+          echo "PGPORT=${SERVICE_PORT}" >> "$GITHUB_ENV"
+          echo "postgres service at ${CI_SERVICE_HOST:-localhost}:${SERVICE_PORT}"
       - name: Create the test databases
         run: .github/scripts/create-test-databases.sh
 
       - name: Run shard
         env:
-          # Character-for-character the Makefile's test10 DSN.
-          WAYMARK10_TEST_DSN: 'jdbc:postgresql://localhost:5433/waymark10_test?user=ckopsa'
+          # The Makefile's test10 DSN, with the host and port the service
+          # actually got (see "Locate the postgres service").
+          WAYMARK10_TEST_DSN: jdbc:postgresql://${{ env.PGHOST }}:${{ env.PGPORT }}/waymark10_test?user=ckopsa
           FOCUS_NS: ${{ matrix.shard.nses }}
         run: |
           set -euo pipefail
@@ -198,7 +216,11 @@ jobs:
           POSTGRES_USER: ckopsa
           POSTGRES_DB: waymark10_test
           POSTGRES_HOST_AUTH_METHOD: trust
-        ports: ['5433:5432']
+        # No fixed host port: on a self-hosted runner the host is shared
+        # with every other shard and with the household's own services
+        # (5433 there is immich's postgres). Docker picks a free one and
+        # the job reads it back from job.services.postgres.ports.
+        ports: ['5432']
         options: >-
           --health-cmd pg_isready
           --health-interval 5s
@@ -209,6 +231,19 @@ jobs:
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      # Where the service container is. CI_SERVICE_HOST comes from the
+      # self-hosted runner's environment (home-infrastructure's
+      # github-runner.hcl) because that host's docker daemon publishes
+      # on its LAN address, not loopback; a GitHub-hosted VM leaves it
+      # unset and localhost is right there. create-test-databases.sh
+      # and the DSN below both read PGHOST/PGPORT.
+      - name: Locate the postgres service
+        env:
+          SERVICE_PORT: ${{ job.services.postgres.ports['5432'] }}
+        run: |
+          echo "PGHOST=${CI_SERVICE_HOST:-localhost}" >> "$GITHUB_ENV"
+          echo "PGPORT=${SERVICE_PORT}" >> "$GITHUB_ENV"
+          echo "postgres service at ${CI_SERVICE_HOST:-localhost}:${SERVICE_PORT}"
       - name: Create the test databases
         run: .github/scripts/create-test-databases.sh
 
@@ -216,7 +251,7 @@ jobs:
         env:
           # test-queue points at waymark10_test too — the Makefile's own
           # choice, not a copy-paste slip.
-          WAYMARK10_TEST_DSN: 'jdbc:postgresql://localhost:5433/waymark10_test?user=ckopsa'
+          WAYMARK10_TEST_DSN: jdbc:postgresql://${{ env.PGHOST }}:${{ env.PGPORT }}/waymark10_test?user=ckopsa
           FOCUS_NS: ${{ matrix.shard.nses }}
         run: |
           set -euo pipefail
