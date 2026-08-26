@@ -99,7 +99,7 @@ jobs:
   # The cheap signal, first: neither of these needs a database, and a
   # declaration error should not wait behind a JVM suite to be told.
   quick:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest  # PROBE: pinned, ignores CI_RUNNER
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-clojure
@@ -114,7 +114,7 @@ jobs:
   # edit here. Namespaces come from paths: test/a/b_test.clj is
   # a.b-test, which is the convention every file in both suites follows.
   discover:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest  # PROBE: pinned, ignores CI_RUNNER
     outputs:
       waymark10: ${{ steps.split.outputs.waymark10 }}
       workqueue10: ${{ steps.split.outputs.workqueue10 }}
@@ -158,7 +158,7 @@ jobs:
 
   test10:
     needs: discover
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest  # PROBE: pinned, ignores CI_RUNNER
     strategy:
       # One shard failing must not hide the others: the point of a
       # split suite is seeing every failure in one round.
@@ -237,7 +237,7 @@ jobs:
 
   test-queue:
     needs: discover
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest  # PROBE: pinned, ignores CI_RUNNER
     strategy:
       fail-fast: false
       matrix:
