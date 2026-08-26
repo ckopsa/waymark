@@ -54,6 +54,37 @@ bd close <id>         # Complete work
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 
+### If `bd dolt push` is refused (restricted agent sessions)
+
+A sandboxed session's git credential may write `refs/heads/*` but not
+`refs/dolt/data`; `bd dolt push` then fails with HTTP 403 on the
+receive-pack POST while ordinary branch pushes succeed. Do not try to
+route around it. Commit the export instead — `.github/workflows/
+beads-sync.yml` carries the last hop on a push to `main`:
+
+```bash
+bd dolt pull                          # MANDATORY, and immediately before the export
+bd export -o .beads/issues.jsonl      # default flags: no --all, no --include-memories
+git add .beads/issues.jsonl && git commit && git push
+```
+
+**Pull immediately before exporting, not at session start.** `bd import`
+upserts, so a stale export does not merely fail to add — it writes old
+field values back over newer ones. The pull is what bounds that window
+to seconds.
+
+Two standing cautions: the export is a full dump, so keep memories and
+infra beads out of a public repo by using the default flags; and a
+tracked `issues.jsonl` drifts and merge-conflicts, so treat it as a
+transport, not a source of truth.
+
+`bd` itself is not installed in a fresh sandbox and publishes no release
+binaries. Build it with `apt-get install -y libicu-dev` then
+`go install github.com/steveyegge/beads/cmd/bd@v1.2.2` — note
+`steveyegge`, not the `gastownhall` path linked above, which fails on a
+module-path mismatch. Then `bd bootstrap` to hydrate the database, which
+a fresh clone does not carry.
+
 ## Agent Context Profiles
 
 The managed Beads block is task-tracking guidance, not permission to override repository, user, or orchestrator instructions.
