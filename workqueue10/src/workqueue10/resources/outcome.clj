@@ -66,6 +66,32 @@
   then holds. Half a year forever, because the only honest way to stop
   hearing about an outcome is to retire the value it serves.
 
+  ── NO BURIAL WITHOUT A DIAGNOSIS (waymark-8um.4) ──
+
+  Laws v3, law 4: when a high-value card keeps losing, the system
+  must first produce a friction diagnosis — an insight proposing a
+  recomposition — before the old form may fade. Nothing in this tree
+  fades a card (the floor holds, waymark-8um.3), so the one moment a
+  composer ACTS on a lost contest is the recomposition itself, and
+  that is where the duty is a wall rather than prose:
+  `no-burial-without-a-diagnosis` stands at this create door, in
+  front of the floor, and refuses a `supersedes` whose prior was
+  SHOWN AND DECLINED, or SHOWN AND PASSED OVER until its week ran out,
+  unless `diagnosis_id` names an insight that cites the prior in its
+  evidence and that the house has not dismissed. The diagnosis IS an
+  insight — law 4's own word, and the composer's leash already holds
+  `insight.create` — so it cards in decide, the house may take or
+  dismiss it, and a dismissal with a quick reason teaches again.
+
+  WHAT MAKES 'SHOWN' A FACT: the decline itself for a declined prior
+  (a person read the card and answered it), and `feed_view` rows for
+  an expired one. A prior never on a recording screen recomposes
+  freely — that teaches the composer about the RANK, not about the
+  house (waymark-1uv.4's distinction, landed here before the cap comes
+  off) — and so does one whose exposure nobody was keeping a record
+  of: the wall reads what the record holds and never guesses past it.
+  `GET /api/-/diagnosis` is the document this wall points at.
+
   ── THE TAP IS THE WRITE, AND IT IS THE MEMBER'S OWN ──
 
   `ctx :invoke` and `ctx :create` carry the OUTER principal (the
@@ -651,6 +677,96 @@
                      " house still has work standing in their name, that"
                      " is a finding about the rotation rather than an"
                      " afternoon to offer."))
+
+          :else (t/allow))))))
+
+(defn- cites?
+  "Does an evidence vector name this outcome's address? Trimmed and
+  exact — an address is the one shape a citation wears (`row-address`)."
+  [evidence oid]
+  (let [want (str "/api/outcomes/" oid)]
+    (boolean (some #(= want (str/trim (str %))) evidence))))
+
+(defguardfn no-burial-without-a-diagnosis
+  {:judges [:diagnosis_id]
+   :reads [:outcome :feed_view :insight]
+   :vars [:problem]
+   :open "A recomposition of an outcome the house was shown and turned down — declined, or left to lapse after it had been on a recording screen — names a diagnosis first: an insight citing the prior outcome in its evidence, still standing. A prior never shown, or one nobody was keeping a record of, recomposes freely; that taught you about the rank, not about the house. Read /api/-/diagnosis before you recompose."
+   :explain "No burial without a diagnosis: {problem}"}
+  [_row inp ctx]
+  ;; LAW 4, AS A WALL (waymark-8um.4). It stands IN FRONT of the floor
+  ;; on purpose — the epic's own sentence is that the composer's duty
+  ;; fires first — so a composer that comes back the next morning with
+  ;; no diagnosis hears about the diagnosis, and only a composer that
+  ;; has one hears about the date. The floor's own refusal already
+  ;; says "diagnose the friction in the meantime"; this is that
+  ;; sentence made structural.
+  ;;
+  ;; The prior's absence or openness is left to the floor wall, whose
+  ;; sentences those are; this wall speaks only about exposure and
+  ;; the diagnosis. A `:find` for `feed_view` answers nil on an engine
+  ;; assembled without the feed module, and nil reads as UNKNOWN —
+  ;; the wall never guesses past what the record holds.
+  (let [read' (:read ctx)
+        find' (:find ctx)
+        sid (some-> (:supersedes inp) str str/trim not-empty)
+        did (some-> (:diagnosis_id inp) str str/trim not-empty)
+        deny (fn [problem] (t/deny {:vars {:problem problem}}))]
+    (cond
+      (nil? read') (t/allow)
+      (and (nil? sid) (nil? did)) (t/allow)
+
+      (nil? sid)
+      (deny (str "diagnosis_id names /api/insights/" did " but this outcome"
+                 " supersedes nothing. A diagnosis is about a prior outcome"
+                 " — name the one it diagnoses in supersedes, or cite none."))
+
+      :else
+      (let [prior (read' :outcome sid)
+            state (some-> prior :state name)
+            shown? (case state
+                     "declined" true
+                     "expired" (when find'
+                                 (boolean
+                                  (some #(seq (find' :feed_view {:card_id %}
+                                                     {:limit 1}))
+                                        (feed/card-ids :outcome sid))))
+                     false)
+            insight (when did (read' :insight did))]
+        (cond
+          ;; the floor wall's sentences, left to it
+          (or (nil? prior) (= "offered" state)) (t/allow)
+
+          (and shown? (nil? did))
+          (deny (str "/api/outcomes/" sid " was "
+                     (if (= "declined" state)
+                       "shown and declined"
+                       "on a recording screen and left to lapse")
+                     ", and that is a diagnosis to write before a"
+                     " recomposition. Read /api/-/diagnosis?outcome=" sid
+                     " — how many mornings, answered how, with which"
+                     " reasons — publish an insight that cites /api/outcomes/"
+                     sid " in its evidence and proposes the smaller step,"
+                     " the loved activity, or the better time, and name it"
+                     " here as diagnosis_id."))
+
+          (nil? did) (t/allow)
+
+          (nil? insight)
+          (deny (str "this house has no insight " did " — read /api/insights"
+                     " and name one of those, or publish the diagnosis first."))
+
+          (not (cites? (get-in insight [:data :evidence]) sid))
+          (deny (str "/api/insights/" did " does not cite /api/outcomes/" sid
+                     " in its evidence. A diagnosis names what it diagnoses;"
+                     " one that cites something else is a finding about"
+                     " something else."))
+
+          (= "dismissed" (name (:state insight)))
+          (deny (str "the house dismissed /api/insights/" did " — read the"
+                     " reason it gave, if it gave one, and diagnose again."
+                     " A recomposition built on a diagnosis the house said"
+                     " was not useful is the old ask in a new hat."))
 
           :else (t/allow))))))
 
@@ -1433,6 +1549,18 @@
 ;; holding real request rows anyway, and workqueue10.outcome-test § 15
 ;; proves them over the real ring handler.
 
+;; AND NONE NAMES `no-burial-without-a-diagnosis`, for the same
+;; structural reason a third time (waymark-8um.4): every arm of the
+;; wall is about a PRIOR ROW — declined, expired with view rows behind
+;; it, or never shown — and a scenario's literal `:input` can only cite
+;; a dangling one, which the wall lets through on purpose so the floor
+;; wall may say "supersede one that exists". The whole ordering claim
+;; (the duty before the date; never-shown recomposes freely; a cited
+;; diagnosis must cite the prior and still stand) is proved by
+;; workqueue10.outcome-test § 16 over the real ring handler, and
+;; `:feed/diagnosis` in the conformance pack proves the refusal and the
+;; document from the wire.
+
 (defscenario the-composer-does-not-answer-its-own-piece
   "The same wall, one row down, and it has to be here as well as on
    the parent: the pieces are where the consent actually happens, so a
@@ -1602,6 +1730,10 @@
    {:x-display
     {:label "The outcome this recomposes"
      :help "When the house said not this week and you are bringing it back in a different shape, name the one it replaces. The house keeps the chain, and each decline pushes the next hearing further out — a week, then three, then two months, then half a year."}}
+   :diagnosis_id
+   {:x-display
+    {:label "The diagnosis it recomposes against"
+     :help "The insight that says WHY the outcome this supersedes did not land — shown how many mornings, answered how, with which reasons (read /api/-/diagnosis) — and proposes the smaller step, the loved activity, or the better time. It cites the prior outcome in its evidence. Required when that prior was shown and declined, or shown and left to lapse; a prior never shown recomposes without one."}}
    :composed_by {:x-display {:raw true :label "Composed by"}}
    :decided_by {:x-display {:raw true :label "Answered by"}}
    :declined_count
@@ -1704,6 +1836,9 @@
            {:rel "supersedes" :kind :outcome
             :href "/api/outcomes/{data.supersedes}"
             :summary "The outcome this one recomposes"}
+           {:rel "diagnosis" :kind :insight
+            :href "/api/insights/{data.diagnosis_id}"
+            :summary "The diagnosis this recomposition was built against"}
            {:rel "companion" :kind :person
             :href "/api/people/{data.companion_id}"
             :summary "Who this outcome is with, off the house's roster"}
@@ -1744,6 +1879,13 @@
         [:maybe [:vector [:string {:min 1 :max 200}]]])
     (oe :supersedes {:optional true :kind :outcome :filter #{:eq}}
         [:maybe :waymark/ref])
+    ;; THE DIAGNOSIS IT RECOMPOSES AGAINST (waymark-8um.4) — an
+    ;; insight, law 4's own word for it. NO :filter, `request_id`'s
+    ;; reasoning one field down: nothing queries outcomes by diagnosis
+    ;; (the diagnosis document reads the chain from the outcome's
+    ;; side), so it lands in `data`, the storage facet does not move
+    ;; and the migrate plan stays empty.
+    (oe :diagnosis_id {:optional true :kind :insight} [:maybe :waymark/ref])
     ;; THE REQUEST IT ANSWERS (waymark-jfv.20). NO :filter, on purpose:
     ;; the join runs the other way — the request stamps the outcome
     ;; that answered it — so nothing queries outcomes by request, and
@@ -1774,6 +1916,7 @@
     (oe :evidence {:optional true}
         [:maybe [:vector [:string {:min 1 :max 200}]]])
     (oe :supersedes {:optional true :kind :outcome} [:maybe :waymark/ref])
+    (oe :diagnosis_id {:optional true :kind :insight} [:maybe :waymark/ref])
     (oe :request_id {:optional true :kind :composition_request}
         [:maybe :waymark/ref])]
    :filterable {:state #{:eq :in}}
@@ -1796,10 +1939,16 @@
    ;; …and the person's pull stands right in front of the cap
    ;; (waymark-jfv.20), so the cap may trust a citation it did not
    ;; read: refused here, or known good by the time the count runs
+   ;; …and THE DUTY BEFORE THE DATE (waymark-8um.4): the diagnosis
+   ;; wall stands in front of the floor, because the epic's sentence
+   ;; is that the composer's duty fires first — a recomposition with
+   ;; no diagnosis hears about the diagnosis; one with a diagnosis
+   ;; hears about the date
    :create-guards [cites-what-it-read
                    names-a-value
                    names-a-person
                    routes-through-something-loved
+                   no-burial-without-a-diagnosis
                    a-recomposition-waits-its-turn
                    the-request-is-open
                    outcomes-are-few]

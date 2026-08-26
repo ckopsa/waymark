@@ -63,6 +63,7 @@
   (:require [clojure.string :as str]
             [waymark10.feed-recipe :as recipe]
             [waymark10.server.capabilities :as cap]
+            [waymark10.server.diagnosis :as diagnosis]
             [waymark10.server.feed :as feed]
             [waymark10.server.grants :as grants]
             [waymark10.server.members :as members]
@@ -296,7 +297,41 @@
                                                      (str (get params "explain")))}
                                preview)))))))
 
+(defn- diagnosis-doc
+  "GET /api/-/diagnosis[?outcome=<id>] — the composer's work order
+  (waymark-8um.4, law 4): every outcome the CALLER composed, each with
+  how many mornings it was shown, how it was answered, which reasons
+  the house gave, and what the floor says — and the lesson each one
+  teaches, shown-and-declined apart from never-shown.
+
+  The feed door's own posture, inherited whole: `wrap-identity` has
+  already run, the anonymous are refused with the same 404 the feed
+  gives, and everyone else is PROJECTED — the outcomes are the
+  caller's own, and the two records other members wrote are read only
+  where the presented leash admits the whole kind. Nothing here
+  authenticates anybody and nothing here writes. It is a second door
+  beside the feed rather than a key on the feed document because it
+  is somebody else's page: the feed is the household's morning, and
+  this is the composer's."
+  [eng]
+  (fn [req]
+    (let [principal (router/principal-of req)]
+      (when (or (nil? principal)
+                (= (:id principal) (:id t/anonymous)))
+        (throw (p/problem :not-found 404 "Not found"
+                          {:detail "No such route."})))
+      (router/json-response
+       200
+       (diagnosis/document eng {:principal principal
+                                :visibility (router/visibility-of req)
+                                :outcome (some-> (get (router/query-params req)
+                                                      "outcome")
+                                                 str/trim not-empty)})))))
+
 (defn routes [eng]
   (let [built-in (feed/check-recipe! (:feed eng feed/default-recipe))]
     {:module :feed
-     :static [["/api/-/feed" {:get (feed-doc eng built-in)}]]}))
+     :static [["/api/-/feed" {:get (feed-doc eng built-in)}]
+              ;; the composer's diagnosis (waymark-8um.4) — the feed's
+              ;; own three-segment shape, for the feed's own reason
+              ["/api/-/diagnosis" {:get (diagnosis-doc eng)}]]}))

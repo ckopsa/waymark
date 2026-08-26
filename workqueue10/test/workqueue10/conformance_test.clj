@@ -182,4 +182,11 @@
     ;; run over the bead's own sentence. This engine holds every kind it
     ;; needs, so a skip here is a regression rather than a posture.
     (is (pos? (suite/coverage report :feed/verdict-reasons))
-        "a declined piece carried a reason, in one more optional tap")))
+        "a declined piece carried a reason, in one more optional tap")
+    ;; …and the diagnosis duty (waymark-8um.4), whose whole claim is
+    ;; that a WALL fired: a recomposition of a shown-and-declined bundle
+    ;; refused by name for want of a diagnosis. A run in which nothing
+    ;; was refused is a green run over law 4's own sentence. This
+    ;; engine holds every kind it needs, so a skip is a regression.
+    (is (pos? (suite/coverage report :feed/diagnosis))
+        "a recomposition with no diagnosis was refused by name")))

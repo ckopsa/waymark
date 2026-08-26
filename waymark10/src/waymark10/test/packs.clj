@@ -5226,6 +5226,320 @@
        (conj (str "feed: a stopped record still cools cards. Stopping"
                   " stops the reading as well as the writing")))}))
 
+;; ── the composer's diagnosis (waymark-8um.4) ─────────────────────────
+
+(defn- diagnosis-doc
+  "One read of the composer's own work order, as whichever principal
+  the headers name."
+  [ctx headers & [query]]
+  (let [resp ((:handler ctx) (cond-> {:request-method :get
+                                      :uri "/api/-/diagnosis"
+                                      :headers headers}
+                               query (assoc :query-string query)))]
+    {:status (:status resp) :doc (json ctx resp)}))
+
+(defn- diagnosed
+  "The one outcome a diagnosis document says about a row, by id."
+  [doc oid]
+  (some #(when (= (str oid) (id-of (:self %))) %) (:outcomes doc)))
+
+(defn- feed-diagnosis-violations
+  "Law 4 from the wire — no burial without a diagnosis — and the
+  distinction waymark-1uv.4 asked for before the cap comes off:
+  SHOWN AND DECLINED teaches, NEVER SHOWN does not.
+
+  In the order a composer would meet it:
+
+  1. **The document is there and it is projected.** A composer whose
+     leash names neither record reads its own outcomes with both
+     halves WITHHELD by name — never a quiet zero — and the grant to
+     ask for spelled out.
+  2. **Exposure is the record's, honoured.** A composer holding the two
+     read grants stages a bundle; before any screen has reported it,
+     the exposure is unknown or nought and never a guess; after one
+     member turns their record on and their screen reports the card,
+     it reads exactly one morning, by that member.
+  3. **A decline with a reason is a lesson.** The member says not this
+     week and taps a quick word; the document reads `declined`,
+     `shown_and_declined`, `diagnosis_needed`, the word, and the floor.
+  4. **The wall, and the duty before the date.** A recomposition with
+     no diagnosis is refused BY NAME by `no-burial-without-a-diagnosis`;
+     with an insight citing the prior, the refusal moves to the floor
+     wall — the composer's duty fires first, and only a composer that
+     has done it hears about the date.
+
+  …and the switch goes back where it was found. It reports `:covered`,
+  because a run in which the wall never fired proved nothing about a
+  wall."
+  [ctx]
+  (let [tag (subs (str (random-uuid)) 0 8)
+        as-member (member-headers tag)
+        member (get as-member "x-waymark-principal")
+        composer (get (composer-headers tag) "x-waymark-principal")
+        blind (str "conformance-blind-composer-" tag)
+        loved (str "the shop " tag)
+        outcomes-plural (:plural (rdef ctx :outcome))
+        value (req ctx :post (str "/api/" (:plural (rdef ctx :value)))
+                   {:name (str "Making things with the boys " tag)
+                    :says (str "The evenings worth remembering are the ones"
+                               " somebody built something in.")
+                    :loved [loved]
+                    :scope "household"}
+                   as-member)
+        vid (when (= 201 (:status value)) (id-of (:self (json ctx value))))
+        vself (when vid (str "/api/" (:plural (rdef ctx :value)) "/" vid))
+        ;; the composer's leash, exactly as the contract spells it: the
+        ;; three create doors and the two READ grants this document was
+        ;; designed to honour
+        leashed (leash! ctx composer
+                        [{:kind "outcome" :actions ["create"]}
+                         {:kind "outcome_piece" :actions ["create"]}
+                         {:kind "insight" :actions ["create"]}
+                         {:kind "feed_view" :actions []}
+                         {:kind "verdict_reason" :actions []}])
+        ;; …and a composer whose leash names neither record
+        blinded (leash! ctx blind [{:kind "outcome" :actions ["create"]}])
+        blind-read (when blinded (diagnosis-doc ctx blinded))
+        target (piece-target ctx)
+        stage (fn [kind body hs]
+                (let [resp (req ctx :post
+                                (str "/api/" (:plural (rdef ctx kind)))
+                                body hs)]
+                  {:status (:status resp) :doc (json ctx resp)}))
+        bundle (fn [goal extra]
+                 (stage :outcome
+                        (merge {:goal goal
+                                :value_id vid
+                                :routing (str "It runs through " loved
+                                              ", which this house wrote down"
+                                              " as something it loves.")
+                                :routes_through loved
+                                :evidence [vself]}
+                               extra)
+                        leashed))
+        staged (when (and vid leashed)
+                 (bundle (str "A Saturday to diagnose " tag) {}))
+        oid (some-> (:doc staged) :self id-of)
+        piece (fn [n]
+                (when (and oid target)
+                  (stage :outcome_piece
+                         {:outcome_id oid
+                          :says (str "Piece " n " of " tag
+                                     " — twenty minutes, already prepared")
+                          :form "create"
+                          :target_kind target
+                          :prepared (create-body ctx (keyword target)
+                                                 (+ 5300 (long n)))}
+                         leashed)))
+        _ (doall (keep piece [1 2]))
+        ;; 2. before any screen has reported it
+        fresh (when oid (diagnosis-doc ctx leashed))
+        fresh-o (when oid (diagnosed (:doc fresh) oid))
+        ;; the member turns their record on and reads the feed
+        switch (when oid (post-row! ctx :feed_view_consent {} as-member))
+        switch-id (some-> (:doc switch) :self id-of)
+        mine (when (= 201 (:status switch)) (:doc (feed-doc ctx as-member)))
+        card (when oid (outcome-card mine oid))
+        day (str (:day mine))
+        viewed (when card
+                 (post-row! ctx :feed_view
+                            {:card_id (str (:card_id card))
+                             :population (str (:population card))
+                             :day day}
+                            as-member))
+        shown (when (= 201 (:status viewed)) (diagnosis-doc ctx leashed))
+        shown-o (when shown (diagnosed (:doc shown) oid))
+        ;; 3. the decline, and its word
+        not-this-week (declared-name ctx :outcome :not_this_week)
+        origin (when card (feed/origin-key day (str (:card_id card))
+                                           (subs (str (random-uuid)) 0 8)))
+        declined (when card
+                   (invoke-http ctx :outcome oid not-this-week nil
+                                {:headers (assoc as-member
+                                                 "idempotency-key" origin)}))
+        word (some-> (reason-door mine) :choices first :value)
+        said (when (and word (= 200 (:status declined)))
+               (post-row! ctx :verdict_reason
+                          {:subject_kind "outcome" :subject_id oid
+                           :subject_href (str "/api/" outcomes-plural "/" oid)
+                           :about (str (:goal (:data (:doc staged))))
+                           :verdict (name not-this-week)
+                           :reason word}
+                          as-member))
+        after (when (= 200 (:status declined)) (diagnosis-doc ctx leashed))
+        after-o (when after (diagnosed (:doc after) oid))
+        one (when after (diagnosis-doc ctx leashed (str "outcome=" oid)))
+        ;; 4. the wall — no diagnosis, then a diagnosis
+        undiagnosed (when (= 200 (:status declined))
+                      (bundle (str "The same Saturday, recomposed " tag)
+                              {:supersedes oid}))
+        still-stands (declared-name ctx :value :still_stands)
+        insight (when (and vid (= 409 (:status undiagnosed)))
+                  (stage :insight
+                         {:finding (str "Shown once and declined as " word
+                                        " — the Saturday was right and the"
+                                        " start was not; a smaller first"
+                                        " step " tag)
+                          :evidence [(str "/api/" outcomes-plural "/" oid)]
+                          :offer_kind "value"
+                          :offer_id vid
+                          :offer_action (name still-stands)
+                          :offer_href vself}
+                         leashed))
+        iid (some-> (:doc insight) :self id-of)
+        diagnosed' (when iid
+                     (bundle (str "The same Saturday, diagnosed " tag)
+                             {:supersedes oid :diagnosis_id iid}))
+        ;; and the switch goes back where it was found
+        stop (declared-name ctx :feed_view_consent :stop)
+        stopped (when switch-id
+                  (invoke-http ctx :feed_view_consent switch-id stop nil
+                               {:headers as-member}))]
+    {:covered (if (and (= 409 (:status undiagnosed))
+                       (= :no-burial-without-a-diagnosis
+                          (refused-guard undiagnosed)))
+                1 0)
+     :violations
+     (cond-> []
+       (nil? vid)
+       (conj (str "feed: the diagnosis obligation could not declare a value ("
+                  (:status value) "): " (pr-str (json ctx value))))
+
+       (nil? leashed)
+       (conj "feed: the composer's leash could not be minted")
+
+       (and blinded (not= 200 (:status blind-read)))
+       (conj (str "feed: a leashed composer reading /api/-/diagnosis answered "
+                  (:status blind-read) " — the document is the composer's own"
+                  " work order and every named principal reads theirs"))
+
+       (and blinded (= 200 (:status blind-read))
+            (or (true? (get-in blind-read [:doc :reads :exposure]))
+                (true? (get-in blind-read [:doc :reads :reasons]))))
+       (conj (str "feed: a leash naming neither record reads "
+                  (pr-str (get-in blind-read [:doc :reads]))
+                  " — a view row is the member's and a reason is the sayer's,"
+                  " and a composer reads them under the grants waymark-8um.1"
+                  " and waymark-jfv.16 designed, never through the courtesy"
+                  " that lets a member read their own"))
+
+       (and leashed vid (not= 201 (:status staged)))
+       (conj (str "feed: the composer could not stage a bundle ("
+                  (:status staged) "): " (pr-str (:doc staged))))
+
+       (and oid (nil? fresh-o))
+       (conj (str "feed: the composer's own bundle is missing from its own"
+                  " diagnosis: " (pr-str (:doc fresh))))
+
+       (and fresh-o (true? (get-in fresh-o [:exposure :withheld])))
+       (conj (str "feed: a composer holding {:kind feed_view :actions []}"
+                  " reads exposure WITHHELD — the grant was designed for"
+                  " exactly this reader"))
+
+       (and fresh-o (true? (get-in fresh-o [:exposure :known]))
+            (not= 0 (get-in fresh-o [:exposure :mornings])))
+       (conj (str "feed: a bundle no screen has reported reads "
+                  (pr-str (:exposure fresh-o)) " — nothing was shown yet"))
+
+       (and fresh-o (not= "still_offered" (str (:lesson fresh-o))))
+       (conj (str "feed: an offered bundle reads lesson "
+                  (pr-str (:lesson fresh-o)) " — nothing has been answered"))
+
+       (and fresh-o (true? (:diagnosis_needed fresh-o)))
+       (conj "feed: an unanswered bundle already owes a diagnosis")
+
+       (and oid (nil? card))
+       (conj (str "feed: the staged bundle never reached the member's feed,"
+                  " so no screen could have reported it"))
+
+       (and card (not= 201 (:status viewed)))
+       (conj (str "feed: the member's screen could not report the crown ("
+                  (:status viewed) "): " (pr-str (:doc viewed))))
+
+       (and shown-o (not (true? (get-in shown-o [:exposure :known]))))
+       (conj (str "feed: one member recorded one morning and the exposure"
+                  " still reads unknown: " (pr-str (:exposure shown-o))))
+
+       (and shown-o (true? (get-in shown-o [:exposure :known]))
+            (not= 1 (get-in shown-o [:exposure :mornings])))
+       (conj (str "feed: one screen, one day, and the exposure reads "
+                  (pr-str (:exposure shown-o)) " mornings"))
+
+       (and shown-o (true? (get-in shown-o [:exposure :known]))
+            (not-any? #(= member (str (:member %)))
+                      (get-in shown-o [:exposure :by])))
+       (conj (str "feed: the exposure does not name the member whose screen"
+                  " reported it: " (pr-str (:exposure shown-o))))
+
+       (and card (not= 200 (:status declined)))
+       (conj (str "feed: the bundle's decline answered " (:status declined)
+                  ": " (pr-str (:doc declined))))
+
+       (and word (= 200 (:status declined)) (not= 201 (:status said)))
+       (conj (str "feed: the quick word after the decline answered "
+                  (:status said) ": " (pr-str (:doc said))))
+
+       (and after-o (not= "declined" (str (:answered after-o))))
+       (conj (str "feed: a declined bundle reads answered "
+                  (pr-str (:answered after-o))))
+
+       (and after-o (not= "shown_and_declined" (str (:lesson after-o))))
+       (conj (str "feed: shown once and declined reads lesson "
+                  (pr-str (:lesson after-o)) " — a decline is a person's"
+                  " answer to a card they read, and it teaches"))
+
+       (and after-o (not (true? (:diagnosis_needed after-o))))
+       (conj "feed: shown and declined, and the document says no diagnosis is owed")
+
+       (and after-o (str/blank? (str (:not_before after-o))))
+       (conj "feed: the declined bundle's floor is not on the diagnosis")
+
+       (and after-o (= 201 (:status said))
+            (not-any? #(and (= (str word) (str (:reason %)))
+                            (= (name not-this-week) (str (:verdict %))))
+                      (:reasons after-o)))
+       (conj (str "feed: the word the member tapped is not on the"
+                  " diagnosis: " (pr-str (:reasons after-o))
+                  " — the reasons are what make a recomposition specific"
+                  " instead of a guess"))
+
+       (and one (not= 1 (count (get-in one [:doc :outcomes]))))
+       (conj (str "feed: ?outcome=<id> answered "
+                  (count (get-in one [:doc :outcomes])) " outcomes"))
+
+       (and undiagnosed (not= 409 (:status undiagnosed)))
+       (conj (str "feed: a recomposition of a shown-and-declined bundle with"
+                  " no diagnosis answered " (:status undiagnosed) ": "
+                  (pr-str (:doc undiagnosed)) " — NO BURIAL WITHOUT A"
+                  " DIAGNOSIS is law 4, and this is the one door where it"
+                  " can be a wall"))
+
+       (and undiagnosed (= 409 (:status undiagnosed))
+            (not= :no-burial-without-a-diagnosis (refused-guard undiagnosed)))
+       (conj (str "feed: the undiagnosed recomposition was refused by "
+                  (pr-str (:guard (:doc undiagnosed)))
+                  " — the composer's duty fires FIRST, before the floor"
+                  " says when"))
+
+       (and (= 409 (:status undiagnosed)) (not= 201 (:status insight)))
+       (conj (str "feed: the composer could not publish its diagnosis ("
+                  (:status insight) "): " (pr-str (:doc insight))))
+
+       (and diagnosed' (not= 409 (:status diagnosed')))
+       (conj (str "feed: a diagnosed recomposition staged the morning after"
+                  " the decline answered " (:status diagnosed')
+                  " — the floor still stands behind the diagnosis"))
+
+       (and diagnosed' (= 409 (:status diagnosed'))
+            (not= :a-recomposition-waits-its-turn (refused-guard diagnosed')))
+       (conj (str "feed: with a diagnosis cited, the recomposition was refused"
+                  " by " (pr-str (:guard (:doc diagnosed')))
+                  " — once the duty is done the only wall left is the date"))
+
+       (and switch-id (not= 200 (:status stopped)))
+       (conj (str "feed: the member could not stop their own record ("
+                  (:status stopped) ")")))}))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -5351,7 +5665,20 @@
     {:name :feed/formula
      :needs #{[:route :feed] [:kind :member]
               [:kind :feed_view] [:kind :feed_view_consent]}
-     :run feed-formula-violations}]
+     :run feed-formula-violations}
+    ;; …and the composer's diagnosis last of all (waymark-8um.4), for
+    ;; the contest's reasons once more — it turns a member's record on
+    ;; and writes a view about a read — plus one of its own: it is the
+    ;; only obligation that stages a bundle and leaves it DECLINED with
+    ;; a floor stamped, which is the state the wall it proves is about.
+    ;; The decline is terminal, so the population retires it and the
+    ;; engine it hands on is the engine it found.
+    {:name :feed/diagnosis
+     :needs #{[:route :feed] [:kind :value] [:kind :outcome]
+              [:kind :outcome_piece] [:kind :insight]
+              [:kind :feed_view] [:kind :feed_view_consent]
+              [:kind :verdict_reason]}
+     :run feed-diagnosis-violations}]
    ;; Every obligation spec-feed § 'Where the law is proved' names is
    ;; here now, each having landed with the bead that landed the
    ;; mechanism it judges rather than ahead of it.

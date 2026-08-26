@@ -24,7 +24,12 @@
     the rest MOOT (the timing was wrong);
   - atomicity: a piece whose target refuses at the tap rolls the whole
     tap back, so no outcome ever reads accepted while a piece silently
-    did not land.
+    did not land;
+  - the diagnosis duty (waymark-8um.4): the composer's document at
+    `/api/-/diagnosis` reading exposure off real view rows and reasons
+    off real reason rows, and `no-burial-without-a-diagnosis` standing
+    in front of the floor — shown-and-declined refused without a
+    diagnosis, never-shown recomposing freely, unknown said as unknown.
 
   THE COMPOSER HERE IS A PERSON, and deliberately. The four-eyes wall
   is `g/not-the-field :composed_by` — it compares principal IDS, so a
@@ -50,7 +55,7 @@
             [waymark10.wire :as wire]
             [workqueue10.main :as main]
             [workqueue10.resources.outcome :as outcome])
-  (:import (java.time Instant)))
+  (:import (java.time Instant LocalDate)))
 
 (def ^:private tables
   ;; THE WHOLE FOLDED REGISTRY'S TABLES — conformance_test's rule, and
@@ -382,10 +387,15 @@
       (is (= 1 (:declined_count d)))
       (let [floor (Instant/parse (str (:not_before d)))]
         (is (pos? (compare floor (Instant/now))))))
-    (testing "a recomposition staged before that floor is refused, by name"
+    ;; waymark-8um.4 MOVED THIS CLAIM ONE WALL BACK, and the move is the
+    ;; bead: a declined outcome was SHOWN — a person read the card and
+    ;; answered it — so the composer's duty fires before the date does.
+    ;; The floor's own sentence is proved in § 16, behind a diagnosis.
+    (testing "a recomposition staged the next morning hears about the diagnosis first, not the date"
       (let [r (stage-outcome! "composer-week" (vid v) {:supersedes o})]
         (is (= 409 (:status r)))
-        (is (= "a-recomposition-waits-its-turn" (guard-of r)))))
+        (is (= "no-burial-without-a-diagnosis" (guard-of r)))
+        (is (str/includes? (detail r) "shown and declined"))))
     (testing "and so is one that supersedes an outcome nobody has answered yet"
       (let [live (id-of (stage-outcome! "composer-week2" (vid v)))
             r (stage-outcome! "composer-week2" (vid v) {:supersedes live})]
@@ -700,17 +710,21 @@
   pack's own idiom, for its own reason: an unleashed agent is already
   answered 404 by the router's default deny, and that proves nothing
   about any wall. → the headers that present the leash."
-  [id actions]
-  (let [hs {"x-waymark-principal" id "x-waymark-actor-type" "agent"}
-        made (req :post "/api/grants"
-                  {:audience id
-                   :scope [{:kind "composition_request" :actions actions}]}
-                  (human "colton-leash"))
-        gid (id-of made)
-        took (invoke! "grants" gid :accept nil hs)]
-    (assert (= 201 (:status made)) (pr-str (json made)))
-    (assert (= 200 (:status took)) (pr-str (json took)))
-    (assoc hs "x-waymark-grant" gid)))
+  ([id actions]
+   (leash! id [{:kind "composition_request" :actions actions}] :scope))
+  ;; …and the whole SCOPE, for a leash that covers more than one kind
+  ;; (waymark-8um.4's composer reads two records and writes three
+  ;; kinds) — the pack's own second arity, one register over
+  ([id scope _]
+   (let [hs {"x-waymark-principal" id "x-waymark-actor-type" "agent"}
+         made (req :post "/api/grants"
+                   {:audience id :scope scope}
+                   (human "colton-leash"))
+         gid (id-of made)
+         took (invoke! "grants" gid :accept nil hs)]
+     (assert (= 201 (:status made)) (pr-str (json made)))
+     (assert (= 200 (:status took)) (pr-str (json took)))
+     (assoc hs "x-waymark-grant" gid))))
 
 (defn- ask!
   ([who] (ask! who nil))
@@ -841,3 +855,308 @@
           (let [doc'' (json (req :get "/api/-/feed" (human who)))]
             (is (not-any? #(str/ends-with? (str (:self %)) rid)
                           (get-in doc'' [:crown :standing])))))))))
+
+;; ── 16. no burial without a diagnosis (waymark-8um.4) ───────────────
+;;
+;; Law 4, lived in. What the scenarios cannot reach — every arm of the
+;; wall is about a PRIOR ROW, and a scenario's literal input can only
+;; cite a dangling one — and what the pack proves from one world (the
+;; document's shape, the refusal by name, the duty before the date) is
+;; widened here to the arms only a controlled world can arrange: an
+;; EXPIRED prior, shown or never shown, with the clock moved by
+;; rewriting its leash rather than by waiting a week (`clear-impact!`'s
+;; own trick, one field over); a member recording, a member not; a
+;; diagnosis the house dismissed; and a leash that names neither
+;; record.
+;;
+;; EVERY TEST THAT TURNS A RECORD ON TURNS IT OFF, in a `finally`, for
+;; the pack's own reason: the deftests share one database in a random
+;; order, and *exposure unknown* is only claimable while nobody is
+;; recording.
+
+(defn- today [] (str (LocalDate/now)))
+
+(defn- consent! [who]
+  (let [r (req :post "/api/feed_view_consents" {} (human who))]
+    (assert (= 201 (:status r)) (pr-str (json r)))
+    (id-of r)))
+
+(defn- stop! [who cid]
+  (when cid (invoke! "feed_view_consents" cid :stop nil (human who))))
+
+(defn- view!
+  "A member's screen reports the crown card for one outcome, today."
+  [who oid]
+  (req :post "/api/feed_views"
+       {:card_id (str "outcomes/outcome/" oid) :population "outcomes"
+        :day (today)}
+       (human who)))
+
+(defn- diagnosis
+  ([who] (diagnosis who nil))
+  ([who oid] (json (req :get (str "/api/-/diagnosis"
+                                  (when oid (str "?outcome=" oid)))
+                        (if (map? who) who (human who))))))
+
+(defn- diagnosed [doc oid]
+  (some #(when (str/ends-with? (str (:self %)) (str oid)) %) (:outcomes doc)))
+
+(defn- lapse!
+  "Move the clock past an outcome's leash by rewriting `good_until` to
+  the past — data only, no transition, no version bump — so `expire`
+  is answered by the engine's own wall against the real clock."
+  [oid]
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (let [row (store/load-row (:storage *eng*) tx :outcome oid {})]
+        (store/update-data! (:storage *eng*) tx :outcome oid
+                            (assoc (dissoc (:data row) :good_until)
+                                   "good_until" "2020-01-01T00:00:00Z")
+                            nil)))))
+
+(defn- expire! [who oid]
+  (let [r (invoke! "outcomes" oid :expire nil (human who))]
+    (assert (= 200 (:status r)) (pr-str (json r)))
+    r))
+
+(defn- publish-diagnosis!
+  "The composer's diagnosis — an insight, law 4's own word — citing
+  the prior outcome and offering the value's own still_stands: the one
+  tap that separates *the value is wrong* from *the plan was wrong*."
+  [who prior value-id evidence]
+  (req :post "/api/insights"
+       {:finding (str "Shown and turned down — the Saturday was right and"
+                      " the first step was too big; recompose smaller")
+        :evidence (or evidence [(str "/api/outcomes/" prior)])
+        :offer_kind "value" :offer_id value-id :offer_action "still_stands"
+        :offer_href (str "/api/values/" value-id)}
+       (if (map? who) who (human who))))
+
+(defn- reason! [who oid word]
+  (req :post "/api/verdict_reasons"
+       {:subject_kind "outcome" :subject_id oid
+        :verdict "not_this_week" :reason word}
+       (human who)))
+
+(deftest the-diagnosis-reads-what-the-house-did-with-a-bundle
+  (let [member "colton-dx"
+        composer "composer-dx"
+        v (declare-value! member "a diagnosed Saturday" ["the shop"])
+        o (id-of (stage-outcome! composer (vid v)))
+        other (id-of (stage-outcome! "composer-dx-other" (vid v)))
+        cid (atom nil)]
+    (try
+      (is (= 201 (:status (stage-piece! composer o "Cut the stock" "task"
+                                        {:title "Cut the stock (dx)"}))))
+      (is (= 201 (:status (stage-piece! composer o "Glue it up" "task"
+                                        {:title "Glue it up (dx)"}))))
+      (testing "the document carries the duty, and the composer's own bundle — nobody else's"
+        (let [doc (diagnosis composer)
+              mine (diagnosed doc o)]
+          (is (str/includes? (str (:duty doc)) "never shown is not a verdict"))
+          (is (some? mine))
+          (is (nil? (diagnosed doc other)))
+          (is (= "offered" (:answered mine)))
+          (is (= "still_offered" (:lesson mine)))
+          (is (false? (:diagnosis_needed mine)))
+          (testing "a human reads unscoped — nothing is withheld"
+            (is (true? (get-in doc [:reads :exposure])))
+            (is (true? (get-in doc [:reads :reasons])))
+            (is (not (true? (get-in mine [:exposure :withheld])))))
+          (testing "and with no screen having reported it, the exposure is unknown or nought — never a guess"
+            (is (or (false? (get-in mine [:exposure :known]))
+                    (= 0 (get-in mine [:exposure :mornings])))))))
+      (reset! cid (consent! member))
+      (is (= 201 (:status (view! member o))))
+      (testing "one member, one morning, and the exposure says exactly that"
+        (let [mine (diagnosed (diagnosis composer) o)]
+          (is (true? (get-in mine [:exposure :known])))
+          (is (= 1 (get-in mine [:exposure :mornings])))
+          (is (= [{:member member :mornings 1}] (get-in mine [:exposure :by])))
+          (is (some #{member} (get-in mine [:exposure :measured])))))
+      (is (= 200 (:status (invoke! "outcomes" o :not_this_week nil (human member)))))
+      (is (= 201 (:status (reason! member o "wrong_time"))))
+      (testing "declined with a word: the lesson, the floor, the reason"
+        (let [mine (diagnosed (diagnosis composer) o)]
+          (is (= "declined" (:answered mine)))
+          (is (= member (:answered_by mine)))
+          (is (= "shown_and_declined" (:lesson mine)))
+          (is (true? (:diagnosis_needed mine)))
+          (is (= 1 (:declined_count mine)))
+          (is (some? (:not_before mine)))
+          (is (= [{:verdict "not_this_week" :reason "wrong_time" :said_by member}]
+                 (mapv #(select-keys % [:verdict :reason :said_by]) (:reasons mine))))
+          (is (str/includes? (str (:says mine)) "wrong_time"))
+          (is (str/includes? (str (:says mine)) "diagnosis to write"))))
+      (testing "?outcome=<id> asks about one"
+        (let [doc (diagnosis composer o)]
+          (is (= 1 (count (:outcomes doc))))
+          (is (some? (diagnosed doc o)))))
+      (testing "the pieces ride along, in the states the decline left them"
+        (is (= #{"moot"} (into #{} (map :state)
+                               (:pieces (diagnosed (diagnosis composer) o))))))
+      (finally (stop! member @cid)))))
+
+(deftest the-duty-fires-before-the-date
+  (let [member "colton-duty"
+        composer "composer-duty"
+        v (declare-value! member "a declined week" ["the shop"])
+        q (id-of (stage-outcome! composer (vid v)))]
+    (is (= 200 (:status (invoke! "outcomes" q :not_this_week nil (human member)))))
+    (testing "a recomposition with no diagnosis hears about the diagnosis — by name, pointing at the document"
+      (let [r (stage-outcome! composer (vid v) {:supersedes q})]
+        (is (= 409 (:status r)))
+        (is (= "no-burial-without-a-diagnosis" (guard-of r)))
+        (is (str/includes? (detail r) (str "/api/-/diagnosis?outcome=" q)))
+        (is (str/includes? (detail r) "diagnosis_id"))))
+    (testing "a diagnosis that is not there"
+      (let [r (stage-outcome! composer (vid v)
+                              {:supersedes q
+                               :diagnosis_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9ZZ"})]
+        (is (= 409 (:status r)))
+        (is (= "no-burial-without-a-diagnosis" (guard-of r)))
+        (is (str/includes? (detail r) "no insight"))))
+    (testing "a diagnosis about something else"
+      (let [elsewhere (publish-diagnosis! composer q (vid v) [(str "/api/values/" (vid v))])]
+        (is (= 201 (:status elsewhere)))
+        (let [r (stage-outcome! composer (vid v)
+                                {:supersedes q :diagnosis_id (id-of elsewhere)})]
+          (is (= 409 (:status r)))
+          (is (= "no-burial-without-a-diagnosis" (guard-of r)))
+          (is (str/includes? (detail r) "does not cite")))))
+    (testing "a diagnosis with nothing to diagnose"
+      (let [i (publish-diagnosis! composer q (vid v) nil)]
+        (is (= 201 (:status i)))
+        (let [r (stage-outcome! composer (vid v) {:diagnosis_id (id-of i)})]
+          (is (= 409 (:status r)))
+          (is (= "no-burial-without-a-diagnosis" (guard-of r)))
+          (is (str/includes? (detail r) "supersedes nothing")))
+        (testing "…and once the duty is done, the only wall left is the date"
+          (let [r (stage-outcome! composer (vid v)
+                                  {:supersedes q :diagnosis_id (id-of i)})]
+            (is (= 409 (:status r)))
+            (is (= "a-recomposition-waits-its-turn" (guard-of r)))))
+        (testing "the recomposition's link to its diagnosis is declared beside supersedes"
+          (is (= #{"supersedes" "diagnosis"}
+                 (into #{} (comp (map :rel) (filter #{"supersedes" "diagnosis"}))
+                       (:links outcome/outcome)))))))))
+
+(deftest never-shown-is-not-a-verdict
+  (let [member "colton-ns"
+        composer "composer-ns"
+        v (declare-value! member "an unseen week" ["the shop"])
+        cid (consent! member)]
+    (try
+      (let [p (id-of (stage-outcome! composer (vid v)))]
+        (lapse! p)
+        (expire! member p)
+        (testing "somebody was recording and never had it on screen: never shown, nothing owed"
+          (let [mine (diagnosed (diagnosis composer) p)]
+            (is (= "expired" (:answered mine)))
+            (is (true? (get-in mine [:exposure :known])))
+            (is (= 0 (get-in mine [:exposure :mornings])))
+            (is (some #{member} (get-in mine [:exposure :measured])))
+            (is (= "never_shown" (:lesson mine)))
+            (is (false? (:diagnosis_needed mine)))
+            (is (str/includes? (str (:says mine)) "rank"))))
+        (testing "and the wall does not fire — this taught the composer about the rank, not the house"
+          (let [r (stage-outcome! composer (vid v) {:supersedes p})]
+            (is (= 201 (:status r)))
+            (is (= p (:supersedes (fields r)))))))
+      (finally (stop! member cid)))))
+
+(deftest shown-and-passed-over-teaches-like-a-decline
+  (let [member "colton-po"
+        composer "composer-po"
+        v (declare-value! member "a passed-over week" ["the shop"])
+        cid (consent! member)]
+    (try
+      (let [p (id-of (stage-outcome! composer (vid v)))]
+        (is (= 201 (:status (view! member p))))
+        (lapse! p)
+        (expire! member p)
+        (testing "on a recording screen and left to lapse: the lesson"
+          (let [mine (diagnosed (diagnosis composer) p)]
+            (is (= "shown_and_passed_over" (:lesson mine)))
+            (is (true? (:diagnosis_needed mine)))
+            (is (= 1 (get-in mine [:exposure :mornings])))))
+        (testing "the wall fires, and names the lapse"
+          (let [r (stage-outcome! composer (vid v) {:supersedes p})]
+            (is (= 409 (:status r)))
+            (is (= "no-burial-without-a-diagnosis" (guard-of r)))
+            (is (str/includes? (detail r) "left to lapse"))))
+        (testing "a diagnosis the house dismissed is not a diagnosis"
+          (let [k (publish-diagnosis! composer p (vid v) nil)]
+            (is (= 201 (:status k)))
+            (is (= 200 (:status (invoke! "insights" (id-of k) :dismiss nil (human member)))))
+            (let [r (stage-outcome! composer (vid v)
+                                    {:supersedes p :diagnosis_id (id-of k)})]
+              (is (= 409 (:status r)))
+              (is (= "no-burial-without-a-diagnosis" (guard-of r)))
+              (is (str/includes? (detail r) "dismissed")))))
+        (testing "a standing diagnosis citing the prior admits the recomposition — no floor stands behind an expiry"
+          (let [i (publish-diagnosis! composer p (vid v) nil)
+                r (stage-outcome! composer (vid v)
+                                  {:supersedes p :diagnosis_id (id-of i)})]
+            (is (= 201 (:status i)))
+            (is (= 201 (:status r)))
+            (is (= (id-of i) (:diagnosis_id (fields r))))
+            (testing "and the prior's diagnosis reads the chain from its side"
+              (let [mine (diagnosed (diagnosis composer) p)]
+                (is (= [(str "/api/insights/" (id-of i))]
+                       (mapv :diagnosis (:superseded_by mine)))))))))
+      (finally (stop! member cid)))))
+
+(deftest exposure-nobody-recorded-is-unknown-not-nought
+  ;; claimable only while nobody is recording — every sibling here
+  ;; stops its own switch on the way out
+  (let [member "colton-unk"
+        composer "composer-unk"
+        v (declare-value! member "an unrecorded week" ["the shop"])
+        p (id-of (stage-outcome! composer (vid v)))]
+    (lapse! p)
+    (expire! member p)
+    (testing "expired, and no member who could have seen it was recording"
+      (let [mine (diagnosed (diagnosis composer) p)]
+        (is (false? (get-in mine [:exposure :known])))
+        (is (str/includes? (str (get-in mine [:exposure :says])) "unknown"))
+        (is (= "unknown" (:lesson mine)))
+        (is (false? (:diagnosis_needed mine)))))
+    (testing "and the wall reads what the record holds and never guesses past it"
+      (is (= 201 (:status (stage-outcome! composer (vid v) {:supersedes p})))))))
+
+(deftest the-records-are-withheld-from-a-leash-that-does-not-name-them
+  (let [member "colton-leash"
+        v (declare-value! member "a leashed reading" ["the shop"])
+        blind (leash! "composer-blind"
+                      [{:kind "outcome" :actions ["create"]}] :scope)
+        sighted (leash! "composer-sighted"
+                        [{:kind "outcome" :actions ["create"]}
+                         {:kind "feed_view" :actions []}
+                         {:kind "verdict_reason" :actions []}] :scope)
+        stage (fn [hs] (req :post "/api/outcomes"
+                            {:goal "A leashed Saturday" :value_id (vid v)
+                             :routing "It runs through the shop."
+                             :evidence [(str "/api/values/" (vid v))]}
+                            hs))
+        b (id-of (stage blind))
+        s' (id-of (stage sighted))]
+    (testing "a leash naming neither record reads its outcome with both halves withheld, by name"
+      (let [doc (diagnosis blind)
+            mine (diagnosed doc b)]
+        (is (some? mine))
+        (is (false? (get-in doc [:reads :exposure])))
+        (is (false? (get-in doc [:reads :reasons])))
+        (is (true? (get-in mine [:exposure :withheld])))
+        (is (str/includes? (str (get-in mine [:exposure :says])) "feed_view"))
+        (is (nil? (:reasons mine)))))
+    (testing "the two read grants the records were designed for admit them"
+      (let [doc (diagnosis sighted)
+            mine (diagnosed doc s')]
+        (is (true? (get-in doc [:reads :exposure])))
+        (is (true? (get-in doc [:reads :reasons])))
+        (is (not (true? (get-in mine [:exposure :withheld]))))
+        (is (vector? (:reasons mine)))))
+    (testing "and neither composer reads the other's bundle"
+      (is (nil? (diagnosed (diagnosis blind) s')))
+      (is (nil? (diagnosed (diagnosis sighted) b))))))

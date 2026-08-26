@@ -4116,3 +4116,300 @@ settled, which is the only shape the card grammar leaves.
 `:feed/verdict-reasons` in `packs/feed` is the obligation, below
 `:feed/outcomes`; `135-feed-screen.js` draws the chips in
 `reasonChips`, and `ui-drive.mjs`'s feed walk taps one.
+
+## Built — 8um.4, the diagnosis duty (2026-08-26, waymark-8um.4)
+
+Law 4, built: **no burial without a diagnosis.** The composer's duty is a
+READ it can make and a WALL it cannot walk around, and the two are one
+sentence, said on the document and enforced at the door:
+
+> An outcome shown N mornings and declined with reason R is a diagnosis to
+> write before a recomposition; an outcome never shown is not a verdict.
+
+This is the last child of the contest epic and the first thing waymark-1uv
+("Ranked, not capped") depends on: the moment the cap on outcomes comes off,
+most of what a composer stages will never reach a screen, and a duty that
+could not tell *never shown* from *shown and passed over* would bury the
+composer under its own rank. So the distinction is built here, now, and the
+1uv.4 bead inherits it rather than retrofitting it.
+
+### Where the duty bites, and why it is the recomposition
+
+The bead was filed against a demotion that does not exist. `8um.3` landed the
+formula as a sort key — *"the step is a sort key, never a filter — nothing
+here can drop a candidate"* — and the crown's `:take` IS the floor, so nothing
+in this tree fades an outcome. Law 4's *"before the old form may fade"*
+therefore has one moment left where the composer ACTS on a lost contest: the
+recomposition, `outcome.supersedes`. That is where the duty is a wall.
+
+And it stands **in front of the floor**, because the epic's own sentence is
+*the composer's duty fires first*. A composer that comes back the next morning
+with no diagnosis hears about the diagnosis; only a composer that has one
+hears about the date. The floor wall's own refusal already said *"diagnose the
+friction in the meantime"*; this bead makes that sentence structural.
+
+```clojure
+:create-guards [cites-what-it-read
+                names-a-value
+                names-a-person
+                routes-through-something-loved
+                no-burial-without-a-diagnosis      ; the duty…
+                a-recomposition-waits-its-turn     ; …before the date
+                the-request-is-open
+                outcomes-are-few]
+```
+
+### The read: `GET /api/-/diagnosis`
+
+**A document, not a kind, and not a field group** — weighed in that order:
+
+- A `diagnosis` KIND the composer writes would be a row whose whole content
+  is a join the engine can already compute, and a row the composer could
+  write is a row it could write wrong. The diagnosis's *prose* half does have
+  a kind, and it is the one law 4 names: an insight (below).
+- A FIELD GROUP on the outcome's own envelope would ride `waymark_get` at the
+  MCP door, which is the one thing a document cannot do. But the envelope is
+  the generic projection of one row, and `derived` reaches across kinds only
+  through declared edges — a view row names its card as a STRING
+  (`outcomes/outcome/<id>`), not a ref, so there is no edge to declare, and
+  a bespoke per-kind render hook would be the framework growing a seam for
+  one reader.
+- So it is a DOCUMENT beside the feed, in the feed's module
+  (`waymark10.server.diagnosis`, mounted by `routes/feed.clj` as the second
+  static route), because every fact in it is the feed's: the card-id
+  convention, the view record, the reason record, the crown's population.
+  It names `:outcome` by keyword exactly as `feed/outcomes` does and answers
+  nothing on an engine that holds neither.
+
+For every outcome the caller composed (newest twenty, or `?outcome=<id>`):
+
+```json
+{"self": "/api/outcomes/01H…",
+ "card_ids": ["outcomes/outcome/01H…", "do_now/outcome/01H…", …],
+ "answered": "declined",                       // accepted · declined · expired · lapsed · offered
+ "answered_by": "colton",
+ "exposure": {"known": true, "mornings": 3, "views": 3,
+              "by": [{"member": "colton", "mornings": 3}],
+              "measured": ["colton"]},
+ "reasons": [{"self": "/api/verdict_reasons/…", "about": "/api/outcome_pieces/…",
+              "verdict": "not_this", "reason": "wrong_time", "words": "…", "said_by": "colton"}],
+ "pieces": [{"self": "…", "says": "…", "state": "moot"}],
+ "not_before": "2026-09-02T…", "declined_count": 1,
+ "supersedes": "/api/outcomes/…", "superseded_by": [{"self": "…", "state": "offered", "diagnosis": "/api/insights/…"}],
+ "lesson": "shown_and_declined",
+ "diagnosis_needed": true,
+ "says": "Declined, shown 3 mornings. The house said why: wrong_time on /api/outcome_pieces/… This is a diagnosis to write before a recomposition: …"}
+```
+
+…under a `duty` sentence quoted on every read, and a `reads` block saying
+which of the two records this read was admitted to.
+
+**Exposure is read under the card ids a row can wear, not one.** The crown
+cards under `:outcomes` by default, but which band a population sits in is
+the household's recipe to say and `check-recipe!` does not forbid a stored
+recipe lining it up elsewhere. So `feed/card-ids` answers one id per census
+section, and both the document and the wall ask under all five — each one a
+prefix scan of the `(card_id, day, member)` index `8um.1` spent its `:unique`
+group on. `outcome-card`'s posture in the pack, one register over.
+
+**Exposure unknown is a third answer, and it is never spelled 0.** The record
+is per member, by choice (law 7). *Measured* is every member other than the
+composer whose switch is RECORDING and was created before the outcome stopped
+being offered; a switch turned on after the week was over recorded nothing
+about it, and counting that member would turn *unknown* into *never shown* —
+the one substitution this document exists to refuse. With rows, the count is
+the count. With no rows and somebody measured, it is a real nought: *never
+shown*. With nobody measured it is *unknown*, said as unknown. A stopped
+switch reads as unmeasured, and the cost is recorded in the function's
+docstring: a member who recorded the week and stopped after it is undercounted
+toward *unknown*, because the switch's transitions are not read here and the
+other direction is the worse error.
+
+**A decline is itself an exposure.** Somebody read the card and answered it,
+so a declined outcome reads `shown_and_declined` whether or not the decider's
+screen was recording; the mornings before the decline are counted where the
+record has them and called unknown where it does not.
+
+### The lesson, in one function
+
+`diagnosis/lesson` is public because the pack and the deftests pin it:
+
+| answered | exposure | lesson | owes a diagnosis |
+|---|---|---|---|
+| accepted | — | `accepted` | no |
+| declined | any | `shown_and_declined` | **yes** |
+| expired | known, ≥1 morning | `shown_and_passed_over` | **yes** |
+| expired | known, 0 | `never_shown` | no — *this taught you about the rank* |
+| expired | unknown | `unknown` | no — *and none can be honest* |
+| offered / lapsed | — | `still_offered` | not yet |
+
+### Projected through the caller's own sight
+
+The outcomes are the composer's own (`:own-surface {:by :composed_by}`) and
+need no grant. The two records are other members' — a view row is the
+member's, a reason is the sayer's — so each half is read ONLY when the leash
+admits the whole kind, through `:whole-kind?` and deliberately not `:kind?`,
+which answers yes for every own-surface kind and would have let a composer
+holding no grant at all read every member's view rows through the courtesy
+that lets a member read their own. The grants are exactly the ones `8um.1`
+and `jfv.16` each designed for this reader: `{:kind "feed_view" :actions []}`
+and `{:kind "verdict_reason" :actions []}`. A human reads unscoped. A leash
+naming neither reads a document that says, per half, *withheld* and which
+grant to ask for — never a quiet zero.
+
+**The composer contract grows by those two lines**, read-only, beside the
+`insight.create` it already holds. Nothing else about the leash moves.
+
+### The wall: `no-burial-without-a-diagnosis`
+
+`outcome` grows one optional field, `diagnosis_id`, a `:waymark/ref` to
+`insight` with no `:filter` (`request_id`'s reasoning: nothing queries outcomes
+by diagnosis, the document reads the chain from the outcome's side, so it lands
+in `data`, the storage facet does not move, the migrate plan stays empty), and
+one create guard, `:judges [:diagnosis_id]`, `:reads [:outcome :feed_view
+:insight]`. Its arms, in order:
+
+1. Nothing cited and nothing superseded — allow.
+2. A `diagnosis_id` with no `supersedes` — refused: *a diagnosis is about a
+   prior outcome; name the one it diagnoses, or cite none.*
+3. The prior is missing or still offered — allow, and say nothing; those are
+   the floor wall's sentences and it stands next.
+4. The prior was SHOWN — declined (by definition), or expired with a view row
+   under any of its card ids — and no diagnosis is cited: **refused by name**,
+   with the document's address in the sentence
+   (`/api/-/diagnosis?outcome=<id>`) and what to do
+   (*publish an insight that cites /api/outcomes/<id> in its evidence and
+   proposes the smaller step, the loved activity, or the better time*).
+5. The prior was never shown, or its exposure is unknown, and no diagnosis is
+   cited — allow. **That is 1uv.4's whole point, landed here:** the wall reads
+   what the record holds and never guesses past it. On an engine assembled
+   without the feed module, `:find` answers nil for `feed_view`, and nil
+   reads as unknown.
+6. A diagnosis is cited: it must exist, it must cite the prior's address in
+   its `evidence`, and the house must not have DISMISSED it — *a
+   recomposition built on a diagnosis the house said was not useful is the
+   old ask in a new hat*. A dismissal with a quick reason (`insight.dismiss`
+   carries `:reasons true` since `jfv.16`) teaches again, on the record.
+
+**The diagnosis IS an insight, and that is law 4's own word** — *"an insight
+proposing a recomposition"*. It was the cheapest honest spelling as well as
+the literal one: the kind exists, the composer's leash already holds
+`insight.create`, it is capped at three a day so a composer ranks its
+diagnoses as it ranks its findings, it cards in decide so the household reads
+what the composer concluded about them before the recomposition lands, and
+the four-eyes wall on it is already the sugar's. What it costs is that an
+insight OFFERS one next step — `offers-something-light` refuses one that
+does not — and the honest offer for a diagnosis is the value's own
+`still_stands`: the one tap `jfv.5`'s contract named for separating *the
+value is wrong* from *the plan was wrong*. The deftests and the pack offer
+exactly that. An offer-less diagnosis is filed rather than smuggled.
+
+**Not author-checked, and recorded.** The wall asks that the insight cite the
+prior and still stand; it does not ask who wrote it. A person may write the
+diagnosis — the bead's own v1 fallback, *"this keeps not resonating — want a
+recomposition?"* — and a second composer's honest finding is a diagnosis too.
+Requiring the citation is what keeps a stray insight from being borrowed.
+
+**As strong as the floor, exactly.** The wall is on `supersedes`. A composer
+that stages a fresh outcome naming no prior walks past it, as it already walks
+past `a-recomposition-waits-its-turn` and the whole backoff schedule. That is
+not a hole this bead opened and it is not one it can close: whether a new
+bundle IS a recomposition is a judgment about two texts, and a wall that tried
+would be a second opinion about the composer's work. *Recomposition is a NEW
+outcome naming `supersedes`* is the contract's sentence, and the composer is
+held to it by `jfv.5`, not by a door.
+
+### Where the law is proved
+
+- **No scenario names the wall, and the absence is forced** the way
+  `names-a-person`'s and `the-request-is-open`'s are: every arm is about a
+  PRIOR ROW, and a scenario's literal `:input` can only cite a dangling one,
+  which the wall lets through on purpose so the floor wall may say *supersede
+  one that exists*. `make check-queue` is unmoved at **37 kinds, 11 warnings,
+  49 scenarios judged**; the outcome kind's line now reads *2 deferred to the
+  suite: reads :composition_request, :feed_view, :insight, …*.
+- **`:feed/diagnosis`, the pack's new LAST obligation** (`:needs` the route,
+  `value`, `outcome`, `outcome_piece`, `insight`, `feed_view`,
+  `feed_view_consent`, `verdict_reason`). It runs below `:feed/formula` for the
+  contest's reasons once more — it turns a member's record on and writes a
+  view about a read — and one of its own: it is the only obligation that
+  leaves a bundle DECLINED with a floor stamped, the state the wall it proves
+  is about. Its claims: a composer whose leash names neither record reads its
+  document with both halves WITHHELD by name; a composer holding the two read
+  grants stages a bundle and reads exposure unknown-or-nought before any
+  screen has reported it, then exactly one morning by exactly that member
+  after one has; the member says not this week and taps a word, and the
+  document reads `declined`, `shown_and_declined`, `diagnosis_needed`, the
+  word and the floor; `?outcome=<id>` answers one; a recomposition with no
+  diagnosis is refused by `no-burial-without-a-diagnosis`; with an insight
+  citing the prior, the refusal moves to `a-recomposition-waits-its-turn` —
+  the duty before the date. It reports `:covered` only when the wall fired,
+  and `workqueue10.conformance-test` pins that coverage positive beside
+  `:feed/outcomes` and `:feed/verdict-reasons`.
+- **`outcome-test` § 16, six deftests**, for the arms only a controlled world
+  can arrange: the document's whole shape over real view rows and real reason
+  rows (`the-diagnosis-reads-what-the-house-did-with-a-bundle`); every refusal
+  sentence of the wall and the order it stands in
+  (`the-duty-fires-before-the-date` — no diagnosis, a diagnosis that is not
+  there, one about something else, one with nothing to diagnose, and then the
+  floor); an EXPIRED prior never on a recording screen recomposing freely
+  (`never-shown-is-not-a-verdict`); an expired prior that WAS on one refused
+  without a diagnosis, refused with a dismissed one, admitted with a standing
+  one, and the chain read back from the prior's side
+  (`shown-and-passed-over-teaches-like-a-decline`); exposure nobody recorded
+  reading `unknown` and the wall not firing
+  (`exposure-nobody-recorded-is-unknown-not-nought`); and a leash that names
+  neither record reading both halves withheld while the two read grants admit
+  them (`the-records-are-withheld-from-a-leash-that-does-not-name-them`). The
+  clock is moved by rewriting an outcome's `good_until` into the past — data
+  only, `clear-impact!`'s own trick one field over — so `expire` is answered
+  by the engine's own wall against the real clock. Every test that turns a
+  record on turns it off in a `finally`, because *unknown* is claimable only
+  while nobody is recording. § 7's old claim moved one wall back and the move
+  is the bead: a declined outcome's next-morning recomposition now hears about
+  the diagnosis, and the floor's sentence is proved behind one.
+
+### Recorded here, for whoever comes next
+
+- **No fingerprint moved, and it was computed rather than argued.** All 79
+  kinds of the full registry — the household's 37 and every module kind —
+  print byte-identical on `HEAD` and on this tree. A create-schema field and
+  a create guard are outside `fingerprint-of`'s facets (442.9's witnesses, a
+  fourth time), `:links` is advertisement, and no action was added anywhere.
+  No new table, no DDL, an empty migrate plan: production needs nothing before
+  the deploy that serves this.
+- **The MCP composer cannot reach a document.** The six fixed tools are over
+  KINDS; `waymark_get` builds `/api/<plural>/<id>` off a registry lookup, and
+  neither the feed nor this document has a plural. A composer at the MCP door
+  reads its diagnosis over HTTP with its bearer, exactly as it reads the
+  welcome document; the wall's refusal sentence carries the address. Filed:
+  either a seventh tool for documents, or `waymark_get` learning the
+  three-segment shape.
+- **`feed/card-ids` is the one framework growth**, and it is a read helper,
+  not a seam. If a household recipe ever cards outcomes under a second band,
+  the diagnosis keeps counting; the cost is five prefix scans per outcome
+  instead of one.
+- **The threshold is one.** The bead spoke of *N exposures (declared N)*. For
+  a declined prior the decline is the answer and N is not a question; for an
+  expired one, a single recorded morning is enough to say the house saw it and
+  let it lapse. Reading the recipe's `cools_after` as N was refused for
+  `8um.3`'s own reason: the moment a guard reads the formula it becomes law
+  with a revision behind it. If single mornings become common once the cap
+  comes off, a declared N is a follow-up, and it belongs on the recipe where
+  the household can read it.
+- **`superseded_by` is a scan of one indexed column** (`supersedes` carries
+  `:filter #{:eq}`), and the document is bounded at twenty outcomes plus one
+  by name; each costs one piece query, five view queries and at most six
+  reason queries. `reached_cap` says when the twenty filled.
+- **The document reads consent rows' STATE and not their transitions**, so a
+  member who recorded a week and stopped is undercounted toward *unknown* for
+  the zero-rows case. Their rows, where they exist, still count. Reading the
+  switch's history is the honest fix and it waits for a household that has
+  actually stopped one.
+- **Four follow-ups filed**: the MCP reach (**waymark-8um.5**); an
+  offer-less diagnosis insight, or a declared diagnosis offer, so a composer
+  need not borrow `value.still_stands` (**waymark-8um.6**); the composer
+  contract in `docs/spec-outcome-menu.md` § *The composer contract* citing
+  this section for the two read grants and the `diagnosis_id` obligation
+  (**waymark-8um.7**); and the consent-transitions read above
+  (**waymark-8um.8**).
