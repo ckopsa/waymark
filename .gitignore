@@ -20,6 +20,3 @@ full_stack/
 *.db
 .beads-credential-key
 .beads/proxieddb/
-
-# AOT output (CI only; production runs from source)
-classes/

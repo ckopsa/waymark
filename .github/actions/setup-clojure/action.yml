@@ -24,20 +24,6 @@ inputs:
   cli-version:
     description: Clojure CLI version to install (must be an exact release)
     required: true
-  aot-project:
-    description: >-
-      Project directory whose third-party libraries should be
-      precompiled into <project>/classes (e.g. "waymark10"). Empty
-      skips AOT entirely and the suites load from source.
-    required: false
-    default: ''
-  aot-enabled:
-    description: >-
-      Set to 'false' to skip AOT even when aot-project is named. Exists
-      so a dispatch can measure the same commit with and without it;
-      anything other than the literal 'false' leaves AOT on.
-    required: false
-    default: 'true'
 
 runs:
   using: composite
@@ -86,25 +72,3 @@ runs:
         sudo bash /tmp/linux-install.sh
         clojure --version
 
-    # ── AOT of the LIBRARIES, when a caller asks for it ──────────────
-    #
-    # Its own cache entry, not the one above: two suites compile two
-    # different project dirs, and sharing a key would let whichever
-    # job saved first decide what the other one finds. Same deps.edn
-    # hash though — the bytecode and the jars it came from must expire
-    # together.
-    - name: Cache AOT library classes
-      if: inputs.aot-project != '' && inputs.aot-enabled != 'false'
-      uses: actions/cache@v4
-      with:
-        path: ${{ inputs.aot-project }}/classes
-        key: aot-${{ runner.os }}-${{ runner.arch }}-${{ inputs.aot-project }}-${{ hashFiles('**/deps.edn') }}
-        # No restore-keys, deliberately. A partial hit here is stale
-        # bytecode for a dependency set that no longer exists, and the
-        # failure mode is a confusing NoSuchMethodError rather than a
-        # slow build. Miss and recompile.
-
-    - name: Precompile third-party libraries
-      if: inputs.aot-project != '' && inputs.aot-enabled != 'false'
-      shell: bash
-      run: ./.github/scripts/aot-libs.sh "${{ inputs.aot-project }}"
