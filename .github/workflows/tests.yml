@@ -77,6 +77,16 @@ on:
           both halves of such a pair.
         type: boolean
         default: true
+      runner:
+        description: >-
+          Where to run. 'default' follows the CI_RUNNER repository
+          variable; 'github' pins this dispatch to GitHub-hosted
+          runners. Pinning is what makes an A/B measurable — the
+          self-hosted node carries other people's load, and a single
+          pair of runs cannot average that out.
+        type: choice
+        options: [default, github]
+        default: default
       profile:
         description: >-
           Collect per-namespace timings via kaocha's profiling plugin and
@@ -173,7 +183,7 @@ jobs:
   # The cheap signal, first: neither of these needs a database, and a
   # declaration error should not wait behind a JVM suite to be told.
   quick:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-clojure
@@ -188,7 +198,7 @@ jobs:
   # edit here. Namespaces come from paths: test/a/b_test.clj is
   # a.b-test, which is the convention every file in both suites follows.
   discover:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     outputs:
       waymark10: ${{ steps.split.outputs.waymark10 }}
       workqueue10: ${{ steps.split.outputs.workqueue10 }}
@@ -232,7 +242,7 @@ jobs:
 
   test10:
     needs: discover
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       # One shard failing must not hide the others: the point of a
       # split suite is seeing every failure in one round.
@@ -341,7 +351,7 @@ jobs:
 
   test-queue:
     needs: discover
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       fail-fast: false
       matrix:
