@@ -71,8 +71,38 @@ concurrency:
 env:
   # Pinned so a shard cannot start failing because upstream moved.
   CLOJURE_CLI_VERSION: '1.12.5.1664'
-  SHARDS_WAYMARK10: '4'
-  SHARDS_WORKQUEUE10: '2'
+  # CONTENTION PROBE — not a tuning change, a measurement.
+  #
+  # On GitHub-hosted runners the 4+2 split cost 96s wall clock, each job
+  # alone on its own VM. On the self-hosted node the same split cost
+  # 474s, with all six shards plus six postgres containers sharing one
+  # 8-core board. Two effects are tangled in that 5x: per-core speed, and
+  # six jobs fighting over one machine. Only the second is fixed by
+  # buying more nodes, so the two must be separated before anything is
+  # bought.
+  #
+  # 1+1 puts two shards on six idle runners. Contention goes to roughly
+  # nothing and what is left is the hardware itself.
+  #
+  # Compare the "Run shard" step against run 16's 371s (test10 shard 1)
+  # and 351s (test-queue shard 1). NOTE those shards each held a QUARTER
+  # and a HALF of their suite; these hold all of it, so scale before
+  # comparing:
+  #
+  #   test10     371s x 4 = ~1484s of work, contended
+  #   test-queue 351s x 2 = ~702s  of work, contended
+  #
+  # Well under those totals  -> contention dominated. More nodes scale
+  #                             nearly linearly; 3-4 would approach
+  #                             GitHub's numbers.
+  # Close to those totals    -> per-core speed dominates. More SBCs buy
+  #                             proportionally little and one faster
+  #                             machine beats several slow ones.
+  #
+  # REVERT TO 4 AND 2 once the number is read. Left at 1+1 this is slower
+  # than either alternative.
+  SHARDS_WAYMARK10: '1'
+  SHARDS_WORKQUEUE10: '1'
 
 jobs:
   # The cheap signal, first: neither of these needs a database, and a
