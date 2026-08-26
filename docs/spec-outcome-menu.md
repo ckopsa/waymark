@@ -607,6 +607,17 @@ outcome whose `request_id` names it — no door on the request kind is granted
 because none is needed: the staging itself moves the request, and the only
 door that could is walled to the staging's own hand (§ 'Built — jfv.20').
 
+**Since waymark-1uv.5, the tuning agent's four lines** — one write door,
+which is the staging door, and three read-only lines for what a rank proposal
+cites: `{"kind": "recipe_proposal", "actions": ["create"]}`, `{"kind":
+"feed_view", "actions": []}`, `{"kind": "verdict_reason", "actions": []}`,
+`{"kind": "feed_recipe", "actions": []}`. A composer that tunes the crown's
+rank reads exposure, the house's verdict words and the recipe's numbers in
+force, proposes new numbers through `recipe_proposal` with `crown_rank` /
+`current_crown_rank` beside the order, and cites the rows it read; a member
+applies. Never `feed_recipe` revise — § 'Built — 1uv.5' has the table of
+what is read per input and the reason the reads are enough.
+
 Write three kinds, all create-only; read the values it must name, the work
 kinds it composes over and cites as evidence, and the owner's feed as the
 owner sees it. **Never** a verdict action, never `value` create or revise,
@@ -3807,3 +3818,212 @@ apply door WRITES, and it is the one fingerprint that moved (below).
   from the epic's ruling, and reading them off the enum's order would make a
   fifth word inserted in the middle re-weigh the others silently. The two
   spellings should be kept in step by hand, and the docstring says so.
+
+## Built — 1uv.5, the rank is tunable (2026-08-26, waymark-1uv.5)
+
+Option A of § *The agent's part*, landed: **an agent proposes numbers for the
+crown's declared formula through `recipe_proposal`; a person applies; the diff
+speaks the household's words; the numbers it replaced stay readable.** The
+epic's ruling was that the crown is the one place a person acts on a machine's
+word and that word must be readable — so the whole of this bead is that a
+machine's *"count declared values 12, not 10"* arrives as a sentence a person
+taps under, through the same door, past the same walls, as any change to the
+order the morning is read in. Nothing new was built at the recipe's wall.
+`feed_recipe.clj` is untouched.
+
+### The door, one field wider — as landed
+
+`recipe_proposal` grew `crown_rank` and `current_crown_rank`, both optional,
+mirroring `formula` / `current_formula` line for line (8um.3's spelling), on
+the row schema, the create form and the prose. Both wear
+`feed-recipe/crown-rank-schema` — the recipe's own — so the form refuses a
+nonsense number before any wall is reached: `{"declared": 101}` is a 422 at
+the proposal's own door, the same 422 the recipe's revise form would have
+given. That is why **no scenario was declared for the crown at the create
+door**: `the-prepared-input-fits-the-door` cannot be reached with a
+`crown_rank` the schema admits, and a scenario that expected the guard would
+have met the form. `make check-queue` is unmoved — 37 kinds, 11 warnings, 49
+scenarios judged.
+
+Every wall that read the contest now reads the crown beside it, in the same
+breath and for the same reason (`:revise` overwrites the authored surface
+wholesale):
+
+- `the-prepared-input-fits-the-door` judges `{label, order, formula,
+  crown_rank}` against `feed-recipe/recipe-input`.
+- `the-order-will-assemble` hands `:crown-rank` to `feed/check-recipe!`, so
+  the sixth assembly check judges a proposal as it judges a row.
+- `the-staging-is-current` asks whether `current_crown_rank` is what the
+  target row reads today — *ranks its crown differently today than this
+  proposal says it does* — compared after the deployment's numbers are filled
+  in (`same-crown-rank?`), so an absent rank and one spelling the built-in's
+  numbers are the same crown and neither is refused for the difference.
+- `the-order-has-not-moved` asks it again at the tap — *ranks its crown
+  differently now than it did when this was staged* — so a member who moved
+  the numbers themselves between staging and tapping meets a refusal by name
+  and never a stale rank written back over their edit.
+- `apply-the-order` writes the numbers the proposal named, else the numbers it
+  was staged against, else — for a proposal staged before the field existed —
+  the target's own, read now. The last arm is 1uv.2's carry-through kept
+  whole; the first two make it the proposal's own sentence rather than a
+  read behind its back.
+
+**One consequence worth saying plainly.** An order-only proposal staged
+against a row whose crown the house has tuned must now carry
+`current_crown_rank`, or it is refused at staging — the contest's own law,
+one field over. A composer staging a seam change reads `recipe.crown_rank`
+off the feed document first, exactly as it reads `recipe.order` and
+`recipe.formula`. The twin proves both halves: the blind one refused, the
+carried one applied with the tuned numbers intact.
+
+### The diff speaks the household's words — and walks the map's keys
+
+```
+The order itself is unchanged, line for line.
+In the crown, serving a value this house declared lifts a bundle 12 instead of 10.
+In the crown, each rank of the house's quick word about a line of thinking holds a bundle 3 instead of 2 — a never-this line of thinking is held 12 instead of 8.
+```
+
+`feed/crown-rank-diff` is no longer four lines naming four keys. It walks the
+keys of the two rank maps — `default-crown-rank`'s first, in its own order,
+then anything either side names beyond those — and says each moved number in
+`feed/crown-rank-words`' sentence for it. A key with no words yet renders as
+*In the crown, crown_rank recomposed is 3 instead of 0.* rather than as
+silence. This is the one rule the diff was written to: **waymark-1uv.10 adds
+a cooling input and waymark-1uv.6 a judgment, and a diff that named its four
+keys would have rendered a fifth number's change as nothing, which is the one
+thing a person tapping under a diff cannot read.** The OFF sentence counts the
+keys the same way (*every one of its 5 numbers is 0*).
+
+The `:declined` line does the multiplication out loud, on purpose. The
+number a household writes is per RANK of the word and the number it feels is
+the strongest word's; a machine proposing to move it should be readable
+without doing ×4 in your head. The 4 is `reason-weights`' top and is kept in
+step by hand, like that map's own note.
+
+The card is `proposal-says` unchanged: the stored diff, read never
+recomputed, plus what it is staged against and *N rows behind it*.
+
+### What the tuning agent reads, and the grant it needs
+
+A tuning agent proposes numbers the way an insight proposes a finding: from
+rows it read, cited. What it reads, per input of the rank:
+
+| the rank's input | what the agent reads | where |
+|---|---|---|
+| shown-and-passed-over (`:cooled`) | the member's own exposure rows — one per card per day | `feed_view` (`?member=…`), read-only |
+| the house's quick words (`:declined`) | which line of thinking was declined and in what word | `verdict_reason`, read-only |
+| declared over observed (`:declared`), freshness (`:fresh`) | each crown card's `why.crown` — lift, `value`, `days_left`, `seen`, `declined` | the owner's feed under `feed.preview_as` with `?explain=1`, the line the composer already holds |
+| the numbers in force | `recipe.crown_rank` / `crown_rank_says` on the feed document; the row's own `crown_rank` (nil is *the deployment's*) | the feed, and `feed_recipe` read-only |
+
+**The grant scope line, exactly** — `recipe_proposal:create` plus read-only
+lines; it is the composer contract's block widened by these four:
+
+```json
+{"kind": "recipe_proposal", "actions": ["create"]},
+{"kind": "feed_view",       "actions": []},
+{"kind": "verdict_reason",  "actions": []},
+{"kind": "feed_recipe",     "actions": []}
+```
+
+Never `feed_recipe` revise or create — that is the wall the whole surface
+exists to keep, and the pack re-proves it in the same breath as the staging.
+`workqueue10.rank-tuning-test` mints exactly this scope through the real grant
+door and proves the three reads answer 200 under it.
+
+**Evidence: the outcome's discipline, already here, and one thing not added.**
+`it-cites-what-it-read` stands on the create door as it did — at least one
+address, each `/api/<collection>/<id>` — and a rank proposal is held to it
+like any other. The outcome's guard goes one step further and consults the
+registry (`:reads [:storage]`, *naming a collection this house serves*); that
+step was weighed and **not** added, for the reason `address?` already records:
+the create door's first three walls are declaration-time, and a registry
+consult would drop the birth of every proposal out of the no-database tier to
+catch a dead link on a card. One consequence the live test pins down: a
+filtered listing is not an address. `/api/feed_views?member=…` is what the
+agent READS; what it CITES is the rows that listing returned, by their own
+addresses — and a proposal citing the query string is refused by name.
+
+### The revert — what is one tap today, and what is not
+
+The epic's table said *one tap, the proposal's own machinery*. Read
+carefully, that is true of the apply and half-true of the way back, and the
+half is worth writing down:
+
+- **One tap back to the deployment's numbers:** `retire` on the recipe row
+  (when it is the house's only row) — the feed falls through to the
+  built-in, crown and all; `restore` undoes it. Already there.
+- **Back to the numbers a proposal replaced: two copies, not one tap.**
+  waymark-by4 is still open, and `history.clj` deliberately does not serve a
+  transition's recorded `inputs` on the wire. What IS on the wire is the
+  applied proposal's own row: `current_crown_rank`, `current_order` and
+  `current_formula` are, by construction, the exact `revise` input that puts
+  the recipe back — read them off `/api/recipe_proposals/<id>`, post them
+  through `feed_recipe`'s own revise door with the row's etag. Both suites
+  prove the round trip restores `{declared 10 …}` and `crown_rank_says` says
+  *lifts a bundle 10* again.
+- **The cheap one tap this suggests** is not by4's ledger affordance but a
+  `revert` verb on an APPLIED proposal — re-post its `current_*` through
+  `revise` as the member, past the same walls, under the same fence. Filed as
+  waymark-1uv.14 rather than built here, because it is a new door on
+  the kind and by4 should decide whether the ledger or the proposal owns it.
+
+### Where the law is proved
+
+- **`recipe-proposal-test`**, on the twin, two deftests: the diff as a pure
+  function (the crown beside the contest; an absent rank and the built-in's
+  numbers the same; the four-argument spelling silent about the crown; a
+  fifth key rendering by its wire name, in both directions, and counted in
+  the OFF sentence), and the whole loop against a household row — the card's
+  sentence with both numbers and *2 rows behind it*, a nonsense number
+  refused by the form, a misread crown refused at staging by name, the
+  member's tap landing the numbers through `:revise` under the member's name
+  with order and contest untouched, the order-only proposal refused blind and
+  applied when it carries the numbers, the fence refusing a rank proposal
+  after the member moved the crown, and the revert from the applied row's
+  `current_crown_rank`.
+- **`workqueue10.rank-tuning-test`**, live, the household's own registry: the
+  tuning scope minted through the real grant door; the three reads answering
+  under it; a query-string citation refused; the decide card's sentence; the
+  agent's own apply concealed by its create-only leash (404 — the four-eyes
+  wall is the twin's to prove); the member's apply; `recipe.crown_rank` and
+  `crown_rank_says` on the next read and `crown_rank` on the row; the fence
+  after the member's own revise; the revert.
+- **`:feed/staged-proposals`**, nine claims added after the stale flow and
+  before the retire: the document carries a `crown_rank` map to stage
+  against; the same leashed composer stages one number moved; the card
+  reaches the member's decide section, says *In the crown* and quotes the
+  number moving; the tap lands; the next read's `crown_rank` equals what was
+  proposed and `crown_rank_says` quotes the new number; the order did not
+  move. The obligation still ends where it began.
+
+### Recorded here, for whoever comes next
+
+- **`make check-queue` is unmoved: 37 kinds, 11 warnings, 49 scenarios
+  judged.** No scenario, for the reason above; no new guard — every wall
+  that grew is one that already stood.
+- **Suites:** framework 768 tests, 5816 assertions, green (was 766 / 5776); household 251 tests, 2793 assertions, green (was 250 / 2757) — both in private
+  databases (`wm_1uv5`, `wm_1uv5_f`).
+- **ONE fingerprint moved, and it is the expected one.** Over the 50-kind
+  census on `main` (`1d3f0ea`, the integration branch carrying 1uv.1, .7
+  and .2) and this tree: 49 byte-identical — `feed_recipe` stays
+  `9e5ba71d…`, `outcome`, `outcome_piece`, `verdict_reason`, `feed_view` and
+  `composition_request` unmoved. `recipe_proposal` goes `d26ac9e4…` →
+  `908661e4…`; the movers are `the-prepared-input-fits-the-door`'s
+  `:judges` (one key wider), the bodies of the two staleness guards (one
+  more question each) and `apply-the-order`'s body (what the tap writes).
+  Each is a real change to what a door judges or lands; `boot-revise!`
+  mints one revision. 1uv.2 predicted this move by name.
+- **`feed_recipe.clj` was not touched, and the one place that still names
+  four keys is `recipe-of`'s wire→map spelling** (beside `crown-rank-schema`
+  and `check-recipe!`'s sixth check). The fifth number's owner extends those
+  three — never the diff, which needs no edit.
+- **`outcome.clj` was not touched** (waymark-1uv.3's, in flight beside this).
+- **`staged-changes-are-few` stays at three** and is now the pace on rank
+  tuning too; 1uv.7's sentence — three waiting being plenty for one agent
+  tuning numbers — held in practice: the twin's tuning flow never had more
+  than two open.
+- **Not done, on purpose:** no `revert` door (waymark-1uv.14); no ledger affordance
+  (by4); no agent input to the rank (1uv.6); `ui-drive.mjs` not walked
+  (1uv.13); the composer's grant-scope block in § *Built — jfv.5* is widened
+  by a sentence pointing here rather than rewritten.

@@ -3500,6 +3500,40 @@
         declined (when second-id
                    (invoke-http ctx :recipe_proposal second-id decline nil
                                 {:headers as-member}))
+        ;; THE CROWN'S RANK RIDES THE SAME DOOR (waymark-1uv.5). The
+        ;; same composer, the same leash, proposing NUMBERS this time:
+        ;; the crown's rank, read off the feed document, one number
+        ;; moved. The claims: the card says the change in the
+        ;; household's words (the diff is generic over the rank's keys,
+        ;; so it is read for the sentence and not for a key), the
+        ;; member's tap lands the numbers on the row, and the next read
+        ;; narrates them back. Staged against the row the stale flow
+        ;; left behind — a member revised it, which is why its crown is
+        ;; the deployment's again — and applied before the retire.
+        now-doc (when (= 200 (:status declined)) (:doc (feed-doc ctx nil)))
+        rank-was (get-in now-doc [:recipe :crown_rank])
+        rank-now (when (map? rank-was)
+                   (update rank-was :declared #(if (< (long (or % 0)) 100)
+                                                 (inc (long (or % 0)))
+                                                 (dec (long %)))))
+        rank-body (when (and rank-now leashed)
+                    {:proposal (str "Declared values are being passed over ("
+                                    tag ")")
+                     :label (str "Declared first " tag)
+                     :evidence [(str "/api/feed_recipes/" landed)]
+                     :current_order (get-in now-doc [:recipe :order])
+                     :order (get-in now-doc [:recipe :order])
+                     :target_id landed
+                     :current_crown_rank rank-was
+                     :crown_rank rank-now})
+        rank-staged (when rank-body (stage-proposal! ctx rank-body leashed))
+        rank-id (some-> (:doc rank-staged) :self id-of)
+        rank-card (when rank-id
+                    (proposal-card (:doc (feed-doc ctx as-member)) rank-id))
+        rank-applied (when rank-card
+                       (invoke-http ctx :recipe_proposal rank-id apply' nil
+                                    {:headers as-member}))
+        rank-after (when (= 200 (:status rank-applied)) (:doc (feed-doc ctx nil)))
         retire (declared-name ctx :feed_recipe :retire)
         gone (when landed (invoke-http ctx :feed_recipe landed retire nil))]
     {:covered (if (= 200 (:status applied)) 1 0)
@@ -3654,6 +3688,64 @@
        (conj (str "feed: declining the leftover proposal answered "
                   (:status declined) " — a change you cannot say no to is"
                   " not a proposal"))
+
+       (and now-doc (not (map? rank-was)))
+       (conj (str "feed: the feed document carries no recipe.crown_rank map"
+                  " to stage a rank proposal against — the crown's numbers"
+                  " ride every answer (waymark-1uv.2) so a tuning agent can"
+                  " read them before it proposes: " (pr-str rank-was)))
+
+       (and rank-body (not= 201 (:status rank-staged)))
+       (conj (str "feed: the composer staging a change to the crown's rank"
+                  " — the recipe's own numbers, read off the document —"
+                  " answered " (:status rank-staged) ": "
+                  (pr-str (:doc rank-staged))
+                  " — the rank is tunable through this door (waymark-1uv.5),"
+                  " and a number is exactly what a proposal may carry"))
+
+       (and rank-id (nil? rank-card))
+       (conj (str "feed: a staged rank change did not reach the member's"
+                  " feed as a decide card"))
+
+       (and rank-card
+            (not (str/includes? (str (:sentence rank-card)) "In the crown")))
+       (conj (str "feed: the rank proposal's card never says what changes in"
+                  " the crown: " (pr-str (:sentence rank-card))
+                  " — a change to a number is read by a person as a sentence"
+                  " about what the number does, and the diff owes them one"))
+
+       (and rank-card
+            (not (str/includes? (str (:sentence rank-card))
+                                (str " " (:declared rank-now) " instead of "
+                                     (:declared rank-was)))))
+       (conj (str "feed: the rank proposal's card does not quote the number"
+                  " moving from " (:declared rank-was) " to "
+                  (:declared rank-now) ": " (pr-str (:sentence rank-card))))
+
+       (and rank-card (not= 200 (:status rank-applied)))
+       (conj (str "feed: a member's tap on a rank proposal answered "
+                  (:status rank-applied) ": " (pr-str (json ctx rank-applied))))
+
+       (and rank-after (not= rank-now (get-in rank-after [:recipe :crown_rank])))
+       (conj (str "feed: the rank proposal applied and the next read still"
+                  " says recipe.crown_rank "
+                  (pr-str (get-in rank-after [:recipe :crown_rank]))
+                  " rather than " (pr-str rank-now)
+                  " — the tap IS the write, at the crown as at the order"))
+
+       (and rank-after
+            (not (str/includes? (str (get-in rank-after [:recipe :crown_rank_says]))
+                                (str " " (:declared rank-now) " "))))
+       (conj (str "feed: after the rank proposal applied, crown_rank_says"
+                  " does not quote the new declared number "
+                  (:declared rank-now) ": "
+                  (pr-str (get-in rank-after [:recipe :crown_rank_says]))))
+
+       (and rank-after
+            (not= (get-in now-doc [:recipe :order])
+                  (get-in rank-after [:recipe :order])))
+       (conj (str "feed: a proposal that named only the crown's numbers moved"
+                  " the order too"))
 
        (and landed (not= 200 (:status gone)))
        (conj (str "feed: retiring the applied recipe answered "

@@ -501,3 +501,182 @@
              (get-in r [:actions :apply :touches]))))
     (testing "…and both of those doors take the input this kind prepares"
       (is (some? (get-in feed-recipe/feed-recipe [:actions :revise :input]))))))
+
+;; ── the crown's rank rides the same change (waymark-1uv.5) ──────────
+;;
+;; Option A of the epic's ruling, proved on the twin: an agent proposes
+;; NUMBERS for a declared, readable formula; a person applies; the
+;; diff speaks the household's words; the numbers it replaced are on
+;; the applied proposal's own row, so the way back is a revise anybody
+;; can copy. The live half — the leash minted through the grant door,
+;; `crown_rank_says` on the household's own registry, the revert — is
+;; workqueue10.rank-tuning-test.
+
+(defn- crown-rank-of-feed [eng]
+  (get-in (feed-doc eng) [:recipe :crown_rank]))
+
+(defn- stage-rank!
+  "A rank change, staged the way a tuning agent stages one: against the
+  order AND the crown the house reads today, citing what it read."
+  [eng target crown-rank & {:keys [current headers evidence order]}]
+  (call! eng :post "/api/recipe_proposals"
+         :headers (or headers (ari eng))
+         :body (cond-> {:proposal "Declared values are being passed over for observed ones"
+                        :label "Declared first"
+                        :evidence (or evidence
+                                      ["/api/feed_views/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+                                       "/api/verdict_reasons/01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"])
+                        :current_order (current-order eng)
+                        :order (or order (current-order eng))
+                        :current_crown_rank (or current (crown-rank-of-feed eng))
+                        :crown_rank crown-rank}
+                 target (assoc :target_id target))))
+
+(deftest the-crowns-rank-is-diffed-beside-the-contest
+  (let [wire (walk/keywordize-keys (feed/order-as-written feed/default-recipe))
+        now (walk/keywordize-keys (feed/crown-rank-as-written feed/default-recipe))]
+    (testing "a proposal that touches only the crown's numbers says the order
+              is unchanged, then each moved number in the household's words —
+              and the declined line does the multiplication out loud"
+      (is (= ["The order itself is unchanged, line for line."
+              "In the crown, serving a value this house declared lifts a bundle 12 instead of 10."
+              (str "In the crown, each rank of the house's quick word about a line"
+                   " of thinking holds a bundle 3 instead of 2 — a never-this line"
+                   " of thinking is held 12 instead of 8.")]
+             (proposal/diff-of wire wire nil nil
+                               now (assoc now :declared 12 :declined 3)))))
+    (testing "an absent rank and one spelling the deployment's numbers are the
+              same crown, and neither reads as a change"
+      (is (= [feed/order-unchanged] (proposal/diff-of wire wire nil nil nil now)))
+      (is (= [feed/order-unchanged] (proposal/diff-of wire wire nil nil now nil))))
+    (testing "the four-argument spelling still says nothing about the crown"
+      (is (= [feed/order-unchanged] (proposal/diff-of wire wire nil nil))))
+    (testing "a number the rank grows later renders the day it lands, by its
+              wire name — the diff walks the map's keys and never names four"
+      (is (= ["In the crown, crown_rank recomposed is 3 instead of 0."]
+             (feed/crown-rank-diff nil {:recomposed 3})))
+      (is (= ["In the crown, each day left on a bundle's week lifts it 2 instead of 1."
+              "In the crown, crown_rank recomposed is 0 instead of 5."]
+             (feed/crown-rank-diff {:recomposed 5} {:fresh 2})))
+      (is (str/includes? (first (feed/crown-rank-diff
+                                 {:recomposed 5}
+                                 {:declared 0 :cooled 0 :declined 0 :fresh 0
+                                  :recomposed 0}))
+                         "every one of its 5 numbers is 0")))))
+
+(deftest an-agent-tunes-the-crown-and-a-member-applies-it
+  (let [{:keys [eng]} (boot)
+        made (call! eng :post "/api/feed_recipes"
+                    :headers as-mom
+                    :body {:label "The house's own"
+                           :scope "household"
+                           :order (current-order eng)})
+        rid (id-of (get-in made [:doc :self]))
+        before (feed-doc eng)
+        staged (stage-rank! eng rid {:declared 12 :cooled 2 :declined 3 :fresh 1})
+        pid (id-of (get-in staged [:doc :self]))]
+    (is (= 201 (:status made)) (pr-str (:doc made)))
+    (is (= 201 (:status staged)) (pr-str (:doc staged)))
+    (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1}
+           (get-in before [:recipe :crown_rank])))
+
+    (testing "the card the member reads says the numbers, in household words"
+      (let [card (some #(when (= (str "decide/recipe_proposal/" pid)
+                                 (str (:card_id %))) %)
+                       (:cards (feed-doc eng)))]
+        (is (some? card))
+        (is (str/includes? (str (:sentence card))
+                           "lifts a bundle 12 instead of 10"))
+        (is (str/includes? (str (:sentence card))
+                           "a never-this line of thinking is held 12 instead of 8"))
+        (is (str/includes? (str (:sentence card)) "2 rows behind it"))))
+
+    (testing "a rank the recipe's own door would refuse is refused at staging —
+              by the FORM, before any guard: the proposal wears the recipe's
+              own crown-rank-schema, so a nonsense number never reaches a wall"
+      (let [bad (stage-rank! eng rid {:declared 101})]
+        (is (= 422 (:status bad)))))
+
+    (testing "a proposal that misreads today's crown is refused at staging, by
+              name — the diff has to describe the world it is read in"
+      (let [wrong (stage-rank! eng rid {:declared 12}
+                               :current {:declared 99})]
+        (is (= 409 (:status wrong)))
+        (is (= :the-staging-is-current (guard-of wrong)))
+        (is (str/includes? (str (get-in wrong [:doc :detail]))
+                           "ranks its crown differently today"))))
+
+    (testing "the member's tap lands the numbers, through the recipe's own door,
+              and the very next read is answered by them"
+      (is (= 200 (:status (verdict! eng pid :apply :headers as-mom))))
+      (let [after (feed-doc eng)
+            t (newest-transition eng :feed_recipe rid)]
+        (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1}
+               (get-in after [:recipe :crown_rank])))
+        (is (str/includes? (get-in after [:recipe :crown_rank_says])
+                           "lifts a bundle 12"))
+        (is (str/includes? (get-in after [:recipe :crown_rank_says])
+                           "12 for never this"))
+        (is (= (get-in before [:recipe :order]) (get-in after [:recipe :order]))
+            "the order is untouched by a proposal that named only the crown")
+        (is (= (get-in before [:recipe :formula]) (get-in after [:recipe :formula]))
+            "and so is the contest")
+        (is (= :revise (:action t)))
+        (is (= "mom" (get-in t [:actor :id])))))
+
+    (testing "an order-only proposal staged against the tuned crown carries the
+              tuned numbers through — and one that misses them is refused"
+      (let [words "Tuned, and caught up."
+            blind (call! eng :post "/api/recipe_proposals"
+                         :headers (ari eng)
+                         :body {:proposal "Just the seam"
+                                :label "Just the seam"
+                                :evidence ["/api/fd_errands/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+                                :target_id rid
+                                :current_order (current-order eng)
+                                :order (reseam (current-order eng) words)})
+            carried (stage-rank! eng rid nil
+                                 :order (reseam (current-order eng) words))
+            cid (id-of (get-in carried [:doc :self]))]
+        (is (= 409 (:status blind)))
+        (is (= :the-staging-is-current (guard-of blind)))
+        (is (= 201 (:status carried)) (pr-str (:doc carried)))
+        (is (= 200 (:status (verdict! eng cid :apply :headers as-mom))))
+        (is (= words (seam-sentence (feed-doc eng))))
+        (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1}
+               (crown-rank-of-feed eng)))))
+
+    (testing "a rank proposal whose target's crown moved underneath it refuses,
+              by name, rather than writing the stale numbers back"
+      (let [second' (stage-rank! eng rid {:declared 20})
+            sid (id-of (get-in second' [:doc :self]))
+            moved (call! eng :post (str "/api/feed_recipes/" rid "/-/revise")
+                         :headers (assoc as-mom "if-match"
+                                         (etag-of eng "feed_recipes" rid))
+                         :body {:label "The house's own"
+                                :order (current-order eng)
+                                :crown_rank {:declared 15 :cooled 2
+                                             :declined 3 :fresh 1}})
+            stale (verdict! eng sid :apply :headers as-mom)]
+        (is (= 201 (:status second')) (pr-str (:doc second')))
+        (is (= 200 (:status moved)) (pr-str (:doc moved)))
+        (is (= 409 (:status stale)))
+        (is (= :the-order-has-not-moved (guard-of stale)))
+        (is (str/includes? (str (get-in stale [:doc :detail]))
+                           "ranks its crown differently now"))
+        (is (= 15 (:declared (crown-rank-of-feed eng))))))
+
+    (testing "the way back: the numbers an applied proposal replaced are on its
+              own row, and a revise with them restores the crown"
+      (let [row (:doc (call! eng :get (str "/api/recipe_proposals/" pid)))
+            was (get-in row [:data :current_crown_rank])
+            back (call! eng :post (str "/api/feed_recipes/" rid "/-/revise")
+                        :headers (assoc as-mom "if-match"
+                                        (etag-of eng "feed_recipes" rid))
+                        :body {:label "The house's own"
+                               :order (current-order eng)
+                               :crown_rank was})]
+        (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1} was))
+        (is (= 200 (:status back)) (pr-str (:doc back)))
+        (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1}
+               (crown-rank-of-feed eng)))))))

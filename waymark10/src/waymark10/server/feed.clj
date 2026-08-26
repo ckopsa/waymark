@@ -3446,32 +3446,75 @@
       (conj (str "The contest counts the last " wb " days of your own looking"
                  " instead of " wa ".")))))
 
+(def crown-rank-words
+  "The household's own sentence for a change to each of the crown's
+  numbers, keyed the way `default-crown-rank` is: a function of the
+  number before and the number after. Spelled as a MAP and read
+  generically by `crown-rank-diff` rather than as four lines inside
+  it, for one reason — the rank is about to grow (waymark-1uv.10's
+  cooling input, waymark-1uv.6's judgment), and a diff that named its
+  four keys would render a fifth number's change as silence, which is
+  the one thing a person tapping under a diff cannot read. A key with
+  no words here still says which number moved, by its wire name.
+
+  `:declined` says the arithmetic out loud — *a never-this line of
+  thinking is held 12 instead of 8* — because the number a household
+  writes is per RANK of the word and the number it feels is the
+  strongest word's, and a proposal from a machine that changes it
+  should be readable without doing the multiplication in your head."
+  {:declared
+   (fn [a b]
+     (str "In the crown, serving a value this house declared lifts a bundle "
+          b " instead of " a "."))
+   :cooled
+   (fn [a b]
+     (str "In the crown, each step a bundle has cooled holds it "
+          b " instead of " a "."))
+   :declined
+   (fn [a b]
+     (str "In the crown, each rank of the house's quick word about a line of"
+          " thinking holds a bundle " b " instead of " a
+          " — a never-this line of thinking is held "
+          (* 4 (long b)) " instead of " (* 4 (long a)) "."))
+   :fresh
+   (fn [a b]
+     (str "In the crown, each day left on a bundle's week lifts it "
+          b " instead of " a "."))})
+
 (defn crown-rank-diff
-  "The crown's four numbers, read side by side (waymark-1uv.2) —
+  "The crown's numbers, read side by side (waymark-1uv.2) —
   `formula-diff`'s shape one field over, and empty when nothing moved.
   Both arguments are recipe-map crown ranks, nil for *whatever the
-  deployment says*."
+  deployment says*.
+
+  It walks the KEYS of the two maps — the deployment's first, in
+  `default-crown-rank`'s own order, then anything either side names
+  beyond those — and says each moved number in `crown-rank-words`'
+  sentence for it, so the rank may grow a number without this
+  function learning its name (waymark-1uv.5's one rule for the diff)."
   [was now]
   (let [a (crown-rank-of {:crown-rank was})
         b (crown-rank-of {:crown-rank now})
-        moved (fn [k] (not= (long (get a k)) (long (get b k))))
-        line (fn [k what]
-               (when (moved k)
-                 (str what " " (get b k) " instead of " (get a k) ".")))]
+        ks (distinct (concat (keys default-crown-rank)
+                             (sort (keys a)) (sort (keys b))))
+        num (fn ^long [m k] (long (or (get m k) 0)))
+        off? (fn [m] (every? #(zero? (num m %)) ks))]
     (cond
-      (and (every? zero? (map #(long (get b %)) (keys default-crown-rank)))
-           (not (every? zero? (map #(long (get a %)) (keys default-crown-rank)))))
-      [(str "The crown's rank turns OFF: every one of its four numbers is 0,"
-            " so a bundle answering your own request still stands first and"
-            " the seed alone places the rest.")]
+      (and (off? b) (not (off? a)))
+      [(str "The crown's rank turns OFF: every one of its " (count ks)
+            " numbers is 0, so a bundle answering your own request still"
+            " stands first and the seed alone places the rest.")]
 
       :else
       (into []
-            (remove nil?)
-            [(line :declared "In the crown, serving a value this house declared lifts a bundle")
-             (line :cooled "In the crown, each step a bundle has cooled holds it")
-             (line :declined "In the crown, each rank of the house's quick word about a line of thinking holds a bundle")
-             (line :fresh "In the crown, each day left on a bundle's week lifts it")]))))
+            (keep (fn [k]
+                    (let [x (num a k) y (num b k)]
+                      (when (not= x y)
+                        (if-some [say (get crown-rank-words k)]
+                          (say x y)
+                          (str "In the crown, crown_rank " (name k) " is "
+                               y " instead of " x "."))))))
+            ks))))
 
 (defn recipe-diff
   "The whole of a staged change, in the household's own words: what

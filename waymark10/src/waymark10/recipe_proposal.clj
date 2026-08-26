@@ -31,6 +31,23 @@
   proposal that carries neither is exactly the proposal this kind was
   the day it was written.
 
+  ── AND THE CROWN'S RANK RIDES IT TOO (waymark-1uv.5) ──
+
+  The epic 'Ranked, not capped' ruled on the agent's part in the crown:
+  it may TUNE a declared, readable formula through this door (option
+  A), may later supply one readable judgment as an input (M), and is
+  never the rank itself (B). The crown's numbers are `crown_rank` on
+  the same recipe row (waymark-1uv.2), so the tuning is `formula`'s
+  sentence one field over: `crown_rank` and `current_crown_rank`
+  beside the contest's pair, the diff says each moved number in the
+  household's words, both staleness walls ask about the crown, and the
+  apply carries the current numbers through when a proposal named
+  none. What a tuning agent READS to propose is not this kind's law —
+  exposure (`feed_view`), verdicts and their words (`verdict_reason`),
+  the recipe's current numbers — but what it CITES is: `evidence` is
+  required here as it is of an outcome, so a rank change proposed by a
+  machine says what it read.
+
   ── THE ASYMMETRY IS THE WHOLE POINT ──
 
   An agent may CREATE one of these and may not create a `feed_recipe`.
@@ -87,7 +104,8 @@
   button that was never offered. Five walls at the create door, in
   shape-then-world-then-pace order:
 
-  - `the-prepared-input-fits-the-door` judges {label, order} against
+  - `the-prepared-input-fits-the-door` judges {label, order, formula,
+    crown_rank} against
     `feed-recipe/recipe-input` — literally the schema `:revise` takes.
   - `the-order-will-assemble` runs `feed/check-recipe!`, the same four
     assembly checks that used to refuse the BOOT and now refuse the
@@ -206,17 +224,42 @@
   (= (feed/formula-of {:formula (as-formula a)})
      (feed/formula-of {:formula (as-formula b)})))
 
+(defn- as-crown-rank
+  "One crown rank in the EDITOR's wire shape → the recipe-map shape, or
+  nil for *whatever the deployment says* — `as-formula`, one field
+  over, through the same one converter."
+  [wire-rank]
+  (:crown-rank (feed-recipe/recipe-of {:crown_rank wire-rank})))
+
+(defn- same-crown-rank?
+  "Do two crown ranks say the same thing? Compared after the
+  deployment's own numbers are filled in (`feed/crown-rank-of`), for
+  `same-formula?`'s reason: an absent rank and one spelling the
+  built-in's numbers are the same crown."
+  [a b]
+  (= (feed/crown-rank-of {:crown-rank (as-crown-rank a)})
+     (feed/crown-rank-of {:crown-rank (as-crown-rank b)})))
+
 (defn diff-of
-  "The staged diff: what changes — line by line in the order, and
-  number by number in the contest — in the household's own words.
-  Public because it is what the create hook writes and what a test
-  reads back, and pure, so the same two recipes answer the same
-  sentences in a scenario, in a suite and in the house."
-  [current proposed current-formula proposed-formula]
-  (feed/recipe-diff {:order (as-recipe-order current)
-                     :formula (as-formula current-formula)}
-                    {:order (as-recipe-order proposed)
-                     :formula (as-formula proposed-formula)}))
+  "The staged diff: what changes — line by line in the order, number by
+  number in the contest, and number by number in the crown's rank — in
+  the household's own words. Public because it is what the create hook
+  writes and what a test reads back, and pure, so the same two recipes
+  answer the same sentences in a scenario, in a suite and in the house.
+
+  The four-argument spelling is the one 8um.3 left; it says nothing
+  about the crown, which is what a proposal staged before waymark-1uv.5
+  said."
+  ([current proposed current-formula proposed-formula]
+   (diff-of current proposed current-formula proposed-formula nil nil))
+  ([current proposed current-formula proposed-formula
+    current-crown-rank proposed-crown-rank]
+   (feed/recipe-diff {:order (as-recipe-order current)
+                      :formula (as-formula current-formula)
+                      :crown-rank (as-crown-rank current-crown-rank)}
+                     {:order (as-recipe-order proposed)
+                      :formula (as-formula proposed-formula)
+                      :crown-rank (as-crown-rank proposed-crown-rank)})))
 
 ;; ── addresses, read rather than guessed ─────────────────────────────
 
@@ -269,7 +312,7 @@
 ;; earning a warning nobody could ever clear.
 
 (g/defguard the-prepared-input-fits-the-door
-  {:judges [:label :order :formula]
+  {:judges [:label :order :formula :crown_rank]
    :vars [:problems]
    :explain "That is not something feed_recipe's revise door would take, so nobody could ever apply it: {problems}"}
   [_row inp _ctx]
@@ -278,7 +321,9 @@
   (if-some [errs (schema/errors feed-recipe/recipe-input
                                 (cond-> {:label (:label inp) :order (:order inp)}
                                   (some? (:formula inp))
-                                  (assoc :formula (:formula inp))))]
+                                  (assoc :formula (:formula inp))
+                                  (some? (:crown_rank inp))
+                                  (assoc :crown_rank (:crown_rank inp))))]
     (t/deny {:vars {:problems (pr-str errs)}})
     (t/allow)))
 
@@ -295,7 +340,9 @@
   (try
     (feed/check-recipe! (cond-> {:order (as-recipe-order (:order inp))}
                           (some? (:formula inp))
-                          (assoc :formula (as-formula (:formula inp)))))
+                          (assoc :formula (as-formula (:formula inp)))
+                          (some? (:crown_rank inp))
+                          (assoc :crown-rank (as-crown-rank (:crown_rank inp)))))
     (t/allow)
     (catch clojure.lang.ExceptionInfo e
       (if (:waymark10/definition-error (ex-data e))
@@ -398,6 +445,16 @@
                        " recipe.formula out of the feed document and stage"
                        " against that — applying would carry the old numbers"
                        " back in."))
+
+            ;; …and about the crown's rank (waymark-1uv.5), for the
+            ;; contest's own reason one field over.
+            (not (same-crown-rank? (:current_crown_rank inp)
+                                   (get-in row [:data :crown_rank])))
+            (deny (str "/api/feed_recipes/" tid " ranks its crown"
+                       " differently today than this proposal says it does."
+                       " Read recipe.crown_rank out of the feed document and"
+                       " stage against that — applying would carry the old"
+                       " numbers back in."))
 
             :else (t/allow)))
         ;; NO TARGET: the proposal stages a CREATE against the order
@@ -511,6 +568,11 @@
             (deny (str "/api/feed_recipes/" tid " weights its order"
                        " differently now than it did when this was staged."))
 
+            (not (same-crown-rank? (:current_crown_rank d)
+                                   (get-in target [:data :crown_rank])))
+            (deny (str "/api/feed_recipes/" tid " ranks its crown"
+                       " differently now than it did when this was staged."))
+
             :else (t/allow)))
         (let [held (when find'
                      (find' :feed_recipe {:scope "household" :state "active"}
@@ -538,7 +600,9 @@
                   (.plusSeconds ^Instant (:now ctx)
                                 (* 86400 (long leash-days))))
         (assoc-in [:data :diff] (diff-of (:current_order d) (:order d)
-                                         (:current_formula d) (:formula d))))))
+                                         (:current_formula d) (:formula d)
+                                         (:current_crown_rank d)
+                                         (:crown_rank d))))))
 
 (defhandler apply-the-order
   [row _inp ctx]
@@ -559,18 +623,21 @@
                 (some? (or (:formula d) (:current_formula d)))
                 (assoc :formula (or (:formula d) (:current_formula d))))
         tid (some-> (:target_id d) str str/trim not-empty)
-        ;; …and the crown's four numbers ride through UNCHANGED
-        ;; (waymark-1uv.2): a proposal has no word for them yet
-        ;; (waymark-1uv.5 gives it one), and :revise overwrites the
-        ;; whole authored surface, so an apply that handed over
-        ;; nothing would silently reset the crown's rank to the
-        ;; deployment's — the exact clearing 8um.3 found for the
-        ;; contest, met here before it could happen.
-        input (if-some [current (when (and tid (:read ctx))
-                                  (get-in ((:read ctx) :feed_recipe tid)
-                                          [:data :crown_rank]))]
-                (assoc input :crown_rank current)
-                input)
+        ;; …and the crown's rank rides the write the same way
+        ;; (waymark-1uv.5): the numbers this proposal named, else the
+        ;; numbers it was staged against, else — for a proposal staged
+        ;; before the field existed, which names neither — the
+        ;; target's own, read now. The last arm is waymark-1uv.2's
+        ;; carry-through kept whole: :revise overwrites the whole
+        ;; authored surface, so an apply that handed over nothing would
+        ;; silently reset the crown's rank to the deployment's.
+        ;; `the-order-has-not-moved` has already proved
+        ;; current_crown_rank is what the target says.
+        crown (or (:crown_rank d) (:current_crown_rank d)
+                  (when (and tid (:read ctx))
+                    (get-in ((:read ctx) :feed_recipe tid)
+                            [:data :crown_rank])))
+        input (cond-> input (some? crown) (assoc :crown_rank crown))
         res (if tid
               ;; feed_recipe's :revise declares an :edit, and an edit
               ;; IMPLIES the fence (resource.clj: "an Edit implies the
@@ -759,6 +826,16 @@
     :x-display
     {:label "The contest you propose in its place"
      :help "How the order is weighted by what a member has already been shown: how far back it counts, and how many days a card may sit untouched before it steps back inside its own line. Zero turns it off. Leave it out to leave the numbers exactly as they are."}}
+   :current_crown_rank
+   {:examples [{:declared 10 :cooled 2 :declined 2 :fresh 1}]
+    :x-display
+    {:label "The crown's rank as it stands today"
+     :help "The crown's numbers the house reads today, copied out of the feed document at recipe.crown_rank. Leave it out if you are not proposing to change them — but if the house has its own numbers and you leave it out, this is refused, for the same reason a stale order is: the diff a person taps under has to describe the world they are reading it in."}}
+   :crown_rank
+   {:examples [{:declared 12 :cooled 2 :declined 3 :fresh 1}]
+    :x-display
+    {:label "The crown's rank you propose in its place"
+     :help "How the crown chooses which composed weeks fill its slots: what serving a value this house declared lifts a bundle, what each cooled step holds it, what each rank of the house's quick word about a line of thinking holds it, and what each day left on its week lifts it. A bundle answering a person's own request stands first whatever these say. Leave it out to leave the numbers exactly as they are; say what you read (feed_view rows, verdicts and their words) in the evidence."}}
    :diff
    {:x-display
     {:label "What changes"
@@ -808,6 +885,11 @@
     (entry :current_formula {:optional true}
            [:maybe feed-recipe/formula-schema])
     (entry :formula {:optional true} [:maybe feed-recipe/formula-schema])
+    ;; …and the crown's rank, the same way (waymark-1uv.5)
+    (entry :current_crown_rank {:optional true}
+           [:maybe feed-recipe/crown-rank-schema])
+    (entry :crown_rank {:optional true}
+           [:maybe feed-recipe/crown-rank-schema])
     (entry :evidence {:optional true}
            [:maybe [:vector [:string {:min 1 :max 200}]]])
     ;; ENGINE-WRITTEN, all four. They are in the row schema because
@@ -831,6 +913,10 @@
     (entry :current_formula {:optional true}
            [:maybe feed-recipe/formula-schema])
     (entry :formula {:optional true} [:maybe feed-recipe/formula-schema])
+    (entry :current_crown_rank {:optional true}
+           [:maybe feed-recipe/crown-rank-schema])
+    (entry :crown_rank {:optional true}
+           [:maybe feed-recipe/crown-rank-schema])
     (entry :evidence {:optional true}
            [:maybe [:vector [:string {:min 1 :max 200}]]])]
    :filterable {:state #{:eq :in}}
