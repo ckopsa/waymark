@@ -211,15 +211,67 @@ jobs:
                   out.append(str(rel).replace("/", ".").replace("_", "-"))
               return out
 
+          def weights(names):
+              """seconds per namespace, from the last profiling run.
+
+              MISSING FILE -> every weight equal, which makes the LPT
+              split below degenerate to balancing COUNTS, i.e. exactly
+              the round-robin this replaced. A missing or stale table
+              can therefore never be worse than what came before.
+              """
+              table = {}
+              f = pathlib.Path(".github/namespace-seconds.tsv")
+              if f.exists():
+                  for line in f.read_text().splitlines():
+                      if line.startswith("#") or not line.strip():
+                          continue
+                      secs, _, ns = line.partition("\t")
+                      try:
+                          table[ns.strip()] = float(secs)
+                      except ValueError:
+                          pass
+              known = [table[n] for n in names if n in table]
+              # The per-namespace LOAD cost — kaocha times test
+              # execution, but every namespace also pays the check
+              # battery its top-level defresource forms trigger at
+              # import, and that is invisible here. Run 27 measured the
+              # two as comparable in total (107s loading against 98s of
+              # tests), so one mean duration per namespace is the
+              # honest estimate. It also keeps the split from parking
+              # twenty cheap namespaces on one shard, since each still
+              # carries a floor.
+              mean = (sum(known) / len(known)) if known else 1.0
+              # A namespace with no recorded time is NEW. Give it the
+              # mean rather than zero, or a new test file would land
+              # free and pile up on one shard until the next refresh.
+              return {n: table.get(n, mean) + mean for n in names}
+
           def shards(names, n):
-              # Round-robin, not contiguous chunks: names cluster
-              # alphabetically (every batch_* together), and a
-              # contiguous split would pile the heavy ones into one
-              # shard. Interleaving spreads them without timing data.
+              # Longest-processing-time-first: sort by cost descending,
+              # then repeatedly put the next namespace on whichever
+              # shard is currently lightest. A 4/3-of-optimal bound on
+              # the makespan, and the makespan is exactly what a run
+              # waits for — it ends when its SLOWEST shard ends.
+              #
+              # Round-robin balanced namespace COUNTS, which is not the
+              # same thing: it left test10 shard 4 at 63s against a 30s
+              # median, and the run waited for the 63.
+              #
+              # Ties break on the name so the split is reproducible —
+              # a matrix that shuffled between runs would make every
+              # comparison meaningless.
+              w = weights(names)
+              order = sorted(names, key=lambda x: (-w[x], x))
               groups = [[] for _ in range(n)]
-              for i, name in enumerate(names):
-                  groups[i % n].append(name)
-              return [{"id": i + 1, "nses": "\n".join(g)}
+              load = [0.0] * n
+              for name in order:
+                  i = min(range(n), key=lambda k: (load[k], k))
+                  groups[i].append(name)
+                  load[i] += w[name]
+              import sys as _s
+              print("  predicted shard seconds: "
+                    + " ".join(f"{x:.0f}" for x in load), file=_s.stderr)
+              return [{"id": i + 1, "nses": "\n".join(sorted(g))}
                       for i, g in enumerate(groups) if g]
 
           for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
@@ -437,3 +489,48 @@ jobs:
           name: timings-test-queue-${{ matrix.shard.id }}
           path: shard-output.txt
           retention-days: 3
+
+  # ── ONE TABLE INSTEAD OF ELEVEN LOGS ────────────────────────────────
+  #
+  # Each shard uploads its own timings, which is right for the shard
+  # and useless for the reader: refreshing the split meant opening
+  # eleven logs. This job collects them into a single sorted table and
+  # prints it, so a refresh is one log and one copy-paste into
+  # .github/namespace-seconds.tsv.
+  #
+  # It downloads artifacts from INSIDE Actions, where blob storage is
+  # reachable — which it is not from an agent sandbox behind an egress
+  # proxy, the reason the per-shard log printing exists as well.
+  timings:
+    needs: [test10, test-queue]
+    if: ${{ inputs.profile && always() }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timings-*
+          path: timings
+      - name: Combined namespace timings
+        run: |
+          set -euo pipefail
+          out=namespace-seconds.tsv
+          {
+            echo "# seconds<TAB>namespace — kaocha per-namespace totals."
+            echo "# Regenerate: dispatch tests.yml with profile=true and"
+            echo "# copy this job's table. Read by discover's weighted split."
+          } > "$out"
+          # One shard per directory; each holds a shard-output.txt.
+          find timings -name shard-output.txt -print0 \
+            | xargs -0 -I{} ./.github/scripts/namespace-timings.sh {} \
+            | awk -F'\t' 'NF==3 { if ($1+0 > m[$3]) m[$3] = $1+0 }
+                           END { for (k in m) printf "%.3f\t%s\n", m[k], k }' \
+            | sort -rn >> "$out"
+          echo "=== combined namespace timings ==="
+          cat "$out"
+          echo "=== $(grep -vc '^#' "$out") namespaces, $(grep -v '^#' "$out" | awk '{s+=$1} END {printf "%.1f", s}')s total ==="
+      - uses: actions/upload-artifact@v4
+        with:
+          name: namespace-seconds
+          path: namespace-seconds.tsv
+          retention-days: 7
