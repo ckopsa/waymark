@@ -632,6 +632,16 @@ force, proposes new numbers through `recipe_proposal` with `crown_rank` /
 applies. Never `feed_recipe` revise — § 'Built — 1uv.5' has the table of
 what is read per input and the reason the reads are enough.
 
+**Since waymark-1uv.6, the scoring agent's two lines** — `{"kind":
+"ranking_note", "actions": ["create"]}` and a read-only line over the kind it
+scores, `{"kind": "outcome", "actions": []}`. An agent that read a bundle
+writes a score, 0 to 1, and one sentence, citing what it read; the crown
+reads the score at `crown_rank.judged`'s weight and the card quotes the
+sentence as the agent's. A composer holding the note door is refused on
+anything it staged (`not-your-own-row`, off the subject kind's own
+`:own-surface`), so the two lines may ride the composer's own leash or a
+second agent's alone — § 'Built — 1uv.6' has the walls and the tiers.
+
 Write three kinds, all create-only; read the values it must name, the work
 kinds it composes over and cites as evidence, and the owner's feed as the
 owner sees it. **Never** a verdict action, never `value` create or revise,
@@ -4297,3 +4307,305 @@ as one map.
 - **The tickler kind is untouched.** `next_offer_at` on a tickler is still a
   read-side rank input for the ticklers line and was never a wall
   (waymark-1uv.7's row); this bead borrowed its schedule and nothing else.
+
+## Built — 1uv.6, the agent's score and sentence (2026-08-26, waymark-1uv.6)
+
+**The owner's ruling, verbatim:** *an agent may tune the rank, or supply a
+judgment to it.* Tuning is § *Built — 1uv.5*. This is the judgment — option
+M of § *The agent's part*, landed: **an agent that read a bundle writes a
+score, 0 to 1, and one sentence, as data with its name on it; the crown's
+formula reads the score as one more weighted number beside its counts; the
+card quotes the sentence as the agent's, the way it quotes the composer's
+routing; a row nobody scored ranks without it; an agent that is wrong is one
+weight turned down.** The epic's own sentence for the weight — *a nudge,
+never a verdict* — is the arithmetic here, not a hope.
+
+### The shape, decided: a kind, not a field
+
+The bead asked whether the score lives on `outcome` or in a small kind of
+its own. **The kind — `ranking_note`, `waymark10/src/waymark10/ranking_note.clj`,
+enrolled `:always` by the feed module beside `verdict_reason`** — and the
+recommendation is the spec's for three reasons, each of them a thing a field
+could not do:
+
+1. **It is not the outcome's fact.** A score is an agent's opinion ABOUT the
+   bundle, and a field on the bundle would put the agent's word inside the
+   row the composer wrote — the exact blur this card exists to refuse. On a
+   row of its own it is stamped with who wrote it (`judged_by`, the engine's
+   stamp off the principal, never the body's), and the crown quotes it under
+   that name.
+2. **It generalizes without a second build.** The subject is
+   `{subject_kind, subject_id}` — the tickler's and the reason kind's
+   spelling — so one kind serves every row a rank places. The insights line
+   (waymark-1uv.8) and the ticklers line (waymark-1uv.9) are getting ranks of
+   their own; when they want an agent's judgment the read is
+   `feed/crown-judgment`'s shape with a different `subject_kind`, and the
+   kind's docstring says so. Nothing is wired for them here.
+3. **It moves no hash the household holds.** A field on `outcome` would have
+   moved that kind's schema; `outcome` is `6f57c0d5…` on `main` and on this
+   tree. A new kind adds one hash and one table, and that is the whole cost
+   (below).
+
+**Whose it is, and whose it never becomes.** A note is born the agent's and
+stays the agent's. The affirmation axis a value has (jfv.10: an agent's
+`observed` row a person affirms into `declared`) was read and deliberately
+**not copied**: a value is the house's law and the observer was guessing at
+it, so a person can make it theirs; a judgment about which bundle deserves a
+Saturday is not a fact about the house a person could confirm — it is an
+agent's opinion, weighed as one, and a person who agrees says so by tapping
+the bundle. So the machine is `live → dismissed`, and nothing else:
+
+- an **agent** creates one (through an ordinary grant — outcome's posture,
+  not insight's open door, because a nudge on the crown is a thing the house
+  says out loud once, at the grant) and **restates** its own — a self-loop
+  on the live row (`:record true`, the tickler's `not_now` and the reason
+  kind's `say_more` are the precedents), so the newest judgment IS the row
+  and the older scores are its transitions;
+- a **person dismisses** one — *not this agent's word, not on this row* —
+  and the row stays on record under the agent's name; the same agent may
+  judge the row again in a new note, which the person may dismiss again;
+- a **person does not write one.** A person ranking a bundle first has a door
+  for that already (*compose me another* is the rank's first tier), and a
+  judgment with a member's name on it would ride the crown as the house's
+  own word wearing an agent's weight. `a-judgment-is-an-agents` refuses
+  `:human` and `:system` alike — a seed that wrote judgments would be the
+  engine having opinions about its own crown.
+
+### The walls, and which tier proves each
+
+| wall | what it reads | proved |
+|---|---|---|
+| `a-judgment-is-an-agents` — a person does not write one | the principal | declared as a scenario (`a-person-does-not-write-a-judgment`); the create chain reads rows, so it defers to the suite by the chain rule and the walker attempts it as the person it names; § 18 proves it live too |
+| `cites-what-it-read` — at least one address, each `/api/<collection>/<id>` naming a collection this house serves | the registry (`outcome/cites-what-it-read` to the letter, including *a listing is not an address*) | § 18, live: an empty list and a query string both refused by name |
+| `not-your-own-row` — the four-eyes wall, **generic**: the subject exists, and it is not a row the agent wrote | the subject row, and the subject KIND's own `:own-surface :by` — `composed_by` for an outcome, `authored_by` for an insight — so the wall is the subject's own sentence about ownership and never a copy of it | § 18, live, and `:feed/outcomes`: the composer, handed the note door, scores its own bundle and is refused by name. No scenario can arrange it — the walker stages `:given` rows under its own name |
+| `one-live-note-per-row-and-author` | this kind's rows | § 18, live: the second is refused and told to restate |
+| `the-judgment-is-your-own` — restating is the author's hand | the principal | **check tier**, `nobody-restates-somebody-elses-judgment` |
+| `a-person-dismisses` — an agent dismisses nothing, not even its own | the principal | **check tier**, `an-agent-does-not-dismiss-a-judgment` |
+| a dismissed note is answered | the machine | **check tier**, `a-dismissed-judgment-is-not-restated` (`out-of-state`) |
+
+An out-of-range score is the schema's own 422 (`[:decimal {:min 0 :max 1}]`),
+so no scenario was declared for it — 1uv.5's reasoning for the crown's
+numbers, one kind over.
+
+**The visibility wall is the router's, and the spec says so rather than
+pretend.** *An agent scores only rows it can read* is kept by the grant the
+agent holds: a guard ctx carries no visibility (insight's recorded finding,
+the seam waymark-iqa.18 names), so what the birth door can honestly check is
+that the row EXISTS and is not the agent's own. What the grant confers is a
+read-only line over the kind it scores; § 18 and the pack both prove the
+agent's read answers 200 under exactly that scope before it scores.
+
+**Restate takes the score and the sentence, not the citations — decided,
+with the alternative recorded.** What the agent READ is the fact the note
+was born from, checked once under the registry consult; a restatement is a
+change of mind about that reading. A shape-only evidence wall on the restate
+door was written and taken out: an action-door guard that judges free text
+must escape closure with `:open` — which `usability/effort-honesty` re-raises
+as a warning, and the battery's count is a number this epic holds at 11 — or
+read rows, which drops that door's scenarios out of the no-database tier,
+and the walker (a system actor) could not stage a note through a birth door
+that admits only agents to attempt them over the wire. A judgment resting on
+new rows is a new note after a dismissal, or the sentence says what changed.
+
+### The arithmetic, as landed
+
+```clojure
+;; feed/default-crown-rank — one line added
+{:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}
+
+;; feed/crown-lift — the sixth line
+lift = … + judged × (2 × score − 1)      ; feed/judged-lift, rounded, half away from zero
+```
+
+**Centred on a half, on purpose.** A score of 1 lifts the whole weight, 0
+holds the whole weight, ½ is nothing, and no score at all is nothing too
+(`judged-lift` of nil is 0). So an agent can say *not this one* as well as
+*this one*, silence is the middle rather than the bottom, and an agent that
+scored everything 1 would have moved nothing relative to anything. The
+literal reading the bead offered — *the score as one more weighted number*,
+`judged × score` — was weighed and refused because under it an unscored row
+and a row scored 0 are the same row, which is the one distinction a person
+reading the card most needs.
+
+**Whole numbers, and ONE by default.** The lift is a long everywhere the
+wire and the packs read it, so the contribution rounds (half away from
+zero). At the recommended weight of 1 only a score past ¾ or under ¼ moves
+anything, and it moves it one place among equals — less than a day of
+freshness. That is what *a nudge, never a verdict* means in arithmetic: two
+otherwise equal bundles, one scored 0.9, and the scored one is first; a
+bundle serving a declared value is never outranked by an observed one on an
+agent's word. A household that has learned to trust its agent's eye raises
+the number through the same door as every other (1uv.5's proposal, 1uv.2's
+form), and one that has not sets it to 0 without deleting a word the agent
+wrote — the card still quotes the sentence, and says the number it moved is
+nothing.
+
+**The newest live note, whoever wrote it — decided and recorded.**
+`feed/crown-judgment` reads ONE note per candidate: the newest live
+`ranking_note` naming the row, one query, limit one, inside the bound
+`crown-scan-cap` already puts on the population. Two agents scoring one
+bundle is a house running two judges, and the honest reading of two opinions
+is not their mean — it is that the card quotes one agent BY NAME and the
+household can read whether that agent was right. A mean would have put a
+number on the card no agent said. This is the decision most worth the
+owner's eye, and it is one function.
+
+### The why sentences, as they actually read
+
+On the crown card, `why.crown` gains one key when — and only when — an agent
+said a word:
+
+```json
+"crown": {"lift": 18, "asked": false, "value": "declared", "days_left": 7,
+          "judged": {"score": 0.9, "by": "cairn-judge",
+                     "says": "This is the outcome he has been circling for a month."}}
+```
+
+`crown-rank-words` gains the key's sentence, so 1uv.5's diff renders it the
+day a proposal moves it: *In the crown, an agent's own score of a bundle — 0
+to 1, with one sentence, quoted on the card as the agent's — moves it up to 3
+either way instead of 1.* `crown-rank-says` mentions the agent's number only
+while it is non-zero — *…and an agent that read a bundle may score it, 0 to
+1, with one sentence the card quotes as the agent's — a score of 1 lifts it
+1, 0 holds it 1, and a bundle nobody scored reads as a half, which is silence*
+— and counts *five numbers a person can read* when it is 0, because a house
+that turned it off does not want the sentence. And the card, asked why:
+
+```
+… 7 days left on its week, lifting it 7. cairn-judge scores this 0.9: “This is
+the outcome he has been circling for a month.” — lifting it 1. Lift 18 in all;
+the seed decides between equals. …
+```
+
+The clause is **quoted, not paraphrased** — the agent's own words inside
+quotation marks, under the agent's name, then what the house's weight made
+of them (*lifting it 1* / *holding it 1* / *a nudge that rounds to nothing at
+a weight of 1* / *and this house weighs an agent's judgment 0, so it moves
+nothing*). It is said even at weight 0, because the word is still the
+agent's and the household may want to read it. The engine's `impact` line
+never carries it, on the bundle or on a piece, and the pack asserts the
+absence. The plain read's opener on the screen (`135-feed-screen.js`) names
+the score and the agent (*cairn-judge scores it 0.9*) and leaves the sentence
+to the server's clause, the way it leaves every other input's words.
+
+### Where the numbers live, and what moved with them
+
+- `feed_recipe/crown-rank-schema` — `:judged`, one entry, with its label and
+  help; `recipe-of` reads it; the field prose's example and help say six.
+- `feed/default-crown-rank` — `:judged 1`, one line; `crown-lift`'s sixth
+  line and `judged-lift`; `crown-judgment` and the `:judged` input on every
+  candidate in `outcomes`; `crown-as-cited` rides `judged` only when a word
+  was said; `crown-card-says` says *six numbers* and gained the quoted
+  clause; `crown-rank-says` gained its clause and its five/six count;
+  `crown-rank-words` gained the key; `check-recipe!`'s sixth check names it;
+  `recipe-guarantees` says *the crown's rank is six*; `crown-rank-as-written`
+  writes it. `crown-rank-diff` needed no edit — 1uv.5's one rule for the
+  diff, kept.
+- `recipe_proposal` needed no edit: `apply-the-order` carries the map whole,
+  and a proposal wears `crown-rank-schema`, so `{"judged": 3}` is proposable
+  today and the diff says it.
+- `modules.clj` — the sixth `:always` kind on the feed module, with the
+  reason kind's reason.
+
+### What the scoring agent reads, and the grant it needs
+
+A scoring agent judges the way a composer composes and a tuner tunes: from
+rows it read, cited. The bundle itself, the value it serves, the request it
+answers if any, and whatever in the house's record made it *the one he has
+been circling* — each an address in `evidence`.
+
+**The grant scope line, exactly** — `ranking_note:create` plus a read-only
+line over the kind it scores; it is the composer contract's block widened by
+these two, and it is deliberately NOT the composer's own leash:
+
+```json
+{"kind": "ranking_note", "actions": ["create"]},
+{"kind": "outcome",      "actions": []}
+```
+
+A composer given the note door scores nothing it staged — `not-your-own-row`
+refuses it by name — so a house that wants its one agent to both compose and
+judge may leash it to both and the four-eyes wall holds row by row; a house
+that wants a second pair of eyes leashes a second agent to this scope alone.
+`restate` rides the own-surface (`{:by :judged_by :actions #{:restate}}`) and
+needs no line; `dismiss` is a person's and is never granted.
+`workqueue10.outcome-test` § 18 mints a composer-and-judge through the real
+grant door and proves both halves.
+
+### Where the law is proved
+
+- **`feed-test`**, the pure half: `judged-lift` at every edge — 0.9 lifts one
+  at weight 1, 0.6 rounds to nothing, 0.1 holds one, nil is silence, weight 0
+  is inert, 0.75 at weight 10 is 5, 0 at weight 10 is −10; the scored bundle
+  standing second only to the person's own request in the seed-independent
+  order; the diff's sentence; the recipe's sentence quoting *a score of 1
+  lifts it 1* at the default and counting five with the number at 0.
+- **`workqueue10.outcome-test` § 18**, live, the household's own registry: a
+  composer-and-judge minted through the real grant door reads the bundle it
+  will score; is refused on its OWN bundle by name; is refused an empty
+  citation and a query-string citation; a person is refused the door; the
+  note lands with the engine's stamp; a second live note is refused and told
+  to restate; two otherwise equal bundles — the scored one above (lift 18 to
+  17), `why.crown.judged` carrying `{score, by, says}` under the agent's name
+  and absent on the unscored card, the citation quoting the sentence under
+  *cairn-judge scores this 0.9* and the impact lines carrying none of it,
+  `crown_rank_says` saying the number; the agent restates to 0.2 and the
+  other stands above (lift 16, *holding it 1*); the member revises the crown
+  to `judged 0` and both read 17 with the word still quoted and *weighs an
+  agent's judgment 0* said; the agent's dismiss is concealed by its
+  create-only leash and the person's lands, after which the card carries no
+  `judged` key at all; and the same agent may judge the row again. Both
+  bundles are declined at the end.
+- **`:feed/outcomes`**, ten claims added after the rank flow and before the
+  declines: the judge's read answers under its scope; the score lands; the
+  author is the engine's stamp; the composer scoring its own bundle is
+  refused, and by name; the scored bundle stays on the feed; `why.crown.judged`
+  carries the score, the name and the sentence; asked why, the citation
+  quotes the sentence under the agent's name; the sentence is in neither the
+  bundle's nor any piece's `impact`; and a bundle nobody scored carries no
+  `judged` key. The `crown_rank` shape claim now names six ints.
+- **The check tier**: three scenarios judged with no database, one deferred
+  by the chain rule and attempted over the wire as the person it names.
+
+### Recorded here, for whoever comes next
+
+- **`make check-queue`: 37 kinds, 11 warnings, 52 scenarios judged** — the
+  warnings unmoved, three check-tier scenarios added, `ranking_note
+  (enrolled) ✓ — 3 scenarios (1 deferred to the suite: reads :ranking_note,
+  :storage), 6 refusing guards, 3 named by a scenario`. The battery's *37
+  kinds* counts the household's own; the enrolled kind is listed beneath
+  them the way `verdict_reason` is. One waiver, value's own for value's own
+  reason: `restate` prefills a required sentence and is `:record true`, so
+  `:waives #{:large-effort}`.
+- **Suites:** framework 768 tests, 5840 assertions, green (was 766 / 5779 on `main`; six enrolled-kind pins moved — `router-test`, `phase9a-test`, `batch-b-mint-test`, `batch-b-access-test`, `modules-test` list the sixth kind, `law-scenarios-test` counts its one deferred scenario); household 253 tests, 2879 assertions, green (was 251 / 2786) — both in private databases (`wm_1uv6`,
+  `wm_1uv6f`).
+- **ONE fingerprint added, none moved.** Over the 50-kind census on `main`
+  (`842395d`, the integration branch carrying 1uv.1, .2, .3, .5, .7 and
+  .10) and this tree: all 50 byte-identical — `outcome` `6f57c0d5…`,
+  `outcome_piece` `8db51a4b…`, `verdict_reason` `8213d8c5…`, `feed_recipe`
+  `9e5ba71d…` (a schema field is not a facet, re-verified once more),
+  `recipe_proposal` `908661e4…`, `insight` `d5b2724b…`, `tickler`
+  `d2b11408…`. The 51st is `ranking_note` `07999ed2…`.
+- **The migrate plan is one CREATE TABLE.** Against a database carrying
+  `main`'s applied schema (`wm_1uv6m`), this tree plans exactly five steps,
+  all on the new table: `CREATE TABLE IF NOT EXISTS ranking_notes (…)` with
+  `f_judged_by`, `f_subject_id` and `f_subject_kind` as generated columns
+  (the three `:filter #{:eq}` fields — the crown's join and the one-live-note
+  wall push down as query conds), and the four standard indexes of a table
+  being created. No existing table is touched.
+- **The centred score and the rounding are the two numbers most worth an
+  owner's second look**, and both are one function (`judged-lift`). If the
+  house wants a finer nudge than *one place among equals* the honest change
+  is the weight, not the rounding.
+- **The newest note wins, not the mean** — `crown-judgment`, above. If a
+  house ever runs two judging agents and wants both read, that is a decision
+  about what the card can honestly quote, and it is filed rather than built.
+- **No `withdraw` door for the author.** An agent that changed its mind
+  restates; an agent that wants its word gone asks a person, who dismisses.
+  Filed as a follow-up rather than added, because a note an agent could
+  silently withdraw is a note the household never got to read.
+- **The insights and ticklers lines do not read it yet.** The kind is built
+  to score any row and says so in its docstring; wiring those reads is
+  waymark-1uv.8's and waymark-1uv.9's, after their own ranks.
+- **The screen walk is still waymark-1uv.13's.** `135-feed-screen.js` names
+  the score and the agent in the plain opener and nothing else moved there.

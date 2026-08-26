@@ -730,7 +730,12 @@ async function renderFeedScreen(view, doc) {
           : null,
         c.declined ? ("the house said " + String(c.declined).replace(/_/g, " ")
                       + " about this line of thinking") : null,
-        c.days_left + " day" + (c.days_left === 1 ? "" : "s") + " left on its week"];
+        c.days_left + " day" + (c.days_left === 1 ? "" : "s") + " left on its week",
+        /* the agent's word, quoted as the agent's (waymark-1uv.6) —
+           the score and the name here; the sentence itself is the
+           server's clause, inside quotation marks, when anybody asks */
+        (c.judged && typeof c.judged.score !== "undefined")
+          ? (c.judged.by + " scores it " + c.judged.score) : null];
       box.append(el("p", {class: "muted"},
         "Ranked in the crown — lift " + c.lift + ": "
         + parts.filter(Boolean).join("; ") + "."));

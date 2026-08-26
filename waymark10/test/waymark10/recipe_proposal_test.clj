@@ -561,8 +561,8 @@
       (is (str/includes? (first (feed/crown-rank-diff
                                  {:recomposed 5}
                                  {:declared 0 :cooled 0 :declined 0 :fresh 0
-                                  :early 0 :recomposed 0}))
-                         "every one of its 6 numbers is 0")))))
+                                  :early 0 :judged 0 :recomposed 0}))
+                         "every one of its 7 numbers is 0")))))
 
 (deftest an-agent-tunes-the-crown-and-a-member-applies-it
   (let [{:keys [eng]} (boot)
@@ -573,11 +573,11 @@
                            :order (current-order eng)})
         rid (id-of (get-in made [:doc :self]))
         before (feed-doc eng)
-        staged (stage-rank! eng rid {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2})
+        staged (stage-rank! eng rid {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1})
         pid (id-of (get-in staged [:doc :self]))]
     (is (= 201 (:status made)) (pr-str (:doc made)))
     (is (= 201 (:status staged)) (pr-str (:doc staged)))
-    (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}
+    (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}
            (get-in before [:recipe :crown_rank])))
 
     (testing "the card the member reads says the numbers, in household words"
@@ -611,7 +611,7 @@
       (is (= 200 (:status (verdict! eng pid :apply :headers as-mom))))
       (let [after (feed-doc eng)
             t (newest-transition eng :feed_recipe rid)]
-        (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2}
+        (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1}
                (get-in after [:recipe :crown_rank])))
         (is (str/includes? (get-in after [:recipe :crown_rank_says])
                            "lifts a bundle 12"))
@@ -643,7 +643,7 @@
         (is (= 201 (:status carried)) (pr-str (:doc carried)))
         (is (= 200 (:status (verdict! eng cid :apply :headers as-mom))))
         (is (= words (seam-sentence (feed-doc eng))))
-        (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2}
+        (is (= {:declared 12 :cooled 2 :declined 3 :fresh 1 :early 2 :judged 1}
                (crown-rank-of-feed eng)))))
 
     (testing "a rank proposal whose target's crown moved underneath it refuses,
@@ -656,7 +656,7 @@
                          :body {:label "The house's own"
                                 :order (current-order eng)
                                 :crown_rank {:declared 15 :cooled 2
-                                             :declined 3 :fresh 1 :early 2}})
+                                             :declined 3 :fresh 1 :early 2 :judged 1}})
             stale (verdict! eng sid :apply :headers as-mom)]
         (is (= 201 (:status second')) (pr-str (:doc second')))
         (is (= 200 (:status moved)) (pr-str (:doc moved)))
@@ -676,7 +676,7 @@
                         :body {:label "The house's own"
                                :order (current-order eng)
                                :crown_rank was})]
-        (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2} was))
+        (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1} was))
         (is (= 200 (:status back)) (pr-str (:doc back)))
-        (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}
+        (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}
                (crown-rank-of-feed eng)))))))

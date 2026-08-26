@@ -4338,6 +4338,50 @@
                              first :card_id str)
         asked-card (when ranked (outcome-card ranked aoid))
         plain-card (when ranked (outcome-card ranked poid))
+        ;; ── the agent's score and sentence (waymark-1uv.6) ────────
+        ;; A second agent, leashed to the note kind's create door and
+        ;; to READ the bundle, scores the uncited bundle 0.9 with one
+        ;; sentence, citing the bundle's own address. The card then
+        ;; quotes that sentence AS THE AGENT'S — beside the engine's
+        ;; numbers and never inside the engine's impact line — and the
+        ;; composer that staged the bundle is refused the same door on
+        ;; its own work. The claims stand down whole on an engine with
+        ;; no note kind.
+        notable (rdef ctx :ranking_note)
+        judge (when (and notable poid)
+                (leash! ctx (str "conformance-judge-" tag)
+                        [{:kind "ranking_note" :actions ["create"]}
+                         {:kind "outcome" :actions []}]))
+        judge-read (when judge
+                     (req ctx :get (str "/api/" (:plural (rdef ctx :outcome))
+                                        "/" poid)
+                          judge))
+        verdict (str "The one he has been circling for a month " tag)
+        scored (when judge
+                 (req ctx :post (str "/api/" (:plural notable))
+                      {:subject_kind "outcome" :subject_id (str poid)
+                       :score 0.9M :says verdict
+                       :evidence [(str "/api/" (:plural (rdef ctx :outcome))
+                                       "/" poid)]}
+                      judge))
+        note-id (when (= 201 (:status scored)) (id-of (:self (json ctx scored))))
+        note-row (when note-id (json ctx (get-env ctx :ranking_note note-id)))
+        ;; the composer, handed the note door too, scores ITS OWN bundle
+        self-judge (when (and notable poid leashed)
+                     (leash! ctx composer
+                             [{:kind "ranking_note" :actions ["create"]}]))
+        self-scored (when self-judge
+                      (req ctx :post (str "/api/" (:plural notable))
+                           {:subject_kind "outcome" :subject_id (str poid)
+                            :score 1M :says (str "Mine, obviously " tag)
+                            :evidence [(str "/api/"
+                                            (:plural (rdef ctx :outcome))
+                                            "/" poid)]}
+                           self-judge))
+        judged-doc (when note-id (:doc (feed-doc ctx as-member "explain=1")))
+        judged-card (when judged-doc (outcome-card judged-doc poid))
+        judged-says (when judged-card
+                      (str/join " " (map str (get-in judged-card [:why :says]))))
         ;; …and both leave the feed the way the reason obligation's
         ;; bundle does — declined, terminal — so the engine handed on
         ;; is the engine found
@@ -4801,10 +4845,11 @@
        (and mine (let [c (get-in mine [:recipe :crown_rank])]
                    (not (and (map? c)
                              (every? #(int? (get c %))
-                                     [:declared :cooled :declined :fresh :early])))))
+                                     [:declared :cooled :declined :fresh :early
+                                      :judged])))))
        (conj (str "feed: recipe.crown_rank reads "
                   (pr-str (get-in mine [:recipe :crown_rank]))
-                  " — the crown's rank is five numbers the household can"
+                  " — the crown's rank is six numbers the household can"
                   " read, on every answer, or it is the hidden model law 5"
                   " forbids"))
 
@@ -4872,7 +4917,88 @@
                       (get-in asked-card [:why :says])))
        (conj (str "feed: the cited bundle's citation never says it stands"
                   " first because the member asked: "
-                  (pr-str (get-in asked-card [:why :says])))))}))
+                  (pr-str (get-in asked-card [:why :says]))))
+
+       ;; ── the agent's score and sentence (waymark-1uv.6) ────────
+       (and judge (not= 200 (:status judge-read)))
+       (conj (str "feed: an agent leashed to read the bundle could not ("
+                  (:status judge-read) ") — the scoring scope is the note"
+                  " door plus a read-only line over the kind it scores, and"
+                  " an agent that cannot read a row has nothing to cite"))
+
+       (and judge (not= 201 (:status scored)))
+       (conj (str "feed: an agent holding a ranking_note grant could not"
+                  " score a bundle it read and cited (" (:status scored) "): "
+                  (pr-str (json ctx scored))
+                  " — option M is a row an agent may write, or it is nothing"))
+
+       (and note-row
+            (not= (get judge "x-waymark-principal")
+                  (str (get-in note-row [:data :judged_by]))))
+       (conj (str "feed: the note carries "
+                  (pr-str (get-in note-row [:data :judged_by]))
+                  " as its author, not the agent that posted it — who judged"
+                  " is the engine's stamp off the principal, never the body's"))
+
+       (and self-judge (not= 409 (:status self-scored)))
+       (conj (str "feed: the composer scored ITS OWN bundle ("
+                  (:status self-scored) ") — a composer ranking its own"
+                  " staging first is the four-eyes wall walked around, and"
+                  " the note door reads the subject's own :own-surface to"
+                  " refuse it"))
+
+       (and self-judge (= 409 (:status self-scored))
+            (not= "not-your-own-row" (str (:guard (json ctx self-scored)))))
+       (conj (str "feed: the composer's own score was refused by "
+                  (pr-str (:guard (json ctx self-scored)))
+                  " rather than by name — the wall that keeps an agent off"
+                  " its own row should say so"))
+
+       (and note-id (nil? judged-card))
+       (conj (str "feed: the scored bundle left the member's feed — a"
+                  " note is an input to the rank, never a filter on it"))
+
+       (and judged-card
+            (let [j (get-in judged-card [:why :crown :judged])]
+              (not (and (map? j)
+                        (= (get judge "x-waymark-principal") (str (:by j)))
+                        (= verdict (str (:says j)))
+                        (== 0.9 (double (:score j)))))))
+       (conj (str "feed: the scored bundle's why.crown.judged reads "
+                  (pr-str (get-in judged-card [:why :crown :judged]))
+                  " — an agent's score rides the card as {score, by, says},"
+                  " under the agent's own name, or the household is being"
+                  " nudged by a hand it cannot see"))
+
+       (and judged-card
+            (not (and (str/includes? judged-says verdict)
+                      (str/includes? judged-says
+                                     (str (get judge "x-waymark-principal")
+                                          " scores this")))))
+       (conj (str "feed: asked why, the scored bundle's citation does not"
+                  " quote the agent's sentence under the agent's name: "
+                  (pr-str (get-in judged-card [:why :says]))
+                  " — the card quotes it as the agent's, the way it quotes"
+                  " the composer's routing"))
+
+       (and judged-card
+            (or (str/includes? (str (:impact judged-card)) verdict)
+                (some #(str/includes? (str (:impact %)) verdict)
+                      (:pieces judged-card))))
+       (conj (str "feed: the agent's sentence leaked into the engine's"
+                  " impact line: " (pr-str (:impact judged-card))
+                  " — the impact line is DERIVED from the prepared input,"
+                  " and an agent's opinion inside it would be the engine"
+                  " vouching for a word that is not its own"))
+
+       (and judged-card asked-card
+            (contains? (get-in (outcome-card judged-doc aoid) [:why :crown])
+                       :judged))
+       (conj (str "feed: a bundle nobody scored carries judged "
+                  (pr-str (get-in (outcome-card judged-doc aoid)
+                                  [:why :crown :judged]))
+                  " — the key rides only when an agent said a word, so a"
+                  " reader can tell silence from a score")))}))
 
 ;; ── the taps learn to speak (waymark-jfv.16) ────────────────────────
 ;;
