@@ -109,6 +109,17 @@
                                      ":dispatcher explicitly")
                                 {:consumer name*})))
          sub (events/subscribe dispatcher {})
+         ;; The cursor is pinned HERE, on the caller's thread, before the
+         ;; consumer thread exists. Seeding it lazily on that thread's
+         ;; first drain left a window between "registered" and "first
+         ;; poll" in which a committed write could land past the seed
+         ;; and never be delivered — invisible on an idle laptop, routine
+         ;; on a loaded 8-core node running six shards. At-least-once
+         ;; starts at registration, not at whenever the scheduler gets
+         ;; round to the thread.
+         _ (let [st (:storage eng)]
+             (when-not (store/with-tx st #(store/cursor-get st % (cursor-name name*)))
+               (seed-cursor! eng name* from-origin?)))
          running (atom true)
          processed (atom 0)
          drain! (fn []
