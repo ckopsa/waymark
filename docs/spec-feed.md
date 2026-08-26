@@ -258,6 +258,22 @@ superseded by law 7:
 The second suspicion above — *"the feed is not the notifier"* — is unchanged
 and unchallenged. Laws v3 adds no badge, no unread state, and no push.
 
+**A cross-reference, not an amendment (2026-08-26, waymark-1uv.1).** The laws
+above govern what may ORDER the feed. `spec-outcome-menu.md` § *Ranked, not
+capped — the principle* records the owner's ruling on what may be WRITTEN
+into its pool: the machine writes without limit; the rank — law 5's declared
+formula — decides what reaches a person's attention, with law 3's floor under
+it; and a cap on writing stays only where the write itself costs the
+household (a push to an authority, a letter to a person, a mirror write),
+each such cap saying so in its docstring. It reverses the outcome cap's
+recorded doctrine (`outcomes-are-few`, two a week per composer), because the
+view-event door built below made *never shown* distinguishable from *shown and
+passed over*, and it fixes the agent's part in any rank as tuning through a
+proposal (A) then a quoted score-and-sentence as one input (M), never the rank
+itself (B). Nothing in the nine laws moves; the crown's own rank is
+waymark-1uv.2's to build, and it is held to law 5 like the three sections
+already in the contest.
+
 ## The design
 
 ### The document is a `feed`, not an envelope

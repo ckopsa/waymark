@@ -2908,6 +2908,9 @@ person spins; the system never spins for them*) applied to composition — and
 a wall that refused the person's own pull would be the system deciding how
 much the household is allowed to want. So the pull is a row, the row admits
 one outcome past the cap, and the cap is otherwise untouched to the letter.
+**Superseded in principle, 2026-08-26 — see § *Ranked, not capped* below
+(waymark-1uv.1): the cap is a wall on writing standing in for a rank on
+attention, and it leaves when the crown's rank lands (waymark-1uv.2, then .3).**
 
 ### The kind, as it landed
 
@@ -3085,3 +3088,213 @@ needed and the only one that could is walled to the staging's own hand.
   and never one that *made* one. The quick reasons (jfv.16) have been ridden
   under the origin key uncounted since they landed. One line in the framework;
   the column already existed.
+
+## Ranked, not capped — the principle (2026-08-26, waymark-1uv.1)
+
+**The owner's ruling, verbatim, 2026-08-26:**
+
+> I have a lot of raw data about myself that I can't use easily. Agents have
+> infinite patience and time to sift through that data and index it.
+> Compositions are a type of that indexing. I don't think it makes sense to
+> limit the indexing. It makes more sense to just rank them.
+
+The epic (`waymark-1uv`) carries the second half of the ruling in its own
+words rather than the owner's: *an agent may tune the rank, or supply a
+judgment to it.* That half is decided below, under § *The agent's part*.
+
+It reverses a recorded ruling — § *The outcomes section — the crown, and its
+floor* above, *"The weekly cap lives at the create door, not in the recipe and
+not in the population"* — and the § *Built — jfv.20* paragraph that restated
+it. Both stand as history and are not edited beyond a forward pointer; what
+follows supersedes them wherever they disagree, which is the jfv.10 convention
+for a reversal.
+
+**The principle, in one sentence:** a cap on WRITING protects a person's
+attention by proxy; a RANK protects it directly. The house already rules this
+way twice over. jfv.10: an agent writes a value without limit, the row is born
+`observed` and *says so wherever this house cites it*, and the owner's hand is
+the safeguard. jfv.11: the same for a person. Neither kind has a pace wall and
+nobody has asked for one, because the danger was never the number of rows — it
+was a row reaching a person's eyes as though it were the person's own word.
+The outcome cap (`outcomes-are-few`, two a week per composer) is the odd one
+out: the one place an agent's writing is walled by count rather than by what
+the reader is shown.
+
+### What the cap was for — the three recorded reasons
+
+Quoted from § *The outcomes section*, because a reversal that paraphrases what
+it reverses is arguing with a straw man:
+
+> 1. **A filter buries what a wall would have refused.** The cap exists so the
+>    composer must *rank* — the insight cap's whole point, put at the source. A
+>    population that showed two of ten staged plans would let a composer dump
+>    ten and learn nothing, and eight rows would sit `offered` teaching the
+>    composer that the household ignores it.
+> 2. **The recipe has no word for a week and should not grow one.** `:take` is
+>    per page; adding a window would make the recipe mean a second thing, in a
+>    schema a person edits in a form.
+> 3. **A weekly filter fights the floor.** 8um law 3 wants guaranteed exposure
+>    so the contest can be measured; a read-side window would hide cards that
+>    had already spent the week's allowance, and *a learner cannot learn about
+>    a card it never shows*.
+
+And `weekly-cap`'s own docstring, which is the same argument compressed to its
+load-bearing clause: *"a filter would bury what a wall would have refused, and
+eight ignored rows would teach the composer that this house does not care."*
+
+| reason | what it is actually about | standing today |
+|---|---|---|
+| 1 — a filter buries; unanswered rows teach the wrong lesson | what an unanswered `offered` row MEANS to the composer | **dissolved** by the view-event door — below |
+| 2 — the recipe has no word for a week | WHERE the rank lives — not in `:take` | still true, and the rank does not live there |
+| 3 — a window fights the floor | WHERE the rank lives — not in a read-side filter that hides | still true, and the floor stays |
+
+Reasons 2 and 3 were never reasons for a cap; they were reasons against two
+particular places a rank could have been put. They survive intact, as
+constraints on the rank (§ *The rule going forward*, below).
+
+### What changed — an unanswered row is no longer a verdict on the composer
+
+Reason 1 rested on one fact about the record as it stood on 2026-08-25: an
+`offered` outcome with no verdict on it was **indistinguishable** from an
+outcome the household had looked at and passed over. The feed READ writes
+nothing — the law that did not move — so the store knew that a row existed and
+that nobody had answered it, and nothing in between. The only safe reading of
+silence was the worst one, *the house ignores it*, and the cap was the device
+that made silence honest: keep the count low enough that every staged outcome
+is on the crown every morning, and then an unanswered row really has been
+shown and passed over.
+
+**waymark-8um.1 made the middle knowable.** `feed_view` records, per member
+who has turned it on, that a card was on THAT member's screen on THAT day
+(`member`, `card_id` whole, `population`, `day`); and *whether an action
+followed* is a join on `(day, card_id)` against the audit trail that already
+knows (`spec-feed.md` § *Built — 8um.1*). So for any outcome the record now
+distinguishes three things it used to collapse into one:
+
+| the row reads | before 8um.1 | after 8um.1 |
+|---|---|---|
+| `offered`, no verdict, no view row | *the house ignores it* | **never shown** — a fact about the rank; the composer learns nothing about the house from it |
+| `offered`, no verdict, view rows | *the house ignores it* | **shown and passed over** — the signal 8um law 4 calls the composer's work order |
+| a verdict, with jfv.16's reason | a verdict | a verdict, and the reason names the line of thinking |
+
+A composer that stages fifty and sees five shown learns about the **rank**,
+not about the house — `waymark-1uv.4` makes the diagnosis duty read the record
+in that order. That is the whole of the change: the cap was protecting the
+composer from a misreading the record can no longer produce. Take the
+misreading away and reason 1 becomes a reason for a rank that says what it
+did — which is 8um law 5, built for three sections and not yet for the crown.
+
+### The rule going forward
+
+Stated as law, in the shape the feed's laws wear, because it governs more than
+outcomes:
+
+> 1. **The machine may write without limit.** Indexing is the agent's work and
+>    a count is not a judgment. No kind grows a pace wall because a person
+>    might otherwise be shown too much of it; what a person is shown is the
+>    rank's to decide, never the create door's.
+> 2. **The rank decides what reaches a person's attention.** It is declared
+>    data on the recipe row, readable on every card it touched (8um law 5),
+>    and the exposure floor stands under it: `:take` is a guaranteed slot and
+>    the rank chooses WHICH, never WHETHER. A rank that hides is the window
+>    reason 3 refused.
+> 3. **A cap stays only where the write itself costs the household** — a push
+>    to an authority (a mirrored kind's `:push-on-write`), a letter to a
+>    person (`letters-are-paced`), a mirror write onto a source the house does
+>    not own. There the cost lands when the row is written, before any rank
+>    could stand between it and a person, and a wall at the door is the only
+>    place left to stand.
+> 4. **Each such cap must say so in its docstring** — name the cost the write
+>    incurs, not the ranking problem it makes the author solve. A docstring
+>    whose whole argument is *"so the author must rank"* is describing a rank
+>    on attention and asking a wall to do its job.
+
+`weekly-cap`'s docstring is exactly what clause 4 describes, and it stands
+today with one sentence pointing here, because the rank it defers to does not
+exist yet (`waymark-1uv.2`). **The guard is not removed by this bead and may
+not be removed before the rank lands** — `waymark-1uv.3`'s own warning: with
+no cap and no rank the crown shows two of two hundred by the day's seed, which
+is worse than what stands.
+
+### The agent's part — A first, M when the formula wants a judgment, never B
+
+The second half of the ruling — *an agent may tune the rank, or supply a
+judgment to it* — admits three shapes, weighed 2026-08-26:
+
+| option | the agent … | what the card can say | the revert | what it needs |
+|---|---|---|---|---|
+| **A** — tunes | proposes numbers for a DECLARED, readable formula through `recipe_proposal` (waymark-0k4) | *asked-for counts 3× — applied by the household on Tuesday*; 8um law 5 holds | one tap, the proposal's own machinery | nothing new — the door exists |
+| **M** — a score and a sentence | writes a `0..1` score and one sentence on a row, as DATA, stamped with who wrote it; the formula reads the score as one weighted input beside the others | quotes the sentence **as the agent's**, the way the routing is quoted as the composer's | one weight, turned down to zero | a field or a small kind — `waymark-1uv.6` decides which |
+| **B** — is the rank | orders the crown itself, at read time or by writing the order | nothing it can prove — *the agent put it here* | none short of un-leashing the agent | a pulse at every read |
+
+**Decision: A first; M when the formula wants a judgment it cannot compute
+from counts; never B.** Four reasons, each a law or a bead this house already
+holds:
+
+1. **8um law 5.** The formula is data the owner can read. An agent that IS
+   the rank is a hidden model whatever its candour at the prompt, because the
+   household cannot read a prompt off the wire and cannot edit one in a form.
+   A and M both leave the formula readable: A changes its numbers, M adds an
+   input the card names.
+2. **`?explain=1`.** Every card's `why` says what lifted or held it, and the
+   `.29` machinery quotes the declaration's own words. Under A the why is
+   arithmetic over numbers the household applied; under M it is that
+   arithmetic plus a quoted sentence with a name on it; under B it is an
+   assertion.
+3. **The pulse (waymark-53u).** The composer has no standing presence — a
+   composition request is answered *at the composer's next sitting*, and
+   § *Built — jfv.20* says so rather than let a chip imply a vending machine.
+   A rank that waits on a sitting is a crown that does not load. A and M are
+   read at the feed's read, from rows already written; B needs an agent awake
+   at every GET, which this house has deliberately not built.
+4. **One-tap revert.** A rides `recipe_proposal`: *the apply IS the member's
+   write*, the diff is stored, and the previous numbers are the row's own
+   transitions. M reverts by one weight. B has no revert but distrust — and
+   the crown is the one place a person acts on a machine's word, so that word
+   must be readable and a person must be able to take it back.
+
+The order A → M is not a ranking of merit; it is the order in which the
+evidence arrives. A tuning agent reads exposure, verdicts and reasons per
+input and proposes numbers citing them, the way an insight cites rows
+(`waymark-1uv.5`). Only when that agent finds the counts cannot express the
+thing it knows — *this is the outcome he has been circling for a month* — does
+M earn its field, and when it does the card quotes the sentence, and the
+household can read whether the agent was right.
+
+### Where each part lands
+
+| this section says | the bead that builds it | lands after |
+|---|---|---|
+| the rank decides what reaches attention — declared, readable on every card, the floor kept | **waymark-1uv.2** — the crown's declared rank: asked-for first, declared over observed, shown-and-passed-over cools, verdict reasons cool a line of thinking, freshness; the population stops scanning | this bead |
+| the machine writes without limit — the cap goes; the request kind stays as the rank's first input; the crown chip's rule re-read | **waymark-1uv.3** — remove `outcomes-are-few` | .2, never before it |
+| never-shown is not a decline — the diagnosis reads exposure before verdicts | **waymark-1uv.4** — the diagnosis duty counts exposure | waymark-8um.4 |
+| option A — the agent tunes through a proposal a person applies; the diff speaks the household's words | **waymark-1uv.5** — the rank is tunable through `recipe_proposal` | .2 |
+| option M — the agent's score and sentence, one input, quoted as the agent's | **waymark-1uv.6** | .2 and .5 |
+| the principle is wider than outcomes — `insights-are-capped`, the tickler pile; clause 3's caps say why they stay | **waymark-1uv.7** | — |
+
+### Recorded here, for whoever comes next
+
+- **Nothing in code moved but one sentence.** `weekly-cap` is still `2`,
+  `outcomes-are-few` still stands at the create door behind
+  `the-request-is-open`, and `make check-queue` reads 37 kinds, 11 warnings,
+  49 scenarios judged — the jfv.20 battery to the number. The docstring gained
+  one sentence pointing here, so a reader of the code finds the reversal where
+  the number is.
+- **jfv.20's opening paragraph is now history**, including *"the reasoning
+  behind it is unchanged: a composer that could stage ten would never rank"*.
+  It stands as written with a forward pointer. Its mechanism — the person's
+  pull admits an outcome past the cap — survives the cap's removal as the
+  rank's first input (*asked-for first*), which is waymark-1uv.3's sentence
+  and not this bead's to build.
+- **`staged-changes-are-few` (three OPEN `recipe_proposal`s per author) was
+  not decided here, and the epic does not list it.** Its docstring argues both
+  ways at once: *"a composer with three proposals already on the fridge has a
+  ranking problem"* is clause 4's tell, but a proposal is a question on the
+  decide section — an obligation outside the contest (8um law 2) that costs a
+  person a verdict the moment it is written, which is clause 3's exemption.
+  `waymark-1uv.7` asks this question of insights and ticklers; this cap wants
+  the same question, and it is recorded here for that bead to take up.
+- **The floor is not the cap and does not go with it.** `:take 2` on the
+  outcomes line is 8um law 3's mechanism and clause 2 keeps it; what
+  waymark-1uv.3 removes is the count at the create door and nothing on the
+  recipe row.

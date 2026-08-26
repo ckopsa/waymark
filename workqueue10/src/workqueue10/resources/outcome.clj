@@ -376,7 +376,13 @@
   reasoning, and `resource/pacing-guards`' — a house-wide cap would
   let a noisy composer silence a quiet one. It counts ROWS in the
   store, so unlike the in-process pacing atoms it is shared across
-  processes."
+  processes.
+
+  SUPERSEDED IN PRINCIPLE (waymark-1uv, 2026-08-26): this cap is a wall
+  on writing standing in for a rank on attention — see
+  docs/spec-outcome-menu.md § 'Ranked, not capped' — and it leaves when
+  the crown's declared rank lands (waymark-1uv.2, then .3); until then
+  the number and the guard stand as written."
   2)
 
 (def bundle-ceiling
