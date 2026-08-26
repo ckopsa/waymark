@@ -123,21 +123,32 @@ env:
   # WALL CLOCK 17m22s.
   #
   # Same commit content, ~10x apart, and the cluster is the slow side.
-  # Run 27's shard 3 says why — 352s in the step, of which:
+  # Run 27's shard 3 says where a shard's 352s goes — the timestamps in
+  # its own log, against kaocha's reported 92.36s of test time:
   #
-  #   ~147s  JVM boot and compile before the first line of output
-  #   ~107s  loading declarations (the usability warnings, timestamped)
-  #    ~92s  the tests themselves
+  #   ~147s  silence: JVM boot, then compiling what the first test
+  #          namespace transitively requires. 70k lines of Clojure and
+  #          no AOT anywhere, so this is a from-source compile that
+  #          EVERY shard repeats. Effectively FIXED per shard.
+  #   ~107s  usability warnings streaming: each test namespace loading,
+  #          running the check battery its top-level defresource forms
+  #          trigger. PROPORTIONAL to the shard's namespace count.
+  #    ~98s  the tests (kaocha: 92.36s). PROPORTIONAL.
   #
-  # 74% of a shard is fixed cost that every shard re-pays. A perfectly
-  # weighted split of the remaining 92s cannot beat 260s, so IMBALANCE
-  # IS NOT WHAT BINDS HERE and the weighted split is not worth building
-  # yet. AOT compilation is the change that would move the 147s; the
-  # 107s is the framework's own load, and belongs to the framework.
+  # So ~40% is fixed and ~60% divides. (The exact split inside the 147s
+  # is not separately measured — some namespace loading hides in it —
+  # so read it as an upper bound on the fixed part.)
   #
-  # So the shard count barely matters on GitHub-hosted (both splits sit
-  # near the ~40s of job setup plus the slowest shard) and 8+3 is kept
-  # for using eight fewer of the 20 concurrent jobs. What matters is
+  # AOT is the change that attacks the fixed 147s, and it is the only
+  # one that helps a shard that is already alone on a machine. The
+  # other two shrink by sharding, which is why the shard count still
+  # earns its keep even though imbalance is a second-order effect.
+  #
+  # On GitHub-hosted the same fixed cost is ~20-26s rather than ~147s,
+  # which is why 97s is already close to the floor there: ~10s discover
+  # + ~20s job setup and container init + the slowest shard. Both
+  # splits land near that, and 8+3 is kept for using eight fewer of the
+  # 20 concurrent jobs. What matters is
   # WHICH RUNNER: leaving CI_RUNNER unset is worth ~10x here, and the
   # cluster earns its keep as a fallback for when GitHub stops
   # scheduling (which it did, for the better part of an hour, on the
