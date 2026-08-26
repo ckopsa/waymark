@@ -62,9 +62,15 @@
   the row lie about what it offers. Recomposition is a NEW outcome
   naming `supersedes`, and the decline stamps `not_before` off the
   tickler's own backoff schedule — a week, then three, then two
-  months, then half a year — which `a-recomposition-waits-its-turn`
-  then holds. Half a year forever, because the only honest way to stop
-  hearing about an outcome is to retire the value it serves.
+  months, then half a year — which the crown's RANK then reads
+  (waymark-1uv.10): a recomposition staged before that date is
+  admitted and cooled, every day early holding it back on the card,
+  never refused at the door. The wall that used to stand there was the
+  person's own verdict used as a cap on the composer's writing, and
+  the epic ruled a cap on writing a proxy for a rank on attention
+  (docs/spec-outcome-menu.md § 'Ranked, not capped'). Half a year
+  forever, because the only honest way to stop hearing about an
+  outcome is to retire the value it serves.
 
   ── THE TAP IS THE WRITE, AND IT IS THE MEMBER'S OWN ──
 
@@ -240,11 +246,9 @@
             ;; spells it — `recipe_proposal/apply-the-order`'s own
             ;; reach, one kind over
             [waymark10.server.invoke :as inv]
-            [waymark10.server.store :as store]
             [waymark10.types :as t]
             [workqueue10.resources.tickler :as tickler])
-  (:import (java.time Instant)
-           (java.time.temporal ChronoUnit)))
+  (:import (java.time Instant)))
 
 (set! *warn-on-reflection* true)
 
@@ -351,7 +355,23 @@
     :invoke
     :create))
 
-;; ── the leashes and the caps, as household numbers ──────────────────
+;; ── the leash and the ceiling, as household numbers ─────────────────
+;;
+;; NO CAP ON STAGING LIVES HERE ANY MORE (waymark-1uv.3, 2026-08-26).
+;; `weekly-cap` — two a week per composer — and its guard
+;; `outcomes-are-few` stood at the create door from jfv.3 to 1uv.2,
+;; and the whole of their argument was "so the composer must rank".
+;; That is a rank on attention asking a wall to do its job (the
+;; epic's clause 4), and the crown's declared rank (feed/default-
+;; crown-rank, waymark-1uv.2) now does it where the household can read
+;; it: the machine writes without limit, the rank chooses which
+;; bundles fill the crown's slots, and an unanswered row teaches the
+;; composer nothing an unshown one would not, because the view-event
+;; record tells NEVER SHOWN from PASSED OVER. The person's own pull
+;; (`request_id`, waymark-jfv.20) survives the cap it was written to
+;; get past as the rank's first tier, and `the-request-is-open` still
+;; checks the citation. docs/spec-outcome-menu.md § 'Ranked, not
+;; capped' and § 'Built — 1uv.3' carry the ruling and the reasons.
 
 (def leash-days
   "How long a staged outcome stands before the house stops being
@@ -361,29 +381,6 @@
   Engine-owned — the person who benefits from a short leash is the
   household, and the one filling the form is not."
   7)
-
-(def weekly-cap
-  "Outcomes one composer may stage in a week. TWO, and the number is
-  the whole of the wall: a composer that could stage ten would never
-  have to decide which one mattered, and a household that woke up to
-  ten would stop reading the section by Thursday. The cap exists so
-  the composer RANKS, which is why it stands at the create door and
-  not in the population — a filter would bury what a wall would have
-  refused, and eight ignored rows would teach the composer that this
-  house does not care.
-
-  Per AUTHOR rather than per house: `insights-are-capped`'s own
-  reasoning, and `resource/pacing-guards`' — a house-wide cap would
-  let a noisy composer silence a quiet one. It counts ROWS in the
-  store, so unlike the in-process pacing atoms it is shared across
-  processes.
-
-  SUPERSEDED IN PRINCIPLE (waymark-1uv, 2026-08-26): this cap is a wall
-  on writing standing in for a rank on attention — see
-  docs/spec-outcome-menu.md § 'Ranked, not capped' — and it leaves when
-  the crown's declared rank lands (waymark-1uv.2, then .3); until then
-  the number and the guard stand as written."
-  2)
 
 (def bundle-ceiling
   "The most pieces one outcome may carry. FIVE, because the epic's own
@@ -395,17 +392,6 @@
   it is the composer's duty in prose and the population's judgment at
   offer time."
   5)
-
-;; ── the week, and where its boundary lives ──────────────────────────
-;;
-;; MONDAY 00:00 UTC — `store/utc-week-start`, called by name so there
-;; is never a second truncation. The week the household is HAVING,
-;; not a rolling 168 hours, which is `insights-are-capped`'s own
-;; reasoning about the calendar day one window up: the house reads
-;; "two a week" and means the week it is in. A rolling window would
-;; have been cheaper and would have made the sentence a lie.
-
-(defn- week-start ^Instant [^Instant now] (store/utc-week-start now))
 
 ;; ── addresses, read rather than guessed ─────────────────────────────
 
@@ -426,16 +412,17 @@
 (defn- listed
   "A short, ordered rendering of what went wrong — EVERY offender, not
   the first, because a composer fixing them one round trip at a time
-  is a composer burning its cap."
+  is a composer wasting a sitting."
   [xs]
   (str/join ", " (map pr-str (sort (distinct xs)))))
 
 ;; ── the outcome's create walls ──────────────────────────────────────
 ;;
-;; SHAPE FIRST, WORLD NEXT, PACE LAST — insight's ordering and its
-;; reason: a malformed outcome should hear what is wrong with it
-;; rather than that the week is full, and because the cap counts ROWS
-;; a refused create spends nothing.
+;; SHAPE FIRST, WORLD NEXT — insight's ordering and its reason: a
+;; malformed outcome should hear what is wrong with it before anything
+;; about the world it lands in. There is no PACE wall to come last any
+;; more (waymark-1uv.3): what a composer may stage is unbounded, and
+;; what the household is shown is the crown's rank's to decide.
 
 (defguardfn cites-what-it-read
   {:judges [:evidence]
@@ -662,11 +649,23 @@
 
 (defguardfn a-recomposition-waits-its-turn
   {:judges [:supersedes]
-   :reads [:outcome :now]
+   :reads [:outcome]
    :vars [:problem]
-   :open "A declined outcome comes back recomposed, not repeated — and not straight away. The decline stamps when the house is willing to hear it again: a week, then three, then two months, then half a year."
-   :explain "That recomposition is early: {problem}"}
+   :open "A declined outcome comes back recomposed, not repeated: the one it supersedes exists, and the house has answered it. How soon it comes back is not this door's question — the decline stamps when the house is willing to hear it again, and the crown's rank holds an early recomposition back by every day it is early, on the card, in words."
+   :explain "That recomposition does not stand: {problem}"}
   [_row inp ctx]
+  ;; TWO ARMS, AND THE THIRD WENT TO THE RANK (waymark-1uv.10). This
+  ;; door used to refuse a recomposition staged before the prior's
+  ;; `not_before` — the person's decline, stamped as a date, used as a
+  ;; wall on the composer's writing. The verdict is real and is still
+  ;; honoured; what moved is WHERE: `feed/crown-lift` reads the same
+  ;; stamp (and `declined_count` beside it) and cools the recomposition
+  ;; until the date, with the card's why saying so. Law 4 wanted the
+  ;; row WRITTEN — the diagnosis is the composer's work order, and a
+  ;; door that refused it for two months was a wall against the duty.
+  ;; The two arms that stay are shape and a dedupe law, not pace:
+  ;; there is no such outcome; the outcome is still on offer, so
+  ;; recomposing it is asking the same question twice.
   (let [read' (:read ctx)
         sid (some-> (:supersedes inp) str str/trim not-empty)
         deny (fn [problem] (t/deny {:vars {:problem problem}}))]
@@ -675,8 +674,7 @@
       (nil? read') (t/allow)
 
       :else
-      (let [prior (read' :outcome sid)
-            floor (get-in prior [:data :not_before])]
+      (let [prior (read' :outcome sid)]
         (cond
           (nil? prior)
           (deny (str "this house serves no outcome " sid
@@ -687,17 +685,13 @@
                      " for an answer. Recomposing something nobody has"
                      " declined yet is asking the same question twice."))
 
-          (and floor (pos? (compare floor (:now ctx))))
-          (deny (str "the house said not this week, and meant it until "
-                     floor ". Diagnose the friction in the meantime —"
-                     " a recomposition that arrives the next morning is"
-                     " the same ask in a new hat."))
-
           :else (t/allow))))))
 
 (defn- cited-request
   "The composition request an outcome cites, trimmed, or nil — the one
-  spelling both the wall and the cap read (waymark-jfv.20)."
+  spelling the wall and the staging hook both read (waymark-jfv.20).
+  Since waymark-1uv.3 nothing counts against it: a citation is the
+  rank's first tier (`feed/crown-key`), not a pass through a cap."
   [inp]
   (some-> (:request_id inp) str str/trim not-empty))
 
@@ -708,15 +702,19 @@
    :open "An outcome may answer a person's own request for another — and when it does, the request is one this house is holding open: it exists, nobody has answered it, its week has not run out, and if the person named the value it should serve, this outcome serves that value."
    :explain "That request cannot admit this outcome: {problem}"}
   [_row inp ctx]
-  ;; THE PERSON'S PULL, CHECKED (waymark-jfv.20). This wall stands in
-  ;; front of `outcomes-are-few`, which is what lets the cap say
-  ;; 'a cited outcome is admitted' without re-reading the request: by
-  ;; the time the cap runs, a citation has either been refused here or
-  ;; is known to be good. The four arms are the bead's own list, and
-  ;; the second is 'one request, one outcome' seen from the outcome's
-  ;; side — the request's `answer` door moved it to `answered` the
-  ;; instant the first outcome citing it was staged, so the second
-  ;; meets a state rather than a count.
+  ;; THE PERSON'S PULL, CHECKED (waymark-jfv.20). A wall on CITING,
+  ;; not on writing, and it stays whole under the epic that removed
+  ;; the cap it once stood in front of (waymark-1uv.3): a cited outcome
+  ;; still answers the request in the same stroke (`stage-the-outcome`
+  ;; invokes the request's own door), and a citation that is not good
+  ;; would burn a person's pull on an outcome that answered nothing.
+  ;; What the citation BUYS changed — it used to be admission past the
+  ;; cap; it is now the crown rank's first tier, above every bundle
+  ;; nobody asked for. The four arms are the bead's own list, and the
+  ;; second is 'one request, one outcome' seen from the outcome's side
+  ;; — the request's `answer` door moved it to `answered` the instant
+  ;; the first outcome citing it was staged, so the second meets a
+  ;; state rather than a count.
   (let [read' (:read ctx)
         rid (cited-request inp)
         deny (fn [problem] (t/deny {:vars {:problem problem}}))]
@@ -732,8 +730,7 @@
           (nil? r)
           (deny (str "this house holds no request " rid
                      " — read /api/composition_requests?state=offered and"
-                     " cite one of those, or cite none and stage inside"
-                     " the week's allowance."))
+                     " cite one of those, or cite none."))
 
           (= "answered" (name (:state r)))
           (deny (str "/api/composition_requests/" rid " was already"
@@ -762,36 +759,6 @@
                      " not for anything."))
 
           :else (t/allow))))))
-
-(defguardfn outcomes-are-few
-  {:reads [:principal :now :outcome]
-   :vars [:limit :retry_at]
-   :open "Two outcomes a week, per composer, Monday to Monday — the cap is what makes a composer rank rather than dump. It walls the machine's initiative and never the person's pull: an outcome citing a request the house is holding open is admitted past it."
-   :explain "That is {limit} outcomes staged this week, which is the week's whole allowance; the next one opens on Monday ({retry_at}). Rank what is left and bring the best of it then — unless a person has asked for another: an outcome citing an open request at /api/composition_requests is admitted past the cap."}
-  [_row inp ctx]
-  ;; THE CAP WALLS THE MACHINE, NOT THE PERSON (waymark-jfv.20). An
-  ;; outcome citing a request is admitted without counting — the
-  ;; request was a person's own pull, and `the-request-is-open`, one
-  ;; wall up, has already refused a citation that is not good. The
-  ;; uncited case is unchanged to the letter.
-  ;;
-  ;; The storage-free probe never spends a slot — letters-are-paced's
-  ;; own discipline, and the same one pacing-guards keeps
-  (if (or (nil? (:find ctx)) (some? (cited-request inp)))
-    (t/allow)
-    (let [pid (:id (:principal ctx))
-          monday (week-start (:now ctx))
-          staged (into []
-                       (filter (fn [r]
-                                 (and (some? (:created-at r))
-                                      (not (pos? (compare monday
-                                                          (:created-at r)))))))
-                       ((:find ctx) :outcome {:composed_by pid} {:limit 500}))]
-      (if (< (count staged) (long weekly-cap))
-        (t/allow)
-        (let [next-monday (.plus monday 7 ChronoUnit/DAYS)]
-          (t/deny {:vars {:limit weekly-cap :retry_at (str next-monday)}
-                   :retry-at next-monday}))))))
 
 ;; ── the piece's create walls ────────────────────────────────────────
 
@@ -1186,12 +1153,17 @@
   ;; able to tell 'the week was wrong' from 'that part was wrong', and
   ;; the states are where that difference lives.
   ;;
-  ;; The floor is stamped here too: how long before the house is
-  ;; willing to hear this outcome recomposed. The schedule is the
-  ;; tickler's own — a week, three weeks, two months, half a year —
-  ;; called by name, with `now` handed in, so nothing here reads a
-  ;; clock and the same inputs answer the same instant in a test, in a
-  ;; scenario and in the house.
+  ;; The schedule is stamped here too: how long before the house is
+  ;; willing to hear this outcome recomposed, and how many times it
+  ;; has said so. Since waymark-1uv.10 both stamps are INPUTS TO THE
+  ;; CROWN'S RANK rather than a wall at the create door — a
+  ;; recomposition staged before `not_before` is admitted and cooled
+  ;; by every day it is early, with the card saying so — so what is
+  ;; written here is the person's verdict in the shape the rank reads.
+  ;; The schedule is the tickler's own — a week, three weeks, two
+  ;; months, half a year — called by name, with `now` handed in, so
+  ;; nothing here reads a clock and the same inputs answer the same
+  ;; instant in a test, in a scenario and in the house.
   (let [said (inc (long (or (get-in row [:data :declined_count]) 0)))
         pieces ((:find ctx) :outcome_piece
                 {:outcome_id (:id row) :state "offered"}
@@ -1515,7 +1487,7 @@
   "An open target is not a free-text target. The door has to be one
    the kind actually declares — and the refusal LISTS the ones it
    does, because a composer discovering a vocabulary one round trip at
-   a time is a composer burning its cap."
+   a time is a composer wasting a sitting."
   {:kind    :outcome_piece
    :attempt :create
    :as      {:id "colton" :type :person}
@@ -1603,7 +1575,7 @@
    :request_id
    {:x-display
     {:label "The request it answers"
-     :help "When a person tapped \"compose me another\" and this outcome is the answer, name their request — /api/composition_requests?state=offered. It is admitted past the weekly cap, because the cap walls the composer's initiative and never the person's pull; it is checked to be open, and if the person named the value it should serve, this outcome serves that one. One request admits one outcome."}}
+     :help "When a person tapped \"compose me another\" and this outcome is the answer, name their request — /api/composition_requests?state=offered. A bundle that answers a person's own request stands first in the crown, above every one nobody asked for, and no number on the recipe moves it below; the request is checked to be open, and if the person named the value it should serve, this outcome serves that one. One request admits one outcome."}}
    :supersedes
    {:x-display
     {:label "The outcome this recomposes"
@@ -1613,11 +1585,11 @@
    :declined_count
    {:x-display
     {:label "Times this line of thinking was turned down"
-     :help "Carried down the supersedes chain by the engine. It is the only input to how long the house waits before it will hear this again."}}
+     :help "Carried down the supersedes chain by the engine. It is the only input to how far out each decline stamps the next hearing, and the crown's card says it beside how early a recomposition arrived."}}
    :not_before
    {:x-display
     {:label "Hearable again from"
-     :help "Stamped when the house says not this week. A recomposition staged before this is refused — the point of a decline is that the composer goes away and diagnoses the friction, not that it rephrases by morning."}}
+     :help "Stamped when the house says not this week, off the tickler's own schedule. A recomposition staged before this is admitted and RANKED for it — every day early holds it back in the crown, and its card says so — because the point of a decline is that the composer diagnoses the friction, and a diagnosis is a row it has to be allowed to write. The date is the person's verdict about when they will hear it, and the rank keeps that verdict where the person can read it."}}
    :good_until
    {:x-display
     {:label "For the week ending"
@@ -1796,19 +1768,20 @@
    ;; thing the house says out loud, once, at the grant door.
    :own-surface {:by :composed_by :actions #{}}
    :on-create stage-the-outcome
-   ;; shape first, world next, PACE LAST: a malformed outcome hears
-   ;; what is wrong with it rather than that the week is full, and
-   ;; because the cap counts ROWS a refused create spends nothing
-   ;; …and the person's pull stands right in front of the cap
-   ;; (waymark-jfv.20), so the cap may trust a citation it did not
-   ;; read: refused here, or known good by the time the count runs
+   ;; shape first, world next, and NO PACE WALL LAST (waymark-1uv.3):
+   ;; `outcomes-are-few` stood here until the crown's rank landed, and
+   ;; left when it did. A malformed outcome hears what is wrong with
+   ;; it; a well-formed one is staged, however many this composer has
+   ;; staged this week, and the rank decides what the house is shown.
+   ;; The person's pull (waymark-jfv.20) is still checked last, so a
+   ;; citation that is not good refuses the staging before the request
+   ;; could be answered by it.
    :create-guards [cites-what-it-read
                    names-a-value
                    names-a-person
                    routes-through-something-loved
                    a-recomposition-waits-its-turn
-                   the-request-is-open
-                   outcomes-are-few]
+                   the-request-is-open]
    :actions
    {:make_it_so
     {:from #{:offered} :to :accepted

@@ -559,7 +559,7 @@
                 (some? (or (:formula d) (:current_formula d)))
                 (assoc :formula (or (:formula d) (:current_formula d))))
         tid (some-> (:target_id d) str str/trim not-empty)
-        ;; …and the crown's four numbers ride through UNCHANGED
+        ;; …and the crown's numbers (five since waymark-1uv.10) ride through UNCHANGED
         ;; (waymark-1uv.2): a proposal has no word for them yet
         ;; (waymark-1uv.5 gives it one), and :revise overwrites the
         ;; whole authored surface, so an apply that handed over

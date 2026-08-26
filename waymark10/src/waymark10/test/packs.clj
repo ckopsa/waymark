@@ -4155,13 +4155,12 @@
         gone (when (= 200 (:status accepted))
                (:doc (feed-doc ctx as-member)))
         ;; 8. COMPOSE ME ANOTHER (waymark-jfv.20). The bundle is
-        ;; answered and off the feed, which is exactly when the crown
-        ;; should offer the person's own pull. The claims stand down
-        ;; whole on an engine holding no request kind, and the ask
-        ;; claim stands down when some OTHER bundle is carding for
-        ;; this member (the chip's rule is 'answer what is there
-        ;; first', and an obligation cannot know what a neighbouring
-        ;; run left on offer).
+        ;; answered and off the feed; the crown offers the person's
+        ;; own pull whether or not anything else is carding for this
+        ;; member (waymark-1uv.3 re-read jfv.20's rule: under the rank
+        ;; asking means 'rank mine first', so the chip rides always).
+        ;; The claims stand down whole on an engine holding no request
+        ;; kind.
         askable (rdef ctx :composition_request)
         crown (when (and askable gone) (:crown gone))
         ask-key (when crown (feed/origin-key day (str (:card_id crown))
@@ -4217,9 +4216,9 @@
         ;; The cited bundle and an UNCITED one, both carded — two
         ;; pieces each, which is the bundle floor — and the rank puts
         ;; the person's own pull first whatever the seed says. The
-        ;; uncited one is the composer's second of the week, which the
-        ;; cap still admits (waymark-1uv.3 takes the cap away after
-        ;; this bead, never before it).
+        ;; uncited one is this composer's THIRD staging of the run,
+        ;; which no door counts (waymark-1uv.3): the machine writes
+        ;; without limit and the rank decides what is shown.
         plain (when (and rid leashed vid (= 201 (:status answered)))
                 (stage :outcome
                        {:goal (str "Nobody asked for this one " tag)
@@ -4268,9 +4267,10 @@
                                    (declared-name ctx :composition_request :answer)
                                    {:outcome_id (str aoid)}
                                    {:headers as-member}))))
-        ;; …and an agent does not mint one at all: the cap walls the
-        ;; machine's initiative, and a composer that could ask itself
-        ;; for a third would have walked around it
+        ;; …and an agent does not mint one at all: a request is the
+        ;; rank's first tier, and a composer that could ask itself for
+        ;; one would put its own initiative where only a person's ask
+        ;; may stand
         minted (when (and askable leashed)
                  (req ctx :post (str "/api/"
                                      (:plural (rdef ctx :composition_request)))
@@ -4602,16 +4602,23 @@
                   " the person's pull lives on the crown, and a feed that"
                   " never says whether the crown is empty cannot offer it"))
 
-       (and crown (:empty crown) (nil? (:ask crown)))
-       (conj (str "feed: the crown carded nothing and offers no ask — the"
-                  " cap walls the composer and not the person, and the one"
-                  " place the person pulls past it is a chip that is absent"))
+       ;; the chip rides ALWAYS (waymark-1uv.3): asking means 'rank
+       ;; mine first' now that nothing caps the composer, and a page
+       ;; that held the ask back while a bundle was on offer would be
+       ;; deciding when the person is allowed to want
+       (and crown (nil? (:ask crown)))
+       (conj (str "feed: the crown "
+                  (if (:empty crown) "carded nothing" "has a bundle on offer")
+                  " and offers no ask — the person's pull is the rank's"
+                  " first tier, and the chip that writes it rides whether"
+                  " or not anything is on offer; holding it back would be"
+                  " the page deciding when the person is allowed to want"))
 
-       (and crown (not (:empty crown)) (:ask crown))
-       (conj (str "feed: a bundle is on offer and the crown still offers"
-                  " 'compose me another' — answer what is there first; a"
-                  " chip beside an unanswered bundle is the page asking for"
-                  " more before the person has said what they think"))
+       (and crown (not (boolean? (:empty crown))))
+       (conj (str "feed: the crown does not say whether it carded nothing"
+                  " (empty " (pr-str (:empty crown)) ") — the screen paints"
+                  " the difference between an empty crown and a full one,"
+                  " and the server is the one that knows"))
 
        (and asked (not= 201 (:status asked)))
        (conj (str "feed: the crown's own ask answered " (:status asked)
@@ -4654,8 +4661,8 @@
        (and rid leashed (not= 201 (:status answered)))
        (conj (str "feed: an outcome citing the person's request was refused"
                   " (" (:status answered) "): " (pr-str (:doc answered))
-                  " — the cap walls the machine's initiative, and a cited"
-                  " outcome is the person's own pull"))
+                  " — nothing caps the composer, and a cited outcome is"
+                  " the person's own pull answered"))
 
        (and request' (not= "answered" (str (:state request'))))
        (conj (str "feed: after an outcome cited it the request still reads "
@@ -4702,20 +4709,30 @@
        (and mine (let [c (get-in mine [:recipe :crown_rank])]
                    (not (and (map? c)
                              (every? #(int? (get c %))
-                                     [:declared :cooled :declined :fresh])))))
+                                     [:declared :cooled :declined :fresh :early])))))
        (conj (str "feed: recipe.crown_rank reads "
                   (pr-str (get-in mine [:recipe :crown_rank]))
-                  " — the crown's rank is four numbers the household can"
+                  " — the crown's rank is five numbers the household can"
                   " read, on every answer, or it is the hidden model law 5"
                   " forbids"))
 
        (and mine (let [c (get-in mine [:recipe :crown_rank])
                        s (str (get-in mine [:recipe :crown_rank_says]))]
                    (not (and (str/includes? s (str (:declared c)))
-                             (str/includes? s "never this")))))
+                             (str/includes? s "never this")
+                             (str/includes? s "recomposition")))))
        (conj (str "feed: recipe.crown_rank_says does not quote its own"
-                  " numbers and the four words back — "
+                  " numbers, the four words and the recomposition's day back — "
                   (pr-str (get-in mine [:recipe :crown_rank_says]))))
+
+       ;; a bundle that recomposes nothing has nothing to be early for,
+       ;; and the why says so by SILENCE (waymark-1uv.10) — the key
+       ;; rides only on a recomposition, so a reader can tell 'on
+       ;; time' from 'nothing to be early for'
+       (and card (contains? (get-in card [:why :crown]) :early))
+       (conj (str "feed: a bundle that supersedes nothing carries early "
+                  (pr-str (get-in card [:why :crown :early]))
+                  " — the schedule's inputs ride only on a recomposition"))
 
        (and card (let [c (get-in card [:why :crown])]
                    (not (and (int? (:lift c))

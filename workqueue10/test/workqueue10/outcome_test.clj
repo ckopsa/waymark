@@ -13,7 +13,9 @@
   - the citation walls against a REAL value row — the routing checked
     against what that value actually says it loves, and a retired
     value taking its outcomes with it;
-  - the weekly cap, Monday to Monday, counting rows;
+  - no cap at the door (waymark-1uv.3): a composer stages three, four,
+    five in a week and every one is admitted — the crown's rank, not a
+    wall on writing, decides what the house is shown;
   - the tap itself: a task that lands with the MEMBER on its create
     transition and the piece carrying the address it landed at;
   - `make it so` fanning out over the pieces still offered and leaving
@@ -24,7 +26,10 @@
     the rest MOOT (the timing was wrong);
   - atomicity: a piece whose target refuses at the tap rolls the whole
     tap back, so no outcome ever reads accepted while a piece silently
-    did not land.
+    did not land;
+  - the crown's rank over real rows (§ 16), and a recomposition staged
+    before the house said it would hear it — admitted, cooled by every
+    day it is early, and still on the page (§ 17, waymark-1uv.10).
 
   THE COMPOSER HERE IS A PERSON, and deliberately. The four-eyes wall
   is `g/not-the-field :composed_by` — it compares principal IDS, so a
@@ -78,12 +83,14 @@
 
 (def ^:private clock
   "The engine's clock, when a test needs to move it: nil is the real
-  one. The crown's rank test (§ 16) has to stage a recomposition of a
-  bundle the house declined, and `a-recomposition-waits-its-turn`
-  holds that door shut for a week — so the test walks the house a
-  week forward and puts the clock back when it is done. Kaocha runs
-  one namespace's tests sequentially, which is what makes an atom
-  honest here."
+  one. The rank tests (§ 16, § 17) pin it so `days_left` and `early`
+  are whole numbers a test can name — the same instant at staging and
+  at the read — and § 16 walks the house a week past a decline so its
+  recomposition is ON TIME rather than early (the door no longer
+  holds it either way, waymark-1uv.10; the numbers are what the walk
+  is for). Each puts the clock back when done. Kaocha runs one
+  namespace's tests sequentially, which is what makes an atom honest
+  here."
   (atom nil))
 
 (use-fixtures :once
@@ -238,23 +245,29 @@
       (is (= "names-a-value" (guard-of refused)))
       (is (str/includes? (detail refused) "retired")))))
 
-;; ── 3. the week, and where its boundary lives ───────────────────────
+;; ── 3. no cap at the door: the rank, not the wall, decides ──────────
+;;
+;; The inverse of the test that stood here from jfv.3 to 1uv.2
+;; (`two-outcomes-a-week-per-composer-monday-to-monday`). The owner's
+;; ruling: *it makes more sense to just rank them.* A composer stages
+;; as many as it likes in a week and every one is admitted; what the
+;; house is SHOWN is the crown's rank's business (§ 16), and the door
+;; has no opinion about how much indexing a week may hold.
 
-(deftest two-outcomes-a-week-per-composer-monday-to-monday
-  (let [v (declare-value! "colton-cap" "a capped week" ["the shop"])
-        who "composer-cap"]
-    (is (= 201 (:status (stage-outcome! who (vid v)))))
-    (is (= 201 (:status (stage-outcome! who (vid v)))))
-    (let [third (stage-outcome! who (vid v))]
-      (testing "the third is refused at the DOOR, so a composer has to rank"
-        (is (= 409 (:status third)))
-        (is (= "outcomes-are-few" (guard-of third))))
-      (testing "and the refusal says when the allowance opens — the Monday, not a rolling week"
-        (let [monday (store/utc-week-start (Instant/now))
-              next-monday (.plusSeconds monday (* 86400 7))]
-          (is (str/includes? (detail third) (str next-monday))))))
-    (testing "the cap is per AUTHOR — a quiet composer is not silenced by a noisy one"
-      (is (= 201 (:status (stage-outcome! "composer-cap-other" (vid v))))))))
+(deftest a-composer-stages-without-limit-and-the-rank-decides-what-shows
+  (let [v (declare-value! "colton-uncapped" "an uncapped week" ["the shop"])
+        who "composer-uncapped"
+        staged (vec (repeatedly 5 #(stage-outcome! who (vid v))))]
+    (testing "three, four, five in one week — every one is admitted, none meets a pace wall"
+      (is (= [201 201 201 201 201] (mapv :status staged))
+          (pr-str (mapv (comp :detail json) staged)))
+      (is (= 5 (count (distinct (map id-of staged))))))
+    (testing "and nothing about the door names a week: no guard in the envelope's refusals is a pace"
+      (let [env (json (req :get (str "/api/outcomes/" (id-of (first staged)))
+                           (human "colton-uncapped")))]
+        (is (= "offered" (:state env)))))
+    (testing "a second composer is equally unbounded — there is no allowance to be quiet inside of"
+      (is (= 201 (:status (stage-outcome! "composer-uncapped-other" (vid v))))))))
 
 ;; ── 4. staging validation: the door it will knock on ────────────────
 
@@ -393,11 +406,11 @@
       (is (= 1 (:declined_count d)))
       (let [floor (Instant/parse (str (:not_before d)))]
         (is (pos? (compare floor (Instant/now))))))
-    (testing "a recomposition staged before that floor is refused, by name"
+    (testing "a recomposition staged before that date is ADMITTED — the date is the rank's input now, not the door's (waymark-1uv.10)"
       (let [r (stage-outcome! "composer-week" (vid v) {:supersedes o})]
-        (is (= 409 (:status r)))
-        (is (= "a-recomposition-waits-its-turn" (guard-of r)))))
-    (testing "and so is one that supersedes an outcome nobody has answered yet"
+        (is (= 201 (:status r)) (pr-str (json r)))
+        (is (= 1 (:declined_count (fields r))) "the chain's count carries down at birth")))
+    (testing "but one that supersedes an outcome nobody has answered yet is still refused — that arm is a dedupe law, not a pace"
       (let [live (id-of (stage-outcome! "composer-week2" (vid v)))
             r (stage-outcome! "composer-week2" (vid v) {:supersedes live})]
         (is (= 409 (:status r)))
@@ -698,13 +711,14 @@
 ;; ── 15. the person's pull (waymark-jfv.20) ──────────────────────────
 ;;
 ;; The owner's own sentence: *I want to be able to just keep requesting
-;; outcomes.* The cap walls the MACHINE's initiative; a request is a
-;; person's consent given in advance, and an outcome citing one is
-;; admitted past the cap. What only a live engine can answer is here:
-;; the cap counting real rows and letting a cited third through, the
-;; request moving to answered INSIDE the outcome's own staging (the
-;; `:within` seam, waymark-jfv.20's one framework growth), a second
-;; citation meeting that state, and the aim being honoured.
+;; outcomes.* A request is a person's consent given in advance; it was
+;; born to get past the cap on the machine's initiative and outlived
+;; it (waymark-1uv.3) as the crown rank's first tier. What only a live
+;; engine can answer is here: the request moving to answered INSIDE
+;; the outcome's own staging (the `:within` seam, waymark-jfv.20's one
+;; framework growth), a second citation meeting that state, the aim
+;; being honoured — and nothing counting, before or after the
+;; citation.
 
 (defn- leash!
   "An agent HOLDING a grant over the request kind's named doors — the
@@ -733,7 +747,7 @@
 (defn- request-row [rid who]
   (json (req :get (str "/api/composition_requests/" rid) (human who))))
 
-(deftest a-persons-request-admits-one-outcome-past-the-cap
+(deftest a-persons-request-is-answered-in-the-same-stroke-and-nothing-counts
   (let [v (declare-value! "colton-pull" "a pulled week" ["the shop"])
         who "composer-pull"
         asked (ask! "colton-pull")
@@ -745,13 +759,11 @@
       (is (some? (:good_until (fields asked)))))
     (is (= 201 (:status (stage-outcome! who (vid v)))))
     (is (= 201 (:status (stage-outcome! who (vid v)))))
-    (testing "the third, uncited, still meets the cap — nothing about the machine's allowance moved"
-      (let [third (stage-outcome! who (vid v))]
-        (is (= 409 (:status third)))
-        (is (= "outcomes-are-few" (guard-of third)))))
+    (testing "a third, uncited, is admitted too — no door counts a composer's week (waymark-1uv.3)"
+      (is (= 201 (:status (stage-outcome! who (vid v))))))
     (let [cited (stage-outcome! who (vid v) {:request_id rid})
           oid (id-of cited)]
-      (testing "the third citing the person's request is admitted past the cap"
+      (testing "the one citing the person's request is admitted and carries the citation"
         (is (= 201 (:status cited)))
         (is (= rid (:request_id (fields cited)))))
       (testing "and the request reads answered, naming the outcome, in the same stroke"
@@ -765,10 +777,8 @@
           (is (= 409 (:status again)))
           (is (= "the-request-is-open" (guard-of again)))
           (is (str/includes? (detail again) "already answered"))))
-      (testing "and an uncited fourth still meets the cap — the pull spent nothing of the machine's allowance"
-        (let [fourth (stage-outcome! who (vid v))]
-          (is (= 409 (:status fourth)))
-          (is (= "outcomes-are-few" (guard-of fourth))))))))
+      (testing "and an uncited fifth is admitted like every other — the citation bought a tier in the rank, not a pass through a door"
+        (is (= 201 (:status (stage-outcome! who (vid v)))))))))
 
 (deftest a-request-that-names-a-value-admits-only-an-outcome-serving-it
   (let [aim (declare-value! "colton-aim" "the aimed value" ["the shop"])
@@ -795,7 +805,7 @@
 (deftest an-agent-does-not-mint-a-request
   (let [refused (req :post "/api/composition_requests" {}
                      (leash! "composer-mint" ["create"]))]
-    (testing "the cap walls the machine's initiative, and a composer that could ask itself for a third has walked around it"
+    (testing "a request is the rank's first tier, and a composer that could ask itself for one would put its own initiative where only a person's ask may stand"
       (is (= 409 (:status refused)))
       (is (= "only-a-person-asks" (guard-of refused))))))
 
@@ -832,17 +842,19 @@
     (testing "and the crown says so in words"
       (is (str/includes? (str (get-in doc [:crown :says])) "asked")))
     ;; a bundle staged by somebody else, with two pieces, cards for
-    ;; this reader — and the chip stands down: answer what is there
-    ;; first
+    ;; this reader — and the chip STILL rides (waymark-1uv.3): asking
+    ;; means 'rank mine first', and the page does not decide when the
+    ;; person is allowed to want
     (let [o (id-of (stage-outcome! "composer-crown" (vid v)))]
       (is (= 201 (:status (stage-piece! "composer-crown" o "Cut the stock"
                                         "task" {:title "Cut the box stock (crown)"}))))
       (is (= 201 (:status (stage-piece! "composer-crown" o "Glue it up"
                                         "task" {:title "Glue up the box (crown)"}))))
       (let [doc' (json (req :get "/api/-/feed" (human who)))]
-        (testing "with a bundle on offer the crown is not empty and offers no ask"
+        (testing "with a bundle on offer the crown is not empty and the ask rides anyway"
           (is (false? (get-in doc' [:crown :empty])))
-          (is (nil? (get-in doc' [:crown :ask]))))
+          (is (= "POST" (get-in doc' [:crown :ask :method])))
+          (is (str/includes? (str (get-in doc' [:crown :says])) "asked")))
         (testing "but the standing request is still said"
           (is (some #(str/ends-with? (str (:self %)) rid)
                     (get-in doc' [:crown :standing]))))
@@ -851,7 +863,13 @@
                                               {:request_id rid}))))
           (let [doc'' (json (req :get "/api/-/feed" (human who)))]
             (is (not-any? #(str/ends-with? (str (:self %)) rid)
-                          (get-in doc'' [:crown :standing])))))))))
+                          (get-in doc'' [:crown :standing])))
+            (testing "and with nothing standing and a bundle on offer, the chip offers the next one in the crown's own words"
+              (is (= "POST" (get-in doc'' [:crown :ask :method])))
+              (is (str/includes? (str (get-in doc'' [:crown :says]))
+                                 "first in the crown")))))
+        ;; leave the house as found
+        (is (= 200 (:status (invoke! "outcomes" o :not_this_week nil (human who)))))))))
 
 ;; ── 16. the crown's rank (waymark-1uv.2) ────────────────────────────
 ;;
@@ -895,9 +913,11 @@
     (is (= 200 (:status declined)) (pr-str (json declined)))
     (is (= 201 (:status said)) (pr-str (json said)))
     (try
-      ;; a week and a day on: the decline's floor has passed, so the
-      ;; recomposition may be staged, and everything staged from here
-      ;; is live at the same clock the feed reads
+      ;; a week and a day on: the decline's date has passed, so the
+      ;; recomposition is ON TIME (early 0 — the door would admit it
+      ;; either way since waymark-1uv.10; § 17 is the early case), and
+      ;; everything staged from here is live at the same clock the
+      ;; feed reads
       (reset! clock (.plusSeconds real-now (* 86400 8)))
       (let [a (id-of (stage-outcome! "composer-rank-a" (vid v)))
             y-resp (stage-outcome! "composer-rank-y" (vid v) {:supersedes x})
@@ -922,8 +942,8 @@
               ca (crown-card doc a) cy (crown-card doc y) cb (crown-card doc b)
               lift #(get-in % [:why :crown :lift])
               says-of (fn [c s] (some #(str/includes? (str %) s) (get-in c [:why :says])))]
-          (testing "the recipe's four numbers ride the document, narrated"
-            (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1}
+          (testing "the recipe's five numbers ride the document, narrated"
+            (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}
                    (get-in doc [:recipe :crown_rank])))
             (is (str/includes? (str (get-in doc [:recipe :crown_rank_says]))
                                "8 for never this")))
@@ -940,7 +960,12 @@
                     NEVER THIS about, and both cards say the numbers"
             (is (< (.indexOf ^java.util.List ids a) (.indexOf ^java.util.List ids y)))
             (is (= 17 (lift ca)) "10 for a declared value + 7 days left")
-            (is (= 9 (lift cy)) "…minus 8 for never this")
+            (is (= 9 (lift cy)) "…minus 8 for never this, and nothing for early — the date has passed")
+            (is (= 0 (get-in cy [:why :crown :early])))
+            (is (= 1 (get-in cy [:why :crown :turned_down])))
+            (is (nil? (get-in cy [:why :crown :not_before])) "on time, so no date to quote")
+            (is (nil? (get-in ca [:why :crown :early])) "a fresh line has nothing to be early for")
+            (is (says-of cy "has passed"))
             (is (= "never_this" (get-in cy [:why :crown :declined])))
             (is (nil? (get-in ca [:why :crown :declined])))
             (is (= "declared" (get-in ca [:why :crown :value])))
@@ -980,4 +1005,68 @@
           ;; leave the house as found: the three bundles declined
           (doseq [oid [a y b]]
             (is (= 200 (:status (invoke! "outcomes" oid :not_this_week nil (human who))))))))
+      (finally (reset! clock nil)))))
+
+;; ── 17. the early recomposition: cooled, never refused ──────────────
+;;
+;; waymark-1uv.10. The house said not this week and meant it until a
+;; date; the composer recomposes the next morning. Until this bead
+;; the create door refused that (`a-recomposition-waits-its-turn`'s
+;; third arm); now the row is written — it is the diagnosis, and the
+;; diagnosis is the composer's work order — and the crown's rank
+;; holds it back by every day it is early, on the card, in words. The
+;; floor and the person's dated verdict meet here and the answer is
+;; recorded in the spec: cool, never hide.
+
+(deftest an-early-recomposition-is-admitted-and-cooled-not-refused
+  (let [who "colton-early"
+        v (declare-value! who "an early week" ["the shop"])
+        real-now (Instant/now)]
+    (try
+      ;; one clock for the decline, the staging and the read, so the
+      ;; days are whole numbers a test can name
+      (reset! clock real-now)
+      (let [x (id-of (stage-outcome! "composer-early-x" (vid v)))
+            declined (invoke! "outcomes" x :not_this_week nil (human who))
+            not-before (str (:not_before (:data (json declined))))
+            y-resp (stage-outcome! "composer-early-y" (vid v) {:supersedes x})
+            y (id-of y-resp)
+            a (id-of (stage-outcome! "composer-early-a" (vid v)))]
+        (is (= 200 (:status declined)) (pr-str (json declined)))
+        (testing "the door admits the recomposition the same morning — the date is the rank's, not the door's"
+          (is (= 201 (:status y-resp)) (pr-str (json y-resp)))
+          (is (= 1 (:declined_count (fields y-resp)))))
+        (two-pieces! "composer-early-y" y "early-y")
+        (two-pieces! "composer-early-a" a "early-a")
+        (let [order (:order (:recipe (feed-as who)))
+              wide (mapv #(if (= "outcomes" (str (:section %))) (assoc % :take 10) %)
+                         order)
+              made (req :post "/api/feed_recipes"
+                        {:label "A wide crown" :scope "mine" :order wide}
+                        (human who))]
+          (is (= 201 (:status made)) (pr-str (json made))))
+        (let [doc (feed-as who "explain=1")
+              ids (crown-ids doc)
+              cy (crown-card doc y) ca (crown-card doc a)
+              says-of (fn [c s] (some #(str/includes? (str %) s) (get-in c [:why :says])))]
+          (testing "both stand on the page — cooled, never hidden — and the early one below the fresh one"
+            (is (some #{y} ids) (pr-str ids))
+            (is (some #{a} ids) (pr-str ids))
+            (is (< (.indexOf ^java.util.List ids a) (.indexOf ^java.util.List ids y))))
+          (testing "the card says how early it is, quotes the date, and the numbers add up"
+            (is (= 7 (get-in cy [:why :crown :early])) "a week early, to the day")
+            (is (= 1 (get-in cy [:why :crown :turned_down])))
+            (is (= not-before (get-in cy [:why :crown :not_before])))
+            (is (= 3 (get-in cy [:why :crown :lift])) "10 declared + 7 left − 14 for 7 days early")
+            (is (= 17 (get-in ca [:why :crown :lift])))
+            (is (says-of cy "7 days early"))
+            (is (says-of cy "holding it 14"))
+            (is (says-of cy (subs not-before 0 10)))
+            (is (says-of cy "The floor still holds")))
+          (testing "a fresh line carries none of the schedule's keys — nothing to be early for"
+            (is (not (contains? (get-in ca [:why :crown]) :early)))
+            (is (not (contains? (get-in ca [:why :crown]) :turned_down)))))
+        ;; leave the house as found
+        (doseq [oid [a y]]
+          (is (= 200 (:status (invoke! "outcomes" oid :not_this_week nil (human who)))))))
       (finally (reset! clock nil)))))

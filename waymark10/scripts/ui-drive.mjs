@@ -1335,10 +1335,11 @@ async function feedStory() {
             + " this is the twenty seconds that finishes it.",
      routes_through: loved,
      evidence: [val.self, materialized ? materialized.self : t1.self]},
-    /* a SECOND composer, and not for variety: `outcomes-are-few` is
-       two a week PER AUTHOR, so a walk that staged both bundles under
-       one name would spend that name's whole allowance and refuse to
-       run twice in a week against the same dev database. */
+    /* a SECOND composer, and not for the old reason: `outcomes-are-few`
+       (two a week per author) left the door with waymark-1uv.3, so
+       one name could stage both. Two names stay because the walk
+       proves the four-eyes wall reads the PIECE's own stager, and
+       two bundles by two hands is the shape that shows it. */
     "ari");
   const o2 = String(outcome2.self).split("/").pop();
   await post("/api/outcome_pieces",
@@ -1528,12 +1529,15 @@ async function feedStory() {
 
   /* ── compose me another: the person pulls (waymark-jfv.20) ──────
      Both bundles above are answered, so the crown carded nothing —
-     which is exactly when the page offers the person's own pull past
-     the composer's weekly cap. One tap under the feed's origin key
-     writes a request under the tapper's name; the chip settles into
-     the honest sentence (the composer answers at its next sitting,
-     not now); and the next read says the request is standing, with
-     no verb on it, because your own request is not a decision. */
+     and the page offers the person's own pull, as it now does whether
+     or not anything is on offer (waymark-1uv.3: asking means 'rank
+     mine first', and the answer stands first in the crown). The walk
+     checks it on the empty crown because that is where it stands
+     alone. One tap under the feed's origin key writes a request under
+     the tapper's name; the chip settles into the honest sentence (the
+     composer answers at its next sitting, not now); and the next read
+     says the request is standing, with no verb on it, because your
+     own request is not a decision. */
   console.log("· asking for another");
   ok("with no bundle on offer the crown offers 'compose me another'",
      await evaljs(`!!document.querySelector(
