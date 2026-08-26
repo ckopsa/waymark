@@ -1,0 +1,218 @@
+# The suites, off the laptop and split across machines.
+#
+# WHY. 145 test files and ~44k lines of test code ran nowhere but a
+# developer's machine — the counts pasted into commit messages are the
+# evidence, and the wait for them was serialised with a person's
+# attention on every push. Nothing here is new work; it is the existing
+# `make test10` / `make test-queue` moved somewhere that can run four of
+# them at once.
+#
+# ── WHY A DATABASE PER SHARD, NOT PER TEST ────────────────────────────
+#
+# waymark10.test.db/with-test-engine opens each namespace by DROPPING
+# the tables its declarations name, plus waymark10_transitions,
+# waymark10_idempotency and waymark10_drafts — which every namespace
+# drops, because they are the engine's own. Two namespaces sharing a
+# database therefore delete each other's tables mid-run, and the failure
+# looks like a flake rather than a collision.
+#
+# So the unit of isolation is the SHARD, and each shard gets its own
+# postgres service container. That is also why the shards are namespace
+# groups rather than a `-p` style split: kaocha's --focus takes
+# namespaces, and a namespace is the smallest thing safe to move.
+#
+# The service is published on 5433, not 5432, so the DSN here is
+# character-for-character the one the Makefile builds. A test that
+# passes locally and fails here should not be able to blame the DSN.
+#
+# ── THE SHARD COUNTS ARE A GUESS ──────────────────────────────────────
+#
+# They are unmeasured: the container this was written in cannot reach
+# Maven Central, so the suites could not be timed. 4 and 2 are a
+# starting point chosen from file counts (104 and 38 namespaces), not
+# from a stopwatch. Read the per-shard times in the first green run and
+# move them. That is the whole tuning procedure.
+#
+# ── MOVING THIS TO YOUR OWN HARDWARE ──────────────────────────────────
+#
+# runs-on reads the CI_RUNNER repository variable. Set it to a
+# self-hosted label and every job moves to your cluster with no edit
+# here. Before you do: a self-hosted runner on a PUBLIC repository will
+# execute a stranger's pull request on your LAN. Turn on Settings →
+# Actions → "Require approval for all external contributors" first, and
+# consider leaving fork PRs on GitHub-hosted runners.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'waymark10/**'
+      - 'calendar10/**'
+      - 'workqueue10/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    paths:
+      - 'waymark10/**'
+      - 'calendar10/**'
+      - 'workqueue10/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned so a shard cannot start failing because upstream moved.
+  CLOJURE_CLI_VERSION: '1.12.5.1664'
+  SHARDS_WAYMARK10: '4'
+  SHARDS_WORKQUEUE10: '2'
+
+jobs:
+  # The cheap signal, first: neither of these needs a database, and a
+  # declaration error should not wait behind a JVM suite to be told.
+  quick:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - name: check-queue — declaration gate, no database
+        run: cd workqueue10 && clojure -M:check
+      - name: calendar10 — pure translation, no database or network
+        run: cd calendar10 && clojure -M:test
+
+  # The matrix is built from the tree, so adding a test file needs no
+  # edit here. Namespaces come from paths: test/a/b_test.clj is
+  # a.b-test, which is the convention every file in both suites follows.
+  discover:
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    outputs:
+      waymark10: ${{ steps.split.outputs.waymark10 }}
+      workqueue10: ${{ steps.split.outputs.workqueue10 }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: split
+        env:
+          N_WAYMARK10: ${{ env.SHARDS_WAYMARK10 }}
+          N_WORKQUEUE10: ${{ env.SHARDS_WORKQUEUE10 }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, os, pathlib
+
+          def namespaces(root):
+              out = []
+              for p in sorted(pathlib.Path(root, "test").rglob("*_test.clj")):
+                  rel = p.relative_to(pathlib.Path(root, "test")).with_suffix("")
+                  out.append(str(rel).replace("/", ".").replace("_", "-"))
+              return out
+
+          def shards(names, n):
+              # Round-robin, not contiguous chunks: names cluster
+              # alphabetically (every batch_* together), and a
+              # contiguous split would pile the heavy ones into one
+              # shard. Interleaving spreads them without timing data.
+              groups = [[] for _ in range(n)]
+              for i, name in enumerate(names):
+                  groups[i % n].append(name)
+              return [{"id": i + 1, "nses": "\n".join(g)}
+                      for i, g in enumerate(groups) if g]
+
+          for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
+                                    ("workqueue10", "workqueue10", "N_WORKQUEUE10")):
+              names = namespaces(root)
+              m = shards(names, int(os.environ[envvar]))
+              print(f"{key}={json.dumps(m)}")
+              print(f"# {key}: {len(names)} namespaces over {len(m)} shards",
+                    file=__import__("sys").stderr)
+          PY
+
+  test10:
+    needs: discover
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    strategy:
+      # One shard failing must not hide the others: the point of a
+      # split suite is seeing every failure in one round.
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.discover.outputs.waymark10) }}
+    name: test10 (shard ${{ matrix.shard.id }})
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ckopsa
+          POSTGRES_DB: waymark10_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - name: Run shard
+        env:
+          # Character-for-character the Makefile's test10 DSN.
+          WAYMARK10_TEST_DSN: 'jdbc:postgresql://localhost:5433/waymark10_test?user=ckopsa'
+          FOCUS_NS: ${{ matrix.shard.nses }}
+        run: |
+          set -euo pipefail
+          # Built as an array, never interpolated into the command line:
+          # these names come from filenames in the tree, and on a public
+          # repo a fork's PR chooses those filenames.
+          args=()
+          while IFS= read -r ns; do
+            [ -n "$ns" ] && args+=(--focus "$ns")
+          done <<< "$FOCUS_NS"
+          echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
+          cd waymark10 && clojure -M:test "${args[@]}"
+
+  test-queue:
+    needs: discover
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.discover.outputs.workqueue10) }}
+    name: test-queue (shard ${{ matrix.shard.id }})
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ckopsa
+          POSTGRES_DB: waymark10_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ['5433:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-clojure
+        with:
+          cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+      - name: Run shard
+        env:
+          # test-queue points at waymark10_test too — the Makefile's own
+          # choice, not a copy-paste slip.
+          WAYMARK10_TEST_DSN: 'jdbc:postgresql://localhost:5433/waymark10_test?user=ckopsa'
+          FOCUS_NS: ${{ matrix.shard.nses }}
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r ns; do
+            [ -n "$ns" ] && args+=(--focus "$ns")
+          done <<< "$FOCUS_NS"
+          echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
+          cd workqueue10 && clojure -M:test "${args[@]}"

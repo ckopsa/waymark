@@ -1,0 +1,60 @@
+# Clojure CLI plus the dependency caches, in one place because five
+# jobs need it identically.
+#
+# THE CACHE IS THE POINT. A cold `clojure -M:test` resolves the whole
+# dependency tree from Maven Central and Clojars before a single
+# assertion runs, and that resolve costs more than the tests do. Keyed
+# on the deps.edn files, so it survives every commit that does not
+# change a dependency — which is nearly all of them.
+#
+# ~/.m2/repository is Maven's; ~/.gitlibs is tools.deps' store for
+# :git/url coordinates. Neither is populated by the other, so both are
+# named. .cpcache is deliberately NOT cached: it is per-checkout
+# classpath memoisation, cheap to rebuild and a real source of stale
+# confusion when restored across commits.
+#
+# No third-party action: this is a pinned installer script and two
+# cache entries, which is less to trust and less to break than a
+# marketplace dependency in the path of every test run.
+
+name: setup-clojure
+description: Install a pinned Clojure CLI and restore the Maven and gitlibs caches
+
+inputs:
+  cli-version:
+    description: Clojure CLI version to install (must be an exact release)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Cache Clojure dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.m2/repository
+          ~/.gitlibs
+        # Every deps.edn in the tree: waymark10 is a :local/root of both
+        # others, so a change to any of them can move the resolved set.
+        key: cljdeps-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/deps.edn') }}
+        # A partial hit still saves most of the download; tools.deps
+        # fetches only what the new deps.edn adds.
+        restore-keys: |
+          cljdeps-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install Clojure CLI
+      shell: bash
+      env:
+        CLI_VERSION: ${{ inputs.cli-version }}
+      run: |
+        set -euo pipefail
+        if command -v clojure >/dev/null 2>&1; then
+          echo "clojure already present: $(clojure --version 2>&1 | head -1)"
+          exit 0
+        fi
+        # Pinned by version, not /latest/: a self-hosted runner and a
+        # GitHub-hosted one must not end up on different toolchains.
+        url="https://github.com/clojure/brew-install/releases/download/${CLI_VERSION}/linux-install.sh"
+        curl -fsSL -o /tmp/linux-install.sh "$url"
+        sudo bash /tmp/linux-install.sh
+        clojure --version
