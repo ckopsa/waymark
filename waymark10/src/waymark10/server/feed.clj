@@ -282,11 +282,13 @@
   `:outcomes` (waymark-jfv.4) is the newest line and the first one
   ever to arrive ABOVE do-now. Its `:take` is the exposure floor laws
   v3 law 3 asks for — guaranteed slots, so the contest can be
-  measured — and the WEEKLY CAP is nowhere near here: it is
-  `outcome/outcomes-are-few`, a wall at the create door, because a
-  filter in a population would bury what the door already let be
-  staged and would teach a composer nothing. The recipe has no word
-  for a week and must not grow one; `:take` is per PAGE.
+  measured — and NO CAP stands anywhere near it any more: the weekly
+  cap at the create door left with waymark-1uv.3, and the crown's own
+  rank (`default-crown-rank`) chooses which bundles fill the slots.
+  What was always true stays true: a read-side WINDOW must not come
+  here, because a filter in a population would hide what the rank
+  should merely place last. The recipe has no word for a week and
+  must not grow one; `:take` is per PAGE.
 
   `:memories` is the bottomless tail and `:events` is one of the two
   sources it reads (waymark-iqa.8): check (3) admits exactly one
@@ -439,16 +441,16 @@
 ;; it directly. Until this bead the crown showed `:take` bundles by
 ;; the day's seed and its citation said *held by the floor … not
 ;; because it won anything* — true while two a week was the most a
-;; composer could stage, and false the morning the cap comes off
-;; (waymark-1uv.3, which may not land before this).
+;; composer could stage, and false the morning the cap came off
+;; (waymark-1uv.3, which landed after this and never could before).
 ;;
 ;; So the crown now RANKS what it shows, and the rank is the same kind
-;; of thing the contest below it is: DATA on the recipe row (four
+;; of thing the contest below it is: DATA on the recipe row (five
 ;; numbers beside the contest's two), one line of arithmetic
 ;; (`crown-lift`), narrated on every answer (`crown-rank-says`), and
 ;; read back on every crown card with the numbers that placed it. Law
 ;; 5 holds for the same reason it holds one section down: a household
-;; can read four numbers, and the moment this needs a model it cannot
+;; can read five numbers, and the moment this needs a model it cannot
 ;; read, somebody is building the thing the law forbids.
 ;;
 ;; THE FLOOR STAYS. `:take` is still a guaranteed slot; the rank only
@@ -464,9 +466,9 @@
 ;; acts on a machine's word and that word must be readable.
 
 (def default-crown-rank
-  "The crown's rank, as four numbers — the weights of the four inputs
-  a household can argue with. The fifth input, *asked for*, is a TIER
-  above all four and not a weight (see `crown-key`): no number a
+  "The crown's rank, as five numbers — the weights of the five inputs
+  a household can argue with. The sixth input, *asked for*, is a TIER
+  above all five and not a weight (see `crown-key`): no number a
   household writes may put the machine's initiative above a person's
   own request, because that is law 6 read at the crown.
 
@@ -492,13 +494,33 @@
   a bundle nearer its lapse ranks lower than one the composer just
   staged.
 
-  All four at zero is *the seed alone*, with a person's own request
+  `:early` — what each day a RECOMPOSITION arrives before the day the
+  house said it would hear that line of thinking again holds it back
+  (waymark-1uv.10). The day is the person's own decline, stamped as
+  `not_before` off the tickler's schedule — a week, three, two months,
+  half a year, lengthening with `declined_count` — and until
+  waymark-1uv.10 it was a WALL at the create door: the composer could
+  not stage the recomposition at all. The verdict is real and is still
+  honoured; it is honoured HERE now, as a number on the card, because
+  a wall on writing was a proxy for this rank and law 4 wants the
+  recomposition written (it is the diagnosis). Per DAY rather than per
+  decline, and at twice `:fresh`, so the arithmetic is the mirror of
+  freshness — every day early costs what two days left would lift —
+  and a recomposition a week early sits below every fresh bundle
+  serving a declared value while still standing on the page when the
+  floor reaches it. `declined_count` is not a second multiplier: the
+  schedule already spent it on the distance, and charging it again
+  would be the house's verdict counted twice. Once the day has passed
+  nothing here holds it, because that is what the house said.
+
+  All five at zero is *the seed alone*, with a person's own request
   still first — a number a person can see rather than a key they have
   to know to delete, the contest's own posture."
   {:declared 10
    :cooled 2
    :declined 2
-   :fresh 1})
+   :fresh 1
+   :early 2})
 
 (def reason-weights
   "How much each of the household's four quick words weighs on the
@@ -528,7 +550,7 @@
 (def crown-scan-cap
   "Offered bundles the crown ranks on one read, newest first. The
   population's cost is per CANDIDATE — a value read, a piece query and
-  a walk up the supersedes chain — and once the cap on staging goes
+  a walk up the supersedes chain — and since the cap on staging went
   (waymark-1uv.3) no create door keeps the number of offered bundles
   small, so the read bounds itself instead.
 
@@ -557,7 +579,7 @@
   5)
 
 (defn crown-rank-of
-  "The crown's four numbers this recipe reads: the household's own,
+  "The crown's five numbers this recipe reads: the household's own,
   with the deployment's filled in for anything it did not state —
   `formula-of`'s shape, one field over."
   [recipe]
@@ -570,22 +592,27 @@
            − cooled   × steps cooled
            − declined × weight of the strongest word on the chain
            + fresh    × days left on the week
+           − early    × days before the house said it would hear it
 
   over one bundle's inputs — `{:value :declared|:observed, :cooled n,
-  :declined word-or-nil, :days-left n}` — and the recipe's four
-  numbers. Higher stands higher. It is only ever a SORT KEY: the crown
-  still shows exactly as many bundles as its `:take` says whenever
-  that many exist, and there is no arithmetic here that can drop one.
+  :declined word-or-nil, :days-left n, :early n}` — and the recipe's
+  five numbers. Higher stands higher. It is only ever a SORT KEY: the
+  crown still shows exactly as many bundles as its `:take` says
+  whenever that many exist, and there is no arithmetic here that can
+  drop one — a recomposition the house said not to hear yet is COOLED
+  by every day it is early (waymark-1uv.10), never hidden, and the
+  card says so.
 
   `:asked` is not in it, on purpose: a bundle that answers a person's
   own request is a tier above every uncited one (`crown-key`), and no
   weight a household writes moves it down."
-  ^long [weights {:keys [value cooled declined days-left]}]
+  ^long [weights {:keys [value cooled declined days-left early]}]
   (let [w (fn ^long [k] (long (get weights k 0)))]
     (+ (if (= :declared value) (w :declared) 0)
        (- (* (w :cooled) (long (or cooled 0))))
        (- (* (w :declined) (reason-weight declined)))
-       (* (w :fresh) (long (or days-left 0))))))
+       (* (w :fresh) (long (or days-left 0)))
+       (- (* (w :early) (long (or early 0)))))))
 
 (defn crown-key
   "One crown candidate's place in the order, as a vector `sort-by`
@@ -1810,12 +1837,16 @@
   house that said *never this* two recompositions ago has not unsaid
   it by being offered a new shape.
 
-  Silence is read as silence. A decline with no word leaves nothing
-  here, on purpose: the quick word is optional and *not tapping is a
-  complete answer* (waymark-jfv.16), so a bare decline teaches the
-  rank nothing — what it buys the house is the `not_before` floor at
-  the create door, which is a different mechanism and stays one. A
-  house that wants a line of thinking held back says so with a word.
+  Silence is read as silence HERE. A decline with no word leaves
+  nothing in this input, on purpose: the quick word is optional and
+  *not tapping is a complete answer* (waymark-jfv.16). What a bare
+  decline buys the house is the SCHEDULE — `not_before`, stamped off
+  the tickler's steps and lengthening with `declined_count` — which
+  since waymark-1uv.10 is the rank's own `:early` input rather than a
+  wall at the create door: a recomposition staged before that day is
+  cooled by every day it is early. The word and the date are two
+  inputs because they say two things — *this line, never* is not
+  *not until March*.
 
   The reason kind is the framework's and enrolled `:always`, but the
   read still asks whether this engine holds it, `reasons-doc`'s own
@@ -1841,13 +1872,30 @@
 
 (defn- days-left
   "Whole days between now and a bundle's `good_until`, never negative
-  — the rank's fifth input, and zero for a bundle with no leash at all
-  (none is staged that way; the engine stamps one)."
+  — the rank's freshness input, and zero for a bundle with no leash at
+  all (none is staged that way; the engine stamps one)."
   ^long [^Instant now good]
   (if (instance? Instant good)
     (max 0 (quot (- (.getEpochSecond ^Instant good) (.getEpochSecond now))
                  86400))
     0))
+
+(defn- days-early
+  "How many days before the house said it would hear this line of
+  thinking again a recomposition is standing — the rank's `:early`
+  input (waymark-1uv.10). Read off the SUPERSEDED outcome's
+  `not_before`, because that is the row the decline stamped; zero once
+  the day has passed, and zero for a bundle that recomposes nothing.
+  Rounded UP where `days-left` rounds down: a recomposition an hour
+  early is a day early, because the person's date is a day and the
+  house has not reached it."
+  ^long [^Instant now prior]
+  (let [nb (get-in prior [:data :not_before])]
+    (if (instance? Instant nb)
+      (max 0 (quot (+ (- (.getEpochSecond ^Instant nb) (.getEpochSecond now))
+                      86399)
+                   86400))
+      0)))
 
 (defn outcomes
   "outcomes: the composed bundles this house has not answered — the
@@ -1898,25 +1946,29 @@
   EACH CANDIDATE CARRIES THE RANK'S INPUTS (waymark-1uv.2), under
   `:crown`: whether it answers a person's own request, how the value
   it serves stands, the strongest word the house said about the line
-  of thinking it recomposes, and how many days are left on its week.
-  The population READS; it does not rank. `entry-cards` adds the one
+  of thinking it recomposes, how many days are left on its week, and
+  — for a recomposition — how many days early it stands against the
+  day the house said it would hear that line again, with how many
+  times the line was turned down beside it (waymark-1uv.10). The
+  population READS; it does not rank. `entry-cards` adds the one
   input only a read knows — how many mornings THIS reader has been
   shown it, off the same view rows the contest reads — and sorts by
   `crown-key`, so the arithmetic lives in one place and the card's
   citation quotes the same numbers the sort used.
 
-  THE WEEKLY CAP IS NOT HERE. Today it is `outcome/outcomes-are-few`
-  at the create door, and the epic (waymark-1uv) has ruled it out of
-  there too (waymark-1uv.3, which lands after the rank and never
-  before it): a cap on writing protects attention by proxy, a rank
-  protects it directly, and a wall that refused a staging taught the
-  composer nothing an unanswered row would not. What stays true either
-  way is that a read-side WINDOW must not come here — a bundle the
-  rank places last is still a candidate, still named to
-  `claimed_above`, and still shown the morning the floor reaches it.
+  THERE IS NO CAP, HERE OR AT THE DOOR. `outcome/outcomes-are-few`
+  left the create door with waymark-1uv.3, the epic's ruling: a cap on
+  writing protects attention by proxy, a rank protects it directly,
+  and a wall that refused a staging taught the composer nothing an
+  unanswered row would not. What stays true is that a read-side WINDOW
+  must not come here — a bundle the rank places last is still a
+  candidate, still named to `claimed_above`, and still shown the
+  morning the floor reaches it. That includes a recomposition the
+  house said not to hear yet: cooled to the bottom by `:early`, never
+  dropped, because the rank chooses WHICH and never WHETHER.
 
-  The cost is the read-time posture's, and since the door will not
-  keep the number small for much longer the read bounds itself: at most
+  The cost is the read-time posture's, and since no door keeps the
+  number small the read bounds itself: at most
   `crown-scan-cap` bundles are scanned, newest first, each surviving
   one costing a value read, a piece query and a walk up its
   supersedes chain, and `a-bundle-is-small` caps the pieces at five.
@@ -1938,7 +1990,16 @@
                        (let [d (inv/decode-row rdef raw)
                              good (get-in d [:data :good_until])
                              parts (bundle-parts ctx (:id raw))
-                             standing (value-standing ctx d)]
+                             standing (value-standing ctx d)
+                             ;; the row this one recomposes, DECODED,
+                             ;; for the day the house said it would
+                             ;; hear the line again (waymark-1uv.10) —
+                             ;; `not_before` is an instant only after
+                             ;; the kind's own schema has read it
+                             prior (when-some [sid (some-> (get-in d [:data :supersedes])
+                                                           str not-empty)]
+                                     (some->> (load-raw ctx :outcome sid)
+                                              (inv/decode-row rdef)))]
                          (when (and (not= pid (get-in d [:data :composed_by]))
                                     (or (nil? good) (pos? (compare good now)))
                                     (<= (long bundle-floor) (count parts))
@@ -1948,11 +2009,20 @@
                             :sentence (outcome-says d (= :observed standing))
                             ;; the rank's inputs, read here and weighed
                             ;; in `entry-cards` (waymark-1uv.2)
-                            :crown {:asked (some? (some-> (get-in d [:data :request_id])
-                                                          str not-empty))
-                                    :value standing
-                                    :declined (crown-word ctx d)
-                                    :days-left (days-left now good)}
+                            :crown (cond-> {:asked (some? (some-> (get-in d [:data :request_id])
+                                                                  str not-empty))
+                                            :value standing
+                                            :declined (crown-word ctx d)
+                                            :days-left (days-left now good)}
+                                     ;; only a recomposition carries the
+                                     ;; schedule: how early it stands and
+                                     ;; how many times the line was turned
+                                     ;; down — `declined_count` is the
+                                     ;; bundle's own, inherited at birth
+                                     prior
+                                     (assoc :early (days-early now prior)
+                                            :turned-down (long (or (get-in d [:data :declined_count]) 0))
+                                            :not-before (get-in prior [:data :not_before])))
                             ;; the union, said out loud (waymark-jfv.17)
                             :impact (bundle-impact
                                      rdef
@@ -1975,27 +2045,40 @@
 
 ;; ── compose me another (waymark-jfv.20) ─────────────────────────────
 ;;
-;; THE PERSON PULLS, and the cap only ever walled the machine. The
-;; owner's sentence — *I want to be able to just keep requesting
-;; outcomes* — is law 6 (the person spins; the system never spins for
-;; them) applied to composition: `outcome/outcomes-are-few` is two a
-;; week per composer so that a composer RANKS, and a person asking for
-;; another is consent given in advance. The ask is a row
-;; (`composition_request`, born by one tap, a person's and never an
-;; agent's), and the crown is where it lives on the page, because the
-;; crown is where the person who asked is already looking.
+;; THE PERSON PULLS, and the rank puts the answer first. The owner's
+;; sentence — *I want to be able to just keep requesting outcomes* —
+;; is law 6 (the person spins; the system never spins for them)
+;; applied to composition. The ask was born to get a person's own
+;; pull past the weekly cap on the composer's initiative; the cap has
+;; since left (waymark-1uv.3) and the ask outlived it with a different
+;; meaning: a bundle that answers a request stands in the crown's
+;; FIRST TIER (`crown-key`), above everything nobody asked for. The
+;; ask is a row (`composition_request`, born by one tap, a person's
+;; and never an agent's), and the crown is where it lives on the page,
+;; because the crown is where the person who asked is already looking.
 ;;
 ;; NOT A CARD, and the absence is the design. A card is a projection
-;; of a row with a verb on it; the chip exists precisely when there is
-;; NO row to project — the crown carded nothing — and a request
+;; of a row with a verb on it; the chip is not one, because a request
 ;; standing open is not something to answer, so it carries no verb at
 ;; all. `document` hands the whole thing over under one key, `crown`,
-;; beside `views` and `reasons`: whether the crown was empty, the door
-;; the chip knocks on, and the requests this reader already has
-;; standing. The chip rides the origin key like a card verb, under a
-;; card_id that names the section, the kind the tap creates, and `ask`
-;; where a row id would stand — so `origin-of` parses it and
+;; beside `views` and `reasons`: whether the crown carded nothing,
+;; the door the chip knocks on, and the requests this reader already
+;; has standing. The chip rides the origin key like a card verb, under
+;; a card_id that names the section, the kind the tap creates, and
+;; `ask` where a row id would stand — so `origin-of` parses it and
 ;; `actions-from-feed` counts the pull under `outcomes`, per day.
+;;
+;; THE CHIP RIDES ALWAYS (waymark-1uv.3 re-read jfv.20's rule). Under
+;; the cap the ask rode only when the crown carded nothing, because
+;; asking meant *let one more in* and a chip beside an unanswered
+;; bundle was the page asking for more before the person had said
+;; what they thought of what was there. Under the rank asking means
+;; *rank mine first*: a person may want a request standing while two
+;; bundles are on offer — neither is the Saturday they had in mind —
+;; and the rank puts the answer first when it arrives, so the offer
+;; on the page and the ask beside it are not in competition. Holding
+;; the chip back would be the page deciding when the person is
+;; allowed to want, which is the wall the cap was.
 
 (def ask-card-id
   "The `card_id` the crown's chip rides the origin key under — see the
@@ -2004,22 +2087,29 @@
   "outcomes/composition_request/ask")
 
 (defn- crown-says
-  "The one sentence the chip stands beside, in the household's words."
+  "The one sentence the chip stands beside, in the household's words —
+  three, since the chip rides whether or not the crown carded anything:
+  the standing request, the empty crown, and the crown with bundles on
+  offer that are not the one the person had in mind."
   [empty? standing]
   (cond
     (seq standing)
     (str "You asked for another"
          (when (> (count standing) 1)
            (str " — " (count standing) " requests are standing"))
-         ". The composer answers at its next sitting, past the week's cap,"
-         " because the cap walls the composer and not you.")
+         ". The composer answers at its next sitting, and the answer stands"
+         " first in the crown when it arrives, above anything nobody asked"
+         " for.")
 
     empty?
     (str "Nothing composed is on offer. Ask, and the composer stages one"
-         " at its next sitting — past the week's cap, because the cap walls"
-         " the composer and not you.")
+         " at its next sitting; a bundle you asked for stands first in the"
+         " crown.")
 
-    :else nil))
+    :else
+    (str "Not the week you had in mind? Ask, and the composer stages"
+         " another at its next sitting — it stands first in the crown when"
+         " it arrives, above anything nobody asked for.")))
 
 (defn- crown-doc
   "The crown's own chip and standing (waymark-jfv.20), or nil when this
@@ -2029,15 +2119,14 @@
 
   `empty` is whether the crown carded nothing on THIS read — the
   reader's own bundles, lapsed ones and answered ones all having been
-  dropped by the population already — and `ask` rides only then: a
-  house with a bundle on offer answers that first, and a chip beside
-  an unanswered bundle would be the page asking for more before the
-  person has said what they think of what is there. `standing` is the
-  reader's own open requests whose week has not run out, each with the
-  value it aims at when it names one; it rides whether or not the
-  crown is empty, because the sentence 'you asked, and the composer
-  has not sat down yet' is true either way and the person who asked
-  deserves to read it.
+  dropped by the population already — and it is said so the screen
+  can say it; `ask` rides WHETHER OR NOT the crown is empty
+  (waymark-1uv.3; the block above says why the old rule went with the
+  cap). `standing` is the reader's own open requests whose week has
+  not run out, each with the value it aims at when it names one; it
+  rides in every case too, because the sentence 'you asked, and the
+  composer has not sat down yet' is true either way and the person
+  who asked deserves to read it.
 
   Under a preview the principal is the PREVIEWED member (`document`'s
   own rule), so the standing requests are theirs and the ask is their
@@ -2068,18 +2157,17 @@
                            (rows-of ctx :composition_request
                                     {:requested_by pid :state "offered"}))]
         (cond-> {"empty" empty?
-                 "card_id" ask-card-id}
-          (crown-says empty? standing) (assoc "says" (crown-says empty? standing))
-          (seq standing) (assoc "standing" standing)
-          empty?
-          (assoc "ask" {"href" (collection-of ctx :composition_request)
+                 "card_id" ask-card-id
+                 "says" (crown-says empty? standing)
+                 "ask" {"href" (collection-of ctx :composition_request)
                         "method" "POST"
                         "label" "Compose me another"
                         "note" (str "One tap writes a request under your name;"
                                     " the composer reads it at its next"
                                     " sitting and stages an outcome that"
-                                    " cites it, admitted past the week's"
-                                    " cap. It stands a week.")}))))))
+                                    " cites it, and that one stands first"
+                                    " in the crown. It stands a week.")}}
+          (seq standing) (assoc "standing" standing))))))
 
 (defn conflicts
   "decide: mirrored rows whose authority and household disagree. A
@@ -2668,21 +2756,22 @@
             (refuse (str ":formula " k " is " what ", " lo "–" hi
                          " — read " (pr-str v))
                     {:formula f})))))
-    ;; …and the sixth (waymark-1uv.2): the crown's four numbers are
+    ;; …and the sixth (waymark-1uv.2): the crown's five numbers are
     ;; numbers, for the fifth check's own reason. Zero is legal for
-    ;; every one of them — all four at zero is the seed alone, with a
+    ;; every one of them — all five at zero is the seed alone, with a
     ;; person's own request still first.
     (when-some [c (:crown-rank recipe)]
       (when-not (map? c)
         (refuse (str ":crown-rank is a map of {:declared :cooled :declined"
-                     " :fresh} — the four numbers the crown's rank is made"
-                     " of, or absent for the deployment's own")
+                     " :fresh :early} — the five numbers the crown's rank is"
+                     " made of, or absent for the deployment's own")
                 {:crown-rank c}))
       (doseq [[k what]
               [[:declared "what a declared value lifts a bundle over an observed one"]
                [:cooled "what each cooled step holds a bundle back"]
                [:declined "what each rank of the house's quick word holds a bundle back"]
-               [:fresh "what each day left on its week lifts a bundle"]]]
+               [:fresh "what each day left on its week lifts a bundle"]
+               [:early "what each day early a recomposition arrives holds it back"]]]
         (when-some [v (get c k)]
           (when-not (and (int? v) (<= 0 (long v) 100))
             (refuse (str ":crown-rank " k " is " what ", 0–100 — read "
@@ -3479,7 +3568,14 @@
    :fresh
    (fn [a b]
      (str "In the crown, each day left on a bundle's week lifts it "
-          b " instead of " a "."))})
+          b " instead of " a "."))
+   ;; the fifth number (waymark-1uv.10): a recomposition arriving before
+   ;; the day the house said it would hear that line of thinking again
+   :early
+   (fn [a b]
+     (str "In the crown, each day early a recomposition arrives — before"
+          " the day the house said it would hear that line of thinking"
+          " again — holds it " b " instead of " a "."))})
 
 (defn crown-rank-diff
   "The crown's numbers, read side by side (waymark-1uv.2) —
@@ -3551,7 +3647,7 @@
        "; exactly one card is the seam; the archive"
        " is last and bottomless; every line names a population this"
        " engine actually holds; the contest is two numbers a person can"
-       " read; and the crown's rank is four. A recipe that broke any of"
+       " read; and the crown's rank is five. A recipe that broke any of"
        " those would have refused to start rather than serve you a"
        " surprise."))
 
@@ -3595,7 +3691,7 @@
            " shown on."))))
 
 (defn crown-rank-as-written
-  "The crown's four numbers in the shape the EDITOR takes — the wire
+  "The crown's five numbers in the shape the EDITOR takes — the wire
   spelling of `waymark10.feed-recipe`'s `crown_rank` field, so what a
   person copies out of a feed document is what the form takes back
   (`formula-as-written`'s sentence, one field over)."
@@ -3604,7 +3700,8 @@
     {"declared" (:declared c)
      "cooled" (:cooled c)
      "declined" (:declined c)
-     "fresh" (:fresh c)}))
+     "fresh" (:fresh c)
+     "early" (:early c)}))
 
 (defn crown-rank-says
   "The crown's rank, narrated in household words with its own numbers
@@ -3613,9 +3710,9 @@
   what the rank did to THIS card is the card's business
   (`crown-card-says`), because only a read knows it."
   ^String [recipe]
-  (let [{:keys [declared cooled declined fresh]} (crown-rank-of recipe)
+  (let [{:keys [declared cooled declined fresh early]} (crown-rank-of recipe)
         {:keys [window-days cools-after]} (formula-of recipe)]
-    (if (every? zero? (map long [declared cooled declined fresh]))
+    (if (every? zero? (map long [declared cooled declined fresh early]))
       (str "The crown's rank is off: every number in crown_rank is 0, so a"
            " bundle answering your own request still stands first and the"
            " seed alone places the rest. Turning it back on is a number in"
@@ -3623,7 +3720,7 @@
       (str "The crown ranks what it shows, and this is the whole of it. A"
            " bundle that answers a request you made stands above every one"
            " nobody asked for, and no number here changes that. Among the"
-           " rest, four numbers a person can read: serving a value this"
+           " rest, five numbers a person can read: serving a value this"
            " house declared lifts a bundle " declared " over one serving a"
            " value an agent only observed; each step the contest says it has"
            " cooled — "
@@ -3636,9 +3733,12 @@
            " about the line of thinking it recomposes holds it "
            (* 1 (long declined)) " for wrong time, " (* 2 (long declined))
            " for wrong piece, " (* 3 (long declined)) " for not this way and "
-           (* 4 (long declined)) " for never this; and each day left on its"
+           (* 4 (long declined)) " for never this; each day left on its"
            " week lifts it " fresh ", so a bundle nearer its lapse ranks"
-           " lower. The floor still holds — the crown shows as many bundles"
+           " lower; and each day a recomposition arrives before the day the"
+           " house said it would hear that line of thinking again holds it "
+           early ", so a bundle the house said not to hear yet sits last"
+           " rather than out of sight. The floor still holds — the crown shows as many bundles"
            " as its take says whenever that many exist; the rank only"
            " chooses which, and the seed decides between equals. Until you"
            " turn the record of what you were shown on, nothing about"
@@ -3759,14 +3859,22 @@
   wire's spelling. `seen`/`cooled` ride only when the reader is
   recording, the contest's own posture one key over; `declined` rides
   only when a word was said, so a reader can tell *no word* from a
-  word. Public because the packs assert the shape."
-  [weights {:keys [asked value seen cooled declined days-left] :as inputs}]
+  word; `early`, `turned_down` and `not_before` ride only on a
+  RECOMPOSITION (waymark-1uv.10), so a reader can tell *nothing to be
+  early for* from *on time*. Public because the packs assert the
+  shape."
+  [weights {:keys [asked value seen cooled declined days-left
+                   early turned-down not-before] :as inputs}]
   (cond-> {"lift" (crown-lift weights inputs)
            "asked" (boolean asked)
            "value" (name (or value :declared))
            "days_left" (long (or days-left 0))}
     (some? seen) (assoc "seen" seen "cooled" cooled)
-    (some? declined) (assoc "declined" (str declined))))
+    (some? declined) (assoc "declined" (str declined))
+    (some? early) (assoc "early" (long early)
+                         "turned_down" (long (or turned-down 0)))
+    (and (some? early) (pos? (long early)) not-before)
+    (assoc "not_before" (str not-before))))
 
 (defn- crown-card-says
   "What the crown's rank did to THIS card, in the household's own words
@@ -3774,16 +3882,21 @@
   says what lifted or held it*, at the one section where a person acts
   on a machine's word. Every clause names an input and the number it
   contributed, and the last clause is the floor, because the floor is
-  still true."
+  still true — and for a recomposition the house said not to hear yet,
+  the floor clause is the one place the person's dated verdict and the
+  guaranteed slot meet (waymark-1uv.10): the card stands last, says
+  how early it is, and is shown when the take reaches it, because a
+  rank that hid it would be the window the epic refused."
   ^String [{:keys [rank of crown crown-weights formula]}]
   (let [w (fn ^long [k] (long (get crown-weights k 0)))
-        {:keys [asked value seen cooled declined days-left]} crown
+        {:keys [asked value seen cooled declined days-left
+                early turned-down not-before]} crown
         lift (crown-lift crown-weights crown)
         window (:window-days formula)
         after (long (or (:cools-after formula) 0))
         plural (fn [n word] (str n " " word (when (not= 1 (long n)) "s")))]
     (str "Ranked " (ordinal rank) " of " of " in the crown by recipe.crown_rank"
-         " — four numbers this house can read — and this is the arithmetic"
+         " — five numbers this house can read — and this is the arithmetic"
          " for this card. "
          (if asked
            (str "You asked for another and this is the composer's answer, so"
@@ -3827,6 +3940,21 @@
                 " this line of thinking down. "))
          (plural (long (or days-left 0)) "day") " left on its week, lifting it "
          (* (w :fresh) (long (or days-left 0))) ". "
+         (cond
+           (nil? early) ""
+           (pos? (long early))
+           (str "The house said not this week about this line of thinking"
+                (when (pos? (long (or turned-down 0)))
+                  (str " " (plural turned-down "time")))
+                " and meant it until " (some-> not-before str (subs 0 10))
+                " — this recomposition is " (plural early "day") " early,"
+                " holding it " (* (w :early) (long early)) ". ")
+           :else
+           (str "It recomposes a line of thinking the house turned down"
+                (when (pos? (long (or turned-down 0)))
+                  (str " " (plural turned-down "time")))
+                ", and the day the house said it would hear it again has"
+                " passed, so nothing holds it for that. "))
          "Lift " lift " in all; the seed decides between equals. The floor"
          " still holds: this section shows as many bundles as its take"
          " says whenever that many exist, and the rank only chooses"
@@ -3852,7 +3980,7 @@
   happened — and that is what these sentences say."
   [section {:keys [formula seen step crown] :as draw}]
   (cond
-    ;; the crown, RANKED (waymark-1uv.2): the four numbers, the inputs
+    ;; the crown, RANKED (waymark-1uv.2): the five numbers, the inputs
     ;; and the arithmetic for this card. The sentence this replaced —
     ;; *held by the floor … not because it won anything* — stopped
     ;; being true the moment the crown chose which bundles fill its
@@ -4221,7 +4349,7 @@
         ;; until somebody chooses otherwise (waymark-8um.3)
         cooling (reader-cooling ctx recipe recording)
         ctx (cond-> ctx cooling (assoc :cooling cooling))
-        ;; the crown's four numbers, resolved once for the read
+        ;; the crown's five numbers, resolved once for the read
         ;; (waymark-1uv.2) — `entry-cards` sorts the crown by them and
         ;; every crown card quotes them back
         ctx (assoc ctx :crown-rank (crown-rank-of recipe))

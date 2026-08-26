@@ -124,9 +124,10 @@
   order never silently clears the numbers.
 
   `:crown_rank` joined with waymark-1uv.2 for the same reason one
-  section up: the crown's rank is four numbers a person can read, and
-  they live where the contest's two live so the same form, the same
-  diff, the same wall and the same transitions govern them."
+  section up: the crown's rank is five numbers a person can read (four
+  at 1uv.2; `:early` with waymark-1uv.10), and they live where the
+  contest's two live so the same form, the same diff, the same wall
+  and the same transitions govern them."
   [:label :order :formula :crown_rank])
 
 ;; ── the wire shape ↔ the recipe map ─────────────────────────────────
@@ -183,7 +184,7 @@
 
   `:crown-rank` is here too (waymark-1uv.2), the same sentence at the
   crown: *which of the composed weeks is worth my Saturday* is a taste,
-  said in four numbers, in the household's own hand."
+  said in five numbers, in the household's own hand."
   [data]
   (let [numbers (fn [m] (into {}
                               (keep (fn [[k v]]
@@ -200,7 +201,8 @@
              (numbers {:declared (get-in data [:crown_rank :declared])
                        :cooled (get-in data [:crown_rank :cooled])
                        :declined (get-in data [:crown_rank :declined])
-                       :fresh (get-in data [:crown_rank :fresh])})))))
+                       :fresh (get-in data [:crown_rank :fresh])
+                       :early (get-in data [:crown_rank :early])})))))
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
@@ -473,16 +475,17 @@
     [:maybe [:int {:min 0 :max 365}]]]])
 
 (def crown-rank-schema
-  "The crown's rank, as four numbers (waymark-1uv.2, laws v3 law 5 at
-  the crown). Four and not five, because the fifth input — a bundle
-  answering a person's own request stands first — is a TIER and not a
-  weight: no number a household writes may put the machine's
-  initiative above a person's own ask.
+  "The crown's rank, as five numbers (waymark-1uv.2, laws v3 law 5 at
+  the crown; `:early` joined with waymark-1uv.10 when the decline's
+  date left the create door for the rank). Five and not six, because
+  the sixth input — a bundle answering a person's own request stands
+  first — is a TIER and not a weight: no number a household writes may
+  put the machine's initiative above a person's own ask.
 
   The bounds are the ones `feed/check-recipe!`'s sixth check applies,
   said here so the FORM refuses a nonsense number before anybody has
   to read a guard's sentence about it. Zero is legal for every one of
-  them; all four at zero is the seed alone."
+  them; all five at zero is the seed alone."
   [:map
    [:declared {:optional true
                :x-display {:label "A declared value lifts"
@@ -499,6 +502,10 @@
    [:fresh {:optional true
             :x-display {:label "Each day left lifts"
                         :help "How much each day still left on a bundle's week lifts it, so a bundle nearer its lapse ranks lower than one the composer just staged."}}
+    [:maybe [:int {:min 0 :max 100}]]]
+   [:early {:optional true
+            :x-display {:label "Each day early holds"
+                        :help "How much each day a recomposition arrives before the day you said you would hear that line of thinking again holds it back. The day is your own not-this-week, stamped a week, three, two months or half a year out; a recomposition staged before it is shown last rather than not at all, and its card says how early it is."}}
     [:maybe [:int {:min 0 :max 100}]]]])
 
 (def ^:private prose
@@ -517,9 +524,9 @@
    :formula {:examples [{:window_days 14 :cools_after 3}]
              :x-display {:label "The contest"
                          :help "Two numbers, and the whole of how the order is weighted by what you have already been shown: how far back it counts, and how many days a card may sit untouched before it steps back inside its own line. It reads your own rows and nobody else's, it never empties a line, and the crown and everything waiting on your answer are outside it. Leave it empty for this deployment's own numbers; set cools_after to 0 to turn it off."}}
-   :crown_rank {:examples [{:declared 10 :cooled 2 :declined 2 :fresh 1}]
+   :crown_rank {:examples [{:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2}]
                 :x-display {:label "The crown's rank"
-                            :help "Four numbers, and the whole of how the crown chooses which composed weeks fill its slots: what a declared value lifts a bundle, what each cooled step holds it, what each rank of the house's quick word about a line of thinking holds it, and what each day left on its week lifts it. A bundle answering your own request stands first whatever these say. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all four to 0 for the seed alone."}}
+                            :help "Five numbers, and the whole of how the crown chooses which composed weeks fill its slots: what a declared value lifts a bundle, what each cooled step holds it, what each rank of the house's quick word about a line of thinking holds it, what each day left on its week lifts it, and what each day early a recomposition arrives — before the day you said you would hear that line again — holds it. A bundle answering your own request stands first whatever these say. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all five to 0 for the seed alone."}}
    :order {:examples [order-example]
            :x-display {:label "The order, line by line"
                        :help "The whole feed, top to bottom: one entry per line, and the vector's order IS the page's order. The house's current order rides the feed document at recipe.order in exactly this shape — copy it and edit a line. Exactly one line is the seam; the bottomless line is last; the sections keep census order; every population is one this engine holds. A line that breaks any of those is refused here, with the sentence that says which."}}})

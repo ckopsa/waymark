@@ -264,11 +264,12 @@ async function renderFeedScreen(view, doc) {
   view.append(head);
 
   /* ── COMPOSE ME ANOTHER (waymark-jfv.20) ─────────────────────────────
-     The person pulls; the cap only ever walled the machine. The server
-     says whether the crown carded nothing (`doc.crown.empty`), where
-     the ask goes (`doc.crown.ask`), and which requests this reader
-     already has standing — this page paints exactly that and authors
-     none of it. The chip is ONE TAP under the feed's own origin key
+     The person pulls, and the rank puts the answer first (since
+     waymark-1uv.3 the chip rides whether or not a bundle is on offer;
+     asking means 'rank mine first'). The server says whether the
+     crown carded nothing (`doc.crown.empty`), where the ask goes
+     (`doc.crown.ask`), and which requests this reader already has
+     standing — this page paints exactly that and authors none of it. The chip is ONE TAP under the feed's own origin key
      (the card_id is the server's, `outcomes/composition_request/ask`),
      so the pull is counted as an action-from-the-feed like any card
      verb; a standing request is a sentence with a link and no verb,

@@ -1,20 +1,23 @@
 (ns workqueue10.resources.composition-request
   "The composition request (waymark-jfv.20): the person pulls, and the
-  cap only ever walled the machine.
+  rank puts the answer first.
 
   The owner's ruling, verbatim, is what this kind is downstream of:
 
     I want to be able to just keep requesting outcomes.
 
-  `outcome/outcomes-are-few` is two a week per composer, Monday to
-  Monday, and the reasoning behind it is still right: a composer that
-  could stage ten would never have to rank, and a household that woke
-  up to ten would stop reading the crown by Thursday. But the cap was
-  written against the MACHINE'S INITIATIVE, and a person asking for
-  another is consent given in advance — waymark-8um law 6 (the person
-  spins; the system never spins for them) applied to composition. A
-  wall that refused the person's own pull would be the system deciding
-  how much the household is allowed to want.
+  It was born to get past a cap — `outcome/outcomes-are-few`, two a
+  week per composer — because a person asking for another is consent
+  given in advance (waymark-8um law 6, the person spins; the system
+  never spins for them, applied to composition) and a wall that
+  refused the person's own pull would be the system deciding how much
+  the household is allowed to want. The cap has since left
+  (waymark-1uv.3; docs/spec-outcome-menu.md § 'Ranked, not capped'),
+  and the request outlived it with a different meaning: an outcome
+  that cites one stands in the crown rank's FIRST TIER, above every
+  bundle nobody asked for, and no number on the recipe moves it below
+  (feed/crown-key). Asking no longer means 'let one more in'; it means
+  'rank mine first'.
 
   ── WHAT A REQUEST IS ──
 
@@ -27,19 +30,22 @@
 
   ── THE THREE WALLS, AND WHY EACH IS WHERE IT IS ──
 
-  1. ONLY A PERSON ASKS (`only-a-person-asks`, at the create door). An
-     agent that could mint requests would kill the cap through the
-     back door — stage two, ask itself for a third, stage it. This is
-     the same shape as `outcome/a-person-answers` and for the same
-     reason: a house running two agents must be no different from a
-     house running one. :system stays admitted (the walker, a seed);
-     the wall is about the composer.
+  1. ONLY A PERSON ASKS (`only-a-person-asks`, at the create door). A
+     request is the rank's first tier, and an agent that could mint
+     one would put its own initiative above a person's ask by asking
+     itself — the machine spinning for the person, which is the one
+     thing law 6 forbids. This is the same shape as
+     `outcome/a-person-answers` and for the same reason: a house
+     running two agents must be no different from a house running
+     one. :system stays admitted (the walker, a seed); the wall is
+     about the composer.
 
   2. THE AIM IS A VALUE THIS HOUSE HOLDS
      (`aims-at-a-value-this-house-holds`). Absent is allowed; named,
      it is checked the way `outcome/names-a-value` checks it, against
      the same two states, so a request cannot aim at a value the
-     house has retired and then admit an outcome past the cap for it.
+     house has retired and then put an outcome for it first in the
+     crown.
 
   3. AN OUTCOME ANSWERS A REQUEST, AND NOTHING ELSE DOES
      (`answered-by-a-composition`, on `answer`). This is the wall the
@@ -118,7 +124,7 @@
 
 (defguardfn only-a-person-asks
   {:reads [:principal]
-   :explain "Asking for another outcome is the household's own pull, and the weekly cap is what it pulls PAST — so a request has to come from a person's hand. A composer that could ask itself for a third would have walked around the one wall that makes it rank. If you are an agent and you think the house would want another, say so where an agent may: publish an insight, cite what you read, and let a person tap."}
+   :explain "Asking for another outcome is the household's own pull, and an outcome that answers one stands first in the crown — so a request has to come from a person's hand. A composer that could ask itself for one would be putting its own initiative where only a person's ask may stand. If you are an agent and you think the house would want another, say so where an agent may: publish an insight, cite what you read, and let a person tap."}
   [_row _inp ctx]
   ;; a pure function of the principal's kind, so the render probe and
   ;; the real invoke read the same fact — value/written-by-a-person's
@@ -229,10 +235,11 @@
 ;; an agent can be leashed: workqueue10.outcome-test
 ;; (`an-agent-does-not-mint-a-request`) and the `:feed/outcomes`
 ;; obligation, both by an agent HOLDING a grant over this very door.
-;; What else wants a live engine — a request admitting a third outcome
-;; past the cap, a second citation meeting `answered`, a request
-;; naming a value refusing an outcome that serves another — is proved
-;; in the same file, where the cap's own rows are.
+;; What else wants a live engine — the request moving to `answered`
+;; inside the outcome's own staging, a second citation meeting that
+;; state, a request naming a value refusing an outcome that serves
+;; another, and the cited bundle standing first in the crown — is
+;; proved in the same file, over the household's own registry.
 
 (def ^:private a-standing-request
   {:requested_by "colton"
@@ -281,7 +288,7 @@
    {:x-display
     {:raw true
      :label "Answered by"
-     :help "The outcome that answered this request, written by the engine when the composer staged it. One request admits one outcome past the weekly cap, and this is the one."}}
+     :help "The outcome that answered this request, written by the engine when the composer staged it. One request admits one outcome, and this is the one — it stands first in the crown for as long as it is on offer."}}
    :good_until
    {:x-display
     {:label "Standing until"
@@ -340,8 +347,9 @@
    :sortable {:fields [:created_at :good_until] :default "-created_at"}
    :on-create stamp-the-asker
    ;; shape first, world next — and no pace wall at all, on purpose:
-   ;; the person can always pull, and a cap on asking would be the cap
-   ;; this kind exists to get past, one door over
+   ;; the person can always pull (law 6), and since waymark-1uv.3 no
+   ;; kind in this house walls writing to protect attention — the
+   ;; rank does that where the person can read it
    :create-guards [only-a-person-asks
                    aims-at-a-value-this-house-holds]
    :actions
@@ -357,12 +365,12 @@
                    {:kind :outcome
                     :x-display
                     {:label "The outcome that answers it"
-                     :help "The outcome's own id, handed over by its staging — the one this request admitted past the weekly cap."}}
+                     :help "The outcome's own id, handed over by its staging — the one that answers this request and stands first in the crown for it."}}
                    :waymark/ref]]
      :guards [answered-by-a-composition]
      :handler record-the-outcome
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The request is answered — the outcome named here is the one it admitted past the weekly cap, and no second outcome may cite it. Nobody taps this: the composer's own staging does, in the same stroke that writes the outcome."}
+              :one-way "The request is answered — the outcome named here is the one that answers it, and no second outcome may cite it. Nobody taps this: the composer's own staging does, in the same stroke that writes the outcome."}
      :display {:label "Answered by an outcome" :order 9
                :description "Written by the engine when a composer stages an outcome citing this request — never tapped by hand"}}
     :expire

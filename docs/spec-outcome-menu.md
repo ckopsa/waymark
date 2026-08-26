@@ -362,7 +362,9 @@ tickler's posture spelled as a floor: the decline stamps `not_before` (the
 `backoff-days [7 21 60 180]` schedule, the same pure function with `now` handed
 in), and `plans-are-few` refuses a superseding plan before it. Half a year
 forever, because the only honest way to stop hearing about an outcome is for
-the owner to retire the value it serves.
+the owner to retire the value it serves. *(The refusal half is superseded:
+since waymark-1uv.10 the date is the crown rank's `:early` input and the
+recomposition is admitted and cooled — § *Built — 1uv.3 and 1uv.10*.)*
 
 ### Materialization — the tap is the write, N times
 
@@ -472,6 +474,18 @@ lose:
    the contest can be measured; a read-side window would hide cards that had
    already spent the week's allowance, and *a learner cannot learn about a card
    it never shows*.
+
+**Superseded, 2026-08-26 (waymark-1uv.1 ruled it; waymark-1uv.3 built it) —
+see § *Ranked, not capped — the principle* and § *Built — 1uv.3 and 1uv.10*
+below.** The paragraph above stands as history. The cap was a wall on WRITING
+standing in for a rank on ATTENTION, and its first reason stopped being true
+when the view-event door (waymark-8um.1) made *never shown* distinguishable
+from *shown and passed over*; its second and third are about where a rank
+lives, not whether one exists. `outcomes-are-few` is gone from the create
+door; the crown's declared rank (`feed/default-crown-rank`, waymark-1uv.2)
+chooses which bundles fill the slots; the floor below is untouched, and the
+"not in the population" half of the sentence is still law — a rank places
+last, a window would hide.
 
 **The exposure floor is the line's `:take`, and this is the section 8um law 3
 was written for.** Today nothing ranks, so the floor is trivially honored: the
@@ -1026,7 +1040,9 @@ each refusal names exactly one fix, which is the tree's own habit
 (`recipe_proposal` has five create walls, not one with five arms). The
 floor also refuses a superseding outcome whose predecessor is **still
 offered** — recomposing something nobody has declined yet is asking the
-same question twice.
+same question twice. *(History as of 2026-08-26: `outcomes-are-few` is
+gone (waymark-1uv.3) and `a-recomposition-waits-its-turn` keeps only its
+shape arms — the date became the rank's input (waymark-1uv.10).)*
 
 **The backoff chain is carried in `declined_count`, inherited at
 birth.** `not_this_week` stamps `not_before` from
@@ -1248,7 +1264,9 @@ so a refusal names the piece the household read first).
 The cap is **not here and must not come here**. `outcomes-are-few` is two per
 author per calendar week at the create door, so the composer has to rank; a
 read-side window would bury what the door already let be staged and would
-make the exposure floor unmeasurable.
+make the exposure floor unmeasurable. *(The door half is history since
+waymark-1uv.3; the "not here" half is still law — the rank places, a window
+would hide.)*
 
 ### The card carries `pieces`, and that is the one wire widening
 
@@ -4027,3 +4045,255 @@ half is worth writing down:
   (by4); no agent input to the rank (1uv.6); `ui-drive.mjs` not walked
   (1uv.13); the composer's grant-scope block in § *Built — jfv.5* is widened
   by a sentence pointing here rather than rewritten.
+## Built — 1uv.3 and 1uv.10, the cap leaves and the date becomes a number (2026-08-26, waymark-1uv.3, waymark-1uv.10)
+
+**The owner's ruling, verbatim:** *I don't think it makes sense to limit the
+indexing. It makes more sense to just rank them.* This is the epic's third
+bead and its tenth, landed together because both take an arm off the same
+create door for the same reason — a wall on writing standing in for a rank on
+attention — and because 1uv.7 filed the tenth to land *with 1uv.3, never
+before 1uv.2*. One section for both, under its own headings, so the reader
+who wants only the cap's removal can stop at the first horizontal rule.
+
+`make check-queue` reads **37 kinds, 11 warnings, 49 scenarios judged** —
+the numbers unmoved, and one line under them moved: `outcome` reads *11
+refusing guards, 5 named by a scenario* where it read 12. No scenario ever
+named the cap, which is its own small verdict on what it was for.
+
+### 1uv.3 — `outcomes-are-few` leaves, and the request kind stays
+
+**What went.** `weekly-cap` (the number, 2), `outcomes-are-few` (the guard,
+its count over the week's rows, its *next Monday* refusal), the private
+`week-start` helper, the `ChronoUnit` import and the `store` require nothing
+else in the file used — and the guard's place in `:create-guards`. Nothing
+replaced it at the door: the vector ends at `the-request-is-open`, and the
+comment above it says why there is no *pace last* any more. The section
+header that held the number is now the place the removal is explained, so a
+reader of the code finds the ruling where the number was.
+
+**What stayed, and changed its meaning.** `the-request-is-open` stands
+exactly as it did — a wall on CITING, all four arms: no such request; already
+answered (and by which outcome); expired; the leash run out; an aim not
+served. It stays because a cited outcome still answers the request *in the
+same stroke* (`stage-the-outcome` invokes the request's `answer` door before
+its own insert), and a citation that was not good would burn a person's pull
+on an outcome that answered nothing. What the citation BUYS is what moved:
+under the cap it was admission past the count; under the rank it is the
+crown's first tier (`feed/crown-key`, waymark-1uv.2's *asked-for is a tier,
+not a weight*). Every sentence that said *admitted past the cap* — the
+guard's own refusal (*or cite none and stage inside the week's allowance*),
+`cited-request`'s docstring, `request_id`'s help, `composition_request`'s
+namespace doc, `only-a-person-asks`'s explain, `answered_by`'s help, the
+`answer` door's input help and one-way sentence, `main.clj`'s enrolment
+comment — now says *stands first in the crown* instead. `only-a-person-asks`
+keeps its wall with a new reason: an agent that could mint a request would
+put its own initiative in the tier only a person's ask may stand in, which is
+law 6 (*the system never spins for them*) read at the crown rather than at a
+cap.
+
+**The crown chip's rule, re-read — decided: the ask rides always.** jfv.20
+had `ask` ride only when the crown carded nothing (*answer what is there
+first — a chip beside an unanswered bundle is the page asking for more
+before the person has said what they think*). That rule was the cap's: when
+asking meant *let one more in*, an ask beside an offer was a request to
+exceed the allowance before the allowance had been judged. Under the rank
+asking means *rank mine first*, and the two are not in competition — a
+person may want a request standing while two bundles are on offer (neither is
+the Saturday they had in mind), the rank puts the answer first when it
+arrives, and the bundles on offer are still there to be answered. Holding the
+chip back would be the page deciding when the person is allowed to want,
+which is the wall the cap was, one door over. So `feed/crown-doc` rides `ask`
+and `says` on every first-page read where the engine holds both kinds;
+`empty` is still said, so the screen can paint the difference; and
+`crown-says` gained a third sentence for the crown with bundles on offer and
+nothing standing — *Not the week you had in mind? Ask, and the composer
+stages another at its next sitting — it stands first in the crown when it
+arrives.* The two older sentences dropped their *past the week's cap* clause
+and say *stands first in the crown* instead. The chip's `note` says the same.
+`135-feed-screen.js` needed no change — it painted whatever the server
+handed it — and `ui-drive.mjs`'s walk still checks the chip on the empty
+crown, because that is where it stands alone; its comment says the chip now
+rides everywhere.
+
+**The pack.** `:feed/outcomes` lost the claim *a bundle is on offer and the
+crown still offers 'compose me another'* (it is now false by design) and
+gained its inverse: the crown, empty or not, offers no ask is a violation,
+and `empty` not being a boolean is one too. The setup comment that stood the
+ask claim down when a neighbouring run left a bundle on offer is gone with
+the rule that needed it. The rank flow's comment no longer says the cap
+admits the composer's second of the week; it says the third staging of the
+run is counted by nobody.
+
+**The tests.** § 3 is the inverse of the test that stood there:
+`a-composer-stages-without-limit-and-the-rank-decides-what-shows` — five
+stagings by one composer in one call, five 201s, five distinct ids, and a
+second composer equally unbounded. § 15's
+`a-persons-request-admits-one-outcome-past-the-cap` became
+`a-persons-request-is-answered-in-the-same-stroke-and-nothing-counts`: the
+uncited third is admitted, the cited one answers the request and is refused
+a second time by `the-request-is-open`, and an uncited fifth is admitted like
+every other. `the-crown-carries-the-pull` now asserts the ask rides beside a
+bundle on offer, and that with nothing standing the chip's sentence says
+*first in the crown*; it also declines its bundle at the end, which it did
+not before. The namespace docstring's *the weekly cap, Monday to Monday,
+counting rows* bullet is replaced.
+
+---
+
+### 1uv.10 — the date leaves the door and becomes `:early`
+
+**The guard, as it stands now.** `a-recomposition-waits-its-turn` keeps arms
+(a) *this house serves no outcome …* and (b) *… is still on the fridge
+waiting for an answer* exactly as they were — shape and a dedupe law. Arm
+(c), *the house said not this week, and meant it until `not_before`*, is
+gone; the guard no longer reads `:now`. Its `:open` sentence says where the
+question went: *How soon it comes back is not this door's question — the
+decline stamps when the house is willing to hear it again, and the crown's
+rank holds an early recomposition back by every day it is early, on the card,
+in words.* `moot-the-rest` still stamps `not_before` and `declined_count`,
+and its comment now says what they are: the person's verdict in the shape the
+rank reads. `not_before`'s help says a recomposition staged before it is
+*admitted and RANKED for it*.
+
+**The rank's fifth number.** `feed/default-crown-rank` gained `:early 2`,
+and `crown-lift` a fifth line:
+
+```clojure
+lift = declared × [the value is declared]
+     − cooled   × steps cooled
+     − declined × weight of the strongest word on the chain
+     + fresh    × days left on the week
+     − early    × days before the house said it would hear it   ; 1uv.10
+```
+
+The input is **days early** — whole days from now until the SUPERSEDED
+outcome's `not_before`, read off that row (decoded through the kind's own
+schema, since the raw row holds a string), rounded UP where `days-left`
+rounds down (*a recomposition an hour early is a day early, because the
+person's date is a day and the house has not reached it*), zero once the day
+has passed, absent for a bundle that recomposes nothing. `declined_count`
+rides beside it on every recomposition's `why.crown` as `turned_down`, and
+the date itself as `not_before` while the bundle is early; neither key rides
+on a bundle that supersedes nothing, so a reader can tell *nothing to be
+early for* from *on time* — the pack asserts the silence.
+
+**Why per day, why twice `:fresh`, and why `declined_count` is not a second
+multiplier — decided and recorded.** The arithmetic is the mirror of
+freshness: a day left lifts 1, a day early holds 2, so a recomposition a
+week early (10 declared + 7 left − 14) reads lift 3 and sits below every
+fresh bundle serving a declared value (17) and below one serving an observed
+value (7), while a recomposition on the day the house named reads exactly as
+a fresh line does. The chain's length is already spent on the distance — one
+decline puts the day a week out, two put it three weeks out, four put it
+half a year out — so a recomposition four declines deep and staged the next
+morning is 180 days early and reads lift −343: cooled to the bottom of any
+crown, and still on the page if the take reaches it. Multiplying by
+`declined_count` on top of that would charge the house's verdict twice, and
+the sentence a person reads (*the house said not this week 2 times and meant
+it until …*) already carries the count as words. 1uv.7's *the decline's
+quick reason* (never_this retires, wrong_time cools, not_this_way /
+wrong_piece cool less) was **not** folded in here: the word is already the
+rank's `:declined` input, read off the same chain, and the date and the word
+are two inputs because they say two things — *this line, never* is not *not
+until March*. A word that should retire a line outright is waymark-1uv.11's
+question about the offered bundle's own pieces' words and the reason kind's
+own `never_this`, not this bead's.
+
+**Cool to a floor or to zero — decided: cool, never hide.** 1uv.7 left one
+real question open: the exposure floor and a recomposition the person said
+not to hear yet collide precisely at the crown's `:take`. The answer is the
+principle's own clause 2 — *the rank chooses WHICH, never WHETHER; a rank
+that hides is the window reason 3 refused* — and it is recorded here with its
+cost said out loud. The recomposition is cooled by every day it is early and
+is never dropped; when the crown holds more candidates than its take (the
+ordinary case for a house whose composer works, and the case the cap's
+removal makes common) it is simply off the page; when the crown holds fewer,
+the floor reaches it and it is SHOWN — last, with its card saying *The house
+said not this week about this line of thinking 1 time and meant it until
+2026-09-02 — this recomposition is 7 days early, holding it 14*, and the
+floor clause after it. That is the person's verdict honoured where the
+person can read it, not overridden: a card that says *you said not yet, and
+here is how early this is* is a different thing from a card that pretends
+the decline never happened, and the person's next tap — `not_this_week`
+again — pushes the day three weeks out and the number with it. The fallback
+1uv.7 recorded (keep arm (c) and say it enforces the person's verdict) was
+not needed, and the reason it was not is worth keeping: a wall enforces a
+verdict by forbidding a ROW, and the verdict was never about the row — it was
+about the person's attention, which the rank protects directly. The pure
+test proves the sort holds it last; § 17 proves it is on the page.
+
+**Where the numbers live.** `feed_recipe/crown-rank-schema` gained `:early`
+with its own label and help; `recipe-of` reads it off the wire; the field
+prose's example and help say five. `check-recipe!`'s sixth check names five
+keys; `recipe-guarantees` says *the crown's rank is five*; `crown-rank-as-
+written` writes `early`; `crown-rank-says` gained its clause (*… and each
+day a recomposition arrives before the day the house said it would hear that
+line of thinking again holds it 2, so a bundle the house said not to hear yet
+sits last rather than out of sight*); `crown-rank-diff` narrates it (*In the
+crown, each day early a recomposition arrives … holds it 5 instead of 2*)
+and the *turns OFF* sentence counts five. `recipe_proposal/apply-the-order`
+carries the whole map through unchanged, so nothing there moved.
+`crown-card-says` says *five numbers* and gained two clauses — the early one
+above, and for a recomposition past its day: *It recomposes a line of
+thinking the house turned down 1 time, and the day the house said it would
+hear it again has passed, so nothing holds it for that.*
+
+**The tests.** `feed-test`'s pure deftest gained `early` (lift 3) and
+`on-time` (lift 17 with a chain of three — past the date nothing holds it),
+the early bundle last in the seed-independent order, `:early 0` in the
+all-zero case, and the diff sentence; the recipe deftest expects five
+numbers everywhere, `recomposition arrives` in the sentence, and turns the
+rank off with five zeros. `outcome-test` § 7 flips its refusal into an
+admission (*the date is the rank's input now, not the door's*) and keeps arm
+(b)'s refusal; § 16's clock walk is now explained as making the
+recomposition ON TIME (early 0, `turned_down` 1, no `not_before` quoted, the
+citation saying *has passed*) rather than getting it past a door; and § 17
+`an-early-recomposition-is-admitted-and-cooled-not-refused` pins the clock,
+declines a bundle, recomposes it the same morning (201, `declined_count` 1),
+stages a fresh line beside it, widens the reader's own crown to ten, and
+reads: both on the page, the fresh one above, the early one at `early 7`,
+`turned_down 1`, the decline's own `not_before` quoted back, lift 3, and the
+citation saying *7 days early*, *holding it 14*, the date, and the floor
+clause; the fresh card carries neither key. It declines both at the end.
+
+---
+
+### Fingerprints, and what did not move
+
+Computed over `workqueue10.main/check-resources` (37 kinds) on `main`
+(`1d3f0ea`) and on this tree: **all 37 byte-identical.** `outcome` is
+`6f57c0d5…` on both — create guards are outside `fingerprint-of`, and
+neither bead touched `:on-create`, a handler or an action guard.
+`composition_request` is `eeb69200…` on both — every change there was
+prose, and `safety-fp` projects only the three booleans, so the `:one-way`
+sentence is not law. `feed_recipe`'s schema grew a field and `:schema` is
+not a facet (0k4's correction, re-verified rather than re-asserted).
+`recipe_proposal` is unmoved because `apply-the-order` carries `crown_rank`
+as one map.
+
+### Recorded here, for whoever comes next
+
+- **`crown-scan-cap` (50) is now the only thing bounding the crown's cost**,
+  and it has arithmetic behind it and no measurement (waymark-1uv.12). The
+  cap's removal is what makes that bead matter; nothing here changed the
+  number.
+- **`insights-are-capped` still stands** (waymark-1uv.8, after its rank).
+  The two removals here are the outcome kind's; the principle is wider and
+  the order the epic set is still the order.
+- **The decline's quick reason as a retire rather than a cool** is not
+  built. `:declined` at `never_this` holds a bundle 8; the epic's own
+  sentence *never_this retires the line* would want a tier below, not a
+  weight, and that is a decision about the reason kind's meaning rather than
+  this bead's arithmetic. Filed as a note on waymark-1uv.11.
+- **A recomposition citing a request sits in the asked tier whatever its
+  `early` says** — the tier is above every weight by construction. A person
+  who declined a line and then asked for another gets the recomposition
+  first if the composer cites the ask. That is law 6 and it is intended, but
+  it is worth knowing.
+- **The screen renders `why.crown.early` only through the server's
+  sentence** (`?explain=1`), the way it renders every other input; the plain
+  read's opener (`135-feed-screen.js`) quotes the lift and does not itemise.
+  waymark-1uv.13's walk is where the crown's numbers reach a screenshot.
+- **The tickler kind is untouched.** `next_offer_at` on a tickler is still a
+  read-side rank input for the ticklers line and was never a wall
+  (waymark-1uv.7's row); this bead borrowed its schedule and nothing else.

@@ -392,10 +392,12 @@
        ;; :composition_request rides last (waymark-jfv.20): the
        ;; person's own pull — "compose me another" — one tap, born by
        ;; a person and never by an agent, standing a week, answered by
-       ;; the one outcome that cites it. It exists because the weekly
-       ;; cap on outcomes walls the MACHINE's initiative and a person
-       ;; asking for another is consent given in advance (8um law 6,
-       ;; applied to composition). Domainless for value's reason, and
+       ;; the one outcome that cites it. It was born to get a person's
+       ;; own pull past the weekly cap on the machine's initiative
+       ;; (8um law 6, applied to composition), and outlived the cap
+       ;; (waymark-1uv.3) as the crown rank's first tier: a bundle
+       ;; that answers a request stands above every one nobody asked
+       ;; for. Domainless for value's reason, and
        ;; :nav :system for outcome's: a request is neither work nor a
        ;; decision, and a card for it would be the feed manufacturing
        ;; a thing to answer. The crown carries it instead
