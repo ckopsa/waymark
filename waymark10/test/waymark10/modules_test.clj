@@ -173,6 +173,9 @@
                "/api/-/intents/answer" "/api/-/collab-ticket"
                "/api/-/mirrors/:plural/:action" "/api/-/welcome" "/api/-/mcp"
                "/api/-/feed"
+               ;; the Gate proxy's two doors (waymark-q95): the
+               ;; affordance document and the grant-checked forward
+               "/api/-/gate" "/api/-/gate/:tool"
                "/api/-/grant-check" "/agentInvite" "/api/-/agent-invite"
                "/api/-/ui" "/api/-/ui-lite" "/api/attachments/:id/bytes"
                "/api/definitions/:id/sweep"
@@ -200,6 +203,9 @@
                  ;; own shape: mounted later, the feed would be read
                  ;; as row "feed" of a collection named "-"
                  "/api/-/feed"
+                 ;; the gate door shares the feed's shape and the
+                 ;; same fate if mounted late (waymark-q95)
+                 "/api/-/gate"
                  ;; four segments, and still static: /api/:plural/:id
                  ;; would not match it, but /api/definitions/{id} is a
                  ;; row address and the sweep is not a field of it

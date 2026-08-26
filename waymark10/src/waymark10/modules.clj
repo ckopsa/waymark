@@ -157,6 +157,7 @@
             [waymark10.server.roles :as roles]
             [waymark10.server.routes.attachments :as attachment-routes]
             [waymark10.server.routes.feed :as feed-routes]
+            [waymark10.server.routes.gate :as gate-routes]
             [waymark10.server.routes.law-sweep :as law-sweep-routes]
             [waymark10.server.routes.mcp :as mcp-routes]
             [waymark10.server.routes.mirror :as mirror-routes]
@@ -427,6 +428,19 @@
              {:kind :verdict_reason :enroll :always
               :kinds (fn [_] [verdict-reason/verdict-reason])}]
     :routes feed-routes/routes :pack packs/feed}
+
+   ;; the Gate hypermedia proxy (waymark-q95): two bespoke doors —
+   ;; GET /api/-/gate, the affordance document (Gate's live tools ∩
+   ;; the presented grant), and POST /api/-/gate/{tool}, the
+   ;; grant-checked forward. It enrols NO kind and starts nothing,
+   ;; deliberately: capabilities exist so external data is never
+   ;; copied into waymark, so the module holds the rule and the map
+   ;; (server/gate-proxy) and never a row. An engine without it
+   ;; simply has no door to Gate, which is what a deployment that
+   ;; does not front the household's external systems should look
+   ;; like. Its Gate address is an engine opt ((:gate eng) {:url …}),
+   ;; read at route build with the deployment default.
+   {:module :gate :routes gate-routes/routes}
 
    ;; named, contributing nothing through this seam
    {:module :postgres-store}
