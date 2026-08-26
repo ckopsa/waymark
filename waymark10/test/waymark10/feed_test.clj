@@ -1614,3 +1614,142 @@
           (is (= 200 (:status revised)) (pr-str (:doc revised)))
           (is (str/includes? (get-in off [:recipe :crown_rank_says])
                              "The crown's rank is off")))))))
+
+;; ── the findings' rank (waymark-1uv.8) ──────────────────────────────
+;;
+;; The crown's two deftests, one section down: the arithmetic as a
+;; PURE FUNCTION — seed-independent given its inputs, no tier — and
+;; the recipe's six numbers on the wire, narrated, checked at assembly
+;; and diffed. The live half (a real diagnosis above a real plain
+;; finding, a real dismissal cooling a real line, six findings in a
+;; day all admitted) is workqueue10.insight-rank-test's, over the
+;; household's own registry.
+
+(deftest the-findings-rank-by-six-numbers-and-the-seed-only-breaks-ties
+  (let [w feed/default-insight-rank
+        plain {:fresh-days 14}
+        diagnosis {:diagnosis :affirmation :fresh-days 14}
+        recomposed {:diagnosis :recomposition :fresh-days 14}
+        declared {:value :declared :fresh-days 14}
+        observed {:value :observed :fresh-days 13}
+        cooled {:seen 3 :cooled 1 :fresh-days 14}
+        dismissed {:dismissed 2 :declined "wrong_time" :fresh-days 14}
+        never {:dismissed 1 :declined "never_this" :fresh-days 14}
+        old {:days-old 30 :fresh-days 0}]
+    (testing "the arithmetic, predictable from the six numbers a household reads"
+      (is (= 14 (feed/insight-lift w plain)) "14 days of freshness, nothing else")
+      (is (= 24 (feed/insight-lift w diagnosis)) "a diagnosis lifts 10")
+      (is (= 24 (feed/insight-lift w recomposed)) "…either shape of one")
+      (is (= 19 (feed/insight-lift w declared)) "a declared value lifts 5")
+      (is (= 13 (feed/insight-lift w observed)) "an observed value lifts nothing")
+      (is (= 12 (feed/insight-lift w cooled)) "one cooled step holds 2")
+      (is (= 6 (feed/insight-lift w dismissed)) "two dismissals hold 6, wrong time 2")
+      (is (= 3 (feed/insight-lift w never)) "one dismissal holds 3, never this 8")
+      (is (= 0 (feed/insight-lift w old)) "old is old, and sinks no further"))
+    (testing "the order is a pure function of the inputs; the seed only breaks
+              ties. Swap every hash and a strict order does not move"
+      (let [cands [[:plain plain] [:diagnosis diagnosis] [:declared declared]
+                   [:observed observed] [:cooled cooled] [:dismissed dismissed]
+                   [:never never] [:old old]]
+            order (fn [hash-of]
+                    (mapv first (sort-by (fn [[k in]] (feed/insight-key w in (hash-of k)))
+                                         cands)))
+            a (order #(wire/sha256-hex (str "seed-a" %)))
+            b (order #(wire/sha256-hex (str "seed-b" %)))]
+        (is (= [:diagnosis :declared :plain :observed :cooled :dismissed :never :old] a))
+        (is (= a b) "two seeds, one order — nothing here was tied")))
+    (testing "…and between equals the seed decides, both ways — there is no tier"
+      (let [twin {:fresh-days 14}
+            key-a (fn [k] (feed/insight-key w twin (wire/sha256-hex (str "a" k))))
+            key-b (fn [k] (feed/insight-key w twin (wire/sha256-hex (str "b" k))))
+            names [:p :q :r :s :t :u]]
+        (is (not= (sort-by key-a names) (sort-by key-b names))
+            "given six equal keys some seed disagrees — or the hash is not
+             the last key")
+        (is (= 2 (count (feed/insight-key w diagnosis "h")))
+            "lift then hash, and nothing above the lift")))
+    (testing "all six at zero is the seed alone"
+      (let [off {:diagnosis 0 :declared 0 :cooled 0 :dismissed 0 :declined 0 :fresh 0}]
+        (is (= 0 (feed/insight-lift off never)))
+        (is (= [0 "h"] (feed/insight-key off diagnosis "h")))))))
+
+(deftest the-findings-rank-rides-the-recipe-and-refuses-at-assembly
+  (testing "law 5 at the insights line: six numbers on every answer, in the
+            editor's shape, narrated with the numbers in the sentence"
+    (let [eng (boot-house)]
+      (post! eng "fd_errands" {:title "one"})
+      (let [recipe (:recipe (:doc (feed! eng)))]
+        (is (= {:diagnosis 10 :declared 5 :cooled 2 :dismissed 3 :declined 2 :fresh 1}
+               (:insight_rank recipe)))
+        (is (str/includes? (:insight_rank_says recipe) "ranked, not capped"))
+        (is (str/includes? (:insight_rank_says recipe) "is lifted 10 over a plain finding"))
+        (is (str/includes? (:insight_rank_says recipe) "8 for never this"))
+        (is (str/includes? (:insight_rank_says recipe) "not an obligation"))
+        (is (str/includes? (:guarantees recipe) "the findings' rank is six")))))
+  (testing "a row that names none keeps the deployment's, and one that names
+            some keeps the rest"
+    (is (= {:diagnosis 10 :declared 5 :cooled 2 :dismissed 3 :declined 2 :fresh 1}
+           (feed/insight-rank-of {})))
+    (is (= {:diagnosis 25 :declared 5 :cooled 2 :dismissed 3 :declined 2 :fresh 1}
+           (feed/insight-rank-of {:insight-rank {:diagnosis 25}}))))
+  (testing "a number that is not one refuses at assembly, by name"
+    (is (str/includes? (str (try (feed/check-recipe!
+                                  (assoc feed/default-recipe
+                                         :insight-rank {:dismissed "lots"}))
+                                 (catch Exception e (ex-message e))))
+                       ":insight-rank :dismissed"))
+    (is (str/includes? (str (try (feed/check-recipe!
+                                  (assoc feed/default-recipe
+                                         :insight-rank {:fresh 101}))
+                                 (catch Exception e (ex-message e))))
+                       "0–100")))
+  (testing "the diff says what moved, in the household's words, beside the
+            crown's and the contest's own"
+    (is (= [] (feed/insight-rank-diff nil {:diagnosis 10})))
+    (is (= ["Among findings, one whose next step serves a value this house declared is lifted 20 instead of 5."]
+           (feed/insight-rank-diff nil {:declared 20})))
+    (is (str/includes? (first (feed/insight-rank-diff
+                               nil {:diagnosis 0 :declared 0 :cooled 0
+                                    :dismissed 0 :declined 0 :fresh 0}))
+                       "turns OFF"))
+    (is (str/includes? (first (feed/insight-rank-diff nil {:declined 3}))
+                       "never this about is held 12 instead of 8"))
+    (is (= ["The order itself is unchanged, line for line."
+            "In the crown, each day left on a bundle's week lifts it 3 instead of 1."
+            "Among findings, each finding the house already dismissed on the same next step holds a new one 5 instead of 3."]
+           (feed/recipe-diff {:order (:order feed/default-recipe)}
+                             {:order (:order feed/default-recipe)
+                              :crown-rank {:fresh 3}
+                              :insight-rank {:dismissed 5}}))))
+  (testing "the household writes its own six numbers on the recipe row and the
+            next read is answered by them, and turning them off says so"
+    (let [eng (boot-house)]
+      (post! eng "fd_errands" {:title "one"})
+      (let [before (:doc (feed! eng))
+            made (call! eng :post "/api/feed_recipes"
+                        :body {:label "Diagnoses matter more"
+                               :scope "household"
+                               :order (get-in before [:recipe :order])
+                               :insight_rank {:diagnosis 40 :fresh 0}})
+            after (:doc (feed! eng))]
+        (is (= 201 (:status made)) (pr-str (:doc made)))
+        (is (= {:diagnosis 40 :declared 5 :cooled 2 :dismissed 3 :declined 2 :fresh 0}
+               (get-in after [:recipe :insight_rank])))
+        (is (str/includes? (get-in after [:recipe :insight_rank_says])
+                           "is lifted 40 over a plain finding"))
+        (is (= (get-in before [:recipe :crown_rank])
+               (get-in after [:recipe :crown_rank]))
+            "the crown's five are untouched by a row that named only the
+             findings'")
+        (let [rid (last (str/split (str (:self (:doc made))) #"/"))
+              revised (call! eng :post (str "/api/feed_recipes/" rid "/-/revise")
+                             :body {:label "The seed alone"
+                                    :order (get-in before [:recipe :order])
+                                    :insight_rank {:diagnosis 0 :declared 0
+                                                   :cooled 0 :dismissed 0
+                                                   :declined 0 :fresh 0}}
+                             :headers {"if-match" (get-in made [:doc :meta :etag])})
+              off (:doc (feed! eng))]
+          (is (= 200 (:status revised)) (pr-str (:doc revised)))
+          (is (str/includes? (get-in off [:recipe :insight_rank_says])
+                             "The findings' rank is off")))))))

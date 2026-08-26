@@ -20,9 +20,20 @@
     place the feed's ≤-selection rule is a DOOR rather than a
     projection, because it is the one place a verb is DECLARED
     (by the author, in data) rather than inherited from a row.
-  - THREE A DAY. `insights-are-capped` is the wall that makes the
-    compiler RANK instead of dump. A surface that can be filled is a
-    surface that will be.
+  - RANKED, NOT CAPPED. Until waymark-1uv.8 a third wall stood here:
+    `insights-are-capped`, three findings a day per author, *the wall
+    that makes the compiler rank instead of dump*. It was the
+    precedent the outcome cap copied and it was the same proxy — a
+    wall on the writer standing in for a rank on the reader — and it
+    left under the owner's ruling (docs/spec-outcome-menu.md § 'Ranked,
+    not capped'): the finding IS the indexing that ruling said not to
+    limit, its write pushes nothing and mails nobody, and the offer
+    below is an ADDRESS that writes no other row. What protects the
+    household's attention now is the feed's own rank on the insights
+    line (`feed/default-insight-rank`, six numbers on the recipe row,
+    read back on every insight card), with `:take` as the exposure
+    floor. A compiler may publish as many findings as it finds; the
+    rank decides which two a person reads today.
   - THE FINDER DOES NOT DECIDE. `:decider {:not {:field
     :authored_by}}` — the four-eyes wall doing real work. The agent
     that published a finding is structurally incapable of accepting
@@ -35,7 +46,8 @@
   `waymark_query` / `waymark_get` / `waymark_invoke` like any other
   leash. This file is the engine's half of that contract: the kind,
   its law, and its scenarios. Automated cadence is waymark-53u; a
-  human running the probe is a valid v1 and the cap holds either way.
+  human running the probe is a valid v1 and the rank reads either
+  way.
 
   WHAT ACCEPTING DOES, AND WHY IT DOES NOT FIRE THE OFFER ITSELF.
   `take` records the household's answer and moves the finding to
@@ -80,9 +92,7 @@
             [waymark10.demand :as demand]
             [waymark10.dsl :refer [defguardfn defresource defscenario]]
             [waymark10.schema :as schema]
-            [waymark10.types :as t])
-  (:import (java.time Instant)
-           (java.time.temporal ChronoUnit)))
+            [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
 
@@ -109,19 +119,21 @@
 (defn- listed
   "A short, ordered rendering of what went wrong — the refusal names
   every offending address rather than the first, because a compiler
-  fixing them one round trip at a time is a compiler burning the cap."
+  fixing them one round trip at a time is a compiler wasting its
+  reader's morning."
   [xs]
   (str/join ", " (map pr-str (sort (distinct xs)))))
 
 ;; ── the create walls ────────────────────────────────────────────────
 ;;
-;; All three refuse AT THE DOOR and all three carry :vars, so the
-;; refusal sentence names the fix — which, per spec-decision-record's
-;; second thesis, is also the evidence the decision record keeps. They
-;; run SHAPE FIRST and PACE LAST: a malformed finding should hear what
-;; is wrong with it rather than that the house is full, and because
-;; the cap counts ROWS rather than attempts, a refused create spends
-;; nothing.
+;; Both refuse AT THE DOOR and both carry :vars, so the refusal
+;; sentence names the fix — which, per spec-decision-record's second
+;; thesis, is also the evidence the decision record keeps. Both are
+;; about SHAPE: what a finding cites and what it offers. There is no
+;; PACE wall after them any more — `insights-are-capped` stood third
+;; until waymark-1uv.8 and left for the reason the ns docstring gives;
+;; how many findings a person reads is the feed's rank's business, and
+;; how many an agent may write is nobody's.
 
 (defguardfn cites-what-it-claims
   {:judges [:evidence]
@@ -219,68 +231,16 @@
 
               :else (t/allow))))))))
 
-(def daily-cap
-  "Findings one author may publish in a day. THREE, and the number is
-  the whole point of the wall: a compiler that could publish twenty
-  would never have to decide which one mattered, and a household that
-  woke up to twenty would stop reading the section by Thursday.
-
-  Per AUTHOR rather than per house, which is the pacing precedent
-  (`resource/pacing-guards` counts `{by pid}`) and the honest reading:
-  the cap exists to make an author rank its own findings, and a
-  house-wide cap would let a noisy author silence a quiet one.
-
-  Inherited from spec-decision-kind and worth saying out loud: this
-  rides no coordinator. It counts rows in the store, so unlike the
-  in-process pacing atoms it is shared across processes — but the
-  window is the calendar day, not a rolling hour, and a house running
-  two compilers is a house that declared two authors."
-  3)
-
-;; The day the cap counts is the CALENDAR day, UTC — the same midnight
-;; `feed/today` rolls the feed on. A rolling twenty-four hours would
-;; have been cheaper and would have made the sentence a lie: the
-;; household reads "three a day" and means the day it is having. This
-;; is also why :pacing {:limit 3 :per :day} is NOT spelled above —
-;; resource.clj's generated sentence reads "Asks are paced to {limit}
-;; an hour" whatever window it computed, and fixing that in the sugar
-;; would move approval_request's pinned fingerprint to correct one
-;; word (waymark-iqa.19).
-(defguardfn insights-are-capped
-  {:reads [:principal :now :insight]
-   :vars [:limit :retry_at]
-   :open "Three findings a day, per author — the cap is what makes a compiler rank rather than dump."
-   :explain "That is {limit} findings today, which is the day's whole allowance; the next one opens at midnight UTC ({retry_at}). Rank what is left and bring the best of it tomorrow."}
-  [_row _inp ctx]
-  ;; the storage-free probe never spends a slot — letters-are-paced'
-  ;; own discipline, and the same one pacing-guards keeps
-  (if (nil? (:find ctx))
-    (t/allow)
-    (let [pid (:id (:principal ctx))
-          ^Instant now (:now ctx)
-          midnight (.truncatedTo now ChronoUnit/DAYS)
-          today (into []
-                      (filter (fn [r]
-                                (and (some? (:created-at r))
-                                     (not (pos? (compare midnight
-                                                         (:created-at r)))))))
-                      ((:find ctx) :insight {:authored_by pid} {:limit 500}))]
-      (if (< (count today) (long daily-cap))
-        (t/allow)
-        (let [tomorrow (.plus midnight 1 ChronoUnit/DAYS)]
-          (t/deny {:vars {:limit daily-cap :retry_at (str tomorrow)}
-                   :retry-at tomorrow}))))))
-
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
 ;; Two tiers, and which is which is read off the declarations rather
 ;; than chosen. The two create refusals DEFER to the conformance tier
-;; — both walls consult the registry (:reads [:storage]) and the cap
-;; reads :insight, none of which the check tier's offline world can
-;; answer — so they are proved through the real HTTP door against the
-;; house's own engine, which is the stronger proof anyway: what a
-;; CLIENT sees. The two verdict scenarios are check tier, judged with
-;; no database in the same breath as the usability warnings.
+;; — both walls consult the registry (:reads [:storage]), which the
+;; check tier's offline world cannot answer — so they are proved
+;; through the real HTTP door against the house's own engine, which
+;; is the stronger proof anyway: what a CLIENT sees. The two verdict
+;; scenarios are check tier, judged with no database in the same
+;; breath as the usability warnings.
 
 (def ^:private a-published-finding
   {:finding "The porch project has not moved since June, and the next physical step is one tap away"
@@ -332,7 +292,10 @@
 (defscenario a-dismissed-finding-does-not-come-back
   "Not useful is an answer, and it is kept. A dismissed finding is
    over — the compiler may find the same thing again tomorrow and
-   spend a slot saying so, which is the cap doing its work."
+   publish it, and the feed's rank reads this dismissal against the
+   new one: a finding on a next step the house already said no to
+   stands below a fresh one (waymark-1uv.8), and never in front of it
+   by being published again."
   {:kind    :insight
    :attempt :take
    :row     {:state :dismissed :data a-published-finding}
@@ -422,7 +385,9 @@
     ;; tomorrow. The verdict doors ride the courtesy too and meet the
     ;; wall's honest 409 rather than a mute 404.
     :own-surface true
-    ;; :pacing is deliberately unspelled — see insights-are-capped.
+    ;; :pacing is deliberately unspelled, and since waymark-1uv.8 the
+    ;; reason is the ns docstring's rather than a sugar bug: findings
+    ;; are ranked, not capped.
     :verdicts
     ;; BOTH ARE NOTE-FREE AND BOTH ARE ONE TAP. A :note would make the
     ;; verdict a `recall` demand and `feed/split-verbs` would move it
@@ -477,11 +442,11 @@
      [:maybe [:string {:max 64}]]]
     [:offer_href {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 200}]]]]
-   ;; shape first, pace last: a malformed finding hears what is wrong
-   ;; with it rather than that the house is full, and the cap counts
-   ;; rows so a refused create spends nothing.
-   :create-guards [cites-what-it-claims offers-something-light
-                   insights-are-capped]
+   ;; shape, and only shape: a malformed finding hears what is wrong
+   ;; with it, and a well-formed one is published however many came
+   ;; before it today — the feed's rank, not a wall here, decides
+   ;; which a person reads (waymark-1uv.8).
+   :create-guards [cites-what-it-claims offers-something-light]
    :scenarios [no-citation-no-publish
                no-offered-action-no-publish
                a-value-may-be-petitioned

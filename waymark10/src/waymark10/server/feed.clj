@@ -365,7 +365,11 @@
   take promises. The contest and the rank are two formulas because
   they answer two questions: *which of these do you keep scrolling
   past* is the contest's, *which of these is worth your Saturday* is
-  the crown's.
+  the crown's. The `:insights` line inside `:decide` has the same
+  arrangement since waymark-1uv.8 (`insight-key`): outside the
+  contest, inside a rank of its own that reads the same rows — the
+  one decide line that is the contest's output rather than an
+  obligation, and its card says so.
 
   What is left is exactly where the owner's own case for adaptivity
   lives: do-now (which of the five you have already scrolled past four
@@ -624,6 +628,177 @@
   [weights inputs ^String hash]
   [(if (:asked inputs) 0 1)
    (- (crown-lift weights inputs))
+   hash])
+
+;; ── the findings' rank: the crown's shape, one section down ─────────
+;; (waymark-1uv.8, the epic 'Ranked, not capped')
+;;
+;; The insight was the precedent the outcome cap copied — three a day
+;; per author, *the cap is what makes a compiler rank rather than
+;; dump* — and under the owner's ruling it is the same proxy: a wall
+;; on the writer standing in for a rank on the reader. The insight IS
+;; the indexing the ruling names; its write pushes nothing, mails
+;; nobody, and its offer is an address that writes no other row. So
+;; the `:insights` line now RANKS what it shows, in exactly the
+;; crown's shape: six numbers on the recipe row (`insight_rank`), one
+;; line of arithmetic (`insight-lift`), narrated on every answer
+;; (`insight-rank-says`), and read back on every insight card with the
+;; numbers that placed it (`why.insight`). `insights-are-capped` left
+;; the create door in the same bead, AFTER the rank and never before —
+;; with no cap and no rank the decide section would show two of two
+;; hundred by seed.
+;;
+;; THE FLOOR STAYS. `:take 2` is still the exposure floor (law 3); the
+;; rank only chooses WHICH findings fill it, and the seed decides
+;; between equals. Nothing here can drop a finding.
+;;
+;; NO TIER. The crown has one because a person's own request is law 6
+;; read at the crown; a finding is always the machine's initiative,
+;; and there is nothing of a person's in the line to stand above
+;; every number. Law 4's diagnosis is a WEIGHT (`:diagnosis`) rather
+;; than a tier for the same reason: the duty is the system's, and a
+;; household may turn a number down where it could not turn a tier.
+;;
+;; WHERE THE LINE STANDS. It is still in `:decide`, and it is still
+;; outside the CONTEST (`contested-sections`), the way the crown is:
+;; the contest's step is never its sort key, while its own rank reads
+;; the same view rows through the same `cooling-step` as one input.
+;; What changed is the sentence: `cooling-says` no longer tells an
+;; insight card it is *outside the contest* as an obligation, because
+;; it is not one — it is the contest's own output (law 4 calls the
+;; diagnosis an insight). The section's OTHER citizens — an ask that
+;; expires, a conflict, mail on a shelf, a change staged for a tap —
+;; are still law 2's, and the insight arm says so out loud.
+
+(def default-insight-rank
+  "The findings' rank, as six numbers — the weights of the six inputs
+  a household can argue with, in the order the arithmetic reads them.
+
+  `:diagnosis` — what a finding that IS a law-4 diagnosis is lifted
+  over a plain one: its next step is a value's or a person's own
+  affirmation (`affirmation-doors`), or it offers a step on an
+  outcome's own row, or it cites an outcome the house declined. Laws
+  v3 law 4 — *the composer's duty fires first* — read as a number.
+
+  `:declared` — what a finding whose offered row serves a value a
+  PERSON declared is lifted over one whose row serves a value an
+  agent only observed (waymark-jfv.10's `observed` state), or none.
+
+  `:cooled` — what each step the contest's own arithmetic says this
+  finding has cooled holds it back: `cooling-step` over the same view
+  rows, the same window and the same `cools-after` as everything in
+  the contest, so the household's two contest numbers govern the
+  findings' cooling too.
+
+  `:dismissed` — what each finding the house already DISMISSED on the
+  same offer — the same `{offer_kind, offer_id, offer_action}` — holds
+  this one back. The house's verdict record on the same question,
+  counted (`dismissal-record-cap` newest).
+
+  `:declined` — what the strongest quick word said on those
+  dismissals holds it back, PER RANK OF THE WORD (`reason-weights`,
+  the crown's own order: never this four, not this way three, wrong
+  piece two, wrong time one). One number, so the order of the words
+  is law by construction.
+
+  `:fresh` — what each day of freshness still left in the contest's
+  `:window-days` lifts it: a finding published today is lifted the
+  whole window, one published two weeks ago is lifted nothing, and
+  older than that is simply old — newer first among equals, bounded
+  so an old finding sinks to the bottom and no further.
+
+  All six at zero is *the seed alone* — a number a person can see
+  rather than a key they have to know to delete."
+  {:diagnosis 10
+   :declared 5
+   :cooled 2
+   :dismissed 3
+   :declined 2
+   :fresh 1})
+
+(def affirmation-doors
+  "The doors whose offer makes a finding a law-4 diagnosis of the
+  first kind: a value's or a person's OWN affirmation, the petition
+  path waymark-jfv.2 opened and jfv.10 / jfv.11 kept as the one wall
+  still standing against an agent — an observer marking its own
+  reading confirmed would be speaking in the owner's voice, so it
+  publishes a finding and offers this tap instead.
+
+  Spelled here as keywords rather than read off the kinds, for the
+  reason `reason-weights` gives: this namespace names kinds the module
+  enrols without requiring them, and the two doors are the two kinds'
+  own (`value/still_stands`, `person/still_with_us`). A third kind
+  with an affirmation door adds its pair here."
+  {:value #{:still_stands}
+   :person #{:still_with_us}})
+
+(def insight-scan-cap
+  "Published findings the line ranks on one read, newest first —
+  `crown-scan-cap`'s posture one section down, and the bound that
+  replaces the cap at the door. The population's cost is per
+  CANDIDATE — a subject read, a dismissal query and a reason query per
+  prior dismissal, sometimes a value read — and since the daily cap
+  went nothing at the door keeps the number of published findings
+  small, so the read bounds itself instead. Fifty is more findings
+  than a household answers in a month; the document says when the
+  cap was reached, and truncation drops the OLDEST, which `:fresh`
+  already places last."
+  50)
+
+(def dismissal-record-cap
+  "How many prior dismissals on the same offer the rank reads, newest
+  first. Five is a line the house has already said no to five times;
+  the number counted stops there, and the word read is the heaviest
+  among those five."
+  5)
+
+(def evidence-read-cap
+  "How many of a finding's cited addresses the rank follows looking
+  for a declined outcome. Eight is more rows than a card can honestly
+  cite for one sentence."
+  8)
+
+(defn insight-rank-of
+  "The findings' six numbers this recipe reads: the household's own,
+  with the deployment's filled in for anything it did not state —
+  `crown-rank-of`'s shape, one field over."
+  [recipe]
+  (merge default-insight-rank (:insight-rank recipe)))
+
+(defn insight-lift
+  "THE FINDINGS' ARITHMETIC, and this is the whole of it:
+
+      lift = diagnosis × [the finding is a law-4 diagnosis]
+           + declared  × [its offered row serves a declared value]
+           − cooled    × steps cooled
+           − dismissed × findings the house dismissed on the same offer
+           − declined  × weight of the strongest word said on those
+           + fresh     × days of freshness left in the window
+
+  over one finding's inputs — `{:diagnosis kw-or-nil, :value
+  :declared|:observed|nil, :cooled n, :dismissed n, :declined
+  word-or-nil, :fresh-days n}` — and the recipe's six numbers. Higher
+  stands higher. It is only ever a SORT KEY: the line still shows
+  exactly as many findings as its `:take` says whenever that many
+  exist, and there is no arithmetic here that can drop one."
+  ^long [weights {:keys [diagnosis value cooled dismissed declined fresh-days]}]
+  (let [w (fn ^long [k] (long (get weights k 0)))]
+    (+ (if diagnosis (w :diagnosis) 0)
+       (if (= :declared value) (w :declared) 0)
+       (- (* (w :cooled) (long (or cooled 0))))
+       (- (* (w :dismissed) (long (or dismissed 0))))
+       (- (* (w :declined) (reason-weight declined)))
+       (* (w :fresh) (long (or fresh-days 0))))))
+
+(defn insight-key
+  "One finding's place in the line, as a vector `sort-by` reads
+  ascending: the lift (higher first), then the seed's hash — a pure
+  function of (the recipe's numbers, this finding's inputs, the seed),
+  and two findings the formula cannot tell apart are still placed by
+  the day rather than by arrival. No tier: nothing in this line is a
+  person's own request."
+  [weights inputs ^String hash]
+  [(- (insight-lift weights inputs))
    hash])
 
 ;; ── the seed ────────────────────────────────────────────────────────
@@ -1325,6 +1500,101 @@
             (rows-of ctx :tickler {:state "offered"})))
     []))
 
+;; ── the findings' rank, read off the rows (waymark-1uv.8) ───────────
+;;
+;; The readers for `insight-lift`'s inputs, each bounded, each a law
+;; read off a declaration rather than a preference. They live beside
+;; the population that calls them; the arithmetic lives one block up
+;; beside the crown's, so the two ranks read as one shape.
+
+(defn- kind-of-plural
+  "The kind keyword a collection address names, or nil — read off the
+  registry's own `:plural`, so the one place a plural is decided stays
+  the one place."
+  [ctx plural]
+  (some (fn [[k rd]] (when (= (str plural) (str (:plural rd))) k))
+        (resources ctx)))
+
+(defn- cited-declined-outcome?
+  "Does this finding cite an outcome the house DECLINED? The second
+  shape of a law-4 diagnosis: a finding built on a losing bundle. Reads
+  at most `evidence-read-cap` addresses and only follows the ones
+  whose collection is the outcome kind's."
+  [ctx d]
+  (when (get (resources ctx) :outcome)
+    (boolean
+     (some (fn [href]
+             (let [parts (str/split (str href) #"/")]
+               (when (and (= 4 (count parts)) (= "api" (nth parts 1))
+                          (= :outcome (kind-of-plural ctx (nth parts 2))))
+                 (when-some [raw (load-raw ctx :outcome (nth parts 3))]
+                   (= :declined (keyword (name (:state raw))))))))
+           (take evidence-read-cap (get-in d [:data :evidence]))))))
+
+(defn- insight-diagnosis
+  "Is this finding a law-4 diagnosis, and of which shape — the rank's
+  first input. `:affirmation` when its next step is a value's or a
+  person's own affirmation (`affirmation-doors`); `:recomposition`
+  when it offers a step on an outcome's own row or cites an outcome
+  the house declined; nil for a plain finding."
+  [ctx d offer-kind]
+  (let [action (some-> (get-in d [:data :offer_action]) str not-empty keyword)]
+    (cond
+      (contains? (get affirmation-doors offer-kind) action) :affirmation
+      (= :outcome offer-kind) :recomposition
+      (cited-declined-outcome? ctx d) :recomposition
+      :else nil)))
+
+(defn- offer-serves
+  "How the value the OFFERED row serves stands — `:declared`,
+  `:observed`, or nil when the row serves none this house holds. The
+  row itself when the offer is on a value; the row's own `value_id`
+  otherwise (an outcome's, a request's). `value-standing`'s reading,
+  one row removed."
+  [ctx offer-kind offer-raw]
+  (when (get (resources ctx) :value)
+    (when-some [raw (if (= :value offer-kind)
+                      offer-raw
+                      (when-some [vid (some-> (get-in offer-raw [:data :value_id])
+                                              str not-empty)]
+                        (load-raw ctx :value vid)))]
+      (#{:declared :observed} (keyword (name (:state raw)))))))
+
+(defn- insight-record
+  "The house's verdict record on the SAME OFFER — the rank's fourth
+  and fifth inputs: how many findings on this `{offer_kind, offer_id,
+  offer_action}` the house already dismissed (newest
+  `dismissal-record-cap`), and the strongest quick word said on any
+  of them (`reason-weights`, the heaviest kept). Silence is read as
+  silence: a dismissal with no word counts as one and weighs no word."
+  [ctx d]
+  (let [data (:data d)
+        prior (rows-of ctx :insight
+                       {:state "dismissed"
+                        :offer_kind (str (:offer_kind data))
+                        :offer_id (str (:offer_id data))
+                        :offer_action (str (:offer_action data))}
+                       dismissal-record-cap)
+        words (when (and (seq prior) (get (resources ctx) reason-kind))
+                (mapcat (fn [r]
+                          (keep #(some-> (get-in % [:data :reason]) str not-empty)
+                                (rows-of ctx reason-kind
+                                         {:subject_kind "insight"
+                                          :subject_id (str (:id r))}
+                                         4)))
+                        prior))]
+    {:dismissed (count prior)
+     :declined (reduce (fn [b w] (if (> (reason-weight w) (reason-weight b)) w b))
+                       nil words)}))
+
+(defn- days-old
+  "Whole days since a row was born, never negative."
+  ^long [^Instant now created]
+  (if (instance? Instant created)
+    (max 0 (quot (- (.getEpochSecond now) (.getEpochSecond ^Instant created))
+                 86400))
+    0))
+
 (defn insights
   "decide: the findings an agent published and nobody has answered
   (waymark-iqa.6). The `letters` and `ticklers` precedent exactly — a
@@ -1347,26 +1617,56 @@
     retires AT OFFER TIME, with no sweeper and no write — the
     tickler's own posture, inherited whole rather than re-decided.
 
-  The bound is the read-time posture's: at most `row-scan-cap`
-  findings are read, and only the ones that survive the first two
-  filters cost a subject read. The kind's own daily cap
-  (`insight/insights-are-capped`, three an author) is what keeps that
-  number small at the source, which is the point of putting the wall
-  at the door instead of here."
+  EACH CANDIDATE CARRIES THE RANK'S INPUTS (waymark-1uv.8), under
+  `:insight`: whether it is a law-4 diagnosis and of which shape, how
+  the value its offered row serves stands, how many findings the house
+  already dismissed on the same offer and the strongest word said on
+  them, and how many days of freshness it has left in the contest's
+  window. The population READS; it does not rank. `entry-cards` adds
+  the one input only a read knows — how many mornings THIS reader has
+  been shown it, off the same view rows the contest reads — and sorts
+  by `insight-key`, so the arithmetic lives in one place and the
+  card's citation quotes the same numbers the sort used.
+
+  THERE IS NO CAP, HERE OR AT THE DOOR. `insight/insights-are-capped`
+  (three a day, per author) left the create door with waymark-1uv.8,
+  the epic's ruling one section down from the crown's: a cap on
+  writing protects attention by proxy, a rank protects it directly,
+  and the finding is the indexing the ruling said not to limit. The
+  read bounds itself instead: at most `insight-scan-cap` findings are
+  scanned, newest first, and only the ones that survive the first two
+  filters cost a subject read, a dismissal query and — for a diagnosis
+  — up to `evidence-read-cap` citation reads. The answer says when the
+  cap was reached, and `document` tells the reader."
   [ctx]
   (if-some [rdef (get (resources ctx) :insight)]
-    (let [pid (:id (:principal ctx))]
-      (into []
-            (keep (fn [raw]
-                    (let [d (inv/decode-row rdef raw)]
-                      (when (and (not= pid (get-in d [:data :authored_by]))
-                                 (set-aside?
-                                  ctx
-                                  (some-> (get-in d [:data :offer_kind])
-                                          str not-empty keyword)
-                                  (get-in d [:data :offer_id])))
-                        {:kind :insight :id (:id raw) :row raw}))))
-            (rows-of ctx :insight {:state "published"})))
+    (let [pid (:id (:principal ctx))
+          ^Instant now (:now ctx)
+          window (long (or (:window-days ctx) 0))
+          scanned (rows-of ctx :insight {:state "published"}
+                           (inc (long insight-scan-cap)))]
+      {:reached-cap (> (count scanned) (long insight-scan-cap))
+       :candidates
+       (into []
+             (keep (fn [raw]
+                     (let [d (inv/decode-row rdef raw)
+                           okind (some-> (get-in d [:data :offer_kind])
+                                         str not-empty keyword)
+                           oid (get-in d [:data :offer_id])]
+                       (when (and (not= pid (get-in d [:data :authored_by]))
+                                  (set-aside? ctx okind oid))
+                         (let [offer-raw (load-raw ctx okind oid)
+                               old (days-old now (:created-at raw))]
+                           {:kind :insight :id (:id raw) :row raw
+                            ;; the rank's inputs, read here and weighed
+                            ;; in `entry-cards` (waymark-1uv.8)
+                            :insight (merge
+                                      {:diagnosis (insight-diagnosis ctx d okind)
+                                       :value (offer-serves ctx okind offer-raw)
+                                       :days-old old
+                                       :fresh-days (max 0 (- window old))}
+                                      (insight-record ctx d))})))))
+             (take insight-scan-cap scanned))})
     []))
 
 (defn- proposal-says
@@ -2777,6 +3077,28 @@
             (refuse (str ":crown-rank " k " is " what ", 0–100 — read "
                          (pr-str v))
                     {:crown-rank c})))))
+    ;; …and the seventh (waymark-1uv.8): the findings' six numbers are
+    ;; numbers, for the sixth check's own reason. Zero is legal for
+    ;; every one of them — all six at zero is the seed alone.
+    (when-some [c (:insight-rank recipe)]
+      (when-not (map? c)
+        (refuse (str ":insight-rank is a map of {:diagnosis :declared :cooled"
+                     " :dismissed :declined :fresh} — the six numbers the"
+                     " findings' rank is made of, or absent for the"
+                     " deployment's own")
+                {:insight-rank c}))
+      (doseq [[k what]
+              [[:diagnosis "what a law-4 diagnosis is lifted over a plain finding"]
+               [:declared "what a finding whose offered row serves a declared value is lifted"]
+               [:cooled "what each cooled step holds a finding back"]
+               [:dismissed "what each finding the house dismissed on the same offer holds it back"]
+               [:declined "what each rank of the house's quick word on those dismissals holds it back"]
+               [:fresh "what each day of freshness left in the window lifts a finding"]]]
+        (when-some [v (get c k)]
+          (when-not (and (int? v) (<= 0 (long v) 100))
+            (refuse (str ":insight-rank " k " is " what ", 0–100 — read "
+                         (pr-str v))
+                    {:insight-rank c})))))
     (reduce (fn [seen e]
               (let [s (if (:seam e) :seam (:section e))
                     r (census-rank s)]
@@ -3612,6 +3934,84 @@
                                y " instead of " x "."))))))
             ks))))
 
+;; ── the findings' numbers, in the household's words (waymark-1uv.8) ─
+;;
+;; A SIBLING map and a sibling diff rather than a widening of the
+;; crown's, on purpose: the two ranks are two fields on the row with
+;; two sentences each, and a diff that walked one map for both would
+;; have to be told which field a key came from. The shape is
+;; identical, so a reader of one can read the other.
+
+(def insight-rank-words
+  "The household's own sentence for a change to each of the findings'
+  numbers, keyed the way `default-insight-rank` is — `crown-rank-words`'
+  shape one field over, read generically by `insight-rank-diff` so the
+  rank may grow a number without the diff learning its name. A key
+  with no words here still says which number moved, by its wire name.
+
+  `:declined` says the arithmetic out loud, for the crown's reason: the
+  number a household writes is per RANK of the word and the number it
+  feels is the strongest word's."
+  {:diagnosis
+   (fn [a b]
+     (str "Among findings, one that is a diagnosis — offering a value's or"
+          " a person's own affirmation, a step on an outcome, or built on"
+          " an outcome the house declined — is lifted " b " instead of "
+          a "."))
+   :declared
+   (fn [a b]
+     (str "Among findings, one whose next step serves a value this house"
+          " declared is lifted " b " instead of " a "."))
+   :cooled
+   (fn [a b]
+     (str "Among findings, each step one has cooled holds it " b
+          " instead of " a "."))
+   :dismissed
+   (fn [a b]
+     (str "Among findings, each finding the house already dismissed on the"
+          " same next step holds a new one " b " instead of " a "."))
+   :declined
+   (fn [a b]
+     (str "Among findings, each rank of the house's quick word on those"
+          " dismissals holds it " b " instead of " a
+          " — a next step the house said never this about is held "
+          (* 4 (long b)) " instead of " (* 4 (long a)) "."))
+   :fresh
+   (fn [a b]
+     (str "Among findings, each day of freshness left in the window lifts"
+          " one " b " instead of " a "."))})
+
+(defn insight-rank-diff
+  "The findings' numbers, read side by side — `crown-rank-diff`'s shape
+  one field over, and empty when nothing moved. Both arguments are
+  recipe-map insight ranks, nil for *whatever the deployment says*. It
+  walks the KEYS of the two maps — the deployment's first, then
+  anything either side names beyond those — and says each moved number
+  in `insight-rank-words`' sentence for it."
+  [was now]
+  (let [a (insight-rank-of {:insight-rank was})
+        b (insight-rank-of {:insight-rank now})
+        ks (distinct (concat (keys default-insight-rank)
+                             (sort (keys a)) (sort (keys b))))
+        num (fn ^long [m k] (long (or (get m k) 0)))
+        off? (fn [m] (every? #(zero? (num m %)) ks))]
+    (cond
+      (and (off? b) (not (off? a)))
+      [(str "The findings' rank turns OFF: every one of its " (count ks)
+            " numbers is 0, so the seed alone places the findings in their"
+            " line.")]
+
+      :else
+      (into []
+            (keep (fn [k]
+                    (let [x (num a k) y (num b k)]
+                      (when (not= x y)
+                        (if-some [say (get insight-rank-words k)]
+                          (say x y)
+                          (str "Among findings, insight_rank " (name k) " is "
+                               y " instead of " x "."))))))
+            ks))))
+
 (defn recipe-diff
   "The whole of a staged change, in the household's own words: what
   moves in the ORDER, what moves in the CONTEST, and what moves in the
@@ -3621,12 +4021,15 @@
   either, because *nothing changes* beside a sentence saying what
   changes would be the diff arguing with itself.
 
-  Both arguments are recipe maps, `{:order … :formula … :crown-rank …}`."
+  Both arguments are recipe maps, `{:order … :formula … :crown-rank …
+  :insight-rank …}` — the findings' numbers joined with waymark-1uv.8,
+  narrated the same way."
   [was now]
   (let [moves (order-diff (:order was) (:order now))
         moved? (not= moves [order-unchanged])
-        f (into (formula-diff (:formula was) (:formula now))
-                (crown-rank-diff (:crown-rank was) (:crown-rank now)))]
+        f (-> (formula-diff (:formula was) (:formula now))
+              (into (crown-rank-diff (:crown-rank was) (:crown-rank now)))
+              (into (insight-rank-diff (:insight-rank was) (:insight-rank now))))]
     (cond
       (and (not moved?) (empty? f)) [order-unchanged]
       (not moved?) (into ["The order itself is unchanged, line for line."] f)
@@ -3647,9 +4050,9 @@
        "; exactly one card is the seam; the archive"
        " is last and bottomless; every line names a population this"
        " engine actually holds; the contest is two numbers a person can"
-       " read; and the crown's rank is five. A recipe that broke any of"
-       " those would have refused to start rather than serve you a"
-       " surprise."))
+       " read; the crown's rank is five; and the findings' rank is six."
+       " A recipe that broke any of those would have refused to start"
+       " rather than serve you a surprise."))
 
 (defn formula-as-written
   "The contest's two numbers in the shape the EDITOR takes — the wire
@@ -3744,6 +4147,64 @@
            " turn the record of what you were shown on, nothing about"
            " seeing moves anything here."))))
 
+(defn insight-rank-as-written
+  "The findings' six numbers in the shape the EDITOR takes — the wire
+  spelling of `waymark10.feed-recipe`'s `insight_rank` field
+  (`crown-rank-as-written`'s sentence, one field over)."
+  [recipe]
+  (let [c (insight-rank-of recipe)]
+    {"diagnosis" (:diagnosis c)
+     "declared" (:declared c)
+     "cooled" (:cooled c)
+     "dismissed" (:dismissed c)
+     "declined" (:declined c)
+     "fresh" (:fresh c)}))
+
+(defn insight-rank-says
+  "The findings' rank, narrated in household words with its own
+  numbers quoted back — the recipe view's half of law 5 at the
+  insights line (waymark-1uv.8). A pure function of the recipe, like
+  `crown-rank-says`: what the rank did to THIS card is the card's
+  business (`insight-card-says`), because only a read knows it."
+  ^String [recipe]
+  (let [{:keys [diagnosis declared cooled dismissed declined fresh]}
+        (insight-rank-of recipe)
+        {:keys [window-days cools-after]} (formula-of recipe)]
+    (if (every? zero? (map long [diagnosis declared cooled dismissed declined fresh]))
+      (str "The findings' rank is off: every number in insight_rank is 0, so"
+           " the seed alone places the findings in their line. Turning it"
+           " back on is a number in this same form.")
+      (str "Findings are ranked, not capped: an agent may publish as many as"
+           " it finds, the line shows as many as its take says, and this is"
+           " the whole of how it chooses which. A finding is the one card"
+           " waiting on your answer that is not an obligation — it is the"
+           " contest's own output — so unlike the ask, the conflict, the"
+           " letter and the staged change beside it, it is ranked, by six"
+           " numbers a person can read: a diagnosis — a finding offering a"
+           " value's or a person's own affirmation, a step on an outcome,"
+           " or built on an outcome the house declined — is lifted "
+           diagnosis " over a plain finding; one whose next step serves a"
+           " value this house declared is lifted " declared "; each step"
+           " the contest says it has cooled — "
+           (if (pos? (long cools-after))
+             (str "the same " cools-after " day"
+                  (when (not= 1 (long cools-after)) "s") " in " window-days
+                  " as the sections below, read off your own record —")
+             "nothing, while the contest is off at cools_after 0 —")
+           " holds it " cooled "; each finding you already dismissed on the"
+           " same next step holds a new one " dismissed ", and the strongest"
+           " quick word you said on those holds it " (* 1 (long declined))
+           " for wrong time, " (* 2 (long declined)) " for wrong piece, "
+           (* 3 (long declined)) " for not this way and " (* 4 (long declined))
+           " for never this; and each day of freshness left in the same "
+           window-days " lifts it " fresh ", so a finding published today"
+           " stands above one from last week and an old one sinks to the"
+           " bottom and no further. The floor still holds — the line shows"
+           " as many findings as its take says whenever that many exist;"
+           " the rank only chooses which, and the seed decides between"
+           " equals. Until you turn the record of what you were shown on,"
+           " nothing about seeing moves anything here."))))
+
 (defn order-as-written
   "The recipe's order in the shape the EDITOR takes — the wire spelling
   of `waymark10.feed-recipe`'s `order` field, which is `line-of`'s
@@ -3796,6 +4257,9 @@
    ;; …and the crown's rank, the same two ways (waymark-1uv.2)
    "crown_rank" (crown-rank-as-written recipe)
    "crown_rank_says" (crown-rank-says recipe)
+   ;; …and the findings' rank, the same two ways (waymark-1uv.8)
+   "insight_rank" (insight-rank-as-written recipe)
+   "insight_rank_says" (insight-rank-says recipe)
    "lines" (into []
                  (map-indexed
                   (fn [i e]
@@ -3875,6 +4339,26 @@
                          "turned_down" (long (or turned-down 0)))
     (and (some? early) (pos? (long early)) not-before)
     (assoc "not_before" (str not-before))))
+
+(defn insight-as-cited
+  "The findings' numbers as they ride an insight card's always-on
+  `why.insight` (waymark-1uv.8): the lift, and every input that went
+  into it, in the wire's spelling. `seen`/`cooled` ride only when the
+  reader is recording, the contest's own posture; `value` rides only
+  when the offered row serves a value at all, so a reader can tell *no
+  value* from *observed*; `declined` rides only when a word was said.
+  `diagnosis` is always there, as `none`, `affirmation` or
+  `recomposition`. Public because the packs assert the shape."
+  [weights {:keys [diagnosis value seen cooled dismissed declined
+                   days-old fresh-days] :as inputs}]
+  (cond-> {"lift" (insight-lift weights inputs)
+           "diagnosis" (name (or diagnosis :none))
+           "dismissed" (long (or dismissed 0))
+           "days_old" (long (or days-old 0))
+           "fresh_days" (long (or fresh-days 0))}
+    (some? value) (assoc "value" (name value))
+    (some? seen) (assoc "seen" seen "cooled" cooled)
+    (some? declined) (assoc "declined" (str declined))))
 
 (defn- crown-card-says
   "What the crown's rank did to THIS card, in the household's own words
@@ -3960,6 +4444,95 @@
          " says whenever that many exist, and the rank only chooses"
          " which.")))
 
+(defn- insight-card-says
+  "What the findings' rank did to THIS card, in the household's own
+  words and with the recipe's own numbers quoted back — law 5's *a
+  card's why says what lifted or held it*, at the insights line
+  (waymark-1uv.8). `crown-card-says`' shape one section down: every
+  clause names an input and the number it contributed, and the last
+  clause is the floor.
+
+  The first sentence is the one this arm exists to say honestly.
+  `cooling-says` tells every other decide card it is *outside the
+  contest* because it is an obligation with a deadline (laws v3 law
+  2); a finding is not one — it is the contest's own output — so its
+  card says that it is ranked, and that the section's OTHER citizens
+  are the ones law 2 is about."
+  ^String [{:keys [rank of insight insight-weights formula]}]
+  (let [w (fn ^long [k] (long (get insight-weights k 0)))
+        {:keys [diagnosis value seen cooled dismissed declined
+                days-old fresh-days]} insight
+        lift (insight-lift insight-weights insight)
+        window (:window-days formula)
+        after (long (or (:cools-after formula) 0))
+        plural (fn [n word] (str n " " word (when (not= 1 (long n)) "s")))]
+    (str "Ranked " (ordinal rank) " of " of " among findings by"
+         " recipe.insight_rank — six numbers this house can read — and this"
+         " is the arithmetic for this card. A finding is not an obligation:"
+         " the ask that expires, the conflict, the letter and the staged"
+         " change beside it in this section stand outside the contest"
+         " because they must appear; a finding is the contest's own output"
+         " and is ranked instead. "
+         (case diagnosis
+           :affirmation
+           (str "It is a diagnosis — its next step is a value's or a person's"
+                " own affirmation, the composer's duty firing first — which"
+                " lifts it " (w :diagnosis) ". ")
+           :recomposition
+           (str "It is a diagnosis — it offers a step on an outcome, or is"
+                " built on one the house declined, the composer's duty firing"
+                " first — which lifts it " (w :diagnosis) ". ")
+           (str "It is a plain finding, not a diagnosis, so the "
+                (w :diagnosis) " a diagnosis is lifted is not there. "))
+         (case value
+           :declared
+           (str "Its next step serves a value this house declared, which"
+                " lifts it " (w :declared) ". ")
+           :observed
+           (str "Its next step serves a value an agent observed and nobody"
+                " has yet affirmed, so the " (w :declared) " a declared value"
+                " would lift it is not there. ")
+           (str "Its next step serves no value this house holds, so nothing"
+                " lifts it for that. "))
+         (cond
+           (nil? seen)
+           (str "Nothing about what you have been shown moves it, because"
+                " you are not recording what you were shown. ")
+           (zero? (long seen))
+           (str "You have not been shown it in the last " window " days, so"
+                " nothing holds it there. ")
+           (zero? after)
+           (str "Shown " (plural seen "day") " in the last " window
+                ", and nothing cools while the contest is off (cools_after"
+                " 0). ")
+           (zero? (long cooled))
+           (str "Shown " (plural seen "day") " in the last " window
+                " with nothing done, which is not yet a step: it cools one"
+                " after " after ". ")
+           :else
+           (str "Shown " (plural seen "day") " in the last " window
+                " with nothing done — " (plural cooled "step")
+                " cooled, holding it " (* (long cooled) (w :cooled)) ". "))
+         (if (pos? (long (or dismissed 0)))
+           (str "You already dismissed " (plural dismissed "finding")
+                " on this same next step, holding it "
+                (* (long dismissed) (w :dismissed))
+                (if declined
+                  (str ", and said " (reason-word declined) " about it"
+                       (when (= 4 (reason-weight declined))
+                         " — the heaviest of the four words")
+                       ", holding it " (* (w :declined) (reason-weight declined))
+                       ". ")
+                  ", and said no word about it. "))
+           (str "Nothing on the record says you dismissed a finding on this"
+                " same next step. "))
+         "Published " (plural (long (or days-old 0)) "day") " ago, with "
+         (plural (long (or fresh-days 0)) "day") " of freshness left in the"
+         " window, lifting it " (* (w :fresh) (long (or fresh-days 0))) ". "
+         "Lift " lift " in all; the seed decides between equals. The floor"
+         " still holds: this line shows as many findings as its take says"
+         " whenever that many exist, and the rank only chooses which.")))
+
 (defn- cooling-says
   "What the contest did to THIS card, in the household's own words —
   law 5's *a card's why says what lifted or held it*.
@@ -3978,7 +4551,7 @@
   record to cite. What the record holds is the other half of the same
   law — how many mornings a card was in front of somebody and nothing
   happened — and that is what these sentences say."
-  [section {:keys [formula seen step crown] :as draw}]
+  [section {:keys [formula seen step crown insight] :as draw}]
   (cond
     ;; the crown, RANKED (waymark-1uv.2): the five numbers, the inputs
     ;; and the arithmetic for this card. The sentence this replaced —
@@ -3989,6 +4562,16 @@
     ;; because it is still true.
     (and (= :outcomes section) crown)
     (crown-card-says draw)
+
+    ;; a finding, RANKED (waymark-1uv.8): the one decide card the
+    ;; *outside the contest* sentence below never honestly described.
+    ;; Law 2's list — an ask that expires, a conflict, mail on a shelf
+    ;; — names no insight, because an insight is not an obligation; it
+    ;; is the contest's own output, and since this bead it has a rank
+    ;; of its own. The arm says both halves: this card is ranked, and
+    ;; the section's other citizens are still law 2's.
+    (and (= :decide section) insight)
+    (insight-card-says draw)
 
     (= :outcomes section)
     (str "Held by the floor: this section's take is a guaranteed slot, so"
@@ -4132,6 +4715,20 @@
                              (assoc in :seen seen
                                     :cooled (cooling-step formula seen)))
                            in)))
+        ;; THE FINDINGS' OWN RANK (waymark-1uv.8): the crown's
+        ;; arrangement one section down, keyed on the POPULATION
+        ;; because `:decide` holds several lines and only this one is
+        ;; ranked. The read's own input — how many mornings THIS
+        ;; reader has been shown it — is filled in exactly as the
+        ;; crown's is, or left absent when nobody is recording.
+        insight-w (when (= :insights population) (:insight-rank ctx))
+        insight-inputs (fn [c]
+                         (let [in (:insight c)]
+                           (if-some [{:keys [formula counts]} (:cooling ctx)]
+                             (let [seen (long (get counts (cid c) 0))]
+                               (assoc in :seen seen
+                                      :cooled (cooling-step formula seen)))
+                             in)))
         ordered (->> unseen
                      (filter of-kind?)
                      ;; the LANE first, the hash inside it (waymark-
@@ -4164,6 +4761,13 @@
                                 crown-w
                                 (fn [c] (crown-key crown-w (crown-inputs c)
                                                    (rank seed (cid c))))
+                                ;; …or the findings' key (waymark-1uv.8):
+                                ;; the lift, then the hash — the same
+                                ;; shape with no tier, because nothing
+                                ;; in this line is a person's own request
+                                insight-w
+                                (fn [c] (insight-key insight-w (insight-inputs c)
+                                                     (rank seed (cid c))))
                                 cool
                                 (juxt #(long (:lane % 0))
                                       #(cool (cid %))
@@ -4202,6 +4806,10 @@
                      ;; where it stands for a reason and would not say
                      ;; so unless asked is the thing law 5 forbids
                      crown (when crown-w (crown-inputs cand))
+                     ;; …and the findings' numbers for THIS card
+                     ;; (waymark-1uv.8), on the plain read, for the
+                     ;; same reason
+                     insight (when insight-w (insight-inputs cand))
                      draw (cond-> {:rank (inc (+ off i)) :of offered
                                    :lane (:lane cand 0) :kind (:kind cand)
                                    :section section :day (:day ctx)
@@ -4214,13 +4822,18 @@
                                         :seen seen :step step)
                             crown (assoc :crown crown
                                          :crown-weights crown-w
-                                         :formula (:formula (:cooling ctx))))
+                                         :formula (:formula (:cooling ctx)))
+                            insight (assoc :insight insight
+                                           :insight-weights insight-w
+                                           :formula (or (:formula (:cooling ctx))
+                                                        {:window-days (:window-days ctx)})))
                      rdef (get (resources ctx) (:kind cand))]
                  (assoc c "why"
                         (cond-> {"line" (:line entry)
                                  "rank" (:rank draw) "of" offered}
                           cool (assoc "seen" seen "cooled" step)
                           crown (assoc "crown" (crown-as-cited crown-w crown))
+                          insight (assoc "insight" (insight-as-cited insight-w insight))
                           explain?
                           (assoc "says"
                                  (card-says entry rdef
@@ -4353,10 +4966,16 @@
         ;; (waymark-1uv.2) — `entry-cards` sorts the crown by them and
         ;; every crown card quotes them back
         ctx (assoc ctx :crown-rank (crown-rank-of recipe))
+        ;; …and the findings' six, with the contest's window beside
+        ;; them (waymark-1uv.8): the population reads the window to
+        ;; count a finding's freshness, whether or not anybody is
+        ;; recording — freshness is the row's own age, not a view
+        ctx (assoc ctx :insight-rank (insight-rank-of recipe)
+                   :window-days (:window-days (formula-of recipe)))
         archive-only? (some? offset)
         lines (into [] (map-indexed (fn [i e] (assoc e :line i)))
                     (:order recipe))
-        {:keys [cards more? capped crown-capped walked counts]}
+        {:keys [cards more? capped crown-capped insight-capped walked counts]}
         (reduce
          (fn [acc e]
            (cond
@@ -4390,12 +5009,16 @@
                (cond-> (-> acc
                            (update :cards into (:cards got))
                            (update :seen into (:claimed got))
-                           ;; the archive's cap and the crown's are two
-                           ;; different bounds with two different
-                           ;; notes, so the crown's is folded by
-                           ;; section (waymark-1uv.2)
-                           (update (if (= :outcomes (:section e))
-                                     :crown-capped :capped)
+                           ;; the archive's cap, the crown's and the
+                           ;; findings' are three different bounds
+                           ;; with three different notes, so the
+                           ;; crown's is folded by section
+                           ;; (waymark-1uv.2) and the findings' by
+                           ;; population (waymark-1uv.8)
+                           (update (cond
+                                     (= :outcomes (:section e)) :crown-capped
+                                     (= :insights (:population e)) :insight-capped
+                                     :else :capped)
                                    #(or % (:reached-cap got)))
                            (assoc-in [:counts (:line e)]
                                      {"offered" (:offered got)
@@ -4405,7 +5028,7 @@
                  (-> (assoc :more? (:more? got))
                      (update :walked + (long (:consumed got 0))))))))
          {:cards [] :seen #{} :more? false :capped false :crown-capped false
-          :walked 0 :counts {}}
+          :insight-capped false :walked 0 :counts {}}
          lines)
         bottomless (some :bottomless (:order recipe))
         next-offset (+ (long (or offset 0)) (long walked))
@@ -4565,6 +5188,17 @@
                             " which the rank already places last; a house"
                             " with more than " crown-scan-cap " on offer at"
                             " once has a composer to talk to before it has"
+                            " a cap to raise."))
+                     ;; …and whether the findings' line ranked everything
+                     ;; published (waymark-1uv.8), the same posture
+                     (when insight-capped
+                       (str "The findings' line read to its cap and stopped"
+                            " — the newest " insight-scan-cap " published"
+                            " findings were ranked, and older ones were not"
+                            " read today. Those are the ones the rank's own"
+                            " freshness already places last; a house with"
+                            " more than " insight-scan-cap " unanswered"
+                            " findings has an agent to talk to before it has"
                             " a cap to raise."))
                      (when capped
                        (str "The archive read to its cap and stopped — the"

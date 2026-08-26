@@ -50,12 +50,12 @@
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "members" "roles" "grants" "approval_requests"
-   ;; insights carry a DAILY CAP counted over rows (waymark-iqa.6), so
-   ;; findings left behind by the last run are an allowance already
-   ;; spent — and two runs later they are also stale cards holding the
-   ;; decide section's two insight slots. The obligation mints a fresh
-   ;; author every run so it can ask the cap its question either way;
-   ;; this is the house not carrying yesterday's findings.
+   ;; insights carried a DAILY CAP counted over rows until
+   ;; waymark-1uv.8 took it off (ranked, not capped); what is left of
+   ;; the reason is the second half — findings left behind by the last
+   ;; run are stale cards contending, by the rank, for the decide
+   ;; section's two insight slots. This is the house not carrying
+   ;; yesterday's findings.
    "insights"
    ;; and the feed module's own pair, for the same two reasons one
    ;; turn on (waymark-4yn, waymark-0k4). A stored feed_recipe left
