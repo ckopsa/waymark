@@ -35,7 +35,8 @@
 (def ^:private fake-tools
   "What the fake Gate's tools/list serves: the emila reads with an
   OPTIONAL __why (Gate's allow policy on the wire), the mutations
-  with a REQUIRED one (its require_approval policy on the wire), and
+  with a REQUIRED one (its require_approval policy on the wire), a
+  ynab pair — one read, one write — standing for the other rigs, and
   one gsd tool the map deliberately does not carry — proof that a
   tool outside the map does not exist through the door whatever Gate
   serves."
@@ -67,6 +68,19 @@
                                :destination {:type "string"}
                                :__why {:type "string"}}
                   :required ["uids" "destination" "__why"]}}
+   {:name "ynab__transactions"
+    :description "List budget transactions."
+    :inputSchema {:type "object"
+                  :properties {:budget_id {:type "string"}
+                               :__why {:type "string"}}}}
+   {:name "ynab__update_transaction"
+    :description "Update one transaction."
+    :inputSchema {:type "object"
+                  :properties {:transaction_id {:type "string"}
+                               :category_id {:type "string"}
+                               :__why {:type "string"
+                                       :description "Required rationale."}}
+                  :required ["transaction_id" "__why"]}}
    {:name "gsd__agenda"
     :description "Not in the map — never projected."
     :inputSchema {:type "object" :properties {}}}])
@@ -117,14 +131,18 @@
                   :gate {:rpc (fake-gate log)}}))
 
 (defn- mint-capabilities!
-  "The three email tokens as ROWS — a scope entry wearing a dot is
-  judged against the registry, so the vocabulary must exist before a
-  grant can name it (workqueue10's boot seed does this in
-  deployment)."
+  "The email tokens plus the ynab pair as ROWS — a scope entry
+  wearing a dot is judged against the registry, so the vocabulary
+  must exist before a grant can name it (workqueue10's boot seed
+  does this in deployment). ynab stands in for the other rigs: one
+  read token, one write, so a non-email row of the map is proven
+  end-to-end too."
   [eng]
   (doseq [[token description] [["email.read" "Read email through Gate."]
                                ["email.send" "Send email through Gate."]
-                               ["email.move" "File email through Gate."]]]
+                               ["email.move" "File email through Gate."]
+                               ["ynab.read" "Read the budget through Gate."]
+                               ["ynab.write" "Write the budget through Gate."]]]
     (let [r (call! eng :post "/api/capabilities"
                    :headers as-mom
                    :body {:token token :description description
@@ -160,8 +178,9 @@
 
 ;; ── the map is the policy ───────────────────────────────────────────
 
-(deftest the-map-carries-the-beads-email-rows-exactly
-  (is (= {"emila__inbox" "email.read"
+(deftest the-map-carries-the-beads-rows-exactly
+  (is (= {;; emila — email
+          "emila__inbox" "email.read"
           "emila__list_messages" "email.read"
           "emila__search" "email.read"
           "emila__read" "email.read"
@@ -171,10 +190,39 @@
           "emila__folders" "email.read"
           "emila__move" "email.move"
           "emila__move_from_sender" "email.move"
-          "emila__send" "email.send"}
+          "emila__send" "email.send"
+          ;; tgram — telegram
+          "tgram__get_messages" "telegram.read"
+          "tgram__list_chats" "telegram.read"
+          "tgram__search_messages" "telegram.read"
+          "tgram__search_all_chats" "telegram.read"
+          "tgram__send_message" "telegram.send"
+          ;; messa — the phone's texts
+          "messa__threads" "messages.read"
+          "messa__read_messages" "messages.read"
+          "messa__reset" "messages.read"
+          ;; ynab — the budget
+          "ynab__accounts" "ynab.read"
+          "ynab__transactions" "ynab.read"
+          "ynab__budget_month" "ynab.read"
+          "ynab__categories" "ynab.read"
+          "ynab__update_transaction" "ynab.write"
+          "ynab__split_transaction" "ynab.write"
+          "ynab__bulk_approve" "ynab.write"
+          "ynab__create_transaction" "ynab.write"
+          ;; amzn — amazon
+          "amzn__orders" "amazon.read"
+          "amzn__search" "amazon.read"
+          "amzn__product_details" "amazon.read"
+          "amzn__view_cart" "amazon.read"
+          "amzn__reset" "amazon.read"
+          "amzn__add_to_cart" "amazon.cart"}
          gate/tool-capability)
       "this map IS the security policy — a changed row is a changed
-       law, and this test is the diff a reviewer reads"))
+       law, and this test is the diff a reviewer reads")
+  (is (not-any? #(str/starts-with? % "gsd__") (keys gate/tool-capability))
+      "gsd__* is deliberately absent: waymark owns tasks and calendar
+       natively (workqueue10/calendar10), per the bead's decision"))
 
 ;; ── acceptance 1: the affordance document is the grant's shadow ─────
 
@@ -346,3 +394,164 @@
         (is (= before (row-census eng)))
         (is (not (contains? (inv/resources eng) :gate))
             "the proxy is not a resource kind and never becomes one")))))
+
+;; ── acceptance 4: the MCP surface is the SAME core, projected ───────
+
+(def ^:private the-six
+  ["waymark_discover" "waymark_schema" "waymark_query"
+   "waymark_get" "waymark_invoke" "waymark_history"])
+
+(defn- mcp!
+  "One JSON-RPC message at /api/-/mcp through the real handler —
+  wrap-identity, the router, the mcp message layer, everything —
+  answering {:status … :result … :error …}."
+  [eng headers method params]
+  (let [r (call! eng :post "/api/-/mcp"
+                 :headers headers
+                 :body (cond-> {:jsonrpc "2.0" :id 1 :method method}
+                         params (assoc :params params)))]
+    (assoc r :result (get-in r [:doc :result])
+           :rpc-error (get-in r [:doc :error]))))
+
+(deftest the-mcp-surface-projects-the-same-core
+  (let [log (atom [])
+        eng (boot log)]
+    (mint-capabilities! eng)
+
+    (testing "no gate grant: tools/list is EXACTLY the six fixed
+              tools, and Gate is never contacted for the list"
+      (let [r (mcp! eng as-claude "tools/list" nil)
+            names (mapv :name (:tools (:result r)))]
+        (is (= 200 (:status r)) (pr-str (:doc r)))
+        (is (= the-six names)
+            "the projection appends only what a grant admits — none
+             worn, none appended")
+        (is (= [] @log) "no admitted token, no wire")))
+
+    (testing "a grant appends its admitted Gate tools AFTER the six,
+              each wearing Gate's own schema, why-translated"
+      (let [worn (wear! eng [{:kind "email.read" :actions []}
+                             {:kind "ynab.read" :actions []}])
+            tools (:tools (:result (mcp! eng worn "tools/list" nil)))
+            names (mapv :name tools)]
+        (is (= the-six (vec (take 6 names)))
+            "the six fixed tools come first, in their order")
+        (is (= #{"emila__inbox" "emila__search" "ynab__transactions"}
+               (set (drop 6 names)))
+            "Gate's live tools ∩ the grant — no email.send means no
+             emila__send, no ynab.write means no ynab__update_transaction,
+             and gsd__agenda (outside the map) does not exist here")
+        (let [ynab (some #(when (= "ynab__transactions" (:name %)) %) tools)]
+          (is (= "List budget transactions." (:description ynab)))
+          (is (contains? (get-in ynab [:inputSchema :properties]) :budget_id)
+              "the input schema is Gate's own")
+          (is (contains? (get-in ynab [:inputSchema :properties]) :why))
+          (is (not (contains? (get-in ynab [:inputSchema :properties]) :__why))
+              "Gate's __why convention crosses this surface as `why`,
+               exactly as it does the hypermedia door"))))
+
+    (testing "tools/call on a granted gate tool answers Gate's
+              CallToolResult VERBATIM"
+      (let [worn (wear! eng [{:kind "ynab.read" :actions []}])
+            r (mcp! eng worn "tools/call"
+                    {:name "ynab__transactions"
+                     :arguments {:budget_id "b1"}})
+            out (:result r)]
+        (is (= 200 (:status r)) (pr-str (:doc r)))
+        (is (= "gate answered ynab__transactions"
+               (get-in out [:content 0 :text])))
+        (is (false? (:isError out)))
+        (let [call (last (gate-calls log))]
+          (is (= "ynab__transactions" (get-in call [:params :name])))
+          (is (= {:budget_id "b1"} (get-in call [:params :arguments]))))))
+
+    (testing "tools/call on an UNGRANTED gate tool refuses as isError
+              TOOL OUTPUT — the surface's standing posture, never a
+              thrown HTTP problem — and never reaches Gate"
+      (let [worn (wear! eng [{:kind "ynab.read" :actions []}])
+            before (count (gate-calls log))
+            r (mcp! eng worn "tools/call"
+                    {:name "ynab__update_transaction"
+                     :arguments {:transaction_id "t1"
+                                 :why "fix the category"}})
+            out (:result r)]
+        (is (= 200 (:status r))
+            "the transport answered a tool RESULT, not a problem status")
+        (is (nil? (:rpc-error r)) "…and not a JSON-RPC error either")
+        (is (true? (:isError out)))
+        (is (str/includes? (str (get-in out [:content 0 :text])) "ynab.write")
+            "capabilities are words: the refusal names the ask")
+        (is (= before (count (gate-calls log))) "nothing was forwarded")))
+
+    (testing "a granted MUTATION forwards with `why` translated to
+              Gate's own `__why`, verbatim answer back"
+      (let [worn (wear! eng [{:kind "ynab.write" :actions []}])
+            r (mcp! eng worn "tools/call"
+                    {:name "ynab__update_transaction"
+                     :arguments {:transaction_id "t1"
+                                 :why "the household asked"}})
+            out (:result r)]
+        (is (= 200 (:status r)) (pr-str (:doc r)))
+        (is (false? (:isError out)))
+        (is (= "gate answered ynab__update_transaction"
+               (get-in out [:content 0 :text])))
+        (let [args (get-in (last (gate-calls log)) [:params :arguments])]
+          (is (= "the household asked" (:__why args)))
+          (is (not (contains? args :why))))))
+
+    (testing "a gate tool OUTSIDE the map is unknown to this surface —
+              the MCP spec's own protocol error, whatever Gate serves"
+      (let [worn (wear! eng [{:kind "ynab.read" :actions []}])
+            r (mcp! eng worn "tools/call" {:name "gsd__agenda" :arguments {}})]
+        (is (some? (:rpc-error r)))
+        (is (nil? (:result r)))
+        (is (= [] (filterv #(= "gsd__agenda" (get-in % [:params :name]))
+                           (gate-calls log))))))))
+
+;; ── acceptance 5: a non-email row walks BOTH surfaces ───────────────
+
+(deftest a-ynab-token-works-through-both-surfaces
+  (let [log (atom [])
+        eng (boot log)]
+    (mint-capabilities! eng)
+    (let [worn (wear! eng [{:kind "ynab.read" :actions []}])]
+
+      (testing "the hypermedia door: ynab.read sees the ynab read link
+                and neither mutation form"
+        (let [doc (:doc (call! eng :get "/api/-/gate" :headers worn))]
+          (is (= #{:ynab__transactions} (set (keys (:links doc)))))
+          (is (= {} (:actions doc)))
+          (is (= "ynab.read"
+                 (get-in doc [:links :ynab__transactions :capability])))))
+
+      (testing "the MCP surface: the same tool, appended after the six"
+        (let [names (mapv :name (:tools (:result (mcp! eng worn
+                                                       "tools/list" nil))))]
+          (is (= the-six (vec (take 6 names))))
+          (is (= ["ynab__transactions"] (vec (drop 6 names))))))
+
+      (testing "a granted read forwards through the hypermedia door"
+        (let [r (call! eng :post "/api/-/gate/ynab__transactions"
+                       :headers worn :body {:budget_id "b1"})]
+          (is (= 200 (:status r)) (pr-str (:doc r)))
+          (is (= "gate answered ynab__transactions"
+                 (get-in r [:doc :content 0 :text])))))
+
+      (testing "the ungranted ynab write is refused on BOTH surfaces,
+                in-process, and never reaches Gate"
+        (let [before (count (gate-calls log))
+              http (call! eng :post "/api/-/gate/ynab__update_transaction"
+                          :headers worn
+                          :body {:transaction_id "t1" :why "because"})
+              mcp (mcp! eng worn "tools/call"
+                        {:name "ynab__update_transaction"
+                         :arguments {:transaction_id "t1" :why "because"}})]
+          (is (= 403 (:status http))
+              "the hypermedia door's posture: a thrown 403 problem")
+          (is (str/includes? (str (get-in http [:doc :detail])) "ynab.write"))
+          (is (true? (get-in mcp [:result :isError]))
+              "the MCP surface's posture: the same refusal as isError
+               tool output")
+          (is (= before (count (gate-calls log)))
+              "identical enforcement underneath — neither surface let
+               the call touch the wire"))))))

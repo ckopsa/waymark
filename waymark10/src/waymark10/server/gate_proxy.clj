@@ -83,13 +83,17 @@
   "THE SECURITY POLICY — the only thing Waymark knows about Gate
   beyond the live tool list. Small config data, not a resource: a
   Gate tool absent from this map does not exist through this door,
-  whatever Gate serves, and adding the other rigs (tgram/messa/ynab/
-  amzn — the bead's draft rows) is just more entries here, no new
-  code shape. gsd__* is deliberately absent: the open decision the
-  bead records leans (a) — waymark already owns tasks and calendar
-  natively, and a gsd capability would leash an agent around the
-  queue's own law."
-  {"emila__inbox"               "email.read"
+  whatever Gate serves. These are the bead's draft rows, whole —
+  every rig Gate aggregates, each tool bound to the dotted token the
+  capability registry already names; a tool named here that a given
+  Gate does not serve live simply never survives the ∩, so the map
+  may bind more than today's Gate lists and a rig's later tool
+  arrives leashed or not at all. gsd__* (todos + calendar) is
+  deliberately absent — DECIDED, not open: waymark already owns
+  tasks and calendar natively (workqueue10/calendar10), and a gsd
+  capability would leash an agent around the queue's own law."
+  {;; emila — email
+   "emila__inbox"               "email.read"
    "emila__list_messages"       "email.read"
    "emila__search"              "email.read"
    "emila__read"                "email.read"
@@ -99,7 +103,36 @@
    "emila__folders"             "email.read"
    "emila__move"                "email.move"
    "emila__move_from_sender"    "email.move"
-   "emila__send"                "email.send"})
+   "emila__send"                "email.send"
+   ;; tgram — telegram
+   "tgram__get_messages"        "telegram.read"
+   "tgram__list_chats"          "telegram.read"
+   "tgram__search_messages"     "telegram.read"
+   "tgram__search_all_chats"    "telegram.read"
+   "tgram__send_message"        "telegram.send"
+   ;; messa — the phone's texts
+   "messa__threads"             "messages.read"
+   "messa__read_messages"       "messages.read"
+   "messa__reset"               "messages.read"
+   ;; ynab — the budget
+   "ynab__accounts"             "ynab.read"
+   "ynab__transactions"         "ynab.read"
+   "ynab__budget_month"         "ynab.read"
+   "ynab__categories"           "ynab.read"
+   "ynab__update_transaction"   "ynab.write"
+   "ynab__split_transaction"    "ynab.write"
+   "ynab__bulk_approve"         "ynab.write"
+   "ynab__create_transaction"   "ynab.write"
+   ;; amzn — amazon
+   "amzn__orders"               "amazon.read"
+   "amzn__search"               "amazon.read"
+   "amzn__product_details"      "amazon.read"
+   "amzn__view_cart"            "amazon.read"
+   "amzn__reset"                "amazon.read"
+   "amzn__add_to_cart"          "amazon.cart"
+   ;; gsd__* — deliberately no rows: waymark owns tasks/calendar
+   ;; natively (workqueue10/calendar10), per the bead's decision.
+   })
 
 (def capability-tokens
   "Every token the map names — what `affordances-for` intersects the
@@ -281,6 +314,20 @@
                            "notifier, and your `why` is the sentence that "
                            "human reads.")}))))
 
+(defn- survivors
+  "THE one computation both surfaces project: Gate's LIVE tools ∩
+  the caller's grant, recomputed per call, nothing cached. A grant
+  admitting no token skips Gate entirely — what a caller may not see
+  costs no wire at all."
+  [rpc vis]
+  (let [tokens (admitted-tokens vis)]
+    (if (empty? tokens)
+      []
+      (into []
+            (filter #(contains? tokens
+                                (get tool-capability (str (:name %)))))
+            (:tools (rpc "tools/list" {}))))))
+
 (defn affordances-for
   "GET /api/-/gate's document: Gate's LIVE tools ∩ the caller's
   grant, recomputed per request, nothing cached and nothing stored.
@@ -290,14 +337,8 @@
   empty document — and Gate is never contacted for it, so what a
   caller may not see costs no wire at all."
   [rpc vis]
-  (let [tokens (admitted-tokens vis)
-        survivors (when (seq tokens)
-                    (into []
-                          (filter #(contains? tokens
-                                              (get tool-capability
-                                                   (str (:name %)))))
-                          (:tools (rpc "tools/list" {}))))
-        {reads false mutations true} (group-by why-required? survivors)
+  (let [{reads false mutations true} (group-by why-required?
+                                               (survivors rpc vis))
         entry #(vector (str (:name %)) (affordance %))]
     {:waymark "10"
      :self "/api/-/gate"
@@ -316,26 +357,24 @@
                       "email.send, email.move — GET /api/capabilities for "
                       "the words) mint the grant this door reads.")}}))
 
-;; TODO(waymark-q95, second surface): the MCP projection. The
-;; bead's design names TWO thin surfaces over this one core; the
-;; hypermedia door (routes/gate.clj) is built, the MCP one is not.
-;; What it needs, when it lands in server/mcp.clj:
-;;   - `tools/list` appends the caller's (Gate live tools ∩ grant)
-;;     — i.e. the survivors `affordances-for` keeps — after the
-;;     six fixed tools, with Gate's own inputSchema (why-translated
-;;     via `present-schema`);
-;;   - `tools/call` on a name in `tool-capability` dispatches to
-;;     `invoke-for` with the session's visibility, answering the
-;;     verbatim CallToolResult (refusals as isError tool output,
-;;     the surface's standing posture);
-;;   - the mcp conformance pack's "tools/list is exactly six"
-;;     obligation must learn the projection (six plus the grant's
-;;     gate tools), and mcp.clj — a core namespace — must reach
-;;     this one, which wants the same engine-opt seam the feed
-;;     recipe used rather than a module reach-in.
-;; Left as a stub rather than a half-wired version on purpose:
-;; identical enforcement already exists underneath, and a partial
-;; second surface is worse than a named absent one.
+;; ── the MCP projection (the second surface) ─────────────────────────
+
+(defn tool-listing-for
+  "The MCP surface's half of the bead's TWO THIN SURFACES, ONE CORE:
+  the same survivors `affordances-for` keeps, rendered as MCP tool
+  entries for server/mcp.clj's `tools/list` to APPEND after the six
+  fixed waymark_* tools. Each entry is Gate's own inputSchema with
+  the `__why` convention surfaced as `why` (`present-schema`), so
+  the two surfaces advertise one vocabulary and `invoke-for`
+  translates it back on the forward. A grant admitting no token
+  appends nothing — and Gate is never contacted for it, so an
+  agent's ordinary tools/list costs no wire."
+  [rpc vis]
+  (mapv (fn [tool]
+          {:name (str (:name tool))
+           :description (str (:description tool))
+           :inputSchema (present-schema (:inputSchema tool))})
+        (survivors rpc vis)))
 
 ;; ── invoke ──────────────────────────────────────────────────────────
 

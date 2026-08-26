@@ -43,6 +43,23 @@
   the outer HTTP boundary, and rides in on the session, so no tool
   can re-authenticate itself into someone else.
 
+  ── the gate projection (waymark-q95, the second surface) ──
+
+  The seventh-through-Nth tools are not this engine's own:
+  `tools/list` APPENDS the caller's grant-admitted Gate tools —
+  gate-proxy's survivors, Gate's live tools ∩ the grant, recomputed
+  per list — after the six, each wearing Gate's own inputSchema with
+  `__why` surfaced as `why`; and `tools/call` on a name in
+  gate-proxy's tool→capability map dispatches to `invoke-for`, which
+  judges the grant IN-PROCESS and answers Gate's CallToolResult
+  verbatim. Same stateless core and same leash as the hypermedia
+  door at /api/-/gate; a caller wearing no gate grant sees exactly
+  the six, and Gate is never contacted on its behalf. The Gate
+  caller (`gate-rpc`) rides in from the transport, which builds it
+  once per engine via gate-proxy/rpc-of — the engine-opt seam
+  ((:gate eng): the tests' :rpc, the deployment's :url) — never
+  re-shaken per message.
+
   Core's routes and no module's, deliberately: the six tools address
   the well-known document, the schemas, the plural grammar and the
   invoke door, every one of them core's. A module's route is reachable
@@ -84,6 +101,7 @@
             [reitit.ring :as ring]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
+            [waymark10.server.gate-proxy :as gate]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
@@ -402,11 +420,19 @@
 (defn listing
   "The `tools/list` payload — the MCP spelling of the six, camelCase
   and all. The definitions above stay kebab-cased because that is this
-  codebase's spelling; the translation happens once, here."
-  []
-  (mapv (fn [t]
-          (-> t (dissoc :input-schema) (assoc :inputSchema (:input-schema t))))
-        tools))
+  codebase's spelling; the translation happens once, here.
+
+  The two-arg arity is the gate projection (waymark-q95): the
+  caller's grant-admitted Gate tools APPENDED after the six, so the
+  fixed list still never grows with the law — only with the leash
+  this caller is actually wearing. No gate grant, no wire: the
+  appended seq is empty and Gate was never contacted."
+  ([]
+   (mapv (fn [t]
+           (-> t (dissoc :input-schema) (assoc :inputSchema (:input-schema t))))
+         tools))
+  ([gate-rpc vis]
+   (into (listing) (gate/tool-listing-for gate-rpc vis))))
 
 ;; ── tool bodies ─────────────────────────────────────────────────────
 
@@ -624,30 +650,56 @@
    "waymark_invoke" invoke
    "waymark_history" history})
 
+(defn- attempt
+  "One tool body, run behind the refusal boundary: a tagged problem —
+  the engine's own refusal, the gate core's 403/404, a dark Gate's
+  502 — comes back as tool output with isError set, and anything
+  else is logged and answered as an anonymous 500 problem."
+  [tool-name thunk]
+  (try
+    (thunk)
+    (catch Exception e
+      (if (p/problem? e)
+        (refusal e)
+        (do (binding [*out* *err*]
+              (println "waymark10 mcp tool" tool-name "failed -" (ex-message e)))
+            (value-result {:type (str p/base-uri "internal-error")
+                           :title "Internal error"
+                           :status 500}
+                          true))))))
+
 (defn call-tool
-  "One `tools/call`. `call` is a `door` for this engine; `session` is
-  {:principal :visibility}, resolved by whichever transport let the
-  caller in.
+  "One `tools/call`. `call` is a `door` for this engine; `gate-rpc`
+  is a gate-proxy caller for this engine (the four-arg arity builds
+  one from the engine opt for callers outside the transport);
+  `session` is {:principal :visibility}, resolved by whichever
+  transport let the caller in.
+
+  A name in gate-proxy's tool→capability map is the second surface
+  (waymark-q95): it dispatches to `gate/invoke-for` wearing the
+  session's visibility, and the answer is Gate's CallToolResult
+  VERBATIM — the grant judged in-process before any wire, a refusal
+  arriving as isError tool output like every other refusal here.
 
   A refusal the engine raised comes back as tool output with isError
   set — never as a protocol error, because an agent learns from a
   refusal and learns nothing from a fault. An unknown tool name is
   the one exception the MCP spec itself makes: it is a protocol
   error, and the caller sees it as one."
-  [eng call session tool-name args]
-  (if-some [f (get bodies tool-name)]
-    (try
-      (f eng call session (or args {}))
-      (catch Exception e
-        (if (p/problem? e)
-          (refusal e)
-          (do (binding [*out* *err*]
-                (println "waymark10 mcp tool" tool-name "failed -" (ex-message e)))
-              (value-result {:type (str p/base-uri "internal-error")
-                             :title "Internal error"
-                             :status 500}
-                            true)))))
-    ::unknown-tool))
+  ([eng call session tool-name args]
+   (call-tool eng call (gate/rpc-of eng) session tool-name args))
+  ([eng call gate-rpc session tool-name args]
+   (cond
+     (contains? bodies tool-name)
+     (attempt tool-name
+              #((get bodies tool-name) eng call session (or args {})))
+
+     (contains? gate/tool-capability tool-name)
+     (attempt tool-name
+              #(gate/invoke-for gate-rpc (:visibility session)
+                                tool-name (or args {})))
+
+     :else ::unknown-tool)))
 
 ;; ── the JSON-RPC message layer ──────────────────────────────────────
 ;;
@@ -684,30 +736,40 @@
 (defn message
   "One JSON-RPC message → the response to send, or nil when there is
   nothing to send (a notification). `session` carries the resolved
-  identity every tool runs as."
-  [eng call session {:keys [id method params]}]
-  (cond
-    (str/blank? (str method))
-    (rpc-error id invalid-request "A JSON-RPC message needs a method.")
+  identity every tool runs as; `gate-rpc` is this engine's Gate
+  caller, built once by the transport (gate-proxy/rpc-of at route
+  build) so the Gate session is reused rather than re-shaken per
+  message — the four-arg arity builds one from the engine opt for a
+  caller outside a transport."
+  ([eng call session msg]
+   (message eng call (gate/rpc-of eng) session msg))
+  ([eng call gate-rpc session {:keys [id method params]}]
+   (cond
+     (str/blank? (str method))
+     (rpc-error id invalid-request "A JSON-RPC message needs a method.")
 
-    ;; notifications: no id, no answer. initialized is the only one a
-    ;; client sends today; the rest are acknowledged by silence, which
-    ;; is what the protocol asks for.
-    (str/starts-with? (str method) "notifications/")
-    nil
+     ;; notifications: no id, no answer. initialized is the only one a
+     ;; client sends today; the rest are acknowledged by silence, which
+     ;; is what the protocol asks for.
+     (str/starts-with? (str method) "notifications/")
+     nil
 
-    :else
-    (case (str method)
-      "initialize" (rpc-result id (initialize params))
-      "ping" (rpc-result id {})
-      "tools/list" (rpc-result id {:tools (listing)})
-      "tools/call"
-      (let [out (call-tool eng call session (:name params) (:arguments params))]
-        (if (= ::unknown-tool out)
-          (rpc-error id invalid-request
-                     (str "Unknown tool " (pr-str (:name params))
-                          " — this engine serves exactly "
-                          (mapv :name tools) "."))
-          (rpc-result id out)))
-      (rpc-error id method-not-found
-                 (str "Method not found: " method)))))
+     :else
+     (case (str method)
+       "initialize" (rpc-result id (initialize params))
+       "ping" (rpc-result id {})
+       "tools/list"
+       (rpc-result id {:tools (listing gate-rpc (:visibility session))})
+       "tools/call"
+       (let [out (call-tool eng call gate-rpc session
+                            (:name params) (:arguments params))]
+         (if (= ::unknown-tool out)
+           (rpc-error id invalid-request
+                      (str "Unknown tool " (pr-str (:name params))
+                           " — this engine serves exactly "
+                           (mapv :name tools)
+                           " plus whatever Gate tools your grant admits"
+                           " (tools/list names them)."))
+           (rpc-result id out)))
+       (rpc-error id method-not-found
+                  (str "Method not found: " method))))))

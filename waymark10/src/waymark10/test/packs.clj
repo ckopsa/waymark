@@ -101,6 +101,7 @@
             [waymark10.server.capabilities :as cap]
             [waymark10.server.curtain :as curtain]
             [waymark10.server.feed :as feed]
+            [waymark10.server.gate-proxy :as gate-proxy]
             [waymark10.server.jobs :as jobs]
             [waymark10.server.presence :as presence]
             [waymark10.server.router :as router]
@@ -1243,16 +1244,29 @@
       (conj "initialize: an unknown protocol version was refused rather than negotiated"))))
 
 (defn- mcp-six-tools-violations
-  "tools/list is the six, and stays the six. The whole design decision
-  is here: the tool list does NOT grow with the law, so an engine with
-  fifty kinds advertises exactly what an engine with one does."
+  "tools/list is the six fixed tools, PLUS — since waymark-q95's
+  second surface — the caller's grant-admitted Gate tools appended
+  after them. The design decision stands: the fixed list does NOT
+  grow with the law, so an engine with fifty kinds advertises exactly
+  what an engine with one does, and anything past the six must be a
+  row of gate-proxy's tool→capability map, worn by a grant. This
+  probe wears no gate grant at all, so the projection must append
+  NOTHING: exactly the six, and any extra is a leak."
   [ctx]
   (let [tools (:tools (:result (mcp-rpc ctx nil "tools/list" nil)))
-        names (into #{} (map :name) tools)]
+        names (into #{} (map :name) tools)
+        extras (vec (sort (remove mcp-tool-names names)))]
     (cond-> []
-      (not= mcp-tool-names names)
-      (conj (str "tools/list: expected exactly " (vec (sort mcp-tool-names))
-                 ", got " (vec (sort names))))
+      (not (every? names mcp-tool-names))
+      (conj (str "tools/list: the six fixed tools must all be advertised "
+                 (vec (sort mcp-tool-names)) ", got " (vec (sort names))))
+      (seq extras)
+      (conj (str "tools/list: this probe wears no gate grant, so the "
+                 "waymark-q95 gate projection must append nothing — got "
+                 extras
+                 (if (every? #(contains? gate-proxy/tool-capability %) extras)
+                   " (gate tools projected without a grant)"
+                   " (names outside gate-proxy's tool→capability map)")))
       (some #(not= "object" (get-in % [:inputSchema :type])) tools)
       (conj "tools/list: every tool needs an object inputSchema a client can fill")
       (not= (count tools) (count names))
