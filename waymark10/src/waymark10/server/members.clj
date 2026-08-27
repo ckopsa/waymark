@@ -826,7 +826,13 @@
                               reentry-targets-durable
                               reentry-standing-is-bounded
                               reentry-token-is-fresh]
-                     :safety {:idempotent true :reversible true :confirm false}
+                     ;; :reversible false, the spend_reentry posture:
+                     ;; a self-loop behind a hidden guard has no
+                     ;; usable reverse (checks.clj's reversible gate),
+                     ;; and honestly none exists — each mint destroys
+                     ;; the prior credential
+                     :safety {:idempotent true :reversible false :confirm false
+                              :one-way "Each rotation replaces the standing credential; the prior token dies with it, and the way back is another mint."}
                      :handler set-reentry
                      :display {:label "Rotate re-entry" :order 5}}
     ;; suspension revokes the credential too (waymark-4zj.8.2 R8): a
