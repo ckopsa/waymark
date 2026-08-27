@@ -106,11 +106,14 @@
     ;; waymark-jfv.16: and verdict_reason, the four quick words a
     ;; settled card offers after a decline lands;
     ;; waymark-1uv.6: and ranking_note, an agent's score and sentence
-    ;; about a ranked row, the crown's sixth input
+    ;; about a ranked row, the crown's sixth input;
+    ;; waymark-b4s: and remark, the thread's turn — words on any
+    ;; subject with no verdict attached
     (is (= ["approval_request" "attachment" "definition" "feed_recipe"
             "feed_view" "feed_view_consent"
             "grant" "job" "meal" "member" "plan" "ranking_note"
-            "recipe_proposal" "role" "subscription" "task" "verdict_reason"]
+            "recipe_proposal" "remark" "role" "subscription" "task"
+            "verdict_reason"]
            (:kinds b)))
     (is (= "/api/plans" (get-in b [:resources :plan :href])))
     (is (= "/api/meals" (get-in b [:resources :meal :href])))

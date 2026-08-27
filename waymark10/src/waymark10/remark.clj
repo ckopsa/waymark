@@ -261,6 +261,12 @@
      :guards [the-remark-is-your-own-hand]
      :edit {:prefill [:says]}
      :record true
+     ;; `says` is required prose, but :reword PREFILLS the turn that
+     ;; already stands and is :record true — the form is never blank
+     ;; and the prior words live in the transition log, so a mis-click
+     ;; loses an in-progress edit and not the turn (ranking_note's
+     ;; `restate`, the same waiver for the same reason).
+     :waives #{:large-effort}
      :handler rewrite-the-words
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Reword" :order 1
