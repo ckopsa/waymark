@@ -1140,17 +1140,124 @@
    :open "Two to five pieces. A bundle tracks what the world can actually hold — a Saturday afternoon, not a whole week."
    :explain "That outcome already carries {ceiling} pieces, which is a week rather than an afternoon. Whatever else this was going to be belongs in its own outcome, and the cap is what makes you choose."}
   [row inp ctx]
+  ;; THE CAP COUNTS WHAT IS ON OFFER, NOT WHAT WAS WITHDRAWN
+  ;; (waymark-9j2). The ceiling is a claim about the world — how many
+  ;; things one afternoon can hold — so a piece the household declined,
+  ;; the week mooted, or the composer REWORKED away is not one of them,
+  ;; and it must not spend the slot the replacement needs. Before the
+  ;; iterate loop a piece under an offered outcome was always offered,
+  ;; so the `:state "offered"` filter changes no answer that stood then;
+  ;; it is what lets replace-in-place stay under five across rounds.
   (if (nil? (:find ctx))
     (t/allow)
     (let [oid (some-> (or (get-in row [:data :outcome_id])
                           (:outcome_id inp))
                       str str/trim not-empty)
           siblings (when oid
-                     ((:find ctx) :outcome_piece {:outcome_id oid}
+                     ((:find ctx) :outcome_piece
+                      {:outcome_id oid :state "offered"}
                       {:limit (inc (long bundle-ceiling))}))]
       (if (< (count siblings) (long bundle-ceiling))
         (t/allow)
         (t/deny {:vars {:ceiling bundle-ceiling}})))))
+
+;; ── the rework walls (waymark-9j2) ──────────────────────────────────
+;;
+;; THE ITERATION LOOP, AND WHY IT IS NOT A DECLINE. A person can say
+;; three things about a bundle today — take it (`make_it_so`), set it
+;; aside for the week (`not_this_week`), let the clock have it
+;; (`expire`) — and none of them is "the outcome is right, the PLAN is
+;; wrong, workshop it with me". That gesture is the whole point of the
+;; system (tune the steps of desirable outcomes over time,
+;; bd memory project-narrative-the-feed), and it wants two doors the
+;; three verbs above cannot spell: one that KEEPS the outcome standing
+;; while asking for a re-plan, and one that lets the composer revise a
+;; STANDING outcome's pieces IN PLACE — replace, re-time, add, remove —
+;; rather than staging a competing twin the rank cannot tell apart or
+;; waiting for a decline it has not earned.
+;;
+;; `iterate` (the person's, on the outcome) leaves the row `offered` —
+;; the self-loop is the point, the bundle is still on the fridge, still
+;; asking — and stamps `iterate_requested_at`, the open invitation the
+;; composer reads. It also files the note as a `remark` on the outcome,
+;; so a critique of the PLAN lands as a turn in the thread the composer
+;; already answers (waymark-b4s) rather than as a fourth verdict word.
+;;
+;; `rework` (the composer's, one on the outcome and one on each piece)
+;; is the answer. It is deliberately NOT walled by four-eyes — the
+;; composer is not DECIDING anything the household consented to, it is
+;; un-proposing and re-proposing its OWN suggestion — so the wall is
+;; the inverse: `only-its-composer-reworks` (`g/is-the-field
+;; :composed_by`, the mirror of `the-composer-does-not-decide`) plus an
+;; invitation wall that opens only while a person's `iterate` stands
+;; unanswered. The person still taps the revised pieces; a rework
+;; changes what is on offer, never what the house has said.
+
+(defn- iterate-open?
+  "An outcome is inviting a rework when a person has asked to iterate
+  more recently than the composer last reworked it — the open
+  invitation, read off two stamps rather than a boolean flag, so a
+  fresh iterate after a round reopens the door and the card can count
+  the rounds. Instants are compared as their ISO strings, which sort
+  the same instant the same and never throw on whatever the store
+  hands back."
+  [o]
+  (when-some [asked (some-> (get-in o [:data :iterate_requested_at]) str
+                            str/trim not-empty)]
+    (let [done (some-> (get-in o [:data :reworked_at]) str str/trim
+                       not-empty)]
+      (or (nil? done) (pos? (compare asked done))))))
+
+(def only-its-composer-reworks
+  "The inverse of the four-eyes wall, and the reason a rework is safe
+  to hand an agent at all: whoever STAGED a proposal may pull it back
+  to replace it, and nobody else may. A rework materializes nothing
+  and decides nothing — it withdraws an unanswered suggestion so a
+  better one can stand — so the law that keeps it honest is authorship,
+  not personhood. `is-the-field` refuses a row that names no author,
+  which a staged row never is."
+  (g/is-the-field
+   :composed_by
+   {:name :only-its-composer-reworks
+    :explain "Only the composer that staged this may rework it. A rework is un-proposing your own suggestion so you can offer a better one — it is not a verdict the household taps, and it is not a door onto somebody else's composition. If you did not stage this, say what you think where an agent may: a remark on the thread, or an insight citing what you read."}))
+
+(defguardfn the-outcome-invited-this-rework
+  {:vars [:problem]
+   :open "A composer reworks a standing outcome's plan only while a person has asked it to — `iterate` on the outcome opens the invitation, and committing the rework closes it. This keeps the composer's in-place revision to the outcomes the household actually asked it to workshop, never any outcome at will."
+   :explain "There is no open request to rework this outcome: {problem}"}
+  [row _inp _ctx]
+  (if (iterate-open? row)
+    (t/allow)
+    (t/deny {:vars {:problem (str "nobody has tapped \"iterate\" on it since"
+                                  " it was last reworked. A rework answers a"
+                                  " person's own \"the plan is wrong, workshop"
+                                  " it\" — wait for the ask, or reply on the"
+                                  " thread instead.")}})))
+
+(defguardfn the-parent-invited-a-rework
+  {:reads [:outcome]
+   :vars [:problem]
+   :open "A piece is reworked only while the bundle it belongs to has an open iterate request — the invitation lives on the outcome (`iterate_requested_at`), and a piece withdrawn to be replaced is one move inside the re-plan the person asked for."
+   :explain "This piece's bundle is not open for a rework: {problem}"}
+  [row inp ctx]
+  (if (nil? (:read ctx))
+    (t/allow)
+    (let [o (outcome-of row inp ctx)]
+      (cond
+        (nil? o)
+        (t/deny {:vars {:problem (str "it names no outcome this house serves,"
+                                      " so there is no invitation to read.")}})
+
+        (iterate-open? o)
+        (t/allow)
+
+        :else
+        (t/deny {:vars {:problem (str "nobody has tapped \"iterate\" on /api/"
+                                      "outcomes/" (:id o) " since it was last"
+                                      " reworked. Withdrawing a piece is part of"
+                                      " answering a person's re-plan; without"
+                                      " the ask, the pieces stand as offered for"
+                                      " the household to answer.")}})))))
 
 ;; ── the verdict walls, shared by both kinds ─────────────────────────
 
@@ -1290,6 +1397,58 @@
         (assoc-in [:data :decided_by] (:id (:principal ctx)))
         (assoc-in [:data :declined_count] said)
         (assoc-in [:data :not_before] (tickler/next-offer (:now ctx) said)))))
+
+(defn- about-of
+  "The outcome's goal, capped to the remark kind's `about` ceiling (200)
+  so a long goal cannot 422 the remark and roll back the gesture that
+  files it — the label copied at birth so the turn reads later even if
+  the row behind it is gone."
+  [d]
+  (let [g (str (:goal d))]
+    (if (> (count g) 200) (subs g 0 200) g)))
+
+(defhandler ask-to-iterate [row inp ctx]
+  ;; THE PERSON'S GESTURE (waymark-9j2). It KEEPS the outcome offered —
+  ;; the self-loop is the point, the bundle is still asking — and does
+  ;; two things: stamps the open invitation the composer reads, and
+  ;; files the note as a turn in the outcome's thread, so a critique of
+  ;; the PLAN lands where the composer already listens (waymark-b4s)
+  ;; rather than as a fourth verdict word. The remark is created through
+  ;; the member's OWN hand (`ctx :create` carries the outer principal,
+  ;; the materialize handler's own finding), so `said_by` is stamped as
+  ;; the person and the thread reads honestly. The storage-free probe
+  ;; carries no `:create` and never runs a writing handler, so the
+  ;; remark arm is guarded by its presence.
+  (let [d (:data row)]
+    (when (:create ctx)
+      ((:create ctx) :remark
+       {:subject_kind "outcome"
+        :subject_id (:id row)
+        :subject_href (str "/api/outcomes/" (:id row))
+        :about (about-of d)
+        :says (:says inp)}))
+    (assoc-in row [:data :iterate_requested_at] (:now ctx))))
+
+(defhandler rework-the-plan [row inp ctx]
+  ;; THE COMPOSER'S ANSWER, on the outcome (waymark-9j2). It commits a
+  ;; round: closes the open invitation (`reworked_at` now stands at or
+  ;; past `iterate_requested_at`), counts the round the card shows
+  ;; (`plan_revision`), and replies on the same thread — the composer's
+  ;; turn, so the thread's last word is its own and the sitting reads
+  ;; the work order as answered. The pieces themselves are withdrawn and
+  ;; re-staged through their own doors before this; this is the commit
+  ;; that says the new plan is ready for the household to answer.
+  (let [d (:data row)]
+    (when (:create ctx)
+      ((:create ctx) :remark
+       {:subject_kind "outcome"
+        :subject_id (:id row)
+        :subject_href (str "/api/outcomes/" (:id row))
+        :about (about-of d)
+        :says (:says inp)}))
+    (-> row
+        (assoc-in [:data :reworked_at] (:now ctx))
+        (update-in [:data :plan_revision] (fn [n] (inc (long (or n 0))))))))
 
 ;; THE PIECE'S TWO BIRTH STAMPS, and neither is the caller's to give.
 ;;
@@ -1651,6 +1810,60 @@
    :expect  {:refused :the-door-carries-its-own-effect
              :because "on its own screen"}})
 
+;; ── the rework scenarios (waymark-9j2) ──────────────────────────────
+;;
+;; THE TWO REWORK WALLS THAT READ ONLY THE PRINCIPAL AND THE ROW are
+;; proved here at check tier, the file's own rule for a wall a literal
+;; `:input` can reach: `a-person-answers` on `iterate` (the gesture is
+;; the household's) and `only-its-composer-reworks` on both rework
+;; doors (the mirror of four-eyes). The INVITATION wall
+;; (`the-parent-invited-a-rework`, `the-outcome-invited-this-rework`)
+;; reads the outcome's own stamps and the whole loop's convergence
+;; wants a live engine, so it and the church example are proved by
+;; workqueue10.outcome-test § 21 over the real ring handler.
+
+(defscenario an-agent-does-not-iterate-an-outcome
+  "Iterate is the household's own gesture — the goal is right, workshop
+   the plan with me — so it is a person's to make, like every other
+   answer to a bundle. An agent that thinks the plan is wrong reworks
+   it when asked, or says so on the thread; it does not tap the
+   household's own \"iterate\" on its behalf."
+  {:kind    :outcome
+   :attempt :iterate
+   :input   {:says "The park walk clashes with 9am church."}
+   :row     {:state :offered :data a-composed-outcome}
+   :as      {:id "composer" :type :agent}
+   :expect  {:refused :a-person-answers
+             :because "A person answers"}})
+
+(defscenario only-the-composer-that-staged-an-outcome-reworks-it
+  "The authorship wall on the bundle's own rework door: the composer
+   that staged the outcome commits the round, and nobody else reaches
+   its plan. A person answers the revised pieces; they do not rework
+   them, and a second agent does not either — a rework is un-proposing
+   your OWN suggestion, the mirror of the four-eyes wall."
+  {:kind    :outcome
+   :attempt :rework
+   :input   {:says "Moved breakfast after church and swapped the walk."}
+   :row     {:state :offered :data a-composed-outcome}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :only-its-composer-reworks
+             :because "composer that staged"}})
+
+;; NO SCENARIO NAMES `only-its-composer-reworks` ON THE PIECE, and the
+;; absence is structural rather than an omission — the same shape the
+;; `names-a-person` note one section up records. The piece's `rework`
+;; carries `the-parent-invited-a-rework`, which reads the parent
+;; `:outcome`, so any scenario attempting it defers to the conformance
+;; suite — and a conformance-tier scenario stages its subject through
+;; the create door AS THE WALKER, stamping the walker's id into
+;; `composed_by`, which would make `is-the-field` ALLOW the very actor
+;; the scenario means to refuse. It is ONE guard object shared by both
+;; rework doors, and the outcome-level twin above proves it refuses at
+;; check tier; the piece door's own refusal, and the whole loop, are
+;; proved by workqueue10.outcome-test § 21 over the real ring handler,
+;; where the test holds `composed_by` itself.
+
 ;; ── the prose the doors wear ────────────────────────────────────────
 ;;
 ;; Spelled ONCE and worn by both the row schema and the create model,
@@ -1725,7 +1938,19 @@
    :good_until
    {:x-display
     {:label "For the week ending"
-     :help "When the house stops being asked. Seven days from staging, written by the engine — the section is called \"this week could hold\", and an outcome still asking on the eighth morning is describing a week that is over."}}})
+     :help "When the house stops being asked. Seven days from staging, written by the engine — the section is called \"this week could hold\", and an outcome still asking on the eighth morning is describing a week that is over."}}
+   :iterate_requested_at
+   {:x-display
+    {:label "Asked to iterate at"
+     :help "When a person last tapped \"iterate\" — kept the outcome, asked the composer to rework the plan. Engine-written. The composer reads it as an open invitation until it commits a rework; a fresh iterate after a round reopens it."}}
+   :reworked_at
+   {:x-display
+    {:label "Plan last reworked at"
+     :help "When the composer last committed a round of rework, engine-written. While this stands earlier than the iterate above (or is absent), a rework request is open — which is what the piece-withdrawal door and the outcome's own rework door both read."}}
+   :plan_revision
+   {:x-display
+    {:label "Plan version"
+     :help "How many times this outcome's plan has been reworked in place from a person's note, engine-written. Zero until the first rework; the card reads it to say \"reworked from your note\" and count the rounds."}}})
 
 (def ^:private piece-prose
   {:outcome_id
@@ -1822,7 +2047,14 @@
             :summary "Who this outcome is with, off the house's roster"}
            {:rel "request" :kind :composition_request
             :href "/api/composition_requests/{data.request_id}"
-            :summary "The person's request this outcome answers"}]
+            :summary "The person's request this outcome answers"}
+           ;; THE THREAD (waymark-9j2, waymark-b4s): the conversation
+           ;; about this outcome — the person's iterate notes and the
+           ;; composer's rework replies, oldest first, read as a
+           ;; conversation off the remark kind's own default sort.
+           {:rel "thread" :kind :remark
+            :href "/api/remarks?subject_kind=outcome&subject_id={id}"
+            :summary "The conversation about this outcome — iterate notes and rework replies"}]
    :schema
    [:map
     (oe :goal {} [:string {:min 1 :max 240}])
@@ -1883,7 +2115,17 @@
     (oe :not_before {:optional true :filter #{:before}}
         [:maybe :waymark/instant])
     (oe :good_until {:optional true :filter #{:before}}
-        [:maybe :waymark/instant])]
+        [:maybe :waymark/instant])
+    ;; THE ITERATE LOOP'S THREE STAMPS (waymark-9j2), engine-written and
+    ;; out of the create model like the five above. NO :filter on any of
+    ;; them, `request_id`'s reasoning once more: the composer reads them
+    ;; off its own outcomes (own-surface), the guards read them off the
+    ;; row in hand, and "an open request" is a two-field comparison a
+    ;; generated column cannot express anyway — so they land in `data`,
+    ;; the storage facet does not move and the migrate plan stays empty.
+    (oe :iterate_requested_at {:optional true} [:maybe :waymark/instant])
+    (oe :reworked_at {:optional true} [:maybe :waymark/instant])
+    (oe :plan_revision {:optional true} [:maybe [:int {:min 0}]])]
    :create-schema
    [:map
     (oe :goal {} [:string {:min 1 :max 240}])
@@ -1901,15 +2143,20 @@
    :default-filters {:state "offered"}
    :sortable {:fields [:created_at :good_until] :default "-created_at"}
    ;; the composer reads what it staged and how it was answered — that
-   ;; IS the diagnosis feed. It reads no doors: the four-eyes wall
-   ;; refuses the stager at every verdict, so listing them would
-   ;; advertise doors that answer 409 to the only principal the
-   ;; courtesy is for (recipe_proposal's reasoning, whole). Staging
-   ;; itself rides an ordinary grant rather than this courtesy, for
-   ;; the same kind's reason: an outcome is a bundle of prepared
-   ;; WRITES, and which agents may put one in front of the house is a
-   ;; thing the house says out loud, once, at the grant door.
-   :own-surface {:by :composed_by :actions #{}}
+   ;; IS the diagnosis feed. The VERDICT doors are still not listed: the
+   ;; four-eyes wall refuses the stager at every one of them, so
+   ;; advertising them would be advertising a 409 to the only principal
+   ;; the courtesy is for (recipe_proposal's reasoning, whole). `rework`
+   ;; is the exception the iterate loop adds (waymark-9j2), and it
+   ;; belongs here for the opposite reason: it is the ONE door the
+   ;; stager may walk — un-proposing its own suggestion is authorship,
+   ;; not a verdict — so it is offered to the composer on its own
+   ;; outcomes, and its own guards hide it until a person's iterate
+   ;; stands open. Staging itself still rides an ordinary grant rather
+   ;; than this courtesy: an outcome is a bundle of prepared WRITES, and
+   ;; which agents may put one in front of the house is a thing the
+   ;; house says out loud, once, at the grant door.
+   :own-surface {:by :composed_by :actions #{:rework}}
    :on-create stage-the-outcome
    ;; shape first, world next, and NO PACE WALL LAST (waymark-1uv.3):
    ;; `outcomes-are-few` stood here until the crown's rank landed, and
@@ -1968,13 +2215,70 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The week already answered this one; the row now says so."}
      :display {:label "Expire" :order 8
-               :description "Tidy an outcome the week ran out on"}}}
+               :description "Tidy an outcome the week ran out on"}}
+    ;; ── THE ITERATE LOOP (waymark-9j2) ──
+    ;;
+    ;; `iterate` KEEPS the outcome (offered → offered) and asks for a
+    ;; re-plan. It is a person's gesture — `a-person-answers` blocks
+    ;; every agent, which is also the four-eyes wall for free, since the
+    ;; composer is one — and `:record true` retains the note the handler
+    ;; files as a remark on the outcome's thread. `:touches` names that
+    ;; cross-write so a reader can see it coming.
+    :iterate
+    {:from #{:offered} :to :offered
+     :guards [a-person-answers]
+     :handler ask-to-iterate
+     :input [:map
+             [:says
+              {:examples ["Sunday breakfast is fine but the park walk clashes with 9am church, and it is too hot for a walk later."]
+               :x-display
+               {:widget "prose"
+                :label "What to change, and why"
+                :help "Say what is wrong with the PLAN while keeping the outcome — the wrong time, the conflict, the step that does not fit. The composer reads this as a turn in the thread and reworks the pieces; the outcome stays on the fridge."}}
+              [:string {:min 1 :max 600}]]]
+     :record true
+     ;; a short note, and the wall against losing it on a mis-click is
+     ;; the composer answering the thread, not a draft box — the remark
+     ;; kind's own `reword` waiver, for the same reason.
+     :waives #{:large-effort}
+     :touches [{:kind :remark :action :create}]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The outcome stays exactly where it is — this does not accept it, decline it, or retire it. It tells the composer the goal is right but the plan needs work, in your own words, and opens the plan for a rework. Your note joins the outcome's thread."}
+     :display {:label "Iterate" :order 3
+               :description "Keep the outcome, tell the composer to rework the plan — say what is wrong and it revises the pieces"}}
+    ;; `rework` is the composer's commit of one re-plan round (offered →
+    ;; offered): it closes the open invitation, counts the round on the
+    ;; card, and replies on the thread. NOT four-eyes —
+    ;; `only-its-composer-reworks` is the inverse wall — and gated by
+    ;; `the-outcome-invited-this-rework`, which opens only while a
+    ;; person's iterate stands unanswered.
+    :rework
+    {:from #{:offered} :to :offered
+     :guards [only-its-composer-reworks the-outcome-invited-this-rework]
+     :handler rework-the-plan
+     :input [:map
+             [:says
+              {:examples ["Moved breakfast after church and swapped the park walk for the shaded creek trail at 8am, before the heat."]
+               :x-display
+               {:widget "prose"
+                :label "What you changed, and why"
+                :help "One turn back to the household: what the rework did to the plan, in answer to their note. This is your turn in the thread, and the card reads it as the reason the plan changed."}}
+              [:string {:min 1 :max 600}]]]
+     :record true
+     :waives #{:large-effort}
+     :touches [{:kind :remark :action :create}]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "This commits a round of rework: it closes the open iterate request, counts the round on the card, and replies on the thread. Withdraw the pieces that were wrong and stage their replacements first — this is the commit that says the new plan is ready for the household to answer."}
+     :display {:label "Rework the plan" :order 4
+               :description "Commit a round of re-planning an outcome the house asked you to iterate — closes the request and counts the round"}}}
    :scenarios [the-composer-does-not-answer-its-own-outcome
                an-agent-does-not-answer-an-outcome
                an-answered-outcome-does-not-come-back
                a-live-outcome-is-not-expired-out-of-the-way
                an-outcome-with-nothing-behind-it-is-refused
-               an-outcome-names-a-value-this-house-holds]})
+               an-outcome-names-a-value-this-house-holds
+               an-agent-does-not-iterate-an-outcome
+               only-the-composer-that-staged-an-outcome-reworks-it]})
 
 ;; ── :outcome_piece — one concrete thing, one tap ────────────────────
 
@@ -1982,9 +2286,16 @@
   {:kind :outcome_piece
    :plural "outcome_pieces"
    :nav :system
-   :states [:offered :taken :declined :moot]
+   ;; `:reworked` is the fifth state (waymark-9j2), and it is neither of
+   ;; the two declines: a piece the composer PULLED BACK to replace, not
+   ;; a piece the household refused. It teaches nothing (unlike
+   ;; `declined`, "never this piece") and it is not the week stepping
+   ;; over it (unlike `moot`) — it is the composer un-proposing its own
+   ;; offer inside a re-plan the person asked for, and `make_it_so` takes
+   ;; only what is still `offered`, so a reworked piece lands nothing.
+   :states [:offered :taken :declined :moot :reworked]
    :initial :offered
-   :terminal #{:taken :declined :moot}
+   :terminal #{:taken :declined :moot :reworked}
    :summary "{data.says} · {state}"
    :label-template "{data.says}"
    :display {:title "Piece of an outcome"}
@@ -2084,7 +2395,12 @@
     (pe :prepared {} [:map-of :keyword :any])]
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:created_at] :default "created_at"}
-   :own-surface {:by :composed_by :actions #{}}
+   ;; the composer reads its own pieces and how they were answered; the
+   ;; verdict doors stay unlisted (four-eyes refuses the stager), and
+   ;; `rework` is the one it may walk — withdrawing its own unanswered
+   ;; offer (waymark-9j2), hidden by its own guards until the bundle's
+   ;; iterate request is open.
+   :own-surface {:by :composed_by :actions #{:rework}}
    :on-create stamp-the-composer
    ;; shape first, world next, pace last — the same order one kind up.
    ;; `the-door-carries-its-own-effect` sits with the shape walls
@@ -2144,7 +2460,21 @@
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Beside the point now — the piece steps out of the way without being counted as a refusal, so nobody reads it as a verdict on the idea."}
      :display {:label "Beside the point" :order 3
-               :description "Set this piece aside without teaching the composer anything about it"}}}
+               :description "Set this piece aside without teaching the composer anything about it"}}
+    ;; THE COMPOSER PULLS A PIECE BACK (waymark-9j2), so a better one
+    ;; can stand in its place. NOT a verdict and NOT four-eyes — the
+    ;; wall is authorship (`only-its-composer-reworks`) plus the parent
+    ;; bundle's open invitation (`the-parent-invited-a-rework`). It
+    ;; takes no input and moves the piece to `reworked`; the transition
+    ;; log carries who withdrew it, and the replacement is a new piece
+    ;; through the ordinary create door.
+    :rework
+    {:from #{:offered} :to :reworked
+     :guards [only-its-composer-reworks the-parent-invited-a-rework]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "You are pulling this piece back so a better one can stand in its place — it leaves the bundle without being declined or set aside, so the household never reads it as a verdict on the idea, and it lands nothing if the outcome is later accepted. Stage the replacement as a new piece."}
+     :display {:label "Rework" :order 4
+               :description "Withdraw your own piece from an outcome under an open iterate request, to replace it"}}}
    :scenarios [the-composer-does-not-answer-its-own-piece
                an-agent-does-not-answer-a-piece
                a-taken-piece-does-not-come-back

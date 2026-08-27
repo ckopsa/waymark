@@ -152,6 +152,23 @@ the thread. Never reword anybody's turn but your own; never read a
 remark as a verdict — words decline nothing, and the person's taps
 stay the only doors that decide.
 
+**The iterate request is a rework order (waymark-9j2).** When a person
+taps `iterate` on an outcome — the goal is right, the PLAN is wrong,
+workshop it — the outcome stays offered, the note joins its thread,
+and the manifest flags the standing outcome `iterate_open`. Answer it
+by revising the pieces IN PLACE, not by staging a twin or waiting for
+a decline: `outcome_pieces/{id}/-/rework` withdraws a piece of yours
+that was wrong (re-time or replace = withdraw then stage a new piece;
+add = just stage; the withdrawn piece goes `reworked`, never
+declined), and `outcomes/{id}/-/rework {says: "…"}` commits the round
+— it bumps the plan version, replies on the thread (your turn, so the
+work order reads answered), and closes the invitation until the next
+iterate. Both doors are yours alone (only the composer that staged a
+row reworks it) and open only while an iterate stands unanswered.
+Stage the replacements before you commit. This is the tuning loop the
+whole system is for — the person critiques, you re-plan, they tap the
+revised bundle, and away you go.
+
 ## 8. Score what you did not write
 
 Every sitting, composed or not — ranking is its own duty, not a tail

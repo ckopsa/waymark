@@ -2516,7 +2516,18 @@
         routing (cond-> routing
                   (and (seq routing) (not (re-find #"[.!?…]$" routing)))
                   (str "."))
-        ev (count (remove str/blank? (map str (:evidence data))))]
+        ev (count (remove str/blank? (map str (:evidence data))))
+        ;; THE REWORKED CLAUSE (waymark-9j2), and it is ENGINE-OWNED
+        ;; prose, never the composer's — the same wall the routing above
+        ;; respects, one clause over: the composer's reason for the
+        ;; rework lives in its thread reply, and this line only says
+        ;; THAT the plan was reworked and how many rounds, a fact the
+        ;; engine stamps and the composer cannot reach a word of. It
+        ;; reads `reworked_at`/`plan_revision`, both engine-written; an
+        ;; outcome the composer has not reworked has neither and says
+        ;; nothing here.
+        reworked? (some-> (:reworked_at data) str not-empty)
+        rounds (long (or (:plan_revision data) 0))]
     (str/trim
      (str ;; THE PERSON'S OWN PULL, said first (waymark-jfv.20): a
           ;; bundle that answers a request is here because somebody
@@ -2533,7 +2544,12 @@
                  ". "))
           routing
           (when (pos? ev)
-            (str " " ev " row" (when (not= 1 ev) "s") " behind it."))))))
+            (str " " ev " row" (when (not= 1 ev) "s") " behind it."))
+          (when reworked?
+            (str " Reworked from your note"
+                 (when (pos? rounds)
+                   (str " — plan v" rounds))
+                 "."))))))
 
 (defn- value-standing
   "How the value this bundle serves stands right now — `:declared`

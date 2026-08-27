@@ -5418,3 +5418,190 @@ waymark-8um.7 as well, which asked for exactly that text.
   change is a `?since=` or a wider cap said out loud, not a cheaper lesson.
 - **waymark-8um.5 stays open**; the contract says the composer reads over
   HTTP until it lands. **waymark-8um.7 is closed by this section.**
+
+## Built — 9j2, the iterate loop (2026-08-27, waymark-9j2)
+
+**The owner's ruling (bd memory `iterate-on-outcomes-is-the-core-loop`):** the
+feed's only outcome verbs are `make_it_so` / `not_this_week` / `expire` —
+accept, defer, kill. *There is no way to say 'the outcome is right, the
+IMPLEMENTATION is wrong, iterate on it with me', which is the project's core
+value proposition (tune the STEPS of desirable outcomes over time).* Observed
+live: the owner read the Sunday breakfast-and-park-walk bundle and said the
+walk clashes with 9am church and it is too hot later — a critique of the
+**plan**, not the goal — and it had nowhere to land. `supersedes` wants a
+declined prior; an offered outcome shows the composer `actions:[]`; the crown
+rank reads no remark or insight, so the card stayed #1 unchanged. This section
+builds the loop: a person gesture that keeps the outcome and asks for a
+re-plan, a composer power to revise a **standing** outcome's pieces in place,
+and the thread (waymark-b4s) as the workshop the two turn in.
+
+### The forks, decided
+
+- **A self-loop, not a new state.** `iterate` and `rework` are both
+  `offered → offered`. A `:workshopping` state was the alternative and it was
+  declined: the crown reads `state=offered` by default, so a new state would
+  drop the outcome off the feed the instant a person asked to keep it — the
+  exact opposite of the gesture — or it would have to duplicate everything
+  `offered` already means about carding, for no gain. The outcome is not
+  *answered*, it is still asking with a different plan; `offered` is the honest
+  state, and the invitation rides two engine stamps beside it, the way the
+  decline's `not_before` / `declined_count` do (waymark-1uv.10).
+
+- **The invitation is two stamps, read as a comparison, not a boolean.**
+  `iterate` stamps `iterate_requested_at`; `rework` (on the outcome) stamps
+  `reworked_at` and bumps `plan_revision`. An outcome is *inviting a rework*
+  while `iterate_requested_at` stands later than `reworked_at` (or the latter
+  is absent) — `iterate-open?`. A fresh iterate after a round reopens the door,
+  so the loop converges in named rounds the card can count. None of the three
+  carries a `:filter`: the composer reads them off its own outcomes
+  (own-surface), the guards read them off the row in hand, and *an open
+  request* is a two-field comparison a generated column cannot express anyway —
+  so all three land in `data`, the storage facet does not move and the migrate
+  plan stays empty (`request_id`'s reasoning, once more).
+
+- **Revise in place = withdraw + re-stage, gated to an open invitation.** The
+  genuinely new power the composer lacked was **retracting its own unanswered
+  piece** — `not_this` / `moot` are the household's verdicts, walled off from
+  the stager by four-eyes, so a composer could add pieces but never take a bad
+  one back. `outcome_piece.rework` (`offered → reworked`) is that withdrawal.
+  Re-time and replace are withdraw-then-stage; add is the ordinary create door;
+  remove is withdraw alone. The `reworked` state is a fifth piece state and
+  deliberately **neither decline**: not `declined` (which teaches *never this
+  piece*) and not `moot` (which teaches *beside the point*) — it is the
+  composer un-proposing its own offer, and `make_it_so` takes only what is
+  still `offered`, so a reworked piece lands nothing.
+
+- **The rework walls are the INVERSE of four-eyes, and that is why an agent may
+  walk them.** A rework decides nothing the household consented to and
+  materializes nothing — it withdraws a proposal so a better one can stand — so
+  the law that keeps it honest is **authorship, not personhood**.
+  `only-its-composer-reworks` is `g/is-the-field :composed_by`, the exact
+  mirror of `the-composer-does-not-decide`: only the composer that staged a row
+  may rework it, and a person or a second agent is refused. `a-person-answers`
+  is deliberately **not** on either rework door — that wall is what keeps
+  materialization a member's tap, and a rework materializes nothing. The person
+  still taps the revised pieces; a rework changes what is on offer, never what
+  the house has said.
+
+- **`iterate` is the household's, and the note is a thread turn.**
+  `a-person-answers` is its one wall (which is also four-eyes for free, the
+  composer being an agent): an agent that thinks the plan is wrong reworks it
+  when asked or speaks on the thread; it does not tap the house's own *iterate*
+  for it. The gesture carries a `:says` note, and `ask-to-iterate` files it as
+  a `remark` on the outcome through `ctx :create` — the member's own hand, so
+  `said_by` is the person and the critique is a turn in the thread the composer
+  already answers (waymark-b4s), not a fourth verdict word. `rework` on the
+  outcome replies the same way, so the thread's last word is the composer's and
+  the sitting reads the work order as answered.
+
+### The doors, as they landed
+
+| door | kind | move | walls | what it does |
+|---|---|---|---|---|
+| `iterate` | `outcome` | `offered → offered` | `a-person-answers` | stamps `iterate_requested_at`; files the note as a remark on the thread |
+| `rework` | `outcome` | `offered → offered` | `only-its-composer-reworks`, `the-outcome-invited-this-rework` | commits a round: stamps `reworked_at`, bumps `plan_revision`, replies on the thread |
+| `rework` | `outcome_piece` | `offered → reworked` | `only-its-composer-reworks`, `the-parent-invited-a-rework` | withdraws the composer's own piece so a replacement can stand |
+
+Three new engine-written fields on `outcome` (`iterate_requested_at`,
+`reworked_at`, `plan_revision`), out of the create model like the other stamps;
+one new `outcome_piece` state (`reworked`); a `thread` link on the outcome to
+`GET /api/remarks?subject_kind=outcome&subject_id={id}`. `own-surface`
+`:actions` gains `:rework` on both kinds — the one door the stager may walk, so
+the composer sees it on its own rows, hidden by its own guards until an
+invitation is open.
+
+### One existing wall moved, and it moves no hash
+
+`a-bundle-is-small` now counts only pieces in state `offered`, not every
+sibling. The ceiling is a claim about the world — how many things one
+afternoon can hold — so a piece the household declined, the week mooted, or the
+composer reworked away is not one of them and must not spend the slot the
+replacement needs. Before the loop a piece under an offered outcome was always
+offered, so the filter changes no answer that stood then; it is what lets
+replace-in-place stay under five across rounds. It reads a `state` the guard's
+`:find` already admits, so no facet moves.
+
+### How the revision shows
+
+`feed/outcome-says` gains one **engine-owned** clause: when `reworked_at`
+stands, the card says *Reworked from your note — plan v{n}*. It honours the
+same wall the routing clause beside it respects — the composer's *reason* for
+the rework lives in its thread reply, and this line only states the **fact**
+that the plan was reworked and how many rounds, a sentence the engine stamps
+and the composer cannot reach a word of. The composer's manifest
+(`scripts/sitting-run.sh`) flags each `standing_outcome` with `iterate_open`
+and its `plan_revision`; the note itself also rides `unanswered_threads`, so
+the sitting reads the work order two ways.
+
+### The composer's grant, one write line wider on each kind
+
+The composer already holds `outcome` / `outcome_piece` `create`. To answer an
+iterate it needs the rework doors added:
+`{"kind": "outcome", "actions": ["create", "rework"]}` and
+`{"kind": "outcome_piece", "actions": ["create", "rework"]}`. `iterate` needs
+no grant — it is a household member's door, not an agent's. Filing the note is
+`ctx :create` on `remark` inside the person's own transaction, so the composer
+needs nothing new to *read* the thread beyond the `remark` read it already
+holds (waymark-b4s).
+
+### The church example, end to end
+
+1. The composer staged *A slow Sunday: breakfast in, then time outside
+   together* with pieces `breakfast` and `walk`.
+2. The owner taps **`outcomes/{o}/-/iterate`** `{says: "…clashes with 9am
+   church, and it is too hot for a walk later."}`. The outcome stays `offered`;
+   the note is turn one on its thread.
+3. The composer taps **`outcome_pieces/{walk}/-/rework`** — the walk is
+   `reworked` — then stages a replacement piece (*the shaded creek trail at
+   8am*) through the ordinary create door.
+4. The composer taps **`outcomes/{o}/-/rework`** `{says: "swapped the walk for
+   the creek trail…"}` — `plan_revision` is 1, `reworked_at` stands, the reply
+   is turn two, the invitation closes.
+5. The owner taps **`outcomes/{o}/-/make_it_so`** — `breakfast` and the creek
+   trail materialize under the owner's name; the withdrawn `walk` lands
+   nothing. The outcome never left the fridge.
+
+### Where the law is proved
+
+- **Check tier (no DB):** `an-agent-does-not-iterate-an-outcome`
+  (`a-person-answers`), `only-the-composer-that-staged-an-outcome-reworks-it`
+  (`only-its-composer-reworks`, the one guard object both rework doors share).
+- **The suite (`workqueue10.outcome-test` § 21):** the whole church flow over
+  the real ring handler — the note on the thread, the piece withdrawal, the
+  ownership and invitation refusals, the version bump and the reply, the
+  engine's *Reworked from your note* clause, the closed invitation, and the
+  partial accept that takes only what is on offer. The piece `rework`'s
+  ownership wall is proved here rather than by a scenario for the structural
+  reason `names-a-person` records: its guard set reads the parent `:outcome`,
+  so a conformance-tier scenario would stage the subject as the walker and
+  stamp `composed_by` to the very actor it means to refuse — the outcome-level
+  twin proves the shared guard object at check tier instead.
+
+### Left conservative, for the owner to decide
+
+- **The crown rank is untouched.** An open iterate request does not re-order
+  the person's feed — ranking is the crown's declared formula and the owner's
+  ruling is that agents change weights only through `recipe_proposal`. The
+  composer's *read* surfaces the work order (manifest, thread, the card's
+  reworked line); whether *asking to iterate* should also lift a card in the
+  crown is a rank change filed for the owner, not made here.
+- **Piece-level `iterate` was not built.** The gesture is outcome-level: the
+  person says *the plan is wrong* and the composer decides which pieces move.
+  A per-piece *this specific piece is wrong, keep the rest and rework just it*
+  is expressible today as `not_this` on that piece plus a thread note, and a
+  dedicated piece-level iterate is a follow-up if the coarser gesture proves
+  too blunt.
+- **`iterate` does not touch the leash.** The outcome's `good_until` is
+  unchanged by a re-plan — an outcome reworked on day six still expires on day
+  seven. Whether a live workshop should extend the week is a real question and
+  deliberately not answered here; the honest conservative default is that the
+  week is the week.
+
+- **Files:** `workqueue10/src/workqueue10/resources/outcome.clj` (the two
+  rework guards, `iterate-open?`, `only-its-composer-reworks`, the three
+  handlers, the `iterate` / `rework` doors on both kinds, the `reworked` state,
+  the three stamps, the thread link, the scenarios, and the `a-bundle-is-small`
+  refinement); `waymark10/src/waymark10/server/feed.clj` (`outcome-says`'
+  reworked clause); `scripts/sitting-run.sh` (`standing_outcomes` carries
+  `iterate_open`); `workqueue10/test/workqueue10/outcome_test.clj` (§ 21); this
+  file.

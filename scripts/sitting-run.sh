@@ -459,9 +459,21 @@ jq -c 'group_by(.kind) | map({kind:.[0].kind, count:length}) ' "$D/uncomposed.js
 # the rows it cites, so the floor's dig does not restage a bundle the
 # house already holds (sitting 7 twinned the realtor list; the rank
 # cannot tell twins apart, so a duplicate is pure noise).
+#
+# iterate_open (waymark-9j2): a person tapped "iterate" on this outcome
+# — the goal is right, the plan is wrong, rework it in place — more
+# recently than the composer last reworked it. A standing work order to
+# revise the pieces (withdraw with outcome_pieces/-/rework, stage the
+# replacements, commit with outcomes/-/rework); the note itself is a
+# remark on the outcome's thread, so it also rides unanswered_threads.
 jq '[.[] | select(.state=="offered" or .state=="accepted")
        | {self, state, goal:.data.goal, value:(.data.value_name // null),
-          evidence:(.data.evidence // [])}]' "$R/outcomes.full.json" > "$D/standing_outcomes.json"
+          evidence:(.data.evidence // []),
+          plan_revision:(.data.plan_revision // 0),
+          iterate_open:(((.data.iterate_requested_at // "") != "")
+                        and ((.data.iterate_requested_at // "")
+                             > (.data.reworked_at // "")))}]' \
+   "$R/outcomes.full.json" > "$D/standing_outcomes.json"
 
 # a value must be LIVE to be named; a companion must be current
 jq '[.[] | select(.state != "retired")

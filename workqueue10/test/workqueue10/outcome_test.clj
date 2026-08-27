@@ -62,6 +62,7 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
             [waymark10.server.engine :as engine]
+            [waymark10.server.feed :as feed]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
@@ -1719,3 +1720,124 @@
       (finally
         (reset! clock nil)
         (stop! member @cid)))))
+
+;; ── 21. the iterate loop: keep the outcome, rework the plan (waymark-9j2) ──
+;;
+;; THE CHURCH EXAMPLE, END TO END. The owner reads the Sunday
+;; breakfast-and-park-walk bundle and says the walk clashes with 9am
+;; church and it is too hot later — the goal is right, the PLAN is
+;; wrong. Before this bead that critique had nowhere to land: the three
+;; verbs are accept, defer, expire, and `supersedes` wants a decline
+;; first. Now `iterate` keeps the outcome standing and files the note as
+;; a thread turn; the composer withdraws the wrong piece with `rework`,
+;; stages a cooler-and-later one, and commits the round with the
+;; outcome's own `rework`; the owner taps the revised bundle. The
+;; outcome never left the fridge.
+
+(defn- remarks-on [who oid]
+  (json (req :get (str "/api/remarks?subject_kind=outcome&subject_id=" oid)
+             (human who))))
+
+(deftest the-iterate-loop-reworks-the-plan-in-place
+  (let [member   "colton-church"
+        composer "composer-church"
+        v (declare-value! member "unhurried Sundays with the family"
+                          ["cooking with a podcast on" "the shop"])
+        o (id-of (req :post "/api/outcomes"
+                      {:goal "A slow Sunday: breakfast in, then time outside together"
+                       :value_id (vid v)
+                       :routing "It runs through cooking with a podcast on, which you said you love."
+                       :routes_through "cooking with a podcast on"
+                       :evidence [(str "/api/values/" (vid v))]}
+                      (human composer)))
+        breakfast (id-of (stage-piece! composer o "Pancakes, podcast on"
+                                       "task" {:title "Make Sunday pancakes"}))
+        walk (id-of (stage-piece! composer o "A walk in the park after"
+                                  "task" {:title "Park walk, Sunday"}))]
+
+    (testing "before any iterate, the composer cannot rework a piece — there is no open invitation"
+      (let [r (invoke! "outcome_pieces" walk :rework nil (human composer))]
+        (is (= 409 (:status r)))
+        (is (= "the-parent-invited-a-rework" (guard-of r)))))
+
+    (testing "the owner iterates: the outcome STAYS offered and the note joins its thread"
+      (let [note (str "Sunday breakfast is fine, but the park walk clashes"
+                      " with 9am church, and it is too hot for a walk later.")
+            r (invoke! "outcomes" o :iterate {:says note} (human member))]
+        (is (= 200 (:status r)))
+        (is (= "offered" (:state (json r))) "iterate keeps the outcome on the fridge")
+        (is (some? (:iterate_requested_at (fields r))))
+        (is (nil? (:reworked_at (fields r))) "no rework has happened yet")
+        (let [thread (remarks-on member o)]
+          (is (= 1 (count thread)) "the note is one turn on the outcome's thread")
+          (is (= member (get-in (first thread) [:data :said_by])) "in the owner's own voice")
+          (is (str/includes? (get-in (first thread) [:data :says]) "9am church")))))
+
+    (testing "an agent-iterate is refused: iterate is the household's gesture"
+      (let [r (invoke! "outcomes" o :iterate {:says "re-plan"}
+                       {"x-waymark-principal" "some-agent"
+                        "x-waymark-actor-type" "agent"})]
+        (is (= 409 (:status r)))
+        (is (= "a-person-answers" (guard-of r)))))
+
+    (testing "only the composer that staged a piece may rework it — the owner cannot"
+      (let [r (invoke! "outcome_pieces" walk :rework nil (human member))]
+        (is (= 409 (:status r)))
+        (is (= "only-its-composer-reworks" (guard-of r)))))
+
+    (testing "the composer withdraws the walk in place — reworked, not declined, not moot"
+      (let [r (invoke! "outcome_pieces" walk :rework nil (human composer))]
+        (is (= 200 (:status r)))
+        (is (= "reworked" (:state (json r))))))
+
+    (let [creek (id-of (stage-piece! composer o
+                                     "A shaded creek trail at 8am, before the heat"
+                                     "task" {:title "Creek trail, Sunday 8am"}))]
+      (testing "a replacement piece stands — reworked pieces do not spend a bundle slot"
+        (is (some? creek))
+        (let [offered (json (req :get
+                                 (str "/api/outcome_pieces?outcome_id=" o
+                                      "&state=offered")
+                                 (human member)))]
+          (is (= #{breakfast creek}
+                 (into #{} (map #(last (str/split (str (:self %)) #"/"))) offered))
+              "only breakfast and the creek trail are on offer; the walk is withdrawn")))
+
+      (testing "the composer commits the round: the plan version bumps and it replies on the thread"
+        (let [note (str "Moved nothing but the walk — swapped it for the shaded"
+                        " creek trail at 8am, before the heat and clear of church.")
+              r (invoke! "outcomes" o :rework {:says note} (human composer))]
+          (is (= 200 (:status r)))
+          (is (= "offered" (:state (json r))) "still on the fridge, now reworked")
+          (is (some? (:reworked_at (fields r))))
+          (is (= 1 (:plan_revision (fields r))))
+          (let [thread (remarks-on member o)]
+            (is (= 2 (count thread)) "the owner's note and the composer's reply")
+            (is (= composer (get-in (last thread) [:data :said_by]))
+                "the thread's last word is the composer's — the work order is answered"))))
+
+      (testing "the card says the plan was reworked, in the engine's own words"
+        (let [row {:data (fields (req :get (str "/api/outcomes/" o) (human member)))}
+              says (#'feed/outcome-says row false)]
+          (is (str/includes? says "Reworked from your note"))
+          (is (str/includes? says "plan v1"))))
+
+      (testing "the invitation is closed: a further rework waits for a fresh iterate"
+        (let [r (invoke! "outcome_pieces" breakfast :rework nil (human composer))]
+          (is (= 409 (:status r)))
+          (is (= "the-parent-invited-a-rework" (guard-of r))))
+        (let [r (invoke! "outcomes" o :rework {:says "again"} (human composer))]
+          (is (= 409 (:status r)))
+          (is (= "the-outcome-invited-this-rework" (guard-of r)))))
+
+      (testing "the owner taps the revised bundle — it takes the two on offer, the walk lands nothing"
+        (let [made (invoke! "outcomes" o :make_it_so nil (human member))]
+          (is (= 200 (:status made)))
+          (is (= "accepted" (:state (json made)))))
+        (doseq [p [breakfast creek]]
+          (let [r (req :get (str "/api/outcome_pieces/" p) (human member))]
+            (is (= "taken" (:state (json r))))
+            (is (str/starts-with? (str (:materialized (fields r))) "/api/tasks/"))))
+        (let [r (req :get (str "/api/outcome_pieces/" walk) (human member))]
+          (is (= "reworked" (:state (json r))) "the withdrawn walk stays withdrawn")
+          (is (nil? (:materialized (fields r))) "and made nothing"))))))
