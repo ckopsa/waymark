@@ -39,8 +39,14 @@ db10: db  ## waymark10 databases on the shared :5433 container
 		"SELECT 1 FROM pg_database WHERE datname='workqueue10_dev'" | grep -q 1 || \
 		docker exec $(PG_CONTAINER) psql -U $(PG_USER) -d postgres -c "CREATE DATABASE workqueue10_dev"
 
-test10: db10  ## waymark10 (Clojure) framework tests
-	cd waymark10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
+test10:  ## (moved to CI) waymark10 framework tests — GitHub Actions runs these
+	@echo "Tests run in CI, not here. The GitHub Actions pipeline"
+	@echo "(.github/workflows/tests.yml) runs test10, test-queue and"
+	@echo "test-calendar sharded on every push, with more horsepower"
+	@echo "than a laptop — push your branch and read the 'gate' check."
+	@echo ""
+	@echo "To run THIS suite by hand anyway, call clojure directly:"
+	@echo "  make db10 && cd waymark10 && WAYMARK10_TEST_DSN=jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER) clojure -M:test"
 
 # The chore, meal and evening modules live under workqueue10/ since
 # the consolidation cleanup (waymark-26j): check-queue is their
@@ -50,8 +56,14 @@ test10: db10  ## waymark10 (Clojure) framework tests
 check-queue:  ## workqueue10 declaration-time checks + usability warnings (no database)
 	cd workqueue10 && clojure -M:check
 
-test-queue: db10  ## the household suite: queue + chores + meals + evenings conformance and stories
-	cd workqueue10 && WAYMARK10_TEST_DSN="jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER)" clojure -M:test
+test-queue:  ## (moved to CI) the household suite — GitHub Actions runs these
+	@echo "Tests run in CI, not here. The GitHub Actions pipeline"
+	@echo "(.github/workflows/tests.yml) runs test10, test-queue and"
+	@echo "test-calendar sharded on every push, with more horsepower"
+	@echo "than a laptop — push your branch and read the 'gate' check."
+	@echo ""
+	@echo "To run THIS suite by hand anyway, call clojure directly:"
+	@echo "  make db10 && cd workqueue10 && WAYMARK10_TEST_DSN=jdbc:postgresql://localhost:$(PG_PORT)/waymark10_test?user=$(PG_USER) clojure -M:test"
 
 dev-queue: db10  ## serve workqueue10 on :8014 against workqueue10_dev (fake sources unless WORKQUEUE10_CHOREPLAN_URL / _MEALPLAN_URL are set)
 	cd workqueue10 && WORKQUEUE10_DSN="jdbc:postgresql://localhost:$(PG_PORT)/workqueue10_dev?user=$(PG_USER)" \
@@ -81,8 +93,14 @@ migrate-queue-prod:  ## print PRODUCTION's real schema plan (read-only; refuses 
 		exit 2; }
 	@cd workqueue10 && WORKQUEUE10_DSN="$$(../scripts/queue-prod-dsn.sh)" clojure -M:migrate
 
-test-calendar:  ## calendar10 transport tests — pure translation + a loopback Google (no database, no network)
-	cd calendar10 && clojure -M:test
+test-calendar:  ## (moved to CI) calendar10 transport tests — GitHub Actions runs these
+	@echo "Tests run in CI, not here. The GitHub Actions pipeline"
+	@echo "(.github/workflows/tests.yml) runs test10, test-queue and"
+	@echo "test-calendar sharded on every push, with more horsepower"
+	@echo "than a laptop — push your branch and read the 'gate' check."
+	@echo ""
+	@echo "To run THIS suite by hand anyway, call clojure directly:"
+	@echo "  cd calendar10 && clojure -M:test   (no database, no network)"
 
 probe-calendar:  ## prove the calendar transport against the REAL family calendar; WRITE=1 also round-trips a scratch event
 	cd calendar10 && clojure -M:probe

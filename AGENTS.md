@@ -16,16 +16,16 @@ non-interactive session from hanging.
 ## Build & Test
 
 See `CLAUDE.md` for the full picture and the `Makefile` for the
-targets. The essentials:
+targets. Testing is handled by **CI**, not locally: the GitHub Actions
+pipeline (`.github/workflows/tests.yml`) runs `test10`, `test-queue`
+and `test-calendar` sharded on every push — push and read the `gate`
+check. The `make test-*` targets now just point you there.
+
+The one gate worth running locally is fast and needs no database:
 
 ```bash
-make test10        # waymark10 framework tests
-make test-queue    # the household suite (queue + chores + meals + evenings)
-make check-queue   # declaration-time checks + usability warnings (no database)
+make check-queue   # declaration-time checks + usability warnings (no DB)
 ```
-
-Everything runs against one dockerized Postgres on `:5433`
-(`make db10` bootstraps it).
 
 ## Issue tracking
 
