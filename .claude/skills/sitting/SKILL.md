@@ -112,10 +112,12 @@ shown-and-declined prior: read the words (`verdict_reason` rows —
 wrong_time is not wrong_piece is not never_this), publish an insight
 citing the `verdict_reason` row and quoting its word — or saying "no
 reason given" and citing the outcome when none stands (the
-`no-burial-without-a-diagnosis` wall demands the citation) — whose
-offered step moves the prior's goal forward (`expire`/`retire` on the
-prior is burial, not a step), and respect the recomposition floor the
-prior verdict set. A decline for timing means hold things ready, not hours.
+`no-burial-without-a-diagnosis` wall demands the citation) — only
+for a decline that still owes one, never twice — whose offered step
+is a door a *standing* row admits now (a prior's evidence task,
+`prioritize`); the declined prior is terminal and admits none, so
+`expire`/`retire` on it is burial, not a step. Respect the
+recomposition floor the prior verdict set. A decline for timing means hold things ready, not hours.
 
 ## 7. The unanswered turn
 

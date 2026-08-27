@@ -114,14 +114,20 @@ holding your place in it.
    a duplicate adds noise, not choice). A declined prior may be
    REcomposed only after its diagnosis insight is published (no
    burial without a diagnosis) — the manifest's `declines` says which
-   ones still owe one, and each carries its `cite` list. A diagnosis
-   cites the `verdict_reason` row and quotes its word (wrong_time is
-   not wrong_piece is not never_this); when `reasons` is empty it
-   says so — "declined, no reason given" — and cites the outcome.
-   Its offered step is the smallest thing that moves the prior's
-   *goal* forward (a task to create, an hour to hold); `expire`,
-   `retire` or a verdict on the prior is burial wearing a next step's
-   clothes, and the law says never buried. It then re-enters cooled.
+   ones still owe one — **only those; a decline whose diagnosis
+   already stands gets nothing, ever** (the manifest lists them apart,
+   and `declines_owed_a_diagnosis: 0` means diagnose nothing). Each
+   owed one carries its `cite` list. A diagnosis cites the
+   `verdict_reason` row and quotes its word (wrong_time is not
+   wrong_piece is not never_this); when `reasons` is empty it says so
+   — "declined, no reason given" — and cites the outcome. Its offered
+   step is a door the offered row admits *now*: pick from the
+   manifest's `offer_candidates` (the prior's evidence rows that still
+   stand, with their kind's declared doors — `prioritize` on a
+   standing task is the usual shape). The declined prior itself
+   admits no door — it is terminal — so `expire`/`retire` on it is
+   not a step, it is burial, and a tap on it would refuse. It then
+   re-enters cooled.
    Each staging still meets the quality walls below; quantity is
    free, sameness is not.
 5. **Score what you did not write — every run, composed or not.**

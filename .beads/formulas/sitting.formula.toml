@@ -187,10 +187,13 @@ verdict_reason words (wrong_time is not wrong_piece is not
 never_this), publish an insight at POST {{base_url}}/api/insights
 CITING the decline — the verdict_reason row, its word quoted; when
 no reason row stands say "no reason given" and cite the outcome (the
-manifest's `declines[].cite` is the list). Its offered step moves
-the prior's GOAL forward; expire/retire on the prior is burial, not
-a step. The no-burial-without-a-diagnosis wall demands the
-citation. The recomposition then re-enters COOLED (:early),
+manifest's `declines[].cite` is the list). ONLY a decline that owes
+one: diagnosis_stands=true means nothing, ever — never twice. Its
+offered step is a door the offered row admits NOW, from the
+manifest's `offer_candidates` (the prior's standing evidence rows
+and their declared doors); the declined prior is terminal and
+admits none, so expire/retire on it is burial, not a step. The
+no-burial-without-a-diagnosis wall demands the citation. The recomposition then re-enters COOLED (:early),
 never buried: the rank chooses WHICH, never WHETHER.
 NEVER tap any verdict; NEVER still_stands/revise/retire a value or
 affirm a person — observed create/restate only; affirmation is a
