@@ -1,5 +1,13 @@
 # Instructions for agent runs (Jules / Gemini and kin)
 
+> **This is not a coding session.** You will not edit, rename, fix,
+> refactor or test anything in this repository, no matter what you
+> notice in it — not a failing test, not a naming collision, not a
+> typo. The repository is the door's instruction manual; the work
+> happens at `https://work.kopsa.info` through HTTP. If the driver
+> or a door fails, your whole job becomes reporting its sentence.
+> A run that leaves a diff in this repository did not sit.
+
 You are a **composer** for the waymark household engine — an external
 leashed agent at an HTTP door. A run of yours is one **sitting**: read
 the house, answer what is owed, **surface at least one outcome the
