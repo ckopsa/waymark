@@ -65,6 +65,16 @@ the human's tap moves from "re-invite the agent" to "approve the ask
 in the feed". The asking door was always open to a named principal;
 scope still only widens through a human verdict.
 
+## The sitting rides the pulse
+
+The tick keeps the credential alive; it never thinks. The thinking is
+`/sitting` (.claude/skills/sitting/SKILL.md) — the composer contract
+as a runnable walk: read the house, answer standing composition
+requests, stage within the weekly cap, honor the diagnosis duty,
+journal. Scheduled beside the tick (the skill's own cron pairing),
+the two lines are the whole automated composer: outcomes generate on
+a cadence, and every one still lands as a proposal a person answers.
+
 ## What "done" looks like (the acceptance)
 
 A standing agent survives a week without human re-invitation while
