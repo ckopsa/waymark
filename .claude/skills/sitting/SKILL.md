@@ -37,6 +37,10 @@ In order, before staging anything:
    is a usable companion), tasks, chore_runs, events, media,
    verdict_reasons (other members' words arrive only through the
    granted whole-kind read).
+6. The threads: `remarks` on your subjects — every outcome, piece,
+   insight, and request you have touched — read oldest-first per
+   subject (`?subject_kind=&subject_id=`, the default sort already
+   reads like a conversation).
 
 ## 2. Answer the pulls first
 
@@ -88,7 +92,20 @@ Score bundles you read with a `ranking_note` (0–1 and one sentence,
 citing what you read) — never your own staged rows; the door refuses
 `not-your-own-row`.
 
-## 6. Journal
+## 6. The unanswered turn
+
+A thread whose last turn is a person's and not yours is a work order
+(waymark-b4s): they said something about your subject and nothing
+answered. Answer every one, this sitting — with a reply `remark`
+(`in_reply_to` naming their turn), with a recomposition whose
+evidence cites what they said, or both. A question gets words; a
+fact ("the wood arrived") gets a composition that uses it; a
+suggestion gets either an outcome that takes it or a turn saying
+honestly why not. Never reword anybody's turn but your own; never
+read a remark as a verdict — words decline nothing, and the person's
+taps stay the only doors that decide.
+
+## 7. Journal
 
 End every sitting with one journal entry: what was staged (ids),
 which requests were answered, which diagnoses were published, and —
