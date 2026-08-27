@@ -79,6 +79,14 @@
   from the invite door's own — N1) so the uniform 404 can't be guessed
   against a short window.
 
+  The standing rotation (waymark-53u) rides beside the handoff: the
+  auth doors re-mint the way home through the concealed registrar
+  :rotate_reentry — at bind, at the homecoming spend, and at a live
+  renew past half-life — seven days per mint, each REPLACING the
+  last, refused for guests by the durable guard. The agent never
+  chooses to mint; the engine rotates a credential a human's act
+  first anchored, so the offer_reentry mint boundary stands.
+
   Recorded deviations and named punts (each a sentence):
   - the invite carries no email and the outbox sends nothing —
     waymark9 bound by verified email claim; v10 binds by the token
@@ -185,6 +193,16 @@
   who asked for a day should learn the door's shape, not discover an
   hour later that the engine quietly disagreed."
   3600)
+
+(def reentry-standing-ttl-seconds
+  "The standing rotation's window (waymark-53u) — seven days by the
+  live clock. Long enough that a client machine down for a long
+  weekend still comes home on its own credential; short enough that
+  a mislaid token dies within the week. The HUMAN handoff keeps its
+  one-hour ceiling above — this constant belongs to :rotate_reentry
+  alone, and the two doors never share a TTL on purpose: a handoff
+  is a moment, a standing credential is a season."
+  (* 7 24 3600))
 
 ;; the second credential boundary on this kind (the assign_roles
 ;; lesson, applied): a re-entry token IS a session for its member, so
@@ -315,6 +333,26 @@
                             reentry-max-ttl-seconds)]
       (if (pos? (compare exp cap))
         (t/deny {:vars {:max_minutes (quot reentry-max-ttl-seconds 60)
+                        :asked (str exp)}})
+        (t/allow)))
+    (t/allow)))
+
+;; the rotation's own ceiling (waymark-53u): the engine computes the
+;; expiry it asks for, so this guard is defense in depth — a future
+;; caller reaching for a month learns the door's shape instead of
+;; being silently clamped, reentry-is-short's philosophy held at the
+;; standing credential's own scale.
+(g/defguard reentry-standing-is-bounded
+  {:judges [:expires_at]
+   :reads [:now]
+   :vars [:max_days :asked]
+   :explain "A standing re-entry credential lives at most {max_days} days; this one runs to {asked}."}
+  [_row inp ctx]
+  (if-some [^java.time.Instant exp (:expires_at inp)]
+    (let [cap (.plusSeconds ^java.time.Instant (:now ctx)
+                            reentry-standing-ttl-seconds)]
+      (if (pos? (compare exp cap))
+        (t/deny {:vars {:max_days (quot reentry-standing-ttl-seconds 86400)
                         :asked (str exp)}})
         (t/allow)))
     (t/allow)))
@@ -758,6 +796,39 @@
                              :one-way "Spending nulls the credential; the way back in again is a fresh mint."}
                     :handler clear-reentry
                     :display {:label "Spend re-entry" :order 6}}
+    ;; the standing rotation (waymark-53u): the engine re-mints the
+    ;; way home at the auth doors — the invite bind, the homecoming
+    ;; spend, and a live renew whose credential has burned half its
+    ;; life. This does NOT breach the mint boundary offer_reentry
+    ;; defends ("an agent must never mint its own way back in"): the
+    ;; agent never CHOOSES to mint — the engine rotates only at the
+    ;; moment the agent presents a still-live credential whose chain
+    ;; of custody began in a human act (the invitation, or a
+    ;; recovery-admin's hand), and each mint REPLACES the prior token
+    ;; (set-reentry's overwrite: at most one live credential per
+    ;; member), so rotation never widens what a human handed out — it
+    ;; renews it, one audited transition row per mint. The durable
+    ;; guard still holds: a knock-born guest never grows a standing
+    ;; way home, so the ephemeral posture of guest access survives
+    ;; rotation untouched. Registrar-only and concealed, the
+    ;; bind/spend_reentry posture; the raw token rides the input and
+    ;; NOT :record, the offer_reentry precedent — the transition row
+    ;; (actor, digest, when) is the audit and the credential never
+    ;; persists into the log. suspend still revokes (clear-reentry),
+    ;; so a suspended agent's rotation dies with its access.
+    :rotate_reentry {:from #{:active} :to :active
+                     :input [:map
+                             [:token [:string {:min 22 :max 128}]]
+                             [:expires_at {:optional true}
+                              [:maybe :waymark/instant]]]
+                     :guards [registrar-binds
+                              reentry-targets-agents
+                              reentry-targets-durable
+                              reentry-standing-is-bounded
+                              reentry-token-is-fresh]
+                     :safety {:idempotent true :reversible true :confirm false}
+                     :handler set-reentry
+                     :display {:label "Rotate re-entry" :order 5}}
     ;; suspension revokes the credential too (waymark-4zj.8.2 R8): a
     ;; suspend that only HID the member (its old behaviour) left the
     ;; re-entry token live on the row, so a suspend/reinstate cycle
@@ -954,6 +1025,48 @@
                          {:principal registrar})
             (catch Exception _ nil)))
         nil))))
+
+(defn rotate-reentry!
+  "The standing rotation (waymark-53u): re-mint the way home through
+  the concealed :rotate_reentry — registrar, logged, the engine's
+  seven-day window. The auth doors call this at the moment an agent
+  proves itself alive; the door's guards hold the law (agent,
+  durable, bounded, fresh), so a refusal — a guest row, a suspended
+  member, a hollow namesake — is a quiet nil and the door answers
+  without a way home. Returns {:token :expires_at} for the one-time
+  response seam; the raw token never persists anywhere but the row's
+  own :secret field. The token is CALLER-SUPPLIED (oidc-rp's
+  rand-token — the auth namespace keeps the randomness, this one
+  keeps the law) so requiring this namespace never buys a mint: the
+  registrar invoke below is the wall, same as spend-reentry!."
+  [eng member-id token]
+  (let [exp (.plusSeconds ^java.time.Instant ((:now-fn eng))
+                          reentry-standing-ttl-seconds)]
+    (try
+      (inv/invoke! eng :member (str member-id) :rotate_reentry
+                   {:token token :expires_at exp}
+                   {:principal registrar})
+      {:token token :expires_at exp}
+      (catch Exception _ nil))))
+
+(defn rotate-reentry-when-stale!
+  "The renew tick's rotation: rotate only when the standing
+  credential is absent, expired, or past HALF its life — so a
+  healthy hourly renew loop lands a member-row write every few days,
+  not every tick (waymark-4r8's transition-log window, respected).
+  nil when the standing token is still young, when the member is
+  unknown, or when the rotation itself refuses."
+  [eng member-id token]
+  (when-some [row (load-member eng (str member-id))]
+    (let [now ^java.time.Instant ((:now-fn eng))
+          exp (get-in row [:data :reentry_expires_at])
+          stale? (or (nil? exp)
+                     (not (neg? (compare (.plusSeconds
+                                          now
+                                          (quot reentry-standing-ttl-seconds 2))
+                                         exp))))]
+      (when stale?
+        (rotate-reentry! eng member-id token)))))
 
 (defn bind-agent!
   "The /auth/agent door's bind (waymark10.server.oidc-rp): an agent
