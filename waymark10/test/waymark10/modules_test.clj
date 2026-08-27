@@ -67,9 +67,15 @@
   ;; about a ranked row, the crown's sixth input. :always for the
   ;; reason kind's reason — it names no application vocabulary and
   ;; the rank that reads it is the feed module's own.
+  ;; …and :remark (waymark-b4s): the thread's turn — words on any
+  ;; subject with no verdict attached. :always for the reason kind's
+  ;; reason again — {subject_kind, subject_id}, no application
+  ;; vocabulary, and the conversation is about the cards this module
+  ;; minted.
   (is (= #{:definition :member :role :grant :approval_request
            :attachment :subscription :job :feed_recipe :recipe_proposal
-           :feed_view :feed_view_consent :verdict_reason :ranking_note}
+           :feed_view :feed_view_consent :verdict_reason :ranking_note
+           :remark}
          (enrolled-kinds [] nil))))
 
 (deftest app-opt-in-kinds-are-named-but-never-enrolled
