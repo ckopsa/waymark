@@ -9,7 +9,9 @@ uv.lock
 .idea/
 .env
 .DS_Store
-.claude/
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
 dist/
 # external repo clones vendored for reference, not part of this project
 full_stack/
