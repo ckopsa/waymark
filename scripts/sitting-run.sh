@@ -448,6 +448,15 @@ jq -c '{tools: ((.links // {}) | to_entries | map({name:.key, href:.value.href, 
 # with the whole house.
 PREV_MANIFEST="$(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | grep -v "/$STAMP/manifest.json" | sort | tail -n 1)"
 SINCE_ARR="$(jq -r '.run.started_at // empty' "$PREV_MANIFEST" 2>/dev/null)"
+# On an EPHEMERAL runner (Jules clones fresh — no prior snapshot) there
+# is no PREV_MANIFEST, so the self-diff below cannot fire and arrivals
+# fall back to a timestamp. The best persisted watermark that survives
+# a fresh clone is our own last JOURNAL — "new since I was last here" —
+# read from the snapshot the driver already took; a truly first run
+# with no journal looks back one hour.
+if [ -z "${SINCE_ARR:-}" ]; then
+  SINCE_ARR="$(jq -r '[.[].meta.updated_at] | max // empty' "$R/journals.full.json" 2>/dev/null)"
+fi
 [ -n "${SINCE_ARR:-}" ] || SINCE_ARR="$(iso "$(( $(now_s) - 3600 ))")"
 
 # ARRIVALS: rows that are genuinely NEW — present now, absent from the
