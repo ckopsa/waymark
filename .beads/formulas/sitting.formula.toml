@@ -1,0 +1,129 @@
+# The composer's sitting as a beads formula (waymark-3z3, the owner's
+# direction): the work order any agent run can be handed. Wisp it per
+# run — `bd mol wisp sitting` — claim the steps oldest-first, do what
+# each says, close it, and `bd mol squash` the wisp to a digest when
+# the sitting ends. The molecule IS the instruction: each step teaches
+# the agent where to look within waymark and which walls hold there.
+#
+# The law behind every step is docs/spec-outcome-menu.md § "The
+# composer contract"; the same walk in prose is
+# .claude/skills/sitting/SKILL.md. The doors enforce most of the law
+# and refuse with sentences that name the fix — trust the refusals.
+#
+# CREDENTIALS: read {{state_file}} (mode 600). Send BOTH headers on
+# every request: `Cookie: waymark_session=<session_token>` and
+# `X-Waymark-Grant: <grant_id>`. A 401 means the session lapsed —
+# stop and say so; scripts/standing-agent-tick.sh owns renewal, and
+# a sitting never knocks or spends re-entry on its own.
+
+formula = "sitting"
+description = "One composer sitting at the waymark door: read the house, answer every pull and every unanswered turn, compose within the cap, diagnose before any burial, journal what was and was not done."
+
+[vars]
+base_url = { default = "https://work.kopsa.info" }
+state_file = { default = "~/.waymark-agent.json" }
+
+[[steps]]
+id = "read"
+title = "Read the house — evidence before anything"
+description = """
+Read, in this order, writing NOTHING yet:
+1. GET {{base_url}}/api/-/welcome — the house's own orientation.
+2. GET {{base_url}}/api/-/diagnosis — the tally: shown-and-declined,
+   exposure. ?outcome=<id> narrows to one.
+3. GET {{base_url}}/api/composition_requests?state=offered — the
+   standing pulls. Every one of these is owed an answer this sitting.
+4. The feed through the owner's eyes: the feed document's own
+   preview_as capability (the welcome names the address). A preview
+   writes nothing — that is law, not a gap.
+5. Evidence the grant admits: {{base_url}}/api/values,
+   /api/persons (only an affirmed/current person is a usable
+   companion), /api/tasks, /api/chore_runs, /api/events, /api/media,
+   /api/verdict_reasons (the house's decline words).
+6. The threads: {{base_url}}/api/remarks?subject_kind=&subject_id=
+   for every outcome, piece, insight and request this composer has
+   touched — the default sort is oldest-first and reads like the
+   conversation it is. Also read the previous sitting's journal
+   entry first if one exists; it names what was deliberately left
+   alone and why.
+Record what you found for the later steps: open requests, threads
+whose LAST turn is a person's, declines with words, evidence worth
+composing from.
+"""
+
+[[steps]]
+id = "answer-requests"
+title = "Answer every standing composition request"
+depends_on = ["read"]
+description = """
+A person's pull is NEVER capped. For each composition_request in
+state offered (from the read step): stage an outcome at
+POST {{base_url}}/api/outcomes whose request_id names the request,
+with 2-5 outcome_pieces whose friction is genuinely pre-paid. The
+walls that will judge you, in the door's own words if you miss:
+name a LIVE value the house holds; cite EVERYTHING you read in
+evidence (all offenders are named at once — fix them in one round);
+routes_through only when a loved activity truly carries it, absent
+is allowed and honest; the prepared input must fit the target door
+(a 422 is your bug, and a piece may name any door in the house).
+The staging itself answers the request — no door on the request kind
+is yours to touch. Read the engine-written impact line back on every
+piece before counting the stage done: a composer that never read its
+own is proposing blind.
+"""
+
+[[steps]]
+id = "answer-threads"
+title = "Answer every unanswered turn"
+depends_on = ["read"]
+description = """
+A thread whose last turn is a person's and not the composer's is a
+work order (waymark-b4s). For each one found in the read step:
+answer with a reply remark — POST {{base_url}}/api/remarks with the
+same {subject_kind, subject_id}, says carrying your answer, and
+in_reply_to naming their turn — or with a recomposition whose
+evidence cites what they said, or both. A question gets words; a
+fact ("the wood arrived") gets a composition that uses it; a
+suggestion gets an outcome that takes it or a turn saying honestly
+why not. NEVER reword anybody's turn but your own (the door refuses
+by name); NEVER read a remark as a verdict — words decline nothing,
+and the person's taps stay the only doors that decide.
+"""
+
+[[steps]]
+id = "compose"
+title = "Initiative within the cap, diagnosis before any burial"
+depends_on = ["answer-requests", "answer-threads"]
+description = """
+Own-initiative staging is walled at TWO offered plans per author per
+calendar week (plans-are-few), and a superseding plan waits for its
+not_before. The cap forces choosing — choose from the evidence, and
+record in the journal step what you chose NOT to compose and why.
+THE DIAGNOSIS DUTY (8um law 4): before any recomposition of a
+shown-and-declined prior, read its verdict_reason words (wrong_time
+is not wrong_piece is not never_this), publish an insight at
+POST {{base_url}}/api/insights CITING the decline — the
+no-burial-without-a-diagnosis wall demands the citation — and
+respect the recomposition floor the verdict set. A timing decline
+means hold things ready, not hours. Also score bundles you READ
+(never your own) with POST {{base_url}}/api/ranking_notes: 0-1 and
+one sentence, citing what you read. NEVER tap any verdict; NEVER
+still_stands/revise/retire a value or affirm a person — observed
+create/restate only; affirmation is a person's act.
+"""
+
+[[steps]]
+id = "journal"
+title = "Journal the sitting — including what was left alone"
+depends_on = ["compose"]
+description = """
+One journal entry closing the sitting: what was staged (ids), which
+requests were answered, which threads were answered, which diagnoses
+were published, and — just as load-bearing — what was deliberately
+NOT composed and why (a floor not yet expired, evidence not yet in
+the house, a person still unaffirmed). The next sitting reads this
+first. If the whole sitting found nothing changed — no request, no
+unanswered turn, no new evidence, no diagnosis due — write NOTHING,
+journal included: a no-op sitting leaves no residue. Then close this
+molecule's steps and squash the wisp.
+"""
