@@ -1,6 +1,6 @@
 ---
 name: sitting
-description: Run one composer sitting at the waymark MCP door — read the house, answer standing composition requests and threads, stage every distinct bundle the evidence supports (ranked, not capped), honor the diagnosis duty, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
+description: Run one composer sitting at the waymark MCP door — read the house, index the facts people said as insights, answer standing composition requests and threads, stage every distinct bundle the evidence supports (ranked, not capped), honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
 ---
 
 # The sitting
@@ -41,25 +41,44 @@ In order, before staging anything:
    insight, and request you have touched — read oldest-first per
    subject (`?subject_kind=&subject_id=`, the default sort already
    reads like a conversation).
+7. What already stands and what is already written: `outcomes` in
+   every state, `insights` (so a fact is never indexed twice), and
+   your own `ranking_notes` (so you know which bundles still carry no
+   judgment of yours).
 
-## 2. Answer the pulls first
+## 2. Index what people said
+
+A person's turn often states a fact about the house — "Wellesley is
+sick", "we're rescheduling", "the wood arrived". In the thread it is
+prose only this sitting can see; the next sitting, the rank and the
+diagnosis are blind to it. Before answering or composing, publish
+each such fact that no insight yet carries: one sentence stating it
+as the house's record, `evidence` citing the remark's address and
+the rows it is about, and the one light next step it points at
+(`offer_kind` / `offer_action` / `offer_id` — usually a door on the
+outcome the thread sits on, or on the person or event it names).
+`cites-what-it-claims` and `offers-something-light` refuse anything
+less. Then compose *from* the insight and cite it. State the fact,
+never judge it; a question or a thanks indexes nothing.
+
+## 3. Answer the pulls
 
 Every offered `composition_request` deserves an answer this sitting:
 an outcome whose `request_id` names it. Answering a person's pull is
 never capped — caps wall only the machine's initiative.
 
-## 3. Ranked, not capped
+## 4. Ranked, not capped
 
 There is no cap on staging (waymark-1uv.3): the machine writes
 without limit and the crown's declared rank chooses what fills the
 person's attention. Stage every DISTINCT bundle the evidence
 honestly supports — but never a twin of one that already stands:
 the rank cannot tell twins apart, so sameness is the only scarcity.
-A declined prior recomposes only after its diagnosis (step 5) and
-re-enters cooled, never buried. The journal (step 7) still records
+A declined prior recomposes only after its diagnosis (step 6) and
+re-enters cooled, never buried. The journal (step 9) still records
 what you chose not to compose and why.
 
-## 4. The walls, in one breath
+## 5. The walls, in one breath
 
 - Name a **live value** the house holds; a plan citing none, or a
   retired one, is refused.
@@ -82,7 +101,7 @@ what you chose not to compose and why.
   back** before the staging counts as done — a composer that never
   read its own is proposing blind (waymark-jfv.23).
 
-## 5. The diagnosis duty (8um law 4)
+## 6. The diagnosis duty (8um law 4)
 
 Non-engagement with a high-value plan is your work order, not a
 verdict on the person. Before any recomposition of a
@@ -92,11 +111,7 @@ citing the decline (the `no-burial-without-a-diagnosis` wall demands
 the citation), and respect the recomposition floor the prior verdict
 set. A decline for timing means hold things ready, not hours.
 
-Score bundles you read with a `ranking_note` (0–1 and one sentence,
-citing what you read) — never your own staged rows; the door refuses
-`not-your-own-row`.
-
-## 6. The unanswered turn
+## 7. The unanswered turn
 
 A thread whose last turn is a person's and not yours is a work order
 (waymark-b4s): they said something about your subject and nothing
@@ -105,17 +120,41 @@ answered. Answer every one, this sitting — with a reply `remark`
 evidence cites what they said, or both. A question gets words; a
 fact ("the wood arrived") gets a composition that uses it; a
 suggestion gets either an outcome that takes it or a turn saying
-honestly why not. Never reword anybody's turn but your own; never
-read a remark as a verdict — words decline nothing, and the person's
-taps stay the only doors that decide.
+honestly why not. When the turn changes the standing of the outcome
+it sits on — a date slid, a plan on hold, someone sick — say so on
+that outcome in a reply: what changed, what you did about it (the
+insight indexed, the follow-up staged, by id), what you left alone.
+The feed must be able to read why a bundle slipped without opening
+the thread. Never reword anybody's turn but your own; never read a
+remark as a verdict — words decline nothing, and the person's taps
+stay the only doors that decide.
 
-## 7. Journal
+## 8. Score what you did not write
+
+Every sitting, composed or not — ranking is its own duty, not a tail
+on staging. For every bundle you can see that carries no live
+`ranking_note` of yours, newest first, at least three when three
+exist: `{subject_kind, subject_id}`, a score 0–1, one sentence saying
+why in the house's terms, `evidence` citing what you judged from.
+The walls: never a row you wrote (`not-your-own-row`); one live note
+per row per author — a changed mind restates, never files a second;
+a person dismisses a note, an agent never does. Your score is the
+judgment input the crown reads at `crown_rank.judged`'s weight and
+quotes as yours; the other numbers (asked-for, declared value, early,
+cooled, declined, fresh) are the recipe's, and a composer who thinks
+a weight is wrong proposes new numbers through `recipe_proposal` and
+leaves the order to the person who applies it.
+
+## 9. Journal
 
 End every sitting with one journal entry: what was staged (ids),
-which requests were answered, which diagnoses were published, and —
-just as load-bearing — what you chose NOT to compose and why (the
-wood not yet in the house; a floor not yet expired; a person still
-unaffirmed). The next sitting reads this first.
+which facts were indexed (insight ids), which requests and threads
+were answered, which diagnoses were published, which bundles were
+scored, and — just as load-bearing — what you chose NOT to compose
+and why (the wood not yet in the house; a floor not yet expired; a
+person still unaffirmed). The next sitting reads this first. A
+sitting that found nothing to index, answer, stage or score writes
+nothing at all — journal included.
 
 ## Scheduling
 

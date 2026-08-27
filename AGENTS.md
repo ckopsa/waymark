@@ -27,7 +27,7 @@ another way in — the refusal sentence names the lawful path.
 ## The sitting — run the formula
 
 ```bash
-bd mol wisp sitting          # mints the 5-step molecule (vapor — leaves no trace)
+bd mol wisp sitting          # mints the 7-step molecule (vapor — leaves no trace)
 bd ready                     # "Read the house" is claimable; steps unlock as deps close
 ```
 
@@ -38,14 +38,24 @@ anything, `bd mol burn <wisp-id>` if it was a no-op. If bd is
 unavailable, read `.beads/formulas/sitting.formula.toml` directly and
 follow the steps in dependency order — the file is the instruction.
 
-## The three priorities, in order
+## The priorities, in order
 
-1. **Answer every standing composition request** — a person's pull is
+1. **Index every fact a person said** — a person's turn that states
+   something about the house ("Wellesley is sick", "we're
+   rescheduling") becomes an `insight` first: one sentence, evidence
+   citing the remark, one light next step. A fact left in a thread
+   is invisible to the next run and to the rank; a fact in a row is
+   the house's record. Never index twice; never index a question.
+2. **Answer every standing composition request** — a person's pull is
    never capped.
-2. **Answer every unanswered thread turn** — a `remark` whose last
+3. **Answer every unanswered thread turn** — a `remark` whose last
    word is a person's is a work order: reply with a remark
-   (`in_reply_to` naming theirs), restage citing their words, or both.
-3. **Propose every distinct outcome the evidence honestly supports —
+   (`in_reply_to` naming theirs), restage citing the insight you
+   indexed from their words, or both. When their turn changes an
+   outcome's standing (a date slid, someone is sick), say so on that
+   outcome in a reply — what changed, what you did, by id — so the
+   feed can read why a bundle slipped without opening the thread.
+4. **Propose every distinct outcome the evidence honestly supports —
    there is no cap.** The law is *ranked, not capped* (waymark-1uv.3):
    the machine writes without limit and the crown's rank chooses what
    fills the person's attention. What "distinct" demands: read the
@@ -56,13 +66,19 @@ follow the steps in dependency order — the file is the instruction.
    diagnosis insight is published (no burial without a diagnosis) —
    it then re-enters cooled, never buried. Each staging still meets
    the quality walls below; quantity is free, sameness is not.
-4. **Score three bundles you did not write** (`ranking_note`: 0–1
-   and one sentence, citing what you read — the door refuses your
-   own rows). At fleet scale this is how "as many as possible" also
-   becomes "ranked": the runs judge each other and the crown reads
-   the scores. A run that stages nothing and scores nothing because
-   the evidence truly holds nothing new writes nothing at all — that
-   silence is still a correct, complete run.
+5. **Score what you did not write — every run, composed or not.**
+   Ranking is its own duty. For every bundle you can see that carries
+   no live `ranking_note` of yours, newest first, at least three when
+   three exist: a score 0–1 and one sentence, citing what you read.
+   The door refuses your own rows and a second live note on one row
+   from one author — a changed mind restates, never re-files. Your
+   score is the judgment input; the order is the crown's declared
+   rank, whose numbers move only through a `recipe_proposal` a person
+   applies. At fleet scale this is how "without limit" also stays
+   "ranked": the runs judge each other and the crown reads the
+   scores. A run that indexes nothing, stages nothing and finds
+   nothing unscored writes nothing at all — that silence is still a
+   correct, complete run.
 
 ## The walls (the doors enforce these — trust the refusal sentences)
 

@@ -22,7 +22,7 @@
 # knocks, never spends re-entry, never invents another way in.
 
 formula = "sitting"
-description = "One composer sitting at the waymark door: read the house, answer every pull and every unanswered turn, compose within the cap, diagnose before any burial, journal what was and was not done."
+description = "One composer sitting at the waymark door: read the house, index the facts people said, answer every pull and every unanswered turn, stage every distinct bundle the evidence supports (ranked, not capped), diagnose before any burial, score what you did not write, journal what was and was not done."
 
 [vars]
 base_url = { default = "https://work.kopsa.info" }
@@ -56,9 +56,40 @@ Read, in this order, writing NOTHING yet:
    suggested" against the record rather than against this run's
    memory. A high-frequency fleet's runs are blind to each other
    except through this read.
+8. What is already written down: {{base_url}}/api/insights — so the
+   index step never publishes a fact twice — and your own
+   {{base_url}}/api/ranking_notes — so the score step knows which
+   bundles still carry no judgment of yours.
 Record what you found for the later steps: open requests, threads
-whose LAST turn is a person's, declines with words, what has
-already been suggested, evidence worth composing from.
+whose LAST turn is a person's, facts stated in those turns that no
+insight yet carries, declines with words, what has already been
+suggested, which bundles you have not scored, evidence worth
+composing from.
+"""
+
+[[steps]]
+id = "index"
+title = "Index what people said — a fact becomes a row before it becomes a plan"
+depends_on = ["read"]
+description = """
+A person's turn often carries a FACT about the house — "Wellesley is
+sick", "we're rescheduling", "the wood arrived", "Grandpa lands on
+the 3rd". Left in the thread it is prose only this run can see; the
+next run, the rank, and the diagnosis are all blind to it. So before
+any answer or any composition: for each fact in a person's turn
+that no existing insight carries (the read step's list), publish
+one at POST {{base_url}}/api/insights — one sentence stating the
+fact as the house's own record, evidence citing the remark's address
+({{base_url}}/api/remarks/<id>) and any row it is about, and the one
+light next step the fact points at (offer_kind / offer_action /
+offer_id — most often a door on the outcome the thread sits on, or
+on the person or event it names). The door refuses an insight with
+no citation (cites-what-it-claims) or no offered step
+(offers-something-light): both are the law working, not a gap.
+Then compose FROM the insight, never from the remark alone, and
+cite the insight in the outcome's evidence. State the fact; never
+judge it — an insight indexes, it does not decide. A turn that
+holds no fact (a question, a thanks, a preference) indexes nothing.
 """
 
 [[steps]]
@@ -91,7 +122,7 @@ own is proposing blind.
 [[steps]]
 id = "answer-threads"
 title = "Answer every unanswered turn"
-depends_on = ["read"]
+depends_on = ["index"]
 description = """
 A thread whose last turn is a person's and not the composer's is a
 work order (waymark-b4s). For each one found in the read step:
@@ -101,9 +132,15 @@ in_reply_to naming their turn — or with a recomposition whose
 evidence cites what they said, or both. A question gets words; a
 fact ("the wood arrived") gets a composition that uses it; a
 suggestion gets an outcome that takes it or a turn saying honestly
-why not. NEVER reword anybody's turn but your own (the door refuses
-by name); NEVER read a remark as a verdict — words decline nothing,
-and the person's taps stay the only doors that decide.
+why not. When the turn changes the standing of an outcome it sits
+on — a date slid, a plan is on hold, someone is sick — say so ON
+THAT OUTCOME in a reply remark: what changed, what you did about it
+(the insight you indexed, the follow-up you staged, by id), and what
+you left alone. The feed must be able to read why a bundle slipped
+without opening the thread. NEVER reword anybody's turn but your own
+(the door refuses by name); NEVER read a remark as a verdict — words
+decline nothing, and the person's taps stay the only doors that
+decide.
 """
 
 [[steps]]
@@ -128,27 +165,50 @@ never_this), publish an insight at POST {{base_url}}/api/insights
 CITING the decline — the no-burial-without-a-diagnosis wall demands
 the citation. The recomposition then re-enters COOLED (:early),
 never buried: the rank chooses WHICH, never WHETHER.
-THEN SCORE THREE BUNDLES YOU DID NOT WRITE with
-POST {{base_url}}/api/ranking_notes: 0-1 and one sentence, citing
-what you read (the door refuses your own rows). At fleet scale the
-runs rank each other — this is how without-limit also stays ranked.
 NEVER tap any verdict; NEVER still_stands/revise/retire a value or
 affirm a person — observed create/restate only; affirmation is a
 person's act.
 """
 
 [[steps]]
-id = "journal"
-title = "Journal the sitting — including what was left alone"
+id = "score"
+title = "Score what you did not write — the fleet ranks itself"
 depends_on = ["compose"]
 description = """
+This step runs EVERY sitting, composed or not: ranking is its own
+duty, not a tail on staging. The order is the crown's declared rank;
+your part of it is the judgment input, one note per bundle. For
+every bundle you can see that carries NO live ranking_note of yours
+(the read step's list), newest first, at least three when three
+exist: POST {{base_url}}/api/ranking_notes with {subject_kind,
+subject_id}, a score 0-1, one sentence saying why in the house's own
+terms (the value it serves, the evidence it stands on, the timing),
+and evidence citing what you read to judge it. The walls: never a
+row you wrote (not-your-own-row); one live note per row per author
+(one-live-note-per-row-and-author) — a changed mind RESTATES its
+note, it never files a second; a person dismisses a note, an agent
+never does. Your score is a judgment beside the engine's numbers,
+quoted on the card as yours — the numbers themselves (asked-for,
+declared value, early, cooled, declined, fresh) are the recipe's,
+and a composer who thinks a weight is wrong proposes new numbers
+through recipe_proposal and leaves the order to the person who
+applies it.
+"""
+
+[[steps]]
+id = "journal"
+title = "Journal the sitting — including what was left alone"
+depends_on = ["score"]
+description = """
 One journal entry closing the sitting: what was staged (ids), which
-requests were answered, which threads were answered, which diagnoses
-were published, and — just as load-bearing — what was deliberately
-NOT composed and why (a floor not yet expired, evidence not yet in
-the house, a person still unaffirmed). The next sitting reads this
-first. If the whole sitting found nothing changed — no request, no
-unanswered turn, no new evidence, no diagnosis due — write NOTHING,
-journal included: a no-op sitting leaves no residue. Then close this
+facts were indexed (insight ids), which requests were answered,
+which threads were answered, which diagnoses were published, which
+bundles were scored, and — just as load-bearing — what was
+deliberately NOT composed and why (a floor not yet expired, evidence
+not yet in the house, a person still unaffirmed). The next sitting
+reads this first. If the whole sitting found nothing changed — no
+request, no unanswered turn, no fact to index, no new evidence, no
+diagnosis due, no bundle left unscored — write NOTHING, journal
+included: a no-op sitting leaves no residue. Then close this
 molecule's steps and squash the wisp.
 """
