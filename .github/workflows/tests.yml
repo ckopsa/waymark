@@ -54,6 +54,8 @@ on:
       - '.github/workflows/tests.yml'
       # The composite action every job here runs through.
       - '.github/actions/**'
+      # The scripts it and the jobs call: test databases, AOT, timings.
+      - '.github/scripts/**'
   pull_request:
     paths:
       - 'waymark10/**'
@@ -62,7 +64,27 @@ on:
       - '.github/workflows/tests.yml'
       # The composite action every job here runs through.
       - '.github/actions/**'
+      # The scripts it and the jobs call: test databases, AOT, timings.
+      - '.github/scripts/**'
   workflow_dispatch:
+    inputs:
+      runner:
+        description: >-
+          Where to run. 'default' follows the CI_RUNNER repository
+          variable; 'github' pins this dispatch to GitHub-hosted
+          runners. Pinning is what makes an A/B measurable — the
+          self-hosted node carries other people's load, and a single
+          pair of runs cannot average that out.
+        type: choice
+        options: [default, github]
+        default: default
+      profile:
+        description: >-
+          Collect per-namespace timings via kaocha's profiling plugin and
+          upload them as artifacts. Off by default: the plugin flags are
+          unverified here, so they stay out of the path every push takes.
+        type: boolean
+        default: false
 
 concurrency:
   group: tests-${{ github.ref }}
@@ -71,14 +93,88 @@ concurrency:
 env:
   # Pinned so a shard cannot start failing because upstream moved.
   CLOJURE_CLI_VERSION: '1.12.5.1664'
-  SHARDS_WAYMARK10: '4'
-  SHARDS_WORKQUEUE10: '2'
+  # Sized from measurement, not from file counts. Run 6 on GitHub-hosted
+  # gave ~20s of per-job overhead (job time minus test time) and 220s /
+  # 90s of total test work for the two suites. So
+  #
+  #   wall clock ~= 20 + work/shards
+  #
+  # and the free tier's 20-concurrent-job cap leaves ~18 for shards after
+  # quick and discover. Balancing the two suites (220/N1 = 90/N2, N1+N2
+  # = 18) puts the knee at 13 and 5:
+  #
+  # CORRECTED BY MEASUREMENT. That model was wrong: it treated all test
+  # time as divisible. Fitting 8 namespaces -> ~35s against 26 -> ~55s
+  # on GitHub-hosted gives
+  #
+  #   shard tests ~= 26s + 1.1s x namespaces
+  #
+  # so ~26s of every shard is FIXED — JVM boot plus loading and
+  # compiling the codebase — and it REPLICATES with each shard instead
+  # of dividing. Only ~114s of the 220s actually splits. The same floor
+  # sits at ~156s on the self-hosted ARM node: same cause, ~6x the size.
+  #
+  #   4 + 2   ->  96s observed
+  #   13 + 5  ->  81s observed, at 3x the machine-time
+  #   balanced floor ~= 18s job + 26s load + a share of 114s
+  #
+  # 13+5 bought 16% for triple the cost, so 8+3 keeps nearly all of it.
+  # Below ~44s the constraint stops being the split: it is IMBALANCE
+  # (13+5 measured 43s to 81s across supposedly equal shards, because
+  # round-robin balances namespace COUNTS and not durations) and then
+  # the 26s fixed cost itself, which only AOT would move.
+  #
+  # Run the workflow with profile=true to collect the per-namespace
+  # durations a duration-weighted split would need. Each shard then
+  # prints its table at the end of its log as well as uploading it.
+  #
+  # ── WHERE THE TIME ACTUALLY GOES, MEASURED (runs 26 and 27) ─────────
+  #
+  # Run 26, 13+5 pinned to GitHub-hosted: 20 jobs, all started within a
+  # second of each other, shard steps 25-60s, WALL CLOCK 97s.
+  # Run 27, 8+3 on the self-hosted cluster: 11 test jobs onto 8 runners
+  # so three queued (one waited 9m32s), shard steps 317-453s,
+  # WALL CLOCK 17m22s.
+  #
+  # Same commit content, ~10x apart, and the cluster is the slow side.
+  # Run 27's shard 3 says where a shard's 352s goes — the timestamps in
+  # its own log, against kaocha's reported 92.36s of test time:
+  #
+  #   ~147s  silence: JVM boot, then compiling what the first test
+  #          namespace transitively requires. 70k lines of Clojure and
+  #          no AOT anywhere, so this is a from-source compile that
+  #          EVERY shard repeats. Effectively FIXED per shard.
+  #   ~107s  usability warnings streaming: each test namespace loading,
+  #          running the check battery its top-level defresource forms
+  #          trigger. PROPORTIONAL to the shard's namespace count.
+  #    ~98s  the tests (kaocha: 92.36s). PROPORTIONAL.
+  #
+  # So ~40% is fixed and ~60% divides. (The exact split inside the 147s
+  # is not separately measured — some namespace loading hides in it —
+  # so read it as an upper bound on the fixed part.)
+  #
+  # AOT is the change that attacks the fixed 147s, and it is the only
+  # one that helps a shard that is already alone on a machine. The
+  # other two shrink by sharding, which is why the shard count still
+  # earns its keep even though imbalance is a second-order effect.
+  #
+  # On GitHub-hosted the same fixed cost is ~20-26s rather than ~147s,
+  # which is why 97s is already close to the floor there: ~10s discover
+  # + ~20s job setup and container init + the slowest shard. Both
+  # splits land near that, and 8+3 is kept for using eight fewer of the
+  # 20 concurrent jobs. What matters is
+  # WHICH RUNNER: leaving CI_RUNNER unset is worth ~10x here, and the
+  # cluster earns its keep as a fallback for when GitHub stops
+  # scheduling (which it did, for the better part of an hour, on the
+  # day this was written) rather than as the fast path.
+  SHARDS_WAYMARK10: '8'
+  SHARDS_WORKQUEUE10: '3'
 
 jobs:
   # The cheap signal, first: neither of these needs a database, and a
   # declaration error should not wait behind a JVM suite to be told.
   quick:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-clojure
@@ -93,7 +189,7 @@ jobs:
   # edit here. Namespaces come from paths: test/a/b_test.clj is
   # a.b-test, which is the convention every file in both suites follows.
   discover:
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     outputs:
       waymark10: ${{ steps.split.outputs.waymark10 }}
       workqueue10: ${{ steps.split.outputs.workqueue10 }}
@@ -115,15 +211,67 @@ jobs:
                   out.append(str(rel).replace("/", ".").replace("_", "-"))
               return out
 
+          def weights(names):
+              """seconds per namespace, from the last profiling run.
+
+              MISSING FILE -> every weight equal, which makes the LPT
+              split below degenerate to balancing COUNTS, i.e. exactly
+              the round-robin this replaced. A missing or stale table
+              can therefore never be worse than what came before.
+              """
+              table = {}
+              f = pathlib.Path(".github/namespace-seconds.tsv")
+              if f.exists():
+                  for line in f.read_text().splitlines():
+                      if line.startswith("#") or not line.strip():
+                          continue
+                      secs, _, ns = line.partition("\t")
+                      try:
+                          table[ns.strip()] = float(secs)
+                      except ValueError:
+                          pass
+              known = [table[n] for n in names if n in table]
+              # The per-namespace LOAD cost — kaocha times test
+              # execution, but every namespace also pays the check
+              # battery its top-level defresource forms trigger at
+              # import, and that is invisible here. Run 27 measured the
+              # two as comparable in total (107s loading against 98s of
+              # tests), so one mean duration per namespace is the
+              # honest estimate. It also keeps the split from parking
+              # twenty cheap namespaces on one shard, since each still
+              # carries a floor.
+              mean = (sum(known) / len(known)) if known else 1.0
+              # A namespace with no recorded time is NEW. Give it the
+              # mean rather than zero, or a new test file would land
+              # free and pile up on one shard until the next refresh.
+              return {n: table.get(n, mean) + mean for n in names}
+
           def shards(names, n):
-              # Round-robin, not contiguous chunks: names cluster
-              # alphabetically (every batch_* together), and a
-              # contiguous split would pile the heavy ones into one
-              # shard. Interleaving spreads them without timing data.
+              # Longest-processing-time-first: sort by cost descending,
+              # then repeatedly put the next namespace on whichever
+              # shard is currently lightest. A 4/3-of-optimal bound on
+              # the makespan, and the makespan is exactly what a run
+              # waits for — it ends when its SLOWEST shard ends.
+              #
+              # Round-robin balanced namespace COUNTS, which is not the
+              # same thing: it left test10 shard 4 at 63s against a 30s
+              # median, and the run waited for the 63.
+              #
+              # Ties break on the name so the split is reproducible —
+              # a matrix that shuffled between runs would make every
+              # comparison meaningless.
+              w = weights(names)
+              order = sorted(names, key=lambda x: (-w[x], x))
               groups = [[] for _ in range(n)]
-              for i, name in enumerate(names):
-                  groups[i % n].append(name)
-              return [{"id": i + 1, "nses": "\n".join(g)}
+              load = [0.0] * n
+              for name in order:
+                  i = min(range(n), key=lambda k: (load[k], k))
+                  groups[i].append(name)
+                  load[i] += w[name]
+              import sys as _s
+              print("  predicted shard seconds: "
+                    + " ".join(f"{x:.0f}" for x in load), file=_s.stderr)
+              return [{"id": i + 1, "nses": "\n".join(sorted(g))}
                       for i, g in enumerate(groups) if g]
 
           for key, root, envvar in (("waymark10", "waymark10", "N_WAYMARK10"),
@@ -137,7 +285,7 @@ jobs:
 
   test10:
     needs: discover
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       # One shard failing must not hide the others: the point of a
       # split suite is seeing every failure in one round.
@@ -158,8 +306,8 @@ jobs:
         # the job reads it back from job.services.postgres.ports.
         ports: ['5432']
         options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
+          --health-cmd "pg_isready -U ckopsa -d waymark10_test"
+          --health-interval 2s
           --health-timeout 5s
           --health-retries 12
     steps:
@@ -202,8 +350,11 @@ jobs:
           # actually got (see "Locate the postgres service").
           WAYMARK10_TEST_DSN: jdbc:postgresql://${{ env.PGHOST }}:${{ env.PGPORT }}/waymark10_test?user=ckopsa
           FOCUS_NS: ${{ matrix.shard.nses }}
+          PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
+          # tee, so a failing suite still leaves its timings behind;
+          # pipefail keeps clojure's exit code rather than tee's.
           # Built as an array, never interpolated into the command line:
           # these names come from filenames in the tree, and on a public
           # repo a fork's PR chooses those filenames.
@@ -211,12 +362,37 @@ jobs:
           while IFS= read -r ns; do
             [ -n "$ns" ] && args+=(--focus "$ns")
           done <<< "$FOCUS_NS"
+          # Opt-in: kaocha's profiling plugin prints the slowest tests and
+          # namespaces, which is what a duration-weighted split needs.
+          if [ "${PROFILE:-false}" = "true" ]; then
+            args+=(--plugin kaocha.plugin/profiling --profiling-count 500)
+          fi
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
-          cd waymark10 && clojure -M:test "${args[@]}"
+          cd waymark10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+
+      # The timings, at the END of the log, where a `tail` finds them.
+      # The artifact keeps the full output; this keeps the part anyone
+      # actually reads, and reaches a caller who cannot fetch artifacts
+      # from blob storage. always(), so a failing shard still reports.
+      - name: Namespace timings
+        if: inputs.profile && always()
+        run: |
+          set -euo pipefail
+          echo "=== namespace timings (seconds, tests, ns) — shard ${{ matrix.shard.id }} ==="
+          ./.github/scripts/namespace-timings.sh shard-output.txt
+
+      # Only when asked. v4 requires a unique artifact name per job.
+      - name: Upload timings
+        if: inputs.profile && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings-test10-${{ matrix.shard.id }}
+          path: shard-output.txt
+          retention-days: 3
 
   test-queue:
     needs: discover
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       fail-fast: false
       matrix:
@@ -235,8 +411,8 @@ jobs:
         # the job reads it back from job.services.postgres.ports.
         ports: ['5432']
         options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
+          --health-cmd "pg_isready -U ckopsa -d waymark10_test"
+          --health-interval 2s
           --health-timeout 5s
           --health-retries 12
     steps:
@@ -279,11 +455,82 @@ jobs:
           # choice, not a copy-paste slip.
           WAYMARK10_TEST_DSN: jdbc:postgresql://${{ env.PGHOST }}:${{ env.PGPORT }}/waymark10_test?user=ckopsa
           FOCUS_NS: ${{ matrix.shard.nses }}
+          PROFILE: ${{ inputs.profile }}
         run: |
           set -euo pipefail
+          # tee, so a failing suite still leaves its timings behind;
+          # pipefail keeps clojure's exit code rather than tee's.
           args=()
           while IFS= read -r ns; do
             [ -n "$ns" ] && args+=(--focus "$ns")
           done <<< "$FOCUS_NS"
+          if [ "${PROFILE:-false}" = "true" ]; then
+            args+=(--plugin kaocha.plugin/profiling --profiling-count 500)
+          fi
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
-          cd workqueue10 && clojure -M:test "${args[@]}"
+          cd workqueue10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+
+      # The timings, at the END of the log, where a `tail` finds them.
+      # The artifact keeps the full output; this keeps the part anyone
+      # actually reads, and reaches a caller who cannot fetch artifacts
+      # from blob storage. always(), so a failing shard still reports.
+      - name: Namespace timings
+        if: inputs.profile && always()
+        run: |
+          set -euo pipefail
+          echo "=== namespace timings (seconds, tests, ns) — shard ${{ matrix.shard.id }} ==="
+          ./.github/scripts/namespace-timings.sh shard-output.txt
+
+      # Only when asked. v4 requires a unique artifact name per job.
+      - name: Upload timings
+        if: inputs.profile && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: timings-test-queue-${{ matrix.shard.id }}
+          path: shard-output.txt
+          retention-days: 3
+
+  # ── ONE TABLE INSTEAD OF ELEVEN LOGS ────────────────────────────────
+  #
+  # Each shard uploads its own timings, which is right for the shard
+  # and useless for the reader: refreshing the split meant opening
+  # eleven logs. This job collects them into a single sorted table and
+  # prints it, so a refresh is one log and one copy-paste into
+  # .github/namespace-seconds.tsv.
+  #
+  # It downloads artifacts from INSIDE Actions, where blob storage is
+  # reachable — which it is not from an agent sandbox behind an egress
+  # proxy, the reason the per-shard log printing exists as well.
+  timings:
+    needs: [test10, test-queue]
+    if: ${{ inputs.profile && always() }}
+    runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timings-*
+          path: timings
+      - name: Combined namespace timings
+        run: |
+          set -euo pipefail
+          out=namespace-seconds.tsv
+          {
+            echo "# seconds<TAB>namespace — kaocha per-namespace totals."
+            echo "# Regenerate: dispatch tests.yml with profile=true and"
+            echo "# copy this job's table. Read by discover's weighted split."
+          } > "$out"
+          # One shard per directory; each holds a shard-output.txt.
+          find timings -name shard-output.txt -print0 \
+            | xargs -0 -I{} ./.github/scripts/namespace-timings.sh {} \
+            | awk -F'\t' 'NF==3 { if ($1+0 > m[$3]) m[$3] = $1+0 }
+                           END { for (k in m) printf "%.3f\t%s\n", m[k], k }' \
+            | sort -rn >> "$out"
+          echo "=== combined namespace timings ==="
+          cat "$out"
+          echo "=== $(grep -vc '^#' "$out") namespaces, $(grep -v '^#' "$out" | awk '{s+=$1} END {printf "%.1f", s}')s total ==="
+      - uses: actions/upload-artifact@v4
+        with:
+          name: namespace-seconds
+          path: namespace-seconds.tsv
+          retention-days: 7

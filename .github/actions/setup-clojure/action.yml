@@ -71,3 +71,4 @@ runs:
         curl -fsSL -o /tmp/linux-install.sh "$url"
         sudo bash /tmp/linux-install.sh
         clojure --version
+
