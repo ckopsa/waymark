@@ -138,10 +138,14 @@ from source once into the snapshot, and never fails the build — bd is
 optional, and a run without it reads
 `.beads/formulas/sitting.formula.toml` instead.
 
-**The queued prompt**, and it is one line:
+**The queued prompt** — and it says what the run is NOT before it
+says what it is, because a coding agent plans from the prompt before
+it reads any file, and one handed a repository will start fixing what
+it notices (sitting 5, 2026-08-27, renamed a test kind and edited the
+test-database list instead of sitting):
 
 ```
-Read AGENTS.md and run one sitting.
+This is NOT a coding task: do not edit, test, fix or refactor anything in this repository, whatever you notice. Read AGENTS.md and run one sitting at the waymark door over HTTP. Leave no diff.
 ```
 
 AGENTS.md's first instruction is `scripts/sitting-run.sh`, so the
