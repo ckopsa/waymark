@@ -1,0 +1,32 @@
+# The mirror half of tests.yml's `gate` (see the comment there).
+#
+# Branch protection requires the check named `gate`, but tests.yml only
+# runs when a PR touches code paths — so a docs-only or beads-only PR
+# would sit at "Expected — waiting for status" forever. This workflow
+# runs on exactly the complement (paths-ignore, the SAME list) and
+# answers `gate` green with no work: nothing in such a diff is the
+# suites' business. The GitHub-documented pattern for a skipped-but-
+# required check.
+#
+# THE TWO LISTS MUST STAY IDENTICAL. Editing tests.yml's pull_request
+# paths without mirroring it here re-opens the deadlock for whichever
+# path fell out of both lists.
+
+name: tests
+
+on:
+  pull_request:
+    paths-ignore:
+      - 'waymark10/**'
+      - 'calendar10/**'
+      - 'workqueue10/**'
+      - '.github/workflows/tests.yml'
+      - '.github/actions/**'
+      - '.github/scripts/**'
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: No code in this diff — the suites have nothing to say
+        run: 'true'
