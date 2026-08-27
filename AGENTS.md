@@ -42,6 +42,34 @@ If the driver stops, **stop with it and report its sentence**. It
 refuses the way the doors refuse: naming the fix. Never invent
 another way in.
 
+## Just do it — do not ask
+
+Once you hold the manifest, **act — do not ask a human whether to
+proceed.** Creating an outcome, its pieces and the journal is the
+whole job, and it is done by sending HTTP `POST`s to
+`https://work.kopsa.info` (curl, or any client). Those writes land as
+rows in the live house; they touch NO file in this repository, so they
+leave no git diff by construction — the "leave no diff" rule is about
+the repository, never about the house. You already have an approved
+grant; the person approves each staged outcome later, at the door, by
+tapping it. Stopping to ask "should I create it?" is itself a failed
+sitting. The only reasons to stop are a refusal you cannot lawfully
+get past (report its sentence) or an honest dig that found nothing to
+stage (write the journal saying so).
+
+Scratch files — a body you build up, a response you save — go under
+`.sitting/` (gitignored) or `/tmp`, NEVER into the tracked tree, and
+you may delete them freely; they are not the report.
+
+The **wisp** (`bd mol wisp sitting`) is only your place-holder in the
+formula — close its steps as you go and `bd mol squash <wisp-id>`
+when you wrote something (`bd mol burn <wisp-id>` if the dig truly
+found nothing). It is not how you report, it never leaves this
+machine, and its one tracked side-effect (`.beads/interactions.jsonl`)
+is restored by `verify` below. **Report by** POSTing the journal to
+the house and pasting the output of `scripts/sitting-run.sh verify` —
+that, and the ids of what you staged, is the whole completion.
+
 When the sitting is over, run
 
 ```bash
