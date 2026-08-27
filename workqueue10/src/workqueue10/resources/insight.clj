@@ -337,7 +337,10 @@
    :plural "insights"
    :label-template "{data.finding}"
    :summary "{data.finding} · found by {data.authored_by} · {state}"
-   :display {:title "Insight"}
+   ;; the row's own line, not the kind label (waymark-iqa.22): the
+   ;; finding IS the heading — "Insight" above the sentence was a form
+   ;; label, and the task card ("Call the dentist") had it right
+   :display {:title "{data.finding}"}
    ;; THE OFFER IS AN ADDRESS. The card sends whoever taps it to the
    ;; row's own screen, where the row's own doors are and where the
    ;; reader's own grant gates them — the tickler's `subject` link

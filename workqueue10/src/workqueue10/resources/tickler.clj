@@ -205,7 +205,10 @@
    :plural "ticklers"
    :label-template "{data.what}"
    :summary "{data.what} · set aside by {data.set_aside_by} · {state}"
-   :display {:title "Tickler"}
+   ;; the row's own line, not the kind label (waymark-iqa.22): a card
+   ;; headed "Tickler" reads like a form label sitting above the thing
+   ;; it labels; a card headed by what was set aside reads like content
+   :display {:title "{data.what}"}
    ;; the way back to the work: the row's own screen, when whoever
    ;; set it aside knew the address. A marker with no href relates to
    ;; nothing and the link simply omits — the framework's own rule,
