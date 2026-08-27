@@ -10,11 +10,16 @@
 # .claude/skills/sitting/SKILL.md. The doors enforce most of the law
 # and refuse with sentences that name the fix — trust the refusals.
 #
-# CREDENTIALS: read {{state_file}} (mode 600). Send BOTH headers on
-# every request: `Cookie: waymark_session=<session_token>` and
-# `X-Waymark-Grant: <grant_id>`. A 401 means the session lapsed —
-# stop and say so; scripts/standing-agent-tick.sh owns renewal, and
-# a sitting never knocks or spends re-entry on its own.
+# CREDENTIALS, two lawful shapes — use whichever the runner has:
+# - ENV-VAR RUNNERS (Jules and kin): mint a fresh 1-hour bearer at
+#   run start — TOKEN="$(scripts/agent-bearer.sh)" — and send
+#   `Authorization: Bearer <token>` plus
+#   `X-Waymark-Grant: $WAYMARK_GRANT_ID` on every request.
+# - TICK-MANAGED RUNNERS: read {{state_file}} (mode 600) and send
+#   `Cookie: waymark_session=<session_token>` plus the grant header;
+#   scripts/standing-agent-tick.sh owns renewal.
+# Either way a refusal means STOP and say so — a sitting never
+# knocks, never spends re-entry, never invents another way in.
 
 formula = "sitting"
 description = "One composer sitting at the waymark door: read the house, answer every pull and every unanswered turn, compose within the cap, diagnose before any burial, journal what was and was not done."
@@ -43,12 +48,17 @@ Read, in this order, writing NOTHING yet:
 6. The threads: {{base_url}}/api/remarks?subject_kind=&subject_id=
    for every outcome, piece, insight and request this composer has
    touched — the default sort is oldest-first and reads like the
-   conversation it is. Also read the previous sitting's journal
-   entry first if one exists; it names what was deliberately left
+   conversation it is. Also read the previous sittings' journal
+   entries if any exist; they name what was deliberately left
    alone and why.
+7. What already stands: {{base_url}}/api/outcomes — offered,
+   answered, AND declined — so the compose step can judge "not yet
+   suggested" against the record rather than against this run's
+   memory. A high-frequency fleet's runs are blind to each other
+   except through this read.
 Record what you found for the later steps: open requests, threads
-whose LAST turn is a person's, declines with words, evidence worth
-composing from.
+whose LAST turn is a person's, declines with words, what has
+already been suggested, evidence worth composing from.
 """
 
 [[steps]]
@@ -97,8 +107,15 @@ depends_on = ["answer-requests", "answer-threads"]
 description = """
 Own-initiative staging is walled at TWO offered plans per author per
 calendar week (plans-are-few), and a superseding plan waits for its
-not_before. The cap forces choosing — choose from the evidence, and
-record in the journal step what you chose NOT to compose and why.
+not_before. THE BAR IS "MEANINGFUL AND NOT YET SUGGESTED": before
+staging, check the idea against the read step's outcome record and
+the prior journals — if it already exists in any live form, or was
+declined and its floor has not expired, or its decline has no
+published diagnosis yet, DO NOT stage it. In a high-frequency fleet
+almost every run rightly stages nothing here, and that silence is a
+correct, complete run. The cap forces choosing — choose from the
+evidence, and record in the journal step what you chose NOT to
+compose and why.
 THE DIAGNOSIS DUTY (8um law 4): before any recomposition of a
 shown-and-declined prior, read its verdict_reason words (wrong_time
 is not wrong_piece is not never_this), publish an insight at
