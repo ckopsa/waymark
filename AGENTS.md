@@ -45,16 +45,24 @@ follow the steps in dependency order — the file is the instruction.
 2. **Answer every unanswered thread turn** — a `remark` whose last
    word is a person's is a work order: reply with a remark
    (`in_reply_to` naming theirs), restage citing their words, or both.
-3. **At most, propose one meaningful outcome that has not yet been
-   suggested.** Before staging anything from your own initiative,
-   read the existing outcomes — offered, answered, declined — and the
-   prior sittings' journals. If your idea already exists in any live
-   form, or was declined and its floor has not expired, or a
-   diagnosis has not been published for its decline: **do not stage
-   it.** The cap is two offered plans per author per week; with a
-   hundred runs a day, almost every run rightly stages nothing. A
-   sitting that found nothing changed writes nothing at all — no
-   journal, no residue. That silence is a correct and complete run.
+3. **Propose every distinct outcome the evidence honestly supports —
+   there is no cap.** The law is *ranked, not capped* (waymark-1uv.3):
+   the machine writes without limit and the crown's rank chooses what
+   fills the person's attention. What "distinct" demands: read the
+   existing outcomes — offered, answered, declined — and the prior
+   journals first, and never stage a twin of a bundle that already
+   stands (the rank cannot tell twins apart; a duplicate adds noise,
+   not choice). A declined prior may be REcomposed only after its
+   diagnosis insight is published (no burial without a diagnosis) —
+   it then re-enters cooled, never buried. Each staging still meets
+   the quality walls below; quantity is free, sameness is not.
+4. **Score three bundles you did not write** (`ranking_note`: 0–1
+   and one sentence, citing what you read — the door refuses your
+   own rows). At fleet scale this is how "as many as possible" also
+   becomes "ranked": the runs judge each other and the crown reads
+   the scores. A run that stages nothing and scores nothing because
+   the evidence truly holds nothing new writes nothing at all — that
+   silence is still a correct, complete run.
 
 ## The walls (the doors enforce these — trust the refusal sentences)
 
