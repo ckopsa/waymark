@@ -33,6 +33,18 @@ suite are mechanically projected. The application directories
 
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:970c3bf2 -->
+## Pull Requests
+
+Agent-opened PRs get **auto-merge enabled at open time** (owner's
+standing authorization, 2026-08-27): open the PR, enable auto-merge
+(repository default merge method), and let the required `gate` check
+do the deciding — it aggregates every suite, and its mirror
+(`tests-gate-skip.yml`) answers for diffs the suites never see. A red
+`gate` blocks the merge; fix and push rather than waiting. Because
+merges now land without a human tap, always `bd dolt pull`
+immediately before bead writes and exports — the beads-sync workflow
+imports on its own schedule.
+
 ## Beads Issue Tracker
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
