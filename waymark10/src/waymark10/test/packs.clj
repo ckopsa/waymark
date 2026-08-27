@@ -5738,15 +5738,27 @@
      read grants stages a bundle; before any screen has reported it,
      the exposure is unknown or nought and never a guess; after one
      member turns their record on and their screen reports the card,
-     it reads exactly one morning, by that member.
+     it reads exactly one morning, by that member. **And the rank's
+     own reading rides it** (waymark-1uv.4): the bundle carries `rank`
+     with the lift the crown read it at as staged and the inputs that
+     made it, and the document carries a `tally` — one count per
+     lesson, summing to the outcomes it folds, and the sentence that
+     says which diagnosis is the house's and which the rank's.
   3. **A decline with a reason is a lesson.** The member says not this
      week and taps a quick word; the document reads `declined`,
-     `shown_and_declined`, `diagnosis_needed`, the word, and the floor.
-  4. **The wall, and the duty before the date.** A recomposition with
+     `shown_and_declined`, `diagnosis_needed`, the word, and the floor
+     — and the tally counts it.
+  4. **The wall, and the duty is the only wall.** A recomposition with
      no diagnosis is refused BY NAME by `no-burial-without-a-diagnosis`;
-     with an insight citing the prior, the refusal moves to the floor
-     wall — the composer's duty fires first, and only a composer that
-     has done it hears about the date.
+     with an insight citing the prior it is ADMITTED, the morning after
+     the decline — the date is the rank's cooling input and not the
+     door's (waymark-1uv.10), so once the duty is done nothing stands
+     between the composer and the row.
+
+  A never-shown bundle cannot be arranged over the wire — it takes an
+  expired week, and the clock is the engine's — so the never-shown
+  pile's reading is proved by `workqueue10.outcome-test` § 19, where
+  the clock can be moved.
 
   …and the switch goes back where it was found. It reports `:covered`,
   because a run in which the wall never fired proved nothing about a
@@ -5870,6 +5882,11 @@
         diagnosed' (when iid
                      (bundle (str "The same Saturday, diagnosed " tag)
                              {:supersedes oid :diagnosis_id iid}))
+        ;; …and the admitted recomposition is declined in turn, so the
+        ;; engine this obligation hands on is the engine it found
+        _ (when (= 201 (:status diagnosed'))
+            (invoke-http ctx :outcome (id-of (:self (:doc diagnosed')))
+                         not-this-week nil {:headers as-member}))
         ;; and the switch goes back where it was found
         stop (declared-name ctx :feed_view_consent :stop)
         stopped (when switch-id
@@ -5927,6 +5944,44 @@
 
        (and fresh-o (true? (:diagnosis_needed fresh-o)))
        (conj "feed: an unanswered bundle already owes a diagnosis")
+
+       ;; the rank's own reading, and the tally (waymark-1uv.4)
+       (and fresh-o (not (integer? (get-in fresh-o [:rank :lift]))))
+       (conj (str "feed: the bundle carries no rank reading: "
+                  (pr-str (:rank fresh-o)) " — every outcome on the diagnosis"
+                  " names the lift the crown read it at as staged, so the"
+                  " never-shown pile can be read against the shown one"))
+
+       (and fresh-o (integer? (get-in fresh-o [:rank :lift]))
+            (or (not= "declared" (str (get-in fresh-o [:rank :value])))
+                (not (integer? (get-in fresh-o [:rank :days_left])))
+                (not (pos? (long (get-in fresh-o [:rank :place] 0))))
+                (str/blank? (str (get-in fresh-o [:rank :says])))))
+       (conj (str "feed: the rank reading is missing its inputs or its place: "
+                  (pr-str (:rank fresh-o))))
+
+       (and fresh (= 200 (:status fresh))
+            (let [t (get-in fresh [:doc :tally])
+                  ls (:lessons t)]
+              (or (not (map? ls))
+                  (not= #{:shown_and_declined :shown_and_passed_over :never_shown
+                          :unknown :accepted :still_offered}
+                        (set (keys ls)))
+                  (not (every? integer? (vals ls)))
+                  (not= (reduce + 0 (vals ls))
+                        (count (get-in fresh [:doc :outcomes])))
+                  (not (pos? (long (:still_offered ls 0))))
+                  (not (vector? (:never_shown t)))
+                  (not (map? (get-in t [:crown :crown_rank])))
+                  (not (str/includes? (str (:says t)) "RANK")))))
+       (conj (str "feed: the tally is not on the document, or does not count"
+                  " every lesson over every outcome it folds: "
+                  (pr-str (get-in fresh [:doc :tally]))))
+
+       (and after (= 200 (:status after))
+            (not (pos? (long (get-in after [:doc :tally :lessons :shown_and_declined] 0)))))
+       (conj (str "feed: shown and declined, and the tally does not count it: "
+                  (pr-str (get-in after [:doc :tally :lessons]))))
 
        (and oid (nil? card))
        (conj (str "feed: the staged bundle never reached the member's feed,"
@@ -6005,16 +6060,21 @@
        (conj (str "feed: the composer could not publish its diagnosis ("
                   (:status insight) "): " (pr-str (:doc insight))))
 
-       (and diagnosed' (not= 409 (:status diagnosed')))
+       ;; once the duty is done, no wall is left: the date the house
+       ;; named is the rank's `:early` input, on the card, not the
+       ;; door's (waymark-1uv.10) — and a wall that still refused here
+       ;; would be the proxy the epic took down, one door over
+       (and diagnosed' (not= 201 (:status diagnosed')))
        (conj (str "feed: a diagnosed recomposition staged the morning after"
-                  " the decline answered " (:status diagnosed')
-                  " — the floor still stands behind the diagnosis"))
+                  " the decline answered " (:status diagnosed') ": "
+                  (pr-str (:doc diagnosed'))
+                  " — with the diagnosis cited, the duty is done and the"
+                  " date is the rank's cooling input, not a door's"))
 
-       (and diagnosed' (= 409 (:status diagnosed'))
-            (not= :a-recomposition-waits-its-turn (refused-guard diagnosed')))
-       (conj (str "feed: with a diagnosis cited, the recomposition was refused"
-                  " by " (pr-str (:guard (:doc diagnosed')))
-                  " — once the duty is done the only wall left is the date"))
+       (and diagnosed' (= 201 (:status diagnosed'))
+            (not= 1 (get-in diagnosed' [:doc :data :declined_count])))
+       (conj (str "feed: the diagnosed recomposition does not carry its"
+                  " chain's count: " (pr-str (get-in diagnosed' [:doc :data]))))
 
        (and switch-id (not= 200 (:status stopped)))
        (conj (str "feed: the member could not stop their own record ("

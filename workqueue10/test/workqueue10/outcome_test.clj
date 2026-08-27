@@ -39,6 +39,10 @@
     off real reason rows, and `no-burial-without-a-diagnosis` standing
     in front of the floor — shown-and-declined refused without a
     diagnosis, never-shown recomposing freely, unknown said as unknown.
+  - the tally (waymark-1uv.4): six staged bundles, two shown, and the
+    document counting each lesson, every outcome carrying the rank's
+    own reading of it as staged, the never-shown pile naming its lifts,
+    and unknown staying unknown without opt-in.
 
   THE COMPOSER HERE IS A PERSON, and deliberately. The four-eyes wall
   is `g/not-the-field :composed_by` — it compares principal IDS, so a
@@ -1615,3 +1619,97 @@
     (testing "and neither composer reads the other's bundle"
       (is (nil? (diagnosed (diagnosis blind) s')))
       (is (nil? (diagnosed (diagnosis sighted) b))))))
+
+;; ── 20. the tally: shown-and-declined teaches, never-shown does not ──
+;;
+;; (waymark-1uv.4) Since the cap left, a composer may stage many and
+;; see few shown. One composer, six bundles: one that lapsed before
+;; anybody was recording; then, under a recording member, five of
+;; which two reached the screen — one declined, one left to lapse —
+;; and three never on it. The clock is pinned so every calendar input
+;; is a whole number, and moved a week on so the engine's own wall
+;; answers `expire`.
+
+(deftest the-tally-counts-exposure-and-never-shown-names-its-lift
+  (let [member "colton-tally"
+        composer "composer-tally"
+        v (declare-value! member "a tallied week" ["the shop"])
+        t0 (Instant/now)
+        cid (atom nil)]
+    (try
+      ;; one bundle answered by the clock before anybody was recording
+      (reset! clock t0)
+      (let [u (id-of (stage-outcome! composer (vid v)))]
+        (lapse! u)
+        (expire! member u)
+        ;; a minute on: the member turns their record on, and the
+        ;; composer stages five at one instant, a week's leash each
+        (reset! clock (.plusSeconds t0 60))
+        (reset! cid (consent! member))
+        (let [[a b c d e :as staged] (vec (repeatedly 5 #(id-of (stage-outcome! composer (vid v)))))]
+          (is (= 5 (count (set staged))))
+          (is (= 201 (:status (view! member a))))
+          (is (= 201 (:status (view! member b))))
+          (is (= 200 (:status (invoke! "outcomes" a :not_this_week nil (human member)))))
+          ;; a week and a day on, the four unanswered lapse
+          (reset! clock (.plusSeconds t0 (* 86400 8)))
+          (doseq [o [b c d e]] (expire! member o))
+          (let [doc (diagnosis composer)
+                t (:tally doc)]
+            (testing "the tally counts each lesson, over every outcome the document folds"
+              (is (= {:shown_and_declined 1 :shown_and_passed_over 1 :never_shown 3
+                      :unknown 1 :accepted 0 :still_offered 0}
+                     (:lessons t)))
+              (is (= 6 (:outcomes t)))
+              (is (= 2 (:owing t)))
+              (is (= 2 (count (filter :diagnosis_needed (:outcomes doc))))))
+            (testing "and says in one sentence which diagnosis is the house's and which the rank's"
+              (is (str/includes? (str (:says t)) "HOUSE"))
+              (is (str/includes? (str (:says t)) "RANK"))
+              (is (str/includes? (str (:says t)) "never_shown")))
+            (testing "the crown's numbers in force ride the tally, with the recipe they came from and its take"
+              (is (= {:declared 10 :cooled 2 :declined 2 :fresh 1 :early 2 :judged 1}
+                     (get-in t [:crown :crown_rank])))
+              (is (= 2 (get-in t [:crown :take])))
+              (is (some? (get-in t [:crown :recipe]))))
+            (testing "the never-shown pile names each lift, highest first"
+              (is (= #{c d e} (into #{} (map #(last (str/split (str (:self %)) #"/")))
+                                    (:never_shown t))))
+              (is (= [17 17 17] (mapv :lift (:never_shown t)))))
+            (testing "every never-shown outcome carries the rank's own inputs and the lift, as staged"
+              (doseq [o [c d e]]
+                (let [mine (diagnosed doc o)
+                      r (:rank mine)]
+                  (is (= "never_shown" (:lesson mine)))
+                  (is (false? (:diagnosis_needed mine)))
+                  (is (= 17 (:lift r)) "10 for a declared value + 7 days left as staged")
+                  (is (= "declared" (:value r)))
+                  (is (= 7 (:days_left r)))
+                  (is (false? (:asked r)))
+                  (is (= 0 (:seen r)))
+                  (is (nil? (:declined r)) "no word on a line nobody turned down")
+                  (is (nil? (:early r)) "a fresh line has nothing to be early for")
+                  (is (= 6 (:of r)))
+                  (is (<= 1 (:place r) 6))
+                  (is (str/includes? (str (:says r)) "lift 17"))
+                  (is (str/includes? (str (:says r)) "declared, lifting it 10"))
+                  (is (str/includes? (str (:says r)) "7 days left"))
+                  (is (str/includes? (str (:says r)) "rank's verdict, not the house's")))))
+            (testing "the shown ones read the same lift — the rank did not choose between these, the seed did"
+              (is (= "shown_and_declined" (:lesson (diagnosed doc a))))
+              (is (= "shown_and_passed_over" (:lesson (diagnosed doc b))))
+              (is (= 17 (get-in (diagnosed doc a) [:rank :lift])))
+              (is (= 17 (get-in (diagnosed doc b) [:rank :lift]))))
+            (testing "the places are the crown's own order over the six, one each"
+              (is (= (set (range 1 7))
+                     (into #{} (map #(get-in % [:rank :place])) (:outcomes doc)))))
+            (testing "unknown stays unknown without opt-in: the lapse before anybody recorded"
+              (let [mine (diagnosed doc u)]
+                (is (= "unknown" (:lesson mine)))
+                (is (false? (get-in mine [:exposure :known])))
+                (is (not-any? #(= (str u) (last (str/split (str (:self %)) #"/")))
+                              (:never_shown t)))
+                (is (integer? (get-in mine [:rank :lift])) "the rank reads it all the same"))))))
+      (finally
+        (reset! clock nil)
+        (stop! member @cid)))))

@@ -31,6 +31,29 @@
   and answered it, so a declined outcome teaches whether or not the
   decider's screen was recording.
 
+  ── TWO DIAGNOSES, KEPT APART (waymark-1uv.4) ──
+
+  Since the cap on staging left (waymark-1uv.3) most of what a busy
+  composer stages never reaches a screen, and the ratio of
+  `never_shown` to `shown_*` in this document is the rank's own
+  report card. So the document carries a TALLY over the outcomes it
+  folds — a count per lesson — and every outcome carries the RANK'S
+  OWN READING of it (`rank`): the lift the crown read it at as
+  staged, every input that went into that number, and where that
+  reading places it among the outcomes here. The inputs are read
+  through `feed/crown-inputs` and weighed by `feed/crown-lift` under
+  the household's own `crown_rank`, so the number a composer reads is
+  the number the crown sorted by and never a second opinion about it.
+
+  Which is which, in one sentence: shown-and-declined and
+  shown-and-passed-over are a diagnosis of the HOUSE — what people did
+  with what they saw, each owing an insight before its line comes
+  back — and never-shown is a diagnosis of the RANK — where the
+  composer's bundles stood against the numbers on the recipe row, to
+  be answered by staging differently, by tuning the rank through
+  `recipe_proposal` (waymark-1uv.5), or by waiting for the floor, and
+  never by an insight about the house.
+
   ── A READ, NOT A KIND ──
 
   Three shapes were weighed. A `diagnosis` KIND the composer writes
@@ -248,7 +271,17 @@
   and never answered before the week ran out.
   `never_shown` — somebody was recording and it was never on screen.
   `unknown` — expired, and nobody who could have seen it was recording.
-  `accepted`, `still_offered` — nothing to diagnose yet or ever."
+  `accepted`, `still_offered` — nothing to diagnose yet or ever.
+
+  THE THRESHOLD IS ONE RECORDED MORNING, and it is not a recipe
+  number — decided by waymark-1uv.4 rather than left open. A morning
+  on a recording screen is a fact about a person's screen, not a
+  weight the household tunes; the six numbers on the recipe row say
+  how the crown CHOOSES, and a number that said how many showings
+  count as being seen would be a guard reading the formula, which is
+  the thing waymark-8um.4 refused for 8um.3's reason. If a house ever
+  wants a bundle to lapse unremarked after one glance, that is a
+  question about the view record's grain, and it is filed then."
   [answered exposure]
   (case answered
     "accepted" :accepted
@@ -319,10 +352,113 @@
            (when mornings (str " So far " mornings "."))
            (when-not (:known exposure) (str " " (:says exposure)))))))
 
+;; ── the rank's own reading (waymark-1uv.4) ──────────────────────────
+
+(def lessons
+  "Every lesson the document can teach, in the order the tally counts
+  them — the two that owe a diagnosis first."
+  [:shown_and_declined :shown_and_passed_over :never_shown :unknown
+   :accepted :still_offered])
+
+(defn- rank-reading
+  "What the crown read for ONE outcome, as it stood when it was staged
+  — the rank's own inputs through `feed/crown-inputs` at the row's own
+  `created-at`, with `seen 0` because nobody had been shown it yet,
+  and the sort key `feed/crown-key` places it by. A value the house no
+  longer holds reads `:gone`, which lifts nothing, so a composer can
+  tell *observed* from *retired since*."
+  [eng rdef weights o]
+  (let [inputs (-> (feed/crown-inputs {:eng eng :now (:created-at o)} rdef o)
+                   (update :value #(or % :gone))
+                   (assoc :seen 0 :cooled 0))]
+    {:inputs inputs
+     :key (feed/crown-key weights inputs (str (:id o)))}))
+
+(defn- rank-says
+  "The rank's reading of one outcome, narrated in the crown's own
+  arithmetic — each input and what the household's number made of it
+  — then where that reading stands among the outcomes in this
+  document and what the crown shows a morning. It ends by saying
+  whose verdict this is, because that is the sentence the never-shown
+  pile exists to hear."
+  ^String [weights {:keys [asked value declined days-left early judged]
+                    :as inputs} place of take']
+  (let [w (fn ^long [k] (long (get weights k 0)))
+        lift (feed/crown-lift weights inputs)
+        days (long (or days-left 0))
+        parts (cond-> []
+                asked
+                (conj "it answers a person's own request, so it stands in the first tier whatever the numbers say")
+                true
+                (conj (case value
+                        :declared (str "it serves a value this house declared, lifting it " (w :declared))
+                        :observed "it serves a value an agent only observed, which lifts it nothing"
+                        "the value it served is no longer held, which lifts it nothing"))
+                true
+                (conj (str days " day" (when (not= 1 days) "s") " left on its week"
+                           " as staged, lifting it " (* (w :fresh) days)))
+                (some? declined)
+                (conj (str "the house said " (str/replace (str declined) "_" " ")
+                           " about the line it recomposes, holding it "
+                           (* (w :declined) (feed/reason-weight declined))))
+                (and (some? early) (pos? (long early)))
+                (conj (str early " day" (when (not= 1 (long early)) "s")
+                           " early against the day the house named, holding it "
+                           (* (w :early) (long early))))
+                (some? judged)
+                (conj (let [j (feed/judged-lift (w :judged) (:score judged))]
+                        (str (:by judged) " scored it " (:score judged) ", "
+                             (cond (pos? j) (str "lifting it " j)
+                                   (neg? j) (str "holding it " (- j))
+                                   :else "moving it nothing")))))]
+    (str "As staged the rank read it at lift " lift ": "
+         (str/join "; " parts) ". That reading places it " place " of " of
+         " among the outcomes here"
+         (when take'
+           (str ", and the crown shows " take' " a morning by these numbers,"
+                " house-wide"))
+         "; which bundles it stood under on each morning it lost is not in"
+         " the record. This is the rank's verdict, not the house's.")))
+
+(defn- tally
+  "The summary over every outcome this document folds: a count per
+  lesson, how many owe a diagnosis, the never-shown pile with the lift
+  each carried (highest first — the one nearest the page is the one to
+  look at), the crown's numbers in force and the recipe they came
+  from, and the one sentence that says which diagnosis is whose."
+  [recipe source outcomes take']
+  (let [counts (into {} (map (fn [l] [l (count (filter #(= l (:lesson %)) outcomes))]))
+                     lessons)
+        never (->> outcomes
+                   (filter #(= :never_shown (:lesson %)))
+                   (sort-by #(get-in % [:rank "lift"]) >)
+                   (mapv (fn [o] {:self (:self o)
+                                  :lift (get-in o [:rank "lift"])
+                                  :place (get-in o [:rank "place"])})))]
+    {:outcomes (count outcomes)
+     :lessons counts
+     :owing (count (filter :diagnosis_needed outcomes))
+     :never_shown never
+     :crown (cond-> {:crown_rank (feed/crown-rank-as-written recipe)
+                     :recipe source}
+              take' (assoc :take take'))
+     :says (str "Two diagnoses, and this document keeps them apart:"
+                " shown_and_declined and shown_and_passed_over are the"
+                " HOUSE's — people saw these and answered them, or let them"
+                " lapse, and each owes an insight before its line comes"
+                " back — while never_shown is the RANK's — the crown had"
+                " these and showed its take by the numbers under crown,"
+                " and what this pile teaches is where your bundles stood,"
+                " not what the house thinks of them: stage differently,"
+                " propose new numbers through recipe_proposal, or wait for"
+                " the floor, and write no insight about the house from it;"
+                " unknown is neither, and accepted and still_offered owe"
+                " nothing.")}))
+
 ;; ── the document ────────────────────────────────────────────────────
 
 (defn- one-outcome
-  [eng vis consents now o]
+  [eng vis consents now weights take' of {:keys [inputs place]} o]
   (let [d (:data o)
         composer (str (:composed_by d))
         terminal? (contains? #{"accepted" "declined" "expired"} (name (:state o)))
@@ -349,6 +485,15 @@
              :declined_count (long (or (:declined_count d) 0))
              :lesson lsn
              :diagnosis_needed (contains? needs-diagnosis lsn)
+             ;; the rank's own reading (waymark-1uv.4): `why.crown`'s
+             ;; shape, as staged, plus where it stands among the
+             ;; outcomes here — on EVERY outcome, because a lift means
+             ;; nothing alone and the never-shown pile is read against
+             ;; the lifts of the ones that were shown
+             :rank (assoc (feed/crown-as-cited weights inputs)
+                          "place" place
+                          "of" of
+                          "says" (rank-says weights inputs place of take'))
              :says (lesson-says eng o ans exp reasons lsn)}
       (some? reasons) (assoc :reasons reasons)
       (:decided_by d) (assoc :answered_by (str (:decided_by d)))
@@ -372,12 +517,24 @@
   "GET /api/-/diagnosis — the composer's own work order, as one
   document: every outcome the caller staged (newest first, `outcome-cap`
   of them, or the one `:outcome` names), each with its exposure, its
-  answer, its reasons, its floor and its lesson; the duty sentence on
-  top; and which of the two records this read was admitted to."
-  [eng {:keys [principal visibility outcome]}]
+  answer, its reasons, its floor, its lesson and the rank's own
+  reading of it; the duty sentence on top; the tally over all of them
+  (waymark-1uv.4); and which of the two records this read was
+  admitted to.
+
+  `:recipe` and `:recipe-source` are the HOUSEHOLD's recipe as the
+  route resolved it (`feed-recipe/for-reader` with no member — the
+  household's row, or the built-in), because the composer has no
+  feed of its own and the numbers a never-shown bundle lost under are
+  the house's. The built-in stands in when the route hands none."
+  [eng {:keys [principal visibility outcome recipe recipe-source]}]
   (let [now ((:now-fn eng))
         pid (str (:id principal))
-        held? (some? (get (resources eng) :outcome))
+        rdef (get (resources eng) :outcome)
+        held? (some? rdef)
+        recipe (or recipe feed/default-recipe)
+        weights (feed/crown-rank-of recipe)
+        take' (some #(when (= :outcomes (:section %)) (:take %)) (:order recipe))
         consents (rows-of eng :feed_view_consent {} 500)
         rows (cond
                (not held?) []
@@ -388,7 +545,21 @@
         rows (if capped (subvec rows 0 outcome-cap) rows)
         reads {:exposure (admits? visibility :feed_view)
                :reasons (admits? visibility :verdict_reason)}
-        outcomes (mapv #(one-outcome eng visibility consents now %) rows)
+        ;; the rank's reading of each row, and where that reading
+        ;; places it among the rows here — sorted by the crown's own
+        ;; key, so two the formula cannot tell apart are placed the
+        ;; way the crown would place them
+        readings (into {} (map (fn [o] [(:id o) (rank-reading eng rdef weights o)])) rows)
+        places (into {}
+                     (map-indexed (fn [i [id _]] [id (inc i)]))
+                     (sort-by (comp :key val) readings))
+        of (count rows)
+        outcomes (mapv (fn [o]
+                         (one-outcome eng visibility consents now weights take' of
+                                      (assoc (get readings (:id o))
+                                             :place (get places (:id o)))
+                                      o))
+                       rows)
         owed (count (filter :diagnosis_needed outcomes))]
     (p/wire-value
      (cond-> {:waymark "10"
@@ -411,6 +582,7 @@
                                        " {\"kind\": \"feed_view\", \"actions\": []}"
                                        " and {\"kind\": \"verdict_reason\","
                                        " \"actions\": []}."))
+              :tally (tally recipe recipe-source outcomes take')
               :outcomes outcomes
               :notes (into []
                            (remove nil?)
@@ -425,5 +597,19 @@
                                  " declined, or shown and passed over, is refused"
                                  " unless diagnosis_id names an insight citing it."
                                  " Never shown, or unknown, and the wall does not"
-                                 " fire.")])}
+                                 " fire.")
+                            (str "Read the tally before every sitting. Recompose"
+                                 " only what the house answered — shown and"
+                                 " declined, shown and passed over — and with a"
+                                 " diagnosis; treat never_shown as the rank's"
+                                 " verdict, not the house's, and answer it by"
+                                 " staging differently or by proposing new numbers"
+                                 " through recipe_proposal. Every outcome here"
+                                 " carries the rank's own reading of it under"
+                                 " rank, as staged."
+                                 (when capped
+                                   (str " The tally counts the " outcome-cap
+                                        " newest outcomes this document folds;"
+                                        " ?outcome=<id> asks about an older one"
+                                        " by name.")))])}
        capped (assoc :reached_cap true)))))

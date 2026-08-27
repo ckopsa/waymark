@@ -2706,6 +2706,54 @@
                    86400))
       0)))
 
+(defn crown-inputs
+  "ONE bundle's rank inputs, read off its row at `(:now ctx)` — the
+  `:crown` map every crown candidate carries (waymark-1uv.2), and the
+  same reading the composer's diagnosis makes of an outcome that never
+  reached a screen (waymark-1uv.4), so the number a composer reads
+  there is the number the crown sorted by and never a second opinion
+  about it: whether it answers a person's own request; how the value
+  it serves stands (`:declared`, `:observed`, or NIL when this house
+  no longer holds it — `value-standing`'s three answers, and the
+  population drops the third); the strongest word the house said
+  about the line of thinking it recomposes; the days left on its
+  week; for a recomposition, how early it stands against the day the
+  house named, how many times the line was turned down, and the day
+  itself (waymark-1uv.10); and the agent's word, when one was said
+  (waymark-1uv.6).
+
+  `seen` and `cooled` are not here, on purpose: they are the one
+  input only a READ knows — how many mornings THIS reader has been
+  shown it — and `entry-cards` fills them in off the reader's own view
+  rows. A caller reading a bundle as it stood when it was staged
+  passes that instant as `:now`, and every calendar input (`days-left`,
+  `early`) reads against it; the rows (the value, the chain, the note)
+  read as they stand now, because that is all the record holds."
+  [ctx rdef d]
+  (let [now (:now ctx)
+        ;; the row this one recomposes, DECODED, for the day the house
+        ;; said it would hear the line again (waymark-1uv.10) —
+        ;; `not_before` is an instant only after the kind's own schema
+        ;; has read it
+        prior (when-some [sid (some-> (get-in d [:data :supersedes])
+                                      str not-empty)]
+                (some->> (load-raw ctx :outcome sid)
+                         (inv/decode-row rdef)))]
+    (cond-> {:asked (some? (some-> (get-in d [:data :request_id])
+                                   str not-empty))
+             :value (value-standing ctx d)
+             :declined (crown-word ctx d)
+             :days-left (days-left now (get-in d [:data :good_until]))
+             ;; the agent's word, when one was said (waymark-1uv.6)
+             :judged (crown-judgment ctx (:id d))}
+      ;; only a recomposition carries the schedule: how early it
+      ;; stands and how many times the line was turned down —
+      ;; `declined_count` is the bundle's own, inherited at birth
+      prior
+      (assoc :early (days-early now prior)
+             :turned-down (long (or (get-in d [:data :declined_count]) 0))
+             :not-before (get-in prior [:data :not_before])))))
+
 (defn outcomes
   "outcomes: the composed bundles this house has not answered — the
   feed's crown, *This week could hold* (waymark-jfv.4). The `letters`
@@ -2753,7 +2801,10 @@
   does for the parent.
 
   EACH CANDIDATE CARRIES THE RANK'S INPUTS (waymark-1uv.2), under
-  `:crown`: whether it answers a person's own request, how the value
+  `:crown` — read by `crown-inputs`, which the composer's diagnosis
+  reads the same rows through (waymark-1uv.4), so the number it quotes
+  for a bundle the crown never showed is the crown's own number:
+  whether it answers a person's own request, how the value
   it serves stands, the strongest word the house said about the line
   of thinking it recomposes, how many days are left on its week, and
   — for a recomposition — how many days early it stands against the
@@ -2802,16 +2853,12 @@
                        (let [d (inv/decode-row rdef raw)
                              good (get-in d [:data :good_until])
                              parts (bundle-parts ctx (:id raw))
-                             standing (value-standing ctx d)
-                             ;; the row this one recomposes, DECODED,
-                             ;; for the day the house said it would
-                             ;; hear the line again (waymark-1uv.10) —
-                             ;; `not_before` is an instant only after
-                             ;; the kind's own schema has read it
-                             prior (when-some [sid (some-> (get-in d [:data :supersedes])
-                                                           str not-empty)]
-                                     (some->> (load-raw ctx :outcome sid)
-                                              (inv/decode-row rdef)))]
+                             ;; the rank's inputs, read here and weighed
+                             ;; in `entry-cards` (waymark-1uv.2); the
+                             ;; value's standing is the one of them the
+                             ;; population also filters on
+                             crown (crown-inputs ctx rdef d)
+                             standing (:value crown)]
                          (when (and (not= pid (get-in d [:data :composed_by]))
                                     (or (nil? good) (pos? (compare good now)))
                                     (<= (long bundle-floor) (count parts))
@@ -2819,25 +2866,7 @@
                                     (some? standing))
                            {:kind :outcome :id (:id raw) :row raw
                             :sentence (outcome-says d (= :observed standing))
-                            ;; the rank's inputs, read here and weighed
-                            ;; in `entry-cards` (waymark-1uv.2)
-                            :crown (cond-> {:asked (some? (some-> (get-in d [:data :request_id])
-                                                                  str not-empty))
-                                            :value standing
-                                            :declined (crown-word ctx d)
-                                            :days-left (days-left now good)
-                                            ;; the agent's word, when one
-                                            ;; was said (waymark-1uv.6)
-                                            :judged (crown-judgment ctx (:id raw))}
-                                     ;; only a recomposition carries the
-                                     ;; schedule: how early it stands and
-                                     ;; how many times the line was turned
-                                     ;; down — `declined_count` is the
-                                     ;; bundle's own, inherited at birth
-                                     prior
-                                     (assoc :early (days-early now prior)
-                                            :turned-down (long (or (get-in d [:data :declined_count]) 0))
-                                            :not-before (get-in prior [:data :not_before])))
+                            :crown crown
                             ;; the union, said out loud (waymark-jfv.17)
                             :impact (bundle-impact
                                      rdef
