@@ -24,7 +24,7 @@
 # knocks, never spends re-entry, never invents another way in.
 
 formula = "sitting"
-description = "One composer sitting at the waymark door: read the house, index the facts people said, answer every pull and every unanswered turn, stage every distinct bundle the evidence supports (ranked, not capped), diagnose before any burial, score what you did not write, journal what was and was not done."
+description = "One composer sitting at the waymark door: read the house, index the facts people said, answer every pull and every unanswered turn, surface at least one outcome the house does not hold yet and every distinct one beyond it (ranked, not capped), diagnose before any burial, score what you did not write, journal what was and was not done."
 
 [vars]
 base_url = { default = "https://work.kopsa.info" }
@@ -171,6 +171,15 @@ id = "compose"
 title = "Ranked, not capped — every distinct bundle the evidence supports"
 depends_on = ["answer-requests", "answer-threads"]
 description = """
+THE FLOOR FIRST (the owner's ruling): this step stages AT LEAST ONE
+outcome the house does not hold yet, every sitting, whatever else
+was owed. Dig for it in the manifest's `uncomposed` list — every
+task, event, media row and chore run no outcome or insight has ever
+cited, newest first — read those rows in FULL at their own
+addresses (a title is not evidence), read the people and values
+beside them, and stage the outcome that is not there yet. Only an
+honest dig that finds nothing distinct stages nothing, and then the
+journal step is mandatory and says what was searched.
 THERE IS NO CAP ON STAGING (waymark-1uv.3): the machine writes
 without limit and the crown's declared rank chooses which bundles
 fill the person's attention. Stage EVERY DISTINCT outcome the
@@ -249,10 +258,10 @@ which threads were answered, which diagnoses were published, which
 bundles were scored, and — just as load-bearing — what was
 deliberately NOT composed and why (a floor not yet expired, evidence
 not yet in the house, a person still unaffirmed). The next sitting
-reads this first. If the whole sitting found nothing changed — no
-request, no unanswered turn, no fact to index, no new evidence, no
-diagnosis due, no bundle left unscored — write NOTHING, journal
-included: a no-op sitting leaves no residue. Then close this
+reads this first. There is no silent sitting: the floor means every
+sitting staged at least one new outcome, or — after an honest dig
+that found nothing distinct — writes THIS journal saying what was
+searched and why nothing could be staged. Then close this
 molecule's steps and squash the wisp.
 LAST, always: run `scripts/sitting-run.sh verify` and put its output
 in your report. It lists every row this principal wrote since the

@@ -162,7 +162,7 @@ if [ "$MODE" = "verify" ]; then
   check journal       "/api/journals?owner=$PRINCIPAL"            written amended
   echo
   if [ "$wrote" -eq 0 ]; then
-    echo "NOTHING. That is a lawful sitting only if the manifest's duties were all zero — a run that had an offered request, an unanswered turn or an unscored bundle and wrote nothing did not do its job."
+    echo "NOTHING. That is not a sitting: every sitting owes at least one new outcome the house did not hold (the floor), and a dig that honestly found none owes a journal saying what was searched. A run that wrote nothing did not do its job."
   else
     echo "$wrote row(s) written by this principal since $SINCE."
   fi
@@ -405,6 +405,25 @@ jq --slurpfile reasons "$R/verdict_reasons.full.json" --slurpfile cited "$D/insi
                     + [ .reasons[].self ] + [ .pieces[].self ])]
 ' "$R/outcomes.full.json" > "$D/declines.json"
 
+# THE FLOOR (the owner's ruling, 2026-08-27): a sitting always owes at
+# least one NEW outcome the house does not hold yet, found by digging.
+# The dig starts here — every row of an evidence kind that no outcome
+# and no insight has ever cited, newest first, with its state and its
+# sentence — so the model starts from what is UNCOMPOSED rather than
+# from what it already knows.
+jq -s '
+  (.[0] + .[1] | unique) as $cited
+  | .[2:] | add
+  | map(.self as $sf | select($sf != null and (($cited | index($sf)) == null)))
+  | map({self, kind, state, at:(.meta.updated_at // null),
+         says:((.display.title // .summary // "") | .[0:140])})
+  | sort_by(.at) | reverse
+' <(jq '[.[].data.evidence[]?]' "$R/outcomes.full.json") \
+   <(jq '[.[].data.evidence[]?]' "$R/insights.full.json") \
+   "$R/tasks.json" "$R/events.json" "$R/media.json" "$R/chore_runs.json" \
+   > "$D/uncomposed.json" 2>/dev/null || echo '[]' > "$D/uncomposed.json"
+jq -c 'group_by(.kind) | map({kind:.[0].kind, count:length}) ' "$D/uncomposed.json" > "$D/uncomposed_census.json"
+
 # a value must be LIVE to be named; a companion must be current
 jq '[.[] | select(.state != "retired")
         | {id:(.self|split("/")|last), self, state, name:(.data.name // .summary),
@@ -460,6 +479,8 @@ jq -n \
   --slurpfile declines "$D/declines.json" \
   --slurpfile values "$D/live_values.json" \
   --slurpfile companions "$D/companions.json" \
+  --slurpfile uncomposed "$D/uncomposed.json" \
+  --slurpfile census "$D/uncomposed_census.json" \
   --slurpfile ask "$D/extend_ask.json" \
   --slurpfile diag "$RUN/rows/diagnosis.json" \
   --slurpfile journals "$RUN/rows/journals.full.json" \
@@ -476,8 +497,11 @@ jq -n \
     answer_threads:  ($threads[0]  | length),
     index_facts:     ($facts[0]    | length),
     score_bundles:   ($unscored[0] | length),
-    declines_owed_a_diagnosis: ([$declines[0][] | select(.diagnosis_stands|not)] | length)
+    declines_owed_a_diagnosis: ([$declines[0][] | select(.diagnosis_stands|not)] | length),
+    surface_one_new_outcome: 1
   },
+  uncomposed_census: $census[0],
+  uncomposed: ($uncomposed[0] | .[0:60]),
   offered_requests: $requests[0],
   unanswered_threads: $threads[0],
   candidate_facts: $facts[0],
@@ -531,6 +555,13 @@ jq -n \
   echo
   echo "## Declines already diagnosed — nothing to do"
   jq -r '[.declines[] | select(.diagnosis_stands)] | if length==0 then "  (none)" else (.[] | "- \(.self) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])") end' "$RUN/manifest.json"
+  echo
+  echo "## THE FLOOR — surface one new outcome, every sitting"
+  echo "  Whatever else is owed, this sitting stages at least ONE outcome the house does not hold yet."
+  echo "  Dig here first: evidence NO outcome and NO insight has ever cited (newest first, 60 of them; the whole list is manifest.json .uncomposed):"
+  jq -r '.uncomposed_census | if length==0 then "  (every row of every evidence kind is already cited — dig the rows in full for what those bundles did NOT compose)" else ("  uncomposed by kind: " + ([.[] | "\(.kind) \(.count)"] | join(" · "))) end' "$RUN/manifest.json"
+  jq -r '.uncomposed[0:24][] | "- \(.self) [\(.kind) \(.state)] \(.says)"' "$RUN/manifest.json"
+  echo "  Read the rows in FULL at their own addresses before composing from them; a title is not evidence. If the dig honestly finds nothing distinct to stage, the journal says what was searched and why — that journal is then mandatory."
   echo
   echo "## Live values you may name"
   jq -r 'if (.live_values|length)==0 then "  (none — a plan citing no live value is refused)" else (.live_values[] | "- \(.self) [\(.state)] \(.name)") end' "$RUN/manifest.json"

@@ -1,6 +1,6 @@
 ---
 name: sitting
-description: Run one composer sitting at the waymark MCP door — read the house, index the facts people said as insights, answer standing composition requests and threads, stage every distinct bundle the evidence supports (ranked, not capped), honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
+description: Run one composer sitting at the waymark MCP door — read the house, index the facts people said as insights, answer standing composition requests and threads, surface at least one outcome the house does not hold yet and every distinct bundle beyond it (ranked, not capped), honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
 ---
 
 # The sitting
@@ -67,11 +67,17 @@ Every offered `composition_request` deserves an answer this sitting:
 an outcome whose `request_id` names it. Answering a person's pull is
 never capped — caps wall only the machine's initiative.
 
-## 4. Ranked, not capped
+## 4. The floor, then ranked-not-capped
 
-There is no cap on staging (waymark-1uv.3): the machine writes
-without limit and the crown's declared rank chooses what fills the
-person's attention. Stage every DISTINCT bundle the evidence
+Every sitting stages at least ONE outcome the house does not hold
+yet — the owner's ruling; a sitting never has no work. Dig for it:
+the evidence rows (tasks, events, media, chore runs) no outcome or
+insight has ever cited, read in full at their own addresses, the
+people and values beside them. Only an honest dig that finds nothing
+distinct stages nothing, and then the journal (step 9) says what was
+searched and why. There is no cap on staging (waymark-1uv.3): the
+machine writes without limit and the crown's declared rank chooses
+what fills the person's attention. Stage every DISTINCT bundle the evidence
 honestly supports — but never a twin of one that already stands:
 the rank cannot tell twins apart, so sameness is the only scarcity.
 A declined prior recomposes only after its diagnosis (step 6) and
@@ -164,9 +170,10 @@ which facts were indexed (insight ids), which requests and threads
 were answered, which diagnoses were published, which bundles were
 scored, and — just as load-bearing — what you chose NOT to compose
 and why (the wood not yet in the house; a floor not yet expired; a
-person still unaffirmed). The next sitting reads this first. A
-sitting that found nothing to index, answer, stage or score writes
-nothing at all — journal included.
+person still unaffirmed). The next sitting reads this first. There
+is no silent sitting: the floor means at least one new outcome was
+staged, or this journal says what the dig searched and why nothing
+could be.
 
 ## Scheduling
 
