@@ -66,8 +66,14 @@ id = "answer-requests"
 title = "Answer every standing composition request"
 depends_on = ["read"]
 description = """
-A person's pull is NEVER capped. For each composition_request in
-state offered (from the read step): stage an outcome at
+A person's pull is NEVER capped, and state=offered means UNANSWERED
+BY DEFINITION: the staging itself is what answers a request — in the
+same transaction, moving its state — so an existing outcome that
+merely resembles the request answers nothing. If a request reads
+offered, it is owed a fresh outcome citing it, full stop; "an
+outcome like that already exists" is never a reason to skip one.
+For each composition_request in state offered (from the read step):
+stage an outcome at
 POST {{base_url}}/api/outcomes whose request_id names the request,
 with 2-5 outcome_pieces whose friction is genuinely pre-paid. The
 walls that will judge you, in the door's own words if you miss:
