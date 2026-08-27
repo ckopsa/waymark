@@ -405,6 +405,19 @@ jq --slurpfile reasons "$R/verdict_reasons.full.json" --slurpfile cited "$D/insi
                     + [ .reasons[].self ] + [ .pieces[].self ])]
 ' "$R/outcomes.full.json" > "$D/declines.json"
 
+# SOURCES BEYOND THE HOUSE (the owner's ruling, 2026-08-27, cont.):
+# email, Telegram and texts are CAPABILITIES, reached through the Gate
+# door — GET /api/-/gate is Gate's live tools ∩ this grant, and nothing
+# behind them is ever stored here. The dig goes through this door when
+# the grant admits it; when it admits nothing, the manifest says which
+# ask would open it.
+gate_out="$(mktemp)"
+if [ "$(api "$gate_out" "/api/-/gate")" = "200" ]; then cp "$gate_out" "$R/gate.json"; else echo '{}' > "$R/gate.json"; fi
+rm -f "$gate_out"
+jq -c '{tools: ((.links // {}) | to_entries | map({name:.key, href:.value.href, summary:(.value.summary // .value.note // null)})),
+        mutations: ((.actions // {}) | keys),
+        ask: (.ask // null)}' "$R/gate.json" > "$D/gate.json"
+
 # THE FLOOR (the owner's ruling, 2026-08-27): a sitting always owes at
 # least one NEW outcome the house does not hold yet, found by digging.
 # The dig starts here — every row of an evidence kind that no outcome
@@ -482,6 +495,7 @@ jq -n \
   --slurpfile uncomposed "$D/uncomposed.json" \
   --slurpfile census "$D/uncomposed_census.json" \
   --slurpfile ask "$D/extend_ask.json" \
+  --slurpfile gate "$D/gate.json" \
   --slurpfile diag "$RUN/rows/diagnosis.json" \
   --slurpfile journals "$RUN/rows/journals.full.json" \
 '{
@@ -500,6 +514,7 @@ jq -n \
     declines_owed_a_diagnosis: ([$declines[0][] | select(.diagnosis_stands|not)] | length),
     surface_one_new_outcome: 1
   },
+  gate: $gate[0],
   uncomposed_census: $census[0],
   uncomposed: ($uncomposed[0] | .[0:60]),
   offered_requests: $requests[0],
@@ -562,6 +577,9 @@ jq -n \
   jq -r '.uncomposed_census | if length==0 then "  (every row of every evidence kind is already cited — dig the rows in full for what those bundles did NOT compose)" else ("  uncomposed by kind: " + ([.[] | "\(.kind) \(.count)"] | join(" · "))) end' "$RUN/manifest.json"
   jq -r '.uncomposed[0:24][] | "- \(.self) [\(.kind) \(.state)] \(.says)"' "$RUN/manifest.json"
   echo "  Read the rows in FULL at their own addresses before composing from them; a title is not evidence. If the dig honestly finds nothing distinct to stage, the journal says what was searched and why — that journal is then mandatory."
+  echo
+  echo "## Sources beyond the house — Gate (email, Telegram, texts)"
+  jq -r '.gate | if (.tools|length)==0 then "  (this grant admits no Gate tool — the dig stays inside the house. To open email/Telegram/texts, file an ANCHORED ask on this grant adding {\"kind\":\"email.read\"}, {\"kind\":\"telegram.read\"}, {\"kind\":\"messages.read\"} with actions [] and NO filter; a person taps it and the same grant widens)" else ("  read tools admitted (GET " + (.tools[0].href|split("/")[0:4]|join("/")) + "/<tool>, POST /api/-/gate/<tool> with the tool'"'"'s own args):\n" + ([.tools[] | "  - \(.name)  \(.summary // "")"] | join("\n")) + "\n  What you learn there is evidence to ACT on, never an address to CITE: cite the house rows it points at (the person, the event, the task) and name the source in the goal'"'"'s prose. Never copy a message body into a row. Read-only: never a send or a move.") end' "$RUN/manifest.json"
   echo
   echo "## Live values you may name"
   jq -r 'if (.live_values|length)==0 then "  (none — a plan citing no live value is refused)" else (.live_values[] | "- \(.self) [\(.state)] \(.name)") end' "$RUN/manifest.json"

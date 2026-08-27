@@ -113,8 +113,20 @@ holding your place in it.
    row and chore run that no outcome or insight has ever cited,
    newest first — read those rows in full at their own addresses (a
    title is not evidence), read the people and values beside them,
-   and find the outcome that is not there yet. As the house grows
-   new kinds (mail, chat), they join the dig. Only if that honest dig
+   and find the outcome that is not there yet. **Dig beyond the house
+   too**: email, Telegram and texts are capabilities reached through
+   the Gate door — the manifest's `gate.tools` are the read tools
+   this grant admits (`POST /api/-/gate/<tool>` with the tool's own
+   arguments; `emila__search`, `tgram__search_all_chats`,
+   `messa__threads` and kin). A birthday in a thread, an appointment
+   in an inbox, a plan somebody floated in chat — that is exactly the
+   outcome the house does not hold yet. What you learn there is
+   evidence to act on, never an address to cite: cite the house rows
+   it points at (the person, the event, the task) and name the source
+   in the goal's prose ("from an email of Aug 20"). Never copy a
+   message body into a row; never send or move anything — read tools
+   only. When the grant admits no Gate tool, the manifest says which
+   anchored ask opens it. Only if that honest dig
    finds nothing distinct to stage does the sitting stage nothing —
    and then the journal says what was searched and why, which makes
    the journal mandatory. The law is *ranked, not capped*

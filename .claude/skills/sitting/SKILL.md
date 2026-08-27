@@ -73,7 +73,12 @@ Every sitting stages at least ONE outcome the house does not hold
 yet — the owner's ruling; a sitting never has no work. Dig for it:
 the evidence rows (tasks, events, media, chore runs) no outcome or
 insight has ever cited, read in full at their own addresses, the
-people and values beside them. Only an honest dig that finds nothing
+people and values beside them — and beyond the house through the
+Gate door (`GET /api/-/gate` is the read tools your grant admits:
+email, Telegram, texts), where what you learn is evidence to act on
+but never an address to cite: cite the house rows it points at, name
+the source in the goal's prose, never copy a message body into a
+row, never send or move. Only an honest dig that finds nothing
 distinct stages nothing, and then the journal (step 9) says what was
 searched and why. There is no cap on staging (waymark-1uv.3): the
 machine writes without limit and the crown's declared rank chooses
