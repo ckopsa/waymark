@@ -28,7 +28,24 @@ fi
 # instead when one is already there (cached container state).
 cd "$CLAUDE_PROJECT_DIR"
 if "$BD_BIN" ready --limit 1 >/dev/null 2>&1; then
-  "$BD_BIN" dolt pull || echo "warning: bd dolt pull failed; database may be stale" >&2
+  if ! "$BD_BIN" dolt pull; then
+    # The recurring divergence: the beads-sync workflow's import of
+    # this session's own export commits the same change onto a second
+    # Dolt history, and a row edited again after the export conflicts
+    # on the next pull — with no operator resolution in embedded mode.
+    # Recover by REPLACING local history, never merging: snapshot the
+    # local database (strictly newer; --all keeps memories through the
+    # round trip — the file stays local, never committed), re-clone
+    # the remote, upsert the snapshot back on top. The same
+    # bootstrap-then-import shape beads-sync.yml itself uses.
+    echo "bd dolt pull refused — recovering by re-clone + re-import" >&2
+    SNAP="$(mktemp)"
+    "$BD_BIN" export --all -o "$SNAP"
+    rm -rf "$CLAUDE_PROJECT_DIR/.beads/embeddeddolt"
+    "$BD_BIN" bootstrap
+    "$BD_BIN" import "$SNAP"
+    rm -f "$SNAP"
+  fi
 else
   "$BD_BIN" bootstrap
 fi
