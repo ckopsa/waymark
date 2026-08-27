@@ -1734,9 +1734,19 @@
 ;; outcome's own `rework`; the owner taps the revised bundle. The
 ;; outcome never left the fridge.
 
-(defn- remarks-on [who oid]
-  (json (req :get (str "/api/remarks?subject_kind=outcome&subject_id=" oid)
-             (human who))))
+(defn- remarks-on
+  "The outcome's own thread, oldest-first (the remark kind's default
+  sort). The collection scopes the remarks to this subject and its
+  items are envelope SUMMARIES — data-less, and `says` is prose the
+  grid column set omits — so each turn is read back at its own address
+  for the full envelope the assertions want (`:data :said_by`,
+  `:data :says`)."
+  [who oid]
+  (->> (get-in (json (req :get (str "/api/remarks?subject_kind=outcome"
+                                    "&subject_id=" oid)
+                          (human who)))
+               [:data :items])
+       (mapv #(json (req :get (:self %) (human who))))))
 
 (deftest the-iterate-loop-reworks-the-plan-in-place
   (let [member   "colton-church"
@@ -1774,9 +1784,14 @@
           (is (str/includes? (get-in (first thread) [:data :says]) "9am church")))))
 
     (testing "an agent-iterate is refused: iterate is the household's gesture"
-      (let [r (invoke! "outcomes" o :iterate {:says "re-plan"}
-                       {"x-waymark-principal" "some-agent"
-                        "x-waymark-actor-type" "agent"})]
+      ;; the wall answers only an agent that reaches it. An unrelated
+      ;; agent is default-DENY and 404s on an outcome it cannot see,
+      ;; which proves nothing about the wall — so leash one over the
+      ;; kind's own `iterate` door: authorization admits the reach, and
+      ;; `a-person-answers` refuses the agent by name.
+      (let [agent (leash! "some-agent"
+                          [{:kind "outcome" :actions ["iterate"]}] :scope)
+            r (invoke! "outcomes" o :iterate {:says "re-plan"} agent)]
         (is (= 409 (:status r)))
         (is (= "a-person-answers" (guard-of r)))))
 
@@ -1795,10 +1810,11 @@
                                      "task" {:title "Creek trail, Sunday 8am"}))]
       (testing "a replacement piece stands — reworked pieces do not spend a bundle slot"
         (is (some? creek))
-        (let [offered (json (req :get
-                                 (str "/api/outcome_pieces?outcome_id=" o
-                                      "&state=offered")
-                                 (human member)))]
+        (let [offered (get-in (json (req :get
+                                         (str "/api/outcome_pieces?outcome_id=" o
+                                              "&state=offered")
+                                         (human member)))
+                              [:data :items])]
           (is (= #{breakfast creek}
                  (into #{} (map #(last (str/split (str (:self %)) #"/"))) offered))
               "only breakfast and the creek trail are on offer; the walk is withdrawn")))
