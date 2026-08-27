@@ -178,6 +178,13 @@ async function renderFeedScreen(view, doc) {
   /* the day rides the head as data, not as a second copy of the
      sentence: doc.summary already says "Feed · <day> · N cards", and
      this page does not rewrite the server's own prose */
+  /* ONE COLUMN, the timeline's own width, and the head sticks just
+     under the page header (whose height the CSS cannot know) */
+  const col = el("div", {class: "feed-col"});
+  view.append(col);
+  const hdr = document.querySelector("header");
+  document.documentElement.style.setProperty("--feed-head-top",
+    (hdr ? hdr.offsetHeight : 0) + "px");
   const head = el("div", {class: "panel feed-head", "data-day": day},
     el("h2", {class: "prose"}, "The feed"),
     el("div", {class: "metaline"},
@@ -269,7 +276,7 @@ async function renderFeedScreen(view, doc) {
           : null));
     head.append(why);
   }
-  view.append(head);
+  col.append(head);
 
   /* ── COMPOSE ME ANOTHER (waymark-jfv.20) ─────────────────────────────
      The person pulls, and the rank puts the answer first (since
@@ -288,6 +295,7 @@ async function renderFeedScreen(view, doc) {
   if (crown && (crown.ask || (crown.standing || []).length)) {
     const panel = el("div", {class: "feed-sect feed-crown",
                              "data-crown-empty": crown.empty ? "1" : "0"},
+      el("div", {class: "fcard-ava", "aria-hidden": "true"}, "✦"),
       el("b", {}, FEED_SECTION_LABEL.outcomes),
       el("span", {class: "muted"}, crown.says || ""));
     const bar = el("div", {class: "actions feed-verbs"});
@@ -322,14 +330,14 @@ async function renderFeedScreen(view, doc) {
       bar.append(chip);
       panel.append(bar, problem);
     } else panel.append(bar);
-    view.append(panel);
+    col.append(panel);
   }
 
   const list = el("div", {class: "feedcards", role: "feed",
                           "aria-label": "the day's feed"});
-  view.append(list);
+  col.append(list);
   const endBox = el("div", {class: "feed-endbox"});
-  view.append(endBox);
+  col.append(endBox);
   /* the ledger watches nothing in particular here: a feed that
      refetched on every household write would re-roll under the
      reader's thumb, and the day's order is supposed to hold still */
@@ -422,11 +430,14 @@ async function renderFeedScreen(view, doc) {
      needs (spec-feed.md, .6's note). The badge posture says WHOSE
      without pretending to know WHO. */
   function bylineChip(pid) {
+    /* the first eight characters on the line, the whole id one hover
+       away — the same shortening the evidence links already wear.
+       Still the id and never a name: shorter, not dressed up. */
     return el("span", {class: "statechip fcard-by mono",
       title: "published by principal " + pid + " — the id as the wire "
            + "gives it. This house does not dress a principal up as a "
            + "person; an agent's findings are offered, never accepted, "
-           + "by the agent that found them."}, "◆ " + pid);
+           + "by the agent that found them."}, "◆ " + String(pid).slice(0, 8));
   }
 
   function verbChip(card, article, name, entry) {
@@ -881,6 +892,20 @@ async function renderFeedScreen(view, doc) {
      into a blank — and a card that throws is a problem panel wearing
      its own refusal, never its neighbours' problem (the dashboard's
      posture). */
+  /* the avatar glyph: a mark of WHAT the post is, by the shape the
+     wire gives it first (a bundle, a finding) and by kind after —
+     never a picture of who, which this page does not know */
+  const FEED_GLYPH = {
+    task: "✓", chore: "⟳", chore_run: "✓", event: "▣", media: "▶",
+    day: "☀", approval_request: "⛨", tickler: "❄", insight: "✦",
+    outcome: "◆", meal: "♨", grocery_list: "☰", letter: "✉"};
+  function avatarGlyph(card, bundle, offer) {
+    if (bundle) return "◆";
+    if (offer) return "✦";
+    const k = card.kind || "";
+    return FEED_GLYPH[k] || (k ? k.charAt(0).toUpperCase() : "·");
+  }
+
   function cardArticle(card, hints, srcHref) {
     const kind = card.kind || "";
     const article = el("article",
@@ -912,11 +937,14 @@ async function renderFeedScreen(view, doc) {
     /* the top line: what state the row is in, what kind it is, when it
        last moved (or, for an archive card, when the moment WAS) */
     const when = card.at || (card.meta || {}).updated_at || "";
+    article.append(el("div", {class: "fcard-ava", "aria-hidden": "true"},
+                      avatarGlyph(card, bundle, offer)));
+    /* the who-line, a timeline's: the kind as the name (the house's
+       own row speaks as itself), the byline beside it when the post
+       is somebody's WORK, then the section it came up in, then when */
+    const sectionLabel = FEED_SECTION_LABEL[card.section] || "";
     article.append(el("div", {class: "fcard-top"},
-      card.state ? el("span", {class: "statechip"}, card.state) : null,
-      el("span", {class: "fcard-kind",
-                  title: `${pretty(card.population || card.section || "")}`
-                       + ` · ${kind}`}, pretty(kind)),
+      el("span", {class: "fcard-name", title: kind}, title(kind)),
       /* the byline, on the two cards that are somebody's WORK rather
          than the house's own rows: a finding was authored, a bundle
          was composed, and either way the reader is owed the principal
@@ -925,9 +953,15 @@ async function renderFeedScreen(view, doc) {
         ? bylineChip(card.fields.authored_by)
         : (bundle && (card.fields || {}).composed_by
              ? bylineChip(card.fields.composed_by) : null),
+      sectionLabel
+        ? el("span", {class: "fcard-kind",
+                      title: `${pretty(card.population || card.section || "")}`},
+            "· " + sectionLabel)
+        : null,
       when ? el("span", {class: "version",
                          title: card.at ? "when this happened" : "last moved"},
-        String(when).slice(0, 16).replace("T", " ")) : null));
+        "· " + String(when).slice(0, 16).replace("T", " ")) : null,
+      card.state ? el("span", {class: "statechip"}, card.state) : null));
 
     if (quiet) {
       /* the read-only shape: the sentence IS the card (a cleared
@@ -1029,6 +1063,22 @@ async function renderFeedScreen(view, doc) {
           title: l.summary || rel},
           (l.download ? "⭳ " : l.external ? "↗ " : "") + title(rel)
           + (l.external || l.download ? "" : " ↗")));
+    /* THE THREAD, on the two posts that are somebody's work: a
+       bundle and a finding each carry a conversation (waymark-b4s —
+       a remark is a turn the composer answers), and a timeline's post
+       is owed its reply door. It is a LINK to the row's own thread —
+       the remarks collection sliced to this subject, whose create door
+       is the ordinary form — because a prose box is composition, and
+       composition is never a thumb. */
+    if ((bundle || offer) && card.self) {
+      const sid = String(card.self).split("/").pop();
+      bar.append(el("a", {class: "chip link-chip", "data-thread": "",
+        href: "#/api/remarks?subject_kind=" + encodeURIComponent(kind)
+            + "&subject_id=" + encodeURIComponent(sid),
+        title: "the thread on this " + pretty(kind)
+             + " — read it, or add a turn of your own"},
+        "💬 Thread"));
+    }
     if (bar.childElementCount) article.append(bar);
     const cite = whyDisclosure(card, srcHref);
     if (cite) article.append(cite);

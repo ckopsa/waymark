@@ -115,22 +115,36 @@
   html[data-ui="mobile"] .feed-actions button { font-size: 13px; }
 
   /* --- feed SCREEN (mobile): the surface it was designed for -------
-     the cards go full-bleed and the verbs grow: this is the one
-     screen in the building meant to be read standing up, one thumb */
-  html[data-ui="mobile"] .fcard { border-radius: 0; border-left-width: 4px;
-    margin: 0 -10px; padding: 13px 14px 12px; }
-  html[data-ui="mobile"] .fcard-title { font-size: 18px; }
-  html[data-ui="mobile"] .feed-verbs button.chip.verb { min-height: 42px;
-    font-size: 15.5px; flex: 1 1 auto; }
+     the posts go full-bleed and the verbs spread under the thumb:
+     this is the one screen in the building meant to be read standing
+     up, one thumb */
+  html[data-ui="mobile"] .feed-col { max-width: none; }
+  html[data-ui="mobile"] .feed-head { margin: 0 -10px; padding: 8px 12px 6px; }
+  html[data-ui="mobile"] .feed-crown { margin: 0 -10px; padding: 10px 12px;
+    grid-template-columns: 36px 1fr; column-gap: 10px; }
+  html[data-ui="mobile"] .feed-sect { margin: 0 -10px; padding: 8px 12px 4px; }
+  html[data-ui="mobile"] .feed-seam { margin: 0 -10px; }
+  html[data-ui="mobile"] .fcard { margin: 0 -10px; padding: 10px 12px 4px;
+    grid-template-columns: 36px 1fr; column-gap: 10px; }
+  html[data-ui="mobile"] .fcard-ava { width: 36px; height: 36px; font-size: 15px; }
+  html[data-ui="mobile"] .fcard-title { font-size: 16px; }
+  /* the section rule above the post already names it: on a phone the
+     who-line keeps to one line and drops the repeat */
+  html[data-ui="mobile"] .fcard-kind { display: none; }
+  html[data-ui="mobile"] .feed-verbs { margin-left: -6px; }
+  html[data-ui="mobile"] .feed-verbs button.chip.verb { min-height: 40px;
+    font-size: 14px; flex: 1 1 auto; }
+  html[data-ui="mobile"] .feed-verbs a.link-chip { min-height: 40px; flex: 1 1 auto;
+    justify-content: center; }
   /* a piece is a thumb too (waymark-jfv.4) — smaller than the
      bundle's own verdicts, never smaller than a fingertip */
-  html[data-ui="mobile"] .fpiece-verbs button.chip.verb { min-height: 40px;
-    font-size: 14.5px; flex: 1 1 auto; }
+  html[data-ui="mobile"] .fpiece-verbs button.chip.verb { min-height: 38px;
+    font-size: 13.5px; flex: 1 1 auto; }
   /* a reason is a thumb too (waymark-jfv.16) — quieter than a verdict,
      never smaller than a fingertip */
   html[data-ui="mobile"] .feed-reasons button.chip.reason { min-height: 38px;
     font-size: 14px; flex: 1 1 auto; }
-  html[data-ui="mobile"] .feed-head h2 { font-size: 20px; }
+  html[data-ui="mobile"] .feed-head h2 { font-size: 17px; }
   html[data-ui="mobile"] .feed-seam-say { font-size: 16px; }
 
   /* ── dashboard screen (mobile): one column, tighter panels ──────── */

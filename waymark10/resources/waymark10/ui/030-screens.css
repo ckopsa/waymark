@@ -306,18 +306,30 @@
   .feed-fin { font-family: var(--serif); color: var(--muted);
               font-size: 15px; margin-bottom: 12px; }
 
-  /* --- the feed screen (135-feed-screen.js): the day, thumb-first ---
-     A LIST, not a stack of full-screen panels: cards are as tall as
-     what they have to say (a memory is two lines, a finding is six),
-     and the seam has to be scrolled PAST rather than dismissed. The
-     verbs are chips sized for a thumb — 15px of sans on a 38px box,
-     not the 11px mono a chip wears when it is only a label. */
-  .feed-head { padding-bottom: 10px; }
-  .feed-head h2 { margin: 0 0 4px; font-size: 22px; }
-  .feed-head .metaline { display: flex; align-items: center; gap: 10px;
-                         flex-wrap: wrap; }
-  .feed-head .metaline .chip { cursor: pointer; margin-left: auto; }
-  .feed-why { margin-top: 8px; font-size: 12.5px; }
+  /* --- the feed screen (135-feed-screen.js): the day, one column ---
+     A TIMELINE, the shape a thumb already knows: one centred column of
+     posts separated by hairlines rather than boxed cards, each post an
+     avatar glyph beside a who-line, the prose, the pieces as an inset
+     block, and a quiet row of verbs underneath. The provenance rules
+     hold (serif = the server's sentence, mono = machine truth, sans =
+     this chrome); what changed is only the furniture. The seam is
+     still scrolled PAST, the verbs are still chips sized for a thumb,
+     and nothing here reorders a card. */
+  .feed-col { max-width: 640px; margin: 0 auto; }
+  .feed-head { position: sticky; top: var(--feed-head-top, 0); z-index: 4;
+               background: var(--paper); border: 0; border-radius: 0;
+               box-shadow: none; margin: 0; padding: 10px 16px 8px;
+               border-bottom: 1px solid var(--line); overflow: visible; }
+  .feed-head h2 { margin: 0; font-size: 18px; letter-spacing: -.01em; }
+  .feed-head .metaline { display: flex; align-items: center; gap: 6px;
+                         flex-wrap: wrap; margin-top: 2px; }
+  .feed-head .metaline .muted { flex: 1 1 12rem; font-size: 12.5px; }
+  .feed-head .metaline .chip { cursor: pointer; margin-left: 0;
+    font-family: var(--sans); font-size: 12.5px; background: transparent;
+    border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; }
+  .feed-head .metaline .chip:hover { background: var(--verdigris-wash);
+                                     border-color: var(--verdigris); }
+  .feed-why { margin-top: 6px; font-size: 12.5px; }
   .feed-why summary { color: var(--muted); cursor: pointer; }
   .feed-why p { margin: 6px 0 0; font-size: 13px; line-height: 1.45; }
   /* the recipe, narrated (waymark-iqa.29): the order the household
@@ -328,117 +340,189 @@
   .feed-recipe li.feed-recipe-seam { list-style: none; margin-left: -14px; }
   .feed-recipe-counts { font-size: 11.5px; }
   /* and the per-card citation, quiet until somebody asks */
-  .fcard-why { margin-top: 10px; font-size: 12.5px; }
+  .fcard-why { margin-top: 4px; font-size: 12px; }
   .fcard-why summary { color: var(--muted); cursor: pointer; }
   .fcard-why p { margin: 6px 0 0; font-size: 13px; line-height: 1.45; }
   .fcard-why[open] { border-top: 1px dashed var(--line); padding-top: 8px; }
-  .feedcards { display: flex; flex-direction: column; gap: 10px; }
+  /* the compose row (waymark-jfv.20), where a timeline keeps its
+     "what's happening?" box: your pull, and your standing pulls.
+     Doubled selector: it shares .feed-sect's class and must out-rank
+     the section rule's small caps. */
+  .feed-sect.feed-crown { display: grid; grid-template-columns: 40px 1fr;
+                column-gap: 12px; row-gap: 2px; align-items: start;
+                padding: 12px 16px; border-bottom: 1px solid var(--line);
+                margin: 0; font-size: 13px; text-transform: none;
+                letter-spacing: 0; color: var(--ink); }
+  .feed-sect.feed-crown > b { grid-column: 2; font-size: 14px;
+                              text-transform: none; letter-spacing: 0; }
+  .feed-sect.feed-crown > .muted { grid-column: 2; font-family: var(--serif);
+                                   font-size: 14px; line-height: 1.4; }
+  .feed-sect.feed-crown > .feed-verbs { grid-column: 2; margin: 6px 0 0 -8px;
+                                        justify-content: flex-start; }
+  .feed-sect.feed-crown > [data-feed-problem] { grid-column: 2; }
+  .feed-sect.feed-crown .fcard-ava { grid-column: 1; grid-row: 1 / span 4; }
+  .feed-crown .feed-verbs .chip { font-family: var(--sans); font-size: 13.5px;
+    min-height: 34px; padding: 5px 12px; border-radius: 999px;
+    border: 1px solid var(--line); background: transparent;
+    color: var(--muted); display: inline-flex; align-items: center;
+    cursor: pointer; }
+  .feed-crown .feed-verbs .chip:hover { color: var(--verdigris-deep);
+    background: var(--verdigris-wash); border-color: var(--verdigris);
+    text-decoration: none; }
+  .feed-crown .feed-verbs .chip.primary { background: var(--verdigris);
+    border-color: var(--verdigris); color: #fff; font-weight: 600; }
+  .feed-crown .feed-verbs .chip.primary:hover { background: var(--verdigris-deep); }
+  .feed-crown .feed-verbs .chip:disabled { opacity: .5; cursor: default; }
+  .feedcards { display: flex; flex-direction: column; gap: 0; }
   /* the section heading is painted from the CARD STREAM, never from
-     the census: an empty population contributes nothing */
+     the census: an empty population contributes nothing. In a
+     timeline it is a quiet rule, not a banner. */
   .feed-sect { display: flex; align-items: baseline; gap: 8px;
-               margin: 14px 2px 0; font-size: 12px;
-               text-transform: uppercase; letter-spacing: .06em; }
+               margin: 0; padding: 10px 16px 6px; font-size: 11.5px;
+               text-transform: uppercase; letter-spacing: .06em;
+               color: var(--muted); border-bottom: 1px solid var(--line); }
+  .feed-sect b { color: var(--ink); }
   .feed-sect .muted { text-transform: none; letter-spacing: 0;
                       font-size: 12px; font-family: var(--serif); }
-  .fcard { background: var(--panel); border: 1px solid var(--line);
-           border-radius: var(--radius); box-shadow: var(--shadow);
-           padding: 14px 16px 12px; }
-  /* the census wears colour: do-now is the one under the thumb,
-     decide is waiting on a person, fuel and the archive are quiet */
-  /* the crown wears the law's own colour: it is the one card here
-     that was authored rather than projected, and it sits on top */
-  .fcard[data-section="outcomes"] { border-left: 3px solid var(--law); }
-  .fcard[data-section="do_now"] { border-left: 3px solid var(--verdigris); }
-  .fcard[data-section="decide"] { border-left: 3px solid var(--warn); }
-  .fcard[data-section="fuel"], .fcard[data-section="archive"] {
-    background: var(--paper); box-shadow: none; }
+  /* ── the post ─────────────────────────────────────────────────── */
+  .fcard { display: grid; grid-template-columns: 40px 1fr;
+           column-gap: 12px; row-gap: 0; align-items: start;
+           background: transparent; border: 0; border-radius: 0;
+           box-shadow: none; padding: 12px 16px 6px;
+           border-bottom: 1px solid var(--line); }
+  .fcard > * { grid-column: 2; min-width: 0; }
+  .fcard:hover { background: rgba(32,38,31,.018); }
   .fcard.done { opacity: .62; }
-  .fcard-top { display: flex; align-items: baseline; gap: 8px;
-               flex-wrap: wrap; margin-bottom: 6px; }
-  .fcard-kind { font-size: 11px; color: var(--muted);
-                text-transform: uppercase; letter-spacing: .05em; }
-  .fcard-top .version { margin-left: auto; }
-  .fcard-by { background: var(--law-wash); color: var(--law); }
-  .fcard-title { margin: 0 0 4px; font-size: 19px; font-weight: 700;
+  /* the avatar: a glyph in a circle, coloured by the census — the
+     one place the section's colour survives, and it is a mark of
+     WHAT this is, never a picture of WHO */
+  .fcard-ava { grid-column: 1; grid-row: 1 / span 40; width: 40px;
+               height: 40px; border-radius: 50%; display: flex;
+               align-items: center; justify-content: center;
+               font-family: var(--sans); font-size: 17px; font-weight: 700;
+               background: var(--chipbg); color: var(--muted);
+               user-select: none; }
+  .fcard[data-section="outcomes"] .fcard-ava,
+  .feed-crown .fcard-ava { background: var(--law-wash); color: var(--law); }
+  .fcard[data-section="do_now"] .fcard-ava { background: var(--verdigris-wash);
+                                             color: var(--verdigris-deep); }
+  .fcard[data-section="decide"] .fcard-ava { background: var(--warn-wash);
+                                             color: var(--warn); }
+  .fcard[data-section="fuel"] .fcard-ava,
+  .fcard[data-section="archive"] .fcard-ava { background: transparent;
+    border: 1px solid var(--line); }
+  /* the who-line: name · section · when, and the state at the end */
+  .fcard-top { display: flex; align-items: baseline; gap: 6px;
+               flex-wrap: wrap; margin-bottom: 2px; font-size: 13.5px;
+               line-height: 1.3; }
+  .fcard-name { font-weight: 700; color: var(--ink); }
+  .fcard-kind { font-size: 12.5px; color: var(--muted);
+                text-transform: none; letter-spacing: 0; }
+  .fcard-top .version { margin-left: 0; font-size: 12px; }
+  .fcard-top .statechip { margin-left: auto; font-size: 10.5px; }
+  .fcard-by { background: var(--law-wash); color: var(--law);
+              font-size: 10.5px; }
+  .fcard-title { margin: 2px 0 2px; font-size: 16.5px; font-weight: 700;
                  line-height: 1.3; letter-spacing: -.01em; }
   .fcard-title a { color: var(--ink); }
   /* the server's own sentence — the seam has one, a cleared queue has
      one, a memory usually has one; prose, because it is prose */
-  .fcard-say { font-family: var(--serif); font-size: 16px; line-height: 1.4;
-               margin: 2px 0 6px; }
-  .fcard-sub { font-size: 13px; }
+  .fcard-say { font-family: var(--serif); font-size: 15.5px; line-height: 1.45;
+               margin: 2px 0 4px; }
+  .fcard-sub { font-size: 12.5px; }
   /* the declaration's own teaser line — the same quiet second line
      the collection table gives a :teaser prose field */
-  .fcard-teaser { font-size: 13.5px; color: var(--muted); margin: 4px 0 0;
+  .fcard-teaser { font-size: 13.5px; color: var(--muted); margin: 2px 0 0;
                   line-height: 1.4; }
-  .fcard-evidence { font-size: 12px; margin: 4px 0 2px; }
-  .feed-verbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px;
-                align-items: center; }
-  .feed-verbs button.chip.verb { font-family: var(--sans); font-size: 15px;
-    min-height: 38px; padding: 7px 14px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--panel); }
-  .feed-verbs button.chip.verb:hover { border-color: var(--verdigris);
+  .fcard-evidence { font-size: 12px; margin: 4px 0 0; }
+  /* the verb row: a timeline's quiet row of actions — ghost pills,
+     the primary one in the action colour, spread under the post.
+     Still chips sized for a thumb (≥34px) and still nothing swipes. */
+  .feed-verbs { display: flex; flex-wrap: wrap; gap: 2px 4px; margin: 6px 0 0;
+                margin-left: -8px; align-items: center; }
+  .feed-verbs button.chip.verb { font-family: var(--sans); font-size: 13.5px;
+    min-height: 34px; padding: 5px 10px; cursor: pointer;
+    border: 1px solid transparent; background: transparent;
+    color: var(--muted); border-radius: 999px; }
+  .feed-verbs button.chip.verb:hover { color: var(--verdigris-deep);
                                        background: var(--verdigris-wash); }
-  .feed-verbs button.chip.verb.primary { background: var(--verdigris);
-    border-color: var(--verdigris); color: #fff; font-weight: 600; }
+  .feed-verbs button.chip.verb.primary { background: transparent;
+    color: var(--verdigris); font-weight: 700; }
+  .feed-verbs button.chip.verb.primary:hover { background: var(--verdigris-wash); }
   .feed-verbs button.chip.verb:disabled { opacity: .5; cursor: default; }
-  .feed-verbs a.link-chip { font-size: 12px; padding: 6px 10px; }
-  .feed-settled { font-size: 13.5px; color: var(--muted); }
+  .feed-verbs a.link-chip { font-family: var(--sans); font-size: 12.5px;
+    padding: 5px 10px; background: transparent; border: 1px solid transparent;
+    color: var(--muted); border-radius: 999px; min-height: 34px;
+    display: inline-flex; align-items: center; }
+  .feed-verbs a.link-chip:hover { color: var(--verdigris-deep);
+    background: var(--verdigris-wash); text-decoration: none; }
+  .feed-settled { font-size: 13.5px; color: var(--muted); padding: 5px 10px; }
   .feed-settled .ok { color: var(--verdigris); font-weight: 700; }
   /* ── the quick reasons (waymark-jfv.16): the row a SETTLED decline
      grows. Quieter than a verdict and on its own line, because it is
      the second, optional tap rather than the answer — the answer has
      already happened and the card already says so above this. */
   .feed-reasons { display: flex; flex-wrap: wrap; gap: 6px;
-                  align-items: center; margin-top: 8px; width: 100%; }
+                  align-items: center; margin: 4px 0 0 8px; width: 100%; }
   .feed-reasons-ask { font-size: 12.5px; }
   .feed-reasons button.chip.reason { font-family: var(--sans);
     font-size: 12.5px; min-height: 30px; padding: 4px 10px; cursor: pointer;
-    border: 1px dashed var(--line); background: transparent;
-    color: var(--muted); }
+    border: 1px dashed var(--line); border-radius: 999px;
+    background: transparent; color: var(--muted); }
   .feed-reasons button.chip.reason:hover { border-style: solid;
     border-color: var(--verdigris); background: var(--verdigris-wash);
     color: var(--ink); }
   .feed-reasons button.chip.reason:disabled { opacity: .5; cursor: default; }
-  .feed-reasons a.link-chip { font-size: 12px; padding: 4px 9px; }
-  .fcard .problem { margin-top: 10px; }
+  .feed-reasons a.link-chip { font-size: 12px; padding: 4px 9px;
+                              border-radius: 999px; }
+  .fcard .problem { margin-top: 8px; }
   /* ── a bundle's pieces (waymark-jfv.4): sub-rows with their own
-     thumbs. Indented under the bundle they belong to, quieter than
-     the card's own verdicts, and each one answerable alone — the
-     partial accept is a person tapping down this list. */
-  .fcard-pieces { list-style: none; margin: 10px 0 2px; padding: 0;
-                  border-left: 2px solid var(--line); }
-  .fpiece { padding: 8px 0 8px 12px; }
-  .fpiece + .fpiece { border-top: 1px dashed var(--line); }
+     thumbs — an inset block inside the post, the way a timeline
+     quotes something, and each row answerable alone: the partial
+     accept is a person tapping down this list. */
+  .fcard-pieces { list-style: none; margin: 8px 0 4px; padding: 0;
+                  border: 1px solid var(--line); border-radius: 12px;
+                  overflow: hidden; background: var(--panel); }
+  .fpiece { padding: 9px 12px 7px; }
+  .fpiece + .fpiece { border-top: 1px solid var(--line); }
   .fpiece-top { display: flex; align-items: baseline; gap: 8px;
                 flex-wrap: wrap; }
+  .fpiece-top .statechip { order: 2; margin-left: auto; font-size: 10.5px; }
   .fpiece-say { font-family: var(--serif); font-size: 15px;
                 line-height: 1.4; color: var(--ink); flex: 1 1 12rem; }
+  .fpiece-say:hover { text-decoration: none; color: var(--verdigris-deep); }
   /* ── the impact line (waymark-jfv.17): the ENGINE's statement of
      what the tap does, under the composer's prose and above the
      chips. Quieter than the say-line and in the SANS face, because
      the difference between them is whose sentence it is — the serif
      is somebody's writing; this is the machine reading itself back.
      Visible rather than disclosed, which is the bead's own ruling. */
-  .fpiece-impact { font-size: 12.5px; color: var(--muted); line-height: 1.45;
-                   margin: 5px 0 0; }
+  .fpiece-impact { font-size: 12px; color: var(--muted); line-height: 1.45;
+                   margin: 3px 0 0; }
   .fcard-impact { font-size: 12.5px; color: var(--muted); line-height: 1.45;
-                  margin: 10px 0 0; }
-  .fpiece-verbs { display: flex; flex-wrap: wrap; gap: 6px;
-                  margin-top: 6px; align-items: center; }
+                  margin: 6px 0 0; }
+  .fpiece-verbs { display: flex; flex-wrap: wrap; gap: 2px 4px;
+                  margin: 2px 0 0 -8px; align-items: center; }
   .fpiece-verbs button.chip.verb { font-family: var(--sans);
-    font-size: 13.5px; min-height: 32px; padding: 5px 11px; cursor: pointer;
-    border: 1px solid var(--line); background: var(--panel); }
-  .fpiece-verbs button.chip.verb:hover { border-color: var(--verdigris);
+    font-size: 13px; min-height: 32px; padding: 4px 10px; cursor: pointer;
+    border: 1px solid transparent; border-radius: 999px;
+    background: transparent; color: var(--muted); }
+  .fpiece-verbs button.chip.verb:hover { color: var(--verdigris-deep);
                                          background: var(--verdigris-wash); }
-  .fpiece-verbs button.chip.verb.primary { background: var(--verdigris);
-    border-color: var(--verdigris); color: #fff; font-weight: 600; }
+  .fpiece-verbs button.chip.verb.primary { color: var(--verdigris);
+                                           font-weight: 700; }
   .fpiece-verbs button.chip.verb:disabled { opacity: .5; cursor: default; }
-  .fpiece-verbs a.link-chip { font-size: 12px; padding: 5px 9px; }
+  .fpiece-verbs a.link-chip { font-family: var(--sans); font-size: 12.5px;
+    padding: 4px 10px; background: transparent; border-color: transparent;
+    color: var(--muted); border-radius: 999px; }
+  .fpiece-verbs a.link-chip:hover { color: var(--verdigris-deep);
+    background: var(--verdigris-wash); text-decoration: none; }
   .fpiece-problem:empty { display: none; }
-  /* the seam: the one structural element, and it says so quietly */
-  .feed-seam { margin: 22px 0 6px; text-align: center; }
-  .feed-seam-rule { border-top: 1px solid var(--line); margin-bottom: 10px; }
+  /* the seam: the one structural element, and it says so quietly —
+     a timeline's "you're all caught up" */
+  .feed-seam { margin: 0; padding: 22px 16px 18px; text-align: center;
+               border-bottom: 1px solid var(--line); }
+  .feed-seam-rule { display: none; }
   .feed-seam-say { font-family: var(--serif); font-size: 17px;
                    color: var(--ink); }
   .feed-seam-sub { font-size: 11.5px; margin-top: 2px; }
