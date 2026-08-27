@@ -166,6 +166,14 @@ if [ "$MODE" = "verify" ]; then
   else
     echo "$wrote row(s) written by this principal since $SINCE."
   fi
+  # A SITTING LEAVES NO DIFF. The wisp appends to .beads/interactions.jsonl
+  # (a tracked file) and a runner that diffs its tree would carry that
+  # residue home as a patch; the snapshot is already gitignored.
+  if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "$ROOT" checkout -q -- .beads/ 2>/dev/null || true
+    left="$(git -C "$ROOT" status --porcelain 2>/dev/null | grep -v '^?? \.sitting' || true)"
+    if [ -n "$left" ]; then echo; echo "tree not clean after the sitting — a sitting leaves no diff:"; echo "$left"; fi
+  fi
   exit 0
 fi
 
@@ -327,31 +335,59 @@ jq --arg me "$PRINCIPAL" --slurpfile cited "$D/insight_cited.json" '
   | map(select(.indexed | not))
 ' "$R/remarks.full.json" > "$D/candidate_facts.json"
 
-# the bundles carrying no live judgment of ours — never our own rows
-jq --arg me "$PRINCIPAL" --slurpfile notes "$R/ranking_notes.full.json" '
+# the bundles carrying no live judgment of ours — never our own rows.
+# Each carries its CITATION PACK: the addresses a judgment is read
+# from — the bundle, the value it names, its pieces, the house's
+# verdict words on it, and any insight that cites it. A note that
+# cites only the bundle was judged from a headline; the pack is what
+# the score step is defined in terms of, and it is computed here so
+# the model copies addresses rather than guessing them.
+jq --arg me "$PRINCIPAL" --slurpfile notes "$R/ranking_notes.full.json" \
+   --slurpfile pieces "$R/outcome_pieces.full.json" \
+   --slurpfile reasons "$R/verdict_reasons.full.json" \
+   --slurpfile insights "$R/insights.full.json" '
   ([ ($notes[0] // [])[] | select(.state=="live")
                          | select((.data.judged_by // "") == $me)
                          | .data.subject_id ]) as $mine
+  | ($pieces[0] // []) as $pc | ($reasons[0] // []) as $vr | ($insights[0] // []) as $in
   | [.[] | select((.data.composed_by // "") != $me)
-         | (.self|split("/")|last) as $id
-         | {id:$id, self, state, goal:.data.goal,
+         | (.self|split("/")|last) as $id | .self as $sf
+         | {id:$id, self:$sf, state, goal:.data.goal,
             value_name:(.data.value_name // null), composed_by:(.data.composed_by // "?"),
             at:.meta.updated_at,
-            scored_by_me: ($mine | index($id) != null)}]
+            evidence:(.data.evidence // []),
+            pieces:[ $pc[] | select(.data.outcome_id == $id) | {self, state, says:.data.says, target_kind:.data.target_kind} ],
+            reasons:[ $vr[] | select(.data.subject_id == $id) | {self, verdict:.data.verdict, reason:.data.reason, words:(.data.words // null)} ],
+            insights:[ $in[] | select((.data.evidence // []) | index($sf) != null) | {self, finding:.data.finding} ],
+            scored_by_me: ($mine | index($id) != null)}
+         | .cite = ([.self]
+                    + (if .value_name != null and (.self|length) > 0 then [] else [] end)
+                    + [ .pieces[].self ] + [ .reasons[].self ] + [ .insights[].self ]) ]
   | map(select(.scored_by_me | not)) | sort_by(.at) | reverse
 ' "$R/outcomes.full.json" > "$D/unscored_bundles.json"
+# the value's address rides the row's own link, read off the projection
+jq --slurpfile full "$R/outcomes.full.json" '
+  ($full[0] // []) as $f
+  | map(. as $b | ($f[] | select(.self == $b.self) | .links.value.href // null) as $v
+        | if $v then .value = $v | .cite = [.self, $v] + (.cite[1:]) else . end)
+' "$D/unscored_bundles.json" > "$D/unscored_bundles.tmp" && mv "$D/unscored_bundles.tmp" "$D/unscored_bundles.json"
 
 # the declines, with the house's own words and whether a diagnosis stands
-jq --slurpfile reasons "$R/verdict_reasons.full.json" --slurpfile cited "$D/insight_cited.json" '
-  ($reasons[0] // []) as $vr | ($cited[0] // []) as $c
+jq --slurpfile reasons "$R/verdict_reasons.full.json" --slurpfile cited "$D/insight_cited.json" \
+   --slurpfile pieces "$R/outcome_pieces.full.json" '
+  ($reasons[0] // []) as $vr | ($cited[0] // []) as $c | ($pieces[0] // []) as $pc
   | [.[] | select(.state=="declined")
          | (.self|split("/")|last) as $id
          | .self as $sf
          | {id:$id, self:$sf, goal:.data.goal, composed_by:(.data.composed_by // "?"),
             declined_count:(.data.declined_count // 0),
+            value:(.links.value.href // null),
             reasons: [ $vr[] | select(.data.subject_id == $id)
-                             | {self, verdict:.data.verdict, reason:.data.reason, says:(.data.says // null)} ],
-            diagnosis_stands: ($c | index($sf) != null)}]
+                             | {self, verdict:.data.verdict, reason:.data.reason, words:(.data.words // null)} ],
+            pieces: [ $pc[] | select(.data.outcome_id == $id) | {self, state, says:.data.says} ],
+            diagnosis_stands: ($c | index($sf) != null)}
+         | .cite = ([.self] + (if .value then [.value] else [] end)
+                    + [ .reasons[].self ] + [ .pieces[].self ])]
 ' "$R/outcomes.full.json" > "$D/declines.json"
 
 # a value must be LIVE to be named; a companion must be current
@@ -471,10 +507,12 @@ jq -n \
   echo "  (a question, a thanks or a preference indexes nothing)"
   echo
   echo "## Bundles carrying no live judgment of yours — newest first"
-  jq -r 'if (.unscored_bundles|length)==0 then "  (none)" else (.unscored_bundles[] | "- \(.self) [\(.state)] \(.goal[0:100])") end' "$RUN/manifest.json"
+  jq -r 'if (.unscored_bundles|length)==0 then "  (none)" else (.unscored_bundles[] | "- \(.self) [\(.state)] \(.goal[0:100])\n    value: \(.value_name // "?")  pieces: \(.pieces|length)  decline words: \([.reasons[]|.reason]|tostring)\n    cite: \(.cite|tostring)") end' "$RUN/manifest.json"
+  echo "  (a note's evidence is the whole cite list — a score read off the headline alone is not a judgment)"
   echo
   echo "## Declines — no burial without a diagnosis"
-  jq -r 'if (.declines|length)==0 then "  (none)" else (.declines[] | "- \(.self) diagnosis_stands=\(.diagnosis_stands) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])") end' "$RUN/manifest.json"
+  jq -r 'if (.declines|length)==0 then "  (none)" else (.declines[] | "- \(.self) diagnosis_stands=\(.diagnosis_stands) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])\n    cite: \(.cite|tostring)") end' "$RUN/manifest.json"
+  echo "  (a diagnosis quotes the reason row it cites; reasons=[] means say so — \"no reason was given\" — and cite the outcome. Its offered step moves the goal forward; expire/retire on the prior is burial, not a step)"
   echo
   echo "## Live values you may name"
   jq -r 'if (.live_values|length)==0 then "  (none — a plan citing no live value is refused)" else (.live_values[] | "- \(.self) [\(.state)] \(.name)") end' "$RUN/manifest.json"

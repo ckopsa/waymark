@@ -114,14 +114,31 @@ holding your place in it.
    a duplicate adds noise, not choice). A declined prior may be
    REcomposed only after its diagnosis insight is published (no
    burial without a diagnosis) — the manifest's `declines` says which
-   ones still owe one. It then re-enters cooled, never buried. Each
-   staging still meets the quality walls below; quantity is free,
-   sameness is not.
+   ones still owe one, and each carries its `cite` list. A diagnosis
+   cites the `verdict_reason` row and quotes its word (wrong_time is
+   not wrong_piece is not never_this); when `reasons` is empty it
+   says so — "declined, no reason given" — and cites the outcome.
+   Its offered step is the smallest thing that moves the prior's
+   *goal* forward (a task to create, an hour to hold); `expire`,
+   `retire` or a verdict on the prior is burial wearing a next step's
+   clothes, and the law says never buried. It then re-enters cooled.
+   Each staging still meets the quality walls below; quantity is
+   free, sameness is not.
 5. **Score what you did not write — every run, composed or not.**
    Ranking is its own duty. The manifest's `unscored_bundles` is
    exactly the list, newest first, already filtered of your own rows:
    at least three when three exist, each a score 0–1 and one sentence
-   (240 characters, no more), citing what you read. The door refuses
+   (240 characters, no more). **Evidence is the bundle's whole `cite`
+   list from the manifest** — the bundle, its value, its pieces, the
+   house's verdict words on it, any insight about it — never the
+   bundle alone: a score read off a headline is not a judgment. The
+   sentence says what the bundle *stands on* in the house's own
+   terms — the value it serves, what its pieces make ready, the
+   timing, the decline word if one was said — not how the idea feels.
+   "Woodworking is a strong family activity" is a vibe; "Declined as
+   wrong_time, not wrong work — and this holds no hour: the same
+   paperwork in four ten-minute pieces, one already moot because the
+   office has the form" is a judgment. The door refuses
    your own rows and a second live note on one row from one author —
    a changed mind restates, never re-files. Your score is the
    judgment input; the order is the crown's declared rank, whose
@@ -136,6 +153,12 @@ holding your place in it.
 
 - Name a live value; cite everything you read; 2–5 pieces; the
   prepared input must fit the target door.
+- **A piece makes something READY.** It opens a door that creates or
+  holds — a task with its input prepared, an hour on the calendar, a
+  list staged. A piece that fires a *completion* door (`complete`,
+  `finish`, `done`, `take`) on a row that already stands is not
+  friction pre-paid: nobody did that work, and a tap would record
+  that they had. Friction pre-paid is a claim about the world.
 - Never tap any verdict. Never affirm a value or person. Never reword
   anyone's turn but your own. Never answer your own plan.
 - Name a `companion_id` only off the manifest's `companions` — an
@@ -160,7 +183,11 @@ Never widen the scope, never file a second ask while one stands.
 No git commits, no pushes, no PRs, no edits to this repository, no
 beads issue writes outside the wisp. The one file a run may leave
 behind is its own `.sitting/` snapshot, which is gitignored on
-purpose. A sitting is a door visit, not a development session.
+purpose. **A sitting leaves no diff**: the wisp appends to
+`.beads/interactions.jsonl`, and `sitting-run.sh verify` restores it
+— if your tree still shows a change after that, say so in the report
+and do not publish it. A sitting is a door visit, not a development
+session.
 Development instructions for coding agents live in `CLAUDE.md` — they
 do not apply to a sitting run.
 

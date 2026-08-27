@@ -126,7 +126,11 @@ For each composition_request in state offered (from the read step):
 stage an outcome at
 POST {{base_url}}/api/outcomes whose request_id names the request,
 with 2-5 outcome_pieces whose friction is genuinely pre-paid. The
-walls that will judge you, in the door's own words if you miss:
+walls that will judge you, in the door's own words if you miss —
+and one the door cannot: a piece makes something READY (a create or
+a hold with its input prepared); a piece firing a completion door
+(complete/finish/take) on a row that already stands records work
+nobody did, and is not friction pre-paid. The door-enforced walls:
 name a LIVE value the house holds; cite EVERYTHING you read in
 evidence (all offenders are named at once — fix them in one round);
 routes_through only when a loved activity truly carries it, absent
@@ -181,8 +185,12 @@ THE DIAGNOSIS DUTY (8um law 4) survives the cap's deletion whole:
 before any recomposition of a shown-and-declined prior, read its
 verdict_reason words (wrong_time is not wrong_piece is not
 never_this), publish an insight at POST {{base_url}}/api/insights
-CITING the decline — the no-burial-without-a-diagnosis wall demands
-the citation. The recomposition then re-enters COOLED (:early),
+CITING the decline — the verdict_reason row, its word quoted; when
+no reason row stands say "no reason given" and cite the outcome (the
+manifest's `declines[].cite` is the list). Its offered step moves
+the prior's GOAL forward; expire/retire on the prior is burial, not
+a step. The no-burial-without-a-diagnosis wall demands the
+citation. The recomposition then re-enters COOLED (:early),
 never buried: the rank chooses WHICH, never WHETHER.
 NEVER tap any verdict; NEVER still_stands/revise/retire a value or
 affirm a person — observed create/restate only; affirmation is a
@@ -202,10 +210,14 @@ every bundle you can see that carries NO live ranking_note of yours
 exist — the manifest's `unscored_bundles` IS that list, newest first
 and already filtered of your own rows: POST
 {{base_url}}/api/ranking_notes with {subject_kind, subject_id}, a
-score 0-1, one sentence saying why in the house's own terms (the
-value it serves, the evidence it stands on, the timing) in NO MORE
-THAN 240 CHARACTERS — the schema counts — and evidence citing what
-you read to judge it, every entry the address of ONE ROW
+score 0-1, one sentence saying what the bundle STANDS ON in the
+house's own terms (the value it serves, what its pieces make ready,
+the timing, the decline word if one was said) — never how the idea
+feels — in NO MORE THAN 240 CHARACTERS — the schema counts — and
+evidence = the bundle's whole `cite` list from the manifest (the
+bundle, its value, its pieces, the verdict words on it, insights
+about it), never the bundle alone: a score read off a headline is
+not a judgment. Every entry is the address of ONE ROW
 (/api/outcome_pieces/<id>), never a filtered collection URL, which
 cites-what-it-read refuses by name. The walls: never a
 row you wrote (not-your-own-row); one live note per row per author
