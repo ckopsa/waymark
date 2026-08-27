@@ -108,31 +108,33 @@ and the person's taps stay the only doors that decide.
 
 [[steps]]
 id = "compose"
-title = "Initiative within the cap, diagnosis before any burial"
+title = "Ranked, not capped — every distinct bundle the evidence supports"
 depends_on = ["answer-requests", "answer-threads"]
 description = """
-Own-initiative staging is walled at TWO offered plans per author per
-calendar week (plans-are-few), and a superseding plan waits for its
-not_before. THE BAR IS "MEANINGFUL AND NOT YET SUGGESTED": before
-staging, check the idea against the read step's outcome record and
-the prior journals — if it already exists in any live form, or was
-declined and its floor has not expired, or its decline has no
-published diagnosis yet, DO NOT stage it. In a high-frequency fleet
-almost every run rightly stages nothing here, and that silence is a
-correct, complete run. The cap forces choosing — choose from the
-evidence, and record in the journal step what you chose NOT to
-compose and why.
-THE DIAGNOSIS DUTY (8um law 4): before any recomposition of a
-shown-and-declined prior, read its verdict_reason words (wrong_time
-is not wrong_piece is not never_this), publish an insight at
-POST {{base_url}}/api/insights CITING the decline — the
-no-burial-without-a-diagnosis wall demands the citation — and
-respect the recomposition floor the verdict set. A timing decline
-means hold things ready, not hours. Also score bundles you READ
-(never your own) with POST {{base_url}}/api/ranking_notes: 0-1 and
-one sentence, citing what you read. NEVER tap any verdict; NEVER
-still_stands/revise/retire a value or affirm a person — observed
-create/restate only; affirmation is a person's act.
+THERE IS NO CAP ON STAGING (waymark-1uv.3): the machine writes
+without limit and the crown's declared rank chooses which bundles
+fill the person's attention. Stage EVERY DISTINCT outcome the
+evidence honestly supports — 2-5 pieces each, friction genuinely
+pre-paid, a live value named, everything read cited. What
+distinctness demands: check against the read step's outcome record
+and the prior journals, and NEVER stage a twin of a bundle that
+already stands — the rank cannot tell twins apart, so a duplicate
+adds noise where the law wants choice. Sameness is the only
+scarcity; quantity is free.
+THE DIAGNOSIS DUTY (8um law 4) survives the cap's deletion whole:
+before any recomposition of a shown-and-declined prior, read its
+verdict_reason words (wrong_time is not wrong_piece is not
+never_this), publish an insight at POST {{base_url}}/api/insights
+CITING the decline — the no-burial-without-a-diagnosis wall demands
+the citation. The recomposition then re-enters COOLED (:early),
+never buried: the rank chooses WHICH, never WHETHER.
+THEN SCORE THREE BUNDLES YOU DID NOT WRITE with
+POST {{base_url}}/api/ranking_notes: 0-1 and one sentence, citing
+what you read (the door refuses your own rows). At fleet scale the
+runs rank each other — this is how without-limit also stays ranked.
+NEVER tap any verdict; NEVER still_stands/revise/retire a value or
+affirm a person — observed create/restate only; affirmation is a
+person's act.
 """
 
 [[steps]]

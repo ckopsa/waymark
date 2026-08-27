@@ -1,6 +1,6 @@
 ---
 name: sitting
-description: Run one composer sitting at the waymark MCP door — read the house, answer standing composition requests, stage at most the weekly cap, honor the diagnosis duty, journal what was and was not composed. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
+description: Run one composer sitting at the waymark MCP door — read the house, answer standing composition requests and threads, stage every distinct bundle the evidence supports (ranked, not capped), honor the diagnosis duty, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
 ---
 
 # The sitting
@@ -48,12 +48,16 @@ Every offered `composition_request` deserves an answer this sitting:
 an outcome whose `request_id` names it. Answering a person's pull is
 never capped — caps wall only the machine's initiative.
 
-## 3. Initiative, within the cap
+## 3. Ranked, not capped
 
-`plans-are-few`: two offered plans per author per calendar week, and
-a superseding plan waits for its `not_before`. The cap forces
-choosing; the door never sees what you discarded, so the journal
-(step 6) must.
+There is no cap on staging (waymark-1uv.3): the machine writes
+without limit and the crown's declared rank chooses what fills the
+person's attention. Stage every DISTINCT bundle the evidence
+honestly supports — but never a twin of one that already stands:
+the rank cannot tell twins apart, so sameness is the only scarcity.
+A declined prior recomposes only after its diagnosis (step 5) and
+re-enters cooled, never buried. The journal (step 7) still records
+what you chose not to compose and why.
 
 ## 4. The walls, in one breath
 
