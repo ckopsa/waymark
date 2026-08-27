@@ -490,6 +490,33 @@ jobs:
           path: shard-output.txt
           retention-days: 3
 
+  # ── THE ONE CHECK BRANCH PROTECTION NAMES ───────────────────────────
+  #
+  # Auto-merge waits on REQUIRED checks, and required checks are matched
+  # by NAME — but the shard jobs' names are dynamic (test10 (shard N)),
+  # so requiring them directly would break every time the shard count
+  # moves. This job is the stable name: it needs every suite, passes
+  # only when none failed or was cancelled, and is the ONLY check to
+  # mark required on main. Its mirror lives in tests-gate-skip.yml:
+  # a PR whose diff misses this workflow's paths filter never runs
+  # this job, and a required check that never reports blocks that PR
+  # forever at "Expected" — the mirror answers `gate` green for
+  # exactly those PRs (its paths-ignore list must stay identical to
+  # the pull_request paths list above). On a mixed diff both run and
+  # the real gate, finishing later, is the result that stands.
+  #
+  # ubuntu-latest deliberately, not the CI_RUNNER expression: the gate
+  # does no work, and the one check a merge waits on must not queue
+  # behind the cluster's load.
+  gate:
+    needs: [quick, test10, test-queue]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every suite green
+        run: |
+          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]
+
   # ── ONE TABLE INSTEAD OF ELEVEN LOGS ────────────────────────────────
   #
   # Each shard uploads its own timings, which is right for the shard
