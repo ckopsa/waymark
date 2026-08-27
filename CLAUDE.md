@@ -78,6 +78,26 @@ infra beads out of a public repo by using the default flags; and a
 tracked `issues.jsonl` drifts and merge-conflicts, so treat it as a
 transport, not a source of truth.
 
+### If `bd dolt pull` refuses with a merge conflict
+
+Expected in any session that merges an export mid-session and keeps
+editing: the beads-sync workflow's import commits your own change onto
+a second Dolt history, and a row edited again after the export
+conflicts on the next pull — embedded mode has no operator resolution.
+Recover by replacing local history, never by merging (your local copy
+is the strictly newer one):
+
+```bash
+bd export --all -o /tmp/beads-snapshot.jsonl   # keep memories; stays local
+rm -rf .beads/embeddeddolt
+bd bootstrap                                    # fresh clone of the remote tip
+bd import /tmp/beads-snapshot.jsonl && rm /tmp/beads-snapshot.jsonl
+```
+
+The session-start hook runs this automatically when its pull refuses.
+Never commit the `--all` snapshot — the transport export keeps its
+default flags.
+
 `bd` itself is not installed in a fresh sandbox and publishes no release
 binaries. Build it with `apt-get install -y libicu-dev` then
 `go install github.com/steveyegge/beads/cmd/bd@v1.2.2` — note
