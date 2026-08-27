@@ -312,21 +312,32 @@
   authenticates anybody and nothing here writes. It is a second door
   beside the feed rather than a key on the feed document because it
   is somebody else's page: the feed is the household's morning, and
-  this is the composer's."
-  [eng]
+  this is the composer's.
+
+  THE RECIPE IS THE HOUSEHOLD'S (waymark-1uv.4). The document reads
+  the crown's numbers to say what the rank made of each outcome, and
+  `for-reader` is asked with NO member — the household's row or the
+  built-in, never a member's own — because the composer has no feed
+  and the numbers its never-shown bundles lost under are the house's.
+  A member who reads under a recipe of their own is one screen among
+  the measured, and the tally says whose numbers it quoted."
+  [eng built-in]
   (fn [req]
     (let [principal (router/principal-of req)]
       (when (or (nil? principal)
                 (= (:id principal) (:id t/anonymous)))
         (throw (p/problem :not-found 404 "Not found"
                           {:detail "No such route."})))
-      (router/json-response
-       200
-       (diagnosis/document eng {:principal principal
-                                :visibility (router/visibility-of req)
-                                :outcome (some-> (get (router/query-params req)
-                                                      "outcome")
-                                                 str/trim not-empty)})))))
+      (let [{:keys [recipe source]} (recipe/for-reader eng built-in nil)]
+        (router/json-response
+         200
+         (diagnosis/document eng {:principal principal
+                                  :visibility (router/visibility-of req)
+                                  :recipe recipe
+                                  :recipe-source source
+                                  :outcome (some-> (get (router/query-params req)
+                                                        "outcome")
+                                                   str/trim not-empty)}))))))
 
 (defn routes [eng]
   (let [built-in (feed/check-recipe! (:feed eng feed/default-recipe))]
@@ -334,4 +345,4 @@
      :static [["/api/-/feed" {:get (feed-doc eng built-in)}]
               ;; the composer's diagnosis (waymark-8um.4) — the feed's
               ;; own three-segment shape, for the feed's own reason
-              ["/api/-/diagnosis" {:get (diagnosis-doc eng)}]]}))
+              ["/api/-/diagnosis" {:get (diagnosis-doc eng built-in)}]]}))

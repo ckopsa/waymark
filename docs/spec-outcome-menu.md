@@ -588,7 +588,11 @@ rather than assuming it:
   and that is **8um.4**'s bead. This spec's contribution to it is the raw
   material: a piece-level decline signal, a plan-level timing signal, and a
   `still_stands` tap that separates *the value is wrong* from *the plan is
-  wrong*.
+  wrong*. *(History since 2026-08-26: the door CAN see engagement now, and
+  half of this moved out of prose — `no-burial-without-a-diagnosis` is a
+  wall on `supersedes` and `GET /api/-/diagnosis` is the read; what prose
+  still holds is the duty's rhythm, under § "The composer's duty under the
+  rank" below and § "Built — 1uv.4".)*
 - **Bundle coherence.** `a-bundle-is-small` counts; it cannot judge whether
   five pieces are one Saturday afternoon.
 - **"Friction pre-paid" is a claim about the world.** The door validates that
@@ -641,6 +645,47 @@ sentence as the agent's. A composer holding the note door is refused on
 anything it staged (`not-your-own-row`, off the subject kind's own
 `:own-surface`), so the two lines may ride the composer's own leash or a
 second agent's alone — § 'Built — 1uv.6' has the walls and the tiers.
+
+**Since waymark-8um.4 and waymark-1uv.4, the diagnosis reader's two lines,
+and one document over HTTP.** The composer's diagnosis is a document beside
+the feed — `GET /api/-/diagnosis`, `?outcome=<id>` for one — and a document
+has no plural, so the six MCP tools cannot name it (**waymark-8um.5**, open
+and deliberately not built here): the composer reads it **over HTTP with its
+bearer**, exactly as it reads `/api/-/welcome`, and the wall's own refusal
+sentence carries the address. The document folds the composer's own outcomes
+with no grant; the two records it reads about them are other members' — a
+view row is the member's, a reason is the sayer's — and each half is admitted
+only by the whole-kind read grant designed for it, **read-only, both**:
+
+```json
+{"kind": "feed_view",      "actions": []},
+{"kind": "verdict_reason", "actions": []}
+```
+
+A leash naming neither reads a diagnosis that says *withheld* per half and
+which line to ask for — never a quiet zero. A composer that also tunes
+already holds both (the 1uv.5 block above); nothing else on the leash moves,
+and `diagnosis_id` on a recomposition is an `insight` the composer's own
+`insight.create` already writes.
+
+**The composer's duty under the rank** — the epic's reading of law 4, and
+the sentence the composer is held to now that the cap is gone and most of
+what it stages will never reach a screen:
+
+1. **Read the tally before every sitting.** `tally.lessons` counts the
+   document's outcomes per lesson; `tally.owing` is the work order's length;
+   `tally.never_shown` is the rank's pile with the lift each carried.
+2. **Recompose only shown-and-declined and shown-and-passed-over lines, with
+   a diagnosis** — an insight citing the prior, named as `diagnosis_id` on
+   the new outcome. The wall refuses the recomposition without one; the
+   contract refuses the *fresh* outcome that is the same line in a new hat.
+3. **Treat never-shown as the rank's verdict, not the house's.** Read
+   `rank` on each — the lift as staged, the inputs, its place among the
+   composer's own — and answer it by staging differently, by proposing new
+   numbers through `recipe_proposal` (1uv.5), or by waiting for the floor.
+   Never by an insight about the house: nobody in the house saw it.
+4. **Unknown is unknown.** No diagnosis is owed and none can be honest;
+   the honest move is to ask a member to turn their record on.
 
 Write three kinds, all create-only; read the values it must name, the work
 kinds it composes over and cites as evidence, and the owner's feed as the
@@ -5169,3 +5214,207 @@ grant door and proves both halves.
   waymark-1uv.8's and waymark-1uv.9's, after their own ranks.
 - **The screen walk is still waymark-1uv.13's.** `135-feed-screen.js` names
   the score and the agent in the plain opener and nothing else moved there.
+
+## Built — 1uv.4, the diagnosis counts exposure (2026-08-26, waymark-1uv.4)
+
+**The bead's sentence:** *a composer that stages fifty and sees five shown
+learns about the RANK, not about the house.* waymark-8um.4 landed the
+distinction this bead was filed for — `GET /api/-/diagnosis` reads exposure
+off the view record before it reads verdicts, says *unknown* as a third
+answer, and teaches one lesson per outcome; the wall
+`no-burial-without-a-diagnosis` fires on shown-and-declined and
+shown-and-passed-over only — and left a note here saying what remained. This
+section is that remainder, decided against the record rather than re-done:
+the tally over a composer's outcomes now that the cap is gone, the rank's own
+reading of the never-shown pile, the N question, and the composer's duty
+written down where the composer reads it.
+
+### The tally, and the rank's own reading — as landed
+
+The document (`waymark10.server.diagnosis`) carries one new top-level key
+and every outcome carries one new key:
+
+```json
+"tally": {"outcomes": 6,
+          "lessons": {"shown_and_declined": 1, "shown_and_passed_over": 1,
+                      "never_shown": 3, "unknown": 1,
+                      "accepted": 0, "still_offered": 0},
+          "owing": 2,
+          "never_shown": [{"self": "/api/outcomes/…", "lift": 17, "place": 2}, …],
+          "crown": {"take": 2, "recipe": {…the for-reader stamp…},
+                    "crown_rank": {"declared": 10, "cooled": 2, "declined": 2,
+                                   "fresh": 1, "early": 2, "judged": 1}},
+          "says": "Two diagnoses, and this document keeps them apart: …"}
+
+"rank": {"lift": 17, "asked": false, "value": "declared", "days_left": 7,
+         "seen": 0, "cooled": 0,
+         "place": 2, "of": 6,
+         "says": "As staged the rank read it at lift 17: it serves a value this
+                  house declared, lifting it 10; 7 days left on its week as
+                  staged, lifting it 7. That reading places it 2 of 6 among the
+                  outcomes here, and the crown shows 2 a morning by these
+                  numbers, house-wide; which bundles it stood under on each
+                  morning it lost is not in the record. This is the rank's
+                  verdict, not the house's."}
+```
+
+**`rank` is `why.crown`'s shape, read through the crown's own function.**
+The one framework growth is `feed/crown-inputs` — the `:crown` map every crown
+candidate already carried, extracted from `feed/outcomes` and made public — so
+the diagnosis reads a never-shown bundle's inputs (asked-for, the value's
+standing, the strongest word on its chain, days left, how early against the
+day the house named, the agent's score) through exactly the reader the crown
+sorts by, and weighs them with `feed/crown-lift` under the household's own
+`crown_rank`. The number a composer reads is the number the crown used and
+never a second opinion about it. `feed/outcomes` now calls the same function,
+so the extraction moved nothing on the feed.
+
+**As staged, decided.** The calendar inputs are read at the row's own
+`created_at`: `days_left` is the whole week, `early` is how early it stood
+the morning it entered the crown, `seen` is 0 because nobody had been shown
+it yet. A lapsed row read *now* would carry `days_left 0` on every entry and
+say nothing about why one lost to another; read as staged, the lift is the
+one fixed number a composer can compare across its pile. The rows (the value,
+the chain's words, the agent's note) read as they stand now, because that is
+all the record holds; a value the house has retired since reads `gone`,
+which lifts nothing, so *observed* and *retired since* are two answers.
+
+**On every outcome, not only the never-shown ones — decided.** A lift means
+nothing alone. The never-shown pile is read against the lifts of the shown
+ones (in the deftest all six read 17: the rank did not choose between them,
+the seed did — which is itself the lesson), and `place` is where the
+crown's own key (`feed/crown-key`, tier then lift then hash) puts each among
+the outcomes this document folds. That is the composer's diagnosis of its
+own staging, and it is the only place the record can honestly give it — the
+morning's house-wide crown, with everybody's bundles in it, is not stored,
+and `rank.says` says so in so many words rather than imply a standing it
+cannot know.
+
+**Which diagnosis is whose, in one sentence** — `tally.says`, quoted on every
+read: *shown_and_declined and shown_and_passed_over are the HOUSE's — people
+saw these and answered them, or let them lapse, and each owes an insight
+before its line comes back — while never_shown is the RANK's — the crown had
+these and showed its take by the numbers under crown, and what this pile
+teaches is where your bundles stood, not what the house thinks of them:
+stage differently, propose new numbers through recipe_proposal, or wait for
+the floor, and write no insight about the house from it; unknown is neither,
+and accepted and still_offered owe nothing.*
+
+**The recipe is the household's.** The route resolves
+`feed-recipe/for-reader` with no member — the household's row, or the
+built-in — because the composer has no feed and the numbers its bundles lost
+under are the house's. `tally.crown.recipe` is the same stamp the feed
+carries, so the composer can read whose numbers it was judged by; a member
+reading under a recipe of their own is one screen among the measured.
+
+**Bounded as the document was.** The tally counts the outcomes the document
+folds — the newest twenty, or the one `?outcome=` names — and the last note
+says so when the cap is reached. Each outcome now costs one value read, a
+chain walk of at most five hops and one note query beside the exposure and
+reason scans 8um.4 recorded.
+
+### The N question — decided: no, and not on the recipe
+
+8um.4 hard-coded the threshold that turns *expired* into *shown and passed
+over* at ONE recorded morning and asked whether a declared N belongs on the
+recipe row beside the other numbers once single mornings become common.
+**No**, and the reason is the row's own: the six numbers on `crown_rank` say
+how the crown CHOOSES; a threshold says when a person's screen counts as
+having shown them something, which is a fact about the view record's grain
+and not a weight the household tunes. Putting it on the recipe would make a
+guard read the formula — the thing 8um.4 refused for 8um.3's reason (*the
+moment a guard reads the formula it becomes law with a revision behind it*)
+— and would give a household a form field whose only effect is to let
+bundles lapse unremarked. The wall's docstring and `diagnosis/lesson`'s say
+so where the number is. The question reopens only if a real house wants a
+glance not to count, and then it is a question about `feed_view`'s grain
+(waymark-dtv's per-day decision), filed then.
+
+### The composer over MCP — not built, and the contract says what it does instead
+
+waymark-8um.5 (a seventh MCP tool for documents, or `waymark_get` learning
+the three-segment shape) stays open and was deliberately not built here.
+§ *The composer contract* now says what the composer does today: it reads
+the diagnosis **over HTTP with its bearer**, as it reads the welcome
+document; the two lines it needs are read-only, `{feed_view []}` and
+`{verdict_reason []}`; `diagnosis_id` is an `insight` its own `insight.create`
+writes. And the duty under the epic is written there in four lines: read
+the tally before every sitting; recompose only shown-and-declined and
+shown-and-passed-over lines, with a diagnosis; treat never-shown as the
+rank's verdict, not the house's; unknown is unknown. That closes
+waymark-8um.7 as well, which asked for exactly that text.
+
+### Where the law is proved
+
+- **`workqueue10.outcome-test` § 20**, live, one deftest
+  (`the-tally-counts-exposure-and-never-shown-names-its-lift`): one composer,
+  six bundles — one lapsed before anybody was recording; then, under a
+  recording member, five staged at one pinned instant, two of them viewed,
+  one of those declined, and the clock moved a week on so the engine's own
+  wall answers `expire`. The tally reads `{shown_and_declined 1,
+  shown_and_passed_over 1, never_shown 3, unknown 1, accepted 0,
+  still_offered 0}`, `owing 2`, the crown's six numbers and `take 2` with
+  the recipe stamp; the never-shown pile names three lifts of 17; each
+  never-shown outcome carries `rank` with `value declared`, `days_left 7`,
+  `seen 0`, no `declined`, no `early`, `of 6`, and a sentence saying *lift
+  17*, *declared, lifting it 10*, *7 days left* and *the rank's verdict, not
+  the house's*; the shown ones read the same 17; the six places are 1–6, one
+  each; and the unrecorded lapse reads `unknown`, out of the never-shown
+  pile, with a lift all the same.
+- **`:feed/diagnosis`**, four claims added after the fresh read: the staged
+  bundle carries an integer `rank.lift` with `value declared`, an integer
+  `days_left`, a positive `place` and a sentence; the tally is on the
+  document with all six lessons as integers summing to the outcomes folded,
+  `still_offered` positive, a vector under `never_shown`, a map under
+  `crown.crown_rank` and *RANK* in its sentence; after the decline the tally
+  counts one `shown_and_declined`. A never-shown bundle cannot be arranged
+  over the wire — it takes an expired week, and the clock is the engine's —
+  and the pack's docstring says the deftest is where that is proved.
+- **One claim in the same pack was wrong on `main` and is corrected here.**
+  8um.4's pack still asserted that a diagnosed recomposition staged the
+  morning after the decline is refused by `a-recomposition-waits-its-turn`
+  (*the floor still stands behind the diagnosis*) — true when it was
+  written, and false since 1uv.10 moved the date from the door to the
+  rank's `:early` input; the integration branch's household suite was red on
+  it (`answered 201`). The claim now asserts the admission, that the
+  recomposition carries its chain's `declined_count 1`, and the obligation
+  declines the admitted row on its way out so the engine it hands on is the
+  engine it found. The deftest `the-duty-fires-before-the-date` had already
+  said the same thing from its side.
+
+### Recorded here, for whoever comes next
+
+- **`make check-queue`: 37 kinds, 11 warnings, 52 scenarios judged** —
+  unmoved; nothing declared changed.
+- **Suites:** household 262 tests, 3188 assertions, green (the integration
+  branch read one failure, the pack claim above; 261 tests before this
+  bead's deftest); framework 772 tests, 5944 assertions, green — both in
+  private databases (`wm_1uv4`, `wm_1uv4f`). The two household focuses
+  (`outcome-test`, `conformance-test`) must run one at a time per database:
+  run together in one process, the pack's recording member is a measured
+  screen for the deftest's composer and *unknown* reads *never shown*.
+- **No fingerprint moved, computed over the 51-kind full registry**
+  (`engine/full-registry` over `workqueue10.main/check-resources`) on
+  `main` (`dfdcbee`) and on this tree: all 51 byte-identical — `outcome`
+  `6f57c0d5…`, `feed_recipe` `9e5ba71d…`, `insight` `d5b2724b…`. A document
+  route, a public function and a document key are outside every facet. No
+  table, no DDL, an empty migrate plan.
+- **Files:** `waymark10/src/waymark10/server/diagnosis.clj` (the tally, the
+  rank reading, the recipe opt, the N decision in `lesson`'s docstring);
+  `waymark10/src/waymark10/server/feed.clj` (`crown-inputs` extracted and
+  public; `outcomes` reads through it); `waymark10/src/waymark10/server/routes/feed.clj`
+  (the diagnosis door resolves the household's recipe);
+  `waymark10/src/waymark10/test/packs.clj` (the claims above, the corrected
+  floor claim, the tidy); `workqueue10/test/workqueue10/outcome_test.clj`
+  (§ 20); this file and `docs/spec-feed.md` § *Built — 8um.4* (pointers).
+- **The place is among the composer's own, never the morning's crown.**
+  Recording the crown's house-wide order per morning would need the read to
+  write — the law that did not move — or a sweeper composing feeds for
+  everybody; filed as a note under the epic rather than built.
+- **The tally is over the folded twenty.** A composer with more staged reads
+  the newest twenty tallied and asks about older rows by name. A count-only
+  pass over every row would still cost the exposure scans per row, since the
+  lesson needs them; if a real composer's pile outgrows the fold, the honest
+  change is a `?since=` or a wider cap said out loud, not a cheaper lesson.
+- **waymark-8um.5 stays open**; the contract says the composer reads over
+  HTTP until it lands. **waymark-8um.7 is closed by this section.**

@@ -4443,7 +4443,17 @@ held to it by `jfv.5`, not by a door.
   `8um.3`'s own reason: the moment a guard reads the formula it becomes law
   with a revision behind it. If single mornings become common once the cap
   comes off, a declared N is a follow-up, and it belongs on the recipe where
-  the household can read it.
+  the household can read it. *(Decided by waymark-1uv.4: NO declared N, and
+  not on the recipe — a threshold is a fact about a person's screen, not a
+  rank weight; `docs/spec-outcome-menu.md` § "Built — 1uv.4" has the reason
+  and the condition under which the question reopens.)*
+- **The tally came with the cap's removal** (waymark-1uv.4): the document
+  now carries `tally` — a count per lesson, the owing count, the never-shown
+  pile with each lift, and the crown's numbers in force — and every outcome
+  carries `rank`, the crown's own reading of it as staged, through
+  `feed/crown-inputs`. The composer reads it over HTTP with the two read
+  grants above; § "Built — 1uv.4" in `docs/spec-outcome-menu.md` is the
+  record, and § "The composer contract" there is the duty in four lines.
 - **`superseded_by` is a scan of one indexed column** (`supersedes` carries
   `:filter #{:eq}`), and the document is bounded at twenty outcomes plus one
   by name; each costs one piece query, five view queries and at most six
