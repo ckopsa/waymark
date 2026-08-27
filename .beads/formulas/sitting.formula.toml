@@ -11,8 +11,10 @@
 # and refuse with sentences that name the fix — trust the refusals.
 #
 # CREDENTIALS, two lawful shapes — use whichever the runner has:
-# - ENV-VAR RUNNERS (Jules and kin): mint a fresh 1-hour bearer at
-#   run start — TOKEN="$(scripts/agent-bearer.sh)" — and send
+# - ENV-VAR RUNNERS (Jules and kin): `scripts/sitting-run.sh` does it
+#   for you — it mints a fresh 1-hour bearer at run start, proves it,
+#   and leaves it at `.sitting/latest/bearer` (0600). By hand it is
+#   TOKEN="$(scripts/agent-bearer.sh)". Either way send
 #   `Authorization: Bearer <token>` plus
 #   `X-Waymark-Grant: $WAYMARK_GRANT_ID` on every request.
 # - TICK-MANAGED RUNNERS: read {{state_file}} (mode 600) and send
@@ -32,7 +34,24 @@ state_file = { default = "~/.waymark-agent.json" }
 id = "read"
 title = "Read the house — evidence before anything"
 description = """
-Read, in this order, writing NOTHING yet:
+FIRST, and it does this whole step mechanically: run
+`scripts/sitting-run.sh`. It mints the bearer, proves it and the
+grant with one GET, pulls every address below into
+`.sitting/latest/rows/`, and works out the lists the later steps are
+defined in terms of — offered requests, threads whose last turn is
+not yours, turns no insight cites yet, bundles carrying no judgment
+of yours, declines owed a diagnosis — into `.sitting/latest/
+manifest.md`. Read the manifest; do not re-fetch what it already
+holds. If it stops, stop with it and report its sentence.
+
+Two shapes the driver already gets right and a hand-rolled read gets
+wrong: a COLLECTION answers a projection while a row read at its own
+address answers `data` in full (evidence and routing live only
+there — the snapshot keeps both, `<kind>.json` and
+`<kind>.full.json`), and paging rides `page[size]` (max 100) and
+`page[number]`, never `?limit=`, which 422s.
+
+What it read, in the order the sitting wants it, writing NOTHING yet:
 1. GET {{base_url}}/api/-/welcome — the house's own orientation.
 2. GET {{base_url}}/api/-/diagnosis — the tally: shown-and-declined,
    exposure. ?outcome=<id> narrows to one.
@@ -42,7 +61,7 @@ Read, in this order, writing NOTHING yet:
    preview_as capability (the welcome names the address). A preview
    writes nothing — that is law, not a gap.
 5. Evidence the grant admits: {{base_url}}/api/values,
-   /api/persons (only an affirmed/current person is a usable
+   /api/people (the roster's plural — only an affirmed/current person is a usable
    companion), /api/tasks, /api/chore_runs, /api/events, /api/media,
    /api/verdict_reasons (the house's decline words).
 6. The threads: {{base_url}}/api/remarks?subject_kind=&subject_id=
@@ -180,10 +199,15 @@ duty, not a tail on staging. The order is the crown's declared rank;
 your part of it is the judgment input, one note per bundle. For
 every bundle you can see that carries NO live ranking_note of yours
 (the read step's list), newest first, at least three when three
-exist: POST {{base_url}}/api/ranking_notes with {subject_kind,
-subject_id}, a score 0-1, one sentence saying why in the house's own
-terms (the value it serves, the evidence it stands on, the timing),
-and evidence citing what you read to judge it. The walls: never a
+exist — the manifest's `unscored_bundles` IS that list, newest first
+and already filtered of your own rows: POST
+{{base_url}}/api/ranking_notes with {subject_kind, subject_id}, a
+score 0-1, one sentence saying why in the house's own terms (the
+value it serves, the evidence it stands on, the timing) in NO MORE
+THAN 240 CHARACTERS — the schema counts — and evidence citing what
+you read to judge it, every entry the address of ONE ROW
+(/api/outcome_pieces/<id>), never a filtered collection URL, which
+cites-what-it-read refuses by name. The walls: never a
 row you wrote (not-your-own-row); one live note per row per author
 (one-live-note-per-row-and-author) — a changed mind RESTATES its
 note, it never files a second; a person dismisses a note, an agent
@@ -200,7 +224,11 @@ id = "journal"
 title = "Journal the sitting — including what was left alone"
 depends_on = ["score"]
 description = """
-One journal entry closing the sitting: what was staged (ids), which
+One journal entry — POST {{base_url}}/api/journals with {title,
+body}, and it needs no grant scope: :journal is an OWN-SURFACE kind,
+so an agent writes and reads its own entries by being itself. Prior
+entries are `.sitting/latest/manifest.md` § "Prior sittings".
+The entry closes the sitting: what was staged (ids), which
 facts were indexed (insight ids), which requests were answered,
 which threads were answered, which diagnoses were published, which
 bundles were scored, and — just as load-bearing — what was
@@ -211,4 +239,10 @@ request, no unanswered turn, no fact to index, no new evidence, no
 diagnosis due, no bundle left unscored — write NOTHING, journal
 included: a no-op sitting leaves no residue. Then close this
 molecule's steps and squash the wisp.
+LAST, always: run `scripts/sitting-run.sh verify` and put its output
+in your report. It lists every row this principal wrote since the
+run started, straight off the engine — the only proof from OUTSIDE
+the run that the sitting happened at all. A verify that says NOTHING
+after a manifest that owed something is a failed run, not a quiet
+one.
 """

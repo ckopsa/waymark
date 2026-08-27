@@ -23,3 +23,6 @@ full_stack/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# the sitting driver's snapshots (scripts/sitting-run.sh) — a run's working memory, never the repo's
+.sitting/

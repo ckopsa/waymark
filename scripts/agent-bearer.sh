@@ -26,5 +26,12 @@ resp=$(curl -sS --max-time 15 -X POST "$ISSUER/protocol/openid-connect/token" \
   --data-urlencode client_secret="$WAYMARK_KC_CLIENT_SECRET" \
   --data-urlencode scope=waymark-workqueue10)
 
-jq -re .access_token <<<"$resp" \
-  || { echo "mint refused: $(jq -r '.error_description // .error // .' <<<"$resp")" >&2; exit 1; }
+# the token on stdout, or NOTHING on stdout and the refusal on stderr —
+# a caller that captures stdout must never be handed the string "null"
+# to send as a bearer (a Jules run did exactly that and reached nothing)
+if token="$(jq -re .access_token <<<"$resp" 2>/dev/null)"; then
+  printf '%s\n' "$token"
+else
+  echo "mint refused: $(jq -r '.error_description // .error // .' <<<"$resp")" >&2
+  exit 1
+fi

@@ -70,10 +70,83 @@ scope still only widens through a human verdict.
 The tick keeps the credential alive; it never thinks. The thinking is
 `/sitting` (.claude/skills/sitting/SKILL.md) — the composer contract
 as a runnable walk: read the house, answer standing composition
-requests, stage within the weekly cap, honor the diagnosis duty,
+requests, stage every distinct bundle the evidence supports (ranked,
+not capped), honor the diagnosis duty, score what it did not write,
 journal. Scheduled beside the tick (the skill's own cron pairing),
 the two lines are the whole automated composer: outcomes generate on
 a cadence, and every one still lands as a proposal a person answers.
+
+## The bearer-only runner (Jules and kin)
+
+A cloud runner has no cron, no state file and no session cookie — it
+has an *environment* and one hour of life. So the tick's five rungs
+collapse to two, and both live in `scripts/sitting-run.sh`:
+
+- **The credential is minted, used and dropped.** No renew, no
+  re-entry, no rotation: `scripts/agent-bearer.sh` turns the two
+  Keycloak env vars into a 1-hour bearer at run start, the run spends
+  it, and it dies. There is nothing to keep alive between runs
+  because nothing persists between runs.
+- **The leash is still watched.** Rung 4 survives whole: the driver
+  reads the grant, and inside the ask window (12h by default) with no
+  ask of its own still open, it files the same anchored
+  `approval_request` in the same words — `{grant_id, task, scope,
+  expires_at}`, the scope copied off the grant so nothing widens. The
+  human's tap is still what extends it. Verified against the engine
+  2026-08-27: ask `feb7912e` was accepted from a bearer-only agent
+  and a second run filed nothing, finding the first still offered.
+
+The rest of what the driver does is not leash work at all — it is the
+sitting's *reading*, done mechanically so the model spends its
+attention on judgment. It writes a snapshot and one manifest; a
+`verify` pass afterwards reports what the principal actually wrote,
+so a run's success is observable from outside the run. That last part
+is the whole point: two Jules sittings had already "completed" while
+leaving zero rows on the engine, and nothing in the loop noticed.
+
+## Running a sitting on Jules
+
+Everything below is set once, by the owner, in the Jules web UI — the
+`jules` CLI can queue a session but cannot set environment variables.
+
+**Environment variables** (Environment → Variables):
+
+| name | value |
+|---|---|
+| `WAYMARK_KC_CLIENT_ID` | `waymark10-agent-gemini` |
+| `WAYMARK_KC_CLIENT_SECRET` | the client's secret — `.waymark10_agent_clients.gemini` in the infra repo's `terraform/secrets.local.json`. Paste the raw value: no quotes, no trailing newline. |
+| `WAYMARK_GRANT_ID` | the accepted grant whose audience is that agent's member id |
+| `WAYMARK_BASE_URL` | optional; `https://work.kopsa.info` is the default |
+
+The secret is the rung that has actually broken. A wrong or stale
+paste refuses at the mint with *"Invalid client or Invalid client
+credentials"*, the sitting reaches nothing, and the session still
+reports itself complete — which is exactly why
+`scripts/jules-setup.sh` now ends with a credential check that mints
+a bearer, opens `/api/-/welcome` and shouts `SETUP FAILURE` with the
+refusal sentence. Read the setup log.
+
+**Setup script** (Environment → Setup script):
+
+```bash
+bash scripts/jules-setup.sh
+```
+
+It installs `jq`/`curl` if the image lacks them (a fresh Ubuntu Jules
+VM has jq, curl, bash 5.2 and go; it does **not** have bd), builds bd
+from source once into the snapshot, and never fails the build — bd is
+optional, and a run without it reads
+`.beads/formulas/sitting.formula.toml` instead.
+
+**The queued prompt**, and it is one line:
+
+```
+Read AGENTS.md and run one sitting.
+```
+
+AGENTS.md's first instruction is `scripts/sitting-run.sh`, so the
+session mints, reads the house, and arrives at its judgment with the
+manifest in hand.
 
 ## What "done" looks like (the acceptance)
 
