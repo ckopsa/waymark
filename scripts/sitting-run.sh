@@ -73,12 +73,29 @@ mint() {
 }
 TOKEN="$(mint)" || { echo "the mint refused — no bearer, no sitting. Fix the credential the message above names; never invent another way in." >&2; exit 1; }
 
-api() { # api <outfile> <path> — GET, echoes the status code
-  curl -sS --max-time 30 -o "$1" -w '%{http_code}' \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "X-Waymark-Grant: $GRANT" \
-    -H "Accept: application/json" \
-    "$BASE$2"
+api() { # api <outfile> <path> — GET, echoes the status code, NEVER aborts.
+  # The reason it must not abort: this script reads the house in ~40
+  # sequential GETs, and on a cloud runner one of them WILL time out
+  # sometimes (Jules, 2026-08-27: curl 28 on read three killed the run,
+  # left no manifest, and the model — handed a repo and no work order —
+  # "improved" the repo instead of sitting). So a read that fails is
+  # retried, and if it still fails it degrades to its HTTP code (000
+  # when no response came); the caller writes an empty snapshot for
+  # that kind and the sitting goes on. The ONE read that must be fatal
+  # — the credential proof at the top — is fatal because it checks for
+  # 200, which 000 is not, not because this function aborts.
+  local code i
+  for i in 1 2 3; do
+    code="$(curl -sS --max-time 25 -o "$1" -w '%{http_code}' \
+      -H "Authorization: Bearer $TOKEN" \
+      -H "X-Waymark-Grant: $GRANT" \
+      -H "Accept: application/json" \
+      "$BASE$2" 2>/dev/null)" && [ -n "$code" ] && [ "$code" != "000" ] \
+      && { printf '%s' "$code"; return 0; }
+    [ "$i" -lt 3 ] && sleep 2
+  done
+  printf '%s' "${code:-000}"
+  return 0
 }
 refusal() { jq -r '(.detail // .title // .error // "no sentence came back") | tostring' "$1" 2>/dev/null || cat "$1"; }
 
