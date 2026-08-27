@@ -12,6 +12,7 @@ uv.lock
 .claude/*
 !.claude/settings.json
 !.claude/hooks/
+!.claude/skills/
 dist/
 # external repo clones vendored for reference, not part of this project
 full_stack/

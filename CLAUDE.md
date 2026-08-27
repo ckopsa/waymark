@@ -38,7 +38,9 @@ suite are mechanically projected. The application directories
 Agent-opened PRs get **auto-merge enabled at open time** (owner's
 standing authorization, 2026-08-27): open the PR, enable auto-merge
 (repository default merge method), and let the required `gate` check
-do the deciding — it aggregates every suite, and its mirror
+do the deciding. On a codeless diff the mirror gate reports within
+seconds and GitHub refuses to arm auto-merge on an already-clean PR —
+merging directly is then the same authorized decision, not a new one — it aggregates every suite, and its mirror
 (`tests-gate-skip.yml`) answers for diffs the suites never see. A red
 `gate` blocks the merge; fix and push rather than waiting. Because
 merges now land without a human tap, always `bd dolt pull`
