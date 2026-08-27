@@ -57,9 +57,16 @@ case "${1:-}" in
       -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" \
       -d "{\"firstName\": \"$NAME\", \"lastName\": \"agent\"}"
     SECRET=$(curl -sS -H "Authorization: Bearer $TOK" "$KC/admin/realms/$REALM/clients/$U/client-secret" | jq -re .value)
+    # The map has been found double-encoded as a JSON string once; decode
+    # that shape rather than fail on it. Not an && chain: set -e must see
+    # a jq failure, or "secret stored" lies.
     TMP=$(mktemp)
-    jq --arg n "$NAME" --arg s "$SECRET" '.waymark10_agent_clients[$n] = $s' "$INFRA_SECRETS" > "$TMP" \
-      && mv "$TMP" "$INFRA_SECRETS"
+    jq --arg n "$NAME" --arg s "$SECRET" '
+      .waymark10_agent_clients = ((.waymark10_agent_clients // {})
+                                  | if type == "string" then fromjson else . end)
+      | .waymark10_agent_clients[$n] = $s' "$INFRA_SECRETS" > "$TMP"
+    chmod --reference="$INFRA_SECRETS" "$TMP"
+    mv "$TMP" "$INFRA_SECRETS"
     echo "secret stored: .waymark10_agent_clients.$NAME"
     echo "mint with:     scripts/agent-token.sh --agent $NAME work"
     ;;
