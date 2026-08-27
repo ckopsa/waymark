@@ -170,6 +170,7 @@
             [waymark10.server.routes.worksheet :as worksheet-routes]
             [waymark10.server.webhooks :as webhooks]
             [waymark10.server.worksheet :as worksheet]
+            [waymark10.remark :as remark]
             [waymark10.verdict-reason :as verdict-reason]
             [waymark10.test.packs :as packs]
             [waymark10.types :as t]))
@@ -426,6 +427,13 @@
    ;; shape), and the rank that reads it is this module's own — a
    ;; house that serves the crown serves the way an agent may speak
    ;; to it.
+   ;; …and since waymark-b4s a SEVENTH: `remark`, the thread's turn —
+   ;; words on any subject with no verdict attached, a person's
+   ;; question and a composer's reply landing through the same create.
+   ;; `:always` for the reason kind's reason, again: {subject_kind,
+   ;; subject_id}, no application vocabulary, and the conversation it
+   ;; carries is about the cards this module minted — a house that
+   ;; serves the feed serves the way to talk back to it.
    {:module :feed
     :enrols [{:kind :feed_recipe :enroll :always
               :kinds (fn [_] [feed-recipe/feed-recipe])}
@@ -438,7 +446,9 @@
              {:kind :verdict_reason :enroll :always
               :kinds (fn [_] [verdict-reason/verdict-reason])}
              {:kind :ranking_note :enroll :always
-              :kinds (fn [_] [ranking-note/ranking-note])}]
+              :kinds (fn [_] [ranking-note/ranking-note])}
+             {:kind :remark :enroll :always
+              :kinds (fn [_] [remark/remark])}]
     ;; …and since waymark-1uv.9 it STARTS one thing, the first this
     ;; module has ever started: the sweep over the dropped pile, which
     ;; sets a tickler aside for every row the house let go and nobody
