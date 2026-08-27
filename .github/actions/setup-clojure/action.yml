@@ -49,7 +49,26 @@ runs:
     # first-party GitHub action like actions/cache above, not a
     # marketplace dependency. On the self-hosted runner the tool cache is
     # a host volume, so this is a download exactly once per version.
+    # Only when the runner does not already carry one. The self-hosted
+    # image ships OpenJDK 21; on it, setup-java would download Temurin
+    # into a tool cache SHARED by every runner on the node, and nine
+    # shards starting together extracted into the same directory at
+    # once — two of them then ran on a half-written JDK ("Unable to
+    # load TZDB time-zone rules", "Could not link verifier"). A
+    # GitHub-hosted image carries 17 and still gets 21 from here.
+    - name: Is a JDK 21 already on this runner?
+      id: jdk
+      shell: bash
+      run: |
+        if java -version 2>&1 | grep -qE 'version "21\.'; then
+          echo "have=true" >> "$GITHUB_OUTPUT"
+          echo "jdk already present: $(java -version 2>&1 | head -1)"
+        else
+          echo "have=false" >> "$GITHUB_OUTPUT"
+        fi
+
     - name: Install JDK
+      if: steps.jdk.outputs.have != 'true'
       uses: actions/setup-java@v4
       with:
         distribution: temurin
