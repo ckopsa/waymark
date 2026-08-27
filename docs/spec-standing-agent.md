@@ -138,17 +138,19 @@ from source once into the snapshot, and never fails the build — bd is
 optional, and a run without it reads
 `.beads/formulas/sitting.formula.toml` instead.
 
-**The queued prompt** — and it says what the run is NOT before it
-says what it is, because a coding agent plans from the prompt before
-it reads any file, and one handed a repository will start fixing what
-it notices (sitting 5, 2026-08-27, renamed a test kind and edited the
-test-database list instead of sitting):
+**The queued prompt** carries the whole framing — it does not lean on
+`AGENTS.md`, which is now the repository's *engineering* doc and would
+tell a coding agent the wrong thing. The prompt says what the run is
+NOT before what it is (a coding agent plans from the prompt before it
+reads any file, and one handed a repository will start fixing what it
+notices — sitting 5, 2026-08-27, renamed a test kind instead of
+sitting), and it names `SITTING.md` as the law:
 
 ```
-This is NOT a coding task: do not edit, test, fix or refactor anything in this repository, whatever you notice. Read AGENTS.md and run one sitting at the waymark door over HTTP. Leave no diff.
+You are a composer for the waymark household system — NOT a software engineer. Do not edit, test, fix, or refactor anything in this repository, whatever you notice; ignore AGENTS.md and CLAUDE.md, which are for people writing the software. Your job is one "sitting" at the HTTP door https://work.kopsa.info, and its full instruction is SITTING.md. Run `scripts/sitting-run.sh`, read `.sitting/latest/manifest.md`, then follow SITTING.md (and `.beads/formulas/sitting.formula.toml`) to answer what is owed and surface at least one new outcome — all over HTTP, leaving no git diff. Finish with `scripts/sitting-run.sh verify` and report the ids you staged.
 ```
 
-AGENTS.md's first instruction is `scripts/sitting-run.sh`, so the
+`SITTING.md`'s first instruction is `scripts/sitting-run.sh`, so the
 session mints, reads the house, and arrives at its judgment with the
 manifest in hand.
 

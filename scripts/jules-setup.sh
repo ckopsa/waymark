@@ -2,7 +2,7 @@
 # Jules environment setup (run once at snapshot build): everything a
 # sitting run needs, and a loud check that the credential the owner
 # pasted into the web UI actually mints. The queued job's own
-# instructions live in AGENTS.md — this script only makes the tools
+# instructions live in SITTING.md — this script only makes the tools
 # real and tells the truth about what is missing.
 #
 # NOTHING here is allowed to fail the build. A Jules VM that cannot
