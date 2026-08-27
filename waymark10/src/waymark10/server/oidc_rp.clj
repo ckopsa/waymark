@@ -349,18 +349,32 @@
      {:status 200
       :headers {"Content-Type" "application/json"}
       :body (wire/write-json
-             {:waymark "10"
-              :agent {:id (:id principal) :display (:display principal)}
-              :session {:token token
-                        :expires_at exp
-                        :use {:header "Cookie"
-                              :value (str (:cookie-name rp) "=" token)
-                              :note (str "send this Cookie header on every "
-                                         "request — it is your credential")}}
-              :renew {:href "/auth/agent/renew" :method "POST"
-                      :note (str "POST with the LIVE session cookie for a "
-                                 "fresh token; a lapsed session needs a "
-                                 "fresh invitation from the human")}})})))
+             (cond-> {:waymark "10"
+                      :agent {:id (:id principal) :display (:display principal)}
+                      :session {:token token
+                                :expires_at exp
+                                :use {:header "Cookie"
+                                      :value (str (:cookie-name rp) "=" token)
+                                      :note (str "send this Cookie header on every "
+                                                 "request — it is your credential")}}
+                      :renew {:href "/auth/agent/renew" :method "POST"
+                              :note (str "POST with the LIVE session cookie for a "
+                                         "fresh token; a lapsed session needs a "
+                                         "fresh invitation from the human")}}
+               ;; the standing rotation's one-time seam (waymark-53u):
+               ;; the raw token crosses HERE and never again — the row
+               ;; stores it :secret, the transition log holds a digest
+               (:reentry extra)
+               (assoc :reentry
+                      (let [{t :token e :expires_at} (:reentry extra)]
+                        {:token t
+                         :expires_at (str e)
+                         :use {:body "{\"invite\": \"<token>\"}"
+                               :note (str "the one-shot way home after a lapse — "
+                                          "POST /auth/agent with this token in the "
+                                          "JSON body; it rotates on every use and "
+                                          "on renew, so keep THIS one and discard "
+                                          "the last")}}))))})))
 
 (defn- body-invite
   "The invite token off a JSON body — nil on absence or garbage; the
@@ -423,11 +437,17 @@
       (not reentry-ok) paced
       :else
       (if-some [row (members/bind-agent! eng invite-token)]
-        (session-response rp {:id (:id row)
-                              :type :agent
-                              :roles (set (get-in row [:data :roles]))
-                              :display (or (get-in row [:data :display])
-                                           (:id row))})
+        ;; the standing rotation at bind (waymark-53u): best-effort —
+        ;; the door's guards decide (an invite-born guest is refused
+        ;; by the durable guard and the response simply carries no
+        ;; way home; a durable agent walks away holding one)
+        (let [reentry (members/rotate-reentry! eng (:id row) (rand-token))]
+          (session-response rp {:id (:id row)
+                                :type :agent
+                                :roles (set (get-in row [:data :roles]))
+                                :display (or (get-in row [:data :display])
+                                             (:id row))}
+                            (when reentry {:reentry reentry})))
         (if-some [row (members/spend-reentry! eng body-token)]
           (let [principal (t/principal
                            {:id (:id row)
@@ -437,20 +457,38 @@
                                          (:id row))})
                 grant (some-> (grants/standing-grant-for eng (:id row))
                               (as-> g (grants/accept-as-audience!
-                                       eng g principal)))]
+                                       eng g principal)))
+                ;; homecoming rotates (waymark-53u): the spent token
+                ;; nulled on the way in, a fresh one minted on the way
+                ;; out — the standing agent's loop closes with no
+                ;; human hand, and the mint is audited like any other
+                reentry (members/rotate-reentry! eng (:id row) (rand-token))]
             (session-response rp principal
-                              (when (and grant (= :accepted (:state grant)))
-                                {:grant (:id grant)})))
+                              (cond-> nil
+                                (and grant (= :accepted (:state grant)))
+                                (assoc :grant (:id grant))
+                                reentry
+                                (assoc :reentry reentry))))
           (problem 404 "Not found" "No standing invitation."
                    {:knock knock-remedy}))))))
 
 (defn- agent-renew
   "POST /auth/agent/renew — possession of a LIVE session renews it
   (the sliding capability); anything else is the honest 401, and a
-  fresh invitation is the human's to hand out."
-  [oidc req]
+  fresh invitation is the human's to hand out. A living AGENT also
+  keeps its way home fresh (waymark-53u): the standing re-entry
+  credential rotates when past half its life — so a renew loop that
+  ticks hourly writes the member row every few days, not every tick
+  — and the response carries the new token through the same one-time
+  seam the bind uses. Best-effort: a refusal (a guest, a human
+  session) is a quiet nil and the renewal stands alone."
+  [eng oidc req]
   (if-some [principal (resolve-session oidc req)]
-    (session-response (:rp oidc) principal)
+    (let [reentry (when (= :agent (:type principal))
+                    (members/rotate-reentry-when-stale!
+                     eng (:id principal) (rand-token)))]
+      (session-response (:rp oidc) principal
+                        (when reentry {:reentry reentry})))
     (problem 401 "Unauthenticated"
              "No live session rides this request — renewal is for the living.")))
 
@@ -590,7 +628,7 @@
               (and post? (= (:uri req) "/auth/agent"))
               (agent-session eng oidc req)
               (and post? (= (:uri req) "/auth/agent/renew"))
-              (agent-renew oidc req)
+              (agent-renew eng oidc req)
 
               ;; the magic link (guest-entry): browser-shaped, and
               ;; open by the same logic as the invite doors — it
