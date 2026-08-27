@@ -68,6 +68,15 @@ on:
       - '.github/scripts/**'
   workflow_dispatch:
     inputs:
+      aot:
+        description: >-
+          Precompile the third-party libraries before running (see
+          waymark10/src/waymark10/aot.clj). On by default; dispatch with
+          this off to measure the same commit without it. The `quick`
+          job never AOTs, so it stays a control for machine load in
+          both halves of such a pair.
+        type: boolean
+        default: true
       runner:
         description: >-
           Where to run. 'default' follows the CI_RUNNER repository
@@ -315,6 +324,8 @@ jobs:
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+          aot-project: waymark10
+          aot-enabled: ${{ inputs.aot != false }}
       # Where the service container is. CI_SERVICE_HOST comes from the
       # self-hosted runner's environment (home-infrastructure's
       # github-runner.hcl) because that host's docker daemon publishes
@@ -368,7 +379,7 @@ jobs:
             args+=(--plugin kaocha.plugin/profiling --profiling-count 500)
           fi
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
-          cd waymark10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+          cd waymark10 && clojure -M:aot:test "${args[@]}" 2>&1 | tee ../shard-output.txt
 
       # The timings, at the END of the log, where a `tail` finds them.
       # The artifact keeps the full output; this keeps the part anyone
@@ -420,6 +431,8 @@ jobs:
       - uses: ./.github/actions/setup-clojure
         with:
           cli-version: ${{ env.CLOJURE_CLI_VERSION }}
+          aot-project: workqueue10
+          aot-enabled: ${{ inputs.aot != false }}
       # Where the service container is. CI_SERVICE_HOST comes from the
       # self-hosted runner's environment (home-infrastructure's
       # github-runner.hcl) because that host's docker daemon publishes
@@ -468,7 +481,7 @@ jobs:
             args+=(--plugin kaocha.plugin/profiling --profiling-count 500)
           fi
           echo "shard ${{ matrix.shard.id }}: ${#args[@]} focus flags"
-          cd workqueue10 && clojure -M:test "${args[@]}" 2>&1 | tee ../shard-output.txt
+          cd workqueue10 && clojure -M:aot:test "${args[@]}" 2>&1 | tee ../shard-output.txt
 
       # The timings, at the END of the log, where a `tail` finds them.
       # The artifact keeps the full output; this keeps the part anyone
