@@ -263,9 +263,10 @@
       (let [b (json (req :get "/api/.well-known/waymark" nil scoped))]
         ;; …and (waymark-1uv.6) the ranking notes it wrote itself, by
         ;; :judged_by — the own surface again
+        ;; …and (waymark-b4s) the remarks it said itself, by :said_by
         (is (= ["approval_request" "feed_view" "feed_view_consent"
                 "grant" "job" "ranking_note" "recipe_proposal"
-                "verdict_reason"]
+                "remark" "verdict_reason"]
                (:kinds b))))
       (is (= 404 (:status (req :get "/api/plans" nil scoped)))
           "the domain stays concealed")

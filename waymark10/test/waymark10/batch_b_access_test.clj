@@ -422,7 +422,10 @@
                    "verdict_reason"
                    ;; waymark-1uv.6: and the judgments it wrote —
                    ;; own-surface by :judged_by
-                   "ranking_note"}
+                   "ranking_note"
+                   ;; waymark-b4s: and the turns it said —
+                   ;; own-surface by :said_by
+                   "remark"}
                  (set (:kinds b))))))
       (testing "the own surface survives the grant's death — how a dead
                 grant's holder asks again"
