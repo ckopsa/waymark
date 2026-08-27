@@ -1,6 +1,6 @@
 ---
 name: sitting
-description: Run one composer sitting at the waymark MCP door — read the house, index the facts people said as insights, answer standing composition requests and threads, surface at least one outcome the house does not hold yet and every distinct bundle beyond it (ranked, not capped), honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
+description: Run one composer sitting at the waymark MCP door — read the house, index the facts people said as insights, answer standing composition requests and threads, advance the arrivals (enrich a bare task at least, compose an outcome only for a real goal — no floor), honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
 ---
 
 # The sitting
@@ -67,19 +67,27 @@ Every offered `composition_request` deserves an answer this sitting:
 an outcome whose `request_id` names it. Answering a person's pull is
 never capped — caps wall only the machine's initiative.
 
-## 4. The floor, then ranked-not-capped
+## 4. Advance the arrivals — enrich, or compose for a real goal
 
-Every sitting stages at least ONE outcome the house does not hold
-yet — the owner's ruling; a sitting never has no work. Dig for it:
-the evidence rows (tasks, events, media, chore runs) no outcome or
-insight has ever cited, read in full at their own addresses, the
-people and values beside them — and beyond the house through the
-Gate door (`GET /api/-/gate` is the read tools your grant admits:
-email, Telegram, texts), where what you learn is evidence to act on
-but never an address to cite: cite the house rows it points at, name
-the source in the goal's prose, never copy a message body into a
-row, never send or move. Only an honest dig that finds nothing
-distinct stages nothing, and then the journal (step 9) says what was
+There is NO floor (waymark-mho): a run advances what ARRIVED (the
+manifest's `arrivals`, new since the last run) and never manufactures
+an outcome to have done something. The MINIMUM is to enrich a bare
+task: for a `bare_tasks` entry (actionable, no detail, unspoken-for)
+publish an insight that ANNOTATES it — evidence citing the task and
+the source you read, a finding that makes it actionable (what it is
+for, where/when/with what, its next physical step), an offer naming
+its next door. Never edit the task's fields. Dig beyond the house for
+that context through the Gate door (`GET /api/-/gate`: email,
+Telegram, texts) — evidence to act on, never an address to cite; name
+the source in prose, copy no message body, read tools only. COMPOSE
+an outcome only when an arrival plus its graph implies a GOAL LARGER
+THAN ANY SINGLE ROW — an end-state, not a task restated; a bundle
+whose goal equals one task, or that only re-prioritizes one, is a
+wrapper, enrich instead. Never a twin of a standing outcome. A run
+that advanced its arrivals, enriched what was bare, and owed nothing
+else may write nothing — a lawful no-op. Only an honest dig that
+finds nothing distinct stages nothing, and then the journal (step 9)
+notes what was
 searched and why. There is no cap on staging (waymark-1uv.3): the
 machine writes without limit and the crown's declared rank chooses
 what fills the person's attention. Stage every DISTINCT bundle the evidence
@@ -197,9 +205,9 @@ were answered, which diagnoses were published, which bundles were
 scored, and — just as load-bearing — what you chose NOT to compose
 and why (the wood not yet in the house; a floor not yet expired; a
 person still unaffirmed). The next sitting reads this first. There
-is no silent sitting: the floor means at least one new outcome was
-staged, or this journal says what the dig searched and why nothing
-could be.
+is NO floor: a run that advanced its arrivals (or had none), enriched
+what was bare, and owed nothing else writes nothing at all — a lawful
+no-op leaves no journal.
 
 ## Scheduling
 

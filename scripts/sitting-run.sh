@@ -179,7 +179,7 @@ if [ "$MODE" = "verify" ]; then
   check journal       "/api/journals?owner=$PRINCIPAL"            written amended
   echo
   if [ "$wrote" -eq 0 ]; then
-    echo "NOTHING. That is not a sitting: every sitting owes at least one new outcome the house did not hold (the floor), and a dig that honestly found none owes a journal saying what was searched. A run that wrote nothing did not do its job."
+    echo "NOTHING written. Under waymark-mho there is NO floor: if the manifest's arrivals were all handled (or there were none) and no bare task was worth enriching, a run that wrote nothing is a lawful no-op. It is only a FAILED run if an arrival was a person's unanswered remark, or a bare task plainly needed enriching, and it was left alone."
   else
     echo "$wrote row(s) written by this principal since $SINCE."
   fi
@@ -436,24 +436,80 @@ jq -c '{tools: ((.links // {}) | to_entries | map({name:.key, href:.value.href, 
         mutations: ((.actions // {}) | keys),
         ask: (.ask // null)}' "$R/gate.json" > "$D/gate.json"
 
-# THE FLOOR (the owner's ruling, 2026-08-27): a sitting always owes at
-# least one NEW outcome the house does not hold yet, found by digging.
-# The dig starts here — every row of an evidence kind that no outcome
-# and no insight has ever cited, newest first, with its state and its
-# sentence — so the model starts from what is UNCOMPOSED rather than
-# from what it already knows.
+# NO FLOOR (waymark-mho, the owner's ruling 2026-08-27 that RETRACTS the
+# floor): a run advances concrete ARRIVALS and enriches BARE tasks; it
+# does not owe a manufactured outcome, and a quiet run is a lawful
+# no-op. What follows computes the three lists that job is defined in
+# terms of: arrivals (new since we last looked), bare tasks (the
+# minimum — enrich one), and the cited set the compose path still needs.
+
+# the previous run's start, so "new" means new since we last looked; on
+# a first run look back one hour rather than flooding the arrival list
+# with the whole house.
+PREV_MANIFEST="$(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | grep -v "/$STAMP/manifest.json" | sort | tail -n 1)"
+SINCE_ARR="$(jq -r '.run.started_at // empty' "$PREV_MANIFEST" 2>/dev/null)"
+[ -n "${SINCE_ARR:-}" ] || SINCE_ARR="$(iso "$(( $(now_s) - 3600 ))")"
+
+# ARRIVALS: rows that are genuinely NEW — present now, absent from the
+# last run's snapshot. A person's remark, a new or Gate-synced task, a
+# new event: the concrete input this run reacts to. Keyed on self, NOT
+# on updated_at, because a mirror sync bumps updated_at on every row and
+# would drown a real arrival. When there is no prior snapshot (first
+# run) fall back to "updated in the last hour" so the run is not blind.
+ARR_ACC="$(mktemp)"; echo '[]' > "$ARR_ACC"
+PREV_DIR="$([ -n "$PREV_MANIFEST" ] && dirname "$PREV_MANIFEST" || echo "")/rows"
+for kf in tasks remarks.full events media chore_runs; do
+  cur="$R/$kf.json"; [ -f "$cur" ] || continue
+  prev="$PREV_DIR/$kf.json"
+  if [ -n "$PREV_MANIFEST" ] && [ -f "$prev" ]; then
+    jq -s '(.[0] | map(.self)) as $seen
+           | .[1] | map(select((.self != null) and (($seen | index(.self)) == null)))' \
+       "$prev" "$cur" > "$ARR_ACC.k" 2>/dev/null || echo '[]' > "$ARR_ACC.k"
+  else
+    jq --arg s "$SINCE_ARR" 'map(select((.self != null) and ((.meta.updated_at // "") > $s)))' \
+       "$cur" > "$ARR_ACC.k" 2>/dev/null || echo '[]' > "$ARR_ACC.k"
+  fi
+  jq -s '.[0] + .[1]' "$ARR_ACC" "$ARR_ACC.k" > "$ARR_ACC.m" && mv "$ARR_ACC.m" "$ARR_ACC"
+done
+jq 'map({self, kind, state, at:(.meta.updated_at // null),
+         says:((.display.title // .summary // "") | .[0:160])})
+    | sort_by(.at) | reverse' "$ARR_ACC" > "$D/arrivals.json" 2>/dev/null || echo '[]' > "$D/arrivals.json"
+rm -f "$ARR_ACC" "$ARR_ACC.k"
+
+# the CITED set — every row an outcome or insight already speaks for
+jq -s '(.[0] + .[1]) | unique' \
+   <(jq '[.[].data.evidence[]?]' "$R/outcomes.full.json") \
+   <(jq '[.[].data.evidence[]?]' "$R/insights.full.json") \
+   > "$D/cited.json" 2>/dev/null || echo '[]' > "$D/cited.json"
+
+# BARE tasks — the minimum a quiet run still does: enrich ONE. A task
+# is bare when it is actionable, carries no detail, and no outcome or
+# insight yet speaks for it. Enrichment ANNOTATES it (an insight citing
+# the source and offering the task's own next step); it NEVER edits the
+# task — only people decide what their own rows say.
+jq --slurpfile cited "$D/cited.json" '
+  ($cited[0] // []) as $c
+  | [.[] | (.state // "") as $st
+         | select($st=="fresh" or $st=="open" or $st=="active")
+         | select(((.fields.detail // "") | tostring | length) == 0)
+         | .self as $sf | select(($c | index($sf)) == null)
+         | {self, state, title:(.display.title // .fields.title // .summary // ""),
+            due_at:(.fields.due_at // null), source:(.fields.source // null)}]
+' "$R/tasks.json" > "$D/bare_tasks.json" 2>/dev/null || echo '[]' > "$D/bare_tasks.json"
+
+# UNCOMPOSED evidence — no longer a floor, just context for when a real
+# outcome IS warranted: rows nothing has composed or enriched yet.
 jq -s '
-  (.[0] + .[1] | unique) as $cited
-  | .[2:] | add
+  (.[0] // []) as $cited
+  | .[1:] | add
   | map(.self as $sf | select($sf != null and (($cited | index($sf)) == null)))
   | map({self, kind, state, at:(.meta.updated_at // null),
          says:((.display.title // .summary // "") | .[0:140])})
   | sort_by(.at) | reverse
-' <(jq '[.[].data.evidence[]?]' "$R/outcomes.full.json") \
-   <(jq '[.[].data.evidence[]?]' "$R/insights.full.json") \
+' "$D/cited.json" \
    "$R/tasks.json" "$R/events.json" "$R/media.json" "$R/chore_runs.json" \
    > "$D/uncomposed.json" 2>/dev/null || echo '[]' > "$D/uncomposed.json"
-jq -c 'group_by(.kind) | map({kind:.[0].kind, count:length}) ' "$D/uncomposed.json" > "$D/uncomposed_census.json"
+jq -c 'group_by(.kind) | map({kind:.[0].kind, count:length})' "$D/uncomposed.json" > "$D/uncomposed_census.json"
 
 # what ALREADY STANDS — every offered/accepted outcome with its goal and
 # the rows it cites, so the floor's dig does not restage a bundle the
@@ -530,6 +586,9 @@ jq -n \
   --slurpfile declines "$D/declines.json" \
   --slurpfile values "$D/live_values.json" \
   --slurpfile companions "$D/companions.json" \
+  --slurpfile arrivals "$D/arrivals.json" \
+  --slurpfile bare "$D/bare_tasks.json" \
+  --arg since_arr "$SINCE_ARR" \
   --slurpfile uncomposed "$D/uncomposed.json" \
   --slurpfile census "$D/uncomposed_census.json" \
   --slurpfile standing "$D/standing_outcomes.json" \
@@ -551,9 +610,13 @@ jq -n \
     index_facts:     ($facts[0]    | length),
     score_bundles:   ($unscored[0] | length),
     declines_owed_a_diagnosis: ([$declines[0][] | select(.diagnosis_stands|not)] | length),
-    surface_one_new_outcome: 1
+    advance_arrivals: ($arrivals[0] | length),
+    enrich_a_bare_task: ($bare[0] | length)
   },
   now: $started,
+  arrivals_since: $since_arr,
+  arrivals: ($arrivals[0] | .[0:40]),
+  bare_tasks: ($bare[0] | .[0:40]),
   gate: $gate[0],
   standing_outcomes: $standing[0],
   uncomposed_census: $census[0],
@@ -616,17 +679,17 @@ jq -n \
   jq -r 'if (.standing_outcomes|length)==0 then "  (nothing stands yet)" else (.standing_outcomes[] | "- \(.self) [\(.state)] \(.goal[0:90])\n    cites: \(.evidence|tostring)") end' "$RUN/manifest.json"
   echo "  A candidate whose GOAL says the same thing, or that cites the SAME evidence row, as any of these is a twin — do not stage it. Compose only what is genuinely not here yet."
   echo
-  echo "## THE FLOOR — surface one new outcome, every sitting"
-  jq -r '"  Right now it is " + .now + ". Every date you prepare (an events starts_at/ends_at, a deadline) is in the FUTURE — a piece that holds an hour already past is a bug a tap would record."' "$RUN/manifest.json"
-  echo "  Whatever else is owed, this sitting stages at least ONE outcome the house does not hold yet."
-  echo "  Dig here first: evidence NO outcome and NO insight has ever cited (newest first, 60 of them; the whole list is manifest.json .uncomposed):"
-  jq -r '.uncomposed_census | if length==0 then "  (every row of every evidence kind is already cited — dig the rows in full for what those bundles did NOT compose)" else ("  uncomposed by kind: " + ([.[] | "\(.kind) \(.count)"] | join(" · "))) end' "$RUN/manifest.json"
-  jq -r '.uncomposed[0:24][] | "- \(.self) [\(.kind) \(.state)] \(.says)"' "$RUN/manifest.json"
-  echo "  Read the rows in FULL at their own addresses before composing from them; a title is not evidence. If the dig honestly finds nothing distinct to stage, the journal says what was searched and why — that journal is then mandatory."
+  echo "## What arrived since the last run — process these"
+  jq -r '"  (new since " + .arrivals_since + ")"' "$RUN/manifest.json"
+  jq -r 'if (.arrivals|length)==0 then "  (nothing new — a quiet run. If nothing below is owed either, journal nothing and leave: a no-op is a lawful run)" else (.arrivals[] | "- \(.self) [\(.kind) \(.state)] \(.says)") end' "$RUN/manifest.json"
+  echo "  Each arrival is a concrete thing to ADVANCE as far as it honestly goes — no further. A person's remark is a work order (answer it). A new or synced task: read it in FULL, then either ENRICH it (below) or, only if it plus its situated graph implies a GOAL LARGER THAN ANY SINGLE ROW, COMPOSE an outcome. Do not manufacture an outcome to have done something — there is no floor."
   echo
-  echo "## Sources beyond the house — Gate (email, Telegram, texts)"
-  jq -r '.gate | if (.tools|length)==0 then "  (this grant admits no Gate tool — the dig stays inside the house. To open email/Telegram/texts, file an ANCHORED ask on this grant adding {\"kind\":\"email.read\"}, {\"kind\":\"telegram.read\"}, {\"kind\":\"messages.read\"} with actions [] and NO filter; a person taps it and the same grant widens)" else ("  read tools admitted (GET " + (.tools[0].href|split("/")[0:4]|join("/")) + "/<tool>, POST /api/-/gate/<tool> with the tool'"'"'s own args):\n" + ([.tools[] | "  - \(.name) (\(.args)) — \(.summary // "")"] | join("\n")) + "\n  The full input schema of each tool: rows/gate.json .links.<tool>.input. Start with tgram__search_all_chats and emila__search for dates, names and plans; read a hit in full before composing from it." + "\n  What you learn there is evidence to ACT on, never an address to CITE: cite the house rows it points at (the person, the event, the task) and name the source in the goal'"'"'s prose. Never copy a message body into a row. Read-only: never a send or a move.") end' "$RUN/manifest.json"
+  echo "## Bare tasks — the minimum a run does: ENRICH one (never mutate it)"
+  jq -r 'if (.bare_tasks|length)==0 then "  (none bare — every actionable task already carries detail or is spoken for)" else (.bare_tasks[] | "- \(.self) [\(.state)] \(.title)\(if .due_at then " · due " + .due_at[0:10] else "" end)") end' "$RUN/manifest.json"
+  echo "  To enrich a bare task: publish an INSIGHT (POST /api/insights) whose evidence cites the task AND the source you read (a Gate email/chat, a related row), whose finding is the context that makes the task actionable (what it is really for, where/when/with what, its real next physical step), and whose offer_kind/offer_id/offer_action names the task's own next door. This ANNOTATES the task beside it — it does not touch the task's fields; only the household edits its own rows. An enrichment that does not change whether the task is actionable is not worth writing."
   echo
+  echo "## When to COMPOSE instead of enrich"
+  echo "  Compose an outcome only when the arrival + its situated graph (the same person / project / value / time-window rows) imply a GOAL that is larger than any single evidence row — an end-state the household would want, not a task restated. A bundle whose goal equals one task, or whose only work is re-prioritizing an existing task, is a wrapper, not an outcome: enrich instead. When a real goal is there, the uncomposed rows below and standing_outcomes above are the material and the twin-guard."
   echo "## Live values you may name"
   jq -r 'if (.live_values|length)==0 then "  (none — a plan citing no live value is refused)" else (.live_values[] | "- \(.self) [\(.state)] \(.name)") end' "$RUN/manifest.json"
   echo
