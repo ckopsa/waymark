@@ -172,7 +172,12 @@ holding your place in it.
    manifest already holds the existing outcomes — offered, accepted,
    declined, expired — and the prior journals, so never stage a twin
    of a bundle that already stands (the rank cannot tell twins apart;
-   a duplicate adds noise, not choice). A declined prior may be
+   a duplicate adds noise, not choice) — the manifest's
+   `standing_outcomes` and its "Already standing — NEVER twin one of
+   these" section list every outcome already offered or accepted, with
+   the rows each cites; a candidate whose GOAL says the same thing, or
+   that cites the SAME evidence row, as one of those is a twin, and you
+   do not stage it. A declined prior may be
    REcomposed only after its diagnosis insight is published (no
    burial without a diagnosis) — the manifest's `declines` says which
    ones still owe one — **only those; a decline whose diagnosis
@@ -221,6 +226,10 @@ holding your place in it.
 
 - Name a live value; cite everything you read; 2–5 pieces; the
   prepared input must fit the target door.
+- **Every date you prepare is in the future.** The manifest gives you
+  `now`; an event's `starts_at`/`ends_at`, a deadline, an hour held —
+  all of them fall after it. A piece holding an hour already past is a
+  bug a tap would faithfully record.
 - **A piece makes something READY.** It opens a door that creates or
   holds — a task with its input prepared, an hour on the calendar, a
   list staged. A piece that fires a *completion* door (`complete`,

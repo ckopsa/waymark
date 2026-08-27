@@ -455,6 +455,14 @@ jq -s '
    > "$D/uncomposed.json" 2>/dev/null || echo '[]' > "$D/uncomposed.json"
 jq -c 'group_by(.kind) | map({kind:.[0].kind, count:length}) ' "$D/uncomposed.json" > "$D/uncomposed_census.json"
 
+# what ALREADY STANDS — every offered/accepted outcome with its goal and
+# the rows it cites, so the floor's dig does not restage a bundle the
+# house already holds (sitting 7 twinned the realtor list; the rank
+# cannot tell twins apart, so a duplicate is pure noise).
+jq '[.[] | select(.state=="offered" or .state=="accepted")
+       | {self, state, goal:.data.goal, value:(.data.value_name // null),
+          evidence:(.data.evidence // [])}]' "$R/outcomes.full.json" > "$D/standing_outcomes.json"
+
 # a value must be LIVE to be named; a companion must be current
 jq '[.[] | select(.state != "retired")
         | {id:(.self|split("/")|last), self, state, name:(.data.name // .summary),
@@ -512,6 +520,7 @@ jq -n \
   --slurpfile companions "$D/companions.json" \
   --slurpfile uncomposed "$D/uncomposed.json" \
   --slurpfile census "$D/uncomposed_census.json" \
+  --slurpfile standing "$D/standing_outcomes.json" \
   --slurpfile ask "$D/extend_ask.json" \
   --slurpfile gate "$D/gate.json" \
   --slurpfile diag "$RUN/rows/diagnosis.json" \
@@ -532,7 +541,9 @@ jq -n \
     declines_owed_a_diagnosis: ([$declines[0][] | select(.diagnosis_stands|not)] | length),
     surface_one_new_outcome: 1
   },
+  now: $started,
   gate: $gate[0],
+  standing_outcomes: $standing[0],
   uncomposed_census: $census[0],
   uncomposed: ($uncomposed[0] | .[0:60]),
   offered_requests: $requests[0],
@@ -589,7 +600,12 @@ jq -n \
   echo "## Declines already diagnosed — nothing to do"
   jq -r '[.declines[] | select(.diagnosis_stands)] | if length==0 then "  (none)" else (.[] | "- \(.self) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])") end' "$RUN/manifest.json"
   echo
+  echo "## Already standing — NEVER twin one of these"
+  jq -r 'if (.standing_outcomes|length)==0 then "  (nothing stands yet)" else (.standing_outcomes[] | "- \(.self) [\(.state)] \(.goal[0:90])\n    cites: \(.evidence|tostring)") end' "$RUN/manifest.json"
+  echo "  A candidate whose GOAL says the same thing, or that cites the SAME evidence row, as any of these is a twin — do not stage it. Compose only what is genuinely not here yet."
+  echo
   echo "## THE FLOOR — surface one new outcome, every sitting"
+  jq -r '"  Right now it is " + .now + ". Every date you prepare (an events starts_at/ends_at, a deadline) is in the FUTURE — a piece that holds an hour already past is a bug a tap would record."' "$RUN/manifest.json"
   echo "  Whatever else is owed, this sitting stages at least ONE outcome the house does not hold yet."
   echo "  Dig here first: evidence NO outcome and NO insight has ever cited (newest first, 60 of them; the whole list is manifest.json .uncomposed):"
   jq -r '.uncomposed_census | if length==0 then "  (every row of every evidence kind is already cited — dig the rows in full for what those bundles did NOT compose)" else ("  uncomposed by kind: " + ([.[] | "\(.kind) \(.count)"] | join(" · "))) end' "$RUN/manifest.json"

@@ -83,8 +83,10 @@ distinct stages nothing, and then the journal (step 9) says what was
 searched and why. There is no cap on staging (waymark-1uv.3): the
 machine writes without limit and the crown's declared rank chooses
 what fills the person's attention. Stage every DISTINCT bundle the evidence
-honestly supports — but never a twin of one that already stands:
-the rank cannot tell twins apart, so sameness is the only scarcity.
+honestly supports — but never a twin of one that already stands
+(the manifest's `standing_outcomes` names them; a candidate with the
+same goal, or citing the same evidence row, is a twin): the rank
+cannot tell twins apart, so sameness is the only scarcity.
 A declined prior recomposes only after its diagnosis (step 6) and
 re-enters cooled, never buried. The journal (step 9) still records
 what you chose not to compose and why.
@@ -103,6 +105,8 @@ what you chose not to compose and why.
 - The **prepared input must fit the target door** — a 422 is your
   bug. A piece may name any door in the house; nothing lands until a
   member taps, and the tap is judged as the member.
+- **Every date you prepare is in the future** — the manifest's `now`
+  is the line; an hour held in the past is a bug a tap would record.
 - **Friction pre-paid is a claim about the world** — say in the piece
   what was actually made ready, not what would be nice. A piece makes
   something READY (a create or a hold with its input prepared); a
