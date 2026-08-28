@@ -171,9 +171,10 @@ holding your place in it.
    work orders and nothing owed writes nothing at all — still a
    lawful, complete run. No outcome is ever manufactured to have done
    something. Behind each order is one of the same three moves, in rising order of what the evidence must
-   support (the manifest's `arrivals` — rows new since the last run —
-   are the material the probes drew from, and stay readable beside
-   them):
+   support (the manifest's `arrivals` — rows CREATED since the last
+   run, read from the engine's own log, plus any turn of a person
+   still holding the end of its thread — are the material the probes
+   drew from, and stay readable beside them):
 
    **a. Enrich a bare task (the lightest write, and a whole
    answer).** The manifest's `bare_tasks` are actionable tasks with no detail that no outcome or
