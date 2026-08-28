@@ -263,9 +263,20 @@
     (is (re-find #"one home per action"
                  (refusal (assoc minimal :actions
                                  {:yes {:from #{:offered} :to :allowed}})))))
-  (testing "one home per birth hook"
-    (is (re-find #"one home per hook"
-                 (refusal (assoc minimal :on-create (fn [row _] row))))))
+  (testing "a birth hook COMPOSES with the stamps, stamps first (waymark-42m)"
+    (let [r (r/normalize-resource
+             (assoc minimal :on-create
+                    (fn [row _ctx]
+                      ;; the author's hook reads what the sugar already
+                      ;; stamped — which is the whole point of the order
+                      (assoc-in row [:data :derived_from]
+                                (get-in row [:data :asked_by])))))
+          born ((:on-create r) {:data {:ask "may I"}}
+                {:principal {:id "iris"} :now (java.time.Instant/EPOCH)})]
+      (is (= "iris" (get-in born [:data :asked_by]))
+          "the decision's own stamp still lands")
+      (is (= "iris" (get-in born [:data :derived_from]))
+          "and the author's hook runs after it, on the stamped row")))
   (testing "a decider that says nothing"
     (is (re-find #":decider says nothing"
                  (refusal (assoc-in minimal [:decision :decider] {}))))

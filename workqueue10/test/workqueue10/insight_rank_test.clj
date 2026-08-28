@@ -20,7 +20,11 @@
   - an agent publishes six findings in one day and every one is
     admitted; the rank, not a wall, decides what the page shows, and
     the line's take is still the floor;
-  - the six numbers ride the document, narrated.
+  - the six numbers ride the document, narrated;
+  - and (waymark-42m) an offer's ADDRESS is derived at birth from the
+    kind and id the finder named — a scenario can say the finding was
+    admitted, only a live engine can show what the row then carries
+    and what the card's offer link points at.
 
   THE FINDER IS LEASHED. An unleashed agent is answered 404 by the
   router's default deny (rank_tuning_test's sentence), which proves
@@ -321,4 +325,58 @@
 
           ;; leave the house as found: every live finding answered
           (doseq [id (into [d p q3] six-ids)]
-            (is (= 200 (:status (invoke! "insights" id :dismiss nil (human who))))))))))))
+            (is (= 200 (:status (invoke! "insights" id :dismiss nil (human who)))))))))))
+
+(deftest the-offers-address-is-derived-and-still-checked
+  ;; waymark-42m: the create form declares `offer_href` hidden and the
+  ;; guard used to require it, so a composer could only learn the field
+  ;; by being refused for one it was never shown. The pair it already
+  ;; names IS the address, and the engine writes it at birth. What the
+  ;; wall still catches is an author naming one row and linking
+  ;; another — and the sentence names where the row actually lives.
+  (let [who "colton-42m"
+        finder (leash! "finder-42m" who [{:kind "insight" :actions ["create"]}])
+        tid (id-of (req :post "/api/tasks" {:title "Take the recycling out"}
+                        (human who)))
+        self (str "/api/tasks/" tid)
+        bare (req :post "/api/insights"
+                  {:finding "The recycling has waited past two collection days"
+                   :evidence [self]
+                   :offer_kind "task" :offer_id tid :offer_action "complete"}
+                  finder)]
+    (testing "no address is asked for — the kind and the id are the address"
+      (is (= 201 (:status bare)) (pr-str (json bare)))
+      (let [seen (json (req :get (str "/api/insights/" (id-of bare))
+                            (human who)))]
+        (is (= self (get-in seen [:data :offer_href]))
+            "the engine wrote it at birth from the pair the finder named")
+        (is (= (str "/#" self) (get-in seen [:links :offer :href]))
+            "and the card can reach the offer it carries")))
+
+    (testing "an address the author DOES spell must be the row's own"
+      (let [crossed (req :post "/api/insights"
+                         {:finding "The recycling has waited past two collection days"
+                          :evidence [self]
+                          :offer_kind "task" :offer_id tid :offer_action "complete"
+                          :offer_href (str "/api/ticklers/" tid)}
+                         finder)
+            says (str (json crossed))]
+        (is (= 409 (:status crossed)) says)
+        (is (str/includes? says "is not where that") says)
+        (is (str/includes? says self)
+            "the refusal names the address the row actually lives at")))
+
+    (testing "a door that takes typing is not an offer, however natural it reads"
+      (let [heavy (req :post "/api/insights"
+                       {:finding "The recycling sits unranked at the tail of the queue"
+                        :evidence [self]
+                        :offer_kind "task" :offer_id tid :offer_action "prioritize"}
+                       finder)
+            says (str (json heavy))]
+        (is (= 409 (:status heavy)) says)
+        (is (str/includes? says "recall") says)
+        (is (str/includes? says "a card offers a decision, never a form") says)))
+
+    ;; leave the house as found
+    (is (= 200 (:status (invoke! "insights" (id-of bare) :dismiss nil
+                                 (human who))))))))

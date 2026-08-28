@@ -102,9 +102,16 @@ fact as the house's own record, evidence citing the remark's address
 ({{base_url}}/api/remarks/<id>) and any row it is about, and the one
 light next step the fact points at (offer_kind / offer_action /
 offer_id — most often a door on the outcome the thread sits on, or
-on the person or event it names). The door refuses an insight with
-no citation (cites-what-it-claims) or no offered step
-(offers-something-light): both are the law working, not a gap.
+on the person or event it names). LIGHT means the door asks for
+NOTHING — complete on a task, take_it_back on a tickler,
+still_stands on a value. A door that takes input is refused however
+natural it reads: prioritize wants a rank, and a card offers a
+decision, never a form; prepared input belongs in an outcome PIECE.
+Those three fields are the whole offer — never send offer_href, the
+engine derives the address from the kind and the id. The door
+refuses an insight with no citation (cites-what-it-claims) or no
+offered step (offers-something-light): both are the law working,
+not a gap.
 Then compose FROM the insight, never from the remark alone, and
 cite the insight in the outcome's evidence. State the fact; never
 judge it — an insight indexes, it does not decide. A turn that
@@ -183,7 +190,10 @@ entry — actionable, no detail, unspoken-for — publish an insight
 (POST {{base_url}}/api/insights) that ANNOTATES it: evidence citing
 the task AND the source you read, a finding that makes it actionable
 (what it is for, where/when/with what, its next physical step), and
-offer_kind/offer_id/offer_action naming the task's own next door.
+offer_kind/offer_id/offer_action naming the task's own next door — a
+NO-INPUT one (complete is the usual door on a task); prioritize takes
+a rank and offers-something-light refuses it, so a rank goes in an
+outcome PIECE, never in a finding's offer.
 Never edit the task's fields — only the household edits its rows.
 Dig BEYOND the house for that context: the manifest's `gate.tools`
 are the read tools this grant admits (email, Telegram, texts — POST
@@ -214,10 +224,12 @@ CITING the decline — the verdict_reason row, its word quoted; when
 no reason row stands say "no reason given" and cite the outcome (the
 manifest's `declines[].cite` is the list). ONLY a decline that owes
 one: diagnosis_stands=true means nothing, ever — never twice. Its
-offered step is a door the offered row admits NOW, from the
+offered step is a NO-INPUT door the offered row admits NOW, from the
 manifest's `offer_candidates` (the prior's standing evidence rows
-and their declared doors); the declined prior is terminal and
-admits none, so expire/retire on it is burial, not a step. The
+and their declared doors — complete on a standing task is the usual
+shape; prioritize takes a rank and is refused); the declined prior
+is terminal and admits none, so expire/retire on it is burial, not a
+step. The
 no-burial-without-a-diagnosis wall demands the citation. The recomposition then re-enters COOLED (:early),
 never buried: the rank chooses WHICH, never WHETHER.
 NEVER tap any verdict; NEVER still_stands/revise/retire a value or

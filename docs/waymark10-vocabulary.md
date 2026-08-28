@@ -354,13 +354,22 @@ nothing downstream — router, render, collections, OpenAPI, MCP, conformance
 hash did not move one byte (`waymark10.decision-sugar-test`).
 
 Every projection fills a blank and never overwrites, so a kind declares the
-extra law only it has beside the sugar. Three refusals: an action also named
-in `:actions` (*one home per action*), an `:on-create` beside a `:decision`
-that already stamps at birth (*one home per hook* — composing would mint a
-wrapper fn, and a wrapper fn is a hash that moves for nothing), and a
-verdict list under two, or one that never leaves the open state (a
-single-verdict decision is a task with a checkbox; a decision that lands
-nowhere is a queue that never drains).
+extra law only it has beside the sugar. Two refusals: an action also named
+in `:actions` (*one home per action*), and a verdict list under two, or one
+that never leaves the open state (a single-verdict decision is a task with a
+checkbox; a decision that lands nowhere is a queue that never drains).
+
+`:on-create` is the one slot that **composes** rather than refusing: the
+decision's own stamps run first — the requester is written before an authored
+hook can read it — and the author's hook runs on the stamped row. A third
+refusal stood here until **waymark-42m** (*one home per hook* — composing
+would mint a wrapper fn, and a wrapper fn is a hash that moves for nothing);
+it was recorded against a cost that had already gone, because `:on-create`
+rides no fingerprint facet and, since waymark-j82, a bare fn hashes by its
+address. What demanded the composition is the `insight` kind: the address its
+offer is reached at is derived at birth from the kind and id the author named,
+so no composer supplies a hidden field, and a decision kind had nowhere to put
+that derivation.
 
 `:decider` is the eligibility dimension. `{:not <field>}` is a FIELD
 four-eyes wall (`guards/not-the-field`), not `guards/four-eyes` — the latter

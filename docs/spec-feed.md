@@ -1046,6 +1046,12 @@ job. **`next_offer_at` is optional and unset means NOW** — a tickler set aside
 with no date is already on the fridge — which is what lets the create door stay
 four fields wide. An automatic sweep of the dropped pile is filed, not built.
 
+*Cross-reference (2026-08-28, waymark-42m):* the "one home per hook" half of
+that reasoning has expired — the `:decision` sugar now COMPOSES an authored
+`:on-create` after its own stamps. The decision it supported stands on its
+other legs (a read that minted rows would be a GET with a side effect), and
+the sweep landed as the elected hook below regardless.
+
 *Cross-reference (2026-08-26, waymark-1uv.9):* the sweep is built —
 `feed/sweep-dropped!`, an elected hook on the `:feed` module, births a marker
 per let-go row under the engine's own hand with **no cap**, one live marker
