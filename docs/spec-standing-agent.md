@@ -124,26 +124,29 @@ tie-break:
 1. `bare-task-due-soon` — an open, detail-less task no outcome or
    insight speaks for, nearest `due_at` first. Material: the task's
    full row, the open tasks sharing its `task_list` or assignee, and
-   Gate hits on its title. Expected write: an **insight** citing the
-   task, offering `complete` on it.
+   Gate hits on the task's **search keys**. Expected write: an
+   **insight** citing the task, offering `complete` on it.
 2. `event-without-prep` — an event starting inside ten days that no
    outcome and no insight cites. Material: the event row, open tasks
-   whose title carries a word of its title, Gate hits on its title.
-   Expected write: an **insight** offering `complete` on that task
-   when one exists; when none does, an event admits no door a card can
-   tap, so the order asks for an **outcome** whose pieces create the
-   prep — or an honest skip.
+   whose title carries a word of its title, Gate hits on the event's
+   **search keys**, and the **last seven days of the household
+   thread**. Expected write: an **insight** offering `complete` on
+   that task when one exists; when none does, an event admits no door
+   a card can tap, so the order asks for an **outcome** whose pieces
+   create the prep — but only when a live value actually fits it, and
+   otherwise for the journal sentence alone (see *value-fit* below).
 3. `person-mentioned-unrecorded` — a roster companion (affirmed /
    `current`; an observed person is not usable) whom the last seven
    days of Gate traffic names and no insight cites in that window.
    Material: the person row and the hits. Expected write: an
    **insight** stating the fact, offering `still_with_us`.
 4. `value-with-no-live-outcome` — a live value no offered or accepted
-   outcome serves. Material: the value, its loved activities, and the
-   open tasks and coming events that name one of them. Expected write:
-   an **outcome** — or nothing, when no goal is really there.
+   outcome serves. Material: the value, and the open tasks and coming
+   events that say one of the value's own words. Expected write: an
+   **outcome** when there is such a row; when there is none, the value
+   carries nothing live and the order is the journal sentence instead.
 
-Four rules hold the whole thing up:
+Six rules hold the whole thing up:
 
 - **Machine dedupe first.** Every probe drops any subject the cited
   set already names. The `not-a-twin` door would refuse a duplicate
@@ -166,6 +169,60 @@ Four rules hold the whole thing up:
   at 200 characters, marked *material, not an address*: a message body
   is never copied into a row and a Gate hit is never cited.
   `WAYMARK_NO_GATE_PROBE=1` skips all of it.
+- **Search the short key, not the title** (waymark-jux). The first real
+  work order queried both rigs with the whole event title —
+  *"Breakfast with Kev Gallagher"* — and got nothing from either;
+  *"Gallagher"* alone found the friend who moved here in 2024 and the
+  breakfast before this one. A title is a household's own sentence,
+  not a search term, so the keys are DERIVED from it: the capitalized
+  tokens that survive the stopword list and the generic calendar words
+  (*Breakfast, Meeting, Call, Appointment…*), a **surname first** — the
+  second of two adjacent capitalized tokens — then the rest
+  longest-first; and when a line carries no name at all, the line minus
+  stopwords. Keys of three letters or fewer are dropped whenever the
+  line offers a longer one, because IMAP `TEXT` search is substring
+  search and *"Kev"* answered 248 messages — the whole mailbox, dressed
+  as material. At most **two keys**, tried in that order, and the
+  second one costs a call only on the rigs where the first came back
+  empty, which keeps the three-hits-per-rig cap exactly where it was.
+  The manifest prints what was searched (`searched "Gallagher"`), so a
+  fruitless probe is legible rather than mysterious. An **event** order
+  also carries the last seven days of ONE named thread, because what an
+  event needs beforehand is said where a household says it and no
+  keyword search sees *"what time tomorrow?"*: the per-chat history
+  tool is the one in `gate.json` whose only required argument is a chat
+  id, its listing partner is the argument-free tool on the same rig
+  that lists chats, and the chat is a roster companion's thread when
+  the roster names one, else the most recently active thread that is
+  not a bot. Of that week the manifest keeps the three messages that
+  say one of the keys, or the three most recent when none does. No such
+  pair of tools means no thread material, which is not a fault.
+- **Value-fit before an outcome is ordered** (waymark-jux). The same
+  first work order demanded *"one OUTCOME naming a value from the live
+  list"* as though every event maps onto some live value; a friend's
+  breakfast served none of the house's four, and the only honest move
+  left was the escape hatch — which a weaker model would not have
+  taken. So fit is tested MECHANICALLY before an outcome is asked for.
+  A value owns the words of its **name**, of every activity it
+  **loves**, and the six-letter-and-longer words of what it **says**
+  (prose filler is short: a value whose `says` reads *"a long healthy
+  life … the God of War game"* otherwise owns *long* and *game*, and
+  matched a woodworking task on *long*). A value FITS a subject when it
+  owns a non-stopword word of four letters or more that the subject's
+  own title, location or material says. For `event-without-prep` the
+  order then names that value in so many words — `value:
+  /api/values/… (Making and building) — matched on "woodworking"` —
+  and for `value-with-no-live-outcome` the fit runs the other way: the
+  material is the open tasks and coming events that say one of the
+  value's words (a task's TITLE decides the match; a paragraph of
+  detail shares a word with everything), and a value with no such row
+  carries nothing live. When nothing fits, the order's WRITE block
+  becomes **journal-only**: *"No live value carries this. Write nothing
+  at the outcome door; in the journal say what value this would need,
+  in one sentence — that skip IS the answer."* The escape hatch stays
+  beside it, because an event that honestly needs nothing prepared is
+  the same answer. `verify` prints such an order as `JOURNAL-ONLY`
+  rather than `UNANSWERED`: no door write was ever asked for.
 - **`verify` grades the orders.** Next run it prints one line per
   order from the previous manifest — `ORDER <probe> <subject>:
   answered by <row>` or `UNANSWERED` — where *answered* means a row
@@ -179,12 +236,16 @@ Four rules hold the whole thing up:
 way a feed population is added: the probe itself in
 `scripts/sitting-run.sh` (a `jq` block appending one candidate object
 to `$CAND`, carrying `probe`, `rank`, `subject`, `subject_says`,
-`urgency_at`, `urgency_says`, `why`, `gate_query`, `material` and
+`urgency_at`, `urgency_says`, `why`, `gate_keys`, `material` and
 `write`), and its entry in the closed list in the block's own header
 comment. Give it the next `rank`; leave `material.gate` null and set
-`gate_query` if it wants Gate material, and the ceiling will fetch it
-only when the order actually ships. Nothing else changes: the render
-and the grading are generic over the shape.
+`gate_keys` (`<a line> | wm_keys`) if it wants Gate material, plus
+`gate_thread: true` for the household thread, and the ceiling will
+fetch both only when the order actually ships. `wm_value_fit(<the
+subject's words>; $values)` is there when the write it expects is an
+outcome. Nothing else changes: the render and the grading are generic
+over the shape, and a `write.kind` of `journal` renders and grades as
+journal-only.
 
 ## Running a sitting on Jules
 
