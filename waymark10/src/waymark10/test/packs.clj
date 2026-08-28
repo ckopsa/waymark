@@ -4615,13 +4615,25 @@
                                    (declared-name ctx :composition_request :answer)
                                    {:outcome_id (str aoid)}
                                    {:headers as-member}))))
-        ;; …and an agent does not mint one at all: a request is the
-        ;; rank's first tier, and a composer that could ask itself for
-        ;; one would put its own initiative where only a person's ask
-        ;; may stand
+        ;; …and an agent mints one only where a PERSON permissioned
+        ;; the door (waymark-sfe, the owner's ruling of 2026-08-28).
+        ;; A request is the rank's first tier, so an agent's own
+        ;; initiative may not put itself there: a leash that does not
+        ;; name the create door conceals it entirely. A leash that
+        ;; DOES name it exists only because a person approved an
+        ;; approval_request, so what it files is the person's pull on
+        ;; the person's instruction — law 6 intact, permissioned
+        ;; rather than disallowed.
+        ask-plural (:plural (rdef ctx :composition_request))
+        unpermissioned (when (and askable leashed)
+                         (req ctx :post (str "/api/" ask-plural)
+                              {}
+                              (assoc (leash! ctx (str "conformance-blind-" tag)
+                                             [{:kind "composition_request"
+                                               :actions []}])
+                                     "idempotency-key" (str "blind-" tag))))
         minted (when (and askable leashed)
-                 (req ctx :post (str "/api/"
-                                     (:plural (rdef ctx :composition_request)))
+                 (req ctx :post (str "/api/" ask-plural)
                       {}
                       (assoc (leash! ctx (str "conformance-asker-" tag)
                                      [{:kind "composition_request"
@@ -5044,10 +5056,20 @@
                   " staging answers one, or a request could be burned with"
                   " no outcome behind it"))
 
-       (and minted (= 201 (:status minted)))
-       (conj (str "feed: an AGENT minted a composition request — the cap"
-                  " walls the machine's initiative, and a composer that can"
-                  " ask itself for a third has walked around it"))
+       (and unpermissioned (not= 404 (:status unpermissioned)))
+       (conj (str "feed: an agent whose leash does not name the create door"
+                  " reached it anyway (" (:status unpermissioned)
+                  ") — a request is the rank's first tier, so an agent's own"
+                  " initiative may never put itself there; the door is"
+                  " CONCEALED, never narrated as refused"))
+
+       (and minted (not= 201 (:status minted)))
+       (conj (str "feed: an agent holding a leash that NAMES"
+                  " composition_request.create was refused ("
+                  (:status minted) "): " (pr-str (json ctx minted))
+                  " — a scope only a person can approve is the person's own"
+                  " pull delegated, and the door has to honour it"
+                  " (waymark-sfe)"))
 
        ;; ── the crown's rank (waymark-1uv.2) ──────────────────────
        ;; Law 5 at the crown: the rank is DATA on every answer, a

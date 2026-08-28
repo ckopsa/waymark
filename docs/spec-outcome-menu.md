@@ -3117,7 +3117,7 @@ and `answered_by` at the answer. Three walls:
 
 | wall | where | what it refuses |
 |---|---|---|
-| `only-a-person-asks` | create | an **agent**. A composer that could ask itself for a third outcome would have walked around the cap through the back door. `:system` stays admitted; the wall is about the composer. |
+| `only-a-person-asks` | create | an **agent whose grant does not admit `composition_request.create`** (`g/unless-granted`, since waymark-sfe / 2026-08-28; before that, every agent). A composer that could ask *itself* for a third outcome would have walked around the cap through the back door — and it still cannot, because a scope naming this door exists only where a person approved an `approval_request`, so what a holder files is the person's own pull. `:system` stays admitted; the wall is about the composer's initiative, not about its hand. |
 | `aims-at-a-value-this-house-holds` | create | an aim naming a value this house does not hold — `names-a-value`'s two states, so a request cannot admit an outcome past the cap for a retired value |
 | `answered-by-a-composition` | `answer` | **everyone but `outcome`'s own create** — see the seam below |
 
@@ -4253,7 +4253,11 @@ comment — now says *stands first in the crown* instead. `only-a-person-asks`
 keeps its wall with a new reason: an agent that could mint a request would
 put its own initiative in the tier only a person's ask may stand in, which is
 law 6 (*the system never spins for them*) read at the crown rather than at a
-cap.
+cap. *(Amended 2026-08-28, waymark-sfe: the wall is now a permission — an
+agent holding a grant that names `composition_request.create` may file the
+ask. Law 6 survives word for word, because the only way that scope exists is
+a person's approval of an `approval_request`; what an agent's own initiative
+reaches is still nothing.)*
 
 **The crown chip's rule, re-read — decided: the ask rides always.** jfv.20
 had `ask` ride only when the crown carded nothing (*answer what is there
