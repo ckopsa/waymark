@@ -44,28 +44,28 @@
 
 name: tests
 
+# ── NO PATHS FILTER: THE DIFF IS JUDGED INSIDE THE WORKFLOW ──────────
+#
+# This workflow used to carry a `paths:` filter and a mirror workflow
+# (tests-gate-skip.yml) with the complementary `paths-ignore:` list, so
+# that a docs-only PR still got an answer for the required check named
+# `gate`. That pairing has a hole: GitHub runs a `paths-ignore`
+# workflow when ANY changed file falls outside the ignore list, so a
+# MIXED diff — one .clj file and one script — triggered BOTH, and the
+# mirror's two-second green satisfied the required check while the real
+# suites were still running. PR #29 (2026-08-28) merged that way.
+#
+# So: no path filter anywhere. Every push and every PR starts this
+# workflow, the `changes` job below computes whether the diff touches
+# code, and `gate` — the one required check — is decided here, by the
+# same run that would have run the suites. The push filter went with
+# it: its purpose was cost, and a codeless push now costs one
+# ten-second `changes` job instead of a whole workflow, which is worth
+# more as a uniform signal than it saves.
 on:
   push:
     branches: [main]
-    paths:
-      - 'waymark10/**'
-      - 'calendar10/**'
-      - 'workqueue10/**'
-      - '.github/workflows/tests.yml'
-      # The composite action every job here runs through.
-      - '.github/actions/**'
-      # The scripts it and the jobs call: test databases, AOT, timings.
-      - '.github/scripts/**'
   pull_request:
-    paths:
-      - 'waymark10/**'
-      - 'calendar10/**'
-      - 'workqueue10/**'
-      - '.github/workflows/tests.yml'
-      # The composite action every job here runs through.
-      - '.github/actions/**'
-      # The scripts it and the jobs call: test databases, AOT, timings.
-      - '.github/scripts/**'
   workflow_dispatch:
     inputs:
       runner:
@@ -171,9 +171,76 @@ env:
   SHARDS_WORKQUEUE10: '3'
 
 jobs:
+  # ── DOES THIS DIFF CONCERN THE SUITES? ──────────────────────────────
+  #
+  # What the `paths:` filter used to answer, answered here instead —
+  # once, by a job whose result the `gate` job below can read. The list
+  # in the case statement is the old filter, verbatim; there is now only
+  # one copy of it, which is the point.
+  #
+  # ubuntu-latest deliberately, like `gate`: this does no work, and the
+  # entire run waits on it, so it must not queue behind the cluster's
+  # load.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.detect.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history: the diff is taken against the PR's base
+          # commit or the push's previous tip, and a shallow clone may
+          # hold neither.
+          fetch-depth: 0
+      - id: detect
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          say_yes () { echo "code=true" >> "$GITHUB_OUTPUT"; echo "$1"; exit 0; }
+
+          # A workflow_dispatch has no base, and a brand-new branch's
+          # first push reports the all-zeros sha. Both mean "no diff to
+          # narrow this down" — run everything rather than guess.
+          case "${BASE_SHA:-}" in
+            ''|0000000000000000000000000000000000000000) say_yes "no base commit for this event — running the suites" ;;
+          esac
+
+          have () { git cat-file -e "${1}^{commit}" 2>/dev/null; }
+          have "$BASE_SHA" || git fetch --no-tags --depth=1 origin "$BASE_SHA" 2>/dev/null || true
+          have "$HEAD_SHA" || git fetch --no-tags --depth=1 origin "$HEAD_SHA" 2>/dev/null || true
+          have "$BASE_SHA" || say_yes "base ${BASE_SHA} not reachable — running the suites"
+          have "$HEAD_SHA" || HEAD_SHA=HEAD
+
+          files=$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}")
+          echo "--- changed files ---"
+          echo "$files"
+          echo "---------------------"
+
+          code=false
+          while IFS= read -r f; do
+            [ -n "$f" ] || continue
+            case "$f" in
+              waymark10/*|calendar10/*|workqueue10/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
+                echo "code path: $f"
+                code=true ;;
+            esac
+          done <<< "$files"
+
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" = true ]; then
+            echo "this diff touches code — the suites run"
+          else
+            echo "no code paths in this diff — the suites are skipped"
+          fi
+
   # The cheap signal, first: neither of these needs a database, and a
   # declaration error should not wait behind a JVM suite to be told.
   quick:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     steps:
       - uses: actions/checkout@v4
@@ -189,6 +256,8 @@ jobs:
   # edit here. Namespaces come from paths: test/a/b_test.clj is
   # a.b-test, which is the convention every file in both suites follows.
   discover:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     outputs:
       waymark10: ${{ steps.split.outputs.waymark10 }}
@@ -284,7 +353,8 @@ jobs:
           PY
 
   test10:
-    needs: discover
+    needs: [changes, discover]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       # One shard failing must not hide the others: the point of a
@@ -391,7 +461,8 @@ jobs:
           retention-days: 3
 
   test-queue:
-    needs: discover
+    needs: [changes, discover]
+    if: needs.changes.outputs.code == 'true'
     runs-on: ${{ inputs.runner == 'github' && 'ubuntu-latest' || (vars.CI_RUNNER || 'ubuntu-latest') }}
     strategy:
       fail-fast: false
@@ -495,27 +566,53 @@ jobs:
   # Auto-merge waits on REQUIRED checks, and required checks are matched
   # by NAME — but the shard jobs' names are dynamic (test10 (shard N)),
   # so requiring them directly would break every time the shard count
-  # moves. This job is the stable name: it needs every suite, passes
-  # only when none failed or was cancelled, and is the ONLY check to
-  # mark required on main. Its mirror lives in tests-gate-skip.yml:
-  # a PR whose diff misses this workflow's paths filter never runs
-  # this job, and a required check that never reports blocks that PR
-  # forever at "Expected" — the mirror answers `gate` green for
-  # exactly those PRs (its paths-ignore list must stay identical to
-  # the pull_request paths list above). On a mixed diff both run and
-  # the real gate, finishing later, is the result that stands.
+  # moves. This job is the stable name: it needs every suite plus
+  # `changes`, and is the ONLY check to mark required on main.
+  #
+  # It is computed HERE, in the same run as the suites, rather than by a
+  # second workflow answering for the diffs this one skipped. That
+  # mirror (tests-gate-skip.yml, deleted 2026-08-28) used the
+  # complementary `paths-ignore:` list, and GitHub starts a
+  # `paths-ignore` workflow whenever ANY changed file falls outside the
+  # ignore list — so a MIXED diff started both, and the mirror's
+  # two-second green satisfied the required check while the real suites
+  # were still running. PR #29 merged that way. One workflow, one
+  # verdict, and a skipped suite on a code diff is a FAILURE here, not a
+  # pass.
   #
   # ubuntu-latest deliberately, not the CI_RUNNER expression: the gate
   # does no work, and the one check a merge waits on must not queue
   # behind the cluster's load.
   gate:
-    needs: [quick, test10, test-queue]
+    needs: [changes, quick, test10, test-queue]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Every suite green
+      - name: Decide
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CODE: ${{ needs.changes.outputs.code }}
+          QUICK: ${{ needs.quick.result }}
+          TEST10: ${{ needs.test10.result }}
+          TEST_QUEUE: ${{ needs.test-queue.result }}
         run: |
-          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]
+          set -euo pipefail
+          echo "changes=$CHANGES code=${CODE:-} quick=$QUICK test10=$TEST10 test-queue=$TEST_QUEUE"
+          if [ "$CHANGES" != "success" ]; then
+            echo "gate: FAIL — the changes job did not succeed ($CHANGES), so whether this diff touches code is unknown."
+            exit 1
+          fi
+          if [ "${CODE:-}" != "true" ]; then
+            echo "gate: PASS — no code paths in this diff; the suites have nothing to say."
+            exit 0
+          fi
+          for r in "$QUICK" "$TEST10" "$TEST_QUEUE"; do
+            if [ "$r" != "success" ]; then
+              echo "gate: FAIL — code changed and a suite did not succeed (quick=$QUICK test10=$TEST10 test-queue=$TEST_QUEUE)."
+              exit 1
+            fi
+          done
+          echo "gate: PASS — code changed and every suite succeeded."
 
   # ── ONE TABLE INSTEAD OF ELEVEN LOGS ────────────────────────────────
   #
