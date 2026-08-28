@@ -17,12 +17,16 @@ grant), which is the difference between this spec and spec-media.md's first
 draft: every field below was read off a real answer, and the two honest
 gaps were found rather than imagined.
 
-1. **`messa` speaks no time at all.** `messa__threads` answers
-   `"time": ""` for every thread, and `messa__read_messages` answers
-   `"time": null` and `"age": null` for every message. So the Google
-   Messages half of this mirror carries a `last_message_at` of nil, cannot
-   rank by recency, and can never produce an arrival. That is recorded, not
-   worked around: see "The messa gap".
+1. **`messa` spoke no time at all — fixed at the rig, 2026-08-28.**
+   `messa__threads` answered `"time": ""` for every thread, so the Google
+   Messages half of this mirror carried a `last_message_at` of nil, could
+   not rank by recency, and could never produce an arrival. The cause was
+   a selector in the rig that matched nothing; messa now reads Google's
+   own `mws-relative-timestamp` and publishes `last_message_at` as an
+   absolute instant. What remains true: `messa__read_messages` still
+   answers `"time": null` and `"age": null` for every message, and a
+   label the rig cannot read is still nil rather than a guess. See "The
+   messa gap".
 2. **Neither rig takes a `since=`.** `tgram__list_chats` and
    `messa__threads` take exactly `{limit, why}`. There is no cursor to
    bear, and this spec does not invent one — see fork (e).
@@ -251,11 +255,26 @@ There is no per-thread route on either rig, so — flickr's shape exactly —
 
 ### The messa gap
 
-Recorded loudly because it changes what the driver can do: messa threads
-carry `last_message_at` nil, so they never rank by recency and never become
-arrivals. They are still worth mirroring — they are ADDRESSES, which is the
-thesis, and a commitment found in the Kathy Peppas thread now has somewhere
-to point. The moment the rig speaks a time, this fills with no change here.
+Recorded loudly because it changed what the driver could do: messa threads
+carried `last_message_at` nil, so they never ranked by recency and never
+became arrivals. They were still worth mirroring — they are ADDRESSES,
+which is the thesis, and a commitment found in the Kathy Peppas thread has
+somewhere to point.
+
+**Closed 2026-08-28, and it did fill with no change here** — the sentence
+above was a prediction and it held. The rig was scraping `.timestamp,
+.date`, which matches nothing in Google Messages' DOM; it now reads the
+`mws-relative-timestamp` element and resolves the relative label ("9:05
+AM", "Yesterday", "Wed", "Aug 12") to an instant in the phone's zone.
+`sources/messa.clj` reads that field and canonicalizes it; `time` stays
+the human label and stays forbidden from the document.
+
+Two residues, because the gap narrowed rather than vanished. A date-only
+label resolves to **midday**, so a messa row older than today is accurate
+to the day and no finer — good enough for a seven-day window, not for
+ordering two threads on the same old day. And a label the rig cannot read
+answers **null, never a guess**: such a thread still carries nil, still
+never ranks, and still never arrives.
 
 ## The forks, decided
 
