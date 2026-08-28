@@ -1235,11 +1235,23 @@
   author also spells wins, exactly as :flow lets a directly declared
   action win — with one refusal, the same one :flow makes. An action
   also named by :actions is the double-declaration error (\"one home
-  per action\"), and so is an :on-create spelled beside a :decision
-  that already stamps at birth. The second refusal is the sugar's own
-  recorded limit: a decision kind that needs an extra birth stamp has
-  no spelling yet, because composing the two hooks would mint a
-  wrapper fn and a wrapper fn is a hash that moves for nothing.
+  per action\").
+
+  :on-create is the one slot that COMPOSES rather than refusing
+  (waymark-42m). The decision's own stamps run FIRST — the requester
+  is written before any authored hook can read it, and an authored
+  hook that wrote over it would be overwriting a fact, not filling a
+  blank — then the author's hook runs on the stamped row. The refusal
+  that stood here until 42m was recorded against a cost that no longer
+  exists: it said composing would mint a wrapper fn and \"a wrapper fn
+  is a hash that moves for nothing\", but :on-create rides NO
+  fingerprint facet (fingerprint-of projects machine, derived,
+  storage, shape, create, deviations and authority — never a birth
+  hook), and since waymark-j82 a bare fn hashes by its address anyway.
+  What demanded the composition is the insight kind: the address its
+  offer is reached at is DERIVED at birth from the kind and the id the
+  author already named, so no composer ever has to supply it, and a
+  decision kind had nowhere to put that derivation.
 
   Verdict arity is two or more, never one, and at least one verdict
   must leave the open state: a single-verdict decision is a task with
@@ -1274,10 +1286,6 @@
             (sugar-err kind ":decision"
                        (str "no verdict leaves " offered
                             " — a decision must be able to land somewhere")))
-          (when (:on-create rmap)
-            (sugar-err kind ":decision"
-                       (str ":on-create is also spelled — the decision already "
-                            "stamps " (name by) " at birth; one home per hook")))
           (let [decider-gs (decider-guards kind (or decider {}))
                 actions (into {}
                               (map (fn [v]
@@ -1334,7 +1342,13 @@
                         #(or % (into #{} (comp (map :to) (remove #{offered}))
                                      verdicts)))
                 (update :actions #(merge actions (or % {})))
-                (assoc :on-create (decision-on-create by expires))
+                ;; the stamps first, then the author's own hook — see
+                ;; the docstring's :on-create paragraph
+                (assoc :on-create
+                       (let [stamp (decision-on-create by expires)]
+                         (if-some [own (:on-create rmap)]
+                           (fn birth [row ctx] (own (stamp row ctx) ctx))
+                           stamp)))
                 (update :create-guards
                         (fn [gs]
                           (cond-> (vec gs)

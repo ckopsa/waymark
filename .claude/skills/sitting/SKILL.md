@@ -58,8 +58,15 @@ the rows it is about, and the one light next step it points at
 (`offer_kind` / `offer_action` / `offer_id` — usually a door on the
 outcome the thread sits on, or on the person or event it names).
 `cites-what-it-claims` and `offers-something-light` refuse anything
-less. Then compose *from* the insight and cite it. State the fact,
-never judge it; a question or a thanks indexes nothing.
+less. **Light means the door asks for NOTHING** — `complete` on a
+task, `take_it_back` on a tickler, `still_stands` on a value. A door
+that takes input is refused however natural it reads: `prioritize`
+wants a rank, and a card offers a decision, never a form. Prepared
+input is an outcome PIECE's business, not a finding's. Those three
+fields are all you send — the address is derived from the kind and
+the id, so never spell `offer_href`. Then compose *from* the insight
+and cite it. State the fact, never judge it; a question or a thanks
+indexes nothing.
 
 ## 3. Answer the pulls
 
@@ -137,9 +144,11 @@ citing the `verdict_reason` row and quoting its word — or saying "no
 reason given" and citing the outcome when none stands (the
 `no-burial-without-a-diagnosis` wall demands the citation) — only
 for a decline that still owes one, never twice — whose offered step
-is a door a *standing* row admits now (a prior's evidence task,
-`prioritize`); the declined prior is terminal and admits none, so
-`expire`/`retire` on it is burial, not a step. Respect the
+is a no-input door a *standing* row admits now (a prior's evidence
+task, `complete`); never `prioritize`, which takes a rank and is
+refused at the insight door — a rank belongs in an outcome piece.
+The declined prior is terminal and admits none, so `expire`/`retire`
+on it is burial, not a step. Respect the
 recomposition floor the prior verdict set. A decline for timing means hold things ready, not hours.
 
 ## 7. The unanswered turn

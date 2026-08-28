@@ -166,7 +166,13 @@ holding your place in it.
    related row), whose `finding` is the context that makes the task
    actionable — what it is really for, where/when/with what, its real
    next physical step — and whose `offer_kind`/`offer_id`/
-   `offer_action` names the task's own next door. This ANNOTATES the
+   `offer_action` names the task's own next door — a door that asks
+   for NOTHING (`complete` is the usual one on a task), because
+   `offers-something-light` refuses anything a card cannot answer in a
+   tap. `prioritize` takes a rank, so it is refused here however well
+   it reads; a rank is prepared input and prepared input is an outcome
+   PIECE's business. You never send `offer_href`: the engine derives
+   the address from the kind and the id you named. This ANNOTATES the
    task beside it; it never edits the task's fields, because only the
    household edits its own rows. An enrichment that does not change
    whether the task is actionable is not worth writing.
@@ -204,10 +210,12 @@ holding your place in it.
    diagnose nothing). A diagnosis cites the `verdict_reason` row and
    quotes its word (wrong_time is not wrong_piece is not never_this);
    an empty `reasons` means say "declined, no reason given" and cite
-   the outcome. Its offered step is a door a STANDING row admits now
-   (the manifest's `offer_candidates` — `prioritize` on a standing
-   task is the usual shape); the declined prior is terminal and admits
-   none, so `expire`/`retire` on it is burial, not a step.
+   the outcome. Its offered step is a NO-INPUT door a STANDING row
+   admits now (the manifest's `offer_candidates` — `complete` on a
+   standing task is the usual shape; `prioritize` asks for a rank, so
+   the insight door refuses it and the rank belongs in an outcome
+   PIECE); the declined prior is terminal and admits none, so
+   `expire`/`retire` on it is burial, not a step.
 
    If nothing arrived and no bare task is worth enriching, a run that
    writes nothing is a lawful no-op — journal nothing and leave.

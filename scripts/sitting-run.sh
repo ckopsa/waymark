@@ -392,10 +392,24 @@ jq --slurpfile full "$R/outcomes.full.json" '
 
 # every row the snapshot holds, by address — the lookup an offered step
 # needs (a step is a door on a row that STANDS; a declined outcome
-# admits none, and a diagnosis that offers one is dead on arrival)
+# admits none, and a diagnosis that offers one is dead on arrival).
+# light_doors is the SHORTLIST an insight's offer may name (waymark-42m):
+# offers-something-light admits nothing heavier than a selection, so a
+# door whose rendered effort is assent or selection is offerable and
+# every other door is a form. Read off the row's own envelope, because
+# effort is the engine's word, not ours.
 for f in "$R"/*.json; do
-  jq -c 'if type=="array" then .[] | select(.self? and .kind?) | {self, kind, state} else empty end' "$f" 2>/dev/null
-done | jq -s 'unique_by(.self)' > "$D/all_rows.json"
+  jq -c 'if type=="array" then .[] | select(.self? and .kind?)
+         | {self, kind, state,
+            light_doors: [ (.actions // {}) | to_entries[]
+                           | select((.value.effort // "recall")
+                                    | . == "assent" or . == "selection")
+                           | .key ]}
+         else empty end' "$f" 2>/dev/null
+done | jq -s 'group_by(.self) | map(reduce .[] as $r ({};
+                (.light_doors // []) as $seen
+                | . * $r
+                | .light_doors = ($seen + ($r.light_doors // []) | unique)))' > "$D/all_rows.json"
 
 # the declines, with the house's own words and whether a diagnosis stands
 jq --slurpfile reasons "$R/verdict_reasons.full.json" --slurpfile cited "$D/insight_cited.json" \
@@ -417,7 +431,8 @@ jq --slurpfile reasons "$R/verdict_reasons.full.json" --slurpfile cited "$D/insi
                                 | $all[] | select(.self == $e)
                                 | select(.kind != "outcome" and .kind != "journal" and .kind != "insight")
                                 | .state as $st | select(($terminal | index($st)) == null)
-                                | {self, kind, state, doors: ($res[.kind].actions // [])} ],
+                                | {self, kind, state, doors: ($res[.kind].actions // []),
+                                   light_doors: (.light_doors // [])} ],
             diagnosis_stands: ($c | index($sf) != null)}
          | .cite = ([.self] + (if .value then [.value] else [] end)
                     + [ .reasons[].self ] + [ .pieces[].self ])]
@@ -687,8 +702,8 @@ jq -n \
   echo "  (a note's evidence is the whole cite list — a score read off the headline alone is not a judgment)"
   echo
   echo "## Declines OWED a diagnosis — publish one each, then nothing more"
-  jq -r '[.declines[] | select(.diagnosis_stands|not)] | if length==0 then "  (none — every decline already carries one; DIAGNOSE NOTHING this sitting)" else (.[] | "- \(.self) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])\n    cite: \(.cite|tostring)\n    offer one of: \(if (.offer_candidates|length)==0 then "(no standing row to offer a door on — cite the outcome and offer nothing forward; do not offer a door on the declined prior)" else ([.offer_candidates[] | "\(.self) [\(.kind) \(.state)] doors \(.doors|tostring)"] | join("; ")) end)") end' "$RUN/manifest.json"
-  echo "  (quote the reason row you cite; reasons=[] means say \"no reason given\" and cite the outcome. The offered step is a door the offered row admits NOW — the declined prior admits none, so expire/retire on it is not a step, it is burial)"
+  jq -r '[.declines[] | select(.diagnosis_stands|not)] | if length==0 then "  (none — every decline already carries one; DIAGNOSE NOTHING this sitting)" else (.[] | "- \(.self) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])\n    cite: \(.cite|tostring)\n    offer one of: \(if (.offer_candidates|length)==0 then "(no standing row to offer a door on — cite the outcome and offer nothing forward; do not offer a door on the declined prior)" else ([.offer_candidates[] | "\(.self) [\(.kind) \(.state)] tappable doors \((if (.light_doors|length)>0 then .light_doors else ["(none seen — read the row)"] end)|tostring) (all: \(.doors|tostring))"] | join("; ")) end)") end' "$RUN/manifest.json"
+  echo "  (quote the reason row you cite; reasons=[] means say \"no reason given\" and cite the outcome. The offered step is a TAPPABLE door the offered row admits NOW — offers-something-light refuses anything that takes input, prioritize included, so a rank goes in an outcome piece. The declined prior admits none, so expire/retire on it is not a step, it is burial)"
   echo
   echo "## Declines already diagnosed — nothing to do"
   jq -r '[.declines[] | select(.diagnosis_stands)] | if length==0 then "  (none)" else (.[] | "- \(.self) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])") end' "$RUN/manifest.json"

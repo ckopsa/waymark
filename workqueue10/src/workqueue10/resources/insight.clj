@@ -20,6 +20,22 @@
     place the feed's ≤-selection rule is a DOOR rather than a
     projection, because it is the one place a verb is DECLARED
     (by the author, in data) rather than inherited from a row.
+    A door that takes typing is not an offer: `task.prioritize` asks
+    for a rank, which renders `recall`, and it is refused here however
+    natural it reads in a sentence. Prepared input belongs in an
+    outcome PIECE, which is where the house lets a composer type on
+    somebody's behalf; a card offers a decision.
+  - THE ADDRESS IS DERIVED, NEVER ASKED FOR (waymark-42m). An offer's
+    href was declared hidden and required in the same breath: the
+    guard refused a finding for omitting a field the composer's own
+    form never showed it, and a sitting burned three refusals on it.
+    `derive-the-offer-address` now writes `/api/<plural>/<id>` at
+    birth from the kind and id the author already named, so the
+    hidden field is hidden because nobody need supply it. An href the
+    author DOES supply is still checked against that pair — naming
+    one row and linking another is the one thing this field can still
+    get wrong, and the refusal names the address the row actually
+    lives at.
   - RANKED, NOT CAPPED. Until waymark-1uv.8 a third wall stood here:
     `insights-are-capped`, three findings a day per author, *the wall
     that makes the compiler rank instead of dump*. It was the
@@ -170,7 +186,7 @@
   {:judges [:offer_kind :offer_id :offer_action :offer_href]
    :reads [:storage]
    :vars [:problem]
-   :open "An insight offers one next step: a kind and an action this house declares, an action light enough to tap, and the row's own address to reach it at."
+   :open "An insight offers one next step: a kind and an action this house declares, on a row it names, and the action light enough to tap. The address the card reaches it at is derived from that pair — supply one only if it says the same thing."
    :explain "That offer is not something the house can do in a tap: {problem}"}
   [_row inp ctx]
   (let [rdef-of (:rdef-of ctx)
@@ -220,9 +236,12 @@
                          " Offer something tappable and let the row's"
                          " own screen take the typing."))
 
-              (nil? href)
-              (deny (str "it gives no address. The card has to be able to"
-                         " REACH the offer: /api/" (:plural rd) "/" oid "."))
+              ;; NO ADDRESS IS NOT A REFUSAL any more (waymark-42m):
+              ;; the kind and the id ARE the address, and
+              ;; `derive-the-offer-address` writes it at birth. The
+              ;; wall that stood here refused a composer for omitting a
+              ;; field the create form hides from it.
+              (nil? href) (t/allow)
 
               (not= {:plural (:plural rd) :id oid} (row-address href))
               (deny (str "the address " (pr-str href) " is not where that"
@@ -230,6 +249,37 @@
                          (:plural rd) "/" oid "."))
 
               :else (t/allow))))))))
+
+;; ── the address, derived at birth ───────────────────────────────────
+
+(defn- derive-the-offer-address
+  "The offer's href, written from the pair the author already named
+  (waymark-42m). `/api/<plural>/<id>` is the one address shape this
+  house speaks — `row-address` above reads it, `feed/screen-of`
+  prefixes it, and the registry is what turns a kind token into its
+  plural — so asking a composer to spell it a second time was asking
+  it to repeat the engine back to itself, through a field the create
+  form declares hidden.
+
+  Fills a BLANK only: an href the author supplied stands, and
+  `offers-something-light` has already refused it if it points
+  somewhere else. Silent when the kind is one this house does not
+  serve or the id is missing — the guard refused that finding before
+  this hook ever ran, and a hook that invented an address for a
+  refused row would be writing fiction.
+
+  It runs beside the decision sugar's own birth stamp (`:authored_by`
+  from the principal), which lands first — resource.clj's
+  desugar-decision composes the two in that order."
+  [row ctx]
+  (let [{:keys [offer_kind offer_id offer_href]} (:data row)
+        rdef-of (:rdef-of ctx)
+        kind (some-> offer_kind str str/trim not-empty)
+        oid (some-> offer_id str str/trim not-empty)
+        rd (when (and rdef-of kind) (rdef-of kind))]
+    (if (and rd oid (str/blank? (str offer_href)))
+      (assoc-in row [:data :offer_href] (str "/api/" (:plural rd) "/" oid))
+      row)))
 
 ;; ── the law, written down as scenarios ──────────────────────────────
 ;;
@@ -329,6 +379,60 @@
              :offer_action "still_stands"
              :offer_href "/api/values/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"}
    :expect  {:allowed true}})
+
+(defscenario an-offer-needs-no-address
+  "The kind and the id ARE the address, so a composer that names them
+   has said everything. This is waymark-42m's own scenario: the
+   create form declares `offer_href` hidden, and the guard used to
+   refuse the finding for leaving it blank — a wall a composer could
+   not see and could only learn by hitting. Now the pair is enough
+   and the engine writes the href at birth."
+  {:kind    :insight
+   :attempt :create
+   :at      "2026-08-28T09:00:00Z"
+   :as      {:id "compiler" :type :agent}
+   :input   {:finding "The porch project has not moved since June, and the reminder is still standing"
+             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :offer_kind "tickler"
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_action "take_it_back"}
+   :expect  {:allowed true}})
+
+(defscenario an-offer-points-at-its-own-row
+  "An address the author DOES spell must be the row's own. Naming one
+   row and linking another is the one thing this field can still get
+   wrong — the card would send a reader somewhere the finding never
+   claimed anything about — and the refusal names where the row
+   actually lives."
+  {:kind    :insight
+   :attempt :create
+   :at      "2026-08-28T09:00:00Z"
+   :as      {:id "compiler" :type :agent}
+   :input   {:finding "The porch project has not moved since June"
+             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :offer_kind "tickler"
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_action "take_it_back"
+             :offer_href "/api/tasks/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"}
+   :expect  {:refused :offers-something-light}})
+
+(defscenario a-form-is-not-a-tap
+  "`task.prioritize` reads like the obvious next step and is not one:
+   it takes a rank, the rank renders `recall`, and a card that
+   collects a number is a form. The refusal is the ≤-selection rule
+   doing its one door's worth of work — and it is why prepared input
+   lives in an outcome PIECE, where a composer may type on the
+   household's behalf, rather than in a finding's offer."
+  {:kind    :insight
+   :attempt :create
+   :at      "2026-08-28T09:00:00Z"
+   :as      {:id "compiler" :type :agent}
+   :input   {:finding "The dentist call has sat unranked at the tail of the queue for three weeks"
+             :evidence ["/api/tasks/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :offer_kind "task"
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_action "prioritize"}
+   :expect  {:refused :offers-something-light}})
 
 ;; ── :insight — the finding, with a next step attached ───────────────
 
@@ -441,10 +545,15 @@
     [:offer_action {:optional true
                     :x-display
                     {:label "The next step"
-                     :help "The action's own name on that kind — the one thing you are proposing somebody do. It has to be light enough to tap: a decision, never a form."}}
+                     :help "The action's own name on that kind — the one thing you are proposing somebody do. It has to be light enough to tap: a decision, never a form. A door that asks for nothing (complete, take_it_back, still_stands) is offerable; one that takes input is not, so prioritize — which wants a rank — belongs in an outcome piece instead."}}
      [:maybe [:string {:max 64}]]]
+    ;; HIDDEN BECAUSE IT IS DERIVED, not because it is secret
+    ;; (waymark-42m): `derive-the-offer-address` writes it at birth
+    ;; from the two fields above. It stays writable so a caller that
+    ;; already holds the address may say it — and be held to it.
     [:offer_href {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 200}]]]]
+   :on-create derive-the-offer-address
    ;; shape, and only shape: a malformed finding hears what is wrong
    ;; with it, and a well-formed one is published however many came
    ;; before it today — the feed's rank, not a wall here, decides
@@ -453,5 +562,8 @@
    :scenarios [no-citation-no-publish
                no-offered-action-no-publish
                a-value-may-be-petitioned
+               an-offer-needs-no-address
+               an-offer-points-at-its-own-row
+               a-form-is-not-a-tap
                the-finder-does-not-decide
                a-dismissed-finding-does-not-come-back]})
