@@ -202,7 +202,11 @@ holding your place in it.
    `tgram__search_all_chats`, `messa__threads` and kin). What you
    learn there is evidence to ACT on, never an address to cite: cite
    the house rows it points at and name the source in the prose ("from
-   an email of Aug 20"). Never copy a message body into a row; never
+   an email of Aug 20"). **A chat is cited by its thread row** — the
+   conversation itself is a row now (`/api/threads/<id>`, listed under
+   `conversations` in the manifest), so a fact found in one cites that
+   address plus the person rows the thread names, and the words stay in
+   the prose. Never copy a message body into a row; never
    send or move anything — read tools only. When the grant admits no
    Gate tool the manifest names the anchored ask that opens it.
 

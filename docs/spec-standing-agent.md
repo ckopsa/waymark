@@ -151,14 +151,25 @@ tie-break:
    material is read-only and `cites-what-it-claims` means an insight
    must name a house address, so a commitment found only in a message
    has exactly ONE lawful landing — a **piece** inside an outcome
-   whose evidence cites house rows. The person who said it is such a
-   row (only `companion_id` needs affirmation; a person row is a
-   lawful evidence address), and the source is named in the prose —
-   *"from Wellesley's text of Aug 27"* — never copied into a row. The
-   probe reads the last seven days of the household thread whole and
-   asks the inbox for everything `SINCE` that date, keeps the lines
-   that say **both** a WHEN and an ASK, drops the ones the house
-   already holds, and emits at most ONE order per run.
+   whose evidence cites house rows. The probe reads the last seven
+   days of the chosen conversations whole (see *thread selection*,
+   below) and asks the inbox for everything `SINCE` that date, keeps
+   the lines that say **both** a WHEN and an ASK, drops the ones the
+   house already holds, and emits at most ONE order per run.
+
+   **The order anchors on the THREAD ROW** (waymark-36s). Until the
+   `:thread` kind existed the chat had no address, so the order
+   anchored on whichever companion the traffic happened to name, the
+   conversation lived in prose, and when no companion was named there
+   was **no order at all** — the fact was simply dropped. Now the
+   subject is `/api/threads/<id>` and the evidence is that thread plus
+   the person rows it names. The inbox arm keeps the old law exactly
+   where it is still the only one: mail is not a conversation this
+   house holds a row for, so those lines still anchor on the person
+   (only `companion_id` needs affirmation; a person row is a lawful
+   evidence address). Either way the message body is never copied into
+   a row — the source is named in the prose, *"from the Bros. thread,
+   Aug 25"*, and paraphrase is the law.
 3. `bare-task-due-soon` — an open, detail-less task no outcome or
    insight speaks for, nearest `due_at` first. Material: the task's
    full row, the open tasks sharing its `task_list` or assignee, and
@@ -276,6 +287,15 @@ These rules hold the whole thing up:
   self-diff, then to nothing for that kind, and the manifest prints
   which basis each kind got, because *"no arrivals"* and *"we could
   not tell"* are different sentences.
+- **A conversation that MOVED is the second arm a clock can see**
+  (waymark-36s). A thread row is created once and then it moves, so the
+  creation diff above can never see one: what makes it an arrival is
+  its `last_message_at` crossing the watermark — *"something was said
+  in the Bros. thread"*, with a read work order. It sits beside the
+  unanswered turn for the same reason that one does: it is still owed
+  an answer. A rig that answers no timestamp for its threads (the
+  phone's texts do not) can contribute no arrival, and the basis line
+  says exactly that rather than reading as quiet.
 - **The crowd-out line** (waymark-q23). Machine dedupe is right and it
   can also leave nothing to do: on 2026-08-28 thirty-one standing
   offered bundles cited every one of the sixteen open tasks, so no
@@ -338,16 +358,41 @@ These rules hold the whole thing up:
   empty, which keeps the three-hits-per-rig cap exactly where it was.
   The manifest prints what was searched (`searched "Gallagher"`), so a
   fruitless probe is legible rather than mysterious. An **event** order
-  also carries the last seven days of ONE named thread, because what an
-  event needs beforehand is said where a household says it and no
-  keyword search sees *"what time tomorrow?"*: the per-chat history
-  tool is the one in `gate.json` whose only required argument is a chat
-  id, its listing partner is the argument-free tool on the same rig
-  that lists chats, and the chat is a roster companion's thread when
-  the roster names one, else the most recently active thread that is
-  not a bot. Of that week the manifest keeps the three messages that
-  say one of the keys, or the three most recent when none does. No such
-  pair of tools means no thread material, which is not a fault.
+  also carries the last seven days of the chosen threads, because what
+  an event needs beforehand is said where a household says it and no
+  keyword search sees *"what time tomorrow?"*. Of each week the
+  manifest keeps the three messages that say one of the keys, or the
+  three most recent when none does.
+- **Thread selection is a READ, not a heuristic** (waymark-36s). The
+  rule is one sentence: **every `/api/threads` row whose
+  `last_message_at` falls inside the seven-day window, ranked newest
+  first, capped at `WAYMARK_THREADS` (4), groups included.** Nothing is
+  matched against the roster, because a conversation does not need a
+  companion to be worth reading — that was the bug: the old heuristic
+  took the most recently active 1:1 chat whose title matched a
+  companion, read ONE thread out of ten and never a group, which is how
+  the Utah Kopsas group carried an unanswered birthday invitation
+  straight past a sitting. The confluence's source tag IS the Gate rig's
+  prefix, so a row says which rig to ask; the per-chat history tool is
+  still the one in `gate.json` whose only required argument is a chat
+  id, and the row's title and its rig-local id are both tried because
+  which handle a rig answers to is the rig's business.
+
+  A house that does not serve the kind yet degrades to the old
+  heuristic and **says so**: the manifest's `conversations.basis` reads
+  either `rows — …` or `heuristic (the thread kind is not served yet)
+  — …`. "We could not tell" and "there was nothing" are different
+  sentences, and a reader must never have to infer which one produced
+  the material.
+- **A picture is a fact.** Both rigs answer an EMPTY text for a
+  media-only message, so a photo used to render as a bare timestamp and
+  read as nothing at all. It renders `[picture]` with its date and
+  sender — not a body, just the fact that one was sent.
+- **Sender ids read back as names.** `tgram__get_messages` answers
+  sender ids and no names at all, but a DIRECT thread row's external id
+  IS the peer's sender id — so the mirrored rows are the directory the
+  rig will not answer. An id the house has no row for stands as the
+  number.
 - **Value-fit before an outcome is ordered** (waymark-jux). The same
   first work order demanded *"one OUTCOME naming a value from the live
   list"* as though every event maps onto some live value; a friend's

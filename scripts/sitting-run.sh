@@ -35,7 +35,9 @@
 # WAYMARK_MAX_HYDRATE (120), WAYMARK_NO_GATE_PROBE (unset — set it to
 # skip the one-read-per-rig Gate liveness probe AND the Gate material
 # the work-order probes fetch), WAYMARK_WORK_ORDERS (2 — the ceiling on
-# how many work orders the manifest presents).
+# how many work orders the manifest presents), WAYMARK_THREADS (4 — how
+# many of the household's conversations a sitting reads; the newest
+# four with activity in the window, groups included).
 #
 # A refusal is the end of the run: this script never knocks, never
 # spends re-entry, never invents another way in. It prints the door's
@@ -435,6 +437,16 @@ collection task_lists  "/api/task_lists"
 collection chore_runs  "/api/chore_runs"
 collection events      "/api/events"
 collection media       "/api/media"
+# the household's CONVERSATIONS, as rows (waymark-36s). This read is
+# what turns thread selection from a guess into a query: every chat is
+# an address, so a fact said in one can be CITED instead of described.
+# It is named chat_threads because `threads` is already the derived
+# list of remark turns, two concepts one word apart.
+# A house that has not deployed the kind yet answers the concealment
+# 404, this degrades to [], and every thread-shaped step below says so
+# rather than pretending — "we could not tell" and "there was nothing"
+# are different sentences.
+collection chat_threads "/api/threads"
 collection verdict_reasons "/api/verdict_reasons"
 collection feed_recipes    "/api/feed_recipes"
 # 6. the threads — one whole-kind read beats a read per subject
@@ -449,7 +461,7 @@ states journals      "/api/journals?owner=$PRINCIPAL" written amended
 collection approval_requests "/api/approval_requests?grant_id=$GRANT"
 doc grant "/api/grants/$GRANT"
 
-for k in composition_requests values people outcomes outcome_pieces insights ranking_notes remarks verdict_reasons journals; do
+for k in composition_requests values people outcomes outcome_pieces insights ranking_notes remarks verdict_reasons journals chat_threads; do
   hydrate "$k"
 done
 
@@ -766,6 +778,41 @@ if jq --slurpfile th "$D/unanswered_threads.json" --slurpfile full "$R/remarks.f
      ([ ($th[0] // [])[] | .last.self ]) as $ends
      | . + [ ($full[0] // [])[] | .self as $sf | select(($ends | index($sf)) != null) ]
    ' "$ARR_ACC" > "$ARR_ACC.m" 2>/dev/null; then mv "$ARR_ACC.m" "$ARR_ACC"; fi
+# …and the CONVERSATIONS THAT MOVED (waymark-36s). A thread row is
+# created once and then it moves, so the creation diff above can never
+# see one: what makes a thread an arrival is its last_message_at
+# crossing the watermark. It is declared here beside the unanswered turn
+# for the same reason that one is — the second thing a clock CAN see,
+# and still owed an answer. The row's own timestamp replaces meta's for
+# ordering (a resync bumps updated_at; only last_message_at means
+# somebody spoke), and the title becomes the sentence.
+if jq --slurpfile th "$R/chat_threads.full.json" --arg since "$SINCE_ARR" '
+     . + [ ($th[0] // [])[] | . as $t | (($t.data.last_message_at) // "") as $at
+           | select($at != "" and (($at | .[0:19]) > ($since | .[0:19])))
+           | $t
+             + {meta: (($t.meta // {}) + {updated_at: $at})}
+             + {display: (($t.display // {})
+                          + {title: ("something was said in "
+                                     + ($t.data.title // "a conversation"))})} ]
+   ' "$ARR_ACC" > "$ARR_ACC.m" 2>/dev/null; then mv "$ARR_ACC.m" "$ARR_ACC"; fi
+# which basis THAT arm got, said out loud like every other kind's: a
+# rig that answers no timestamp for its threads (the phone's texts do
+# not) can contribute no arrival, and that is not the same as quiet.
+jq -nc --slurpfile th "$R/chat_threads.full.json" \
+   --argjson dated "$(jq '[.[] | select((.data.last_message_at // "") != "")] | length' \
+                        "$R/chat_threads.full.json" 2>/dev/null || echo 0)" \
+   --argjson n "$(jq --arg since "$SINCE_ARR" \
+                     '[.[] | select(((.data.last_message_at // "") != "")
+                                    and ((.data.last_message_at | .[0:19]) > ($since | .[0:19])))] | length' \
+                     "$R/chat_threads.full.json" 2>/dev/null || echo 0)" '
+  (($th[0] // []) | length) as $rows
+  | {kind:"chat_threads",
+     read_from:(if $rows == 0
+                then "nothing — this house serves no /api/threads yet, so a conversation that moved cannot be seen from here"
+                else ("the thread row own last_message_at (" + ($dated|tostring)
+                      + " of " + ($rows|tostring)
+                      + " rows carry one; a rig that answers no time contributes none)") end),
+     created_since:$n}' >> "$D/arrivals_basis.jsonl" 2>/dev/null || true
 jq 'unique_by(.self)
     | map({self, kind, state, at:(.meta.updated_at // null),
            says:((.display.title // .summary // "") | .[0:160])})
@@ -989,6 +1036,70 @@ SESSION_WD="$(TZ="$HOUSE_TZ" date -d "$SESSION_DATE" +%A 2>/dev/null || echo "th
 PROBE_ERRS="$D/probe_errors.log"; : > "$PROBE_ERRS"
 probe_stumbled() { echo "  ! probe $1 stumbled — see $PROBE_ERRS" >&2; }
 
+# ── WHICH CONVERSATIONS THIS SITTING READS (waymark-36s) ─────────────
+# Until the :thread kind existed this was a heuristic, and the
+# heuristic was wrong in a way nobody could see from the manifest: take
+# the most recently active 1:1 chat whose title matched a roster
+# companion, else the most recent non-bot chat. ONE thread out of ten,
+# and never a group — which is how the Utah Kopsas group carried an
+# unanswered birthday invitation straight past a sitting.
+#
+# Now it is a READ, and the rule is one sentence: every thread ROW
+# whose last_message_at falls inside the window, ranked newest first,
+# capped at WAYMARK_THREADS, GROUPS INCLUDED. Nothing is matched
+# against the roster, because a conversation does not need a companion
+# to be worth reading — that was the bug.
+#
+# The confluence's source TAG is the Gate rig's own prefix ("tgram",
+# "messa"), so a row says which rig to ask without anything here
+# mapping between the two vocabularies.
+#
+# A rig that answers no timestamp for its threads (the phone's texts do
+# not — verified) contributes no candidate, and that is not a fault:
+# its rows are still addresses a work order can cite.
+THREADS_CAP="${WAYMARK_THREADS:-4}"
+case "$THREADS_CAP" in ''|*[!0-9]*) THREADS_CAP=4 ;; esac
+jq --arg since "$SINCE_7D" --argjson cap "$THREADS_CAP" '
+  [ .[] | . as $t | ($t.data // {}) as $d
+    | select((($d.last_message_at) // "") != "")
+    | select(($d.last_message_at | .[0:19]) >= ($since | .[0:19]))
+    | {self:$t.self, title:($d.title // ""),
+       source:($d.source // ""),
+       chat_kind:($d.chat_kind // null),
+       at:$d.last_message_at,
+       # the rig own handle, unwrapped from the confluence namespacing
+       handle:((($d.external_id) // "") | split(":") | .[1:] | join(":")),
+       names:($d.participant_names // []),
+       # the PEOPLE this conversation names, as house addresses — the
+       # evidence a commitment found in it is cited with
+       people:[ ($d.participants // [])[] | "/api/people/" + . ]} ]
+  | sort_by(.at) | reverse | .[0:$cap]
+' "$R/chat_threads.full.json" > "$D/chat_selection.json" 2>>"$PROBE_ERRS" \
+  || echo '[]' > "$D/chat_selection.json"
+
+# THE SENDER DIRECTORY, which the rows buy for nothing. tgram answers
+# sender IDS and no names at all, so a group's week used to render as
+# numbers. But a DIRECT chat's external id IS the peer's sender id —
+# so the mirrored rows are the only place that question is answerable,
+# and no name appears here that the rig did not already hand us as a
+# chat title.
+jq '[ .[] | (.data // {}) as $d
+      | select(($d.chat_kind // "") == "direct")
+      | {id: ((($d.external_id) // "") | split(":") | .[1:] | join(":")),
+         name: ($d.title // "")}
+      | select((.id | length) > 0 and (.name | length) > 0
+               and (.id | test("^[0-9]+$"))) ]' \
+   "$R/chat_threads.full.json" > "$D/chat_senders.json" 2>>"$PROBE_ERRS" \
+  || echo '[]' > "$D/chat_senders.json"
+
+# what the manifest says about HOW the threads were chosen — the
+# degradation is announced, never silent
+if [ "$(jq 'length' "$R/chat_threads.full.json" 2>/dev/null || echo 0)" -gt 0 ]; then
+  THREAD_BASIS="rows — every /api/threads row with activity in the last seven days, newest first, groups included, capped at $THREADS_CAP"
+else
+  THREAD_BASIS="heuristic (the thread kind is not served yet) — one chat picked from Gate's own listing: a roster companion's 1:1 thread if the listing names one, else the most recently active non-bot chat"
+fi
+
 # ── the words: search keys, and whether a value touches a subject ────
 # THE SHORT KEY (waymark-jux). The first real work order queried both
 # rigs with the whole event title — "Breakfast with Kev Gallagher" —
@@ -1111,12 +1222,34 @@ JQ_ROWS='
     if type == "object"
     then ([ (.date // .last_message_date // .Date // .received // empty),
             (.from // .sender_name // .sender // .chat_title // .title
-             // .From // .thread_hash // empty),
-            (.subject // .Subject // .text // .snippet // .preview
-             // .last_message_preview // .body // empty) ]
+             // .From // .thread_hash
+             # tgram answers sender IDS and no names at all; the id is
+             # a handle the sender directory turns back into a name
+             # (wm_names, below), and a bare number beats no sender
+             // (if (.sender_id != null) then (.sender_id | tostring) else null end)
+             // empty),
+            ((.subject // .Subject // .text // .snippet // .preview
+              // .last_message_preview // .body // empty)
+             | tostring
+             # A MEDIA-ONLY MESSAGE (waymark-36s). Both rigs answer an
+             # EMPTY text for a picture, so a photo used to render as a
+             # bare timestamp and read as nothing at all — a week of a
+             # family thread came back looking half empty. "[picture]"
+             # is not a body: it is the FACT that one was sent, which
+             # is the part a sitting needs. Only an object that HAS one
+             # of those keys reaches this, so a chat listing entry
+             # never grows a picture it does not have.
+             | if length == 0 then "[picture]" else . end) ]
           | map(tostring) | map(select(length > 0)) | join(" | ")) as $l
          | (if ($l | length) > 0 then $l else tostring end)
     else tostring end;
+  # a rendered line with its sender ids read back as names, from the
+  # directory the mirrored direct chats are (waymark-36s). No opinion
+  # when the house has no row for the id: the number stands, which is
+  # still better than the nothing it used to say.
+  def wm_names($senders):
+    reduce ($senders[] | select((.id | length) > 3)) as $s
+      (.; gsub($s.id; $s.name));
   def wm_trim: gsub("\\s+"; " ") | .[0:200];
 '
 
@@ -1218,23 +1351,28 @@ gate_search() { # gate_search <outfile.json> <imap-prefix> <key> [key]
   rm -f "$acc"
 }
 
-# ── ONE named household thread, read once (waymark-jux, waymark-is7) ─
+# ── THE HOUSEHOLD THREADS, read once (waymark-jux, is7, 36s) ────────
 # What an event needs beforehand is said where a household actually
 # says it — the spouse/family chat — and a keyword search over all
 # chats never sees a line that names the event obliquely ("what time
-# tomorrow?"). Two probes read that thread now: an EVENT order wants
-# the week AROUND its subject, and a COMMITMENTS order wants everything
-# said in it. So the picking and the history read are one function, and
-# the callers differ only in how much they ask for and what they keep.
+# tomorrow?"). Two probes read those threads: an EVENT order wants the
+# week AROUND its subject, and a COMMITMENTS order wants everything
+# said in them. So the picking and the history read are one function,
+# and the callers differ only in how much they ask for and what they
+# keep.
 #
-# Nothing is hardcoded: the per-chat HISTORY tool is the one whose only
-# required argument is a chat id, its listing partner is the
-# argument-free tool on the same rig that lists chats, and the chat is
-# a roster companion's thread when the roster names one, else the most
-# recently active thread that is not a bot. No such pair in gate.json
-# means no thread material, which is not a fault.
-gate_chat_history() { # gate_chat_history <raw-outfile> <limit> — echoes "rig\ttool\ttitle"
-  local raw="$1" limit="$2"
+# WHICH threads is now a READ (waymark-36s): gate_chat_history_rows,
+# below, works from /api/threads. What follows it is the FALLBACK for a
+# house that does not serve the kind yet — the old heuristic, kept
+# whole and announced in the manifest rather than silently standing in.
+#
+# Nothing is hardcoded in either arm: the per-chat HISTORY tool is the
+# one whose only required argument is a chat id, and its listing
+# partner (the guess arm's) is the argument-free tool on the same rig
+# that lists chats. No such pair in gate.json means no thread material,
+# which is not a fault.
+gate_chat_history_guess() { # <raw-dir> <limit> — echoes "rig\ttool\ttitle\t"
+  local raw="$1/1.json" limit="$2"
   : > "$raw"
   [ -z "${WAYMARK_NO_GATE_PROBE:-}" ] || return 0
   local pair rig list_tool hist_tool
@@ -1299,12 +1437,83 @@ gate_chat_history() { # gate_chat_history <raw-outfile> <limit> — echoes "rig\
     if [ "$code" = "200" ] \
        && [ "$(jq "$JQ_ROWS"'if (.isError // false) then 0 else (wm_rows | length) end' "$hf" 2>/dev/null || echo 0)" -gt 0 ]; then
       cp "$hf" "$raw"; rm -f "$hf"
-      printf '%s\t%s\t%s' "$rig" "$hist_tool" "$title"
+      printf '%s\t%s\t%s\t\n' "$rig" "$hist_tool" "$title"
       return 0
     fi
     rm -f "$hf"
   done
   return 0
+}
+
+# the per-rig HISTORY tool, read off gate.json rather than named here —
+# Gate's tool list is its aggregation and it changes without telling us
+gate_hist_tool() { # gate_hist_tool <rig> — echoes "tool\tkey"
+  jq -r --arg rig "$1" '
+    ((.links // {}) | to_entries
+     | map({name:.key, rig:(.key|split("__")|.[0]),
+            props:((.value.input.properties // {})|keys),
+            required:(((.value.input.required // []))|map(select(. != "why")))})
+     | map(select(.rig == $rig))
+     | map(select((.required | length) == 1))
+     | map(select(.required[0] | test("chat|dialog|thread")))
+     | map(select((.props | index("query")) == null))
+     | sort_by(.name) | .[0] // empty)
+    | [.name, .required[0]] | @tsv' "$R/gate.json" 2>>"$PROBE_ERRS" || true
+}
+
+# THE READ (waymark-36s): the threads the ROWS chose, each read once.
+# One raw file per thread that answered, numbered in the order the
+# lines are echoed, so a caller can pair them without a second lookup.
+#
+# The confluence's source tag IS the Gate rig's prefix, so the row says
+# which rig to ask and nothing here maps between two vocabularies. The
+# HANDLE is the rig's business: the row carries the title and the rig's
+# own external id, and both are tried in that order — telegram answers
+# to a title and refuses its own numeric id ("Cannot find any entity"),
+# the phone answers to its hash. A 200 carrying nothing is a wrong
+# handle, not an empty week.
+gate_chat_history_rows() { # <raw-dir> <limit> — one "rig\ttool\ttitle\tself" line per thread read
+  local dir="$1" limit="$2"
+  local n=0 rig title self handle pair tool key cand hf code
+  while IFS="$(printf '\t')" read -r rig title self handle; do
+    [ -n "$rig" ] || continue
+    pair="$(gate_hist_tool "$rig")"
+    [ -n "$pair" ] || continue
+    IFS="$(printf '\t')" read -r tool key <<< "$pair"
+    [ -n "${tool:-}" ] || continue
+    for cand in "$title" "$handle"; do
+      [ -n "$cand" ] || continue
+      hf="$(mktemp)"
+      code="$(gate_call "$hf" "$tool" "$(jq -nc --arg id "$cand" \
+        --arg key "${key:-chat_id}" --argjson lim "$limit" \
+        '{($key): $id, limit: $lim,
+          why: "waymark sitting: the last week of a conversation this house holds a row for"}')")"
+      if [ "$code" = "200" ] \
+         && [ "$(jq "$JQ_ROWS"'if (.isError // false) then 0 else (wm_rows | length) end' "$hf" 2>/dev/null || echo 0)" -gt 0 ]; then
+        n=$((n + 1))
+        cp "$hf" "$dir/$n.json"; rm -f "$hf"
+        printf '%s\t%s\t%s\t%s\n' "$rig" "$tool" "$title" "$self"
+        break
+      fi
+      rm -f "$hf"
+    done
+  done < <(jq -r '.[] | [.source, .title, .self, .handle] | @tsv' \
+             "$D/chat_selection.json" 2>>"$PROBE_ERRS" || true)
+  return 0
+}
+
+gate_chat_history() { # gate_chat_history <raw-dir> <limit> — one line per thread read
+  local dir="$1" limit="$2"
+  mkdir -p "$dir"
+  [ -z "${WAYMARK_NO_GATE_PROBE:-}" ] || return 0
+  if [ "$(jq 'length' "$D/chat_selection.json" 2>/dev/null || echo 0)" -gt 0 ]; then
+    gate_chat_history_rows "$dir" "$limit"
+  else
+    # no rows chose anything — either the kind is not served here, or
+    # nothing was said in the window. Either way the guess is the only
+    # material available, and THREAD_BASIS says which of the two it is.
+    gate_chat_history_guess "$dir" "$limit"
+  fi
 }
 
 # the EVENT order's slice of that thread: the three messages that say
@@ -1314,15 +1523,22 @@ gate_thread() { # gate_thread <outfile.json> [key...]
   local out="$1"; shift
   local keys_json; keys_json="$(printf '%s\n' "$@" | jq -R '.' | jq -sc 'map(select(length > 0))')"
   echo '[]' > "$out"
-  local raw meta rig tool title
-  raw="$(mktemp)"
-  meta="$(gate_chat_history "$raw" 20)"
-  if [ -n "$meta" ]; then
-    IFS="$(printf '\t')" read -r rig tool title <<< "$meta"
-    jq -c --arg rig "$rig" --arg tool "$tool" \
+  # EVERY chosen thread, not one: the picking moved to the rows, and
+  # the material follows it. Each answered thread contributes its own
+  # entry, so a group's week sits beside a spouse's rather than
+  # replacing it.
+  local dir acc rig tool title self i=0
+  dir="$(mktemp -d)"; acc="$(mktemp)"; : > "$acc"
+  while IFS="$(printf '\t')" read -r rig tool title self; do
+    [ -n "$rig" ] || continue
+    i=$((i + 1))
+    [ -f "$dir/$i.json" ] || continue
+    jq -c --arg rig "$rig" --arg tool "$tool" --arg self "$self" \
       --arg q "the $title thread, last 7 days" --arg since "$SINCE_7D" \
-      --argjson keys "$keys_json" "$JQ_ROWS"'
+      --argjson keys "$keys_json" \
+      --slurpfile senders "$D/chat_senders.json" "$JQ_ROWS"'
       ([ $keys[] | ascii_downcase ]) as $k
+      | ($senders[0] // []) as $sn
       | ([ wm_rows[] | select(type == "object")
            | ((.date // .last_message_date // "") | tostring) as $d
            | select($d == "" or (($d | sub(" "; "T") | .[0:19]) >= ($since | .[0:19])))
@@ -1331,16 +1547,21 @@ gate_thread() { # gate_thread <outfile.json> [key...]
            # the three the ORDER is about, when the thread says them;
            # otherwise the three most recent — a week of a household
            # thread is ambient context either way
-           | {line:($m | wm_one | wm_trim), at:$d,
+           | {line:($m | wm_one | wm_names($sn) | wm_trim), at:$d,
               on_key: ([ $k[] as $w | select($hay | contains($w)) ] | length)} ]
          | sort_by([(0 - .on_key)])) as $rows
       | if ($rows | length) == 0 then empty
         else {rig:$rig, tool:$tool, query:$q, answered:true,
               keys_tried:[$q],
+              # the house address this material came from, when the
+              # house has one — a Gate line is never an address, and
+              # this is the row that is
+              subject:(if ($self | length) > 0 then $self else null end),
               hits: ($rows[0:3] | map(.line)), refusal:null}
-        end' "$raw" 2>/dev/null | jq -s '.' > "$out" || echo '[]' > "$out"
-  fi
-  rm -f "$raw"
+        end' "$dir/$i.json" >> "$acc" 2>/dev/null || true
+  done < <(gate_chat_history "$dir" 20)
+  jq -s '.' "$acc" > "$out" 2>/dev/null || echo '[]' > "$out"
+  rm -rf "$dir"; rm -f "$acc"
   return 0
 }
 
@@ -1370,21 +1591,33 @@ gate_commitments() { # gate_commitments <outfile.json>
   local out="$1"
   local acc; acc="$(mktemp)"; : > "$acc"
   if [ -z "${WAYMARK_NO_GATE_PROBE:-}" ]; then
-    local raw meta rig tool title
-    raw="$(mktemp)"
-    meta="$(gate_chat_history "$raw" 100)"
-    if [ -n "$meta" ]; then
-      IFS="$(printf '\t')" read -r rig tool title <<< "$meta"
-      jq -c --arg src "the $title thread" --arg since "$SINCE_7D" "$JQ_ROWS$JQ_COMMIT"'
-        [ wm_rows[] | select(type == "object")
+    # EVERY chosen thread (waymark-36s), and each line carries the
+    # ADDRESS of the conversation it was said in — which is the whole
+    # point of the thread kind: a commitment found in a chat used to
+    # have no row to cite, so the order anchored on a person and the
+    # source lived in prose. Now the chat itself is the subject.
+    local dir rig tool title self i=0
+    dir="$(mktemp -d)"
+    while IFS="$(printf '\t')" read -r rig tool title self; do
+      [ -n "$rig" ] || continue
+      i=$((i + 1))
+      [ -f "$dir/$i.json" ] || continue
+      jq -c --arg src "the $title thread" --arg self "$self" \
+        --arg title "$title" --arg since "$SINCE_7D" \
+        --slurpfile senders "$D/chat_senders.json" "$JQ_ROWS$JQ_COMMIT"'
+        ($senders[0] // []) as $sn
+        | [ wm_rows[] | select(type == "object")
           | ((.date // .last_message_date // "") | tostring) as $d
           | select($d == "" or (($d | sub(" "; "T") | .[0:19]) >= ($since | .[0:19])))
-          | {line:(wm_one | wm_trim),
+          | {line:(wm_one | wm_names($sn) | wm_trim),
              text:(((.text // .body // .snippet // .preview // .subject // "") | tostring) | wm_trim),
-             at:$d, source:$src}
-          | select(wm_commits(.line)) ] | .[]' "$raw" >> "$acc" 2>>"$PROBE_ERRS" || true
-    fi
-    rm -f "$raw"
+             at:$d, source:$src,
+             thread_self:(if ($self | length) > 0 then $self else null end),
+             thread_title:$title}
+          | select(wm_commits(.line)) ] | .[]' \
+        "$dir/$i.json" >> "$acc" 2>>"$PROBE_ERRS" || true
+    done < <(gate_chat_history "$dir" 100)
+    rm -rf "$dir"
     local irig itool iprops iargs ihit code
     while IFS="$(printf '\t')" read -r irig itool iprops; do
       [ "$irig" = "emila" ] || continue
@@ -1659,10 +1892,12 @@ if [ "$(jq 'length' "$COMMIT_HITS" 2>/dev/null || echo 0)" -gt 0 ]; then
   jq -n --slurpfile hits "$COMMIT_HITS" --slurpfile tasks "$R/tasks.json" \
         --slurpfile events "$R/events.json" --slurpfile people "$D/companions.json" \
         --slurpfile cited "$D/cited.json" --slurpfile values "$D/live_values.json" \
+        --slurpfile selection "$D/chat_selection.json" \
         --argjson nows "$NOW_S" --argjson days "$DAY_TABLE" --arg tz "$HOUSE_TZ" \
         "$JQ_DATES$JQ_KEYS"'
     ($hits[0] // []) as $h | ($tasks[0] // []) as $tk | ($events[0] // []) as $ev
     | ($people[0] // []) as $pp | ($cited[0] // []) as $c | ($values[0] // []) as $vals
+    | ($selection[0] // []) as $sel
     # DEDUPE AGAINST WHAT THE HOUSE ALREADY HOLDS, by key word and by
     # date. A line sharing a distinctive word with an open task or with
     # an event in the window around now is a line ABOUT a row that
@@ -1697,40 +1932,61 @@ if [ "$(jq 'length' "$COMMIT_HITS" 2>/dev/null || echo 0)" -gt 0 ]; then
                    | select($m.line | test($md)) ] | length == 0)
         | $m ] as $fresh
     | select(($fresh | length) > 0)
-    # THE EVIDENCE ADDRESS. The order is anchored on the companion the
-    # traffic names — the person row is what makes the write lawful,
-    # and machine dedupe drops one a standing row already speaks for.
-    # The SOURCE is read as well as the line, and that is not belt and
-    # braces: a per-chat history tool answers a date and a body and no
-    # sender at all, so in the household thread the only place the name
-    # appears is the thread title. In the inbox it is the other way
-    # round — the source is just "the inbox" and the sender rides the
-    # line. When neither says a companion there is no house address to
-    # cite and so no order: the honest answer, not a fault.
+    # THE EVIDENCE ADDRESS (waymark-36s). Until the :thread kind
+    # existed, a commitment said in a chat had NO row to cite: this
+    # order anchored on whichever companion the traffic happened to
+    # name, the chat itself lived in prose, and when no companion was
+    # named there was no order at all — the fact was simply dropped.
+    # Now the conversation IS a row. The order anchors on the THREAD
+    # the lines were said in, and cites it together with the person
+    # rows that thread names.
+    #
+    # The inbox arm carries no thread — mail is not a conversation this
+    # house holds a row for — so those lines still fall to the person
+    # anchor, the old law kept exactly where it is still the only one.
+    | ([ $fresh[] | select(.thread_self != null) ]
+       | group_by(.thread_self) | sort_by(0 - length) | (.[0] // [])) as $in_thread
     | ([ $pp[] | . as $p | select(($c | index($p.self)) == null)
                | select([ $fresh[]
                           | ((.source + " " + .line) | ascii_downcase) as $hay
                           | select($hay | contains($p.name | ascii_downcase)) ] | length > 0) ]) as $named
-    | select(($named | length) > 0)
-    | $named[0] as $who
+    | (($named | first) // null) as $who
+    | (($in_thread | first) // null) as $thread
+    | ($thread.thread_self // null) as $thread_self
+    # the thread ROW, and the people it names — read off the selection
+    # the rows already made, so the citation is exactly the set the
+    # conversation itself names rather than a guess from the prose
+    | (([ $sel[] | select(.self == $thread_self) ]) | first) as $trow
+    | ([ $trow.people[]? ]) as $thread_people
+    | select($thread_self != null or $who != null)
+    # when a thread anchors it, the lines that count are that one thread
+    | (if $thread_self != null then $in_thread else $fresh end) as $fresh
+    | ([$thread_self] + $thread_people + [$who.self]
+       | map(select(. != null)) | unique) as $cite
+    | (if $thread != null then $thread.thread_title
+       else ($who.name // "the inbox") end) as $where
     | (($fresh | length) | tostring) as $n
     | (wm_value_fit(([ $fresh[] | .line ] | join(" ")); $vals)) as $fit
     | {probe:"commitments-in-messages", rank:2,
-       subject:$who.self,
-       subject_says:($who.name + " — " + $n + (if $n == "1" then " commitment" else " commitments" end)
+       subject:($thread_self // $who.self),
+       subject_says:($where + " — " + $n + (if $n == "1" then " commitment" else " commitments" end)
                      + " living only in a message"),
        urgency_at:null,
        urgency_says:("said in the last seven days of " + $fresh[0].source + "; no row in the house holds it"),
-       why:("The last seven days of the household thread and of the inbox carry " + $n
+       why:("The last seven days of the conversations of this house and of the inbox carry " + $n
             + (if $n == "1" then " line that names" else " lines that name" end)
             + " a day AND an obligation, and no open task and no coming event says any of their words. A commitment that lives only in a message is invisible to the rank and to whoever is not holding the phone."),
        gate_keys:[],
        value_fit:$fit,
        material:{
-         row:$who,
+         row:($trow // $who),
+         # the people this conversation names — the roster rows the
+         # citation carries beside the thread itself
+         people:[ $sel[] | select(.self == $thread_self)
+                         | {names, people} ],
          siblings:[],
          excluded:[],
-         gate:[{rig:"the household thread and the inbox",
+         gate:[{rig:"the conversations of this house and the inbox",
                 tool:"read tools only",
                 query:"the last seven days", answered:true,
                 keys_tried:["a day AND an obligation, said in one line"],
@@ -1744,8 +2000,8 @@ if [ "$(jq 'length' "$COMMIT_HITS" 2>/dev/null || echo 0)" -gt 0 ]; then
        write:(if ($fit|length) > 0
               then {kind:"outcome", door:"POST /api/outcomes",
                     fields:["goal", "value_id", "evidence", "1-3 outcome_pieces"],
-                    finding:("The commitment above KEPT — one goal in the household own words, naming what has to happen and by when. PARAPHRASE it: never the message sentence, and name the source in the prose (\"from " + $who.name + ", " + ($fresh[0].at | .[0:10]) + "\")."),
-                    cite:[$who.self],
+                    finding:("The commitment above KEPT — one goal in the household own words, naming what has to happen and by when. PARAPHRASE it: never the message sentence, and name the source in the prose (\"from " + $where + ", " + ($fresh[0].at | .[0:10]) + "\")."),
+                    cite:$cite,
                     offer:null,
                     value_id:$fit[0].id,
                     pieces:[ {form:"create", target_kind:"task", target_id:null, target_action:null,
@@ -1758,13 +2014,14 @@ if [ "$(jq 'length' "$COMMIT_HITS" 2>/dev/null || echo 0)" -gt 0 ]; then
                                         ends_at:"<the same row, an hour later>",
                                         calendar:"family"}} ],
                     note:(wm_value_note($fit[0])
-                          + " ONE outcome, and one piece per commitment, at most three. A piece title PARAPHRASES — a message body is never copied into a row, and a Gate line is never an address: cite " + $who.self
-                          + " (a person row is a lawful evidence address) plus any house row you actually read, and name the source in prose. Every prepared instant is a wall clock in " + $tz
+                          + " ONE outcome, and one piece per commitment, at most three. A piece title PARAPHRASES — a message body is never copied into a row, and a Gate line is never an address: cite " + ($cite | join(", "))
+                          + (if $thread_self != null then " (the conversation itself is a row now, and the people it names are rows too — that is what a chat-borne fact cites)" else " (a person row is a lawful evidence address)" end)
+                          + " plus any house row you actually read, and name the source in prose. Every prepared instant is a wall clock in " + $tz
                           + " rendered UTC and after the run time at the top of this manifest — the household clock above has the next seven days already converted, so pick a row rather than doing the arithmetic.")}
               else {kind:"journal", door:"POST /api/journals",
                     fields:["title", "body"],
                     finding:("No live value carries these. Write nothing at the outcome door; in the journal say, in one sentence, what value a commitment like this would serve — that skip IS the answer."),
-                    cite:[$who.self],
+                    cite:$cite,
                     offer:null, value_id:null, pieces:[],
                     note:("No live value owns a word these lines say, so an outcome here would have to invent the value it serves. Say what value it would need; never copy the message into the journal either.")}
               end)}' > "$COMMIT_ORDER" 2>>"$PROBE_ERRS" || probe_stumbled commitments-in-messages
@@ -2197,6 +2454,9 @@ jq -n \
   --slurpfile standing "$D/standing_outcomes.json" \
   --slurpfile ask "$D/extend_ask.json" \
   --slurpfile gate "$D/gate.json" \
+  --slurpfile chatsel "$D/chat_selection.json" \
+  --slurpfile chatrows "$R/chat_threads.json" \
+  --arg thread_basis "$THREAD_BASIS" \
   --slurpfile diag "$RUN/rows/diagnosis.json" \
   --slurpfile journals "$RUN/rows/journals.full.json" \
 '{
@@ -2226,6 +2486,17 @@ jq -n \
   arrivals: ($arrivals[0] | .[0:40]),
   bare_tasks: ($bare[0] | .[0:40]),
   gate: $gate[0],
+  # WHICH CONVERSATIONS WERE READ, AND HOW THEY WERE CHOSEN
+  # (waymark-36s). `basis` is the honest half: "rows" means the house
+  # serves /api/threads and the selection below is a query over it;
+  # "heuristic" means the kind is not deployed here yet and the rig own
+  # listing was guessed at instead. A reader must never have to infer
+  # which of the two produced the material.
+  conversations: {
+    basis: $thread_basis,
+    rows_in_house: ($chatrows[0] | length),
+    read_this_run: $chatsel[0]
+  },
   standing_outcomes: $standing[0],
   uncomposed_census: $census[0],
   uncomposed: ($uncomposed[0] | .[0:60]),
@@ -2382,6 +2653,16 @@ jq -n \
   echo
   echo "## Usable companions (affirmed/current only)"
   jq -r 'if (.companions|length)==0 then "  (none — name no companion_id)" else (.companions[] | "- \(.self) \(.name)") end' "$RUN/manifest.json"
+  echo
+  echo "## Conversations read this sitting"
+  jq -r '"  chosen by: " + .conversations.basis' "$RUN/manifest.json"
+  jq -r 'if (.conversations.read_this_run|length)==0
+         then "  (none — nothing was said in the window, or this house serves no thread rows yet; a chat named in prose is not an address, so cite nothing you did not read)"
+         else (.conversations.read_this_run[]
+               | "- \(.self) [\(.source) \(.chat_kind // "?")] \(.title) — last word \(.at[0:16])"
+                 + (if (.people|length) > 0 then " · names \(.people|join(", "))" else "" end)) end' \
+    "$RUN/manifest.json"
+  echo "  A fact said in one of these cites the THREAD's address plus the person rows it names — never the Gate line, and never the message's own sentence."
   echo
   echo "## Prior sittings"
   jq -r 'if (.prior_journals|length)==0 then "  (none — this is the first)" else (.prior_journals[] | "- \(.at) \(.title)") end' "$RUN/manifest.json"

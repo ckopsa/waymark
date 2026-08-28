@@ -31,7 +31,8 @@ of this repository; `main`'s history records the Clojure lineage.
 **`workqueue10/`** is the household app — one engine serving every
 domain of family life, each a module of declarations under its
 `src/`: the unified work queue (`workqueue10.*` — tasks from every
-authority, media, the breaker panel, the dwelling kinds), the meal
+authority, media, the household's conversations as addresses
+(`thread`), the breaker panel, the dwelling kinds), the meal
 plan (`mealplan10.*` — Tue→Tue themed weeks, grocery lists, prep
 tasks, rotations, the pantry), chores (`choreplan10.*`), and evening
 plans (`eveningplan10.*`). The calendar (`calendar10/`) stays its own
