@@ -205,7 +205,7 @@ if [ "$MODE" = "verify" ]; then
   fi
   rm -f "$thin"
   if [ "$wrote" -eq 0 ]; then
-    echo "NOTHING written. Under waymark-mho there is NO floor: if the manifest's arrivals were all handled (or there were none) and no bare task was worth enriching, a run that wrote nothing is a lawful no-op. It is only a FAILED run if an arrival was a person's unanswered remark, or a bare task plainly needed enriching, and it was left alone."
+    echo "NOTHING written. Under waymark-mho a run writes only what its work orders and the owed lists name: if the manifest's arrivals were all handled (or there were none) and no bare task was worth enriching, a run that wrote nothing is a lawful no-op. It is only a FAILED run if an arrival was a person's unanswered remark, or a bare task plainly needed enriching, and it was left alone."
   else
     echo "$wrote row(s) written by this principal since $SINCE."
   fi
@@ -643,12 +643,13 @@ jq -s '.' "$D/gate_rigs.jsonl" > "$D/gate_rigs.json"
 jq -c --slurpfile rigs "$D/gate_rigs.json" '. + {rigs: ($rigs[0] // [])}' \
   "$D/gate.json" > "$D/gate.tmp" && mv "$D/gate.tmp" "$D/gate.json"
 
-# NO FLOOR (waymark-mho, the owner's ruling 2026-08-27 that RETRACTS the
-# floor): a run advances concrete ARRIVALS and enriches BARE tasks; it
-# does not owe a manufactured outcome, and a quiet run is a lawful
-# no-op. What follows computes the three lists that job is defined in
-# terms of: arrivals (new since we last looked), bare tasks (the
-# minimum — enrich one), and the cited set the compose path still needs.
+# WHAT A RUN OWES (waymark-mho, the owner's ruling 2026-08-27 that
+# RETRACTED the old requirement): a run advances concrete ARRIVALS and
+# enriches BARE tasks; it never owes a manufactured outcome, and a
+# quiet house is a complete run. What follows computes the three lists
+# that job is defined in terms of: arrivals (new since we last
+# looked), bare tasks (the lightest write — enrich one), and the cited
+# set the compose path still needs.
 
 # the previous run's start, so "new" means new since we last looked; on
 # a first run look back one hour rather than flooding the arrival list
@@ -709,9 +710,9 @@ jq -s '(.[0] + .[1]) | unique' \
    <(jq '[.[].data.evidence[]?]' "$R/insights.full.json") \
    > "$D/cited.json" 2>/dev/null || echo '[]' > "$D/cited.json"
 
-# BARE tasks — the minimum a quiet run still does: enrich ONE. A task
-# is bare when it is actionable, carries no detail, and no outcome or
-# insight yet speaks for it. Enrichment ANNOTATES it (an insight citing
+# BARE tasks — the lightest write, and what a quiet run does: enrich
+# ONE. A task is bare when it is actionable, carries no detail, and no
+# outcome or insight yet speaks for it. Enrichment ANNOTATES it (an insight citing
 # the source and offering the task's own next step); it NEVER edits the
 # task — only people decide what their own rows say.
 #
@@ -732,8 +733,8 @@ jq --slurpfile cited "$D/cited.json" '
             due_at:(.fields.due_at // null), source:(.fields.source // null)}]
 ' "$R/tasks.json" > "$D/bare_tasks.json" 2>/dev/null || echo '[]' > "$D/bare_tasks.json"
 
-# UNCOMPOSED evidence — no longer a floor, just context for when a real
-# outcome IS warranted: rows nothing has composed or enriched yet.
+# UNCOMPOSED evidence — nothing a run owes, just context for when a
+# real outcome IS warranted: rows nothing has composed or enriched yet.
 jq -s '
   (.[0] // []) as $cited
   | .[1:] | add
@@ -747,7 +748,7 @@ jq -s '
 jq -c 'group_by(.kind) | map({kind:.[0].kind, count:length})' "$D/uncomposed.json" > "$D/uncomposed_census.json"
 
 # what ALREADY STANDS — every offered/accepted outcome with its goal and
-# the rows it cites, so the floor's dig does not restage a bundle the
+# the rows it cites, so a compose does not restage a bundle the
 # house already holds (sitting 7 twinned the realtor list; the rank
 # cannot tell twins apart, so a duplicate is pure noise).
 #
@@ -790,7 +791,7 @@ jq '[.[] | select(.state == "current")
 # to offer), and one line saying why it is worth a row. Nothing in it is
 # a judgment call except the sentence the model has to write.
 #
-# THE CEILING, NOT THE FLOOR. The manifest presents the top
+# THE CEILING. The manifest presents the top
 # WAYMARK_WORK_ORDERS (default 2), ordered by urgency — soonest due or
 # soonest starting first, then the probe order below. Those two ARE the
 # run's assignment. Everything else in the manifest is optional
@@ -1174,7 +1175,7 @@ jq -c --slurpfile out "$R/outcomes.full.json" --slurpfile cited "$D/cited.json" 
            write:{kind:"outcome", door:"POST /api/outcomes",
                   fields:["goal", "value_id", "evidence", "2-5 outcome_pieces"],
                   finding:("A goal larger than any single row below, serving " + $v.name
-                           + " — an end-state the household would want, not a task restated. If the rows below do not imply one, this order is answered by writing NOTHING and saying so in the journal: there is no floor."),
+                           + " — an end-state the household would want, not a task restated. If the rows below do not imply one, this order is answered by writing NOTHING and saying so in the journal: that skip IS the answer."),
                   cite:([$v.self] + [ $sib[] | .self ]),
                   offer:null,
                   value_id:$v.id}})
@@ -1372,7 +1373,7 @@ jq -n \
           | .[]))
     end' "$RUN/manifest.json"
   echo
-  echo "  These orders ARE the assignment. Do what is owed above first (a person's pull and a person's turn outrank any probe), then execute these in the order given — each is one row at one door, and the material to write it is already here. Everything else in this manifest is OPTIONAL material: read it if an order needs it, and stage nothing extra to look busy. An order you cannot answer honestly is skipped and said so in the journal. A run with no work orders and nothing owed writes NOTHING AT ALL, and that is a lawful, complete run (waymark-mho)."
+  echo "  These orders ARE the assignment, and they are its ceiling. Do what is owed above first (a person's pull and a person's turn outrank any probe), then execute these in the order given — each is one row at one door, and the material to write it is already here. Everything else in this manifest is OPTIONAL material: read it if an order needs it, and stage nothing extra to look busy. An order you cannot answer honestly is skipped and said so in the journal. A run with no work orders and nothing owed writes NOTHING AT ALL, and that is a lawful, complete run (waymark-mho)."
   echo
   echo "## Offered requests — a person's pull is never capped"
   jq -r 'if (.offered_requests|length)==0 then "  (none)" else (.offered_requests[] | "- \(.self) by \(.requested_by) good until \(.good_until)") end' "$RUN/manifest.json"
@@ -1407,12 +1408,12 @@ jq -n \
   echo "## What arrived since the last run — process these"
   jq -r '"  (new since " + .arrivals_since + ")"' "$RUN/manifest.json"
   jq -r 'if (.arrivals|length)==0 then "  (nothing new — a quiet run. If nothing below is owed either, journal nothing and leave: a no-op is a lawful run)" else (.arrivals[] | "- \(.self) [\(.kind) \(.state)] \(.says)") end' "$RUN/manifest.json"
-  echo "  Each arrival is a concrete thing to ADVANCE as far as it honestly goes — no further. A person's remark is a work order (answer it). A new or synced task: read it in FULL, then either ENRICH it (below) or, only if it plus its situated graph implies a GOAL LARGER THAN ANY SINGLE ROW, COMPOSE an outcome. Do not manufacture an outcome to have done something — there is no floor."
+  echo "  Each arrival is a concrete thing to ADVANCE as far as it honestly goes — no further. A person's remark is a work order (answer it). A new or synced task: read it in FULL, then either ENRICH it (below) or, only if it plus its situated graph implies a GOAL LARGER THAN ANY SINGLE ROW, COMPOSE an outcome. Do not manufacture an outcome to have done something: a run writes only what its work orders and the owed lists name, and skipping an order out loud in the journal is the right answer when the order does not hold."
   echo
-  echo "## Bare tasks — the minimum a run does: ENRICH one (never mutate it)"
+  echo "## Bare tasks — the lightest write a run makes: ENRICH one (never mutate it)"
   jq -r 'if (.bare_tasks|length)==0 then "  (none bare — every actionable task already carries detail or is spoken for)" else (.bare_tasks[] | "- \(.self) [\(.state)] \(.title)\(if .due_at then " · due " + .due_at[0:10] else "" end)") end' "$RUN/manifest.json"
   echo "  To enrich a bare task: publish an INSIGHT (POST /api/insights) whose evidence cites the task AND the source you read (a Gate email/chat, a related row), whose finding is the context that makes the task actionable (what it is really for, where/when/with what, its real next physical step), and whose offer_kind/offer_id/offer_action names the task's own next door. This ANNOTATES the task beside it — it does not touch the task's fields; only the household edits its own rows. An enrichment that does not change whether the task is actionable is not worth writing."
-  echo "  A finding must carry at least one FACT the task's row does not already state — what it is really for, who or where, when, or the next physical step — in a full sentence. \"This task needs action.\" is not an enrichment; verify flags as THIN any finding under 40 characters, or one reading 'needs action' / 'requires further action' / 'needs attention' / 'should be done'."
+  echo "  A finding must carry a FACT the task's row does not already state — what it is really for, who or where, when, or the next physical step — in a full sentence. \"This task needs action.\" is not an enrichment; verify flags as THIN any finding under 40 characters, or one reading 'needs action' / 'requires further action' / 'needs attention' / 'should be done'."
   echo
   echo "## When to COMPOSE instead of enrich"
   echo "  Compose an outcome only when the arrival + its situated graph (the same person / project / value / time-window rows) imply a GOAL that is larger than any single evidence row — an end-state the household would want, not a task restated. A bundle whose goal equals one task, or whose only work is re-prioritizing an existing task, is a wrapper, not an outcome: enrich instead. When a real goal is there, the uncomposed rows below and standing_outcomes above are the material and the twin-guard."
