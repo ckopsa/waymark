@@ -6,9 +6,11 @@
 # read the formula's "read the house" step names into a snapshot of raw
 # JSON, works out the lists the later steps are DEFINED in terms of
 # (offered requests, unanswered turns, facts nothing has indexed,
-# bundles carrying no judgment of ours, declines owed a diagnosis), and
-# writes ONE manifest. What is left for the model is judgment and the
-# door writes — which facts matter, what to compose, what to score.
+# bundles carrying no judgment of ours, declines owed a diagnosis),
+# runs a closed set of PROBES that turn the snapshot into two WORK
+# ORDERS with their material already fetched (waymark-48a), and writes
+# ONE manifest. What is left for the model is judgment and the door
+# writes — which facts matter, what to compose, what to score.
 #
 #   scripts/sitting-run.sh            # read the house, write the manifest
 #   scripts/sitting-run.sh verify     # what did the sitting actually write?
@@ -31,7 +33,9 @@
 # WAYMARK_SITTING_DIR (.sitting), WAYMARK_ASK_WINDOW_S (43200),
 # WAYMARK_EXTEND_S (86400), WAYMARK_MAX_PAGES (5),
 # WAYMARK_MAX_HYDRATE (120), WAYMARK_NO_GATE_PROBE (unset — set it to
-# skip the one-read-per-rig Gate liveness probe).
+# skip the one-read-per-rig Gate liveness probe AND the Gate material
+# the work-order probes fetch), WAYMARK_WORK_ORDERS (2 — the ceiling on
+# how many work orders the manifest presents).
 #
 # A refusal is the end of the run: this script never knocks, never
 # spends re-entry, never invents another way in. It prints the door's
@@ -149,9 +153,12 @@ STARTED="$(iso "$(now_s)")"
 if [ "$MODE" = "verify" ]; then
   rm -f "$WHO"
   SINCE="${WAYMARK_SINCE:-}"
-  if [ -z "$SINCE" ]; then
-    prev="$(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | sort | tail -n 1)"
-    [ -n "$prev" ] && SINCE="$(jq -r '.run.started_at' "$prev")"
+  # the previous manifest is read for TWO things now — the "since" mark
+  # and the work orders this run was handed — so it is found whether or
+  # not WAYMARK_SINCE overrode the mark.
+  prev="$(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | sort | tail -n 1 || true)"
+  if [ -z "$SINCE" ] && [ -n "$prev" ]; then
+    SINCE="$(jq -r '.run.started_at' "$prev")"
   fi
   [ -n "$SINCE" ] || SINCE="$(iso "$(( $(now_s) - 7200 ))")"
   echo "what $DISPLAY ($PRINCIPAL) wrote at $BASE since $SINCE"
@@ -239,9 +246,16 @@ if [ "$MODE" = "verify" ]; then
               (if (.data.value_id // "") == "" then ""
                else "/api/values/" + (.data.value_id | tostring) end) as $own
               | {self, kind:$k, at:$at,
+                 by:((.data.composed_by // .data.authored_by // "") | tostring),
                  offer:[(.data.offer_kind // ""), (.data.offer_id // ""),
                         (.data.offer_action // "")],
-                 evidence:[(.data.evidence // [])[] | select(. != $own)]}' \
+                 evidence:[(.data.evidence // [])[] | select(. != $own)],
+                 # the UNSUBTRACTED list, for the work-order grading
+                 # below: a bundle that serves a value drops that value
+                 # from `evidence`, and an order whose subject IS a
+                 # value would then read UNANSWERED however well it was
+                 # answered
+                 cites:((.data.evidence // []) + [$own] | map(select(. != "")) | unique)}' \
               "$full"
           fi
           rm -f "$full"
@@ -266,12 +280,35 @@ if [ "$MODE" = "verify" ]; then
         | select($b.at < $a.at or ($b.at == $a.at and $b.self < $a.self))
         | "TWIN: \($a.self) shares \($shared | join(", ")) with \($b.self)" ]
     | unique | .[]' "$twins" 2>/dev/null)"
-  rm -f "$twins"
   if [ -n "$faults" ]; then
     echo
     echo "$faults"
     echo "  A twin is a FAILED run: the rank cannot tell two rows saying the same thing apart, so the second one is pure noise on the household's fridge. Read the standing row named above, and retire (or leave unstaged) the duplicate."
   fi
+
+  # ── THE WORK ORDERS, GRADED (waymark-48a) ─────────────────────────
+  # The row listing above says WHAT was written; this says whether the
+  # run did WHAT IT WAS ASKED. An order is ANSWERED when a row this
+  # principal wrote since the mark CITES the order's subject address —
+  # not when a row of any shape exists, and not when the prose sounds
+  # related. Nothing else grades it: the manifest named the subject,
+  # the write and the citation, so answering is a fact about evidence,
+  # which a script can check and a report cannot fake.
+  if [ -n "$prev" ] && [ "$(jq '(.work_orders // []) | length' "$prev" 2>/dev/null || echo 0)" -gt 0 ]; then
+    echo
+    jq -rs --slurpfile m "$prev" --arg s "$SINCE" --arg me "$PRINCIPAL" '
+      . as $rows
+      | [ $rows[] | select(.at >= $s) | select(.by == $me) ] as $mine
+      | (($m[0].work_orders) // [])[]
+      | . as $o
+      | [ $mine[] | select((.cites | index($o.subject)) != null) | .self ] as $hits
+      | if ($hits | length) > 0
+        then "ORDER \($o.probe) \($o.subject): answered by \($hits | join(", "))"
+        else "ORDER \($o.probe) \($o.subject): UNANSWERED"
+        end' "$twins" 2>/dev/null
+    echo "  An order left UNANSWERED is only a failure if it could honestly have been answered — a Gate rig that refused, an event that needed nothing, a value with no goal in it are all lawful skips. The journal is where a skip is said out loud; an UNANSWERED order and a silent journal is a run that ignored its assignment."
+  fi
+  rm -f "$twins"
 
   # A SITTING LEAVES NO DIFF. The wisp appends to .beads/interactions.jsonl
   # (a tracked file) and a runner that diffs its tree would carry that
@@ -737,6 +774,437 @@ jq '[.[] | select(.state == "current")
         | {id:(.self|split("/")|last), self, name:(.data.name // .summary),
            relation:(.data.relation // null)}]' "$R/people.full.json" > "$D/companions.json"
 
+# ── THE WORK ORDERS (waymark-48a) ────────────────────────────────────
+# The owner's ruling, 2026-08-27: THE WEAKER THE MODEL, THE MORE
+# DIRECTION IT NEEDS. Handed the same manifest, Fable read a noisy
+# candidate list and picked well; Gemini wrote filler. A candidate set
+# asks the model to CHOOSE; a work order asks it to EXECUTE. So the line
+# moves one notch further toward the machine: below is a CLOSED SET OF
+# PROBES — the feed's `populations` shape (waymark10.server.feed: a
+# closed map a reviewer reads on one screen, never a scan) — each a
+# deterministic query over the snapshot, each emitting AT MOST ONE work
+# order carrying its own pre-fetched material and the write it expects.
+#
+# A work order is: a subject ADDRESS, the material to read, the EXPECTED
+# WRITE (kind, the fields to fill, the addresses to cite, the light door
+# to offer), and one line saying why it is worth a row. Nothing in it is
+# a judgment call except the sentence the model has to write.
+#
+# THE CEILING, NOT THE FLOOR. The manifest presents the top
+# WAYMARK_WORK_ORDERS (default 2), ordered by urgency — soonest due or
+# soonest starting first, then the probe order below. Those two ARE the
+# run's assignment. Everything else in the manifest is optional
+# material, and a run with no work orders and nothing owed writes
+# nothing at all: still a lawful run (waymark-mho).
+#
+# THE PROBES, in order (the order is also the tie-break):
+#   1. bare-task-due-soon          — an open, detail-less, unspoken-for
+#                                    task, nearest due_at first
+#   2. event-without-prep          — an event inside 10 days that no
+#                                    outcome or insight speaks for
+#   3. person-mentioned-unrecorded — a roster companion named in the
+#                                    last 7 days of Gate traffic whom no
+#                                    insight has written down since
+#   4. value-with-no-live-outcome  — a live value nothing standing serves
+# Adding a fifth means adding it HERE and in the render below, together,
+# the way a feed population is added — docs/spec-standing-agent.md § The
+# composer probes says it in full.
+#
+# MACHINE DEDUPE COMES FIRST. Every probe drops any subject the cited
+# set already names — a row an outcome or insight already speaks for.
+# The not-a-twin door (waymark-8gc) would refuse a duplicate outcome at
+# staging, but a refusal costs the run a round trip and teaches the
+# model nothing: the list it is handed is clean before it reads it.
+WORK_ORDERS_N="${WAYMARK_WORK_ORDERS:-2}"
+# a ceiling that is not a number is not a ceiling — and jq would abort
+# the whole run on it, which is the one thing this block must never do
+case "$WORK_ORDERS_N" in ''|*[!0-9]*) WORK_ORDERS_N=2 ;; esac
+NOW_S="$(now_s)"
+SINCE_7D="$(iso "$(( NOW_S - 604800 ))")"
+IMAP_SINCE="SINCE $(date -u -d "@$(( NOW_S - 604800 ))" +%d-%b-%Y 2>/dev/null || date -u -r "$(( NOW_S - 604800 ))" +%d-%b-%Y) "
+
+# A PROBE NEVER FAILS THE RUN — but a probe that fails SILENTLY is worse
+# than one that fails loudly: the first cut of this block swallowed a jq
+# scoping bug behind 2>/dev/null and printed a confident manifest with
+# zero work orders on a house that had two. So every probe keeps its
+# refusal to abort, and its stderr goes somewhere a person can read.
+PROBE_ERRS="$D/probe_errors.log"; : > "$PROBE_ERRS"
+probe_stumbled() { echo "  ! probe $1 stumbled — see $PROBE_ERRS" >&2; }
+
+# The GATE SEARCH tool, one per rig that ANSWERED the liveness probe
+# above (waymark-idw): the tool whose schema takes a free-text `query`
+# and requires nothing else — `emila__search` and
+# `tgram__search_all_chats` today; `messa` lists threads and searches
+# nothing, so it contributes no material, and that is not a fault. The
+# schemas are read off gate.json rather than named here, because Gate's
+# tool list is its aggregation and it changes without telling us.
+: > "$D/gate_search_tools.tsv"
+if [ -z "${WAYMARK_NO_GATE_PROBE:-}" ]; then
+  jq -r --slurpfile rigs "$D/gate_rigs.json" '
+    ([ ($rigs[0] // [])[] | select(.answered) | .rig ]) as $live
+    | (.links // {}) | to_entries
+    | map({name:.key, rig:(.key|split("__")|.[0]), short:((.key|split("__")|.[1]) // ""),
+           props:((.value.input.properties // {})|keys),
+           required:(((.value.input.required // []))|map(select(. != "why")))})
+    | map(. as $t | select(($live | index($t.rig)) != null))
+    | map(select((.props | index("query")) != null))
+    | map(select(((.required - ["query"]) | length) == 0))
+    | map(. as $t | $t + {rank: (if ($t.short | test("search")) then 0 else 1 end)})
+    | group_by(.rig) | map(sort_by(.rank, (.name|length), .name) | .[0])
+    | .[] | [.rig, .name, (.props|join(","))] | @tsv' \
+    "$R/gate.json" >> "$D/gate_search_tools.tsv" 2>>"$PROBE_ERRS" || probe_stumbled gate-search-tools
+fi
+
+gate_search() { # gate_search <outfile.json> <query> [imap-prefix]
+  # READ ONLY, and never fatal: a rig that refuses contributes its
+  # SENTENCE instead of its hits, which is exactly what the model must
+  # say in place of filler. At most three hits per rig, each flattened
+  # to one line and cut at 200 characters — a manifest is not a mailbox,
+  # and a message body copied into a row is a body in the house's
+  # record. WAYMARK_NO_GATE_PROBE=1 skips the material entirely.
+  local out="$1" q="$2" pre="${3:-}"
+  local acc; acc="$(mktemp)"; : > "$acc"
+  if [ -z "${WAYMARK_NO_GATE_PROBE:-}" ] && [ -s "$D/gate_search_tools.tsv" ]; then
+    local rig tool props args hit code
+    while IFS="$(printf '\t')" read -r rig tool props; do
+      [ -n "$tool" ] || continue
+      # emila speaks IMAP, where a bare phrase is a syntax error; every
+      # other rig takes the phrase as it stands
+      args="$(jq -nc --arg q "$q" --arg pre "$pre" --arg rig "$rig" --arg props "$props" '
+        ($props | split(",")) as $p
+        | {query: (if $rig == "emila" then ($pre + "TEXT \"" + $q + "\"") else $q end),
+           why: "waymark sitting: material for one work order"}
+        + (if ($p|index("count"))            then {count:3}            else {} end)
+        + (if ($p|index("results_per_chat")) then {results_per_chat:3} else {} end)
+        + (if ($p|index("dialog_limit"))     then {dialog_limit:10}    else {} end)
+        + (if ($p|index("limit"))            then {limit:3}            else {} end)')"
+      hit="$(mktemp)"
+      code="$(curl -sS --max-time 30 -o "$hit" -w '%{http_code}' -X POST \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "X-Waymark-Grant: $GRANT" \
+        -H "Content-Type: application/json" \
+        -H "Accept: application/json" \
+        -d "$args" "$BASE/api/-/gate/$tool" 2>/dev/null)" || true
+      jq -c --arg rig "$rig" --arg tool "$tool" --arg code "${code:-000}" --arg q "$q" '
+        def one:
+          if type == "object"
+          then ([ (.date // .last_message_date // .Date // .received // empty),
+                  (.from // .sender // .chat_title // .From // .thread_hash // empty),
+                  (.subject // .Subject // .text // .snippet // .preview
+                   // .last_message_preview // .body // empty) ]
+                | map(tostring) | map(select(length > 0)) | join(" | ")) as $l
+               | (if ($l | length) > 0 then $l else tostring end)
+          else tostring end;
+        def trim: gsub("\\s+"; " ") | .[0:200];
+        # EACH content part is parsed on its own: a rig that found three
+        # messages answers with three JSON objects side by side, and
+        # `fromjson` over the concatenation of them fails — which sent
+        # the first cut of this down the plain-text path and printed
+        # JSON fragments at the model.
+        (($code == "200") and (.isError != true)) as $ok
+        | ((.content // []) | map(.text? // empty)) as $texts
+        | ($texts | join("\n")) as $t
+        | ([ $texts[]
+             | (try fromjson catch null) as $j
+             | if   ($j | type) == "array"  then $j[]
+               elif ($j | type) == "object"
+                 then (($j.results // $j.messages // $j.hits // $j.items
+                        // $j.threads // $j.chats) as $arr
+                       | if ($arr | type) == "array" then $arr[] else $j end)
+               else (split("\n")[] | select((gsub("\\s"; "") | length) > 0))
+               end ]) as $rows
+        | {rig:$rig, tool:$tool, query:$q, answered:$ok,
+           hits: (if $ok then ($rows[0:3] | map(one | trim)) else [] end),
+           refusal: (if $ok then null
+                     else ((if ($t | length) > 0 then $t
+                            else ((.detail // .title // ("HTTP " + $code)) | tostring) end)
+                           | gsub("\\s+"; " ") | .[0:300]) end)}' "$hit" 2>/dev/null \
+        || jq -nc --arg rig "$rig" --arg tool "$tool" --arg q "$q" \
+             '{rig:$rig, tool:$tool, query:$q, answered:false, hits:[],
+               refusal:"no answer came back from the rig"}'
+      rm -f "$hit"
+    done < "$D/gate_search_tools.tsv" >> "$acc"
+  fi
+  jq -s '.' "$acc" > "$out"
+  rm -f "$acc"
+}
+
+CAND="$D/work_order_candidates.jsonl"; : > "$CAND"
+
+# the date arithmetic every probe needs, written once — a mirror writes
+# dates in three shapes (a day, an instant, an instant with an offset)
+JQ_DATES='
+  def to_epoch:
+    if . == null or . == "" then null
+    else (tostring
+          | (if (length == 10) then (. + "T00:00:00Z") else . end)
+          | sub("\\.[0-9]+"; "")
+          | sub("[+-][0-9]{2}:?[0-9]{2}$"; "Z")
+          | (if test("Z$") then . else (. + "Z") end)
+          | (try (strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) catch null))
+    end;
+  def in_days($now): to_epoch as $t
+    | if $t == null then null else ((($t - $now) / 86400) | floor) end;
+  def when($now): (in_days($now)) as $d
+    | if $d == null then "no date"
+      elif $d < 0 then ((-$d|tostring) + " days ago")
+      elif $d == 0 then "today"
+      elif $d == 1 then "tomorrow"
+      else ("in " + ($d|tostring) + " days") end;
+'
+
+# ── probe 1: bare-task-due-soon ──────────────────────────────────────
+# The bare list is already the open, detail-less, unspoken-for tasks
+# (the mirror sits at state=fresh whether its source says open or done,
+# so :status is the word that decides — the Fable sitting of 2026-08-27
+# read out 24 finished July chores when state alone was the filter).
+# Nearest due_at wins; a task carrying no due date sorts last.
+jq -c --slurpfile bare "$D/bare_tasks.json" --slurpfile cited "$D/cited.json" \
+      --argjson nows "$NOW_S" "$JQ_DATES"'
+  ($cited[0] // []) as $c
+  | . as $tasks
+  | [ ($bare[0] // [])[] | . as $x | select(($c | index($x.self)) == null) ]
+  | sort_by([(if .due_at == null then 1 else 0 end), (.due_at // "")])
+  | .[0:1]
+  | map(. as $t
+        | ((first($tasks[] | select(.self == $t.self))) // null) as $row
+        | ($row.fields // {}) as $f
+        | {probe:"bare-task-due-soon", rank:1,
+           subject:$t.self, subject_says:$t.title,
+           urgency_at:$t.due_at,
+           urgency_says:(if $t.due_at
+                         then ("due " + ($t.due_at|.[0:10]) + " (" + ($t.due_at|when($nows)) + ")")
+                         else "no due date" end),
+           why:("An open task with no detail that nothing in the house speaks for"
+                + (if $t.due_at then (", due " + ($t.due_at|when($nows))) else ", with no due date" end)
+                + " — until a row says what it is for, the household holds a title and no next step."),
+           gate_query:$t.title,
+           material:{
+             row:{self:$t.self, state:$t.state, status:($f.status // "open"),
+                  title:$t.title, due_at:($f.due_at // null),
+                  source:($f.source // null), task_list:($f.task_list // null),
+                  assignee_name:($f.assignee_name // null),
+                  priority:($f.priority // null),
+                  source_ui_href:($f.source_ui_href // null)},
+             siblings:[ $tasks[]
+                        | select(.self != $t.self)
+                        | select((.fields.status // "open") == "open")
+                        | select((($f.task_list != null) and (.fields.task_list == $f.task_list))
+                                 or (($f.assignee != null) and (.fields.assignee == $f.assignee)))
+                        | {self, title:((.display.title // .fields.title // "")|tostring),
+                           due_at:(.fields.due_at // null),
+                           shares:(if (($f.task_list != null) and (.fields.task_list == $f.task_list))
+                                   then ("task_list " + ($f.task_list|tostring))
+                                   else ("assignee " + (($f.assignee_name // $f.assignee)|tostring)) end)} ][0:6],
+             gate:null},
+           write:{kind:"insight", door:"POST /api/insights",
+                  fields:["finding", "evidence", "offer_kind", "offer_id", "offer_action"],
+                  finding:"One sentence carrying a FACT this task row does not already state — what it is really for, where/when/with what, or its real next physical step.",
+                  cite:[$t.self],
+                  offer:{offer_kind:"task", offer_id:($t.self|split("/")|last),
+                         offer_action:"complete"}}})
+  | .[]' "$R/tasks.json" >> "$CAND" 2>>"$PROBE_ERRS" || probe_stumbled bare-task-due-soon
+
+# ── probe 2: event-without-prep ──────────────────────────────────────
+# An event inside ten days that no outcome and no insight cites. A TASK
+# cannot cite an address at all, so a task whose title carries a word of
+# the event is not a citation — it is MATERIAL, and it is also the only
+# light door in sight: an event declares no door a card can tap, so the
+# order offers `complete` on that task when one exists, and when none
+# does it says plainly that an insight here would be refused and names
+# the two lawful answers instead.
+jq -c --slurpfile cited "$D/cited.json" --slurpfile tasks "$R/tasks.json" \
+      --argjson nows "$NOW_S" "$JQ_DATES"'
+  ($cited[0] // []) as $c | ($tasks[0] // []) as $tk
+  | [ .[] | . as $x
+          | (.fields.starts_at // .fields.date // null) as $start
+          | select($start != null)
+          | ($start | in_days($nows)) as $d
+          | select($d != null and $d >= 0 and $d <= 10)
+          | select(($c | index($x.self)) == null)
+          # the RAW title, not display.title: a mirror appends the date
+          # to the display line, and " — 2026-08-28" in a Gate query is
+          # a search for nothing
+          | {self, state, start:$start, days:$d,
+             title:((.fields.title // .display.title // "") | tostring),
+             location:(.fields.location // null),
+             calendar:(.fields.calendar // null),
+             all_day:(.fields.all_day // false),
+             ends_at:(.fields.ends_at // .fields.end_date // null)} ]
+  | map(select(.title != ""))
+  | sort_by(.start) | .[0:1]
+  | map(. as $e
+        | ([ ($e.title | ascii_downcase | gsub("[^a-z0-9 ]"; " ") | split(" ")[])
+             | select(length >= 5) ]) as $words
+        | ([ $tk[] | select((.fields.status // "open") == "open")
+                   | ((.display.title // .fields.title // "") | tostring) as $tt
+                   | select($tt != "")
+                   | select([ $words[] as $w | select($tt | ascii_downcase | contains($w)) ] | length > 0)
+                   | {self, title:$tt, due_at:(.fields.due_at // null),
+                      shares:"a word of the event title"} ][0:4]) as $near
+        | {probe:"event-without-prep", rank:2,
+           subject:$e.self, subject_says:$e.title,
+           urgency_at:$e.start,
+           urgency_says:("starts " + ($e.start|.[0:10]) + " (" + ($e.start|when($nows)) + ")"),
+           why:("An event " + ($e.start|when($nows))
+                + " that no outcome and no insight speaks for — nothing in the house says what it needs beforehand."),
+           gate_query:$e.title,
+           material:{
+             row:{self:$e.self, state:$e.state, title:$e.title, starts_at:$e.start,
+                  ends_at:$e.ends_at, all_day:$e.all_day,
+                  location:$e.location, calendar:$e.calendar},
+             siblings:$near,
+             gate:null},
+           # WHICH DOOR depends on whether an open task names the event,
+           # and the difference is not the model to judge: an event
+           # declares no door a card can tap, so an insight about an
+           # event with no task beside it would have nothing LIGHT to
+           # offer and offers-something-light would refuse it. With a
+           # task in hand the write is an insight offering `complete` on
+           # that task; without one the only lawful write is an OUTCOME
+           # whose pieces CREATE the prep.
+           write:(if ($near|length) > 0
+                  then {kind:"insight", door:"POST /api/insights",
+                        fields:["finding", "evidence", "offer_kind", "offer_id", "offer_action"],
+                        finding:("One sentence naming what " + $e.title + " needs prepared beforehand and by when — a fact, not its title restated."),
+                        cite:([$e.self] + [ $near[] | .self ]),
+                        offer:{offer_kind:"task", offer_id:($near[0].self|split("/")|last),
+                               offer_action:"complete"},
+                        note:null}
+                  else {kind:"outcome", door:"POST /api/outcomes",
+                        fields:["goal", "value_id", "evidence", "2-5 outcome_pieces"],
+                        finding:($e.title + " happens prepared — the end-state, not the event restated. Each piece OPENS a create door with its input already filled (the thing bought, booked, written, brought), and every date in it falls after the run time at the top of this manifest."),
+                        cite:[$e.self],
+                        offer:null,
+                        value_id:null,
+                        note:"No open task names this event, and an event admits no door a card can tap — so an INSIGHT here would have nothing light to offer and offers-something-light would refuse it. Write the OUTCOME instead, naming a value from the manifest section Live values you may name. If the event honestly needs nothing prepared, write nothing and say so in the journal: a skipped order is lawful, and a refused write is a wasted round trip."}
+                  end)})
+  | .[]' "$R/events.json" >> "$CAND" 2>>"$PROBE_ERRS" || probe_stumbled event-without-prep
+
+# ── probe 3: person-mentioned-unrecorded ─────────────────────────────
+# A companion the roster affirms (state=current — an observed person is
+# not a usable companion, so a house that has affirmed nobody yields
+# nothing here, which is honest) whom the last seven days of Gate
+# traffic names and no insight has written down in that window. This is
+# the one probe whose CANDIDACY needs the outside world, so its searches
+# run here rather than after the ceiling; three names at most, and the
+# first name that comes back with hits wins.
+PERSON_ORDER="$D/work_order_person.json"; echo 'null' > "$PERSON_ORDER"
+people_seen="$(jq -r --slurpfile ins "$R/insights.full.json" --arg s "$SINCE_7D" '
+  ([ ($ins[0] // [])[] | select((.meta.updated_at // "") >= $s) | (.data.evidence // [])[] ]) as $recent
+  | [ .[] | . as $x | select(($recent | index($x.self)) == null) ] | .[0:3]
+  | .[] | [.self, .name] | @tsv' "$D/companions.json" 2>/dev/null || true)"
+if [ -n "$people_seen" ]; then
+  while IFS="$(printf '\t')" read -r p_self p_name; do
+    [ -n "$p_name" ] || continue
+    [ "$(jq -r 'type' "$PERSON_ORDER")" = "null" ] || break
+    pg="$(mktemp)"
+    gate_search "$pg" "$p_name" "$IMAP_SINCE"
+    if [ "$(jq '[.[] | select(.answered) | .hits[]] | length' "$pg")" -gt 0 ]; then
+      jq -c --slurpfile g "$pg" --arg self "$p_self" --arg name "$p_name" \
+            --arg since "$SINCE_7D" --slurpfile people "$D/companions.json" '
+        {probe:"person-mentioned-unrecorded", rank:3,
+         subject:$self, subject_says:$name,
+         urgency_at:null,
+         urgency_says:("named in Gate traffic since " + ($since|.[0:10])),
+         why:("The roster carries " + $name
+              + ", the last seven days of mail and chat name them, and no insight has written any of it into the house."),
+         gate_query:null,
+         material:{
+           row:((first(($people[0] // [])[] | select(.self == $self))) // {self:$self, name:$name}),
+           siblings:[],
+           gate:$g[0]},
+         write:{kind:"insight", door:"POST /api/insights",
+                fields:["finding", "evidence", "offer_kind", "offer_id", "offer_action"],
+                finding:("One sentence stating, as the house record, the FACT about " + $name
+                         + " the traffic below carries — what changed, when, and for whom. State it; never judge it."),
+                cite:[$self],
+                offer:{offer_kind:"person", offer_id:($self|split("/")|last),
+                       offer_action:"still_with_us"}}}' \
+        > "$PERSON_ORDER"
+    fi
+    rm -f "$pg"
+  done <<< "$people_seen"
+fi
+jq -c 'select(type == "object")' "$PERSON_ORDER" >> "$CAND" 2>>"$PROBE_ERRS" || probe_stumbled person-mentioned-unrecorded
+
+# ── probe 4: value-with-no-live-outcome ──────────────────────────────
+# A live value no offered or accepted outcome serves. Its material is
+# the value, the activities it says the household loves, and the open
+# tasks and coming events that name one of them — exactly the graph a
+# real goal would have to come out of. It is the only probe whose
+# expected write is an OUTCOME, and it is last in probe order on
+# purpose: it carries no clock, so anything with a date outranks it.
+jq -c --slurpfile out "$R/outcomes.full.json" --slurpfile cited "$D/cited.json" \
+      --slurpfile tasks "$R/tasks.json" --slurpfile events "$R/events.json" \
+      --argjson nows "$NOW_S" "$JQ_DATES"'
+  ($cited[0] // []) as $c
+  | ([ ($out[0] // [])[] | select(.state=="offered" or .state=="accepted")
+       | ((.data.value_id // "") | tostring) ]) as $served
+  | ($tasks[0] // []) as $tk | ($events[0] // []) as $ev
+  | [ .[] | . as $x
+          | select(($c | index($x.self)) == null)
+          | select(($served | index($x.id)) == null)
+          | {self, state, name, id, loved:(.loved // [])} ]
+  | .[0:1]
+  | map(. as $v
+        | ([ ($v.loved // [])[] | ascii_downcase ]) as $love
+        | (([ $tk[] | select((.fields.status // "open") == "open")
+                    | ((.display.title // .fields.title // "")|tostring) as $t
+                    | select($t != "")
+                    | (($t + " " + ((.fields.detail // "")|tostring)) | ascii_downcase) as $hay
+                    | select([ $love[] as $w | select($hay | contains($w)) ] | length > 0)
+                    | {self, kind:"task", title:$t, due_at:(.fields.due_at // null)} ]
+            + [ $ev[] | ((.display.title // .fields.title // "")|tostring) as $t
+                      | ((.fields.starts_at // .fields.date // null)) as $s
+                      | select($t != "" and $s != null)
+                      | select((($s|in_days($nows)) // -999) >= 0)
+                      | select([ $love[] as $w | select($t | ascii_downcase | contains($w)) ] | length > 0)
+                      | {self, kind:"event", title:$t, starts_at:$s} ])[0:6]) as $sib
+        | {probe:"value-with-no-live-outcome", rank:4,
+           subject:$v.self, subject_says:$v.name,
+           urgency_at:null,
+           urgency_says:"no clock — nothing standing serves this value",
+           why:"The house declares this value and no offered or accepted outcome serves it, so the rank has nothing to raise for it.",
+           gate_query:null,
+           material:{
+             row:{self:$v.self, state:$v.state, name:$v.name, loved:$v.loved},
+             siblings:$sib,
+             gate:null},
+           write:{kind:"outcome", door:"POST /api/outcomes",
+                  fields:["goal", "value_id", "evidence", "2-5 outcome_pieces"],
+                  finding:("A goal larger than any single row below, serving " + $v.name
+                           + " — an end-state the household would want, not a task restated. If the rows below do not imply one, this order is answered by writing NOTHING and saying so in the journal: there is no floor."),
+                  cite:([$v.self] + [ $sib[] | .self ]),
+                  offer:null,
+                  value_id:$v.id}})
+  | .[]' "$D/live_values.json" >> "$CAND" 2>>"$PROBE_ERRS" || probe_stumbled value-with-no-live-outcome
+
+# ── the ceiling: rank by urgency, keep the top N, and only THEN pay for
+# the Gate material. A probe whose order never ships costs no outside
+# read at all.
+jq -s 'sort_by([(if .urgency_at == null then 1 else 0 end), (.urgency_at // ""), .rank])' \
+   "$CAND" > "$D/work_orders_all.json" 2>/dev/null || echo '[]' > "$D/work_orders_all.json"
+jq --argjson n "$WORK_ORDERS_N" '.[0:$n]' "$D/work_orders_all.json" > "$D/work_orders.json"
+
+WO_ACC="$D/work_orders.jsonl"; : > "$WO_ACC"
+wo_n="$(jq 'length' "$D/work_orders.json")"
+wo_i=0
+while [ "$wo_i" -lt "$wo_n" ]; do
+  ord="$(jq -c --argjson k "$wo_i" '.[$k]' "$D/work_orders.json")"
+  q="$(printf '%s' "$ord" | jq -r '.gate_query // ""')"
+  if [ -n "$q" ] && [ "$(printf '%s' "$ord" | jq -r '.material.gate | type')" = "null" ]; then
+    gf="$(mktemp)"
+    gate_search "$gf" "$q" ""
+    printf '%s' "$ord" | jq -c --slurpfile g "$gf" '.material.gate = $g[0]' >> "$WO_ACC"
+    rm -f "$gf"
+  else
+    printf '%s\n' "$ord" >> "$WO_ACC"
+  fi
+  wo_i=$((wo_i + 1))
+done
+jq -s '.' "$WO_ACC" > "$D/work_orders.json"
+
 # ── the leash: file the anchored extend-ask before it runs out ───────
 ASK='{"filed": false, "why": "the grant is not inside the ask window"}'
 if [ -n "$GRANT_EXP" ] && [ -z "${WAYMARK_NO_ASK:-}" ]; then
@@ -786,6 +1254,8 @@ jq -n \
   --slurpfile companions "$D/companions.json" \
   --slurpfile arrivals "$D/arrivals.json" \
   --slurpfile bare "$D/bare_tasks.json" \
+  --slurpfile orders "$D/work_orders.json" \
+  --slurpfile orders_all "$D/work_orders_all.json" \
   --arg since_arr "$SINCE_ARR" \
   --slurpfile uncomposed "$D/uncomposed.json" \
   --slurpfile census "$D/uncomposed_census.json" \
@@ -809,8 +1279,11 @@ jq -n \
     score_bundles:   ($unscored[0] | length),
     declines_owed_a_diagnosis: ([$declines[0][] | select(.diagnosis_stands|not)] | length),
     advance_arrivals: ($arrivals[0] | length),
-    enrich_a_bare_task: ($bare[0] | length)
+    enrich_a_bare_task: ($bare[0] | length),
+    work_orders: ($orders[0] | length)
   },
+  work_orders: $orders[0],
+  work_orders_found: ($orders_all[0] | length),
   now: $started,
   arrivals_since: $since_arr,
   arrivals: ($arrivals[0] | .[0:40]),
@@ -850,6 +1323,56 @@ jq -n \
   echo
   echo "## What is owed"
   jq -r '.duties | to_entries[] | "- \(.key): \(.value)"' "$RUN/manifest.json"
+  echo
+  echo "## YOUR WORK ORDERS — this run's assignment (waymark-48a)"
+  jq -r '"  (\(.work_orders|length) presented of \(.work_orders_found) the probes found — a CEILING, set by WAYMARK_WORK_ORDERS)"' "$RUN/manifest.json"
+  jq -r '
+    if (.work_orders|length) == 0 then
+      "  (no order this run — every probe came up empty)"
+    else
+      (. as $root
+       | .work_orders | to_entries[]
+       | (.key + 1) as $n | .value as $o
+       | ([ "",
+            "ORDER \($n) · \($o.probe) · \($o.subject)",
+            "    subject: \($o.subject_says)",
+            "    urgency: \($o.urgency_says)",
+            "    why:     \($o.why)",
+            "    MATERIAL — read all of it; only house addresses may be cited:",
+            "      row: \($o.material.row | tojson)" ]
+          + [ $o.material.siblings[]?
+              | "      related: \(.self) — \(.title)"
+                + (if .due_at then " · due " + (.due_at | .[0:10]) else "" end)
+                + (if .starts_at then " · starts " + (.starts_at | .[0:10]) else "" end)
+                + (if .shares then " (shares \(.shares))" else "" end) ]
+          + (if $o.material.gate == null
+             then [ "      gate: (no Gate material — the probe was turned off or no rig answered)" ]
+             else (([ $o.material.gate[]
+                      | if .answered
+                        then ([ "      gate \(.rig) via \(.tool) — MATERIAL, NOT AN ADDRESS (never cite it, never copy a body; name the source in prose):" ]
+                               + (if (.hits|length) == 0
+                                  then [ "        (nothing came back for \(.query))" ]
+                                  else [ .hits[] | "        · \(.)" ] end))
+                        else [ "      gate \(.rig): REFUSED — \(.refusal)",
+                               "        (say the source was unreachable and quote that sentence — a refusal is never a licence to write filler)" ]
+                        end ] | add) // [ "      gate: (no rig this grant admits could be searched)" ])
+             end)
+          + [ (($root.gate.rigs // [])[] | select(.answered | not))
+              | "      gate \(.rig): NOT SEARCHED — it refused the liveness probe: \(.refusal)" ]
+          + [ "    WRITE — one \($o.write.kind | ascii_upcase) at \($o.write.door), and that is the whole order:",
+              "      fields: \($o.write.fields | join(", "))",
+              "      \(if $o.write.kind == "outcome" then "goal" else "finding" end): \($o.write.finding)",
+              "      evidence: \($o.write.cite | tojson)  — these, plus any other HOUSE row you actually read" ]
+          + (if $o.write.value_id then [ "      value_id: \($o.write.value_id)" ] else [] end)
+          + (if $o.write.offer
+             then [ "      offer_kind: \($o.write.offer.offer_kind)  offer_id: \($o.write.offer.offer_id)  offer_action: \($o.write.offer.offer_action)",
+                    "      (that door is LIGHT — it asks for nothing. Never send offer_href: the engine derives the address from the kind and the id.)" ]
+             else [] end)
+          + (if $o.write.note then [ "      NOTE: \($o.write.note)" ] else [] end)
+          | .[]))
+    end' "$RUN/manifest.json"
+  echo
+  echo "  These orders ARE the assignment. Do what is owed above first (a person's pull and a person's turn outrank any probe), then execute these in the order given — each is one row at one door, and the material to write it is already here. Everything else in this manifest is OPTIONAL material: read it if an order needs it, and stage nothing extra to look busy. An order you cannot answer honestly is skipped and said so in the journal. A run with no work orders and nothing owed writes NOTHING AT ALL, and that is a lawful, complete run (waymark-mho)."
   echo
   echo "## Offered requests — a person's pull is never capped"
   jq -r 'if (.offered_requests|length)==0 then "  (none)" else (.offered_requests[] | "- \(.self) by \(.requested_by) good until \(.good_until)") end' "$RUN/manifest.json"

@@ -41,11 +41,20 @@ reads every address the formula's "read the house" step names into
 turn is not yours, the turns no insight cites yet, the bundles
 carrying no judgment of yours, the declines owed a diagnosis.
 
+Then it goes one step further and writes your **work orders**
+(waymark-48a): a closed set of probes turns that snapshot into at
+most two concrete assignments, each carrying its subject's address,
+the material already fetched for it (rows beside it in the house, and
+whatever the live Gate rigs answered), and the write it expects —
+which kind, which fields, which addresses to cite, which light door
+to offer.
+
 It ends by printing `.sitting/latest/manifest.md`. **Read that first,
-and work from it.** The machine already did the reading; what is left
-for you is the part only judgment can do — which of those facts
-matter, what to compose, what score to give — and the door writes
-themselves.
+and work from it** — and read § "YOUR WORK ORDERS" before anything
+else in it, because that is what this run is for. The machine already
+did the reading and the choosing; what is left for you is the part
+only judgment can do — the sentence itself, and whether the evidence
+honestly carries it — and the door writes themselves.
 
 If the driver stops, **stop with it and report its sentence**. It
 refuses the way the doors refuse: naming the fix. Never invent
@@ -150,13 +159,20 @@ holding your place in it.
    outcome's standing (a date slid, someone is sick), say so on that
    outcome in a reply — what changed, what you did, by id — so the
    feed can read why a bundle slipped without opening the thread.
-4. **Advance each arrival as far as it honestly goes — no floor, no
-   padding.** There is no quota. A run reacts to what actually
-   ARRIVED (the manifest's `arrivals`: rows new since the last run — a
-   person's remark, a new or Gate-synced task, a new event) and does
-   the minimum honest work on the corpus; it never manufactures an
-   outcome to have done something. Three moves, in rising order of
-   what the evidence must support:
+4. **Work the manifest's WORK ORDERS — no floor, no padding.** The
+   reading a run works from is § "YOUR WORK ORDERS": at most two
+   assignments the driver's probes built out of the snapshot, each
+   already naming its subject address, its material, and the write it
+   expects. Do them in the order given, one row each. They are a
+   CEILING, not a floor: anything past them is optional, an order you
+   cannot answer honestly is skipped and said so in the journal, and a
+   run with no work orders and nothing owed writes nothing at all —
+   still a lawful, complete run. There is no quota, and no outcome is
+   ever manufactured to have done something. Behind each order is one
+   of the same three moves, in rising order of what the evidence must
+   support (the manifest's `arrivals` — rows new since the last run —
+   are the material the probes drew from, and stay readable beside
+   them):
 
    **a. Enrich a bare task (the minimum).** The manifest's
    `bare_tasks` are actionable tasks with no detail that no outcome or
@@ -246,8 +262,13 @@ holding your place in it.
    runs judge each other and the crown reads the scores. A run that
    found no arrival to advance, no bare task worth enriching and
    nothing owed writes nothing at all — and that is a correct,
-   complete run. `sitting-run.sh verify` only faults a run that left
-   a person's remark or a plainly-bare task untouched.
+   complete run. `sitting-run.sh verify` grades the previous
+   manifest's work orders one line each — `ORDER <probe> <subject>:
+   answered by <row>` or `UNANSWERED`, where answered means a row you
+   wrote this run CITES the subject's address — and otherwise only
+   faults a run that left a person's remark or a plainly-bare task
+   untouched. An UNANSWERED order is not automatically a failure; an
+   UNANSWERED order beside a journal that never mentions it is.
 
 ## The walls (the doors enforce these — trust the refusal sentences)
 

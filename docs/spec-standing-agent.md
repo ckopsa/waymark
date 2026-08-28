@@ -104,6 +104,87 @@ so a run's success is observable from outside the run. That last part
 is the whole point: two Jules sittings had already "completed" while
 leaving zero rows on the engine, and nothing in the loop noticed.
 
+## The composer probes — a work order, not a candidate set
+
+The owner's observation, 2026-08-27: **the weaker the model, the more
+direction it needs.** Handed the same manifest, Fable read a long
+candidate list and picked well; Gemini wrote filler. A candidate set
+asks the model to CHOOSE; a work order asks it to EXECUTE. So the
+driver moves the line one notch further toward the machine
+(waymark-48a).
+
+A **probe** is a deterministic query over the run's snapshot plus
+whatever material it pre-fetches, emitting **at most one work order**.
+The set is CLOSED — the same shape as the feed's `populations`
+(`waymark10.server.feed`), a map a reviewer reads on one screen rather
+than a discovered registry that would behave differently on two
+machines. Today it holds four, and the order below is also the
+tie-break:
+
+1. `bare-task-due-soon` — an open, detail-less task no outcome or
+   insight speaks for, nearest `due_at` first. Material: the task's
+   full row, the open tasks sharing its `task_list` or assignee, and
+   Gate hits on its title. Expected write: an **insight** citing the
+   task, offering `complete` on it.
+2. `event-without-prep` — an event starting inside ten days that no
+   outcome and no insight cites. Material: the event row, open tasks
+   whose title carries a word of its title, Gate hits on its title.
+   Expected write: an **insight** offering `complete` on that task
+   when one exists; when none does, an event admits no door a card can
+   tap, so the order asks for an **outcome** whose pieces create the
+   prep — or an honest skip.
+3. `person-mentioned-unrecorded` — a roster companion (affirmed /
+   `current`; an observed person is not usable) whom the last seven
+   days of Gate traffic names and no insight cites in that window.
+   Material: the person row and the hits. Expected write: an
+   **insight** stating the fact, offering `still_with_us`.
+4. `value-with-no-live-outcome` — a live value no offered or accepted
+   outcome serves. Material: the value, its loved activities, and the
+   open tasks and coming events that name one of them. Expected write:
+   an **outcome** — or nothing, when no goal is really there.
+
+Four rules hold the whole thing up:
+
+- **Machine dedupe first.** Every probe drops any subject the cited
+  set already names. The `not-a-twin` door would refuse a duplicate
+  outcome at staging anyway, but a refusal costs a round trip and
+  teaches the model nothing; the list it is handed is clean before it
+  reads it.
+- **A ceiling, not a floor.** The manifest presents the top
+  `WAYMARK_WORK_ORDERS` (default 2), ordered by urgency — soonest due
+  or soonest starting first, then probe order. Anything past them is
+  optional, and a run with no orders and nothing owed writes nothing
+  at all: still a lawful run (waymark-mho).
+- **Gate is read-only and never fatal.** Material comes from the one
+  search tool each *answering* rig exposes that takes a free-text
+  `query` and requires nothing else — read off `gate.json`, because
+  Gate's tool list is an aggregation that changes without telling us.
+  A rig that refuses contributes its SENTENCE instead of its hits, and
+  the manifest says so, because a refusal is what the model must
+  report in place of filler. Hits are capped at three per rig and cut
+  at 200 characters, marked *material, not an address*: a message body
+  is never copied into a row and a Gate hit is never cited.
+  `WAYMARK_NO_GATE_PROBE=1` skips all of it.
+- **`verify` grades the orders.** Next run it prints one line per
+  order from the previous manifest — `ORDER <probe> <subject>:
+  answered by <row>` or `UNANSWERED` — where *answered* means a row
+  this principal wrote since the mark CITES the subject's address.
+  That is a fact about evidence, which a script can check and a report
+  cannot fake. An UNANSWERED order is lawful; an UNANSWERED order
+  beside a journal that never mentions it is a run that ignored its
+  assignment.
+
+**Adding a fifth probe** means adding it in two places at once, the
+way a feed population is added: the probe itself in
+`scripts/sitting-run.sh` (a `jq` block appending one candidate object
+to `$CAND`, carrying `probe`, `rank`, `subject`, `subject_says`,
+`urgency_at`, `urgency_says`, `why`, `gate_query`, `material` and
+`write`), and its entry in the closed list in the block's own header
+comment. Give it the next `rank`; leave `material.gate` null and set
+`gate_query` if it wants Gate material, and the ceiling will fetch it
+only when the order actually ships. Nothing else changes: the render
+and the grading are generic over the shape.
+
 ## Running a sitting on Jules
 
 Everything below is set once, by the owner, in the Jules web UI — the
@@ -147,7 +228,7 @@ notices — sitting 5, 2026-08-27, renamed a test kind instead of
 sitting), and it names `SITTING.md` as the law:
 
 ```
-You are a composer for the waymark household system — NOT a software engineer. Do not edit, test, fix, or refactor anything in this repository, whatever you notice; ignore AGENTS.md and CLAUDE.md, which are for people writing the software. Your job is one "sitting" at the HTTP door https://work.kopsa.info, and its full instruction is SITTING.md. Run `scripts/sitting-run.sh`, read `.sitting/latest/manifest.md`, then follow SITTING.md (and `.beads/formulas/sitting.formula.toml`) to answer what is owed — advance what arrived (enrich a bare task at least; compose an outcome only for a real goal, never a twin of one standing), all over HTTP, leaving no git diff. Finish with `scripts/sitting-run.sh verify` and report the ids you staged.
+You are a composer for the waymark household system — NOT a software engineer. Do not edit, test, fix, or refactor anything in this repository, whatever you notice; ignore AGENTS.md and CLAUDE.md, which are for people writing the software. Your job is one "sitting" at the HTTP door https://work.kopsa.info, and its full instruction is SITTING.md. Run `scripts/sitting-run.sh`, read `.sitting/latest/manifest.md`, then follow SITTING.md (and `.beads/formulas/sitting.formula.toml`) to answer what is owed and to execute the manifest's WORK ORDERS — each one names its subject, its material and the exact write it expects; do those and nothing extra, and skip honestly (saying so in the journal) rather than writing filler. All over HTTP, leaving no git diff. Finish with `scripts/sitting-run.sh verify` and report the ids you staged.
 ```
 
 `SITTING.md`'s first instruction is `scripts/sitting-run.sh`, so the
