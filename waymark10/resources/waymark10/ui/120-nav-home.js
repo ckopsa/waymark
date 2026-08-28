@@ -269,7 +269,7 @@ async function renderHome(view, seq) {
      the newest per owner wins, so a wrong tap is corrected by tapping
      again; no report today is simply absent. meta.updated_at stands
      in for created_at on the wire: a weather row is never edited. */
-  const skyDot = {quiet: "#4A6B8A", steady: "var(--verdigris)",
+  const skyDot = {quiet: "var(--sky-quiet)", steady: "var(--verdigris)",
                   loud: "var(--warn)"};
   const weatherHref = collectionHref(w, "weather");
   if (weatherHref) {

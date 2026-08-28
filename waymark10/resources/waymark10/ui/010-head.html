@@ -3,8 +3,31 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- native chrome (form controls, scrollbars, the canvas behind the
+     page) follows the same two schemes the stylesheet paints; the
+     boot below narrows it to one when a choice was stored -->
+<meta name="color-scheme" content="light dark">
 <title>Waymark</title>
 <!-- no favicon route on the engine: declare none, so the browser's
      automatic /favicon.ico probe doesn't 404 in every console -->
 <link rel="icon" href="data:,">
+<!-- ── the theme boot ────────────────────────────────────────────────
+     The one script outside this page's single client block, and it is
+     here for one reason: it must run BEFORE THE FIRST PAINT. A stored
+     "light"/"dark" stamps <html data-theme=…> now, so the very first
+     frame is already the theme the reader chose — no flash of the
+     other one. "system" (and a browser that refuses storage) stamps
+     nothing, and the stylesheet's prefers-color-scheme block answers
+     instead. Reading storage can THROW outright, not merely return
+     null (private mode, a blocked-cookies profile), so the read is
+     wrapped and a failure simply means "system". -->
+<script id="theme-boot">
+(function () {
+  try {
+    var t = localStorage.getItem("waymark.theme");
+    if (t === "light" || t === "dark")
+      document.documentElement.setAttribute("data-theme", t);
+  } catch (_e) { /* no storage: the system's word stands */ }
+})();
+</script>
 <style>
