@@ -6286,13 +6286,22 @@ the feed, and the composer's own commit is the only door back.
 ### Recorded here, for whoever comes next
 
 - **`make check-queue`: 38 kinds, 11 warnings, 57 scenarios judged** (was 38 /
-  11 / 56 on `main`) — two scenarios added, one of which defers to the suite.
-  `outcome` reads *7 scenarios ✓ (3 deferred), 16 refusing guards, 7 named by
-  a scenario*; `outcome_piece` *3 scenarios ✓ (4 deferred), 12 refusing
-  guards*. The deferral is a property of the DOOR and not of the wall under
-  test: `make_it_so` carries `something-is-still-on-offer`, which reads
-  `:outcome_piece`, so every scenario on that door waits for the suite
-  whatever it is about — and § 21 walks it live.
+  11 / 56 on `main`) — one scenario added,
+  `a-decline-is-allowed-from-under-a-rework`, check tier. `outcome` reads
+  *7 scenarios ✓ (2 deferred), 16 refusing guards, 6 named by a scenario*;
+  `outcome_piece` *3 scenarios ✓ (4 deferred), 12 refusing guards*.
+- **`the-plan-is-not-under-rework` is named by no scenario, and the reason is
+  the WALKER rather than the wall.** A scenario on `make_it_so` defers to the
+  suite whatever it is about, because a sibling guard on that door
+  (`something-is-still-on-offer`) reads `:outcome_piece` — and the conformance
+  walker stages its subject through the kind's OWN create door, which for an
+  outcome demands a value this house holds and evidence it can read, rows a
+  declaration-time literal cannot mint. The first cut of this bead shipped that
+  scenario and the suite answered *the row it describes could not be staged
+  through its own door*, which is the honest verdict: it is proved in
+  § 21 instead, over the real ring handler against a real value and a real
+  bundle. Third time this file has had to write that sentence down
+  (`names-a-person`, the piece's `only-its-composer-reworks`).
 - **Exactly two fingerprints moved, and they are the two whose machines
   changed.** Computed over the whole 53-kind census
   (`engine/full-registry` over `workqueue10.main/check-resources`) on `main`
@@ -6327,7 +6336,7 @@ the feed, and the composer's own commit is the only door back.
   `the-bundle-is-taking-answers`, `the-plan-is-not-under-rework`,
   `reworks-wall`, `the-parent-invited-a-rework` re-read, `standing-states`,
   `iterate-open?` and `the-outcome-invited-this-rework` deleted, two
-  scenarios); `waymark10/src/waymark10/server/feed.clj` (`reworking-doc`, the
+  one scenario); `waymark10/src/waymark10/server/feed.clj` (`reworking-doc`, the
   crown document, the population's docstring); `waymark10/src/waymark10/server/diagnosis.clj`
   (`answered` lapses from `iterating` too, `lesson` reads it as
   `still_offered`, and the sentence says it is a work order rather than a

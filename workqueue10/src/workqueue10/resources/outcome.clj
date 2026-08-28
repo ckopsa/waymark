@@ -2345,15 +2345,13 @@
 ;; reach: `a-person-answers` on `iterate` (the gesture is the
 ;; household's), `only-its-composer-reworks` on the outcome's rework
 ;; door (the mirror of four-eyes, grantable since 9xn), and
-;; `the-plan-is-not-under-rework` on `make_it_so` (a pure read of this
-;; row's own state — the scenario itself DEFERS to the suite all the
-;; same, because a sibling guard on that door, `something-is-still-on-
-;; offer`, reads `:outcome_piece`; the tier is a property of the door
-;; and never of the wall under test, and § 21 walks it live). The wall
-;; that reads the PARENT (`the-parent-invited-a-rework`) and the whole
-;; loop's convergence want a live engine, so they and the church
-;; example are proved by workqueue10.outcome-test § 21 over the real
-;; ring handler.
+;; `a-decline-is-allowed-from-under-a-rework` on `not_this_week`
+;; from the new state (a person's no is never held hostage to an
+;; agent's answer). The wall that reads the PARENT
+;; (`the-parent-invited-a-rework`), the one on `make_it_so` (see the
+;; note above that scenario), and the whole loop's convergence want a
+;; live engine, so they and the church example are proved by
+;; workqueue10.outcome-test § 21 over the real ring handler.
 
 (defscenario an-agent-does-not-iterate-an-outcome
   "Iterate is the household's own gesture — the goal is right, workshop
@@ -2383,20 +2381,19 @@
    :expect  {:refused :only-its-composer-reworks
              :because "composer that staged"}})
 
-(defscenario a-bundle-under-rework-is-not-made-so
-  "The one verdict `iterating` closes, and it closes with a sentence
-   rather than with the machine's own out-of-state refusal. A person
-   who has just said the plan is wrong cannot be handed a button that
-   takes that very plan whole; the way forward is the composer's
-   rework, and the ways out are still open — not this week answers it,
-   and the week's own clock still ends it."
-  {:kind    :outcome
-   :attempt :make_it_so
-   :at      "2026-08-25T09:00:00Z"
-   :row     {:state :iterating :data a-composed-outcome}
-   :as      {:id "colton" :type :person}
-   :expect  {:refused :the-plan-is-not-under-rework
-             :because "not this week"}})
+;; NO SCENARIO NAMES `the-plan-is-not-under-rework`, and the absence is
+;; structural rather than an omission — the third time this file has
+;; had to write that sentence down (`names-a-person`'s note, the
+;; piece's `only-its-composer-reworks` note). `make_it_so` carries
+;; `something-is-still-on-offer`, which reads `:outcome_piece`, so any
+;; scenario attempting that door DEFERS to the conformance suite; and
+;; the conformance walker stages its subject through the kind's own
+;; create door, which for an outcome demands a value this house holds
+;; and evidence it can read — rows a declaration-time literal cannot
+;; mint. So a deferred scenario on this door cannot be staged at all,
+;; which is a fact about the walker rather than about the wall. It is
+;; proved where it can be: workqueue10.outcome-test § 21, over the real
+;; ring handler, against a real value and a real bundle.
 
 (defscenario a-decline-is-allowed-from-under-a-rework
   "A decline is always allowed, and this is the half of `iterating` a
@@ -2892,7 +2889,6 @@
                an-outcome-names-a-value-this-house-holds
                an-agent-does-not-iterate-an-outcome
                only-the-composer-that-staged-an-outcome-reworks-it
-               a-bundle-under-rework-is-not-made-so
                a-decline-is-allowed-from-under-a-rework]})
 
 ;; ── :outcome_piece — one concrete thing, one tap ────────────────────
