@@ -30,7 +30,8 @@
 # Optional: WAYMARK_BASE_URL (https://work.kopsa.info),
 # WAYMARK_SITTING_DIR (.sitting), WAYMARK_ASK_WINDOW_S (43200),
 # WAYMARK_EXTEND_S (86400), WAYMARK_MAX_PAGES (5),
-# WAYMARK_MAX_HYDRATE (120).
+# WAYMARK_MAX_HYDRATE (120), WAYMARK_NO_GATE_PROBE (unset — set it to
+# skip the one-read-per-rig Gate liveness probe).
 #
 # A refusal is the end of the run: this script never knocks, never
 # spends re-entry, never invents another way in. It prints the door's
@@ -540,6 +541,71 @@ jq -c '{tools: ((.links // {}) | to_entries | map({name:.key, href:.value.href, 
         mutations: ((.actions // {}) | keys),
         ask: (.ask // null)}' "$R/gate.json" > "$D/gate.json"
 
+# … AND WHETHER THE RIG BEHIND EACH NAME STILL ANSWERS (waymark-idw).
+# Gate's tool list is its AGGREGATION, not a promise: on 2026-08-27
+# emila listed eight email tools and refused every one of them ("no
+# such user" — the mail bridge had lost its account), and the sitting
+# found that out mid-dig, one filler enrichment at a time. So probe
+# ONE cheap read per rig HERE, at manifest time, and let the manifest
+# NAME a dead rig before the model plans a dig around it. Reads only:
+# nothing is ever written to Gate, and a probe that refuses costs the
+# run nothing but the refusal's own sentence, which is what the model
+# needs to say instead of filler. WAYMARK_NO_GATE_PROBE=1 turns it off.
+gate_probe() { # gate_probe <outfile> <tool> <json-args> — POST, echoes the code
+  # `api`'s posture, one direction over: never abort, degrade to the
+  # HTTP code (000 when no answer came). The window is wider than a
+  # read's because a rig that is merely SICK answers slowly — messa
+  # waits 30s on its own page before it says so, and that sentence is
+  # worth more to the manifest than a timeout of ours.
+  local code
+  code="$(curl -sS --max-time 40 -o "$1" -w '%{http_code}' -X POST \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "X-Waymark-Grant: $GRANT" \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json" \
+    -d "$3" "$BASE/api/-/gate/$2" 2>/dev/null)" || true
+  printf '%s' "${code:-000}"
+}
+: > "$D/gate_rigs.jsonl"
+if [ -z "${WAYMARK_NO_GATE_PROBE:-}" ]; then
+  # one tool per rig — an ARGUMENT-FREE read, the listing tools first
+  # by name, so the probe is the cheapest call that rig serves; a
+  # `limit`/`count` argument is pinned to 1 where the schema has one
+  while IFS="$(printf '\t')" read -r rig tool args; do
+    [ -n "$rig" ] || continue
+    probe_out="$(mktemp)"
+    code="$(gate_probe "$probe_out" "$tool" "$args")"
+    jq -c --arg rig "$rig" --arg tool "$tool" --arg code "$code" '
+      (($code == "200") and (.isError != true)) as $ok
+      | {rig: $rig, probe: $tool, answered: $ok,
+         refusal: (if $ok then null
+                   else (((.content // []) | map(.text? // empty) | join(" ")) as $t
+                         | (if ($t | length) > 0 then $t
+                            else ((.detail // .title // ("HTTP " + $code)) | tostring) end)
+                         | gsub("\\s+"; " ") | .[0:300])
+                   end)}' "$probe_out" 2>/dev/null \
+      || printf '{"rig":"%s","probe":"%s","answered":false,"refusal":"no answer came back (HTTP %s)"}\n' "$rig" "$tool" "$code"
+    rm -f "$probe_out"
+  done < <(jq -r '
+    (.links // {}) | to_entries
+    | map({rig: (.key | split("__") | .[0]), name: .key,
+           short: (.key | split("__") | .[1] // ""),
+           props: ((.value.input.properties // {}) | keys),
+           required: ((.value.input.required // []) | map(select(. != "why")))})
+    | map(select((.required | length) == 0))
+    | map(. as $t | $t + {rank: ((["folders","threads","list_chats","chats",
+                                   "accounts","categories","summary","inbox"]
+                                  | index($t.short)) // 99)})
+    | group_by(.rig) | map(sort_by(.rank, .name) | .[0])
+    | .[] | [.rig, .name,
+             (if (.props | index("limit")) then "{\"limit\":1}"
+              elif (.props | index("count")) then "{\"count\":1}"
+              else "{}" end)] | @tsv' "$R/gate.json") >> "$D/gate_rigs.jsonl"
+fi
+jq -s '.' "$D/gate_rigs.jsonl" > "$D/gate_rigs.json"
+jq -c --slurpfile rigs "$D/gate_rigs.json" '. + {rigs: ($rigs[0] // [])}' \
+  "$D/gate.json" > "$D/gate.tmp" && mv "$D/gate.tmp" "$D/gate.json"
+
 # NO FLOOR (waymark-mho, the owner's ruling 2026-08-27 that RETRACTS the
 # floor): a run advances concrete ARRIVALS and enriches BARE tasks; it
 # does not owe a manufactured outcome, and a quiet run is a lawful
@@ -550,8 +616,19 @@ jq -c '{tools: ((.links // {}) | to_entries | map({name:.key, href:.value.href, 
 # the previous run's start, so "new" means new since we last looked; on
 # a first run look back one hour rather than flooding the arrival list
 # with the whole house.
-PREV_MANIFEST="$(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | grep -v "/$STAMP/manifest.json" | sort | tail -n 1)"
-SINCE_ARR="$(jq -r '.run.started_at // empty' "$PREV_MANIFEST" 2>/dev/null)"
+# (the `|| true` is load-bearing under `set -o pipefail`: with no prior
+# manifest at all — the ephemeral runner the next comment describes —
+# both `ls` and `grep -v` exit non-zero, and the assignment took the
+# whole run down before it ever reached the fallback written for it.)
+PREV_MANIFEST="$(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | grep -v "/$STAMP/manifest.json" | sort | tail -n 1 || true)"
+# (and the read of it is GUARDED for the same reason: handed an empty
+# path, jq reads stdin and exits 2, which under `set -e` killed the run
+# — silently, because the stderr this hides is jq's. The two guards
+# together are what make the fallback below reachable at all.)
+SINCE_ARR=""
+if [ -n "$PREV_MANIFEST" ]; then
+  SINCE_ARR="$(jq -r '.run.started_at // empty' "$PREV_MANIFEST" 2>/dev/null || true)"
+fi
 # On an EPHEMERAL runner (Jules clones fresh — no prior snapshot) there
 # is no PREV_MANIFEST, so the self-diff below cannot fire and arrivals
 # fall back to a timestamp. The best persisted watermark that survives
@@ -559,7 +636,7 @@ SINCE_ARR="$(jq -r '.run.started_at // empty' "$PREV_MANIFEST" 2>/dev/null)"
 # read from the snapshot the driver already took; a truly first run
 # with no journal looks back one hour.
 if [ -z "${SINCE_ARR:-}" ]; then
-  SINCE_ARR="$(jq -r '[.[].meta.updated_at] | max // empty' "$R/journals.full.json" 2>/dev/null)"
+  SINCE_ARR="$(jq -r '[.[].meta.updated_at] | max // empty' "$R/journals.full.json" 2>/dev/null || true)"
 fi
 [ -n "${SINCE_ARR:-}" ] || SINCE_ARR="$(iso "$(( $(now_s) - 3600 ))")"
 
@@ -799,6 +876,10 @@ jq -n \
   echo "## Already standing — NEVER twin one of these"
   jq -r 'if (.standing_outcomes|length)==0 then "  (nothing stands yet)" else (.standing_outcomes[] | "- \(.self) [\(.state)] \(.goal[0:90])\n    cites: \(.evidence|tostring)") end' "$RUN/manifest.json"
   echo "  A candidate whose GOAL says the same thing, or that cites the SAME evidence row, as any of these is a twin — do not stage it. Compose only what is genuinely not here yet."
+  echo
+  echo "## Beyond the house — the Gate rigs, each probed just now"
+  jq -r 'if ((.gate.rigs // []) | length) == 0 then "  (nothing probed — this grant admits no Gate tool, or the probe was turned off)" else (.gate.rigs[] | if .answered then "- \(.rig): ANSWERS (probed \(.probe))" else "- \(.rig): REFUSING — \(.refusal)  (probed \(.probe))" end) end' "$RUN/manifest.json"
+  echo "  A rig marked REFUSING will refuse every tool it lists — do not plan a dig through it, and never let its refusal become filler: say the source was unreachable, quote the sentence, and enrich from what the house itself holds."
   echo
   echo "## What arrived since the last run — process these"
   jq -r '"  (new since " + .arrivals_since + ")"' "$RUN/manifest.json"
