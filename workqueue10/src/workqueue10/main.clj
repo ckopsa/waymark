@@ -33,7 +33,12 @@
   for a reconsented token to spend), WORKQUEUE10_FLICKR_URL (the household's
   media engine — the :media domain's first authority; unset falls
   back to the in-memory fake, the hub's noop source always wired
-  beside it), WAYMARK10_DEPLOY_MODE,
+  beside it), WORKQUEUE10_GATE_URL (the household's Gate — the
+  :thread domain's two rigs, tgram and messa, share ONE caller
+  against it; unset falls back to the in-memory twin, so offline dev
+  and the declaration gate never reach for the LAN) and
+  WORKQUEUE10_GATE_CHAT_LIMIT (how many conversations a listing asks
+  for — the window, default 40), WAYMARK10_DEPLOY_MODE,
   WAYMARK10_AUTO_MIGRATE=1 (dev only — production boots REFUSE on
   schema drift and name the plan), WAYMARK10_OIDC_* (the family
   IdP — waymark10.server.oidc/from-env names them; absent = the
@@ -66,16 +71,20 @@
             [workqueue10.resources.outcome :refer [outcome outcome-piece]]
             [workqueue10.resources.person :refer [person]]
             [workqueue10.resources.task :refer [task-resource]]
+            [workqueue10.resources.thread :refer [thread-resource]]
             [workqueue10.resources.tickler :refer [tickler]]
             [workqueue10.resources.task-list :refer [task-list-resource]]
             [workqueue10.resources.value :refer [value]]
             [workqueue10.resources.weather :refer [weather]]
             [workqueue10.sources.choreplan :as chores]
             [workqueue10.sources.flickr :as flickr]
+            [workqueue10.sources.gate-chat :as gate-chat]
             [workqueue10.sources.gtasks :as gtasks]
             [workqueue10.sources.homeassistant :as ha]
             [workqueue10.sources.hub :as hub]
             [workqueue10.sources.mealplan :as meals]
+            [workqueue10.sources.messa :as messa]
+            [workqueue10.sources.tgram :as tgram]
             [waymark10.dashboard :as dashboard]
             [workqueue10.connections :as connections :refer [connection]]
             [waymark10.dsl :refer [in-domain]]
@@ -128,6 +137,26 @@
   ;; offline dev exercises the addendum's follow-the-row half too.
   (flickr/fake-source
    {:preferred-fn (flickr/engine-audience-fn {:engine-ref engine-ref})}))
+
+(defonce fake-gate
+  ;; ONE scriptable Gate behind both thread rigs — the twin stands at
+  ;; the TRANSPORT (flickr's kind), so offline dev and the declaration
+  ;; gate run the real listing read, the real filters and the real
+  ;; translation, with only the socket missing. Empty until something
+  ;; scripts it: an unlisted rig discovers nothing, which is the
+  ;; honest offline shape.
+  (gate-chat/fake-state))
+
+;; both twins ride the same engine-ref birth-fn the real boundaries
+;; do, so offline dev exercises the observed-birth half too
+(defonce fake-tgram
+  (tgram/fake-source fake-gate
+                     {:birth-fn (gate-chat/roster-birth-fn
+                                 {:engine-ref engine-ref})}))
+(defonce fake-messa
+  (messa/fake-source fake-gate
+                     {:birth-fn (gate-chat/roster-birth-fn
+                                 {:engine-ref engine-ref})}))
 
 (defn- ui-base []
   (or (System/getenv "WAYMARK10_OIDC_APP_URL") "http://localhost:8014"))
@@ -203,6 +232,30 @@
                 fake-flickr)
    "hub" (hub/source)})
 
+(defn thread-sources
+  "The THREAD confluence's tag → ThreadSource map — the confluence
+  instantiated a third time (docs/spec-threads.md): one :thread kind
+  over the household's conversations, from Telegram and from the
+  phone's texts. Both rigs answer through Gate, so BOTH share ONE
+  caller — gate-proxy's own client, built once here, which is the
+  session reuse the door asks for and the reason this is not two
+  transports.
+
+  Real when WORKQUEUE10_GATE_URL names the Gate (the every-boundary
+  rule; Gate publishes a deployment default, but a source that went
+  real by default would have offline dev and the declaration gate
+  reaching for the LAN), the shared in-memory twin otherwise."
+  []
+  (if-some [url (some-> (System/getenv "WORKQUEUE10_GATE_URL") str not-empty)]
+    (let [rpc (gate-chat/rpc {:url url})
+          limit (some-> (System/getenv "WORKQUEUE10_GATE_CHAT_LIMIT")
+                        parse-long)
+          birth-fn (gate-chat/roster-birth-fn {:engine-ref engine-ref})
+          cfg {:rpc-fn rpc :limit limit :birth-fn birth-fn}]
+      {"tgram" (tgram/source cfg)
+       "messa" (messa/source cfg)})
+    {"tgram" fake-tgram "messa" fake-messa}))
+
 (defonce fake-calendar
   ;; module-default fake boundary — tests script it, offline dev and
   ;; the declaration gate run over it
@@ -249,16 +302,28 @@
   for the rows no catalog owns. Same protocol, same routing law,
   different canonical doc.
 
+  THE THREAD DOMAIN is the confluence instantiated a THIRD time
+  (docs/spec-threads.md), over a protocol of its own: :thread, the
+  household's conversations as ADDRESSES — one row per chat from
+  Telegram and the phone's texts, carrying titles, times and names
+  and never a word anybody said. Domainless like :person, and for
+  the same family reason: who this house talks to is not a domain of
+  logistics beside queue/chores/meals.
+
   srcs: the task confluence's tag → TaskSource map; media-srcs: the
-  media confluence's (the two-arg arity fills it with the offline
-  fakes — the pre-media call sites' shape, kept); adapter: the
-  family calendar's event boundary (a MirrorAdapter AND
-  MirrorCreateAdapter — this one is written to, not merely read)."
+  media confluence's; thread-srcs: the thread confluence's (the
+  narrower arities fill both with the offline fakes — the pre-media
+  and pre-thread call sites' shapes, kept); adapter: the family
+  calendar's event boundary (a MirrorAdapter AND MirrorCreateAdapter
+  — this one is written to, not merely read)."
   ([srcs adapter]
    (resources srcs {"flickr" fake-flickr "hub" (hub/source)} adapter))
   ([srcs media-srcs adapter]
    (resources srcs media-srcs adapter nil))
   ([srcs media-srcs adapter report-fn]
+   (resources srcs media-srcs {"tgram" fake-tgram "messa" fake-messa}
+              adapter report-fn))
+  ([srcs media-srcs thread-srcs adapter report-fn]
    (-> (in-domain :queue [(task-resource (conf/confluence srcs report-fn))
                           (task-list-resource
                            (conf/list-confluence (conf/list-sources srcs)
@@ -402,9 +467,21 @@
        ;; decision, and a card for it would be the feed manufacturing
        ;; a thing to answer. The crown carries it instead
        ;; (docs/spec-outcome-menu.md § 'Built — jfv.20').
+       ;; :thread rides last (waymark-36s): the household's
+       ;; conversations as ADDRESSES — a row per chat, so a fact found
+       ;; in a text has somewhere to point, the sitting's thread
+       ;; selection reads ROWS instead of guessing, and a thread whose
+       ;; last word moved is an arrival. Domainless beside :person for
+       ;; the same family reason, and :nav :secondary for value's: a
+       ;; conversation is not a thing to do, and a permanently-open
+       ;; row on a primary kind would card in do-now forever. Mirror
+       ;; the THREAD, never the messages — titles, times and names;
+       ;; bodies stay behind Gate under a capability a person approved.
        (into (into [saved-view capability connection self journal weather letter
                     permission-slip tickler insight value outcome outcome-piece
-                    person composition-request]
+                    person composition-request
+                    (thread-resource (conf/thread-confluence thread-srcs
+                                                             report-fn))]
                    dashboard/resources)))))
 
 (def surfaces
@@ -466,7 +543,9 @@
   (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos
               "gtasks" fake-gtasks}
              {"flickr" fake-flickr "hub" (hub/source)}
-             fake-calendar))
+             {"tgram" fake-tgram "messa" fake-messa}
+             fake-calendar
+             nil))
 
 (defn- dsn []
   (or (System/getenv "WORKQUEUE10_DSN")
@@ -562,6 +641,13 @@
    "flickr" {:mode (if (System/getenv "WORKQUEUE10_FLICKR_URL")
                      "real" "fake")}
    "hub" {:mode "real"}
+   ;; the two thread rigs, both behind ONE Gate caller — so they are
+   ;; real or fake together, and the panel says which by the same env
+   ;; gate thread-sources judges by. NO :provider: that key advertises
+   ;; a /auth/<provider>/reconsent door, and Gate's credential is
+   ;; Gate's own — there is nothing here for a person to re-consent to
+   "tgram" {:mode (if (System/getenv "WORKQUEUE10_GATE_URL") "real" "fake")}
+   "messa" {:mode (if (System/getenv "WORKQUEUE10_GATE_URL") "real" "fake")}
    "calendar" {:provider "google"
                :mode (if (and (System/getenv "CALENDAR10_GOOGLE_CLIENT_ID")
                               (System/getenv "CALENDAR10_GOOGLE_CLIENT_SECRET"))
@@ -608,6 +694,7 @@
                              :resources (resources
                                          (sources)
                                          (media-sources)
+                                         (thread-sources)
                                          (calendar-adapter)
                                          (connections/fan-reporter engine-ref))
                              ;; the calendar's adapter is no confluence,
@@ -695,7 +782,9 @@
     (try
       (let [reg (engine/full-registry (resources (sources)
                                                  (media-sources)
-                                                 (calendar-adapter)))
+                                                 (thread-sources)
+                                                 (calendar-adapter)
+                                                 nil))
             steps (migrate/plan storage (vals (:kinds reg)))]
         (if (empty? steps)
           (println "workqueue10: storage matches the declarations — empty plan.")
@@ -737,7 +826,9 @@
                  (engine/engine {:storage storage
                                  :resources (resources (sources)
                                                        (media-sources)
-                                                       (calendar-adapter))
+                                                       (thread-sources)
+                                                       (calendar-adapter)
+                                                       nil)
                                  :surfaces surfaces
                                  :deploy-mode (deploy-mode)
                                  :oidc (oidc/from-env)

@@ -625,14 +625,27 @@
   "The gone-policy's one write: the feed ANSWERED and the row was not
   in it — an observation, not an outage — so the declared :set patch
   lands (wire-shaped values, decoded like any load), freshness is
-  stamped, and any conflict note clears. The etag stays: should the
-  id ever return, the next pull's differing etag re-observes it."
+  stamped, and any conflict note clears.
+
+  THE ETAG CLEARS, and that is what makes the patch undoable
+  (waymark-36s). It used to stay, on the reasoning that a returning id
+  would come back with a DIFFERENT etag and re-observe itself. That
+  holds for a catalog, where a row absent for a while has usually
+  moved; it is false for a WINDOWED listing, where a conversation
+  simply rolls off the end and back with a byte-identical document —
+  and resync's `changed?` is exactly `etag differs OR state is not
+  fresh`, so the row kept serving its gone patch forever. `dropped`
+  and `abandoned` are observations about the FEED, not about the row,
+  and an observation that cannot be revised is a verdict. With the
+  etag cleared, the next pull that ANSWERS re-observes whatever the
+  authority now says."
   [data-schema patch]
   (with-meta
     (fn [row _inp ctx]
       (let [merged (merge (schema/encode data-schema (:data row))
                           patch
-                          {:synced_at (str (:now ctx))
+                          {:external_etag nil
+                           :synced_at (str (:now ctx))
                            :conflict_reason nil})]
         (assoc row :data (schema/decode data-schema merged))))
     {:waymark10/form '(fn [row inp ctx]

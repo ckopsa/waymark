@@ -574,7 +574,17 @@
             :href "/api/people/{data.through_id}"
             :summary "The person they relate to this house through"}]
    :schema [:map
-            (entry :name {:sort :default} [:string {:min 1 :max 80}])
+            ;; :eq-filterable since waymark-36s: `thread`'s
+            ;; :participants is a :many external-keyed ref matched on
+            ;; THIS field, and the framework's assembly check demands
+            ;; the matched target field be :eq-filterable — the
+            ;; resolution is one indexed read per distinct name, on
+            ;; the promoted column or not at all. `relation` still
+            ;; carries none, deliberately (exact-match on free prose
+            ;; is a trap); a name is the opposite case — it is
+            ;; precisely what an outside system hands you to match on.
+            (entry :name {:sort :default :filter #{:eq}}
+                   [:string {:min 1 :max 80}])
             ;; FREE WORDS, and they are the owner's. No enum: a house's
             ;; relationships are not a schema's to enumerate, and
             ;; "the grandfather's CNA" is not a category — it is the

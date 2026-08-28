@@ -46,7 +46,7 @@
   ;; declares, chore and meal included, so a fixture that drops only
   ;; "tasks" boots into whatever shape another suite left behind —
   ;; a promoted column added to a folded kind refuses at boot
-  ["tasks" "task_lists" "media" "chores" "chore_runs" "days"
+  ["tasks" "task_lists" "media" "threads" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "members" "roles" "grants" "approval_requests"
@@ -106,7 +106,7 @@
             (f)))
         (finally (pg/close! st))))))
 
-(def kinds [:task :task_list :media])
+(def kinds [:task :task_list :media :thread])
 
 ;; ── the enrollment ──────────────────────────────────────────────────
 
@@ -160,6 +160,26 @@
               :audience_name "Colton"
               :source "flickr"
               :source_ui_href "https://stream.kopsa.info/#/item/51"}
+   :etag "conformance-etag-1"})
+
+;; :thread is the THIRD confluence's kind (docs/spec-threads.md) and
+;; registers the pull-only pair :task_list does, for the same reason:
+;; the queue mirrors the household's conversations and never writes
+;; them — no local writes, no push, and under the pull-only shape a
+;; birth is the external-identity create carrying the rig's tag. The
+;; observed document is the shape verified live at Gate on 2026-08-28,
+;; wire-shaped — and it is worth reading for what is NOT in it: no
+;; preview, no snippet, no unread count, nothing anybody said.
+(fac/example-input! :thread :create
+  (fn [_] {:external_id (str "tgram:walk-" (random-uuid))}))
+
+(fac/example-input! :thread :observe_external
+  {:document {:title "Wellesley Kopsa"
+              :source "tgram"
+              :chat_kind "direct"
+              :status "live"
+              :last_message_at "2026-08-28T03:54:19Z"
+              :participant_names ["Wellesley Kopsa"]}
    :etag "conformance-etag-1"})
 
 ;; ── the whole suite ─────────────────────────────────────────────────
