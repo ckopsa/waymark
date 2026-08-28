@@ -567,6 +567,7 @@ guard, refuses with a sentence that names the fix, and is proved by a scenario:
 | `a-bundle-is-small` | fewer than two pieces, more than five |
 | `plans-are-few` | the third offered plan of the week, per author; and a superseding plan before its `not_before` |
 | `the-prepared-input-fits-the-door` | a piece whose prepared input would 422 at its target's create door |
+| `not-a-twin` | *(since waymark-8gc)* a bundle citing an evidence row a standing — `offered` or `accepted` — outcome already cites, any composer; the refusal names that outcome and the shared address. A cited `request_id` is exempt, and a row's own value address is not a reading |
 | `the-composer-does-not-decide` | the stager answering its own plan or piece (`g/not-the-field :composed_by`) |
 | `a-person-answers` | **any agent** tapping any verdict, with the refusal naming the lawful path |
 
@@ -5605,3 +5606,111 @@ holds (waymark-b4s).
   reworked clause); `scripts/sitting-run.sh` (`standing_outcomes` carries
   `iterate_open`); `workqueue10/test/workqueue10/outcome_test.clj` (§ 21); this
   file.
+
+## Built — 8gc, not a twin (2026-08-28, waymark-8gc)
+
+**A law with no door behind it.** SITTING.md has told the composer since it
+had a manifest: *never a twin of a `standing_outcome` — a candidate whose goal
+says the same thing, or cites the same evidence row, as one already offered or
+accepted is a twin, and the rank cannot tell twins apart.* The manifest even
+prints the standing bundles under the heading *Already standing — NEVER twin
+one of these*. Nothing enforced it. `outcome`'s create guards judged the
+candidate's own shape and its own prior and never once looked at what
+**another** outcome cites, so a sitting on 2026-08-27 staged duplicates and
+every one was admitted. This section is that sentence made structural:
+`not-a-twin`, a `(:find ctx)` guard on the create door.
+
+**It is not the cap coming back.** § *Ranked, not capped* law 1 says the
+machine may write without limit, and this wall does not touch it: a cap
+refuses the Nth row **because it is the Nth**, and this refuses a row because
+the house is already holding one built on the same reading, whoever composed
+it. A duplicate is not indexing — it is one index written twice, and a rank
+cannot choose between two cards that say the same thing. waymark-1ag's own
+compression: *dedupe is a law, not a cap.*
+
+### The rule, exactly
+
+For a candidate with **no `request_id`**, its evidence set is compared against
+the evidence of every `offered` and `accepted` outcome, **any composer**; one
+shared row address refuses the staging, and the sentence names the standing
+outcome's address, the state it stands in, and the shared address.
+
+### The forks, decided
+
+- **Exact address overlap, and nothing cleverer.** No goal-text similarity.
+  A door that judged whether two goals *say the same thing* would be a door
+  guessing, and the refusal sentence could not name the offending row — which
+  is the one thing every wall on this kind does. Two bundles over disjoint
+  evidence with near-identical prose are admitted, and that is the honest
+  boundary of what an address comparison can claim.
+
+- **A row's own value address is subtracted from both sides.** `value_id` is a
+  declared field, so an outcome that also lists its own value in `evidence` has
+  read nothing the field did not already say. Counting that as a shared row
+  would have made the wall *one standing outcome per value* — the cap
+  waymark-1uv.3 removed, restored by accident under a new name — and it would
+  have refused the conformance pack's own third staging, which exists to prove
+  that no door counts a composer's week. **Another** outcome's value, cited as
+  a reading, is an ordinary shared row and still twins.
+
+- **The person's pull is the one exemption.** A candidate carrying a
+  `request_id` passes whatever it cites; `the-request-is-open` stands right
+  behind this wall and checks the citation itself, so the exemption cannot be
+  bought with an invented request. The reason is the epic's own: a pull is
+  consent given in advance, and a person holding the standing bundle who asks
+  anyway is not being twinned — he is asking.
+
+- **`supersedes` needed no exemption written for it, and got a small one
+  anyway.** A recomposition of a **declined** prior legitimately re-cites the
+  prior's evidence, and it passes because a declined outcome is not standing —
+  it falls out of the state list rather than out of a special case (proved,
+  not assumed: § 22's last deftest). The row named in `supersedes` is
+  additionally left out of the comparison, which matters only for an
+  **accepted** prior: refusing a recomposition as a twin of the very row it
+  names would be this wall answering a question `a-recomposition-waits-its-turn`
+  and `no-burial-without-a-diagnosis` already own.
+
+- **A bounded read, and the direction it fails in.** The wall reads 200 rows
+  per standing state. A household's fridge holds tens; if a pathological store
+  ever ran past the window the wall lets a twin **through** rather than
+  refusing a bundle over a row it could not see, which is the right way for a
+  wall reading a window to be wrong.
+
+- **The insight arm is not built here.** waymark-1ag holds it — identical
+  evidence set plus identical `offer_kind` / `offer_id` / `offer_action` — and
+  it is left alone on purpose: the conformance pack publishes six findings on
+  one offer to prove *ranked, not capped*, and folding five of those into
+  refusals is a different claim wanting its own inversion. Until then
+  `sitting-run.sh verify` is the only check on that side, and it wears 1ag's
+  shape rather than bare evidence overlap.
+
+### Where the law is proved
+
+- **`workqueue10.outcome-test` § 22**, four deftests over the real ring
+  handler: a second bundle over a standing row refused by name, with the
+  standing address and the shared address in the sentence and from a *second*
+  composer; distinct evidence admitted; an accepted bundle twinning just as an
+  offered one does, and its own recomposition admitted; the person's pull
+  admitted over the same overlap; a recomposition of a declined prior
+  re-citing exactly what the prior cited; and two bundles serving one value
+  both admitted, which is the value-subtraction fork asserted rather than
+  described.
+- **No scenario names it**, for the structural reason `names-a-person`,
+  `the-request-is-open` and `no-burial-without-a-diagnosis` have none: the
+  wall's whole question is what another row cites, and a scenario holds one
+  literal input over an empty store, so every scenario reaching this door
+  would be an allow. `check-queue` reads the outcome row as 15 refusing
+  guards, 6 named by a scenario.
+- **`scripts/sitting-run.sh verify`** prints a fault line —
+  `TWIN: <self> shares <evidence> with <other>` — for any outcome or insight
+  written this run whose evidence overlaps another standing row of the same
+  kind (insights additionally needing the same offer triple). It hydrates each
+  row at its own address, because evidence lives only there, and it makes the
+  same value subtraction the door makes so the report and the wall never
+  disagree.
+
+- **Files:** `workqueue10/src/workqueue10/resources/outcome.clj` (`not-a-twin`,
+  `standing-states`, `own-value-address`, `read-rows`, the create-guard list,
+  the ns docstring's own section and the scenario-absence note);
+  `scripts/sitting-run.sh` (`verify`'s twin fault lines);
+  `workqueue10/test/workqueue10/outcome_test.clj` (§ 22); this file.

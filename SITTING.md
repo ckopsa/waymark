@@ -193,7 +193,11 @@ holding your place in it.
    manufactured bundle). Never a twin of a `standing_outcome` — a
    candidate whose goal says the same thing, or cites the same
    evidence row, as one already offered or accepted is a twin, and the
-   rank cannot tell twins apart. *ranked, not capped* (waymark-1uv.3)
+   rank cannot tell twins apart. The evidence half of that is a DOOR
+   now (`not-a-twin`, waymark-8gc): a shared evidence row with any
+   standing bundle is refused at staging, naming it — so a twin costs
+   you a round trip rather than passing quietly. The goal half is
+   still yours to judge. *ranked, not capped* (waymark-1uv.3)
    still holds for real outcomes: stage every genuinely distinct one,
    and the crown's rank chooses what fills attention.
 

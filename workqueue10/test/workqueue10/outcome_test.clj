@@ -43,6 +43,12 @@
     document counting each lesson, every outcome carrying the rank's
     own reading of it as staged, the never-shown pile naming its lifts,
     and unknown staying unknown without opt-in.
+  - the anti-twin wall (waymark-8gc, § 22): a bundle over a row a
+    standing outcome already cites, refused by name; distinct evidence
+    admitted; the person's own pull admitted over the overlap; a
+    recomposition of a declined prior re-citing exactly what the prior
+    cited; and two bundles serving one value both admitted, because a
+    row's own value is what it serves rather than something it read.
 
   THE COMPOSER HERE IS A PERSON, and deliberately. The four-eyes wall
   is `g/not-the-field :composed_by` — it compares principal IDS, so a
@@ -1857,3 +1863,113 @@
         (let [r (req :get (str "/api/outcome_pieces/" walk) (human member))]
           (is (= "reworked" (:state (json r))) "the withdrawn walk stays withdrawn")
           (is (nil? (:materialized (fields r))) "and made nothing"))))))
+
+;; ── 22. not a twin: one standing bundle per evidence row (8gc) ───────
+;;
+;; The anti-twin law lived in SITTING.md and in the manifest's own
+;; heading ("Already standing — NEVER twin one of these") and no door
+;; enforced it, so a sitting that staged the same bundle twice was
+;; admitted twice. `not-a-twin` is that law at the create door, and
+;; only a live engine can judge it: the wall's whole question is what
+;; ANOTHER row cites, and a declaration-time scenario holds one
+;; literal input over an empty store.
+;;
+;; Four claims, and the last is the one worth stating out loud: a
+;; row's own value address is subtracted from both sides before the
+;; sets meet, so two bundles serving one value are still both
+;; admitted. Otherwise this wall would have quietly restored the cap
+;; waymark-1uv.3 removed — one standing outcome per value — which is
+;; the opposite of what the anti-twin law is for.
+
+(defn- ev
+  "An evidence address, minted per claim so two deftests sharing this
+  database never twin each other's bundles by accident.
+  `cites-what-it-read` judges the SHAPE of an address — a collection
+  this house serves — and never whether the row is there, which is
+  what makes a literal address the right fixture for a wall about
+  overlap; the declaration's own `a-composed-outcome` cites one
+  exactly like it."
+  [tag]
+  (str "/api/tasks/01HZQ7TWIN" tag))
+
+(deftest a-twin-of-a-standing-bundle-is-refused-and-the-refusal-names-it
+  (let [v (declare-value! "colton-twin" "a week worth composing once"
+                          ["the shop"])
+        shared (ev "SHARED0001")
+        first' (stage-outcome! "composer-twin-a" (vid v)
+                               {:evidence [(str "/api/values/" (vid v))
+                                           shared]})
+        oid (id-of first')]
+    (is (= 201 (:status first')) (detail first'))
+    (testing "a second bundle over the same row — and from ANOTHER composer, because a twin is a twin whoever wrote it — is refused, naming the standing address and the shared one"
+      (let [r (stage-outcome! "composer-twin-b" (vid v)
+                              {:evidence [shared (ev "TWINOTHER1")]})]
+        (is (= 409 (:status r)))
+        (is (= "not-a-twin" (guard-of r)))
+        (is (str/includes? (detail r) (str "/api/outcomes/" oid)))
+        (is (str/includes? (detail r) shared))
+        (is (str/includes? (detail r) "offered"))))
+    (testing "evidence nobody has composed over is admitted — this is a wall on duplication, never on how much a week may hold"
+      (is (= 201 (:status (stage-outcome! "composer-twin-b" (vid v)
+                                          {:evidence [(ev "TWINDISTIN")]})))))
+    (testing "and two bundles serving the same value, each citing only that value, are BOTH admitted: a row's own value is what it serves, not something it read"
+      (is (= 201 (:status (stage-outcome! "composer-twin-c" (vid v)))))
+      (is (= 201 (:status (stage-outcome! "composer-twin-c" (vid v))))))))
+
+(deftest an-accepted-bundle-still-speaks-for-the-rows-it-cites
+  (let [member "colton-twin-acc"
+        v (declare-value! member "a Saturday already said yes to" ["the shop"])
+        shared (ev "ACCEPTED01")
+        oid (id-of (stage-outcome! "composer-acc" (vid v)
+                                   {:evidence [shared]}))
+        _ (stage-piece! "composer-acc" oid "Cut the stock" "task"
+                        {:title "Cut the stock (an accepted bundle)"})
+        made (invoke! "outcomes" oid :make_it_so nil (human member))]
+    (testing "the house said yes"
+      (is (= 200 (:status made)))
+      (is (= "accepted" (:state (json made)))))
+    (testing "a bundle over the row the accepted one cites is a twin too, and the sentence says which state it stands in"
+      (let [r (stage-outcome! "composer-acc-2" (vid v) {:evidence [shared]})]
+        (is (= 409 (:status r)))
+        (is (= "not-a-twin" (guard-of r)))
+        (is (str/includes? (detail r) "accepted"))))
+    (testing "…but the recomposition that NAMES it is not a twin of itself — whether a prior may be replaced is the two recomposition walls' question, and this one stays out of it"
+      (let [r (stage-outcome! "composer-acc" (vid v)
+                              {:evidence [shared] :supersedes oid})]
+        (is (= 201 (:status r)) (detail r))))))
+
+(deftest a-persons-pull-is-admitted-over-a-row-a-standing-bundle-cites
+  (let [member "colton-twin-pull"
+        composer "composer-twin-pull"
+        v (declare-value! member "a pulled Saturday" ["the shop"])
+        shared (ev "PULLED0001")
+        oid (id-of (stage-outcome! composer (vid v) {:evidence [shared]}))
+        rid (id-of (ask! member))]
+    (is (some? oid))
+    (testing "uncited, the second bundle over that row is a twin"
+      (let [r (stage-outcome! composer (vid v) {:evidence [shared]})]
+        (is (= 409 (:status r)))
+        (is (= "not-a-twin" (guard-of r)))))
+    (testing "the same body citing the person's own request is admitted — the pull is this wall's one exemption: he is holding the standing one and asked anyway"
+      (let [r (stage-outcome! composer (vid v)
+                              {:evidence [shared] :request_id rid})]
+        (is (= 201 (:status r)) (detail r))
+        (is (= rid (:request_id (fields r))))))))
+
+(deftest a-recomposition-of-a-declined-prior-recites-its-evidence
+  (let [member "colton-twin-recompose"
+        composer "composer-twin-recompose"
+        v (declare-value! member "a Saturday worth trying twice"
+                          ["the shop"])
+        shared (ev "RECOMPOSE1")
+        prior (id-of (stage-outcome! composer (vid v) {:evidence [shared]}))]
+    (is (= 200 (:status (invoke! "outcomes" prior :not_this_week nil
+                                 (human member)))))
+    (let [i (publish-diagnosis! composer prior (vid v) nil)
+          again (stage-outcome! composer (vid v)
+                                {:evidence [shared]
+                                 :supersedes prior
+                                 :diagnosis_id (id-of i)})]
+      (is (= 201 (:status i)) (detail i))
+      (testing "the recomposition re-cites exactly what the prior cited and is admitted — a declined prior does not STAND, so there is nothing here to twin, and no exemption had to be written for it"
+        (is (= 201 (:status again)) (detail again))))))
