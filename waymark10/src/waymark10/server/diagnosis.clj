@@ -249,14 +249,20 @@
 ;; ── the lesson ──────────────────────────────────────────────────────
 
 (defn- answered
-  "How the house answered, in one word — the state, except that an
-  offered outcome whose week has run out is `lapsed` rather than
+  "How the house answered, in one word — the state, except that a
+  STANDING outcome whose week has run out is `lapsed` rather than
   `offered`: nobody will tap it now, and `expire` is bookkeeping
-  anybody may run."
+  anybody may run.
+
+  `iterating` (waymark-9xn) lapses the same way and for the same
+  reason: the leash keeps running while a bundle is back with its
+  composer, so one nobody reworked in time is a week that ran out,
+  not a plan still being written."
   [o now]
   (let [state (name (:state o))
         good (get-in o [:data :good_until])]
-    (if (and (= "offered" state) good (not (pos? (compare good now))))
+    (if (and (#{"offered" "iterating"} state)
+             good (not (pos? (compare good now))))
       "lapsed"
       state)))
 
@@ -286,7 +292,12 @@
   (case answered
     "accepted" :accepted
     "declined" :shown_and_declined
-    ("offered" "lapsed") :still_offered
+    ;; `iterating` is nothing to diagnose YET (waymark-9xn): the
+    ;; household said the plan was wrong in its own words, and what
+    ;; happens next is the composer's rework rather than a lesson. It
+    ;; teaches when it comes back and is answered — or when the week
+    ;; runs out on it, which `answered` has already called `lapsed`.
+    ("offered" "iterating" "lapsed") :still_offered
     "expired" (cond
                 (not (:known exposure)) :unknown
                 (pos? (long (:mornings exposure 0))) :shown_and_passed_over
@@ -346,8 +357,11 @@
       "Accepted — the work is on its own rows, and nothing here is owed."
 
       :still_offered
-      (str (if (= "lapsed" answered)
-             "The week ran out and nobody answered; expire it, and the lesson follows."
+      (str (case answered
+             "lapsed" "The week ran out and nobody answered; expire it, and the lesson follows."
+             ;; waymark-9xn: not unanswered — answered with a re-plan,
+             ;; and the answer is a work order rather than a lesson
+             "iterating" "Back with you for a re-plan: the household said the goal is right and the plan is wrong. Rework the pieces and commit the round; nothing is owed here until it stands again."
              "Still offered.")
            (when mornings (str " So far " mornings "."))
            (when-not (:known exposure) (str " " (:says exposure)))))))

@@ -2784,7 +2784,13 @@
   declaration rather than a preference:
 
   - `offered` bundles only. `accepted`, `declined` and `expired` are
-    terminal, so an answered outcome leaves the feed by construction.
+    terminal, so an answered outcome leaves the feed by construction —
+    and since waymark-9xn so does `iterating`, which is not terminal
+    at all: a bundle the household handed back for a re-plan is in the
+    composer's hands, not asking anybody anything, and it returns to
+    this query the moment `rework` puts it back in `offered`. What is
+    said instead is one line under the crown (`reworking-doc`), so the
+    disappearance reads as answered rather than as lost.
   - NOT THE READER'S OWN. `the-composer-does-not-decide` means the
     principal that staged a bundle is structurally incapable of
     answering any part of it, so carding it to the composer would be
@@ -2860,6 +2866,15 @@
       []
       (let [pid (:id (:principal ctx))
             now (:now ctx)
+            ;; THE STATE IS THE FILTER (waymark-9xn), and it is worth
+            ;; saying out loud because a whole bead rests on it: this
+            ;; query takes `offered` and nothing else, so an outcome the
+            ;; household handed back for a re-plan (`iterating`) leaves
+            ;; the crown BY CONSTRUCTION — no flag on the row, no second
+            ;; filter here to keep in step with the machine, and no way
+            ;; for the two to disagree. It comes back the moment the
+            ;; composer's `rework` puts it in `offered` again, re-ranked
+            ;; as the fresh thing it now is.
             scanned (rows-of ctx :outcome {:state "offered"}
                              (inc (long crown-scan-cap)))]
         {:reached-cap (> (count scanned) (long crown-scan-cap))
@@ -2946,6 +2961,56 @@
   the screen does."
   "outcomes/composition_request/ask")
 
+(defn- reworking-doc
+  "THE LINE UNDER THE CROWN (waymark-9xn): how many of this reader's
+  bundles are away being reworked, and the sentence that says the
+  disappearance was ANSWERED rather than lost.
+
+  It exists because the state alone would be a silence. A person taps
+  `iterate`, the bundle leaves the feed — which is exactly what they
+  asked for — and the next morning the crown is one card shorter with
+  nothing anywhere saying why. That reads as the house forgetting, and
+  a system that quietly drops what somebody said is the thing this
+  whole kind is against. One line, no card and no verb: there is
+  nothing to answer here, which is the point of it being a line.
+
+  It counts what the crown WOULD have shown — the reader's own
+  composed bundles are excluded (`the-composer-does-not-decide` makes
+  them unanswerable, which is the population's own rule one filter
+  over) and a lapsed one is not coming back, so its week is checked
+  the way the population checks it. Nil when this engine holds no
+  outcome kind, or when nothing of this reader's is being reworked:
+  an empty count said out loud would be a line about nothing."
+  [ctx]
+  (when (get (resources ctx) :outcome)
+    (let [pid (:id (:principal ctx))
+          now (:now ctx)
+          rdef (get (resources ctx) :outcome)
+          mine (into []
+                     (keep (fn [raw]
+                             (let [d (inv/decode-row rdef raw)
+                                   good (get-in d [:data :good_until])]
+                               (when (and (not= pid (get-in d [:data :composed_by]))
+                                          (or (nil? good)
+                                              (pos? (compare good now))))
+                                 (:id raw)))))
+                     (rows-of ctx :outcome {:state "iterating"}))
+          n (count mine)]
+      (when (pos? n)
+        {"count" n
+         ;; THE SENTENCE SAYS WHO ASKED ONLY AS "THE HOUSE", and the
+         ;; caution is honesty rather than style: nothing on the row
+         ;; records which member tapped `iterate` (the note is a remark
+         ;; on the thread, said in their own voice, and that is where
+         ;; the reader goes for it), so a line telling THIS reader
+         ;; "you said the plan was wrong" would be a guess about a
+         ;; household with more than one adult in it.
+         "says" (str n " bundle" (when (not= 1 n) "s")
+                     (if (= 1 n) " is" " are")
+                     " being reworked — the house asked for the plan to"
+                     " change, and you'll see " (if (= 1 n) "it" "them")
+                     " again when the composer answers.")}))))
+
 (defn- crown-says
   "The one sentence the chip stands beside, in the household's words —
   three, since the chip rides whether or not the crown carded anything:
@@ -3015,10 +3080,15 @@
                                          (some-> vname str not-empty)
                                          (assoc "value_name" (str vname)))))))
                            (rows-of ctx :composition_request
-                                    {:requested_by pid :state "offered"}))]
+                                    {:requested_by pid :state "offered"}))
+            reworking (reworking-doc ctx)]
         (cond-> {"empty" empty?
                  "card_id" ask-card-id
                  "says" (crown-says empty? standing)
+                 ;; …and one line for what is NOT here (waymark-9xn) —
+                 ;; see reworking-doc. It rides `crown` beside the ask
+                 ;; because that is where the reader is already looking
+                 ;; for the bundle that has gone quiet.
                  "ask" {"href" (collection-of ctx :composition_request)
                         "method" "POST"
                         "label" "Compose me another"
@@ -3027,7 +3097,8 @@
                                     " sitting and stages an outcome that"
                                     " cites it, and that one stands first"
                                     " in the crown. It stands a week.")}}
-          (seq standing) (assoc "standing" standing))))))
+          (seq standing) (assoc "standing" standing)
+          reworking (assoc "reworking" reworking))))))
 
 (defn conflicts
   "decide: mirrored rows whose authority and household disagree. A

@@ -182,8 +182,8 @@ if [ "$MODE" = "verify" ]; then
       rm -f "$out"
     done
   }
-  check outcome       "/api/outcomes?composed_by=$PRINCIPAL"      offered accepted declined expired
-  check outcome_piece "/api/outcome_pieces?composed_by=$PRINCIPAL" offered taken declined moot
+  check outcome       "/api/outcomes?composed_by=$PRINCIPAL"      offered iterating accepted declined expired
+  check outcome_piece "/api/outcome_pieces?composed_by=$PRINCIPAL" offered taken declined moot reworked
   check insight       "/api/insights?authored_by=$PRINCIPAL"      published taken dismissed
   check ranking_note  "/api/ranking_notes?judged_by=$PRINCIPAL"   live dismissed
   check remark        "/api/remarks?said_by=$PRINCIPAL"           noted
@@ -273,7 +273,7 @@ if [ "$MODE" = "verify" ]; then
     done
   }
   twins="$(mktemp)"; : > "$twins"
-  twin_rows "/api/outcomes" outcome offered accepted >> "$twins"
+  twin_rows "/api/outcomes" outcome offered iterating accepted >> "$twins"
   twin_rows "/api/insights" insight published >> "$twins"
   faults="$(jq -rs --arg s "$SINCE" '
     . as $rows
@@ -452,8 +452,14 @@ collection feed_recipes    "/api/feed_recipes"
 # 6. the threads — one whole-kind read beats a read per subject
 collection remarks "/api/remarks"
 # 7. what already stands, in EVERY state
-states outcomes       "/api/outcomes"       offered accepted declined expired
-states outcome_pieces "/api/outcome_pieces" offered taken declined moot
+# `iterating` is a state the snapshot must read (waymark-9xn): it is
+# where the household's own rework orders sit, and a driver that
+# listed only the four old states would have handed a composer a
+# manifest with its work orders invisible. `reworked` on the piece is
+# the same omission one kind down (waymark-9j2 added the state and
+# left this list at four).
+states outcomes       "/api/outcomes"       offered iterating accepted declined expired
+states outcome_pieces "/api/outcome_pieces" offered taken declined moot reworked
 # 8. what is already written down, and what this composer has judged
 states insights      "/api/insights"      published taken dismissed
 states ranking_notes "/api/ranking_notes" live dismissed
@@ -823,12 +829,16 @@ rm -f "$ARR_ACC" "$ARR_ACC.k"
 # the CITED set — every row a STANDING outcome or a LIVE insight speaks
 # for. Standing means offered or accepted; live means published. A
 # declined, expired or dismissed row speaks for nothing — that is what
-# a verdict frees (not-a-twin reads the same two states). Until
+# a verdict frees (not-a-twin reads the same three states, `iterating`
+# among them since waymark-9xn: a bundle handed back for a re-plan is
+# the loudest kind of standing, and twinning it would be composing
+# against the very rework you were asked for). Until
 # 2026-08-28 this read every outcome in every state, so a swept fridge
 # (28 declines in one evening) still claimed all 16 open tasks and the
 # session probe could never find a free cluster.
 jq -s '(.[0] + .[1]) | unique' \
-   <(jq '[.[] | select(.state=="offered" or .state=="accepted") | .data.evidence[]?]' "$R/outcomes.full.json") \
+   <(jq '[.[] | select(.state=="offered" or .state=="iterating" or .state=="accepted")
+          | .data.evidence[]?]' "$R/outcomes.full.json") \
    <(jq '[.[] | select(.state=="published") | .data.evidence[]?]' "$R/insights.full.json") \
    > "$D/cited.json" 2>/dev/null || echo '[]' > "$D/cited.json"
 
@@ -874,20 +884,36 @@ jq -c 'group_by(.kind) | map({kind:.[0].kind, count:length})' "$D/uncomposed.jso
 # house already holds (sitting 7 twinned the realtor list; the rank
 # cannot tell twins apart, so a duplicate is pure noise).
 #
-# iterate_open (waymark-9j2): a person tapped "iterate" on this outcome
-# — the goal is right, the plan is wrong, rework it in place — more
-# recently than the composer last reworked it. A standing work order to
-# revise the pieces (withdraw with outcome_pieces/-/rework, stage the
-# replacements, commit with outcomes/-/rework); the note itself is a
-# remark on the outcome's thread, so it also rides unanswered_threads.
-jq '[.[] | select(.state=="offered" or .state=="accepted")
+# iterate_open (waymark-9j2, waymark-9xn): a person tapped "iterate" on
+# this outcome — the goal is right, the plan is wrong, rework it in
+# place — and the bundle is OFF THEIR FEED until you answer. It is READ
+# OFF THE STATE now rather than compared out of two stamps: `iterating`
+# IS the open request, one fact instead of two that could disagree. A
+# standing work order to revise the pieces (withdraw with
+# outcome_pieces/-/rework, stage the replacements, commit with
+# outcomes/-/rework, which is the door back to `offered`); the note
+# itself is a remark on the outcome's thread, so it also rides
+# unanswered_threads.
+jq --arg me "$PRINCIPAL" '[.[] | select(.state=="offered" or .state=="iterating"
+                                        or .state=="accepted")
        | {self, state, goal:.data.goal, value:(.data.value_name // null),
           evidence:(.data.evidence // []),
+          composed_by:(.data.composed_by // null),
           plan_revision:(.data.plan_revision // 0),
-          iterate_open:(((.data.iterate_requested_at // "") != "")
-                        and ((.data.iterate_requested_at // "")
-                             > (.data.reworked_at // "")))}]' \
+          mine:((.data.composed_by // "") == $me),
+          iterate_open:(.state=="iterating")}]' \
    "$R/outcomes.full.json" > "$D/standing_outcomes.json"
+
+# ITERATING, NOT YOURS TO REWORK (waymark-9xn). A bundle in `iterating`
+# whose composer is somebody else is a work order this run cannot
+# execute: `only-its-composer-reworks` admits the author unasked and
+# anybody else only under a grant that names the row. It is listed all
+# the same, with the composer named, because a person is waiting on it
+# and a silent omission would read as nothing being wrong — if that
+# composer is gone, the fix is a grant the owner approves, not a twin.
+jq '[.[] | select(.iterate_open and (.mine | not))
+       | {self, goal, composed_by, plan_revision}]' \
+   "$D/standing_outcomes.json" > "$D/iterating_not_mine.json"
 
 # a value must be LIVE to be named; a companion must be current
 # (`says` rides along because value-fit is tested on a value's OWN
@@ -2251,7 +2277,8 @@ jq -c --slurpfile out "$R/outcomes.full.json" --slurpfile cited "$D/cited.json" 
       --slurpfile tasks "$R/tasks.json" --slurpfile events "$R/events.json" \
       --argjson nows "$NOW_S" "$JQ_DATES$JQ_KEYS"'
   ($cited[0] // []) as $c
-  | ([ ($out[0] // [])[] | select(.state=="offered" or .state=="accepted")
+  | ([ ($out[0] // [])[] | select(.state=="offered" or .state=="iterating"
+                                  or .state=="accepted")
        | ((.data.value_id // "") | tostring) ]) as $served
   | ($tasks[0] // []) as $tk | ($events[0] // []) as $ev
   | [ .[] | . as $x
@@ -2344,7 +2371,8 @@ jq -c --slurpfile out "$R/outcomes.full.json" --slurpfile cited "$D/cited.json" 
 # the tasks again.
 jq -n --slurpfile tasks "$R/tasks.json" --slurpfile standing "$D/standing_outcomes.json" '
   ([ ($tasks[0] // [])[] | select(((.fields.status // "open")) == "open") | .self ]) as $open
-  | ([ ($standing[0] // [])[] | select(.state == "offered") ]) as $offered
+  | ([ ($standing[0] // [])[]
+       | select(.state == "offered" or .state == "iterating") ]) as $offered
   | ([ $offered[] | (.evidence // [])[] ] | unique) as $spoken
   | ([ $open[] | . as $t | select(($spoken | index($t)) != null) ]) as $held
   | if (($open | length) > 0) and ((($held | length) * 2) >= ($open | length))
@@ -2452,6 +2480,7 @@ jq -n \
   --slurpfile uncomposed "$D/uncomposed.json" \
   --slurpfile census "$D/uncomposed_census.json" \
   --slurpfile standing "$D/standing_outcomes.json" \
+  --slurpfile notmine "$D/iterating_not_mine.json" \
   --slurpfile ask "$D/extend_ask.json" \
   --slurpfile gate "$D/gate.json" \
   --slurpfile chatsel "$D/chat_selection.json" \
@@ -2475,6 +2504,9 @@ jq -n \
     declines_owed_a_diagnosis: ([$declines[0][] | select(.diagnosis_stands|not)] | length),
     advance_arrivals: ($arrivals[0] | length),
     enrich_a_bare_task: ($bare[0] | length),
+    # the rework orders the household handed back (waymark-9xn):
+    # bundles off its feed until this composer answers
+    rework_iterating: ([$standing[0][] | select(.iterate_open and .mine)] | length),
     work_orders: ($orders[0] | length)
   },
   work_orders: $orders[0],
@@ -2498,6 +2530,7 @@ jq -n \
     read_this_run: $chatsel[0]
   },
   standing_outcomes: $standing[0],
+  iterating_not_mine: $notmine[0],
   uncomposed_census: $census[0],
   uncomposed: ($uncomposed[0] | .[0:60]),
   offered_requests: $requests[0],
@@ -2622,8 +2655,19 @@ jq -n \
   echo "## Declines already diagnosed — nothing to do"
   jq -r '[.declines[] | select(.diagnosis_stands)] | if length==0 then "  (none)" else (.[] | "- \(.self) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])") end' "$RUN/manifest.json"
   echo
+  echo "## Handed back for a rework — YOUR work orders, and they are off the household's feed"
+  jq -r '[.standing_outcomes[] | select(.iterate_open and .mine)]
+          | if length==0 then "  (none — nothing of yours is being reworked)"
+            else (.[] | "- \(.self) [iterating, plan v\(.plan_revision)] \(.goal[0:90])") end' "$RUN/manifest.json"
+  echo "  An ITERATING bundle is one a person kept and sent back: the goal is right, the plan is wrong, and it has LEFT THEIR FEED until you answer. Read its thread for the note. Withdraw the pieces that were wrong (POST /api/outcome_pieces/<id>/-/rework — the piece goes reworked, never declined), stage the replacements, then commit with POST /api/outcomes/<id>/-/rework {says}. That commit is the only door back to offered; until it lands, nobody in the house can see the bundle at all. Do not stage a twin, and do not wait for a decline."
+  echo
+  echo "## Iterating, not yours to rework"
+  jq -r 'if (.iterating_not_mine|length)==0 then "  (none)" else (.iterating_not_mine[] | "- \(.self) [iterating, plan v\(.plan_revision)] composed by \(.composed_by // "?") — \(.goal[0:80])") end' "$RUN/manifest.json"
+  echo "  Somebody else staged these and only its own composer walks its rework door unasked. Leave them alone: no twin, no verdict, no piece. If a composer here is gone and the household is waiting, say so in the journal — the way through is a grant the owner approves naming outcome.rework on that row, not a second bundle."
+  echo
   echo "## Already standing — NEVER twin one of these"
   jq -r 'if (.standing_outcomes|length)==0 then "  (nothing stands yet)" else (.standing_outcomes[] | "- \(.self) [\(.state)] \(.goal[0:90])\n    cites: \(.evidence|tostring)") end' "$RUN/manifest.json"
+  echo "  Standing is three states now (waymark-9xn): offered, iterating — handed back for a re-plan — and accepted. A bundle being reworked speaks for the rows it cites exactly as loudly as one on the fridge."
   echo "  A candidate whose GOAL says the same thing, or that cites the SAME evidence row, as any of these is a twin — do not stage it. Compose only what is genuinely not here yet."
   echo
   echo "## Beyond the house — the Gate rigs, each probed just now"

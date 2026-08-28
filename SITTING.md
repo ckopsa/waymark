@@ -152,7 +152,22 @@ holding your place in it.
 2. **Answer every standing composition request** — a person's pull is
    never capped. The manifest's `offered_requests` is the list, and
    `offered` means unanswered by definition.
-3. **Answer every unanswered thread turn** — a `remark` whose last
+3. **Rework every bundle the house handed back** — an outcome in
+   `iterating` is one a person kept and sent back: the goal is right,
+   the plan is wrong, and **it has left their feed** until you answer
+   (waymark-9xn). The manifest lists yours under *Handed back for a
+   rework* with the plan version; read the outcome's thread for the
+   note, withdraw the pieces that were wrong
+   (`POST /api/outcome_pieces/<id>/-/rework` — the piece goes
+   `reworked`, never declined), stage the replacements under the same
+   bundle, then commit with
+   `POST /api/outcomes/<id>/-/rework {says}`. That commit is the only
+   door back to `offered`; until it lands nobody in the house can see
+   the bundle at all. Never stage a twin instead, and never wait for a
+   decline. A bundle being reworked by somebody else is listed apart
+   (*iterating, not yours to rework*) — leave it, and say so in the
+   journal if its composer is gone.
+4. **Answer every unanswered thread turn** — a `remark` whose last
    word is a person's is a work order: reply with a remark
    (`in_reply_to` naming theirs), restage citing the insight you
    indexed from their words, or both. The manifest lists the threads
@@ -161,7 +176,7 @@ holding your place in it.
    outcome's standing (a date slid, someone is sick), say so on that
    outcome in a reply — what changed, what you did, by id — so the
    feed can read why a bundle slipped without opening the thread.
-4. **Work the manifest's WORK ORDERS — those, and no padding.** The
+5. **Work the manifest's WORK ORDERS — those, and no padding.** The
    reading a run works from is § "YOUR WORK ORDERS": at most two
    assignments the driver's probes built out of the snapshot, each
    already naming its subject address, its material, and the write it
@@ -263,7 +278,7 @@ holding your place in it.
 
    If nothing arrived and no bare task is worth enriching, a run that
    writes nothing is a lawful no-op — journal nothing and leave.
-5. **Score what you did not write — every run, composed or not.**
+6. **Score what you did not write — every run, composed or not.**
    Ranking is its own duty. The manifest's `unscored_bundles` is
    exactly the list, already filtered of your own rows — work it
    newest first, each a score 0–1 and one sentence (240 characters, no
@@ -321,6 +336,13 @@ holding your place in it.
   `finish`, `done`, `take`) on a row that already stands is not
   friction pre-paid: nobody did that work, and a tap would record
   that they had. Friction pre-paid is a claim about the world.
+- **A rework is yours only on what you staged.** `outcome.rework` and
+  `outcome_piece.rework` open for the row's own composer with no grant
+  at all, and for anybody else only under a grant that names the row —
+  the mirror of four eyes, and the way an orphaned plan gets finished
+  when its composer is gone. From `iterating` a person can still
+  decline the whole bundle and the week can still end it; what they
+  cannot do is accept a plan they have just called wrong.
 - Never tap a verdict or affirm a value or person unless your grant
   admits that door — and never on a row you wrote. Your standing
   sitting scope admits none of them, so under it the answer is still
