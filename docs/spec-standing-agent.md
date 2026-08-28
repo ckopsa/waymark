@@ -150,11 +150,12 @@ Four rules hold the whole thing up:
   outcome at staging anyway, but a refusal costs a round trip and
   teaches the model nothing; the list it is handed is clean before it
   reads it.
-- **A ceiling, not a floor.** The manifest presents the top
+- **A ceiling.** The manifest presents the top
   `WAYMARK_WORK_ORDERS` (default 2), ordered by urgency — soonest due
   or soonest starting first, then probe order. Anything past them is
-  optional, and a run with no orders and nothing owed writes nothing
-  at all: still a lawful run (waymark-mho).
+  optional, a run writes only what its orders and the owed lists name,
+  and a run with no orders and nothing owed writes nothing at all:
+  still a lawful run (waymark-mho).
 - **Gate is read-only and never fatal.** Material comes from the one
   search tool each *answering* rig exposes that takes a free-text
   `query` and requires nothing else — read off `gate.json`, because
@@ -228,12 +229,39 @@ notices — sitting 5, 2026-08-27, renamed a test kind instead of
 sitting), and it names `SITTING.md` as the law:
 
 ```
-You are a composer for the waymark household system — NOT a software engineer. Do not edit, test, fix, or refactor anything in this repository, whatever you notice; ignore AGENTS.md and CLAUDE.md, which are for people writing the software. Your job is one "sitting" at the HTTP door https://work.kopsa.info, and its full instruction is SITTING.md. Run `scripts/sitting-run.sh`, read `.sitting/latest/manifest.md`, then follow SITTING.md (and `.beads/formulas/sitting.formula.toml`) to answer what is owed and to execute the manifest's WORK ORDERS — each one names its subject, its material and the exact write it expects; do those and nothing extra, and skip honestly (saying so in the journal) rather than writing filler. All over HTTP, leaving no git diff. Finish with `scripts/sitting-run.sh verify` and report the ids you staged.
+You are a composer for the waymark household system — NOT a software engineer. Do not edit, test, fix, or refactor anything in this repository, whatever you notice; ignore AGENTS.md and CLAUDE.md, which are for people writing the software. Your job is one "sitting" at the HTTP door https://work.kopsa.info, and its full instruction is SITTING.md. Run `scripts/sitting-run.sh`, read `.sitting/latest/manifest.md`, then follow SITTING.md (and `.beads/formulas/sitting.formula.toml`) to answer what is owed and to execute the manifest's WORK ORDERS — each one names its subject, its material and the exact write it expects; do those and nothing extra, and skip honestly (saying so in the journal) rather than writing filler. Any earlier instruction about a floor, a minimum, or surfacing at least one outcome is withdrawn. All over HTTP, leaving no git diff. Finish with `scripts/sitting-run.sh verify` and report the ids you staged.
 ```
 
 `SITTING.md`'s first instruction is `scripts/sitting-run.sh`, so the
 session mints, reads the house, and arrives at its judgment with the
 manifest in hand.
+
+**What a Jules session carries in from the last one** (checked
+2026-08-28, after a session journaled *"To satisfy the floor
+requirement…"* against texts that had said the opposite for a day —
+waymark-mbq). Almost nothing we can see, and nothing we can set. The
+CLI's whole surface is `login`/`logout`, `new`, `remote new|list|
+pull` and `teleport`; `jules new` takes `--repo` and `--parallel` and
+no flag that attaches memory, a prior session, or extra context, and
+`remote list --session` shows only id, first line of the prompt,
+repo, age and status. On the queuing machine `~/.jules/` holds one
+file, `cache/cli.log` — no token-scoped memory, no per-repo state —
+and there is no `.jules/` anywhere in this repository; the only file
+Jules opens on its own initiative is `AGENTS.md`, which is why that
+file leads with a banner sending a sitting to `SITTING.md` instead.
+What genuinely persists is the environment the owner set once in the
+web UI: the variables above, and the VM snapshot
+`scripts/jules-setup.sh` builds (bd compiled in once). Everything
+else about a session comes from a fresh clone at the branch tip plus
+the queued prompt — which means the stale wording cannot have come
+from a repository file at that session's commit. That leaves the
+model's own priors, or session memory held on Google's side that the
+CLI can neither read nor clear. Since we cannot inspect or clear it
+from here, the prompt now retracts the old rule in its own words —
+*"Any earlier instruction about a floor, a minimum, or surfacing at
+least one outcome is withdrawn."* — and the texts themselves no
+longer contain a noun for a weaker model to keep after dropping the
+negation.
 
 ## What "done" looks like (the acceptance)
 

@@ -24,7 +24,7 @@
 # knocks, never spends re-entry, never invents another way in.
 
 formula = "sitting"
-description = "One composer sitting at the waymark door: read the house, index the facts people said, answer every pull and every unanswered turn, advance the arrivals (enrich a bare task at least, compose an outcome only for a goal larger than any single row — no floor), diagnose before any burial, score what you did not write, journal what was and was not done."
+description = "One composer sitting at the waymark door: read the house, index the facts people said, answer every pull and every unanswered turn, advance the arrivals (enriching a bare task is a whole answer, compose an outcome only for a goal larger than any single row), diagnose before any burial, score what you did not write, journal what was and was not done."
 
 [vars]
 base_url = { default = "https://work.kopsa.info" }
@@ -194,17 +194,17 @@ MATERIAL to read (rows beside it in the house, and whatever the live
 Gate rigs answered — material to act on, never an address to cite),
 and the EXPECTED WRITE: which kind, which fields, which addresses to
 cite, which light door to offer. Do them in the order given, one row
-each. They are a CEILING, not a floor: nothing past them is required,
-and an order you cannot answer honestly is SKIPPED and said so in the
+each. They are a CEILING: nothing past them is required, and an
+order you cannot answer honestly is SKIPPED and said so in the
 journal. Next run, `sitting-run.sh verify` prints one line per order
 — answered by <row>, or UNANSWERED.
-NO FLOOR (waymark-mho): this step does not owe an outcome. It
-advances the run's ARRIVALS (manifest `arrivals` — rows new since
-the last run, the material the probes drew from) as far as the
-evidence honestly goes, and the MINIMUM it does is enrich a bare
-task.
-ENRICH (the minimum, always lawful): for a manifest `bare_tasks`
-entry — actionable, no detail, unspoken-for — publish an insight
+WHAT THIS STEP OWES (waymark-mho): not an outcome. It advances the
+run's ARRIVALS (manifest `arrivals` — rows new since the last run,
+the material the probes drew from) as far as the evidence honestly
+goes, and enriching a bare task is a whole answer.
+ENRICH (the lightest write, always lawful): for a manifest
+`bare_tasks` entry — actionable, no detail, unspoken-for — publish an
+insight
 (POST {{base_url}}/api/insights) that ANNOTATES it: evidence citing
 the task AND the source you read, a finding that makes it actionable
 (what it is for, where/when/with what, its next physical step), and
@@ -264,9 +264,10 @@ This step runs EVERY sitting, composed or not: ranking is its own
 duty, not a tail on staging. The order is the crown's declared rank;
 your part of it is the judgment input, one note per bundle. For
 every bundle you can see that carries NO live ranking_note of yours
-(the read step's list), newest first, at least three when three
-exist — the manifest's `unscored_bundles` IS that list, newest first
-and already filtered of your own rows: POST
+(the read step's list), newest first — a run that stops short of
+three while three are listed has left this step undone; the
+manifest's `unscored_bundles` IS that list, newest first and already
+filtered of your own rows: POST
 {{base_url}}/api/ranking_notes with {subject_kind, subject_id}, a
 score 0-1, one sentence saying what the bundle STANDS ON in the
 house's own terms (the value it serves, what its pieces make ready,
@@ -302,12 +303,12 @@ The entry closes the sitting: what was staged (ids), which
 facts were indexed (insight ids), which requests were answered,
 which threads were answered, which diagnoses were published, which
 bundles were scored, and — just as load-bearing — what was
-deliberately NOT composed and why (a floor not yet expired, evidence
-not yet in the house, a person still unaffirmed). The next sitting
-reads this first. There is NO floor (waymark-mho): a run that
-advanced its arrivals (or had none), enriched what was bare, and
-owed nothing else may write nothing at all — a lawful no-op leaves
-no journal. Write this journal only when the sitting actually did
+deliberately NOT composed and why (a `not_before` date not yet
+reached, evidence not yet in the house, a person still unaffirmed).
+The next sitting reads this first. A run writes only what its work
+orders and the owed lists name (waymark-mho): one that advanced its
+arrivals (or had none), enriched what was bare, and owed nothing
+else may write nothing at all — a lawful no-op leaves no journal. Write this journal only when the sitting actually did
 something. Then close this molecule's steps and squash the wisp.
 LAST, always: run `scripts/sitting-run.sh verify` and put its output
 in your report. It lists every row this principal wrote since the

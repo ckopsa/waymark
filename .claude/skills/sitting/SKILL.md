@@ -1,6 +1,6 @@
 ---
 name: sitting
-description: Run one composer sitting at the waymark MCP door — read the house, index the facts people said as insights, answer standing composition requests and threads, advance the arrivals (enrich a bare task at least, compose an outcome only for a real goal — no floor), honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
+description: Run one composer sitting at the waymark MCP door — read the house, index the facts people said as insights, answer standing composition requests and threads, advance the arrivals (enriching a bare task is a whole answer, compose an outcome only for a real goal), honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
 ---
 
 # The sitting
@@ -90,10 +90,11 @@ required, an order you cannot answer honestly is skipped and named in
 the journal, and `verify` will say `ORDER <probe> <subject>: answered
 by <row>` or `UNANSWERED` for each of them next run.
 
-There is NO floor (waymark-mho): a run advances what ARRIVED (the
-manifest's `arrivals`, new since the last run — the material the
-probes drew from) and never manufactures an outcome to have done
-something. The MINIMUM is to enrich a bare task, and that is what a
+A run writes only what its work orders and the owed lists name
+(waymark-mho): it advances what ARRIVED (the manifest's `arrivals`,
+new since the last run — the material the probes drew from) and never
+manufactures an outcome to have done something. Enriching a bare task
+is the lightest write and a whole answer, and that is what a
 `bare-task-due-soon` order asks for: for a `bare_tasks` entry
 (actionable, no detail, unspoken-for)
 publish an insight that ANNOTATES it — evidence citing the task and
@@ -165,7 +166,7 @@ task, `complete`); never `prioritize`, which takes a rank and is
 refused at the insight door — a rank belongs in an outcome piece.
 The declined prior is terminal and admits none, so `expire`/`retire`
 on it is burial, not a step. Respect the
-recomposition floor the prior verdict set. A decline for timing means hold things ready, not hours.
+`not_before` date the prior verdict stamped. A decline for timing means hold things ready, not hours.
 
 ## 7. The unanswered turn
 
@@ -206,8 +207,9 @@ revised bundle, and away you go.
 
 Every sitting, composed or not — ranking is its own duty, not a tail
 on staging. For every bundle you can see that carries no live
-`ranking_note` of yours, newest first, at least three when three
-exist: `{subject_kind, subject_id}`, a score 0–1, one sentence saying
+`ranking_note` of yours, newest first — and a run that stops short
+of three while three are listed has left this step undone:
+`{subject_kind, subject_id}`, a score 0–1, one sentence saying
 what the bundle *stands on* in the house's terms (its value, what its
 pieces make ready, the timing, the decline word) — never how it feels
 — and `evidence` = everything you judged from: the bundle, its value,
@@ -228,10 +230,10 @@ End every sitting with one journal entry: what was staged (ids),
 which facts were indexed (insight ids), which requests and threads
 were answered, which diagnoses were published, which bundles were
 scored, and — just as load-bearing — what you chose NOT to compose
-and why (the wood not yet in the house; a floor not yet expired; a
-person still unaffirmed). The next sitting reads this first. There
-is NO floor: a run that advanced its arrivals (or had none), enriched
-what was bare, and owed nothing else writes nothing at all — a lawful
+and why (the wood not yet in the house; a `not_before` date not yet
+reached; a person still unaffirmed). The next sitting reads this
+first. A run that advanced its arrivals (or had none), enriched what
+was bare, and owed nothing else writes nothing at all — a lawful
 no-op leaves no journal.
 
 ## Scheduling
