@@ -12,6 +12,19 @@
   <span id="grantchip"></span>
   <span id="followchip"></span>
   <div class="spacer"></div>
+  <!-- the theme control: three states, and one of them is "don't
+       decide" — System hands the question back to the operating
+       system and keeps tracking it. The head's boot already applied
+       the stored word before first paint; 220-boot.js only wires the
+       buttons and marks which one is pressed. -->
+  <div id="themepick" class="themepick" role="group" aria-label="appearance">
+    <button type="button" data-theme-choice="system" aria-label="system"
+            title="follow the system's appearance">◐</button>
+    <button type="button" data-theme-choice="light" aria-label="light"
+            title="always light">☀</button>
+    <button type="button" data-theme-choice="dark" aria-label="dark"
+            title="always dark">☾</button>
+  </div>
   <input id="who" placeholder="principal"
          title="dev principal (x-waymark-principal)">
   <!-- unpainted until the member row answers (220-boot.js): the chip

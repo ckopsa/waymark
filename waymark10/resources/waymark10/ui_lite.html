@@ -3,26 +3,55 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>waymark 10 · lite</title>
+<!-- the theme boot: a stored choice stamps <html data-theme=…> before
+     the first paint, so the page never flashes the other theme.
+     "system" stores nothing and the media query answers. -->
+<script id="theme-boot">
+(function () {
+  try {
+    var t = localStorage.getItem("waymark.theme");
+    if (t === "light" || t === "dark")
+      document.documentElement.setAttribute("data-theme", t);
+  } catch (_e) { /* no storage: the system's word stands */ }
+})();
+</script>
 <style>
 /* ── the envelope is the screen ──────────────────────────────────────
    One self-contained page, zero external hosts, zero app knowledge:
    everything rendered here was read off the wire — kinds from
    well-known, tables from the query grammar, forms from the action
    input schemas, gates from safety, reasons from unavailable.       */
+/* The system's preference has always applied here; what is new is
+   that a reader may override it in either direction. An explicit
+   choice stamps <html data-theme=…> (same storage key as the full
+   client, "waymark.theme", so the two pages agree), which is why the
+   media block below excludes data-theme="light". Keep the two dark
+   blocks in lockstep — CSS cannot share one body across a media
+   boundary. */
 :root {
+  color-scheme: light;
   --bg: #f7f6f3; --panel: #ffffff; --ink: #1a1a18; --muted: #6b6a64;
   --line: #e2e0d8; --accent: #2c5f8a; --accent-ink: #ffffff;
   --danger: #a33a2e; --warn-bg: #fdf3d7; --warn-line: #e5c96b;
   --ok: #3a7d44; --chip: #eceae2; --code: #f0efe9;
 }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --bg: #191a1c; --panel: #222325; --ink: #e8e6e1; --muted: #97958e;
     --line: #35363a; --accent: #6ea3cc; --accent-ink: #14181c;
     --danger: #d3766a; --warn-bg: #3a3320; --warn-line: #8a7a3a;
     --ok: #7dbb87; --chip: #2e2f33; --code: #26272b;
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #191a1c; --panel: #222325; --ink: #e8e6e1; --muted: #97958e;
+  --line: #35363a; --accent: #6ea3cc; --accent-ink: #14181c;
+  --danger: #d3766a; --warn-bg: #3a3320; --warn-line: #8a7a3a;
+  --ok: #7dbb87; --chip: #2e2f33; --code: #26272b;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--ink);
@@ -40,6 +69,14 @@ nav { display: flex; gap: 4px; flex-wrap: wrap; flex: 1; }
 nav a { padding: 3px 9px; border-radius: 20px; font-size: 13.5px; }
 nav a.on { background: var(--accent); color: var(--accent-ink); }
 nav .sep { color: var(--line); align-self: center; }
+.themepick { display: inline-flex; border: 1px solid var(--line);
+  border-radius: 20px; overflow: hidden; }
+.themepick button { border: none; border-radius: 0; background: none;
+  color: var(--muted); font-size: 12px; line-height: 1; padding: 5px 9px;
+  cursor: pointer; }
+.themepick button + button { border-left: 1px solid var(--line); }
+.themepick button[aria-pressed="true"] { background: var(--accent);
+  color: var(--accent-ink); }
 #who { width: 110px; padding: 4px 8px; border: 1px solid var(--line);
   border-radius: 6px; background: var(--bg); color: var(--ink); }
 #live { width: 9px; height: 9px; border-radius: 50%; background: var(--muted);
@@ -155,6 +192,14 @@ main { padding-bottom: 48px; }
 <header>
   <span class="brand">waymark <small>10</small></span>
   <nav id="nav"></nav>
+  <div id="themepick" class="themepick" role="group" aria-label="appearance">
+    <button type="button" data-theme-choice="system" aria-label="system"
+            title="follow the system's appearance">◐</button>
+    <button type="button" data-theme-choice="light" aria-label="light"
+            title="always light">☀</button>
+    <button type="button" data-theme-choice="dark" aria-label="dark"
+            title="always dark">☾</button>
+  </div>
   <input id="who" placeholder="principal" title="dev principal (x-waymark-principal)">
   <span id="live" title="event stream"></span>
 </header>
@@ -184,6 +229,35 @@ $who.addEventListener("change", () => {
   localStorage.setItem("wm10.principal", $who.value.trim());
   render();
 });
+/* ── the theme control ───────────────────────────────────────────────
+   System / Light / Dark, sharing the full client's storage key so the
+   two pages agree. "system" is the ABSENCE of a stamp, so the page
+   keeps following the OS while it is open. */
+const THEMES = ["system", "light", "dark"];
+const themeSeats = () => document.querySelectorAll("#themepick button");
+function storedTheme() {
+  try {
+    const t = localStorage.getItem("waymark.theme");
+    return THEMES.includes(t) ? t : "system";
+  } catch (_e) { return "system"; }
+}
+function applyTheme(t) {
+  if (t === "light" || t === "dark")
+    document.documentElement.setAttribute("data-theme", t);
+  else document.documentElement.removeAttribute("data-theme");
+  for (const b of themeSeats())
+    b.setAttribute("aria-pressed", String(b.dataset.themeChoice === t));
+}
+for (const b of themeSeats())
+  b.addEventListener("click", () => {
+    const t = b.dataset.themeChoice;
+    try {
+      if (t === "system") localStorage.removeItem("waymark.theme");
+      else localStorage.setItem("waymark.theme", t);
+    } catch (_e) { /* this tab only, then */ }
+    applyTheme(t);
+  });
+applyTheme(storedTheme());
 function headers(extra) {
   const h = Object.assign({"Content-Type": "application/json"}, extra || {});
   const who = $who.value.trim();

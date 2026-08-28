@@ -99,7 +99,22 @@
       (is (str/includes? body "Waymark-Acknowledge")
           "the acknowledge protocol is wired")
       (is (str/includes? body "Idempotency-Key"))
-      (is (str/includes? body "If-Match")))))
+      (is (str/includes? body "If-Match")))
+    (testing (str path ": the page dresses itself for the reader's theme")
+      ;; waymark-88k — BOTH pages, and they agree: the system's
+      ;; preference by default, an explicit data-theme winning in
+      ;; either direction, and one storage key between them
+      (is (str/includes? body "<meta name=\"color-scheme\" content=\"light dark\">"))
+      (is (str/includes? body "@media (prefers-color-scheme: dark)"))
+      (is (str/includes? body ":root:not([data-theme=\"light\"])"))
+      (is (str/includes? body ":root[data-theme=\"dark\"]"))
+      (is (str/includes? body "localStorage.getItem(\"waymark.theme\")")
+          "the same key on the lite page and the full one")
+      (is (< (str/index-of body "<script id=\"theme-boot\">")
+             (str/index-of body "<style>"))
+          "the stamp precedes the stylesheet: no flash of the wrong theme")
+      (is (str/includes? body "data-theme-choice=\"system\"")
+          "System is a seat of its own — it removes the stamp"))))
 
 (deftest ui-references-no-external-hosts
   (check-page "/api/-/ui")

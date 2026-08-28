@@ -19,6 +19,8 @@
     (is (str/ends-with? page "</html>\n"))
     (is (= 1 (count (re-seq #"<style>" page))) "exactly one <style> block")
     (is (= 1 (count (re-seq #"<script>" page))) "exactly one <script> block")
+    (is (= 1 (count (re-seq #"<script id=\"theme-boot\">" page)))
+        "…plus the head's theme boot, the one script outside that block")
     (is (str/includes? page "<html lang=\"en\">") "the mobile-stamp anchor")
     (is (str/includes? page "\"use strict\";"))
     (is (str/includes? page "render();"))
@@ -63,3 +65,79 @@
         "the dispatch seam calls it")
     (is (str/includes? page ".slot-grid"))
     (is (str/includes? page "html[data-ui=\"mobile\"] .slot-grid"))))
+
+;; ── the theme (waymark-88k) ───────────────────────────────────────
+;; One palette, restated: the light tokens on :root, the dark ones
+;; under prefers-color-scheme AND under an explicit data-theme, and a
+;; head script that stamps the stored choice before the first paint.
+
+(defn- stylesheet
+  "The page's one <style> block — the three CSS fragments as served."
+  [page]
+  (second (re-find #"(?s)<style>(.*?)</style>" page)))
+
+(defn- block
+  "The declarations of the rule opening at `selector`, as a set of
+  \"prop: value\" strings — no nesting inside a token block, so the
+  first } after the selector closes it, and indentation is flattened
+  so a rule nested in a media query compares to a top-level one."
+  [css selector]
+  (let [start (+ (str/index-of css selector) (count selector))
+        body  (subs css start (+ start (str/index-of (subs css start) "}")))]
+    (->> (str/split body #";")
+         (map #(str/replace (str/trim %) #"\s+" " "))
+         (remove str/blank?)
+         set)))
+
+(deftest the-page-dresses-for-light-and-dark
+  ;; the whole switch, end to end: the meta that lets native chrome
+  ;; follow, the before-first-paint stamp, both dark blocks, and the
+  ;; three-seat control in the shell
+  (let [page (sut/assemble)]
+    (is (str/includes? page "<meta name=\"color-scheme\" content=\"light dark\">")
+        "native controls and scrollbars follow the page")
+    (is (< (str/index-of page "<script id=\"theme-boot\">")
+           (str/index-of page "<style>"))
+        "the stamp lands before the stylesheet — no flash of the other theme")
+    (is (str/includes? page "localStorage.getItem(\"waymark.theme\")")
+        "one storage key, shared with ui_lite.html")
+    (is (str/includes? page "@media (prefers-color-scheme: dark)")
+        "the system's preference applies with nothing stored")
+    (is (str/includes? page ":root:not([data-theme=\"light\"])")
+        "an explicit light beats a dark system")
+    (is (str/includes? page ":root[data-theme=\"dark\"]")
+        "an explicit dark beats a light system")
+    (is (str/includes? page "id=\"themepick\"") "the shell carries the control")
+    (doseq [seat ["system" "light" "dark"]]
+      (is (str/includes? page (str "data-theme-choice=\"" seat "\"")) seat))
+    (is (str/includes? page "localStorage.removeItem(\"waymark.theme\")")
+        "\"system\" is the absence of a stored word, not a third colour")))
+
+(deftest the-two-dark-blocks-say-the-same-thing
+  ;; CSS cannot share one body across a media boundary, so the dark
+  ;; palette is written twice — once for the system's preference, once
+  ;; for the explicit choice. A drifted copy is a theme that changes
+  ;; when you toggle it away and back, so the two are compared here
+  ;; rather than trusted to a reviewer's eye.
+  (let [css (stylesheet (sut/assemble))]
+    (is (= (block css ":root:not([data-theme=\"light\"]) {")
+           (block css ":root[data-theme=\"dark\"] {")))))
+
+(deftest no-colour-escapes-the-palette
+  ;; every colour the page paints is named in the token blocks and
+  ;; read back through var(): a literal anywhere else is a spot that
+  ;; would keep its light value under a dark theme. The three blocks
+  ;; are contiguous (light :root, the media block, the explicit one),
+  ;; so cutting from the first to the close of the last leaves exactly
+  ;; the stylesheet that must be token-only.
+  (let [css     (stylesheet (sut/assemble))
+        dark    (str/index-of css ":root[data-theme=\"dark\"] {")
+        close   (+ dark (str/index-of (subs css dark) "}") 1)
+        outside (str (subs css 0 (str/index-of css ":root {"))
+                     (subs css close))]
+    ;; a hex colour is a VALUE, so it ends the declaration or an
+    ;; argument list — which is what keeps #feed and friends out
+    (is (empty? (re-seq #"#[0-9a-fA-F]{3,8}[;,)]" outside))
+        "no literal hex outside the palette")
+    (is (empty? (re-seq #"\b(rgba?|hsla?)\(" outside))
+        "no literal rgb()/hsl() outside the palette")))
