@@ -101,8 +101,17 @@
   `:within` (waymark-jfv.20) is on the offline side: a scenario is a
   client's knock, so the check tier answers it as nil — which is the
   same answer the wire gives, and exactly the case a door walled on it
-  exists to refuse."
-  #{:now :principal :services.features :within})
+  exists to refuse.
+
+  `:grant` (waymark-sfe) joins it for the same reason and with the
+  same answer: a scenario knocks presenting NO grant, so a grantable
+  wall (`guards/unless-granted`) refuses every agent here — the
+  ungranted half of its law, judged with no database at all. What a
+  scenario cannot say is the other half; \"admitted under a scope
+  naming this action\" needs a minted grant and a real request, so it
+  is proved in the suites, over the wire, where a grant exists to be
+  presented."
+  #{:now :principal :services.features :within :grant})
 
 (def out-of-state
   "The reserved denier name: a row whose state is outside the

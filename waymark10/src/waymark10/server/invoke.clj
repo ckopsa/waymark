@@ -275,9 +275,19 @@
     else, and without this key that law was a grant's promise rather
     than a wall. The render probe and the dry-run rehearsals never set
     it, so a door walled on it renders refused, which is the truth: no
-    client taps it. A guard reading it declares `:reads [:within]`."
+    client taps it. A guard reading it declares `:reads [:within]`.
+  - `:grant` — the guard's-eye view of the X-Waymark-Grant this
+    request presented (waymark-sfe), `{:id :action? :row?}` minted by
+    `grants/visibility` and nil for every principal that presented
+    none or presented a dead one. It rides the ctx as `(:grant ctx)`,
+    which is what lets a wall refuse an agent UNLESS its own scope
+    admits the door (`guards/unless-granted`). It follows the hand
+    into inner writes: a cross-write opened by a granted invoke is
+    judged against the same leash, so `outcome.make_it_so` reaching
+    `outcome_piece.take` needs both named in the scope. A guard
+    reading it declares `:reads [:grant]`."
   ([engine tx mode principal] (make-ctx engine tx mode principal nil))
-  ([engine tx mode principal {:keys [correlation-id self within]}]
+  ([engine tx mode principal {:keys [correlation-id self within grant]}]
    (let [;; the cross-WRITE door (waymark9 Ctx.invoke): handlers and
          ;; on-create hooks write OTHER rows through the same
          ;; transaction and the full per-item algorithm. Only a real
@@ -291,6 +301,8 @@
              :services (:services engine)
              :mode mode
              :inner-sink sink
+             ;; the presented leash, as the guards see it (waymark-sfe)
+             :grant grant
              ;; the write this ctx was opened inside of, or nil at the
              ;; wire — see the docstring
              :within within
@@ -314,6 +326,12 @@
                               (body-digest body) body
                               {:principal principal
                                :correlation-id correlation-id
+                               ;; the leash follows the hand
+                               ;; (waymark-sfe): an inner write opened
+                               ;; by a granted invoke is judged against
+                               ;; the same scope, never waived by being
+                               ;; reached from inside
+                               :grant grant
                                ;; the inner door learns whose hand
                                ;; opened it (waymark-jfv.20)
                                :within self
@@ -364,6 +382,7 @@
                             engine tx target-kind body
                             {:principal principal
                              :correlation-id correlation-id
+                             :grant grant
                              :within self
                              :acknowledged (or (:acknowledged opts) #{})})]
                    (swap! sink conj {:kind target-kind
@@ -715,9 +734,18 @@
                  :action (:name defn)
                  :from-state (:state row)
                  :to-state (:to defn)
-                 :actor {:type (name (:type principal))
-                         :id (:id principal)
-                         :display (:display principal)}
+                 ;; UNDER WHOSE LEASH (waymark-sfe). The actor already
+                 ;; says whose hand; a write made while presenting a
+                 ;; live grant says which grant too, so the history
+                 ;; reads "declined by <agent> under grant-…". It rides
+                 ;; the actor map — a jsonb column, so no migration and
+                 ;; no new field for a fact that is ABOUT the actor —
+                 ;; and is simply absent for every unscoped write, which
+                 ;; is the honest thing to say about one.
+                 :actor (cond-> {:type (name (:type principal))
+                                 :id (:id principal)
+                                 :display (:display principal)}
+                          (:id (:grant ctx)) (assoc :grant (:id (:grant ctx))))
                  :law-revision (:law-revision row)
                  :input-digest digest
                  :inputs (when (:record defn) inp)
@@ -880,7 +908,8 @@
 
 (defn invoke!
   "One write. opts: :principal (required), :if-match, :idempotency-key,
-  :dry-run, :acknowledged (set of guard names), :correlation-id."
+  :dry-run, :acknowledged (set of guard names), :correlation-id,
+  :grant (the presented leash as the guards see it — waymark-sfe)."
   [engine kind id action-name body opts]
   (let [rdef (rdef-of engine kind)]
     (if (and (= :adopt action-name)
@@ -950,7 +979,7 @@
   :require-key? false waives step 2's 428 for fan-out items."
   [engine tx rdef kind id defn digest body
    {:keys [principal if-match idempotency-key dry-run acknowledged
-           correlation-id require-key? within]
+           correlation-id require-key? within grant]
     :or {acknowledged #{} require-key? true}}]
   (let [action-name (:name defn)]
     ;; 2. idempotency: requirement, then stored replay
@@ -980,6 +1009,7 @@
             ctx (make-ctx engine tx (if dry-run :dry-run :invoke) principal
                           {:correlation-id correlation-id
                            :within within
+                           :grant grant
                            :self {:kind kind :action action-name}})
             ;; guards judge; they never write — the pen stays with the
             ;; handler (and :on-create), so guard evaluation gets a
@@ -1141,7 +1171,7 @@
   :dry-run."
   [engine kind action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
-           dry-run]
+           dry-run grant]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -1185,6 +1215,7 @@
             ;; 9 never grew a bulk one, recorded).
             (let [item-opts {:principal principal
                              :acknowledged acknowledged
+                             :grant grant
                              :dry-run dry-run
                              :require-key? false}
                   verdicts
@@ -1215,6 +1246,7 @@
               (let [cid (or correlation-id (str (random-uuid)))
                     item-opts {:principal principal
                                :acknowledged acknowledged
+                               :grant grant
                                :correlation-id cid
                                :require-key? false}
                     run-item (fn [tx id]
@@ -1286,7 +1318,7 @@
   deferred-jobs worker (phase 9b): a job item and a bulk item are one
   code path. Refusals throw exactly as a single invoke's would."
   [engine kind action-name id body
-   {:keys [principal acknowledged correlation-id]
+   {:keys [principal acknowledged correlation-id grant]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (or (some-> (get-in rdef [:actions action-name])
@@ -1301,6 +1333,7 @@
                         {:principal principal
                          :acknowledged acknowledged
                          :correlation-id correlation-id
+                         :grant grant
                          :require-key? false}))))))
 
 (defn batch!
@@ -1320,7 +1353,7 @@
   input is judged independently."
   [engine kind id action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
-           dry-run]
+           dry-run grant]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (some-> (get-in rdef [:actions action-name])
@@ -1351,6 +1384,7 @@
         (fn [tx]
           (let [item-opts {:principal principal
                            :acknowledged acknowledged
+                           :grant grant
                            :dry-run dry-run
                            :require-key? false}
                 verdicts
@@ -1379,6 +1413,7 @@
           (let [cid (or correlation-id (str (random-uuid)))
                 item-opts {:principal principal
                            :acknowledged acknowledged
+                           :grant grant
                            :correlation-id cid
                            :require-key? false}
                 at (volatile! 0)
@@ -1476,7 +1511,7 @@
   tiers to what the caller provided (§23's judged-when-answerable
   mode): provided entries schema-checked, fully covered guard leaves
   judged, the rest :awaiting."
-  [engine rdef model body principal acknowledged mode]
+  [engine rdef model body principal acknowledged mode grant]
   (let [partial? (= :partial mode)
         inp (schema/decode model (or body {}))
         errors (cond-> (schema/closed-errors model inp)
@@ -1487,7 +1522,10 @@
       (if partial? {:valid? true :judged [] :awaiting []} {:valid? true})
       (store/with-tx (:storage engine)
         (fn [tx]
-          (let [ctx (make-ctx engine tx :dry-run principal)]
+          ;; the rehearsal wears the same leash the real create would
+          ;; (waymark-sfe): a grantable create wall must answer a
+          ;; dry-run exactly as it will answer the write
+          (let [ctx (make-ctx engine tx :dry-run principal {:grant grant})]
             (if partial?
               (let [{:keys [judged awaiting]}
                     (split-leaves (:create-guards rdef)
@@ -1528,7 +1566,7 @@
   author's :create-schema, and the author's create guards are not
   consulted — they judge the create-schema's vocabulary, which a
   mint doesn't speak. Never set from a request path."
-  [engine kind body {:keys [principal acknowledged dry-run mint?]
+  [engine kind body {:keys [principal acknowledged dry-run mint? grant]
                      :or {acknowledged #{}}
                      :as opts}]
   (let [rdef (rdef-of engine kind)
@@ -1537,7 +1575,8 @@
                 (or (:create-schema rdef) (:schema rdef)))
         create-action (first (:create-action-names rdef))]
     (if dry-run
-      (create-dry-run! engine rdef model body principal acknowledged dry-run)
+      (create-dry-run! engine rdef model body principal acknowledged dry-run
+                       grant)
       (after-write!
        engine kind create-action
        (store/with-tx (:storage engine)
@@ -1596,7 +1635,7 @@
   child's full create algorithm — its own :on-create may birth
   grandchildren; a declaration cycle refuses at depth 8."
   [engine tx kind body {:keys [principal acknowledged correlation-id id
-                               idempotency-key mint? depth within]
+                               idempotency-key mint? depth within grant]
                         :or {acknowledged #{} depth 0}}]
   (let [rdef (rdef-of engine kind)
         model (if mint?
@@ -1621,6 +1660,7 @@
             ctx (make-ctx engine tx :invoke principal
                           {:correlation-id correlation-id
                            :within within
+                           :grant grant
                            :self {:kind kind :action create-action}})
             {:keys [warned overridden basis]}
             (create-guard-pass (if mint? [] (:create-guards rdef))
@@ -1685,9 +1725,15 @@
                        :action create-action
                        :from-state nil
                        :to-state (:state row)
-                       :actor {:type (name (:type principal))
-                               :id (:id principal)
-                               :display (:display principal)}
+                       ;; under whose leash, when there was one
+                       ;; (waymark-sfe — finish!'s own stamp, and for
+                       ;; its reason: a delegate's ask reads "filed by
+                       ;; <agent> under grant-…" or it reads as the
+                       ;; agent's own initiative)
+                       :actor (cond-> {:type (name (:type principal))
+                                       :id (:id principal)
+                                       :display (:display principal)}
+                                (:id grant) (assoc :grant (:id grant)))
                        :law-revision (:law-revision row)
                        :input-digest digest
                        :acknowledged (not-empty (vec overridden))
@@ -1720,6 +1766,8 @@
                              (schema/encode tmodel (or body {}))
                              {:principal principal
                               :correlation-id correlation-id
+                              ;; …and under the same leash
+                              :grant grant
                               ;; a deferred birth is still opened
                               ;; inside THIS create's hand
                               :within {:kind kind :action create-action}

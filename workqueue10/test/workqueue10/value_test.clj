@@ -150,18 +150,33 @@
 (defn- leash!
   "One grant over the `value` doors an agent is about to knock on,
   minted by a member and accepted by the agent → the headers that
-  present it. `packs/leash!`, narrowed to one kind."
-  [audience actions]
-  (let [hs (agent' audience)
-        made (req :post "/api/grants"
-                  {:audience audience
-                   :scope [{:kind "value" :actions actions}]}
-                  (human "colton-grants"))
-        gid (when (= 201 (:status made)) (id-of made))
-        took (when gid (invoke! "grants" gid :accept nil hs))]
-    (is (= 201 (:status made)) (str "grant mint: " (json made)))
-    (is (= 200 (:status took)) (str "grant accept: " (json took)))
-    (assoc hs "x-waymark-grant" gid)))
+  present it. `packs/leash!`, narrowed to one kind — and, in the
+  second arity, the WHOLE scope, which waymark-sfe needs: a filtered
+  entry is the leash that admits some rows and not others."
+  ([audience actions]
+   (leash! audience [{:kind "value" :actions actions}] :scope))
+  ([audience scope _]
+   (let [hs (agent' audience)
+         made (req :post "/api/grants"
+                   {:audience audience :scope scope}
+                   (human "colton-grants"))
+         gid (when (= 201 (:status made)) (id-of made))
+         took (when gid (invoke! "grants" gid :accept nil hs))]
+     (is (= 201 (:status made)) (str "grant mint: " (json made)))
+     (is (= 200 (:status took)) (str "grant accept: " (json took)))
+     (assoc hs "x-waymark-grant" gid))))
+
+(defn- under-grant
+  "Which grant the log says a transition was made UNDER (waymark-sfe) —
+  the actor's own `grant` key, absent on every unscoped write."
+  [kind id action]
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (some (fn [rec]
+              (when (= action (:action rec)) (get-in rec [:actor :grant])))
+            (store/transitions (:storage *eng*) tx
+                               {:kind kind :resource-id id}
+                               {:limit 20 :newest-first true})))))
 
 (defn- write-value!
   "One value through the ordinary door, by whichever hand is handed in."
@@ -209,7 +224,9 @@
     (testing "THE ONE REMAINING WALL: an observer marking its own guess confirmed would speak in the owner's voice"
       (is (= 409 (:status itself)) (str "allowed: " (json itself)))
       (is (= "written-by-a-person" (guard-of itself)))
-      (is (str/includes? (detail itself) "insight")))
+      (is (str/includes? (detail itself) "insight"))
+      (testing "and it is FOUR EYES since waymark-sfe — the leash names still_stands and the wall refuses anyway, because this agent wrote the row"
+        (is (str/includes? (detail itself) "four eyes"))))
     (let [tap (invoke! "values" id :still_stands nil (human "colton-affirm"))]
       (testing "the owner's tap is the whole affirmation — one state change, one stamp"
         (is (= 200 (:status tap)) (str "refused: " (json tap)))
@@ -222,6 +239,56 @@
         (let [log (hands :value id)]
           (is (contains? log [:create "sous-affirm"]))
           (is (contains? log [:still_stands "colton-affirm"])))))))
+
+;; ── 2b. the affirmation is GRANTABLE (waymark-sfe) ──────────────────
+;;
+;; The owner ruled a second time on 2026-08-28: "The whole reason we
+;; have the access controls we have is so that I can ask you to do what
+;; I want when I want. It doesn't make sense to disallow it, it just
+;; makes sense to permission it." So the wall above became a
+;; permission: a delegate holding a scope that NAMES `value.still_stands`
+;; says the owner's yes on the owner's instruction, and the audit says
+;; which grant it said it under. What did not move is four eyes — the
+;; hand that WROTE the row still never answers it — which is what
+;; section 2 above now proves in its own words.
+
+(deftest a-delegate-under-a-scope-that-names-the-door-affirms
+  (let [writer (leash! "sous-sfe-writer" ["create"])
+        v (write-value! writer "an hour in the shop before the house wakes")
+        id (id-of v)]
+    (testing "an agent whose scope does not name the door sees no such door — concealment, never a narrated refusal"
+      (let [blind (leash! "sous-sfe-blind" ["create"])]
+        (is (= 404 (:status (invoke! "values" id :still_stands nil blind))))))
+    (testing "one that does name it lands the affirmation, and the row becomes the house's"
+      (let [delegate (leash! "sous-sfe-delegate" ["still_stands"])
+            r (invoke! "values" id :still_stands nil delegate)]
+        (is (= 200 (:status r)) (str "refused: " (json r)))
+        (is (= "declared" (state-of r)))
+        (is (= "sous-sfe-delegate" (:affirmed_by (fields r))))
+        (is (= "sous-sfe-writer" (:written_by (fields r)))
+            "the hand that noticed it is still on the row")
+        (testing "and the history reads 'under grant-…'"
+          (is (= (get delegate "x-waymark-grant")
+                 (under-grant :value id :still_stands))))))))
+
+(deftest a-filtered-scope-admits-only-the-rows-it-names
+  ;; the `:filter` half of a scope entry, judged at the row: rows
+  ;; minted after the grant land inside the leash the moment they
+  ;; match, and rows outside it do not exist at all.
+  (let [ours (leash! "sous-sfe-ours" ["create"])
+        theirs (leash! "sous-sfe-theirs" ["create"])
+        inside (id-of (write-value! ours "the workbench, cleared before Saturday"))
+        outside (id-of (write-value! theirs "a podcast while the sauce reduces"))
+        narrow (leash! "sous-sfe-narrow"
+                       [{:kind "value" :actions ["still_stands"]
+                         :filter {:written_by "sous-sfe-ours"}}]
+                       :scope)]
+    (testing "outside the filter, the row does not exist"
+      (is (= 404 (:status (invoke! "values" outside :still_stands nil narrow)))))
+    (testing "inside it, the same tap lands"
+      (let [r (invoke! "values" inside :still_stands nil narrow)]
+        (is (= 200 (:status r)) (str "refused: " (json r)))
+        (is (= "declared" (state-of r)))))))
 
 ;; ── 3. one wording door per hand ────────────────────────────────────
 

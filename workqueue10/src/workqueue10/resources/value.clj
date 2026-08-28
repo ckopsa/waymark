@@ -67,8 +67,23 @@
   `declared`, and rewording an observed value CLAIMS it in the same
   stroke; `restate` is the observer's, runs `observed → observed`,
   and never leaves the record of what was noticed. Each hand sees
-  exactly one of them, because both walls are pure functions of the
-  principal and the render probe reads the same fact the invoke does.
+  exactly one of them, because both walls read the principal and the
+  presented leash, and the render probe reads the same two facts the
+  invoke does.
+
+  AND THE AFFIRMATION WALL IS GRANTABLE (waymark-sfe, 2026-08-28). The
+  owner ruled a second time, on the wall itself rather than on the
+  writing: \"The whole reason we have the access controls we have is so
+  that I can ask you to do what I want when I want. It doesn't make
+  sense to disallow it, it just makes sense to permission it.\" So
+  `written-by-a-person` no longer refuses every agent — it refuses one
+  that presents no grant admitting the door it is knocking on
+  (`value.still_stands`, `value.revise`, …), and it refuses the agent
+  that WROTE the row whatever it presents. Nothing above changes: an
+  agent's own reading is still not an affirmation, because affirming
+  it would be answering its own guess. What changed is that the OWNER
+  may hand a delegate his own yes, through the approval_request door,
+  and read afterwards which grant it acted under.
 
   THE PETITION STILL STANDS, and it is now the second thing
   `still_stands` does rather than the only one. The epic asks for
@@ -167,7 +182,7 @@
   `observed`, because a person reaching for `restore` has held it
   again with his own hand."
   (:require [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario]]
+                                   defscenario unless-granted]]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -191,22 +206,37 @@
   [ctx]
   (contains? #{:human :person} (:type (:principal ctx))))
 
-(defguardfn written-by-a-person
-  {:reads [:principal]
-   :explain "Affirming is a person's word. You may write down what you observed — that row is born observed and says so wherever this house cites it — but marking your own reading affirmed would be speaking in the owner's voice about the owner's own life. Leave it observed and say what you found: publish an insight, cite the rows you read, and offer this value's own \"yes, this one's ours\" as the one next step. The owner answers with a tap, or rewords it himself, and either way the row becomes his."}
-  [_row _inp ctx]
-  ;; a pure function of the principal's kind — the render probe and the
-  ;; real invoke read the same fact, so no probe path opens a door
-  ;; (feed_recipe/written-by-a-person, line for line).
-  ;;
-  ;; waymark-jfv.10 moved this wall OFF the create door and left it on
-  ;; every door that lands a row in `declared`: `still_stands`,
-  ;; `revise`, `restore`, and the `retire` that takes a value out of
-  ;; the house's holding. What it guards now is the AFFIRMATION rather
-  ;; than the writing.
-  (if (an-agent? ctx)
-    (t/deny)
-    (t/allow)))
+;; THE AFFIRMATION WALL, GRANTABLE (waymark-sfe, the owner's ruling of
+;; 2026-08-28: "It doesn't make sense to disallow it, it just makes
+;; sense to permission it"). It used to be a pure function of the
+;; principal's kind, refusing every agent outright — a wall standing
+;; BESIDE the grants machine even though that machine already spells
+;; exactly this scope. It is now `g/unless-granted`, per door, and it
+;; says three things instead of one:
+;;
+;;   a person passes, as ever;
+;;   an agent that WROTE this row is refused, grant or no grant —
+;;   `:own-field :written_by` is four eyes, and jfv.10's whole point
+;;   was that an observer does not answer its own reading;
+;;   any other agent passes only under a grant admitting
+;;   `value.<this door>` — the owner delegating in his own words.
+;;
+;; It is minted per action because the refusal NAMES the door a scope
+;; would have to admit, and a sentence that said "some door" would
+;; send a refused composer to read source.
+(defn- affirmation-wall
+  "`written-by-a-person`, for one door. jfv.10 left this wall on every
+  door that lands a row in `declared` — `still_stands`, `revise`,
+  `restore` — and on the `retire`/`dismiss` that take a value out of
+  the house's holding. What it guards is the AFFIRMATION rather than
+  the writing, which is why `restate` and the create door carry it
+  not at all."
+  [action]
+  (unless-granted
+   :value action
+   {:name :written-by-a-person
+    :own-field :written_by
+    :explain "Affirming is a person's word. You may write down what you observed — that row is born observed and says so wherever this house cites it — but marking your own reading affirmed would be speaking in the owner's voice about the owner's own life. Leave it observed and say what you found: publish an insight, cite the rows you read, and offer this value's own \"yes, this one's ours\" as the one next step. The owner answers with a tap, or rewords it himself, and either way the row becomes his."}))
 
 (defguardfn only-the-observer-restates
   {:reads [:principal]
@@ -661,7 +691,7 @@
              ;; not warranted for a law one person writes (the journal's
              ;; own waiver, one kind over).
              :waives #{:large-effort}
-             :guards [written-by-a-person this-is-yours-to-declare]
+             :guards [(affirmation-wall :revise) this-is-yours-to-declare]
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "Rewording overwrites the declaration with what you write; the log keeps the prior words, who changed them and when, so the amendment is a record rather than a replacement. If this value was only observed, rewording it also makes it yours."}
              :handler apply-revision
@@ -693,14 +723,14 @@
     ;; "I read what you brought me and it stands anyway", and the
     ;; rewording is `revise`, two doors up, by the owner's own hand.
     :still_stands {:from #{:observed :declared} :to :declared
-                   :guards [written-by-a-person]
+                   :guards [(affirmation-wall :still_stands)]
                    :handler stamp-the-affirmation
                    :safety {:idempotent true :reversible false :confirm false
                             :one-way "This puts your name to these words: the value is one this house holds, and the date is stamped. From an observed value it is what makes it yours; from one you already declared it records that you read what was found and it stands anyway — the fact that tells a composer the friction is in the plan rather than in the declaration. The words themselves do not change."}
                    :display {:label "Yes — this one's ours" :order 2
                              :description "This is a value this house holds. If it was only observed, this is the tap that makes it yours; if you already declared it, this says you read the evidence and it stands"}}
     :retire {:from #{:declared} :to :retired :undo :restore
-             :guards [written-by-a-person this-is-yours-to-declare]
+             :guards [(affirmation-wall :retire) this-is-yours-to-declare]
              :safety {:idempotent true :confirm false}
              :display {:label "Retire" :style :danger :order 8
                        :description "This is not one of ours any more — the outcomes that serve it stop being offered, the row stays on record, and restore brings it back"}}
@@ -716,7 +746,7 @@
     ;; in `retired`, because a value this house is not holding is a
     ;; value this house is not holding.
     :dismiss {:from #{:observed} :to :retired
-              :guards [written-by-a-person]
+              :guards [(affirmation-wall :dismiss)]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "This says the reading was wrong: no outcome may be staged against it, and what was observed stays on record with your answer beside it. Restore brings it back if you change your mind — and it comes back as yours."}
               :display {:label "Not one of ours" :style :danger :order 7
@@ -725,7 +755,7 @@
     ;; person reaching for this door has held it again with his own
     ;; hand, so it stamps like every other landing in `declared`
     :restore {:from #{:retired} :to :declared :undo :retire
-              :guards [written-by-a-person this-is-yours-to-declare]
+              :guards [(affirmation-wall :restore) this-is-yours-to-declare]
               :handler stamp-the-affirmation
               :safety {:idempotent true :confirm false}
               :display {:label "Restore" :order 1

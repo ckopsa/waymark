@@ -256,14 +256,20 @@
       (t/allow)
       (t/deny {:vars {:whose whose :you me}}))))
 
-(g/defguard a-person-dismisses
-  {:reads [:principal]
-   :open "A person dismisses a note. An agent does not — not its own (it restates), and not another's (a house running two agents would otherwise have one silence the other's judgment before a person read it)."
-   :explain "Dismissing an agent's judgment is a person's answer. If it is your own note, restate it; if it is another agent's, say what you read where an agent may — a note of your own, on the same row."}
-  [_row _inp ctx]
-  (if (= :agent (:type (:principal ctx)))
-    (t/deny)
-    (t/allow)))
+;; Grantable since waymark-sfe (the owner's ruling of 2026-08-28, and
+;; `outcome`'s verdict doors one file over): a person dismisses, and so
+;; does a delegate holding a scope that names `ranking_note.dismiss`.
+;; The half that stays absolute is the one this wall's own sentence
+;; already named — an agent never dismisses ITS OWN note, whatever it
+;; holds, because that is restating with the record scrubbed. What a
+;; grant opens is the other agent's note, on a person's instruction.
+(def a-person-dismisses
+  (g/unless-granted
+   :ranking_note :dismiss
+   {:name :a-person-dismisses
+    :own-field :judged_by
+    :open "A person dismisses a note, and so does a delegate under a scope that names this door. An agent does not dismiss its OWN (it restates, and the record keeps both) — nor another's on its own initiative: a house running two agents would otherwise have one silence the other's judgment before a person read it."
+    :explain "Dismissing an agent's judgment is a person's answer. If it is your own note, restate it; if it is another agent's, say what you read where an agent may — a note of your own, on the same row."}))
 
 ;; ── the stamps ──────────────────────────────────────────────────────
 

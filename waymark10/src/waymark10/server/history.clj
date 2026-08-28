@@ -196,7 +196,13 @@
 
 (defn- entry
   "One transition on the wire: what moved, who moved it, under which
-  law — then the two halves of why."
+  law — then the two halves of why.
+
+  The actor carries `grant` when the write was made while presenting a
+  live one (waymark-sfe), and carries no such key otherwise, which is
+  the honest thing to say about an unscoped hand. It is what makes a
+  delegated verdict readable as one: *declined by `<agent>` under
+  `grant-…`*."
   [rdef law t visible?]
   (let [j (decision/project (:judgment t) visible?)
         b (basis-of law t)]
@@ -204,7 +210,7 @@
              :action (:action t)
              :from (:from-state t)
              :to (:to-state t)
-             :actor (select-keys (:actor t) [:type :id :display])
+             :actor (select-keys (:actor t) [:type :id :display :grant])
              :law_revision (:law-revision t)
              :evidence (evidence-tier rdef (:judgment t))}
       (:summary t) (assoc :summary (:summary t))
@@ -430,7 +436,7 @@
                                       :at (:at t)
                                       :action (:action t)
                                       :actor (select-keys (:actor t)
-                                                          [:type :id :display])})))
+                                                          [:type :id :display :grant])})))
                             (filter (fn [i] (or (nil? row?)
                                                 (row? (:kind rdef) (:id i))))))
                       (sort-by key (group-by :resource-id in-window)))]

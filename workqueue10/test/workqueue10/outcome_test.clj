@@ -189,6 +189,20 @@
             (store/transitions (:storage *eng*) tx
                                {:kind kind :resource-id id} {:limit 20})))))
 
+(defn- under-grant
+  "Which grant the log says a transition was made UNDER (waymark-sfe) —
+  the actor's own `grant` key, absent on every unscoped write. Read
+  off the audit trail rather than off anything the response claims, so
+  what is proved is what a reader of history will see."
+  [kind id action]
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (some (fn [rec]
+              (when (= action (:action rec)) (get-in rec [:actor :grant])))
+            (store/transitions (:storage *eng*) tx
+                               {:kind kind :resource-id id}
+                               {:limit 20 :newest-first true})))))
+
 ;; ── the household's own rows ────────────────────────────────────────
 
 (defn- declare-value! [who name' loved]
@@ -857,12 +871,67 @@
         (is (= 409 (:status bad)))
         (is (= "aims-at-a-value-this-house-holds" (guard-of bad)))))))
 
-(deftest an-agent-does-not-mint-a-request
-  (let [refused (req :post "/api/composition_requests" {}
-                     (leash! "composer-mint" ["create"]))]
-    (testing "a request is the rank's first tier, and a composer that could ask itself for one would put its own initiative where only a person's ask may stand"
-      (is (= 409 (:status refused)))
-      (is (= "only-a-person-asks" (guard-of refused))))))
+(deftest an-agent-mints-a-request-only-under-a-scope-that-says-so
+  ;; waymark-sfe, the owner's ruling of 2026-08-28: the pull is the
+  ;; household's, and it is DELEGABLE. Law 6 is intact because the
+  ;; scope below exists only where a person approved an
+  ;; approval_request — so what the delegate files is the person's own
+  ;; pull, on the person's instruction.
+  (testing "a scope that does not name the create door conceals it — an agent's own initiative reaches nothing"
+    (let [reading-only (leash! "composer-mint-blind" [])
+          r (req :post "/api/composition_requests" {} reading-only)]
+      (is (= 404 (:status r)) (str "not concealed: " (json r)))))
+  (testing "a scope that NAMES composition_request.create admits the ask"
+    (let [delegate (leash! "composer-mint" ["create"])
+          made (req :post "/api/composition_requests" {} delegate)]
+      (is (= 201 (:status made)) (str "refused: " (json made)))
+      (testing "and the history says under WHICH grant it was filed"
+        (is (= (get delegate "x-waymark-grant")
+               (under-grant :composition_request (id-of made) :create)))))))
+
+(deftest a-verdict-is-grantable-but-four-eyes-is-not
+  ;; The whole of waymark-sfe on the verdict doors, over the wire:
+  ;; concealed without the scope, admitted with it, refused on the
+  ;; composer's own row whatever it holds, and the audit says which
+  ;; grant answered.
+  (let [v (declare-value! "colton-sfe" "making memories with the family"
+                          ["the shop"])
+        composer "composer-sfe"
+        mine (id-of (stage-outcome! composer (vid v)))
+        theirs (id-of (stage-outcome! composer (vid v)))]
+    (testing "an agent whose scope does not name the verdict sees no such door"
+      (let [blind (leash! "delegate-sfe-blind" [{:kind "outcome" :actions []}] :scope)]
+        (is (= 404 (:status (invoke! "outcomes" mine :not_this_week nil blind))))))
+
+    (testing "THE COMPOSER'S OWN ROW is refused even holding the scope — four eyes, and no grant opens it"
+      (let [staged-it (leash! composer
+                              [{:kind "outcome" :actions ["not_this_week"]}] :scope)
+            r (invoke! "outcomes" mine :not_this_week nil staged-it)]
+        (is (= 409 (:status r)) (str "allowed: " (json r)))
+        ;; the-composer-does-not-decide stands FIRST and answers first
+        (is (= "the-composer-does-not-decide" (guard-of r)))))
+
+    (testing "another agent, under a scope that names the door, declines on the household's instruction"
+      (let [delegate (leash! "delegate-sfe"
+                             [{:kind "outcome" :actions ["not_this_week"]}] :scope)
+            r (invoke! "outcomes" mine :not_this_week nil delegate)]
+        (is (= 200 (:status r)) (str "refused: " (json r)))
+        (is (= "declined" (:state (json r))))
+        (testing "and the transition reads 'under grant-…'"
+          (is (= (get delegate "x-waymark-grant")
+                 (under-grant :outcome mine :not_this_week))))))
+
+    (testing "a FILTERED scope admits only the rows it names"
+      (let [narrow (leash! "delegate-sfe-narrow"
+                           [{:kind "outcome" :actions ["not_this_week"]
+                             :filter {:composed_by composer}}] :scope)
+            other (leash! "delegate-sfe-other"
+                          [{:kind "outcome" :actions ["not_this_week"]
+                            :filter {:composed_by "somebody-else"}}] :scope)]
+        (is (= 404 (:status (invoke! "outcomes" theirs :not_this_week nil other)))
+            "outside the filter the row does not exist at all")
+        (is (= 200 (:status (invoke! "outcomes" theirs :not_this_week nil narrow)))
+            "inside it, the same tap lands")))))
 
 (deftest nothing-but-a-staging-answers-a-request-over-the-wire
   (let [rid (id-of (ask! "colton-wire"))
@@ -1818,17 +1887,27 @@
           (is (= member (get-in (first thread) [:data :said_by])) "in the owner's own voice")
           (is (str/includes? (get-in (first thread) [:data :says]) "9am church")))))
 
-    (testing "an agent-iterate is refused: iterate is the household's gesture"
+    (testing "THIS outcome's own composer may not iterate it, grant or no grant — four eyes (waymark-sfe)"
       ;; the wall answers only an agent that reaches it. An unrelated
       ;; agent is default-DENY and 404s on an outcome it cannot see,
-      ;; which proves nothing about the wall — so leash one over the
-      ;; kind's own `iterate` door: authorization admits the reach, and
-      ;; `a-person-answers` refuses the agent by name.
-      (let [agent (leash! "some-agent"
-                          [{:kind "outcome" :actions ["iterate"]}] :scope)
-            r (invoke! "outcomes" o :iterate {:says "re-plan"} agent)]
+      ;; which proves nothing about any wall — so leash the COMPOSER
+      ;; over the kind's own `iterate` door: authorization admits the
+      ;; reach, the scope names the very action, and
+      ;; `a-person-answers` refuses it anyway because it staged the row.
+      (let [staged-it (leash! composer
+                              [{:kind "outcome" :actions ["iterate"]}] :scope)
+            r (invoke! "outcomes" o :iterate {:says "re-plan"} staged-it)]
         (is (= 409 (:status r)))
-        (is (= "a-person-answers" (guard-of r)))))
+        (is (= "a-person-answers" (guard-of r)))
+        (is (str/includes? (detail r) "four eyes")
+            "the refusal says which of the two walls it is")))
+
+    (testing "a scope that does not name the door conceals it — never a narrated refusal"
+      ;; (the granted delegate that DOES reach a verdict door gets its
+      ;; own deftest below — it must not add a turn to this thread)
+      (let [elsewhere (leash! "delegate-elsewhere"
+                              [{:kind "outcome" :actions ["not_this_week"]}] :scope)]
+        (is (= 404 (:status (invoke! "outcomes" o :iterate {:says "no"} elsewhere))))))
 
     (testing "only the composer that staged a piece may rework it — the owner cannot"
       (let [r (invoke! "outcome_pieces" walk :rework nil (human member))]

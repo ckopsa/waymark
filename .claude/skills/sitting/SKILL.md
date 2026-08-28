@@ -144,9 +144,15 @@ what you chose not to compose and why.
   something READY (a create or a hold with its input prepared); a
   piece firing a completion door on a row that already stands records
   work nobody did.
-- Never answer your own plan or piece; never tap any verdict; never
-  `still_stands` / `revise` / `retire` a value or affirm a person —
-  observed `create` / `restate` only. Affirmation is a person's act.
+- Never answer your own plan or piece — that wall is four eyes and no
+  grant opens it. Never tap a verdict or affirm a value or person
+  unless your grant admits that door: your standing sitting scope
+  admits `create` / `restate` and nothing else, so `still_stands`,
+  `revise`, `retire` and the verdict doors are simply not there for
+  you. If the owner wants one of them done in his name he approves an
+  `approval_request` naming that exact action, and the transition then
+  records the grant you acted under. Otherwise: observed `create` /
+  `restate` only, and affirmation is a person's act.
 - The engine writes every impact line. **Read your own impact lines
   back** before the staging counts as done — a composer that never
   read its own is proposing blind (waymark-jfv.23).

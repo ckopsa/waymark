@@ -1242,7 +1242,8 @@
   unknown grant conceals the domain but never the asking door.
   Returns closures the render/router consult — {:kind? :row? :action?
   :field? :arg? :ids-of} — plus :grant-id for narration-free
-  diagnostics."
+  diagnostics and :grant, the guard's-eye view a LIVE grant confers
+  (waymark-sfe): {:id :action? :row?}, nil for every other fate."
   [eng grant-id principal]
   (let [pid (:id principal)
         row (when grant-id (load-decoded eng :grant grant-id))
@@ -1291,10 +1292,60 @@
                        ;; un-granted one)
                        (when-some [row (load-decoded eng (keyword k) id)]
                          (boolean (some #(branch-owns? row % pid)
-                                        (:by os)))))))]
+                                        (:by os)))))))
+        ;; the two closures the GUARD-side of the leash consults
+        ;; (waymark-sfe) are bound here rather than only in the map
+        ;; below, because `:grant` — the guard's-eye view of the
+        ;; presented grant — is built out of them. Naming them once
+        ;; is what keeps `unless-granted` reading the SAME admission
+        ;; the router's concealment reads, instead of a second
+        ;; definition of what a scope admits.
+        row?* (fn [kind id]
+                (let [k (name kind)]
+                  (boolean
+                   (if-some [e (get surface k)]
+                     (and (or (nil? (:ids e)) (contains? (:ids e) (str id)))
+                          ;; filter-scoped: the row itself is the judge —
+                          ;; one load per check, paid only by filtered
+                          ;; entries; a row outside the filter is the
+                          ;; same 404 as a row outside the ids
+                          (or (nil? (:filters e))
+                              (when-some [row (load-decoded eng (keyword k) id)]
+                                (row-matches? row (:filters e)))))
+                     (own-row? k id)))))
+        action?* (fn [kind action]
+                   (let [k (name kind) a (name action)]
+                     (or (contains? (get-in surface [k :actions] #{}) a)
+                         ;; the own-surface affordances: filing an ask
+                         ;; and its verdict doors, ACCEPTING an offered
+                         ;; grant (since the agent default, waymark-rci,
+                         ;; leaves no unscoped moment in which to accept,
+                         ;; and an offer its audience cannot take is dead
+                         ;; law), writing one's own dwelling rows, posting
+                         ;; and opening a letter. Each is row-gated to a
+                         ;; row the principal SEES (own-row? above) and
+                         ;; each kind's own guards narrow further where
+                         ;; they must — a self-judging requester meets the
+                         ;; four-eyes guard's honest 409, never a mute
+                         ;; 404; a letter's recipient guards keep
+                         ;; open/discard to the addressee alone. The list
+                         ;; used to be a per-kind case block here; it is
+                         ;; now each kind's own :own-surface :actions, so
+                         ;; the affordance and the law it opens live in
+                         ;; one file
+                         (contains? (:actions (own-of k) #{}) a))))]
     {:grant-id (str grant-id)
      :surface surface
      :own? own?
+     ;; THE GUARD'S-EYE VIEW (waymark-sfe). Present only when a LIVE
+     ;; grant conferred a surface: a dead, foreign, unknown or absent
+     ;; grant leaves it nil, and `unless-granted` refuses an agent that
+     ;; carries none — dead means scoped-to-nothing here exactly as it
+     ;; does at the router. It rides the invoke ctx as `(:grant ctx)`
+     ;; and the render probe's ctx alongside it, so advertisement and
+     ;; enforcement read one fact.
+     :grant (when (and live? (seq surface))
+              {:id (str grant-id) :action? action?* :row? row?*})
      :kind? (fn [kind]
               (let [k (name kind)]
                 (or (contains? surface k) (own-kind? k))))
@@ -1307,40 +1358,8 @@
      ;; surface) and never a :row?-sampling approximation — granted
      ;; sight of SOME rows is not sight of the collection.
      :whole-kind? (fn [kind] (contains? whole-kinds (name kind)))
-     :row? (fn [kind id]
-             (let [k (name kind)]
-               (boolean
-                (if-some [e (get surface k)]
-                  (and (or (nil? (:ids e)) (contains? (:ids e) (str id)))
-                       ;; filter-scoped: the row itself is the judge —
-                       ;; one load per check, paid only by filtered
-                       ;; entries; a row outside the filter is the
-                       ;; same 404 as a row outside the ids
-                       (or (nil? (:filters e))
-                           (when-some [row (load-decoded eng (keyword k) id)]
-                             (row-matches? row (:filters e)))))
-                  (own-row? k id)))))
-     :action? (fn [kind action]
-                (let [k (name kind) a (name action)]
-                  (or (contains? (get-in surface [k :actions] #{}) a)
-                      ;; the own-surface affordances: filing an ask
-                      ;; and its verdict doors, ACCEPTING an offered
-                      ;; grant (since the agent default, waymark-rci,
-                      ;; leaves no unscoped moment in which to accept,
-                      ;; and an offer its audience cannot take is dead
-                      ;; law), writing one's own dwelling rows, posting
-                      ;; and opening a letter. Each is row-gated to a
-                      ;; row the principal SEES (own-row? above) and
-                      ;; each kind's own guards narrow further where
-                      ;; they must — a self-judging requester meets the
-                      ;; four-eyes guard's honest 409, never a mute
-                      ;; 404; a letter's recipient guards keep
-                      ;; open/discard to the addressee alone. The list
-                      ;; used to be a per-kind case block here; it is
-                      ;; now each kind's own :own-surface :actions, so
-                      ;; the affordance and the law it opens live in
-                      ;; one file
-                      (contains? (:actions (own-of k) #{}) a))))
+     :row? row?*
+     :action? action?*
      :field? (fn [kind field]
                (let [k (name kind)]
                  (if-some [e (get surface k)]
