@@ -40,6 +40,15 @@
      one. :system stays admitted (the walker, a seed); the wall is
      about the composer.
 
+     SINCE waymark-sfe (2026-08-28) it is a PERMISSION rather than a
+     prohibition: an agent presenting a grant that admits
+     `composition_request.create` may file the ask. Law 6 survives
+     intact, because that scope exists only where a person approved an
+     approval_request in the feed — the agent asked, the person said
+     yes, and what the agent then files is the person's pull on the
+     person's instruction. An agent's own initiative still cannot
+     widen anything, which is the whole of what law 6 ever forbade.
+
   2. THE AIM IS A VALUE THIS HOUSE HOLDS
      (`aims-at-a-value-this-house-holds`). Absent is allowed; named,
      it is checked the way `outcome/names-a-value` checks it, against
@@ -94,7 +103,7 @@
   needs) can ask for the ones nobody has answered."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario]]
+                                   defscenario unless-granted]]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -115,21 +124,24 @@
 
 ;; ── the walls ───────────────────────────────────────────────────────
 
-(defn- an-agent?
-  "The one predicate the person-wall is a pure function of. :system is
-  the ENGINE's own actor — a migration, a seed, the conformance walker
-  — and is not what the wall is about; the wall is about the composer."
-  [ctx]
-  (= :agent (:type (:principal ctx))))
-
-(defguardfn only-a-person-asks
-  {:reads [:principal]
-   :explain "Asking for another outcome is the household's own pull, and an outcome that answers one stands first in the crown — so a request has to come from a person's hand. A composer that could ask itself for one would be putting its own initiative where only a person's ask may stand. If you are an agent and you think the house would want another, say so where an agent may: publish an insight, cite what you read, and let a person tap."}
-  [_row _inp ctx]
-  ;; a pure function of the principal's kind, so the render probe and
-  ;; the real invoke read the same fact — value/written-by-a-person's
-  ;; posture, and outcome/a-person-answers', one door over
-  (if (an-agent? ctx) (t/deny) (t/allow)))
+;; THE PULL IS THE HOUSEHOLD'S, AND IT IS DELEGABLE (waymark-sfe, the
+;; owner's ruling of 2026-08-28). Law 6 — the person spins, never the
+;; system for them — is preserved rather than dented: a scope naming
+;; `composition_request.create` exists only because a person approved
+;; an anchored approval_request in the feed, so a delegate files the
+;; PERSON'S pull on the person's instruction. What an agent still
+;; cannot do is widen anything on its own initiative, which is the
+;; thing law 6 was ever about.
+;;
+;; No `:own-field` here, and that is not an omission: a create has no
+;; row, so there is nothing yet for four eyes to be about. The
+;; requester stamp lands afterwards, and `answered-by-a-composition`
+;; keeps the ANSWER to an outcome's own staging either way.
+(def only-a-person-asks
+  (unless-granted
+   :composition_request :create
+   {:name :only-a-person-asks
+    :explain "Asking for another outcome is the household's own pull, and an outcome that answers one stands first in the crown — so a request has to come from a person's hand. A composer that could ask itself for one would be putting its own initiative where only a person's ask may stand. If you are an agent and you think the house would want another, say so where an agent may: publish an insight, cite what you read, and let a person tap."}))
 
 (def ^:private held-states
   "The value states a request may aim at — `outcome/held-states`, the

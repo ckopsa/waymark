@@ -570,8 +570,37 @@ guard, refuses with a sentence that names the fix, and is proved by a scenario:
 | `not-a-twin` | *(since waymark-8gc)* a bundle citing an evidence row a standing — `offered` or `accepted` — outcome already cites, any composer; the refusal names that outcome and the shared address. A cited `request_id` is exempt, and a row's own value address is not a reading |
 | `composes-from-what-stands` | *(since waymark-euj)* a bundle whose **every** citation is a finished row — a done or dropped task, an event that has ended, a retired value, a past person, an answered finding — refused naming each row and the word it is finished with. One standing citation is enough; a row this house cannot classify **stands**; the bundle's own value address is subtracted first, so citing the value alone is not a reading |
 | `the-door-is-open-now` | *(since waymark-euj)* an invoke piece staged behind a button that is not there — the target action judged **unavailable** on that row now, by `render/action-availability`, the envelope's own partition asked one door at a time; the refusal quotes **that door's** unavailable reason. A denier reading `:principal` is about the composer's hand rather than the row, and the wall stands down for it |
-| `the-composer-does-not-decide` | the stager answering its own plan or piece (`g/not-the-field :composed_by`) |
-| `a-person-answers` | **any agent** tapping any verdict, with the refusal naming the lawful path |
+| `the-composer-does-not-decide` | the stager answering its own plan or piece (`g/not-the-field :composed_by`) — **absolute**, and no grant opens it |
+| `a-person-answers` | an agent tapping a verdict **whose grant does not admit that door** (`g/unless-granted`, since waymark-sfe / 2026-08-28) — and, on every door, **the agent that composed the row**, grant or no grant. The refusal names the token a scope would have to carry |
+
+**The two walls above are different in kind, and the difference is the
+whole of waymark-sfe.** `the-composer-does-not-decide` is *four eyes*:
+it refuses whoever staged the row, person or agent, always. It is not
+grantable and will not become grantable. `a-person-answers` is a
+*permission*: since the owner's ruling of 2026-08-28 — "*it doesn't
+make sense to disallow it, it just makes sense to permission it*" — an
+agent presenting a grant that names `outcome.not_this_week` (or
+`make_it_so`, `iterate`, `outcome_piece.take` / `not_this` / `moot`)
+may tap it, because that scope exists only where a person approved an
+`approval_request` in the feed. The agent asks, the person approves,
+the agent acts on instruction; **an agent's own initiative still cannot
+widen anything**, which is what law 6 has always been about. Because
+`iterate` and `moot` never carried a separate four-eyes wall — refusing
+every agent gave them one for free — `a-person-answers` now carries it
+itself (`:own-field :composed_by`), so a composer answering its own row
+is refused at every one of the six doors. The transition records the
+grant on its actor, so the history reads *declined by `<agent>` under
+`grant-…`*.
+
+The same ruling reaches three doors outside this table, the same way and
+with four eyes kept the same way: `person.still_with_us` / `revise` /
+`now_past` / `dismiss` / `restore` and `value.still_stands` / `revise` /
+`retire` / `dismiss` / `restore` (four eyes on `written_by`),
+`ranking_note.dismiss` (four eyes on `judged_by`), and
+`composition_request.create` (no row yet, so nothing for four eyes to be
+about — law 6 holds because the scope is a person's tap). It does **not**
+reach `feed_recipe` or `recipe_proposal`: who orders the feed is law 6's
+own subject and stays a person's hand outright.
 
 `routes_through` is optional on purpose, and the reason is the thesis read
 honestly: *Grandpa's paperwork* routes through nothing anybody loves, and a
@@ -670,6 +699,42 @@ which line to ask for — never a quiet zero. A composer that also tunes
 already holds both (the 1uv.5 block above); nothing else on the leash moves,
 and `diagnosis_id` on a recomposition is an `insight` the composer's own
 `insight.create` already writes.
+
+**Since waymark-sfe (2026-08-28), a DELEGATION scope the standing leash does
+not carry and never should.** The verdict and affirmation doors are
+grantable now (§ *The composer contract*, the wall table's addendum), which
+means an agent may hold one **only when a person has approved an
+`approval_request` naming it**. It is a separate, short-lived grant, filed
+per errand, and it is spelled exactly like any other scope — this is what
+the owner approves when he says *decline these thirty-one, with these
+words*:
+
+```json
+{"audience": "claude-code",
+ "scope": [{"kind": "outcome",
+            "actions": ["not_this_week"],
+            "filter": {"composed_by": "some-other-composer"}},
+           {"kind": "person",  "actions": ["still_with_us"]},
+           {"kind": "value",   "actions": ["still_stands", "revise"]},
+           {"kind": "composition_request", "actions": ["create"]}],
+ "expires_at": "…"}
+```
+
+Read it door by door. `outcome.not_this_week` lets the holder decline a
+bundle — and the `filter` narrows it to rows whose `composed_by` is that
+value, so a row outside the leash **does not exist** for this grant, in the
+collection, on a GET, and at the door. `person.still_with_us` and
+`value.still_stands` / `value.revise` are the affirmations; `revise` also
+rewrites the words, which is why an owner granting it is granting more than
+a tap. `composition_request.create` files the household's own pull. Two
+things no scope in this shape can buy: **the row the holder itself wrote**
+(four eyes, on `written_by` / `composed_by` / `judged_by`), and **anything
+the holder asked for and nobody approved**. And note what
+`outcome.make_it_so` costs: taking a bundle fans out to each piece's own
+`take` door, so a scope meaning "accept it for me" is *two* lines,
+`{"kind": "outcome", "actions": ["make_it_so"]}` **and**
+`{"kind": "outcome_piece", "actions": ["take"]}` — the leash follows the
+hand into the cross-write rather than being waived by it.
 
 **The composer's duty under the rank** — the epic's reading of law 4, and
 the sentence the composer is held to now that the cap is gone and most of
@@ -2040,6 +2105,25 @@ judged**; 11 warnings, unchanged. `person` reports clean.
   `still_with_us`, never `revise`, never `now_past`, `dismiss` or
   `restore` — who is in this family's life is the family's sentence, in
   both directions.
+
+  **AMENDED 2026-08-28 (waymark-sfe).** The owner ruled on the wall
+  itself, not on the composer's scope:
+
+  > The whole reason we have the access controls we have is so that I
+  > can ask you to do what I want when I want. It doesn't make sense to
+  > disallow it, it just makes sense to permission it.
+
+  So the sentence above is now about the STANDING composer scope rather
+  than about what is possible: `only-a-person-says-who-we-know` refuses
+  an agent **unless the grant it presents admits that very door**, and
+  the sitting composer's standing grant still names only `create` and
+  `restate`. What changed is that the owner may hand a delegate
+  `person.still_with_us` for an afternoon, through the
+  `approval_request` door, and read afterwards which grant it acted
+  under (the transition's actor carries `grant`). One half stays
+  absolute and is four eyes rather than permission: **the agent that
+  WROTE the row never answers it**, whatever it holds — an observer
+  answering its own reading is the failure this kind exists to stop.
 - **A person's `relation` carries no filter**, deliberately: exact-match
   on free prose is a trap, and the words there are the family's rather
   than a vocabulary.
@@ -2328,6 +2412,28 @@ so the row-level wall has to be declared.**
   `/#/api/verdict_reasons` is always there and takes the same four
   fields, so the path exists; it is simply not a thumb. That is the
   honest v1 and it is written down rather than discovered later.
+- **AMENDED 2026-08-28 (waymark-sfe): whose hand may tap the verdict
+  these words ride on.** The owner ruled:
+
+  > The whole reason we have the access controls we have is so that I
+  > can ask you to do what I want when I want. It doesn't make sense to
+  > disallow it, it just makes sense to permission it.
+
+  `a-person-answers` no longer refuses every agent outright; it refuses
+  one that presents no grant admitting the door it is knocking on
+  (`outcome.not_this_week`, `outcome.make_it_so`, `outcome.iterate`,
+  `outcome_piece.take` / `not_this` / `moot`). Nothing about this
+  section's mechanism changes — `:reasons` is still advertisement, the
+  tap is still input-free and `assent`, the reason still rides as its
+  own `verdict_reason` row a screen deeper — and the reason kind's own
+  `stamp-the-sayer` now records a delegate honestly, because the
+  transition it hangs off carries the grant it was made under. **Four
+  eyes did not move**: `the-composer-does-not-decide` still stands
+  first on `make_it_so`, `not_this_week`, `take` and `not_this`, and
+  `iterate` and `moot` — which never carried it, because refusing every
+  agent gave it to them for free — grew it inside `a-person-answers`
+  (`:own-field :composed_by`). A composer can never answer its own
+  bundle, grant or no grant.
 
 ## Built — jfv.17, the impact line (2026-08-25, waymark-jfv.17)
 

@@ -308,7 +308,15 @@ holding your place in it.
   `finish`, `done`, `take`) on a row that already stands is not
   friction pre-paid: nobody did that work, and a tap would record
   that they had. Friction pre-paid is a claim about the world.
-- Never tap any verdict. Never affirm a value or person. Never reword
+- Never tap a verdict or affirm a value or person unless your grant
+  admits that door — and never on a row you wrote. Your standing
+  sitting scope admits none of them, so under it the answer is still
+  "never": the doors are simply absent from what you can see. If the
+  owner wants you to decline a batch or affirm a reading in his name,
+  he says so and approves an `approval_request` naming exactly those
+  actions; only then does the door exist for you, and the transition
+  records the grant you acted under. The row you WROTE is the one
+  exception no grant reaches — four eyes, always. Never reword
   anyone's turn but your own. Never answer your own plan.
 - Name a `companion_id` only off the manifest's `companions` — an
   unaffirmed person is not a usable companion.

@@ -112,6 +112,17 @@
   been written down and not yet answered` a query this house already
   owns.
 
+  …AND SINCE waymark-sfe (2026-08-28), \"only a person says who we
+  know\" reads with one clause more: only a person, OR a delegate the
+  person permissioned at this very door. The owner's ruling — \"it
+  doesn't make sense to disallow it, it just makes sense to permission
+  it\" — turned the outright agent refusal into a grant check, so an
+  agent presenting a scope that names `person.still_with_us` may say
+  the owner's yes on the owner's instruction, and the transition
+  records which grant it said it under. The agent that WROTE the row
+  is still refused whatever it presents: an observer never answers its
+  own reading, and that half is four eyes rather than permission.
+
   SO THE TWO AXES SHARE ONE COLUMN: `observed`, `current`, `past`. The
   combination the column cannot hold is `observed AND past` — an
   unaffirmed departure — and it is not a loss, because nothing may plan
@@ -194,7 +205,7 @@
   are earned."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario]]
+                                   defscenario unless-granted]]
             [waymark10.types :as t]))
 
 (set! *warn-on-reflection* true)
@@ -208,13 +219,6 @@
 ;; writing down was a caregiver would be the framework talking to
 ;; itself.
 
-(defn- an-agent?
-  "The one predicate the affirmation wall is a pure function of.
-  :system is the ENGINE's own actor — a migration, a seed, the
-  conformance walker — and is not what this wall is about."
-  [ctx]
-  (= :agent (:type (:principal ctx))))
-
 (defn- a-persons-hand?
   "Somebody in this house, as opposed to the composer or the engine.
   `types/actor-types` is #{:human :agent :system} and a scenario may
@@ -223,18 +227,23 @@
   [ctx]
   (contains? #{:human :person} (:type (:principal ctx))))
 
-(defguardfn only-a-person-says-who-we-know
-  {:reads [:principal]
-   :explain "Who is in this family's life is the family's own sentence. You may write down somebody you found in this house's record — that row is born observed and says so wherever it is cited — but answering for it would be telling the owner who his people are. Leave it observed and say what you found: publish an insight, cite the rows the name came from, and offer this row's own \"yes — still with us\" as the one next step. He answers with a tap, or puts it in his own words, and either way the row becomes this house's."}
-  [_row _inp ctx]
-  ;; a pure function of the principal's kind — the render probe and the
-  ;; real invoke read the same fact, so no probe path opens a door
-  ;; (value/written-by-a-person, line for line). It stands on every door
-  ;; that lands a row in `current` or takes somebody out of the house's
-  ;; life, and on none that only writes down what was seen.
-  (if (an-agent? ctx)
-    (t/deny)
-    (t/allow)))
+;; THE ROSTER WALL, GRANTABLE (waymark-sfe, the owner's ruling of
+;; 2026-08-28). `value`'s law with `person`'s own sentence, exactly as
+;; before — and now `value`'s new shape too: a person passes; an agent
+;; that WROTE this row is refused, grant or no grant (`:own-field
+;; :written_by`, which is four eyes and the whole of jfv.11's "the
+;; observer does not answer its own reading"); any other agent passes
+;; only under a grant admitting `person.<this door>`.
+(defn- roster-wall
+  "`only-a-person-says-who-we-know`, for one door. It stands on every
+  door that lands a row in `current` or takes somebody out of the
+  house's life, and on none that only writes down what was seen."
+  [action]
+  (unless-granted
+   :person action
+   {:name :only-a-person-says-who-we-know
+    :own-field :written_by
+    :explain "Who is in this family's life is the family's own sentence. You may write down somebody you found in this house's record — that row is born observed and says so wherever it is cited — but answering for it would be telling the owner who his people are. Leave it observed and say what you found: publish an insight, cite the rows the name came from, and offer this row's own \"yes — still with us\" as the one next step. He answers with a tap, or puts it in his own words, and either way the row becomes this house's."}))
 
 (defguardfn only-the-observer-corrects
   {:reads [:principal]
@@ -634,7 +643,7 @@
              ;; which is what makes the transitions the history of how
              ;; this house has described somebody
              :record true
-             :guards [only-a-person-says-who-we-know
+             :guards [(roster-wall :revise)
                       relates-through-somebody-here]
              :safety {:idempotent true :reversible false :confirm false
                       :one-way "This overwrites how the house describes them with what you write; the log keeps the earlier words, who changed them and when. If they were only observed in your record, saying it in your own words is also what makes the row this house's."}
@@ -666,7 +675,7 @@
     ;; today", which is the fact that keeps a roster from going quietly
     ;; stale into a composer's next plan.
     :still_with_us {:from #{:observed :current} :to :current
-                    :guards [only-a-person-says-who-we-know]
+                    :guards [(roster-wall :still_with_us)]
                     :handler stamp-the-answer
                     :safety {:idempotent true :reversible false :confirm false
                              :one-way "This says they are somebody in this family's life, and stamps the date. From an observed row it is what lets a plan name them at all; from one already current it records that the roster is still true today. Nothing about who they are changes."}
@@ -680,7 +689,7 @@
     ;; `:undo` for exactly that reason — an `:undo` must return where it
     ;; departed from, and this one departs from two places.
     :now_past {:from #{:observed :current} :to :past
-               :guards [only-a-person-says-who-we-know]
+               :guards [(roster-wall :now_past)]
                :handler stamp-the-answer
                :safety {:idempotent true :reversible false :confirm false
                         :one-way "They were in this house's life and they are not now — a caregiver who left, a contractor whose job is done. No plan may name them from here on, the row and everything it says stays on record, and \"with us again\" brings them back if that changes."}
@@ -694,7 +703,7 @@
     ;; this house is not planning with is a person this house is not
     ;; planning with.
     :dismiss {:from #{:observed} :to :past
-              :guards [only-a-person-says-who-we-know]
+              :guards [(roster-wall :dismiss)]
               :safety {:idempotent true :reversible false :confirm false
                        :one-way "This says the reading was wrong: no plan may name them, and what was written down stays on record with your answer beside it. \"With us again\" brings them back if you change your mind — and they come back as this house's."}
               :display {:label "Not somebody we know" :style :danger :order 8
@@ -703,7 +712,7 @@
     ;; for this door has held them again with his own hand, so it stamps
     ;; like every other landing in `current`.
     :restore {:from #{:past} :to :current
-              :guards [only-a-person-says-who-we-know]
+              :guards [(roster-wall :restore)]
               :handler stamp-the-answer
               ;; `:reversible false` because there is no `:undo`
               ;; POINTER, not because the door is one-way in life —

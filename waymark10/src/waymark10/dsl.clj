@@ -64,6 +64,7 @@
 (defalias owner g/owner)
 (defalias four-eyes g/four-eyes)
 (defalias unless g/unless)
+(defalias unless-granted g/unless-granted)
 
 ;; ── the def forms: thin wrappers onto the originals ─────────────────
 ;; Syntax-quote qualifies the expansion, so the caller needs no other

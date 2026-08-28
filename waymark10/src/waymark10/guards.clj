@@ -630,6 +630,130 @@
                                         '(t/allow) '(t/deny))))})}
      hide (assoc :hide true))))
 
+;; ── the grantable person-wall (waymark-sfe) ─────────────────────────
+;;
+;; THE OWNER'S RULING, 2026-08-28: "The whole reason we have the access
+;; controls we have is so that I can ask you to do what I want when I
+;; want. It doesn't make sense to disallow it, it just makes sense to
+;; permission it."
+;;
+;; Four kinds had written the same wall by hand — a pure function of
+;; the principal's type, refusing EVERY agent outright at the verdict
+;; and affirmation doors. Each stood BESIDE the grant system rather
+;; than through it, so a person could not delegate "decline these
+;; thirty-one with these words" even though the grants machine already
+;; expresses exactly that scope. This factory is those four hands,
+;; generalized: a person still passes; an agent passes only when the
+;; grant it presented ADMITS this action on this kind (and on this
+;; row, when the entry carries a :filter).
+;;
+;; It reuses the projection's own admission — `(:grant ctx)` is the
+;; visibility's `{:id :action? :row?}`, minted by `grants/visibility`
+;; and threaded through the invoke ctx and the render probe alike — so
+;; the wall asks the SAME question the router's concealment asks
+;; instead of re-deriving what a scope means. A ctx carrying no grant
+;; (an unscoped read, the engine's own actor, a check-tier scenario)
+;; refuses every agent, which is the posture the walls had before.
+;;
+;; FOUR EYES STAYS ABSOLUTE. `:own-field` names the field recording
+;; whose hand wrote the row — `written_by`, `composed_by`,
+;; `authored_by` — and an agent that finds itself there is refused
+;; grant or no grant. It is spelled ON THIS WALL rather than as a
+;; separate `not-the-field` beside it because that one refuses EVERY
+;; principal, and a person re-affirming a value they wrote themselves
+;; is the ordinary path; what the grant opens for an agent, four eyes
+;; must close again for the agent alone.
+
+(def ^:private no-grant-sentence
+  "The refusal that names the fix. A composer that has just been
+  refused is one approval_request away from being allowed, and a
+  sentence that did not say the token would be a sentence that sent it
+  to read source."
+  "An agent decides here only under a grant that admits %s — ask for one (the approval_request door) and a person approves it.")
+
+(defn- own-row-sentence [field]
+  (str "And this row names you as its "
+       (str/replace (clojure.core/name field) "_" " ")
+       ". Whoever wrote a row never answers it — that wall is four eyes, "
+       "and no grant opens it. Another hand decides this one."))
+
+(defn unless-granted
+  "The person-wall, made grantable: a person (or the engine's own
+  system actor) passes; an AGENT passes only under a presented grant
+  whose scope admits `kind`.`action` — and, when that scope entry
+  carries a `:filter`, only on a row inside it.
+
+  `opts`:
+    :explain    the household's own sentence, required — it is what a
+                reader hits, and the grant clause is appended to it
+    :name       the guard's name (keep the kind's existing one, so
+                scenarios and clients keep reading the same word)
+    :own-field  the field naming whose hand wrote the row; an agent
+                that wrote it is refused grant or no grant
+    :open       the acknowledged sentence, when the kind wrote one
+    :hide       conceal the refusal, as everywhere
+
+  ONE THING IT IS NOT: the concealment check. At the wire, an action a
+  scope does not name has already 404'd (`router/check-action!`) before
+  a guard runs, so the refusal below is the one a scoped CROSS-WRITE
+  meets, the one a scenario reads at declaration time, and the one an
+  engine-internal invoke draws. The wall and the projection agree by
+  construction because they consult the same closure."
+  [kind action {:keys [explain name own-field open hide]}]
+  (clojure.core/when (clojure.core/or (nil? explain) (str/blank? explain))
+    (throw (t/definition-error
+            "unless-granted carries the kind's own sentence: :explain is required")))
+  (let [token (str (clojure.core/name kind) "." (clojure.core/name action))
+        no-grant (format no-grant-sentence token)
+        own-said (clojure.core/when own-field (own-row-sentence own-field))]
+    (guard
+     (cond-> {:name (clojure.core/or name
+                                     (keyword (str "unless-granted:" token)))
+              :reads [:principal :grant]
+              :vars [:problem]
+              :explain (str explain "\n\n{problem}")
+              :check
+              (with-meta
+                (fn [row _inp ctx]
+                  (let [p (:principal ctx)
+                        g (:grant ctx)
+                        mine (clojure.core/when own-field
+                               (get-in row [:data own-field]))]
+                    (cond
+                      (not= :agent (:type p)) (t/allow)
+
+                      (clojure.core/and (some? mine) (= mine (:id p)))
+                      (t/deny {:vars {:problem own-said}})
+
+                      (clojure.core/and (some? g)
+                                        ((:action? g) kind action)
+                                        (clojure.core/or
+                                         (nil? (:id row))
+                                         ((:row? g) kind (:id row))))
+                      (t/allow)
+
+                      :else (t/deny {:vars {:problem no-grant}}))))
+                {:waymark10/form
+                 (list 'fn '[row _inp ctx]
+                       (list 'let ['p '(:principal ctx)
+                                   'g '(:grant ctx)
+                                   'mine (clojure.core/when own-field
+                                           (list 'get-in 'row
+                                                 [:data own-field]))]
+                             (list 'cond
+                                   '(not= :agent (:type p)) '(t/allow)
+                                   '(and (some? mine) (= mine (:id p)))
+                                   (list 't/deny {:vars {:problem own-said}})
+                                   (list 'and '(some? g)
+                                         (list '(:action? g) kind action)
+                                         (list 'or '(nil? (:id row))
+                                               (list '(:row? g) kind '(:id row))))
+                                   '(t/allow)
+                                   :else
+                                   (list 't/deny {:vars {:problem no-grant}}))))})}
+       open (assoc :open open)
+       hide (assoc :hide true)))))
+
 ;; ── the code-guard macro ────────────────────────────────────────────
 
 (defmacro defguard

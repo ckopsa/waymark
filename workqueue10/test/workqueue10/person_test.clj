@@ -145,17 +145,30 @@
   "One grant over the `person` doors an agent is about to knock on,
   minted by a member and accepted by the agent → the headers that
   present it. `packs/leash!`, narrowed to one kind."
-  [audience actions]
-  (let [hs (agent' audience)
-        made (req :post "/api/grants"
-                  {:audience audience
-                   :scope [{:kind "person" :actions actions}]}
-                  (human "colton-grants"))
-        gid (when (= 201 (:status made)) (id-of made))
-        took (when gid (invoke! "grants" gid :accept nil hs))]
-    (is (= 201 (:status made)) (str "grant mint: " (json made)))
-    (is (= 200 (:status took)) (str "grant accept: " (json took)))
-    (assoc hs "x-waymark-grant" gid)))
+  ([audience actions]
+   (leash! audience [{:kind "person" :actions actions}] :scope))
+  ([audience scope _]
+   (let [hs (agent' audience)
+         made (req :post "/api/grants"
+                   {:audience audience :scope scope}
+                   (human "colton-grants"))
+         gid (when (= 201 (:status made)) (id-of made))
+         took (when gid (invoke! "grants" gid :accept nil hs))]
+     (is (= 201 (:status made)) (str "grant mint: " (json made)))
+     (is (= 200 (:status took)) (str "grant accept: " (json took)))
+     (assoc hs "x-waymark-grant" gid))))
+
+(defn- under-grant
+  "Which grant the log says a transition was made UNDER (waymark-sfe) —
+  the actor's own `grant` key, absent on every unscoped write."
+  [kind id action]
+  (store/with-tx (:storage *eng*)
+    (fn [tx]
+      (some (fn [rec]
+              (when (= action (:action rec)) (get-in rec [:actor :grant])))
+            (store/transitions (:storage *eng*) tx
+                               {:kind kind :resource-id id}
+                               {:limit 20 :newest-first true})))))
 
 (defn- write-person!
   "One person through the ordinary door, by whichever hand is handed
@@ -202,7 +215,9 @@
     (testing "THE WALL THIS KIND IS FOR: an observer answering its own guess would be telling the owner who his people are"
       (is (= 409 (:status itself)) (str "allowed: " (json itself)))
       (is (= "only-a-person-says-who-we-know" (guard-of itself)))
-      (is (str/includes? (detail itself) "insight")))
+      (is (str/includes? (detail itself) "insight"))
+      (testing "and it is FOUR EYES since waymark-sfe — the leash names still_with_us and the wall refuses anyway, because this agent wrote the row"
+        (is (str/includes? (detail itself) "four eyes"))))
     (let [tap (invoke! "people" id :still_with_us nil (human "colton-answer"))]
       (testing "the owner's tap is the whole answer — one state change, one stamp"
         (is (= 200 (:status tap)) (str "refused: " (json tap)))
@@ -215,6 +230,31 @@
         (let [log (hands :person id)]
           (is (contains? log [:create "sous-answer"]))
           (is (contains? log [:still_with_us "colton-answer"])))))))
+
+;; ── 2b. the roster answer is GRANTABLE (waymark-sfe) ────────────────
+
+(deftest a-delegate-under-a-scope-that-names-the-door-answers
+  ;; the owner's ruling of 2026-08-28, on `person` as on `value`: an
+  ;; agent presenting a scope that names `person.still_with_us` says
+  ;; the owner's yes on the owner's instruction. Four eyes is what
+  ;; section 2 above proves and this one does not touch.
+  (let [writer (leash! "sous-sfe-writer" ["create"])
+        p (write-person! writer "Nessa" "the caregiver on Thursdays")
+        id (id-of p)]
+    (testing "a scope that does not name the door conceals it"
+      (let [blind (leash! "sous-sfe-blind" ["create"])]
+        (is (= 404 (:status (invoke! "people" id :still_with_us nil blind))))))
+    (testing "one that names it answers the roster, and the row becomes the house's"
+      (let [delegate (leash! "sous-sfe-delegate" ["still_with_us"])
+            r (invoke! "people" id :still_with_us nil delegate)]
+        (is (= 200 (:status r)) (str "refused: " (json r)))
+        (is (= "current" (state-of r)))
+        (is (= "sous-sfe-delegate" (:affirmed_by (fields r))))
+        (is (= "sous-sfe-writer" (:written_by (fields r)))
+            "the hand that wrote them down is still on the row")
+        (testing "and the history reads 'under grant-…'"
+          (is (= (get delegate "x-waymark-grant")
+                 (under-grant :person id :still_with_us))))))))
 
 ;; ── 3. one correcting door per hand ─────────────────────────────────
 

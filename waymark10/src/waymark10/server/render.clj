@@ -812,6 +812,13 @@
              :as ctx-opts}]
   (let [ctx (t/ctx {:principal (or principal t/anonymous)
                     :now now :services services :mode :probe
+                    ;; the presented leash rides the probe too
+                    ;; (waymark-sfe): a wall that opens for a granted
+                    ;; agent must ADVERTISE the door it will open, or
+                    ;; the envelope narrates a refusal the invoke will
+                    ;; not make — advertisement equals enforcement is
+                    ;; this file's whole posture
+                    :grant (:grant visibility)
                     :read (:read ctx-opts) :find (:find ctx-opts)})
         self (str "/api/" (:plural rdef) "/" (:id row))
         state (:state row)

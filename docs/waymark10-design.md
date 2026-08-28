@@ -226,7 +226,7 @@ now say so out loud: `[opaque-residue]` warns on every formless
 minting its `:waymark10/form` by hand the way `guards/not-the-field`
 does, upgrades the leaf from an address to a law. Every factory in
 `waymark10.guards` (role, owner, feature-flag, require, unless,
-rate-limit) mints its form now: a guard the sugar writes is one the
+unless-granted, rate-limit) mints its form now: a guard the sugar writes is one the
 app author cannot rewrite, so filing it under an address would warn
 somebody about code that is not theirs.
 

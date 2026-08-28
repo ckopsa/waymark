@@ -211,6 +211,12 @@
     {:principal (principal-of req)
      :if-match (get headers "if-match")
      :idempotency-key (get headers "idempotency-key")
+     ;; the presented leash, as the GUARDS see it (waymark-sfe): the
+     ;; visibility resolved once at the identity boundary, handed on so
+     ;; a wall can refuse an agent UNLESS its own scope admits the
+     ;; door. Nil for everybody who presented no live grant, which is
+     ;; the posture those walls had before there was a door at all.
+     :grant (:grant (visibility-of req))
      :acknowledged (into #{} (map keyword) (csv (get headers "waymark-acknowledge")))
      ;; dry_run=1 is the full rehearsal; dry_run=partial judges only
      ;; what the caller provided (design §23) — anything else is a
@@ -518,7 +524,8 @@
           opts (invoke-opts req)
           result (inv/create! eng (:kind rdef) (read-body req)
                               (select-keys opts [:principal :acknowledged
-                                                 :idempotency-key :dry-run]))]
+                                                 :idempotency-key :dry-run
+                                                 :grant]))]
       (cond
         ;; the create door's rehearsal (§23): the verdict body, and —
         ;; full mode only — a considering card naming the COLLECTION

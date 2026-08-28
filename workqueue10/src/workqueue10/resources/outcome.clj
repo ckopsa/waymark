@@ -307,7 +307,7 @@
   house should get to make out loud, once, at the grant."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
-                                   defscenario]]
+                                   defscenario unless-granted]]
             [waymark10.guards :as g]
             [waymark10.schema :as schema]
             ;; the impact line's one derivation (waymark-jfv.17), which
@@ -1698,18 +1698,38 @@
    {:name :the-composer-does-not-decide
     :explain "The composing is yours; the answer is the household's. Whoever staged this cannot be the one to take it, decline it, or let it go."}))
 
-(defguardfn a-person-answers
-  {:reads [:principal]
-   :explain "A person answers an outcome — every part of it, both ways round. A house running two agents would otherwise have one stage the bundle and the other tap it through, and the four-eyes wall would have been walked around rather than kept. If you are an agent and you think this outcome is right, say so where an agent may: publish an insight citing what you read."}
-  [_row _inp ctx]
-  ;; a pure function of the principal's kind, so the render probe and
-  ;; the real invoke read the same fact (feed_recipe's own posture,
-  ;; value.clj's one kind over). :system is the ENGINE's own actor — a
-  ;; migration, a seed, the conformance walker — and is not what this
-  ;; wall is about; the wall is about the composer.
-  (if (= :agent (:type (:principal ctx)))
-    (t/deny)
-    (t/allow)))
+;; THE VERDICT WALL, GRANTABLE (waymark-sfe, the owner's ruling of
+;; 2026-08-28: "The whole reason we have the access controls we have is
+;; so that I can ask you to do what I want when I want. It doesn't make
+;; sense to disallow it, it just makes sense to permission it.")
+;;
+;; It used to refuse EVERY agent outright, which meant a person could
+;; not say "decline these thirty-one, these words" even though the
+;; grants machine already spells that scope to the letter. It now
+;; refuses an agent UNLESS the grant it presented admits this very
+;; door — and a scope naming `outcome.not_this_week` exists only
+;; because a person tapped an approval_request in the feed, so the
+;; agent acts on instruction and never on initiative.
+;;
+;; WHAT DID NOT MOVE. `the-composer-does-not-decide` still stands in
+;; front of `make_it_so`, `not_this_week`, `take` and `not_this`, and
+;; it refuses EVERY principal that staged the row, grant or no grant.
+;; The two doors it never stood on — `iterate` and `moot` — got four
+;; eyes for the agent inside this wall (`:own-field :composed_by`),
+;; because their old comment said the quiet part: "`a-person-answers`
+;; blocks every agent, which is also the four-eyes wall for free, since
+;; the composer is one". The moment the wall stops blocking every
+;; agent, that freebie has to be paid for.
+(defn- verdict-wall
+  "`a-person-answers`, for one door of one kind (`:outcome` or
+  `:outcome_piece`). The sentence is the household's, unchanged; what
+  is new is that it says which token a scope would have to admit."
+  [kind action]
+  (unless-granted
+   kind action
+   {:name :a-person-answers
+    :own-field :composed_by
+    :explain "A person answers an outcome — every part of it, both ways round. A house running two agents would otherwise have one stage the bundle and the other tap it through, and the four-eyes wall would have been walked around rather than kept. If you are an agent and you think this outcome is right, say so where an agent may: publish an insight citing what you read."}))
 
 (defguardfn the-leash-has-not-run-out
   {:reads [:now]
@@ -2630,7 +2650,7 @@
    :actions
    {:make_it_so
     {:from #{:offered} :to :accepted
-     :guards [the-composer-does-not-decide a-person-answers
+     :guards [the-composer-does-not-decide (verdict-wall :outcome :make_it_so)
               the-leash-has-not-run-out something-is-still-on-offer]
      :handler take-the-rest
      ;; the honest blast radius: the pieces' own verdict door, and
@@ -2645,7 +2665,7 @@
                :description "Take the pieces still on offer — they land as real rows, under your name, in one go"}}
     :not_this_week
     {:from #{:offered} :to :declined
-     :guards [the-composer-does-not-decide a-person-answers]
+     :guards [the-composer-does-not-decide (verdict-wall :outcome :not_this_week)]
      :handler moot-the-rest
      :touches [{:kind :outcome_piece :action :moot}]
      :safety {:idempotent true :reversible false :confirm false
@@ -2669,13 +2689,16 @@
     ;;
     ;; `iterate` KEEPS the outcome (offered → offered) and asks for a
     ;; re-plan. It is a person's gesture — `a-person-answers` blocks
-    ;; every agent, which is also the four-eyes wall for free, since the
-    ;; composer is one — and `:record true` retains the note the handler
+    ;; every agent that holds no grant admitting `outcome.iterate`, and
+    ;; blocks THIS outcome's own composer whatever it holds (waymark-sfe
+    ;; moved four eyes inside that wall; until then the agent wall was
+    ;; the four-eyes wall for free, since the composer is one) — and
+    ;; `:record true` retains the note the handler
     ;; files as a remark on the outcome's thread. `:touches` names that
     ;; cross-write so a reader can see it coming.
     :iterate
     {:from #{:offered} :to :offered
-     :guards [a-person-answers]
+     :guards [(verdict-wall :outcome :iterate)]
      :handler ask-to-iterate
      :input [:map
              [:says
@@ -2871,7 +2894,7 @@
    :actions
    {:take
     {:from #{:offered} :to :taken
-     :guards [the-composer-does-not-decide a-person-answers
+     :guards [the-composer-does-not-decide (verdict-wall :outcome_piece :take)
               the-outcome-is-still-open the-target-has-not-moved]
      :handler materialize
      :touches touched-creates
@@ -2884,7 +2907,7 @@
                :description "Make this one real — it lands as a row of its own, under your name"}}
     :not_this
     {:from #{:offered} :to :declined
-     :guards [the-composer-does-not-decide a-person-answers]
+     :guards [the-composer-does-not-decide (verdict-wall :outcome_piece :not_this)]
      :handler record-the-verdict
      ;; THE TEACHING REFUSAL. Distinct from the parent's not_this_week
      ;; and from moot below, and the difference is the signal: this one
@@ -2899,15 +2922,18 @@
                :description "This part was wrong — decline it and leave the rest of the bundle standing"}}
     :moot
     {:from #{:offered} :to :moot
-     :guards [a-person-answers]
+     :guards [(verdict-wall :outcome_piece :moot)]
      :handler record-the-verdict
      ;; SET ASIDE, NOT REFUSED. This is what "not this week" on the
      ;; parent does to every piece still standing, and it is offered
      ;; here on its own for the honest case: the piece is beside the
      ;; point now, and the house does not want the composer to learn
-     ;; anything from it. No four-eyes wall: nothing is created and
-     ;; nothing is refused, so there is nothing here for a stager to
-     ;; grade.
+     ;; anything from it. No SEPARATE four-eyes wall: nothing is
+     ;; created and nothing is refused, so there is nothing here for a
+     ;; stager to grade — the four eyes inside `a-person-answers`
+     ;; (waymark-sfe, `:own-field :composed_by`) is there for the other
+     ;; reason, which is that a grant must never let a composer set its
+     ;; own piece aside.
      ;;
      ;; AND NO `:reasons` EITHER (waymark-jfv.16), for exactly that
      ;; reason said once more: this verdict's whole meaning is that
