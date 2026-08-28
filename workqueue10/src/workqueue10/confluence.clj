@@ -107,6 +107,36 @@
     still keeps; a list it can prove is gone answers :gone. Throw on
     unreachable."))
 
+(defprotocol ThreadSource
+  "The CONVERSATIONS one authority keeps, already speaking canonical
+  — the third protocol over the same fan, and the smallest.
+
+  Three verbs and no more. There is no push and no create, and that
+  is structural rather than polite: the queue mirrors the household's
+  conversations, it does not write them (saying something in a chat
+  is a leashed capability a PERSON approves at Gate's own door, never
+  a sync pass's business), so thread-confluence declares no
+  MirrorCreateAdapter and the framework has nothing to try. It is the
+  argument TaskListSource makes, twice over: a source should not have
+  to answer a question its authority never asks.
+
+  A thread document is small on purpose (docs/spec-threads.md): a
+  title, whether it is direct or a group, when it last moved, and the
+  names in it. NO bodies, NO previews, NO snippets, NO unread counts
+  — timestamps, counts and names only; what was said stays behind the
+  Gate under a grant. The routing tag arrives the way it does on both
+  other feeds — stamped by the confluence, never by the source."
+  (thread-discover [s]
+    "→ seq of source-local ids for the conversations worth an
+    address. Throw on unreachable.")
+  (thread-pull [s id]
+    "→ [canonical-thread-doc etag]. Throw on unreachable or gone
+    (gone carries {:status 404} in ex-data).")
+  (thread-pull-many [s ids]
+    "→ {id [canonical-thread-doc etag]} for the threads the authority
+    still lists; one it can prove is gone answers :gone. Throw on
+    unreachable."))
+
 (defn list-sources
   "The confluence's sources, narrowed to the ones that keep lists —
   the map list-confluence rides. Reading the protocol rather than a
@@ -332,6 +362,37 @@
   confluence — both feeds speak the same tag to the same breaker."
   ([sources] (list-confluence sources nil))
   ([sources report-fn] (->ListConfluence sources report-fn)))
+
+(defrecord ThreadConfluence [sources report-fn]
+  mirror/MirrorAdapter
+  (discover [_] (fan-discover sources report-fn "thread" thread-discover))
+  (pull [_ x]
+    (let [[tag id] (split-xid x)
+          [doc etag] (thread-pull (source-for sources tag) id)]
+      [(stamp-list tag doc) etag]))
+  (pull-many [_ xids]
+    (fan-pull-many sources report-fn "thread" thread-pull-many stamp-list
+                   xids))
+  (push [_ x _document]
+    ;; unreachable through the sync machine — :thread declares no
+    ;; :push-on-write, so the framework never pushes it. A sentence
+    ;; rather than a stub for the one door that COULD reach it: a
+    ;; person resolving a conflict keep=local deserves to be told why
+    ;; the queue will not write a conversation.
+    (throw (ex-info (str "the queue does not write conversations — " (str x)
+                         " is mirrored from the rig that carries it, and "
+                         "saying something in it happens there, under a "
+                         "capability a person approves")
+                    {}))))
+
+(defn thread-confluence
+  "sources: {tag ThreadSource} — {\"tgram\" … \"messa\" …}. One adapter
+  for the :thread kind, routing on exactly the tags the other two
+  feeds route on, and declaring NO MirrorCreateAdapter: a conversation
+  has no birth at this door, structurally. report-fn as on confluence
+  — all three feeds speak the same tag to the same breaker."
+  ([sources] (thread-confluence sources nil))
+  ([sources report-fn] (->ThreadConfluence sources report-fn)))
 
 ;; ── the scriptable twin ─────────────────────────────────────────────
 
