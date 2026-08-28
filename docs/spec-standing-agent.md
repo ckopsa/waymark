@@ -118,15 +118,49 @@ whatever material it pre-fetches, emitting **at most one work order**.
 The set is CLOSED — the same shape as the feed's `populations`
 (`waymark10.server.feed`), a map a reviewer reads on one screen rather
 than a discovered registry that would behave differently on two
-machines. Today it holds four, and the order below is also the
+machines. Today it holds six, and the order below is also the
 tie-break:
 
-1. `bare-task-due-soon` — an open, detail-less task no outcome or
+1. `session-of-like-tasks` — two or more *free* open tasks of one
+   shape, gathered into one held block (waymark-q23). The owner's
+   ideal outcome, 2026-08-28: *"group like tasks into a work session
+   and suggest I schedule it."* Every other probe is single-subject
+   and the ceiling text forbids extras, so nothing ever batched. The
+   shapes are the four batches the household's own values name — the
+   phone calls (a title beginning *Call / Contact / Phone / Ring*, or
+   one carrying a phone number), the errand loop (*Pick up / Drop off
+   / Mail / Buy / Return / Go to*), the shop (woodworking, boards,
+   dowel, glue, saw, workbench), the paperwork hour (form,
+   application, insurance, 401k, address, policy, placard, tax,
+   account) — plus, purely mechanically, every set that shares a task
+   list, because a task list is a set the household already grouped.
+   Material: the nearest-due free task, the other free tasks beside
+   it, and the EXCLUDED ones (see below). Expected write: an
+   **outcome** whose goal is the session itself, with pieces that hold
+   the block on the calendar (`event.create`, the instant already
+   converted) and raise each free task into it (`task.prioritize`,
+   legal now only while the task is open).
+2. `commitments-in-messages` — a task or an event that exists only in
+   a text or an email (waymark-is7). The owner's ideal outcome,
+   2026-08-28: *"digging through old messages to find tasks/calendar
+   events."* This one is a structural gap, not a preference: Gate
+   material is read-only and `cites-what-it-claims` means an insight
+   must name a house address, so a commitment found only in a message
+   has exactly ONE lawful landing — a **piece** inside an outcome
+   whose evidence cites house rows. The person who said it is such a
+   row (only `companion_id` needs affirmation; a person row is a
+   lawful evidence address), and the source is named in the prose —
+   *"from Wellesley's text of Aug 27"* — never copied into a row. The
+   probe reads the last seven days of the household thread whole and
+   asks the inbox for everything `SINCE` that date, keeps the lines
+   that say **both** a WHEN and an ASK, drops the ones the house
+   already holds, and emits at most ONE order per run.
+3. `bare-task-due-soon` — an open, detail-less task no outcome or
    insight speaks for, nearest `due_at` first. Material: the task's
    full row, the open tasks sharing its `task_list` or assignee, and
    Gate hits on the task's **search keys**. Expected write: an
    **insight** citing the task, offering `complete` on it.
-2. `event-without-prep` — an event starting inside ten days that no
+4. `event-without-prep` — an event starting inside ten days that no
    outcome and no insight cites. Material: the event row, open tasks
    whose title carries a word of its title, Gate hits on the event's
    **search keys**, and the **last seven days of the household
@@ -135,24 +169,72 @@ tie-break:
    a card can tap, so the order asks for an **outcome** whose pieces
    create the prep — but only when a live value actually fits it, and
    otherwise for the journal sentence alone (see *value-fit* below).
-3. `person-mentioned-unrecorded` — a roster companion (affirmed /
+5. `person-mentioned-unrecorded` — a roster companion (affirmed /
    `current`; an observed person is not usable) whom the last seven
    days of Gate traffic names and no insight cites in that window.
    Material: the person row and the hits. Expected write: an
    **insight** stating the fact, offering `still_with_us`.
-4. `value-with-no-live-outcome` — a live value no offered or accepted
+6. `value-with-no-live-outcome` — a live value no offered or accepted
    outcome serves. Material: the value, and the open tasks and coming
    events that say one of the value's own words. Expected write: an
    **outcome** when there is such a row; when there is none, the value
    carries nothing live and the order is the journal sentence instead.
 
-Six rules hold the whole thing up:
+The two new probes go FIRST, and rank only breaks a tie — a date
+always outranks it, so an event today still ships ahead of a session
+next Saturday. What the order settles is what wins when two probes
+carry the same clock, and there the answer is the one that clears more
+of the house: a session finishes four tasks where `bare-task-due-soon`
+annotates one, and a commitment nobody wrote down is the only kind of
+subject invisible to every other probe — it has no row yet to be found
+by. (A person's pull and a person's turn still outrank all six: those
+are owed lists, not probes, and `SITTING.md` puts them first.)
+
+Nine rules hold the whole thing up:
 
 - **Machine dedupe first.** Every probe drops any subject the cited
   set already names. The `not-a-twin` door would refuse a duplicate
   outcome at staging anyway, but a refusal costs a round trip and
   teaches the model nothing; the list it is handed is clean before it
   reads it.
+- **Clusters are seen whole; orders are built from what is free**
+  (waymark-q23). Dedupe applied before the clustering would also hide
+  the cluster — a house whose phone calls are all spoken for would
+  look like a house with no phone calls in it. So `session-of-like-
+  tasks` forms its clusters over every open task and then splits them:
+  the free ones become the evidence and the pieces, the cited ones
+  ride the order as **EXCLUDED**, each printed beside the standing
+  bundle that already speaks for it and the reason (*"citing it too
+  would be the twin `not-a-twin` refuses"*). A cluster needs two FREE
+  tasks to be worth an hour.
+- **The crowd-out line** (waymark-q23). Machine dedupe is right and it
+  can also leave nothing to do: on 2026-08-28 thirty-one standing
+  offered bundles cited every one of the sixteen open tasks, so no
+  session could ship and no new bundle could cite anything. That is
+  not a fault in a probe, it is a fact about the fridge, and a
+  manifest that only said *"no work orders"* would leave a run unable
+  to tell a quiet house from a jammed one. So whenever standing
+  offered outcomes speak for **half the open tasks or more**, the
+  manifest says it with the count — *"the fridge is crowding out
+  composition: 32 standing offered outcomes cite 15/16 open tasks, so
+  machine dedupe frees nothing…"* — and adds who can fix it, which is
+  not us: a person's verdicts on those offers are what free the tasks
+  again. `verify` reprints the same line off the manifest the run was
+  handed, so a run that wrote nothing is read against the reason.
+- **Every prepared instant is a household wall clock, rendered UTC**
+  (waymark-q23, waymark-is7). The house keeps `America/Denver` time.
+  *Saturday morning* is 09:00 there, which is 15:00Z in August and
+  16:00Z in November, so a probe that shipped a bare `09:00Z` would be
+  holding a block at three in the morning — and a model handed a bare
+  hour would have to do the arithmetic itself. The driver asks `date`
+  for the conversion with the zone INSIDE the string, which is
+  DST-correct on both sides of the change rather than carrying today's
+  offset a week forward, and it checks that what came back is ahead of
+  the run before shipping it. A session order carries its block
+  already converted; a commitments order carries the **household
+  clock** — the next seven local days, each with a 9am and a 7pm start
+  already rendered UTC — so a small model picks a row from a table
+  instead of doing timezone arithmetic.
 - **A ceiling.** The manifest presents the top
   `WAYMARK_WORK_ORDERS` (default 2), ordered by urgency — soonest due
   or soonest starting first, then probe order. Anything past them is
@@ -223,6 +305,28 @@ Six rules hold the whole thing up:
   beside it, because an event that honestly needs nothing prepared is
   the same answer. `verify` prints such an order as `JOURNAL-ONLY`
   rather than `UNANSWERED`: no door write was ever asked for.
+- **An observed value is named as observed.** `outcome/names-a-value`
+  holds `observed` and `declared` alike and refuses only `retired`,
+  and the crown ranks an observed value LOWER rather than turning the
+  bundle away — so value-fit considers observed values too. What it
+  must not do is let one pass silently as something the household said
+  in so many words, so an order landing on one says which it is in the
+  same sentence that names it, and asks the goal to own that it serves
+  a reading of this household rather than a word the household gave.
+- **A message body never becomes a row.** The commitments probe uses
+  read tools only. Its hits are capped and trimmed to the same 200
+  characters every other Gate hit is, the piece title PARAPHRASES, the
+  evidence is the person row (plus any house row the model actually
+  read), and the source is named in prose. Candidates are deduped
+  against the house by **key word and date**: a line sharing a
+  distinctive word with an open task or an event in the window around
+  now is the household talking over a row that exists, and so is a
+  line naming a day an event already sits on. The match reads the
+  message BODY rather than the rendered line — the line carries
+  whatever timestamp the rig printed in front of it, and a date is not
+  a subject — and ignores bare figures, because a mirror appends the
+  date to `display.title` and *"2026"* is a word every row in the
+  house shares.
 - **`verify` grades the orders.** Next run it prints one line per
   order from the previous manifest — `ORDER <probe> <subject>:
   answered by <row>` or `UNANSWERED` — where *answered* means a row
@@ -232,7 +336,7 @@ Six rules hold the whole thing up:
   beside a journal that never mentions it is a run that ignored its
   assignment.
 
-**Adding a fifth probe** means adding it in two places at once, the
+**Adding a seventh probe** means adding it in two places at once, the
 way a feed population is added: the probe itself in
 `scripts/sitting-run.sh` (a `jq` block appending one candidate object
 to `$CAND`, carrying `probe`, `rank`, `subject`, `subject_says`,
@@ -243,9 +347,14 @@ comment. Give it the next `rank`; leave `material.gate` null and set
 `gate_thread: true` for the household thread, and the ceiling will
 fetch both only when the order actually ships. `wm_value_fit(<the
 subject's words>; $values)` is there when the write it expects is an
-outcome. Nothing else changes: the render and the grading are generic
-over the shape, and a `write.kind` of `journal` renders and grades as
-journal-only.
+outcome, and `wm_value_note(<the fit>)` renders the sentence that
+names it (and says so when it is observed). Nothing else changes: the
+render and the grading are generic over the shape, and a `write.kind`
+of `journal` renders and grades as journal-only. Three optional keys
+the render already knows: `material.excluded` (rows machine dedupe
+took out of reach, each with the bundle that cites it),
+`material.day_table` (the household clock), and `write.pieces` (the
+`outcome_piece` bodies, printed as JSON ready to POST).
 
 ## Running a sitting on Jules
 
