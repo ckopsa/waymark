@@ -754,6 +754,109 @@
        open (assoc :open open)
        hide (assoc :hide true)))))
 
+;; ── the authorship wall, made grantable (waymark-9xn) ───────────────
+;;
+;; THE SAME RULING, READ THROUGH THE OTHER SIDE OF THE MIRROR. The
+;; wall above is `not you, because you wrote it`; this one is `only
+;; you, because you wrote it` — the shape `is-the-field` says, worn by
+;; the doors that are AUTHORSHIP rather than judgment (an outcome's
+;; `rework`: un-proposing your own suggestion so a better one can
+;; stand). `is-the-field` refuses everybody else outright, which meant
+;; a bundle whose composer is gone — a suspended principal, a leash
+;; that lapsed — had a plan nobody in the house could ever revise, and
+;; the household could not delegate the revision either, though the
+;; grants machine already spells exactly that scope.
+;;
+;; So: the row's own author passes with no grant at all, and anybody
+;; else passes only under a presented grant that admits this
+;; `kind`.`action` — and this ROW, when the entry carries `:ids` or a
+;; `:filter`. It is `unless-granted` with the own-field exemption
+;; INVERTED, and the inversion is the whole difference between the two
+;; laws: four eyes says the author is the one principal who may never
+;; act, authorship says the author is the one who may always act.
+;;
+;; A row naming NO author is refused the same as a stranger, which is
+;; `is-the-field`'s posture kept: an unauthored row names no author to
+;; be, so the only way through it is a grant a person approved.
+
+(def ^:private not-yours-sentence
+  "The refusal that names the fix, `no-grant-sentence`'s twin: whoever
+  is holding this door and did not write the row is one approval away
+  from being allowed, and a sentence that did not say the token would
+  be a sentence that sent them to read source."
+  "This row is not yours to answer for, and only its own author walks this door unasked — anybody else acts here under a grant that admits %s on this very row, which a person approves through the approval_request door.")
+
+(defn author-or-granted
+  "The authorship wall, made grantable (waymark-9xn): the principal
+  this row names in `field` passes; anybody else passes only under a
+  presented grant whose scope admits `kind`.`action` — and, when that
+  entry names rows (`:ids`) or carries a `:filter`, only on a row
+  inside it.
+
+  `opts`:
+    :field      the field naming whose hand wrote the row, required
+    :explain    the kind's own sentence, required — the grant clause
+                is appended to it
+    :name       the guard's name (keep the kind's existing one, so
+                scenarios and clients keep reading the same word)
+    :open       the acknowledged sentence, when the kind wrote one
+    :hide       conceal the refusal, as everywhere
+
+  It asks the projection's own admission, exactly as `unless-granted`
+  does — `(:grant ctx)` is `grants/visibility`'s `{:id :action? :row?}`
+  — so the wall and the concealment can never disagree about what a
+  scope means."
+  [kind action {:keys [field explain name open hide]}]
+  (clojure.core/when (nil? field)
+    (throw (t/definition-error
+            "author-or-granted names the field that records the author: :field is required")))
+  (clojure.core/when (clojure.core/or (nil? explain) (str/blank? explain))
+    (throw (t/definition-error
+            "author-or-granted carries the kind's own sentence: :explain is required")))
+  (let [token (str (clojure.core/name kind) "." (clojure.core/name action))
+        not-yours (format not-yours-sentence token)]
+    (guard
+     (cond-> {:name (clojure.core/or name
+                                     (keyword (str "author-or-granted:" token)))
+              :reads [:principal :grant]
+              :vars [:problem]
+              :explain (str explain "\n\n{problem}")
+              :check
+              (with-meta
+                (fn [row _inp ctx]
+                  (let [p (:principal ctx)
+                        g (:grant ctx)
+                        mine (get-in row [:data field])]
+                    (cond
+                      (clojure.core/and (some? mine) (= mine (:id p)))
+                      (t/allow)
+
+                      (clojure.core/and (some? g)
+                                        ((:action? g) kind action)
+                                        (clojure.core/or
+                                         (nil? (:id row))
+                                         ((:row? g) kind (:id row))))
+                      (t/allow)
+
+                      :else (t/deny {:vars {:problem not-yours}}))))
+                {:waymark10/form
+                 (list 'fn '[row _inp ctx]
+                       (list 'let ['p '(:principal ctx)
+                                   'g '(:grant ctx)
+                                   'mine (list 'get-in 'row [:data field])]
+                             (list 'cond
+                                   '(and (some? mine) (= mine (:id p)))
+                                   '(t/allow)
+                                   (list 'and '(some? g)
+                                         (list '(:action? g) kind action)
+                                         (list 'or '(nil? (:id row))
+                                               (list '(:row? g) kind '(:id row))))
+                                   '(t/allow)
+                                   :else
+                                   (list 't/deny {:vars {:problem not-yours}}))))})}
+       open (assoc :open open)
+       hide (assoc :hide true)))))
+
 ;; ── the code-guard macro ────────────────────────────────────────────
 
 (defmacro defguard

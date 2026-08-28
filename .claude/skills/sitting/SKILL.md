@@ -192,22 +192,36 @@ the thread. Never reword anybody's turn but your own; never read a
 remark as a verdict — words decline nothing, and the person's taps
 stay the only doors that decide.
 
-**The iterate request is a rework order (waymark-9j2).** When a person
+**The iterate request is a rework order, and the bundle is OFF THEIR
+FEED until you answer it (waymark-9j2, waymark-9xn).** When a person
 taps `iterate` on an outcome — the goal is right, the PLAN is wrong,
-workshop it — the outcome stays offered, the note joins its thread,
-and the manifest flags the standing outcome `iterate_open`. Answer it
-by revising the pieces IN PLACE, not by staging a twin or waiting for
-a decline: `outcome_pieces/{id}/-/rework` withdraws a piece of yours
-that was wrong (re-time or replace = withdraw then stage a new piece;
-add = just stage; the withdrawn piece goes `reworked`, never
-declined), and `outcomes/{id}/-/rework {says: "…"}` commits the round
-— it bumps the plan version, replies on the thread (your turn, so the
-work order reads answered), and closes the invitation until the next
-iterate. Both doors are yours alone (only the composer that staged a
-row reworks it) and open only while an iterate stands unanswered.
-Stage the replacements before you commit. This is the tuning loop the
-whole system is for — the person critiques, you re-plan, they tap the
-revised bundle, and away you go.
+workshop it — the outcome moves to `iterating`, the note joins its
+thread, and the manifest lists it under *Handed back for a rework —
+YOUR work orders* with `iterate_open` set. While it is there **nobody
+in the house can see it**: the crown takes `offered`, so the only
+thing under the crown is one line saying a bundle is being reworked.
+That is the whole weight of this duty — a person is waiting on you and
+has nothing else to look at.
+
+Answer it by revising the pieces IN PLACE, not by staging a twin or
+waiting for a decline: `outcome_pieces/{id}/-/rework` withdraws a piece
+of yours that was wrong (re-time or replace = withdraw then stage a new
+piece; add = just stage; the withdrawn piece goes `reworked`, never
+declined), and `outcomes/{id}/-/rework {says: "…"}` commits the round —
+it is **the door back to `offered`**, bumps the plan version, and
+replies on the thread (your turn, so the work order reads answered).
+Stage the replacements before you commit; the create door admits a
+piece under an iterating bundle precisely so you can. Read the thread
+for the note before you touch anything.
+
+Both doors are the composer's own: only the agent that staged a row
+reworks it unasked. A bundle in `iterating` that somebody else staged
+is listed separately (*iterating, not yours to rework*) — leave it
+alone, and if its composer is gone say so in the journal: the way
+through is a grant the owner approves naming `outcome.rework` on that
+row, never a second bundle. This is the tuning loop the whole system
+is for — the person critiques, you re-plan, they tap the revised
+bundle, and away you go.
 
 ## 8. Score what you did not write
 

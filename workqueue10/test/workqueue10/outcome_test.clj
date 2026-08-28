@@ -1824,18 +1824,29 @@
         (reset! clock nil)
         (stop! member @cid)))))
 
-;; ── 21. the iterate loop: keep the outcome, rework the plan (waymark-9j2) ──
+;; ── 21. the iterate loop: keep the outcome, rework the plan
+;;        (waymark-9j2, and the STATE it grew — waymark-9xn) ──────────
 ;;
 ;; THE CHURCH EXAMPLE, END TO END. The owner reads the Sunday
 ;; breakfast-and-park-walk bundle and says the walk clashes with 9am
 ;; church and it is too hot later — the goal is right, the PLAN is
-;; wrong. Before this bead that critique had nowhere to land: the three
+;; wrong. Before 9j2 that critique had nowhere to land: the three
 ;; verbs are accept, defer, expire, and `supersedes` wants a decline
-;; first. Now `iterate` keeps the outcome standing and files the note as
-;; a thread turn; the composer withdraws the wrong piece with `rework`,
-;; stages a cooler-and-later one, and commits the round with the
-;; outcome's own `rework`; the owner taps the revised bundle. The
-;; outcome never left the fridge.
+;; first. `iterate` gave it a door; waymark-9xn gave it a STATE, on the
+;; owner's own second reading — *when I iterate on an outcome, it
+;; doesn't remove it from my feed. I think it should… and then I
+;; shouldn't see it until it's been iterated on.* So the loop walked
+;; here is `offered --iterate--> iterating --rework--> offered`: the
+;; note joins the thread, the bundle LEAVES THE CROWN with one line
+;; under it saying so, its pieces stop being tappable while the
+;; composer holds the plan, the replacements stage under it all the
+;; same, and the composer's commit is the only door back.
+;;
+;; Four deftests, and the last three are the state's own promises: a
+;; decline is still allowed from under a rework (a person never waits
+;; on an agent to say no), the leash keeps running so nothing is stuck
+;; when a composer goes quiet, and an ORPHANED bundle is finishable —
+;; the authorship wall is grantable in the direction four eyes is not.
 
 (defn- remarks-on
   "The outcome's own thread, oldest-first (the remark kind's default
@@ -1850,6 +1861,20 @@
                           (human who)))
                [:data :items])
        (mapv #(json (req :get (:self %) (human who))))))
+
+(defn- wide-crown!
+  "This reader's own recipe row, with the crown wide enough that the
+  rank never decides what this test can see — § 16's idiom, and the
+  reason it is here: the claim under test is what the POPULATION
+  admits, so the contest must not be able to answer for it."
+  [who]
+  (let [order (:order (:recipe (feed-as who)))
+        wide (mapv #(if (= "outcomes" (str (:section %))) (assoc % :take 10) %)
+                   order)
+        made (req :post "/api/feed_recipes"
+                  {:label "A wide crown" :scope "mine" :order wide}
+                  (human who))]
+    (is (= 201 (:status made)) (pr-str (json made)))))
 
 (deftest the-iterate-loop-reworks-the-plan-in-place
   (let [member   "colton-church"
@@ -1868,24 +1893,44 @@
                                        "task" {:title "Make Sunday pancakes"}))
         walk (id-of (stage-piece! composer o "A walk in the park after"
                                   "task" {:title "Park walk, Sunday"}))]
+    (wide-crown! member)
 
-    (testing "before any iterate, the composer cannot rework a piece — there is no open invitation"
+    (testing "before any iterate, the composer cannot rework a piece — the bundle is on the fridge, not in its hands"
       (let [r (invoke! "outcome_pieces" walk :rework nil (human composer))]
         (is (= 409 (:status r)))
         (is (= "the-parent-invited-a-rework" (guard-of r)))))
 
-    (testing "the owner iterates: the outcome STAYS offered and the note joins its thread"
+    (testing "and it cannot commit a round either: rework LEAVES FROM iterating, so the machine itself answers"
+      (let [r (invoke! "outcomes" o :rework {:says "unasked"} (human composer))]
+        (is (= 409 (:status r)))
+        (is (nil? (guard-of r)) "no guard — the door is not there from offered")
+        (is (str/includes? (detail r) "Iterating"))))
+
+    (testing "the bundle is on the crown, which is what makes its leaving mean something"
+      (is (some #{o} (crown-ids (feed-as member)))))
+
+    (testing "the owner iterates: the outcome MOVES to iterating and the note joins its thread"
       (let [note (str "Sunday breakfast is fine, but the park walk clashes"
                       " with 9am church, and it is too hot for a walk later.")
             r (invoke! "outcomes" o :iterate {:says note} (human member))]
         (is (= 200 (:status r)))
-        (is (= "offered" (:state (json r))) "iterate keeps the outcome on the fridge")
+        (is (= "iterating" (:state (json r))) "iterate hands the plan back")
         (is (some? (:iterate_requested_at (fields r))))
         (is (nil? (:reworked_at (fields r))) "no rework has happened yet")
         (let [thread (remarks-on member o)]
           (is (= 1 (count thread)) "the note is one turn on the outcome's thread")
           (is (= member (get-in (first thread) [:data :said_by])) "in the owner's own voice")
           (is (str/includes? (get-in (first thread) [:data :says]) "9am church")))))
+
+    (testing "and it LEAVES THE FEED — the population takes offered, so the state is the whole filter"
+      (let [doc (feed-as member)]
+        (is (not-any? #{o} (crown-ids doc)))
+        (testing "with one line under the crown, so the disappearance reads as answered rather than lost"
+          (is (pos? (long (get-in doc [:crown :reworking :count] 0))))
+          (is (str/includes? (str (get-in doc [:crown :reworking :says]))
+                             "being reworked"))
+          (is (str/includes? (str (get-in doc [:crown :reworking :says]))
+                             "when the composer answers")))))
 
     (testing "THIS outcome's own composer may not iterate it, grant or no grant — four eyes (waymark-sfe)"
       ;; the wall answers only an agent that reaches it. An unrelated
@@ -1909,6 +1954,19 @@
                               [{:kind "outcome" :actions ["not_this_week"]}] :scope)]
         (is (= 404 (:status (invoke! "outcomes" o :iterate {:says "no"} elsewhere))))))
 
+    (testing "the pieces are not tappable while the plan is in the composer's hands"
+      (let [r (invoke! "outcome_pieces" breakfast :take nil (human member))]
+        (is (= 409 (:status r)))
+        (is (= "the-bundle-is-taking-answers" (guard-of r)))
+        (is (str/includes? (detail r) "being reworked"))))
+
+    (testing "and neither is the bundle — make it so is refused from iterating, in the house's own words"
+      (let [r (invoke! "outcomes" o :make_it_so nil (human member))]
+        (is (= 409 (:status r)))
+        (is (= "the-plan-is-not-under-rework" (guard-of r)))
+        (is (str/includes? (detail r) "not this week")
+            "the refusal names the answer that IS still open")))
+
     (testing "only the composer that staged a piece may rework it — the owner cannot"
       (let [r (invoke! "outcome_pieces" walk :rework nil (human member))]
         (is (= 409 (:status r)))
@@ -1919,11 +1977,12 @@
         (is (= 200 (:status r)))
         (is (= "reworked" (:state (json r))))))
 
-    (let [creek (id-of (stage-piece! composer o
-                                     "A shaded creek trail at 8am, before the heat"
-                                     "task" {:title "Creek trail, Sunday 8am"}))]
-      (testing "a replacement piece stands — reworked pieces do not spend a bundle slot"
-        (is (some? creek))
+    (let [staged (stage-piece! composer o
+                               "A shaded creek trail at 8am, before the heat"
+                               "task" {:title "Creek trail, Sunday 8am"})
+          creek (id-of staged)]
+      (testing "a replacement piece stages UNDER AN ITERATING BUNDLE — the create door is where a rework happens"
+        (is (= 201 (:status staged)) (pr-str (json staged)))
         (let [offered (get-in (json (req :get
                                          (str "/api/outcome_pieces?outcome_id=" o
                                               "&state=offered")
@@ -1933,12 +1992,12 @@
                  (into #{} (map #(last (str/split (str (:self %)) #"/"))) offered))
               "only breakfast and the creek trail are on offer; the walk is withdrawn")))
 
-      (testing "the composer commits the round: the plan version bumps and it replies on the thread"
+      (testing "the composer commits the round: the bundle comes BACK to the fridge, one plan version on"
         (let [note (str "Moved nothing but the walk — swapped it for the shaded"
                         " creek trail at 8am, before the heat and clear of church.")
               r (invoke! "outcomes" o :rework {:says note} (human composer))]
           (is (= 200 (:status r)))
-          (is (= "offered" (:state (json r))) "still on the fridge, now reworked")
+          (is (= "offered" (:state (json r))) "iterating → offered: rework is the door back")
           (is (some? (:reworked_at (fields r))))
           (is (= 1 (:plan_revision (fields r))))
           (let [thread (remarks-on member o)]
@@ -1946,19 +2005,22 @@
             (is (= composer (get-in (last thread) [:data :said_by]))
                 "the thread's last word is the composer's — the work order is answered"))))
 
+      (testing "and the household sees it again, revised"
+        (is (some #{o} (crown-ids (feed-as member)))))
+
       (testing "the card says the plan was reworked, in the engine's own words"
         (let [row {:data (fields (req :get (str "/api/outcomes/" o) (human member)))}
               says (#'feed/outcome-says row false)]
           (is (str/includes? says "Reworked from your note"))
           (is (str/includes? says "plan v1"))))
 
-      (testing "the invitation is closed: a further rework waits for a fresh iterate"
+      (testing "the invitation is closed with the state: a further rework waits for a fresh iterate"
         (let [r (invoke! "outcome_pieces" breakfast :rework nil (human composer))]
           (is (= 409 (:status r)))
           (is (= "the-parent-invited-a-rework" (guard-of r))))
         (let [r (invoke! "outcomes" o :rework {:says "again"} (human composer))]
           (is (= 409 (:status r)))
-          (is (= "the-outcome-invited-this-rework" (guard-of r)))))
+          (is (nil? (guard-of r)) "the machine answers before any guard does")))
 
       (testing "the owner taps the revised bundle — it takes the two on offer, the walk lands nothing"
         (let [made (invoke! "outcomes" o :make_it_so nil (human member))]
@@ -1971,6 +2033,120 @@
         (let [r (req :get (str "/api/outcome_pieces/" walk) (human member))]
           (is (= "reworked" (:state (json r))) "the withdrawn walk stays withdrawn")
           (is (nil? (:materialized (fields r))) "and made nothing"))))))
+
+;; A DECLINE IS ALWAYS ALLOWED (waymark-9xn). The half of `iterating` a
+;; machine could easily have got wrong: a person who asked for a
+;; re-plan and then decided the WEEK itself is wrong must not have to
+;; wait on the composer's turnaround to say so.
+
+(deftest a-decline-answers-a-bundle-that-is-being-reworked
+  (let [member   "colton-declines-mid-rework"
+        composer "composer-declines-mid-rework"
+        v (declare-value! member "a week that fits" ["the shop"])
+        made (stage-outcome! composer (vid v))
+        o (id-of made)
+        p (id-of (stage-piece! composer o "One thing" "task"
+                               {:title "One thing, mid-rework"}))]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (is (= 200 (:status (invoke! "outcomes" o :iterate
+                                 {:says "The Saturday is wrong for this."}
+                                 (human member)))))
+    (testing "from iterating, the person's own no still lands"
+      (let [r (invoke! "outcomes" o :not_this_week nil (human member))]
+        (is (= 200 (:status r)) (pr-str (json r)))
+        (is (= "declined" (:state (json r))))))
+    (testing "and the pieces are set aside rather than refused, exactly as from offered"
+      (is (= "moot" (:state (json (req :get (str "/api/outcome_pieces/" p)
+                                       (human member)))))))
+    (testing "the week's own schedule is stamped by the decline, not skipped for the rework"
+      (let [d (fields (req :get (str "/api/outcomes/" o) (human member)))]
+        (is (= 1 (:declined_count d)))
+        (is (some? (:not_before d)))))))
+
+;; THE LEASH KEEPS RUNNING (waymark-9xn). A bundle whose composer never
+;; answers is not stuck: the week it was for ends, and `expire` tidies
+;; the row from `iterating` exactly as it does from `offered`.
+
+(deftest a-bundle-nobody-reworks-lapses-on-its-own-week
+  (let [member   "colton-lapse-iterating"
+        composer "composer-lapse-iterating"
+        v (declare-value! member "a week that ends" ["the shop"])
+        made (stage-outcome! composer (vid v))
+        o (id-of made)]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (is (= 200 (:status (invoke! "outcomes" o :iterate
+                                 {:says "Wrong hours — re-plan it."}
+                                 (human member)))))
+    (try
+      (testing "while the week is live, expiring is still refused — the clock answers, never a hand"
+        (let [r (invoke! "outcomes" o :expire nil (human member))]
+          (is (= 409 (:status r)))
+          (is (= "the-leash-has-run-out" (guard-of r)))))
+      (reset! clock (.plusSeconds (Instant/now)
+                                  (* 86400 (inc (long outcome/leash-days)))))
+      (testing "a week on with no rework, the row is tidied and nothing is stuck"
+        (let [r (invoke! "outcomes" o :expire nil (human member))]
+          (is (= 200 (:status r)) (pr-str (json r)))
+          (is (= "expired" (:state (json r))))))
+      (finally (reset! clock nil)))))
+
+;; THE ORPHANED BUNDLE (waymark-9xn, on waymark-sfe's ruling). The
+;; authorship wall is grantable in the direction four eyes is not: the
+;; composer walks its own rework door unasked, and a SECOND agent walks
+;; it only under a grant that names the row — which exists only because
+;; a person approved it. Without that grant the row is not the second
+;; agent's to touch, whoever is holding the leash.
+
+(deftest a-second-agent-reworks-only-under-a-grant-naming-the-row
+  (let [member   "colton-orphan"
+        composer "composer-orphan"
+        v (declare-value! member "a plan somebody must finish" ["the shop"])
+        made (stage-outcome! composer (vid v))
+        made-other (stage-outcome! composer (vid v))
+        o (id-of made)
+        other (id-of made-other)]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (is (= 201 (:status made-other)) (pr-str (json made-other)))
+    (doseq [oid [o other]]
+      (is (= 201 (:status (stage-piece! composer oid "The one step" "task"
+                                        {:title (str "Step for " oid)})))))
+    (is (= 200 (:status (invoke! "outcomes" o :iterate
+                                 {:says "The hour is wrong; move it."}
+                                 (human member)))))
+
+    (testing "a person who did not stage it is refused, and the sentence names the way through"
+      (let [r (invoke! "outcomes" o :rework {:says "I'll fix it myself"}
+                       (human member))]
+        (is (= 409 (:status r)))
+        (is (= "only-its-composer-reworks" (guard-of r)))
+        (is (str/includes? (detail r) "grant"))))
+
+    (testing "an agent whose grant names the door on ANOTHER row does not see this one at all"
+      (let [elsewhere (leash! "delegate-orphan-elsewhere"
+                              [{:kind "outcome" :actions ["rework"]
+                                :ids [other]}] :scope)]
+        (is (= 404 (:status (invoke! "outcomes" o :rework {:says "not mine"}
+                                     elsewhere)))
+            "outside the ids the row does not exist for it")))
+
+    (testing "under a grant naming THIS row, a second agent finishes the plan the composer left"
+      (let [rescuer (leash! "delegate-orphan"
+                            [{:kind "outcome" :actions ["rework"]
+                              :ids [o]}] :scope)
+            r (invoke! "outcomes" o :rework
+                       {:says "Picked this up: moved the step to the evening."}
+                       rescuer)]
+        (is (= 200 (:status r)) (pr-str (json r)))
+        (is (= "offered" (:state (json r))) "and the bundle is back on the fridge")
+        (is (= 1 (:plan_revision (fields r))))
+        (testing "and the audit reads 'under grant-…', so the house can see whose errand it was"
+          (is (= (get rescuer "x-waymark-grant")
+                 (under-grant :outcome o :rework))))))
+
+    ;; leave the house as found
+    (doseq [oid [o other]]
+      (is (= 200 (:status (invoke! "outcomes" oid :not_this_week nil
+                                   (human member))))))))
 
 ;; ── 22. not a twin: one standing bundle per evidence row (8gc) ───────
 ;;

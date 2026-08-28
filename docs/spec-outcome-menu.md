@@ -572,6 +572,25 @@ guard, refuses with a sentence that names the fix, and is proved by a scenario:
 | `the-door-is-open-now` | *(since waymark-euj)* an invoke piece staged behind a button that is not there — the target action judged **unavailable** on that row now, by `render/action-availability`, the envelope's own partition asked one door at a time; the refusal quotes **that door's** unavailable reason. A denier reading `:principal` is about the composer's hand rather than the row, and the wall stands down for it |
 | `the-composer-does-not-decide` | the stager answering its own plan or piece (`g/not-the-field :composed_by`) — **absolute**, and no grant opens it |
 | `a-person-answers` | an agent tapping a verdict **whose grant does not admit that door** (`g/unless-granted`, since waymark-sfe / 2026-08-28) — and, on every door, **the agent that composed the row**, grant or no grant. The refusal names the token a scope would have to carry |
+| `only-its-composer-reworks` | *(since waymark-9j2; grantable since waymark-9xn / 2026-08-28)* anybody but the row's own composer walking `outcome.rework` or `outcome_piece.rework` **without a grant that admits that door on that row** (`g/author-or-granted`). It is `a-person-answers` with the own-field exemption **inverted**: authorship is what opens this door rather than what closes it, so the composer walks it unasked and a second agent walks it only on a person's approved errand — which is what makes an ORPHANED bundle finishable |
+
+**The outcome's states, as they now stand** (waymark-9xn, 2026-08-28):
+`offered` → `iterating` → back to `offered`, with the three terminal answers
+reachable from either standing state.
+
+| from | door | to | who |
+|---|---|---|---|
+| `offered` | `iterate` | `iterating` | a person (an agent only under a grant naming `outcome.iterate`; never the composer) |
+| `iterating` | `iterate` | `iterating` | the same — a second note is another turn on the thread |
+| `iterating` | `rework` | `offered` | the row's own composer; another agent only under a grant naming the row |
+| `offered` | `make_it_so` | `accepted` | a person (grantable) — **refused from `iterating`** by `the-plan-is-not-under-rework`, in the house's own words |
+| `offered` / `iterating` | `not_this_week` | `declined` | a person (grantable) — a decline is always allowed |
+| `offered` / `iterating` | `expire` | `expired` | anybody, once `good_until` has passed — the leash keeps running while a bundle is being reworked |
+
+A piece's own doors read the parent's state: `take` is refused while the
+bundle is `iterating` (`the-bundle-is-taking-answers`), `rework` (withdraw)
+opens **only** while it is (`the-parent-invited-a-rework`), and a replacement
+piece **stages** under an iterating bundle, which is where a re-plan happens.
 
 **The two walls above are different in kind, and the difference is the
 whole of waymark-sfe.** `the-composer-does-not-decide` is *four eyes*:
@@ -699,6 +718,12 @@ which line to ask for — never a quiet zero. A composer that also tunes
 already holds both (the 1uv.5 block above); nothing else on the leash moves,
 and `diagnosis_id` on a recomposition is an `insight` the composer's own
 `insight.create` already writes.
+
+**Since waymark-9xn (2026-08-28), one more errand the same scope can carry:**
+`{"kind": "outcome", "actions": ["rework"], "ids": ["<the bundle>"]}` — the
+household's way to get an ORPHANED plan finished when the composer that staged
+it is gone. The row's own composer never needs it; anybody else does, and the
+grant names the row.
 
 **Since waymark-sfe (2026-08-28), a DELEGATION scope the standing leash does
 not carry and never should.** The verdict and affirmation doors are
@@ -1362,6 +1387,10 @@ recorded stands where it was.
 Four filters and three retirements, each read off a declaration:
 
 - `offered` bundles only; the other three states are terminal.
+  **(Ruling, 2026-08-28, waymark-9xn: there is a fifth state now, `iterating`,
+  and it is NOT terminal — a bundle the household handed back for a re-plan
+  leaves this population by the same filter and comes back when the composer's
+  `rework` returns it to `offered`. See § *Built — 9xn*.)**
 - **not the reader's own** — `the-composer-does-not-decide` makes the stager
   structurally incapable of answering, so carding it would offer three doors
   that all answer 409. `asks`, `insights` and `proposals` already do this.
@@ -5560,6 +5589,17 @@ and the thread (waymark-b4s) as the workshop the two turn in.
   state, and the invitation rides two engine stamps beside it, the way the
   decline's `not_before` / `declined_count` do (waymark-1uv.10).
 
+  **OVERTURNED by the owner, 2026-08-28 (waymark-9xn).** He read the fork's
+  own reasoning back as the bug: *when I iterate on an outcome, it doesn't
+  remove it from my feed. I think it should. It should probably go into a
+  state of 'Needs Iterating' and then I shouldn't see it until it's been
+  iterated on* — and he named it as a reason he had stopped answering the
+  fridge at all. The argument above assumed dropping off the feed was the
+  opposite of the gesture; it is the gesture. A person who has said *the plan
+  is wrong* has ANSWERED that card, and re-asking them the next morning is the
+  system ignoring them. `iterating` is a real state now, non-terminal, and
+  `rework` is the door back. See § *Built — 9xn*.
+
 - **The invitation is two stamps, read as a comparison, not a boolean.**
   `iterate` stamps `iterate_requested_at`; `rework` (on the outcome) stamps
   `reworked_at` and bumps `plan_revision`. An outcome is *inviting a rework*
@@ -5571,6 +5611,14 @@ and the thread (waymark-b4s) as the workshop the two turn in.
   request* is a two-field comparison a generated column cannot express anyway —
   so all three land in `data`, the storage facet does not move and the migrate
   plan stays empty (`request_id`'s reasoning, once more).
+
+  **Since waymark-9xn (2026-08-28) the invitation is the STATE, and these are
+  the record.** `iterate-open?` and `the-outcome-invited-this-rework` are gone:
+  a bundle invites a rework when it is `iterating`, which is one fact instead
+  of two stamps that had to be kept in step, and the wall is the machine's own
+  `:from`. The three stamps stay, written by the same handlers, because the
+  card counts the rounds off `plan_revision` and says *Reworked from your note*
+  off `reworked_at`.
 
 - **Revise in place = withdraw + re-stage, gated to an open invitation.** The
   genuinely new power the composer lacked was **retracting its own unanswered
@@ -5590,7 +5638,13 @@ and the thread (waymark-b4s) as the workshop the two turn in.
   the law that keeps it honest is **authorship, not personhood**.
   `only-its-composer-reworks` is `g/is-the-field :composed_by`, the exact
   mirror of `the-composer-does-not-decide`: only the composer that staged a row
-  may rework it, and a person or a second agent is refused. `a-person-answers`
+  may rework it, and a person or a second agent is refused. **(Ruling,
+  2026-08-28, waymark-9xn: still authorship, but GRANTABLE — `g/author-or-
+  granted`, which is `unless-granted` with the own-field exemption inverted.
+  The composer walks it unasked; anybody else walks it under a grant that names
+  the row. Refusing outright left a bundle whose composer is gone with a plan
+  nobody in the house could ever revise, which is the wall waymark-sfe's ruling
+  is against.)** `a-person-answers`
   is deliberately **not** on either rework door — that wall is what keeps
   materialization a member's tap, and a rework materializes nothing. The person
   still taps the revised pieces; a rework changes what is on offer, never what
@@ -6128,3 +6182,161 @@ belongs on `task`'s declaration where every reader of that kind would see it —
   `workqueue10/test/workqueue10/value_test.clj`,
   `workqueue10/test/workqueue10/person_test.clj` (their stagings);
   `SITTING.md`; this file.
+
+## Built — 9xn, iterate is a state (2026-08-28, waymark-9xn)
+
+**The owner, reading his own fridge:** *when I iterate on an outcome, it
+doesn't remove it from my feed. I think it should. It should probably go into
+a state of 'Needs Iterating' and then I shouldn't see it until it's been
+iterated on.* He named it as a reason he had stopped answering yes/no on the
+fridge at all. waymark-9j2 built the loop as a **self-loop** — `iterate` kept
+the outcome `offered`, stamped `iterate_requested_at`, and the crown, which
+reads `state=offered`, went on showing it — so the morning after a person said
+*the plan is wrong* the house asked them the same question again. A card that
+re-asks what you have already answered teaches you to stop answering.
+
+This section makes the gesture a **state**. `offered --iterate--> iterating
+--rework--> offered`: the plan is in the composer's hands, the bundle is off
+the feed, and the composer's own commit is the only door back.
+
+### The forks, decided
+
+- **A state, not a flag.** The population is `rows-of ctx :outcome {:state
+  "offered"}` and nothing else, so `iterating` leaves the crown **by
+  construction** — no boolean on the row, no second filter beside the query,
+  and no way for the machine and the feed to drift apart about what is being
+  shown. 9j2's fork note argued a new state would "drop the outcome off the
+  feed the instant a person asked to keep it"; that IS the ask, and keeping
+  the outcome is what `iterating` does — the goal stands, the row stands, only
+  the question stops.
+
+- **The state is the invitation, so the invitation wall is gone.**
+  `iterate-open?` (two stamps compared) and `the-outcome-invited-this-rework`
+  are deleted; `rework` simply `:from #{:iterating}` and the machine answers.
+  `the-parent-invited-a-rework` survives on the piece and now reads the
+  parent's **state** rather than its stamps. The three stamps stay as the
+  RECORD of the round — the card still says *Reworked from your note — plan
+  v1* off `reworked_at` / `plan_revision` — and no longer as anybody's wall.
+
+- **One verdict closes, with a sentence, and the other two stay open.**
+  `make_it_so` from `iterating` would take the very pieces the person just
+  called wrong, so it is refused — and refused by a GUARD
+  (`the-plan-is-not-under-rework`, `:from` naming `iterating` so the door is
+  reached) rather than by the machine's out-of-state 409, because *Available
+  in state(s) Offered; the resource is Iterating* is true and says nothing
+  about what happened or when the bundle comes back. `not_this_week` stays
+  open from `iterating`: a decline is always allowed, and holding a person's
+  own no hostage to an agent's turnaround would be law 6 inverted. `expire`
+  stays open too — the leash keeps running, so a composer that goes quiet
+  costs the household a week, never a stuck row.
+
+- **The pieces read the parent's state, in three different directions.**
+  `take` is refused while the bundle is `iterating`
+  (`the-bundle-is-taking-answers`, its own sentence: *you said the plan was
+  wrong and the composer has not answered yet*). `rework` (withdraw) opens
+  **only** while it is. And the CREATE door widens to admit `iterating`
+  (`open-to-a-piece`), because staging the replacements is exactly what a
+  re-plan is — a wall that read `offered` alone would have refused the rework
+  it invited.
+
+- **`iterate` from `iterating` is a self-loop, and that one is right.** A
+  second thought about the same unanswered plan is another turn on the thread;
+  nothing about the row's standing changed, so there is no state to move to.
+
+- **The authorship wall becomes grantable, in the direction four eyes never
+  will.** `only-its-composer-reworks` was `g/is-the-field :composed_by`, which
+  refused every other hand outright — so a bundle in `iterating` whose composer
+  is gone (a suspended principal, a lapsed leash, an agent retired between
+  sittings) was a plan nobody in the house could ever revise, and the household
+  could not delegate the revision either. It is now
+  `g/author-or-granted` — **`unless-granted` with the own-field exemption
+  inverted**: the row's own composer passes with no grant at all, and anybody
+  else passes only under a presented grant admitting `<kind>.rework` on that
+  row. Four eyes is untouched and stays absolute: `the-composer-does-not-
+  decide` still refuses the stager at every verdict door, grant or no grant.
+  The two laws are mirror images and the inversion is the whole point —
+  authorship is what CLOSES a verdict door and what OPENS a rework one.
+
+- **One line under the crown, and it is a line rather than a card.** A bundle
+  vanishing with nothing said reads as the house forgetting. `crown.reworking`
+  carries `{count, says}` — *2 bundles are being reworked — the house asked for
+  the plan to change, and you'll see them again when the composer answers* —
+  beside the ask chip, where the reader is already looking for the bundle that
+  went quiet. No verb, because there is nothing here to answer; that is what
+  makes it a line. It counts what the crown WOULD have shown: the reader's own
+  compositions are excluded and a lapsed one is not coming back, the
+  population's own two filters. Who asked is said as *the house* rather than as
+  *you*: nothing on the row records which member tapped `iterate` — the note is
+  a thread remark in their own voice — so a line addressing this reader as the
+  one who said it would be a guess about a household with more than one adult
+  in it.
+
+- **The driver reads the state, and says what it cannot do.** `iterate_open`
+  on a `standing_outcome` is `.state=="iterating"` now, not a comparison of two
+  stamps; the manifest gains a duty count (`rework_iterating`) and two
+  headings — *Handed back for a rework — YOUR work orders*, and **iterating,
+  not yours to rework**, which lists an iterating bundle whose composer is
+  somebody else, names that composer, and says the way through is a grant the
+  owner approves rather than a twin. `standing` is three states everywhere it
+  is read (the cited set, the twin report, the crowd-out reading, the
+  value-with-no-live-outcome probe): a bundle being reworked speaks for the
+  rows it cites exactly as loudly as one on the fridge — more so, since a
+  composer is under orders about it.
+
+### Recorded here, for whoever comes next
+
+- **`make check-queue`: 38 kinds, 11 warnings, 57 scenarios judged** (was 38 /
+  11 / 56 on `main`) — two scenarios added, one of which defers to the suite.
+  `outcome` reads *7 scenarios ✓ (3 deferred), 16 refusing guards, 7 named by
+  a scenario*; `outcome_piece` *3 scenarios ✓ (4 deferred), 12 refusing
+  guards*. The deferral is a property of the DOOR and not of the wall under
+  test: `make_it_so` carries `something-is-still-on-offer`, which reads
+  `:outcome_piece`, so every scenario on that door waits for the suite
+  whatever it is about — and § 21 walks it live.
+- **Exactly two fingerprints moved, and they are the two whose machines
+  changed.** Computed over the whole 53-kind census
+  (`engine/full-registry` over `workqueue10.main/check-resources`) on `main`
+  (`c160d21`) and on this tree: 51 byte-identical — `feed_recipe`
+  `9e5ba71d…`, `insight` `d5b2724b…`, `ranking_note` `c863e054…`,
+  `verdict_reason`, `feed_view` and `composition_request` unmoved.
+  `outcome` goes `1b0e6c24…` → `334d3a45…` (a state, four doors' `:from`/`:to`,
+  two new guards, one guard deleted, one wall re-minted) and `outcome_piece`
+  `e6b59232…` → `0479ff85…` (`take` gains a wall, both rework walls change).
+  `boot-revise!` mints one revision on each.
+- **No migration, and it was computed rather than argued.** `state` is a plain
+  `state text NOT NULL` engine column (`store/engine-columns`) — no enum, no
+  check constraint, no per-state index — and this bead declares no new
+  filterable or sortable field, so nothing is promoted. The two kinds' STORAGE
+  facets were printed on `main` and on this tree and diffed **byte-identical**,
+  which is exactly what an empty migrate plan is: same table, same fifteen
+  columns, same four indexes. No `:renames {:states …}` is needed either — a
+  token is being ADDED, and `assert-known-states!` only refuses tokens live
+  rows occupy that no declaration names. `image.yml` applies the plan on
+  deploy with a human tap when it is non-empty; here it is empty.
+- **Tests:** `workqueue10/test/workqueue10/outcome_test.clj` § 21, rewritten
+  and grown to four deftests — the church example end to end (crown before,
+  gone after with the line under it, pieces untappable, `make_it_so` refused in
+  the house's words, a replacement staged under the iterating bundle, the
+  commit that returns it, the crown again, the accept); a decline from under a
+  rework; a bundle nobody reworks lapsing on its own week; and a second agent
+  reworking an orphan under a grant naming the row, refused without it, with
+  the transition reading *under grant-…*.
+- **Files:** `waymark10/src/waymark10/guards.clj` (`author-or-granted`,
+  `not-yours-sentence`); `workqueue10/src/workqueue10/resources/outcome.clj`
+  (the `iterating` state, four doors' `:from`/`:to`, `open-to-a-piece`,
+  `the-bundle-is-taking-answers`, `the-plan-is-not-under-rework`,
+  `reworks-wall`, `the-parent-invited-a-rework` re-read, `standing-states`,
+  `iterate-open?` and `the-outcome-invited-this-rework` deleted, two
+  scenarios); `waymark10/src/waymark10/server/feed.clj` (`reworking-doc`, the
+  crown document, the population's docstring); `waymark10/src/waymark10/server/diagnosis.clj`
+  (`answered` lapses from `iterating` too, `lesson` reads it as
+  `still_offered`, and the sentence says it is a work order rather than a
+  silence); `scripts/sitting-run.sh` (the states read, `iterate_open`,
+  `iterating_not_mine`, the duty count, two manifest headings);
+  `workqueue10/test/workqueue10/outcome_test.clj` (§ 21); `SITTING.md`;
+  `.claude/skills/sitting/SKILL.md`; this file.
+- **Left standing, deliberately.** `iterate` still does not touch the leash
+  (9j2's own note: the week is the week), there is still no piece-level
+  iterate, and nothing sweeps `iterating` — the clock and the composer are the
+  only two things that move a bundle out of it, which is the same posture
+  `offered` has always had.
