@@ -568,6 +568,8 @@ guard, refuses with a sentence that names the fix, and is proved by a scenario:
 | `plans-are-few` | the third offered plan of the week, per author; and a superseding plan before its `not_before` |
 | `the-prepared-input-fits-the-door` | a piece whose prepared input would 422 at its target's create door |
 | `not-a-twin` | *(since waymark-8gc)* a bundle citing an evidence row a standing — `offered` or `accepted` — outcome already cites, any composer; the refusal names that outcome and the shared address. A cited `request_id` is exempt, and a row's own value address is not a reading |
+| `composes-from-what-stands` | *(since waymark-euj)* a bundle whose **every** citation is a finished row — a done or dropped task, an event that has ended, a retired value, a past person, an answered finding — refused naming each row and the word it is finished with. One standing citation is enough; a row this house cannot classify **stands**; the bundle's own value address is subtracted first, so citing the value alone is not a reading |
+| `the-door-is-open-now` | *(since waymark-euj)* an invoke piece staged behind a button that is not there — the target action judged **unavailable** on that row now, by `render/action-availability`, the envelope's own partition asked one door at a time; the refusal quotes **that door's** unavailable reason. A denier reading `:principal` is about the composer's hand rather than the row, and the wall stands down for it |
 | `the-composer-does-not-decide` | the stager answering its own plan or piece (`g/not-the-field :composed_by`) |
 | `a-person-answers` | **any agent** tapping any verdict, with the refusal naming the lawful path |
 
@@ -5853,3 +5855,166 @@ array-set path), nil and empty.
   `waymark10/src/waymark10/ranking_note.clj` (the three copies removed, the
   callers reading `g/listed`);
   `waymark10/test/waymark10/batch_h_defguard_test.clj`; this file.
+## Built — euj, composed from what stands (2026-08-28, waymark-euj)
+
+**The specimen.** A Gemini sitting at 03:22Z on 2026-08-28 staged outcome
+`0bf19726`, *"Sacrament talk drafted and ready for August 23"* — five days
+into the past — citing **one** row: `/api/tasks/51b49195`, a mirrored task
+whose `status` said `done` and whose due date was August 20th. Under it hung a
+piece that **prioritized that finished task**. Its journal said, verbatim: *to
+satisfy the floor requirement, I staged an outcome.* There is no floor
+(waymark-1uv.3 removed the cap and § *Ranked, not capped* removed the reason).
+
+Every door passed it, and each for its own correct reason:
+`cites-what-it-read` — the address is real and the collection is served;
+`names-a-value` — the value is held; `not-a-twin` — no standing bundle cites
+that task, **precisely because it is finished**. The composer had read the
+house honestly and composed from the part of it that was already over.
+
+Two walls land here. One asks whether anything the bundle read is still open;
+the other asks whether the button a piece is staged behind is there.
+
+### `composes-from-what-stands` — at least one row still standing
+
+A candidate's evidence, less its own value address, must contain **one** row
+the wall can read as still open. Refused only when **every** readable citation
+is closed, and the sentence names each one with the word it is closed with:
+
+> Nothing this bundle cites is still standing: `/api/tasks/51b49195` is done;
+> `/api/events/…` ended 2026-08-26T14:00:00Z.
+
+**"Stands" is read off the kind, never listed.** In order:
+
+1. **The vocabularies this file already keeps.** `held-states` for a value
+   (observed or declared; `retired` is shut), `standing-states` for an outcome
+   (`offered` or `accepted`), and *not past* for a person. The outcome case is
+   the one worth saying out loud: `accepted` is **terminal to the machine and
+   live to the household** — the bundle is being done — so the machine's word
+   is the wrong one and the wall says so where a reader can see it.
+2. **The kind's own ending vocabulary** — `feed/work-over?`, which reads the
+   declared `:over` when there is one and the terminal states when there is
+   not. This is what catches the specimen: `task` declares
+   `:over {:field :status :accomplished #{"done"} :let-go #{"dropped"}}`, so a
+   done task is over however fresh its **sync** state reads. Reusing the feed's
+   own function rather than re-deriving it means this wall and the archive can
+   never disagree about whether a row is finished.
+3. **The clock**, for a kind with no ending to declare. An `event`'s machine is
+   the sync machine and is never terminal, so *is this still ahead of us* is a
+   fact about `ends_at` — or `starts_at` when nothing named an end — against
+   `(:now ctx)`. Only a real `Instant` is judged.
+4. **Anything else stands.** A row this house has not got, a kind with no
+   ending and no clock: the wall refuses what it can **read** is finished and
+   never guesses past that, the same rule `no-burial-without-a-diagnosis`
+   holds about exposure. A wall that refused on what it could not classify
+   would refuse honest bundles for a living.
+
+### The forks, decided
+
+- **Person is `current` *or* `observed`, which is wider than
+  `names-a-person`'s `in-our-lives`.** Those are different questions.
+  `names-a-person` refuses composing a Saturday around an unanswered guess
+  about who somebody is — a wall about **affirmation**. This wall is about
+  **closed books**, and a person nobody has answered yet is not a closed book.
+  Only `past` shuts it.
+
+- **The bundle's own value is subtracted, and citing it alone is refused.**
+  Same subtraction `not-a-twin` makes and the same reason: `value_id` is a
+  declared field, so listing it under `evidence` reads nothing the field did
+  not already say. The consequence is deliberate rather than incidental —
+  **serving a value is not the same act as reading the house** — and it cost
+  the fixtures: `stage-outcome!`, two application suites and six stagings in
+  the conformance pack all cited their own value and nothing else, and every
+  one now cites a row it read. That churn is the finding, not a side effect:
+  the shape the specimen wore was the shape every fixture wore.
+
+- **Refuse only when EVERY citation is closed**, never when one is. A bundle
+  built on an open task and the finished one that came before it is a bundle
+  reading the record properly, and demanding every citation be live would
+  forbid exactly the reasoning a composer is for.
+
+- **No floor, and this is not one.** It does not ask for two rows, or for a
+  particular kind of row. It asks that the record the bundle stands on not be
+  entirely shut.
+
+### `the-door-is-open-now` — the button has to be there
+
+An invoke piece names a row and a door. `the-row-it-names-is-there` already
+checked that the row exists and that the door leaves from its state; this adds
+the case that wall cannot see — the row **is** in a state the door leaves from
+and the door's own guards refuse it anyway.
+
+**It asks the engine rather than itself.** `render/action-availability` is new
+and public: the envelope's `actions` / `unavailable` partition asked one door
+at a time, with the same law resolution (`judgment/resolve-action`), the same
+guards in the same order, and the same no-admissible-input narration. The
+refusal quotes **that door's own** unavailable reason. The ns's standing rule —
+*a wall that tried to predict another kind's guards would be a second opinion
+about that kind's law, and it would be wrong first* — is kept rather than
+broken: the wall does not predict those guards, it runs them the way the
+household's screen does.
+
+- **A denier reading `:principal` is about the HAND, and the wall stands
+  down.** The probe can only ask as the principal it has — the composer —
+  while the tap will be a **member's**. `g/role`, `g/not-the-field` and the
+  actor-type walls all declare `:reads [:principal]`, so the distinction is a
+  declaration rather than a heuristic. Refusing a piece because the *composer*
+  could not tap it would refuse the household its own Saturday; a plan a member
+  may lawfully take is precisely what a composer is for, and
+  `outcome_piece.take` judges the hand again, as the member, in the
+  transaction.
+- **A hidden door is left alone.** Concealment means the action does not exist
+  for this principal, and narrating *it is hidden from you* would be the leak
+  the hide flag exists to prevent. `the-prepared-input-fits-the-door`'s
+  sentence about a door this kind does not have is the honest one.
+- **It still does not predict the tap.** The world moves between staging and
+  Saturday; `the-target-has-not-moved` and the target's own guards answer that.
+  This closes only the case where the door was **already** shut at staging,
+  which is not a race and never was.
+
+### What it deliberately does not catch, recorded rather than hidden
+
+**The specimen's own piece stages, and it should.** `task.prioritize` leaves
+from the sync states, and a done task is `fresh`; nothing in `task`'s
+declaration shuts its rank on a finished row, because the rank is hub-local and
+the lifecycle is data (`:over`) and the two never meet. The one guard that does
+refuse there is `role:ranker`, which reads `:principal` — the composer's hand,
+not the row. So the piece is admitted and the **bundle** is refused, which is
+where the specimen's fault actually lay: it composed from a closed book, and
+the piece was the symptom. That a finished task still offers *Done* and
+*Prioritize* on the household's own screen is a real gap, and the wall for it
+belongs on `task`'s declaration where every reader of that kind would see it —
+**waymark-tgy**.
+
+### Where the law is proved
+
+- **`workqueue10.outcome-test` § 23**, five deftests over the real ring
+  handler: the specimen re-run and refused, naming the row and `is done`; a
+  finished row beside an open one admitted; a past event refused by its own
+  clock; a row this house has not got admitted, which is the never-guess arm
+  asserted rather than described; the value-only citation refused with
+  *value_id already said that*; a piece against a door the **row** has shut
+  (`make_it_so` on a pieceless bundle) refused in that door's own words and
+  admitted the moment the bundle has a piece; a piece against an open door and
+  a create piece both untouched; and the specimen's `prioritize` piece staging,
+  with the reason written down.
+- **No scenario names either wall**, for `not-a-twin`'s reason exactly: both
+  questions are about **another row**, and a scenario holds one literal input
+  over an empty store, so every scenario reaching these doors is an allow.
+  `check-queue` reads outcome as 16 refusing guards and outcome_piece as 11.
+- **The conformance pack was staging what this now refuses**, and it was fixed
+  rather than the wall narrowed: six `feed-*-violations` stagings cited
+  `[vself]` and nothing else. `packs.clj/a-row-read` mints one address per
+  staging — a collection this house serves, a row it has not got — which is
+  what `not-a-twin` (no two bundles sharing a row) and this wall (something
+  still open) want at the same time.
+
+- **Files:** `waymark10/src/waymark10/server/render.clj`
+  (`action-availability`, public); `workqueue10/src/workqueue10/resources/outcome.clj`
+  (`composes-from-what-stands`, `the-door-is-open-now`, `still-with-us`,
+  `standing-words`, `ending-word`, `past-word`, `closed-word`, both
+  create-guard lists, the ns docstring's two sections);
+  `waymark10/src/waymark10/test/packs.clj` (`a-row-read` and six stagings);
+  `workqueue10/test/workqueue10/outcome_test.clj` (§ 23, `a-row-read`);
+  `workqueue10/test/workqueue10/value_test.clj`,
+  `workqueue10/test/workqueue10/person_test.clj` (their stagings);
+  `SITTING.md`; this file.

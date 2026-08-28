@@ -117,6 +117,43 @@
   cap waymark-1uv.3 removed rather than the dedupe law 1ag argued
   for.
 
+  ── AND NOT COMPOSED OUT OF A CLOSED BOOK (waymark-euj) ──
+
+  A sitting staged a Saturday that was already over — a goal about
+  August 23rd, staged on the 28th, citing one mirrored task whose
+  status said `done`, with a piece that prioritized that finished
+  task. Every wall above passed it, because each was asking a
+  different question: the address was real, the value was held, and
+  nothing standing cited that task PRECISELY BECAUSE it was finished.
+
+  `composes-from-what-stands` asks the missing one: is anything the
+  composer read still open? At least one cited row must STAND, and
+  what standing means is read off the kind rather than listed here —
+  the value and person and outcome vocabularies this file already
+  keeps, then `feed/work-over?` (the kind's own `:over`, or its
+  terminal states), then the clock for a kind with no ending to
+  declare. A row it cannot classify STANDS: the wall never guesses
+  past what it can read. The refusal names every closed row and the
+  word it is closed with, so one round trip fixes the bundle.
+
+  The bundle's own value is subtracted first, as `not-a-twin`
+  subtracts it, which means citing the value ALONE does not satisfy
+  this wall. Serving a value is not the same act as reading the
+  house.
+
+  ── AND STAGED BEHIND A BUTTON THAT IS THERE (waymark-euj) ──
+
+  The same specimen's piece named a real row and a real door, in a
+  state that door leaves from — and `prioritize` on a task the house
+  finished is a tap nobody would ever make. `the-door-is-open-now`
+  asks the engine, not itself: `render/action-availability` is the
+  envelope's own `actions`/`unavailable` partition asked one door at
+  a time, so the wall admits exactly what the household's screen would
+  render and quotes the door's own unavailable reason when it would
+  not. That is the ns's rule about second opinions kept rather than
+  broken — the wall does not predict another kind's guards, it runs
+  them the way the screen does.
+
   ── THE TAP IS THE WRITE, AND IT IS THE MEMBER'S OWN ──
 
   `ctx :invoke` and `ctx :create` carry the OUTER principal (the
@@ -291,6 +328,13 @@
             ;; spells it — `recipe_proposal/apply-the-order`'s own
             ;; reach, one kind over
             [waymark10.server.invoke :as inv]
+            ;; how the ENGINE judges whether a door is open on a row —
+            ;; the envelope's own `actions`/`unavailable` partition,
+            ;; asked one door at a time (waymark-euj). A piece is
+            ;; staged behind a button, so the wall that checks the
+            ;; button reads the same code the screen does rather than
+            ;; forming a second opinion about another kind's guards.
+            [waymark10.server.render :as render]
             [waymark10.types :as t]
             [workqueue10.resources.tickler :as tickler])
   (:import (java.time Instant)))
@@ -947,6 +991,162 @@
                               :state (:state hit)
                               :shared (g/listed (:shared hit))}}))))))))
 
+;; ── the closed-book wall (waymark-euj) ──────────────────────────────
+;;
+;; A GEMINI SITTING ON 2026-08-28 STAGED A SATURDAY THAT WAS ALREADY
+;; OVER. The bundle's goal was "Sacrament talk drafted and ready for
+;; August 23" — staged on the 28th — and the only row it cited was a
+;; mirrored task whose `status` said `done`, with a piece that
+;; prioritized that finished task. Every door here passed it:
+;; `cites-what-it-read` (the address is real), `names-a-value` (the
+;; value is held), `not-a-twin` (nothing standing cites that task —
+;; BECAUSE it is finished). The journal said, verbatim, "to satisfy
+;; the floor requirement, I staged an outcome". There is no floor.
+;;
+;; So this wall asks the one question none of the others did: is
+;; anything the composer read STILL OPEN? A week cannot be planned out
+;; of a finished record, and a bundle whose every citation is closed
+;; is not a plan — it is a composer filling in a form from the
+;; archive.
+;;
+;; WHAT "STANDS" MEANS IS READ OFF THE KIND, never guessed. In order:
+;;
+;; 1. THE KINDS THAT SAY IT HERE. Three vocabularies already stand in
+;;    this file, written for other walls and true for this one:
+;;    `held-states` (a value this house is holding), `standing-states`
+;;    (an outcome on the fridge or said yes to — accepted is terminal
+;;    to the MACHINE and live to the household, which is exactly why
+;;    the machine's word is the wrong one here), and, for a person,
+;;    "not past". That last is deliberately WIDER than
+;;    `in-our-lives`: composing a Saturday around an unanswered guess
+;;    about who somebody is is `names-a-person`'s refusal, and this
+;;    wall is about closed books rather than about affirmation. An
+;;    observed person is a book nobody has shut.
+;; 2. THE KIND'S OWN ENDING VOCABULARY, for everything else:
+;;    `feed/work-over?`, which reads the kind's declared `:over` when
+;;    it has one and its terminal states when it does not. That is the
+;;    one place the household's word for "finished" lives, and reusing
+;;    it means this wall and the archive can never disagree about a
+;;    row. It is what catches the specimen: task declares
+;;    `:over {:field :status :accomplished #{"done"} :let-go
+;;    #{"dropped"}}`, so a done task is over however fresh its sync
+;;    state reads.
+;; 3. THE CLOCK, for a row whose kind has no ending to declare. An
+;;    event's machine is the sync machine and it is never terminal, so
+;;    "is this still ahead of us" is a fact about `ends_at` (or
+;;    `starts_at` when nothing named an end) against `(:now ctx)`, and
+;;    only a real instant is judged.
+;; 4. AND ANYTHING ELSE STANDS. A row this house has not got, a kind
+;;    with no ending and no clock — the wall never guesses past what
+;;    it can read, the same rule `no-burial-without-a-diagnosis` holds
+;;    about exposure. A wall that refused on what it could not classify
+;;    would refuse honest bundles for a living.
+;;
+;; The bundle's OWN value address is subtracted first, exactly as
+;; `not-a-twin` subtracts it and for the same reason: `value_id` is a
+;; declared field, so an outcome that also lists its value under
+;; `evidence` has read nothing the field did not already say. The
+;; consequence is deliberate — citing the value ALONE does not satisfy
+;; this wall, because serving a value is not the same act as reading
+;; the house.
+
+(def ^:private still-with-us
+  "The person states that are an OPEN book. Wider than `in-our-lives`
+  on purpose: `names-a-person` refuses an `observed` companion because
+  a week may not be spent on a guess about who somebody is, and that
+  is a wall about affirmation. This one is about endings — a person
+  nobody has answered yet is not a closed book, and `past` is."
+  #{"current" "observed"})
+
+(def ^:private standing-words
+  "The kinds whose 'still open' this file already says out loud, in
+  the vocabularies other walls here are written against. Everything
+  else asks its own declaration (`feed/work-over?`) and then the
+  clock."
+  {:value  held-states
+   :person still-with-us
+   :outcome (set standing-states)})
+
+(defn- ending-word
+  "The word a finished row is finished WITH, read the way the feed
+  reads it: the value of the kind's declared `:over` field when it
+  declared one (a mirror's lifecycle is data), the machine state
+  otherwise."
+  [rd row]
+  (let [f (:field (feed/over-vocabulary rd))]
+    (if f
+      (str (get-in row [:data f]))
+      (name (:state row)))))
+
+(defn- past-word
+  "What a row says about its own clock when the clock has run out, or
+  nil. `ends_at` is the fact; `starts_at` answers for a row that
+  named no end. Only a real instant is judged — a kind that spells
+  its time some other way is one this wall cannot classify, and an
+  unclassifiable row stands."
+  [row now]
+  (let [inst (fn [k] (let [v (get-in row [:data k])]
+                       (when (instance? Instant v) v)))
+        ends (inst :ends_at)
+        starts (inst :starts_at)]
+    (when (instance? Instant now)
+      (cond
+        (and ends (.isBefore ^Instant ends ^Instant now))
+        (str "ended " ends)
+
+        (and (nil? ends) starts (.isBefore ^Instant starts ^Instant now))
+        (str "began " starts " and named no end")))))
+
+(defn- closed-word
+  "How this address is FINISHED — a short phrase for the refusal's
+  sentence — or nil when the row still stands, which includes every
+  row this wall cannot honestly classify."
+  [rdef-of read' now href]
+  (when-some [{:keys [plural id]} (row-address href)]
+    (when-some [rd (rdef-of plural)]
+      (when-some [row (read' (:kind rd) id)]
+        (if-some [open (standing-words (:kind rd))]
+          (when-not (open (name (:state row)))
+            (str "is " (name (:state row))))
+          (if (feed/work-over? rd row)
+            (str "is " (ending-word rd row))
+            (past-word row now)))))))
+
+(defguardfn composes-from-what-stands
+  {:judges [:evidence]
+   :reads [:storage]
+   :vars [:closed]
+   :open "An outcome is composed out of a book that is still open: at least one row it cites is still standing — a task nobody has finished, an event still ahead, a person this house holds, a value it still keeps, a finding nobody has answered. Its own value does not count: that is what the bundle SERVES, and value_id already says it."
+   :explain "Nothing this bundle cites is still standing: {closed} A week cannot be planned out of a finished record — read what is still open (/api/tasks?status=open, the calendar ahead of today, the value's own screen) and compose from a row the house still has in front of it."}
+  [_row inp ctx]
+  (let [read' (:read ctx)
+        rdef-of (:rdef-of ctx)
+        now (:now ctx)
+        deny (fn [closed] (t/deny {:vars {:closed closed}}))]
+    (cond
+      ;; the storage-free probe advertises optimistically, exactly as
+      ;; `cites-what-it-read` and `not-a-twin` do
+      (or (nil? read') (nil? rdef-of)) (t/allow)
+
+      :else
+      (let [mine (sort (read-rows (:evidence inp)
+                                  (own-value-address (:value_id inp))))]
+        (cond
+          ;; NOTHING BUT THE VALUE (or nothing at all — that one is
+          ;; `cites-what-it-read`'s sentence and it speaks first).
+          ;; Serving a value is not reading the house.
+          (empty? mine)
+          (deny (str "it cites nothing but the value it serves, and"
+                     " value_id already said that."))
+
+          :else
+          (let [words (mapv (fn [href] [href (closed-word rdef-of read' now href)])
+                            mine)]
+            (if (some (comp nil? second) words)
+              (t/allow)
+              (deny (str (str/join "; " (map (fn [[h w]] (str h " " w)) words))
+                         ".")))))))))
+
 (defn- cited-request
   "The composition request an outcome cites, trimmed, or nil — the one
   spelling the wall and the staging hook both read (waymark-jfv.20).
@@ -1191,6 +1391,87 @@
                      " moved past its door is one nobody can answer."))
 
           :else (t/allow))))))
+
+(defguardfn the-door-is-open-now
+  {:reads [:storage]
+   :vars [:door :reason]
+   :open "An invoke piece is staged behind a button, so the button has to be there: the target action is judged AVAILABLE on that row now, by the same code the row's own envelope uses — its guards, in their own order, over the real row. A door shut against YOUR hand is not shut — a member taps, not you — but one the row's own law shuts is. Read the target's envelope and stage against a door its actions actually offer."
+   :explain "{door} is not open on that row: {reason} A piece behind a shut door is one nobody could ever tap, so it is refused at staging rather than left on the crown to fail."}
+  ;; NO :judges, for `the-row-it-names-is-there`'s reason exactly: the
+  ;; subject is a row in another kind's collection, not a field of
+  ;; this door's input.
+  ;;
+  ;; WHY IT IS NOT A SECOND OPINION (waymark-euj). The ns docstring
+  ;; says, and means, that a wall predicting another kind's guards
+  ;; would be wrong first — so this one does not predict them. It
+  ;; calls `render/action-availability`, which IS the envelope's
+  ;; partition asked one door at a time: same guard order, same
+  ;; law resolution, same empty-admission narration, and the refusal
+  ;; quotes THAT DOOR'S OWN unavailable reason rather than a sentence
+  ;; written here. If the household's screen would render the button,
+  ;; this admits the piece; if the screen would print a reason instead,
+  ;; that reason is what the composer reads.
+  ;;
+  ;; WHAT IT STILL DOES NOT DO IS PREDICT THE TAP. The world moves
+  ;; between staging and Saturday, and the target's own guards judge
+  ;; again inside the transaction with `the-target-has-not-moved`
+  ;; beside them. This closes only the case where the door was ALREADY
+  ;; shut at staging — the specimen's `prioritize` on a finished task —
+  ;; which is not a race and never was.
+  ;;
+  ;; THE PROBE'S CTX IS THE RENDER PROBE'S, built the way
+  ;; `render/envelope` builds it: the composer's own principal, this
+  ;; write's clock and services, the read hooks, and `:mode :probe`.
+  ;; A create guard's ctx already carries no pen (`invoke/guard-ctx`
+  ;; strips :invoke/:create), and `:within` is dropped because the
+  ;; door being probed was not opened by anybody — nobody is tapping
+  ;; yet, and a guard reading `:within` should hear the truth.
+  ;;
+  ;; AND THE HAND IS NOT THE COMPOSER'S, WHICH IS THE ONE CORRECTION
+  ;; THIS WALL OWES ITSELF. The probe can only ask as the principal it
+  ;; has — the composer — while the tap will be a MEMBER's. So a
+  ;; denier that declares `:reads [:principal]` is refusing THIS HAND
+  ;; rather than shutting the door: `g/role`, `g/not-the-field`, the
+  ;; four-eyes and actor-type walls. This wall stands down for those,
+  ;; every one of them, because refusing a piece because the composer
+  ;; could not tap it would refuse the household its own Saturday —
+  ;; a plan a member may lawfully take is precisely what a composer is
+  ;; for. `outcome_piece.take` runs the target's guards again, as the
+  ;; member, and THAT is where a hand is judged.
+  ;;
+  ;; A HIDDEN door is left to `the-prepared-input-fits-the-door`, whose
+  ;; sentence about a door this kind does not have is the honest one:
+  ;; concealment means the action does not exist for this principal,
+  ;; and narrating "it is hidden from you" would be the leak the hide
+  ;; flag exists to prevent.
+  [_row inp ctx]
+  (let [read' (:read ctx)
+        rdef-of (:rdef-of ctx)
+        k (some-> (:target_kind inp) str str/trim not-empty)
+        tid (some-> (:target_id inp) str str/trim not-empty)
+        action (some-> (:target_action inp) str str/trim not-empty)]
+    (if (or (not= :invoke (form-of inp)) (nil? read') (nil? rdef-of)
+            (nil? k) (nil? tid) (nil? action))
+      (t/allow)
+      (let [rd (rdef-of k)
+            row (when rd (read' (:kind rd) tid))
+            probe (t/ctx {:principal (:principal ctx)
+                          :now (:now ctx)
+                          :services (:services ctx)
+                          :mode :probe
+                          :read read'
+                          :find (:find ctx)})
+            verdict (when row (render/action-availability rd action row probe))
+            about-the-hand? (boolean
+                             (some #{:principal}
+                                   (:reads (:denier verdict))))]
+        (if (and (= :unavailable (:status verdict)) (not about-the-hand?))
+          (t/deny {:vars {:door (str "/api/" (:plural rd) "/" tid " · " action)
+                          :reason (str (:reason verdict))}})
+          ;; no row, no such door, hidden, open, or shut against the
+          ;; composer's own hand: every one of those is another wall's
+          ;; sentence, another principal's question, or an admission
+          (t/allow))))))
 
 (defguardfn the-target-has-not-moved
   {:reads [:storage]
@@ -2331,10 +2612,17 @@
    ;; the pull is this wall's own exemption — a cited request means a
    ;; person asked, and a person's ask is never refused for resembling
    ;; something the house already holds.
+   ;; …and THE CLOSED BOOK (waymark-euj) with the citation walls it
+   ;; belongs to: `cites-what-it-read` judges the SHAPE of what was
+   ;; read, this judges whether any of it is still open, and
+   ;; `not-a-twin` judges whether somebody already composed it. Shape
+   ;; first, then the world — so a composer citing a malformed address
+   ;; hears about the address before it hears about the archive.
    :create-guards [cites-what-it-read
                    names-a-value
                    names-a-person
                    routes-through-something-loved
+                   composes-from-what-stands
                    no-burial-without-a-diagnosis
                    a-recomposition-waits-its-turn
                    not-a-twin
@@ -2567,9 +2855,17 @@
    ;; `the-door-carries-its-own-effect` sits with the shape walls
    ;; because what it reads is a fact about this ENGINE's declarations
    ;; and not about any row.
+   ;; `the-door-is-open-now` stands behind `the-row-it-names-is-there`
+   ;; and not in front of it (waymark-euj): out-of-state is the older
+   ;; wall's sentence, and it is the better one — it names the states
+   ;; the door leaves from, which is what a composer needs to fix the
+   ;; piece. What this adds is the case that wall cannot see: the row
+   ;; IS in a state the door leaves from, and the door's own guards
+   ;; refuse it anyway.
    :create-guards [the-prepared-input-fits-the-door
                    the-door-carries-its-own-effect
                    the-row-it-names-is-there
+                   the-door-is-open-now
                    the-outcome-is-still-open
                    a-bundle-is-small]
    :actions

@@ -49,6 +49,14 @@
     recomposition of a declined prior re-citing exactly what the prior
     cited; and two bundles serving one value both admitted, because a
     row's own value is what it serves rather than something it read.
+  - the closed book (waymark-euj, § 23): a bundle whose every citation
+    is a finished row refused by name and by the WORD each row is
+    finished with, one standing citation enough to admit it, a past
+    event judged by its own clock, the value-only citation refused as
+    no reading at all — and, on the piece, a door the ROW has shut
+    refused at staging in that door's own words while a door shut only
+    against the composer's HAND stages, because a member is the one
+    who taps.
 
   THE COMPOSER HERE IS A PERSON, and deliberately. The four-eyes wall
   is `g/not-the-field :composed_by` — it compares principal IDS, so a
@@ -192,6 +200,24 @@
 
 (defn- vid [v] (last (str/split (str (:self v)) #"/")))
 
+(defn- a-row-read
+  "One address a bundle says it READ, minted fresh per staging
+  (waymark-euj). Two walls now care what an evidence list holds and
+  they want opposite things from a fixture: `not-a-twin` wants no two
+  bundles sharing a row, and `composes-from-what-stands` wants at
+  least one row that is not finished. A fresh address satisfies both —
+  the collection is one this house serves (which is all
+  `cites-what-it-read` judges) and the row is not there, which is the
+  arm the standing wall deliberately leaves open: it never guesses
+  past what it can read, so a row it cannot classify stands.
+
+  A bundle's OWN value does not do this job, and that is the wall's
+  point — value_id already says what the bundle serves, so citing it
+  under `evidence` is not a reading."
+  []
+  (str "/api/tasks/01HZQ7READ"
+       (str/upper-case (subs (str (random-uuid)) 0 8))))
+
 (defn- stage-outcome!
   ([who value-id] (stage-outcome! who value-id {}))
   ([who value-id extra]
@@ -199,7 +225,7 @@
         (merge {:goal "One Saturday afternoon in the shop with Jack, and a finished box"
                 :value_id value-id
                 :routing "It runs through the shop, which you said you love — the expensive part is already paid."
-                :evidence [(str "/api/values/" value-id)]}
+                :evidence [(str "/api/values/" value-id) (a-row-read)]}
                extra)
         (human who))))
 
@@ -1167,7 +1193,8 @@
                         {:goal "One Saturday in the shop, staged by the judge itself"
                          :value_id (vid v)
                          :routing "It runs through the shop, which you said you love."
-                         :evidence [(str "/api/values/" (vid v))]}
+                         :evidence [(str "/api/values/" (vid v))
+                                    (a-row-read)]}
                         cairn)
             a (id-of a-resp)
             b (id-of (stage-outcome! "composer-judge-b" (vid v)))
@@ -1609,7 +1636,8 @@
         stage (fn [hs] (req :post "/api/outcomes"
                             {:goal "A leashed Saturday" :value_id (vid v)
                              :routing "It runs through the shop."
-                             :evidence [(str "/api/values/" (vid v))]}
+                             :evidence [(str "/api/values/" (vid v))
+                                        (a-row-read)]}
                             hs))
         b (id-of (stage blind))
         s' (id-of (stage sighted))]
@@ -1764,7 +1792,8 @@
                        :value_id (vid v)
                        :routing "It runs through cooking with a podcast on, which you said you love."
                        :routes_through "cooking with a podcast on"
-                       :evidence [(str "/api/values/" (vid v))]}
+                       :evidence [(str "/api/values/" (vid v))
+                                  (a-row-read)]}
                       (human composer)))
         breakfast (id-of (stage-piece! composer o "Pancakes, podcast on"
                                        "task" {:title "Make Sunday pancakes"}))
@@ -1973,3 +2002,168 @@
       (is (= 201 (:status i)) (detail i))
       (testing "the recomposition re-cites exactly what the prior cited and is admitted — a declined prior does not STAND, so there is nothing here to twin, and no exemption had to be written for it"
         (is (= 201 (:status again)) (detail again))))))
+
+;; ── 23. composed from what stands (waymark-euj) ──────────────────────
+;;
+;; A sitting on 2026-08-28 staged "Sacrament talk drafted and ready for
+;; August 23" — five days after the 23rd — citing ONE row: a mirrored
+;; task whose status said `done`. Its journal said, verbatim, "to
+;; satisfy the floor requirement, I staged an outcome". There is no
+;; floor. Every wall above it passed: the address was real, the value
+;; was held, and no standing bundle cited that task precisely BECAUSE
+;; it was finished.
+;;
+;; Two walls land here, and only a live engine can judge either — the
+;; whole question of both is what ANOTHER row says about itself.
+;;
+;; `composes-from-what-stands` asks whether anything the composer read
+;; is still open, reading each kind's own word for "finished": task's
+;; declared `:over` (status done/dropped), the clock for an event, the
+;; state vocabularies this file already keeps for a value, a person and
+;; an outcome. A row it cannot classify STANDS — which is what makes
+;; every other deftest in this namespace still legal, and it is the
+;; deliberate half: the wall never guesses past what it can read.
+;;
+;; `the-door-is-open-now` asks the ENGINE whether the button a piece is
+;; staged behind is there, through the same `render/action-availability`
+;; the envelope's own actions/unavailable partition is built from — and
+;; stands down when the refusal is about the composer's HAND, because
+;; the hand at the tap is a member's.
+
+(defn- done-task! [who title]
+  (let [t (make-task! who title)]
+    (is (= 200 (:status (invoke! "tasks" t :complete nil (human who))))
+        "the fixture task did not complete")
+    t))
+
+(defn- past-event! [who title]
+  (let [ends (.minusSeconds (Instant/now) (long (* 3600 24)))
+        starts (.minusSeconds ends 3600)]
+    (id-of (req :post "/api/events"
+                {:title title :all_day false
+                 :starts_at (str starts) :ends_at (str ends)}
+                (human who)))))
+
+(deftest a-bundle-whose-every-citation-is-finished-is-refused-by-name
+  (let [member "colton-stands"
+        composer "composer-stands"
+        v (declare-value! member "a week that is still ahead" ["the shop"])
+        done (done-task! member "Draft the talk for the 23rd")
+        open' (make-task! member "Cut the box stock to length")
+        done-href (str "/api/tasks/" done)]
+    (testing "THE SPECIMEN: the only row it read is a task the house finished, and the refusal names the row and the word it is finished with"
+      (let [r (stage-outcome! composer (vid v) {:evidence [done-href]})]
+        (is (= 409 (:status r)) (detail r))
+        (is (= "composes-from-what-stands" (guard-of r)))
+        (is (str/includes? (detail r) done-href))
+        (is (str/includes? (detail r) "is done"))))
+    (testing "ONE standing row is enough — this is a wall on composing out of a closed book, never a demand that every citation be live"
+      (is (= 201 (:status (stage-outcome! composer (vid v)
+                                          {:evidence [done-href
+                                                      (str "/api/tasks/" open')]})))
+          "a finished row beside an open one is reading, not a closed book"))
+    (testing "an event is judged by its own clock rather than by a machine state it does not have"
+      (let [past (past-event! member "The rehearsal, last night")
+            r (stage-outcome! composer (vid v)
+                              {:evidence [(str "/api/events/" past)]})]
+        (is (= 409 (:status r)) (detail r))
+        (is (= "composes-from-what-stands" (guard-of r)))
+        (is (str/includes? (detail r) "ended"))))
+    (testing "and a row this house has not got STANDS: the wall refuses what it can read is finished, and never guesses past that"
+      (is (= 201 (:status (stage-outcome! composer (vid v))))))))
+
+(deftest serving-a-value-is-not-the-same-act-as-reading-the-house
+  (let [v (declare-value! "colton-onlyvalue"
+                          "a value with nothing read behind it"
+                          ["the shop"])]
+    (testing "the bundle's own value is subtracted first, exactly as not-a-twin subtracts it — so citing it alone is not a reading, and the sentence says which"
+      (let [r (stage-outcome! "composer-onlyvalue" (vid v)
+                              {:evidence [(str "/api/values/" (vid v))]})]
+        (is (= 409 (:status r)) (detail r))
+        (is (= "composes-from-what-stands" (guard-of r)))
+        (is (str/includes? (detail r) "value_id already said that"))))))
+
+(deftest a-piece-behind-a-door-the-row-has-shut-is-refused-at-staging
+  ;; `make_it_so` is the door this file can shut without touching
+  ;; anybody's roles: an outcome with no pieces still on offer would
+  ;; be a tap that landed nothing while the row read accepted, and
+  ;; `something-is-still-on-offer` says so. The pieceless bundle is
+  ;; staged by SOMEBODY ELSE, so the four-eyes wall in front of that
+  ;; door never fires — this deftest is about a door the ROW has shut,
+  ;; and the hand is the next one's subject.
+  (let [member "colton-shut"
+        composer "composer-shut"
+        v (declare-value! member "a bundle with nothing left to take"
+                          ["the shop"])
+        pieceless (id-of (stage-outcome! member (vid v)))
+        o (id-of (stage-outcome! composer (vid v)))]
+    (testing "the piece is refused at staging, and the sentence is the DOOR'S OWN — not one written at this wall"
+      (let [r (stage-invoke-piece! composer o
+                                   "Take the bundle he has been sitting on"
+                                   "outcome" pieceless "make_it_so" {})]
+        (is (= 409 (:status r)) (detail r))
+        (is (= "the-door-is-open-now" (guard-of r)))
+        (is (str/includes? (detail r) (str "/api/outcomes/" pieceless)))
+        (is (str/includes? (detail r) "nothing left for Make it so to do"))))
+    (testing "give that bundle a piece and the same staging is admitted — the wall reads the row NOW, not a rule about the kind"
+      (is (= 201 (:status (stage-piece! member pieceless "Cut the stock"
+                                        "task"
+                                        {:title "Cut the stock (shut door)"}))))
+      (is (= 201 (:status (stage-invoke-piece!
+                           composer o
+                           "Take the bundle he has been sitting on"
+                           "outcome" pieceless "make_it_so" {})))))))
+
+(deftest an-open-door-stages-and-a-create-piece-is-never-asked
+  (let [member "colton-open-door"
+        composer "composer-open-door"
+        v (declare-value! member "an open door" ["the shop"])
+        o (id-of (stage-outcome! composer (vid v)))
+        t (make-task! member "Call the lumber yard about the maple")]
+    (testing "a piece against a door that IS open stages"
+      (is (= 201 (:status (stage-invoke-piece! composer o "Mark the call made"
+                                               "task" t "complete" {})))))
+    (testing "and a create piece has no target row at all, so this wall never asks"
+      (let [r (stage-piece! composer o "Buy the sandpaper" "task"
+                            {:title "Buy 120-grit sandpaper"})]
+        (is (= 201 (:status r)))
+        (is (= "create" (:form (fields r))))
+        (is (nil? (:target_id (fields r))))))))
+
+(deftest the-specimens-piece-is-not-what-this-wall-catches-and-the-record-says-so
+  ;; AN HONEST RECORD OF A CLAIM THIS WALL DOES NOT MAKE. The specimen
+  ;; staged a piece that PRIORITIZED the finished task, and the bead
+  ;; expected `the-door-is-open-now` to refuse it. It does not, and
+  ;; both halves of the reason are declarations rather than opinions:
+  ;;
+  ;; 1. `task.prioritize` leaves from the SYNC states, and a done task
+  ;;    is `fresh`. Nothing in task's declaration shuts its rank on a
+  ;;    finished row — the rank is hub-local and the lifecycle is data
+  ;;    (`:over {:field :status …}`), and the two never meet. If the
+  ;;    household wants that door shut, the wall belongs on task's own
+  ;;    declaration, where every reader of that kind would see it
+  ;;    (waymark-tgy).
+  ;; 2. The one guard that DOES refuse here is `role:ranker`, and it
+  ;;    declares `:reads [:principal]` — it is about the composer's
+  ;;    hand, and the hand at the tap is a member's. A wall that
+  ;;    refused a piece because the COMPOSER could not tap it would
+  ;;    refuse the household its own Saturday.
+  ;;
+  ;; So the specimen is caught one level up, by `composes-from-what-
+  ;; stands` on the BUNDLE — which is where it should be caught: the
+  ;; bug was composing from a closed book, and the piece was only the
+  ;; symptom. Recorded here rather than left as a surprise.
+  (let [member "colton-specimen"
+        composer "composer-specimen"
+        v (declare-value! member "the specimen, re-run" ["the shop"])
+        done (done-task! member "Sacrament talk, drafted (already done)")
+        bundle (stage-outcome! composer (vid v)
+                               {:evidence [(str "/api/tasks/" done)]})]
+    (testing "the BUNDLE is refused, which is the specimen's actual fault"
+      (is (= 409 (:status bundle)))
+      (is (= "composes-from-what-stands" (guard-of bundle))))
+    (testing "and a piece prioritizing that same finished task still stages — the door is genuinely open, and saying otherwise would be a second opinion about task's own law"
+      (let [o (id-of (stage-outcome! composer (vid v)))
+            r (stage-invoke-piece! composer o "Rank the finished talk"
+                                   "task" done "prioritize" {:priority 3})]
+        (is (= 201 (:status r)) (detail r))))))

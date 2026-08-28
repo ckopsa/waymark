@@ -4200,6 +4200,25 @@
 ;; the population retires it by construction and the engine it hands
 ;; on is the engine it found.
 
+(defn- a-row-read
+  "One address a staged bundle says it READ, minted fresh per staging
+  (waymark-euj).
+
+  A bundle's own value is what it SERVES, and `value_id` already says
+  so — `composes-from-what-stands` subtracts that address before
+  asking whether anything the composer READ is still standing, so an
+  obligation citing only `vself` would be refused at the door, and
+  rightly: it read nothing. What this hands it is an address in a
+  collection this house serves (all `cites-what-it-read` judges)
+  naming a row this house has not got, which is the arm the standing
+  wall deliberately leaves open — it never guesses past what it can
+  read, so a row it cannot classify stands. Fresh per call, because
+  `not-a-twin` refuses two bundles sharing a row and these
+  obligations stage several against one value."
+  [ctx]
+  (str "/api/" (:plural (rdef ctx :value)) "/read-"
+       (subs (str (random-uuid)) 0 12)))
+
 (defn- piece-target
   "The kind a piece will become, read off the declaration rather than
   named here — an obligation that spelled `task` would be a second
@@ -4281,7 +4300,7 @@
                                        " loves — so the expensive part,"
                                        " getting started, is already paid.")
                          :routes_through loved
-                         :evidence [vself]}))
+                         :evidence [vself (a-row-read ctx)]}))
         oid (some-> (:doc staged) :self id-of)
         ;; 3. THE PIECES. Three, so the partial accept is a real shape
         ;; rather than a story: one declined, one taken by its own tap,
@@ -4480,7 +4499,7 @@
                            :routing (str "You asked, so the hard part —"
                                          " deciding whether to want it —"
                                          " is already paid.")
-                           :evidence [vself]
+                           :evidence [vself (a-row-read ctx)]
                            :request_id rid}))
         aoid (some-> (:doc answered) :self id-of)
         request' (when (and rid (= 201 (:status answered)))
@@ -4495,7 +4514,7 @@
                        {:goal (str "The same request, cited again " tag)
                         :value_id vid
                         :routing "Once was the deal."
-                        :evidence [vself]
+                        :evidence [vself (a-row-read ctx)]
                         :request_id rid}))
         ;; ── the crown's rank (waymark-1uv.2) ──────────────────────
         ;; The cited bundle and an UNCITED one, both carded — two
@@ -4511,7 +4530,7 @@
                         :routing (str "It runs through " loved " too, and"
                                       " nobody asked.")
                         :routes_through loved
-                        :evidence [vself]}))
+                        :evidence [vself (a-row-read ctx)]}))
         poid (some-> (:doc plain) :self id-of)
         ranked-piece (fn [id n]
                        (when (and id target)
@@ -5248,7 +5267,7 @@
                                        " house wrote down as something it"
                                        " loves.")
                          :routes_through loved
-                         :evidence [vself]}))
+                         :evidence [vself (a-row-read ctx)]}))
         oid (some-> (:doc staged) :self id-of)
         piece (fn [n]
                 (when (and oid target)
@@ -5876,7 +5895,7 @@
                                               ", which this house wrote down"
                                               " as something it loves.")
                                 :routes_through loved
-                                :evidence [vself]}
+                                :evidence [vself (a-row-read ctx)]}
                                extra)
                         leashed))
         staged (when (and vid leashed)
