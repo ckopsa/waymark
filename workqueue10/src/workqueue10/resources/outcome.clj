@@ -98,6 +98,25 @@
   of: the wall reads what the record holds and never guesses past it.
   `GET /api/-/diagnosis` is the document this wall points at.
 
+  ── NOT A TWIN (waymark-8gc) ──
+
+  One standing bundle per evidence row. `not-a-twin` reads the
+  offered and accepted outcomes of EVERY composer and refuses a
+  candidate that cites a row one of them already cites, naming that
+  outcome's address and the shared address in the sentence. It is
+  exact address overlap and nothing cleverer — no goal-text
+  similarity, which is a judgment a door cannot make honestly.
+
+  Two things it deliberately does not touch. A candidate carrying a
+  `request_id` passes whatever it cites: a member asked for it by
+  hand, and a person's pull is not refused for resembling something
+  the house already holds. And an outcome's OWN value address is
+  subtracted from both sides before the sets meet, because
+  `value_id` is a declared field — treating it as a shared reading
+  would make this wall one standing outcome per value, which is the
+  cap waymark-1uv.3 removed rather than the dedupe law 1ag argued
+  for.
+
   ── THE TAP IS THE WRITE, AND IT IS THE MEMBER'S OWN ──
 
   `ctx :invoke` and `ctx :create` carry the OUTER principal (the
@@ -802,6 +821,129 @@
                      " declined yet is asking the same question twice."))
 
           :else (t/allow))))))
+
+;; ── the anti-twin wall (waymark-8gc) ────────────────────────────────
+;;
+;; THE LAW WAS PROSE AND IS NOW A DOOR. SITTING.md has said it since
+;; the composer had a manifest — *never a twin of a standing outcome;
+;; a candidate that cites the same evidence row as one already
+;; offered or accepted is a twin, and the rank cannot tell twins
+;; apart* — and nothing enforced it: a sitting on 2026-08-27 staged
+;; duplicates and every one was admitted, because no wall here had
+;; ever looked at what ANOTHER outcome cites.
+;;
+;; It is NOT a cap, and it does not reopen what waymark-1uv's law 1
+;; settled (*the machine may write without limit*). A cap refuses the
+;; Nth row because it is the Nth; this refuses a row because the
+;; house already holds one built on the same reading, whoever wrote
+;; it. A duplicate is not indexing — it is one index written twice,
+;; and the rank cannot choose between two cards that say the same
+;; thing. waymark-1ag's sentence, in its own words: dedupe is a law,
+;; not a cap.
+
+(def ^:private standing-states
+  "The two states an outcome STANDS in — on the fridge waiting for an
+  answer, and answered yes. Those are the ones a twin would sit
+  beside. A declined or expired outcome is answered and gone, which
+  is why the recomposition case needs no exemption written for it: a
+  recomposition re-cites its declined prior's evidence on purpose,
+  and the prior is not in this list."
+  ["offered" "accepted"])
+
+(def ^:private standing-page
+  "How deep the wall reads per standing state. A household's fridge
+  holds tens, not thousands; a bounded read that missed the far tail
+  of a pathological store would let a twin through rather than refuse
+  a bundle over a row it could not see, which is the right way for a
+  wall reading a window to be wrong."
+  200)
+
+(defn- own-value-address
+  "A row's own value, written as the address it would wear in an
+  evidence list, or nil.
+
+  SUBTRACTED FROM BOTH SIDES before two bundles are compared, and the
+  reason is the difference between citing and serving: `value_id` is
+  a declared field, so an outcome that also lists its own value in
+  `evidence` has read nothing the field did not already say. Counting
+  that as a shared row would make this wall 'one standing outcome per
+  value' — a cap on the value, which is precisely the wall
+  waymark-1uv.3 took off this door. ANOTHER outcome's value, cited as
+  a reading, is an ordinary shared row and still twins."
+  [vid]
+  (when-some [v (some-> vid str str/trim not-empty)]
+    (str "/api/values/" v)))
+
+(defn- read-rows
+  "The set of row addresses a bundle actually READ: its evidence,
+  trimmed, blank-free, less its own value's address."
+  [evidence own-value]
+  (into #{}
+        (comp (map #(str/trim (str %)))
+              (remove str/blank?)
+              (remove #(= own-value %)))
+        evidence))
+
+(defguardfn not-a-twin
+  {:judges [:evidence]
+   :reads [:outcome]
+   :vars [:standing :shared :state]
+   :open "One standing bundle per evidence row. An outcome that is offered or accepted already speaks for the rows it cites — whoever composed it — so a second bundle built on one of those same rows is a twin, and the rank cannot tell twins apart. A person's own pull is the exception: when somebody asked, they get one."
+   :explain "That is a twin of a bundle this house is already holding: {shared} is cited by /api/outcomes/{standing}, which is {state}. Read that one — compose from rows nobody has composed yet, or, if its PLAN is what is wrong, leave it standing and let the household's own iterate ask you to rework it in place."}
+  [_row inp ctx]
+  ;; ONE EXEMPTION, AND IT IS THE PERSON'S: a `request_id` means a
+  ;; member asked for this bundle by hand (`the-request-is-open`
+  ;; checks the citation itself, right behind this wall), and a pull
+  ;; is never refused for looking like something the house already
+  ;; holds — the person holds it and asked anyway.
+  ;;
+  ;; The row named in `supersedes` is left out of the comparison, for
+  ;; the same reason it is not this wall's business: a recomposition
+  ;; re-cites what its prior cited, on purpose, and WHETHER it may
+  ;; replace that prior is `a-recomposition-waits-its-turn`'s question
+  ;; and `no-burial-without-a-diagnosis`'s. A declined prior never
+  ;; reaches this line anyway (it is not standing); an accepted one
+  ;; would, and refusing a recomposition as a twin of the very row it
+  ;; names would be this wall answering a question two other walls
+  ;; already own.
+  (let [find' (:find ctx)
+        rid (some-> (:request_id inp) str str/trim not-empty)]
+    (cond
+      ;; the storage-free probe advertises optimistically, exactly as
+      ;; `cites-what-it-read` and `insight/cites-what-it-claims` do —
+      ;; the write path always carries the consult
+      (nil? find') (t/allow)
+      (some? rid) (t/allow)
+
+      :else
+      (let [mine (read-rows (:evidence inp)
+                            (own-value-address (:value_id inp)))
+            sid (some-> (:supersedes inp) str str/trim not-empty)]
+        (if (empty? mine)
+          (t/allow)
+          (let [hit (->> standing-states
+                         (into []
+                               (comp (mapcat #(find' :outcome {:state %}
+                                                     {:limit standing-page}))
+                                     (remove #(= sid (str (:id %))))
+                                     (map (fn [r]
+                                            {:id (str (:id r))
+                                             :state (name (:state r))
+                                             :shared
+                                             (into #{}
+                                                   (filter mine)
+                                                   (read-rows
+                                                    (get-in r [:data :evidence])
+                                                    (own-value-address
+                                                     (get-in r [:data :value_id]))))}))
+                                     (filter (comp seq :shared))))
+                         (sort-by :id)
+                         first)]
+            (if (nil? hit)
+              (t/allow)
+              (t/deny {:vars {:standing (:id hit)
+                              :state (:state hit)
+                              :shared (listed (:shared hit))}}))))))))
 
 (defn- cited-request
   "The composition request an outcome cites, trimmed, or nil — the one
@@ -1698,6 +1840,16 @@
 ;; `:feed/diagnosis` in the conformance pack proves the refusal and the
 ;; document from the wire.
 
+;; AND NONE NAMES `not-a-twin`, for the structural reason a fourth
+;; time (waymark-8gc): the wall's whole question is what ANOTHER row
+;; already cites, and a scenario holds one literal `:input` over an
+;; empty store — there is no standing outcome for a candidate to twin,
+;; so every scenario reaching this door would be an allow. The claims
+;; (a twin refused by name, distinct evidence admitted, a cited
+;; request admitted despite the overlap, a recomposition of a declined
+;; prior admitted) are proved by workqueue10.outcome-test § 22 over
+;; the real ring handler, where a first bundle can actually stand.
+
 (defscenario the-composer-does-not-answer-its-own-piece
   "The same wall, one row down, and it has to be here as well as on
    the parent: the pieces are where the consent actually happens, so a
@@ -2171,12 +2323,19 @@
    ;; is that the composer's duty fires first — a recomposition with
    ;; no diagnosis hears about the diagnosis; one with a diagnosis
    ;; hears about the date
+   ;; …and NOT A TWIN (waymark-8gc), standing between the
+   ;; recomposition walls and the person's pull: after a bundle's
+   ;; shape and its prior are judged, and before the pull is, because
+   ;; the pull is this wall's own exemption — a cited request means a
+   ;; person asked, and a person's ask is never refused for resembling
+   ;; something the house already holds.
    :create-guards [cites-what-it-read
                    names-a-value
                    names-a-person
                    routes-through-something-loved
                    no-burial-without-a-diagnosis
                    a-recomposition-waits-its-turn
+                   not-a-twin
                    the-request-is-open]
    :actions
    {:make_it_so

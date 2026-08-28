@@ -184,6 +184,77 @@ if [ "$MODE" = "verify" ]; then
   else
     echo "$wrote row(s) written by this principal since $SINCE."
   fi
+
+  # ── TWINS (waymark-8gc) ───────────────────────────────────────────
+  # A run that duplicated what the house already holds is a FAILED
+  # run, and the report has to say so in its own voice rather than
+  # leave it to whoever reads the ids. `not-a-twin` refuses a
+  # duplicate OUTCOME at the create door now, so a fault line here is
+  # a hole worth knowing about — a row written before the wall
+  # landed, or a standing row past the window the wall reads. The
+  # INSIGHT arm is not built at all (waymark-1ag), so for insights
+  # this report IS the only check, and it wears 1ag's own shape:
+  # shared evidence AND the same {offer_kind, offer_id, offer_action},
+  # because two findings citing one task are two findings until they
+  # answer the same question.
+  #
+  # Evidence lives only at a row's OWN address (a collection answers a
+  # projection), so every candidate and every standing row is read
+  # there — `hydrate`'s idiom, inlined, because verify mints no run
+  # directory to keep a snapshot in.
+  twin_rows() { # twin_rows <path> <kind> <state...> — one JSON line per row
+    local path="$1" kind="$2"; shift 2
+    local st out full href at
+    for st in "$@"; do
+      out="$(mktemp)"
+      if [ "$(api "$out" "${path}?state=${st}&page%5Bsize%5D=100")" = "200" ]; then
+        # the stamp comes off the COLLECTION item, which carries meta;
+        # only the row's own address carries data.evidence
+        while IFS="$(printf '\t')" read -r href at; do
+          [ -n "$href" ] || continue
+          full="$(mktemp)"
+          if [ "$(api "$full" "$href")" = "200" ]; then
+            # a row's OWN value is what it serves, not something it
+            # read — the same subtraction `not-a-twin` makes, so this
+            # report and that door disagree about nothing
+            jq -c --arg k "$kind" --arg at "$at" '
+              (if (.data.value_id // "") == "" then ""
+               else "/api/values/" + (.data.value_id | tostring) end) as $own
+              | {self, kind:$k, at:$at,
+                 offer:[(.data.offer_kind // ""), (.data.offer_id // ""),
+                        (.data.offer_action // "")],
+                 evidence:[(.data.evidence // [])[] | select(. != $own)]}' \
+              "$full"
+          fi
+          rm -f "$full"
+        done < <(jq -r '.data.items[]? | "\(.self)\t\(.meta.updated_at // "")"' \
+                    "$out" | head -n "$MAXHYDRATE")
+      fi
+      rm -f "$out"
+    done
+  }
+  twins="$(mktemp)"; : > "$twins"
+  twin_rows "/api/outcomes" outcome offered accepted >> "$twins"
+  twin_rows "/api/insights" insight published >> "$twins"
+  faults="$(jq -rs --arg s "$SINCE" '
+    . as $rows
+    | [ $rows[] | select(.at >= $s) ] as $mine
+    | [ $mine[] as $a
+        | $rows[] as $b
+        | select($b.self != $a.self and $b.kind == $a.kind)
+        | select($a.kind != "insight" or $a.offer == $b.offer)
+        | ($a.evidence - ($a.evidence - $b.evidence)) as $shared
+        | select(($shared | length) > 0)
+        | select($b.at < $a.at or ($b.at == $a.at and $b.self < $a.self))
+        | "TWIN: \($a.self) shares \($shared | join(", ")) with \($b.self)" ]
+    | unique | .[]' "$twins" 2>/dev/null)"
+  rm -f "$twins"
+  if [ -n "$faults" ]; then
+    echo
+    echo "$faults"
+    echo "  A twin is a FAILED run: the rank cannot tell two rows saying the same thing apart, so the second one is pure noise on the household's fridge. Read the standing row named above, and retire (or leave unstaged) the duplicate."
+  fi
+
   # A SITTING LEAVES NO DIFF. The wisp appends to .beads/interactions.jsonl
   # (a tracked file) and a runner that diffs its tree would carry that
   # residue home as a patch; the snapshot is already gitignored.
