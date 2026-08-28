@@ -5714,3 +5714,142 @@ outcome's address, the state it stands in, and the shared address.
   the ns docstring's own section and the scenario-absence note);
   `scripts/sitting-run.sh` (`verify`'s twin fault lines);
   `workqueue10/test/workqueue10/outcome_test.clj` (§ 22); this file.
+
+## Built — 1ag, one live finding per offer (2026-08-28, waymark-1ag)
+
+**The insight arm of the same law.** § *Built — 8gc* closed with the insight
+arm explicitly unbuilt: *identical evidence set plus identical `offer_kind` /
+`offer_id` / `offer_action`*, left alone because the conformance pack published
+six findings on one offer to prove *ranked, not capped* and folding five of
+them into refusals is a different claim. Both halves are here now:
+`one-live-finding-per-offer`, a `(:find ctx)` guard on `insight`'s create door,
+and the pack's six findings moved onto six distinct offers so each claim has
+its own fixture.
+
+**It is not the cap coming back either.** `insights-are-capped` refused the
+Nth finding **because it was the Nth**, and it left with waymark-1uv.8. This
+refuses a finding because the house is already asking exactly that question,
+off exactly that reading, and nobody has answered it. waymark-1ag's own
+compression, which § *Built — 8gc* borrowed: *dedupe is a law, not a cap.*
+
+### The rule, exactly
+
+A candidate is refused when a **`published`** insight carries the same
+`{offer_kind, offer_id, offer_action}` **and** shares at least one address with
+the candidate's `evidence`. The sentence names that finding's address, the
+action and row it offers, and the shared evidence row. `taken` and `dismissed`
+are terminal, so neither blocks: answering a question reopens it.
+
+### The forks, decided
+
+- **The evidence half was not in the bead, and building the wall is what
+  found it.** waymark-1ag's own sentence keyed on the offer triple alone. That
+  key **deadlocks the diagnosis duty**: `no-burial-without-a-diagnosis` makes a
+  composer publish an insight citing the declined prior and offering the
+  *value's* `still_stands` before it may recompose, so two bundles on one value
+  declined a fortnight apart owe two diagnoses with the identical triple — and
+  the composer cannot clear the first itself, because the four-eyes wall means
+  the finder does not decide. A wall keyed on the triple alone would leave a
+  composer unable to discharge a duty the house imposes on it, which is not a
+  law, it is a trap. It is also the shape the house had already written down
+  for this arm before the door existed: waymark-8gc's bead text, and
+  `sitting-run.sh verify`'s insight fault line, which needed **no edit** —
+  report and door now agree by construction rather than by care.
+
+- **Exact address overlap, and nothing cleverer.** `not-a-twin`'s fork,
+  repeated for the same reason: a door that judged whether two findings *say*
+  the same thing would be a door guessing, and the refusal could not name the
+  offending row. A compiler that genuinely read somewhere else is asking about
+  something else, and that is the honest boundary of what an address
+  comparison can claim.
+
+- **The refusal carries the live finding's address, in `:vars`.** The bead
+  asked whether it should; it does. A wall that cannot say WHICH row already
+  asks the question leaves the author guessing, and the address is what makes
+  *read that one, and dismiss it if it is wrong* an instruction rather than
+  advice.
+
+- **The rank's `:dismissed` input stays exactly as it was.**
+  `feed/insight-record` counts DISMISSED priors on the same offer and holds a
+  repeat DOWN; this wall counts only the live one. The two never overlap, and
+  the division is the point: what the house answered is the rank's business,
+  the question still open is the door's.
+
+- **The fingerprint does not move.** Create guards are outside
+  `fingerprint-of`. `check-queue` reads the insight row as **4 refusing
+  guards**, 3 named by a scenario — the count the bead predicted.
+
+### What the pack's change costs, and does not
+
+`:feed/insights` published **six findings on one offer**; it now publishes six
+on six **distinct** offers, walked off the feed's own above-seam cards crossed
+with the light verbs each advertises (a page with fewer than six of those asks
+the question at the size it can). The claim is untouched: *ranked, not capped*
+asks whether the door counts a **writer's rows**, and six well-formed findings
+from one author in one day, every one admitted, is that question either way.
+The dedupe claim then gets the fixture it needs — a seventh finding repeating
+the first fill's offer, refused by name, with the live finding's address in the
+sentence.
+
+### Where the law is proved
+
+- **`workqueue10.insight-rank-test`**, a new deftest over the real ring
+  handler: a second live finding on one offer refused by name **from a second
+  author**, with the live finding's address, the offered row's address and
+  *one question at a time* in the sentence, and the first still `published`;
+  a different `offer_action` on the same row admitted; the same action read off
+  a different row admitted (the diagnosis case); a DISMISSED prior admitting a
+  fresh finding, which the rank then holds down by counting it.
+- **`:feed/insights` in the conformance pack**, from the wire: the duplicate
+  refused by `one-live-finding-per-offer`, and its sentence naming the live
+  finding.
+- **No scenario names it**, for the structural reason `not-a-twin` has none:
+  the wall's whole question is what another row already offers, and a scenario
+  holds one literal input over an empty store, so every scenario reaching this
+  door would be an allow.
+
+### One thing found on the way
+
+`workqueue10.insight-rank-test`'s first deftest was **one closing paren
+short**, so `the-offers-address-is-derived-and-still-checked` (waymark-42m's
+live proof) was read as a form inside its body: the var was def'd when the
+outer test ran — after kaocha had finished collecting — and its assertions
+never executed once. The suite reported `1 tests` and looked green. Fixed
+here; the namespace docstring says what to check if a deftest ever stops
+appearing under `--reporter kaocha.report/documentation`.
+
+- **Files:** `workqueue10/src/workqueue10/resources/insight.clj`
+  (`one-live-finding-per-offer`, `live-state`, `live-page`, `offer-key`,
+  `read-rows`, the create-guard list, the ns docstring's bullet and the
+  scenario-absence note); `waymark10/src/waymark10/test/packs.clj`
+  (`:feed/insights`'s six distinct offers and its duplicate claim);
+  `workqueue10/test/workqueue10/insight_rank_test.clj`;
+  `scripts/sitting-run.sh` and `SITTING.md` (the twin sentence, now naming
+  both doors); this file.
+
+## Built — g4e, one `listed` (2026-08-28, waymark-g4e)
+
+Three namespaces — `outcome`, `insight`, `ranking_note` — each carried a
+private `listed`, identical to the character, rendering a refusal's offenders
+as a sorted, de-duplicated, quoted list. `clojure.core/distinct` destructures
+`[f :as xs]`, which calls `nth`, which a `PersistentHashSet` does not support,
+so a caller that built its offenders with `(into #{} …)` **threw where it meant
+to refuse** — the router turned the throw into a 500 and the refusal sentence
+was lost. waymark-8gc did exactly that on 2026-08-28 and every `not-a-twin`
+refusal answered 500 until PR #34 fixed the call site.
+
+The trap is gone rather than patched: one `waymark10.guards/listed`, beside
+`render-reason` where the other refusal-sentence machinery lives, seq'ing
+before `distinct` — a no-op for every vector caller, and what makes a set an
+ordinary argument. Nil and empty render as the empty string, because a guard's
+sentence must never be the thing that fails. Proved by
+`waymark10.batch-h-defguard-test/listed-renders-every-offender-from-any-collection`
+over a vector with duplicates, a set (small and large enough to leave the
+array-set path), nil and empty.
+
+- **Files:** `waymark10/src/waymark10/guards.clj` (`listed`);
+  `workqueue10/src/workqueue10/resources/outcome.clj`,
+  `workqueue10/src/workqueue10/resources/insight.clj`,
+  `waymark10/src/waymark10/ranking_note.clj` (the three copies removed, the
+  callers reading `g/listed`);
+  `waymark10/test/waymark10/batch_h_defguard_test.clj`; this file.

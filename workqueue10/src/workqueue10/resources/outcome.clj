@@ -454,13 +454,6 @@
                (not (str/includes? (str s) "?")))
       {:plural (nth parts 2) :id (nth parts 3)})))
 
-(defn- listed
-  "A short, ordered rendering of what went wrong — EVERY offender, not
-  the first, because a composer fixing them one round trip at a time
-  is a composer wasting a sitting."
-  [xs]
-  (str/join ", " (map pr-str (sort (distinct xs)))))
-
 ;; ── the outcome's create walls ──────────────────────────────────────
 ;;
 ;; SHAPE FIRST, WORLD NEXT — insight's ordering and its reason: a
@@ -497,7 +490,7 @@
         (if (seq bad)
           (t/deny {:vars {:count (count ev)
                           :offenders (str "; this house has nothing at "
-                                          (listed bad))}})
+                                          (g/listed bad))}})
           (t/allow))))))
 
 (defn- value-row
@@ -598,7 +591,7 @@
           (t/deny {:vars {:named (pr-str named)
                           :legal (if (seq loved)
                                    (str ". What that value says it loves is "
-                                        (listed loved))
+                                        (g/listed loved))
                                    (str ", and the value you named lists no"
                                         " loved activity at all — which is"
                                         " precisely the high-friction value"
@@ -929,11 +922,15 @@
                                      (map (fn [r]
                                             {:id (str (:id r))
                                              :state (name (:state r))
-                                             ;; a VECTOR, not a set:
-                                             ;; `listed` runs `distinct`
-                                             ;; over what it is handed
-                                             ;; and Clojure 1.12's
-                                             ;; `distinct` refuses a set
+                                             ;; a VECTOR because the
+                                             ;; comparison wants order,
+                                             ;; not because `g/listed`
+                                             ;; needs one: it seqs
+                                             ;; before `distinct` now
+                                             ;; (waymark-g4e), so the
+                                             ;; set that threw here on
+                                             ;; 2026-08-28 is an
+                                             ;; ordinary argument
                                              :shared
                                              (into []
                                                    (filter mine)
@@ -948,7 +945,7 @@
               (t/allow)
               (t/deny {:vars {:standing (:id hit)
                               :state (:state hit)
-                              :shared (listed (:shared hit))}}))))))))
+                              :shared (g/listed (:shared hit))}}))))))))
 
 (defn- cited-request
   "The composition request an outcome cites, trimmed, or nil — the one
@@ -1104,7 +1101,7 @@
               (nil? adefn)
               (deny (str k "." action)
                     (str "that kind has no such door. The ones it has are "
-                         (listed (map name (keys (:actions rd)))) "."))
+                         (g/listed (map name (keys (:actions rd)))) "."))
 
               ;; ctx :invoke refuses a bulk action by name — its row
               ;; form does not exist — so a piece naming one could
@@ -1189,7 +1186,7 @@
           (deny (str "/api/" (:plural rd) "/" tid " is "
                      (name (:state row)) " today, and " k "." action
                      " leaves from "
-                     (listed (map name (:from adefn)))
+                     (g/listed (map name (:from adefn)))
                      ". A piece staged against a row that has already"
                      " moved past its door is one nobody can answer."))
 

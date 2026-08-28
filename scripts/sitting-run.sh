@@ -210,18 +210,23 @@ if [ "$MODE" = "verify" ]; then
     echo "$wrote row(s) written by this principal since $SINCE."
   fi
 
-  # ── TWINS (waymark-8gc) ───────────────────────────────────────────
+  # ── TWINS (waymark-8gc, waymark-1ag) ──────────────────────────────
   # A run that duplicated what the house already holds is a FAILED
   # run, and the report has to say so in its own voice rather than
-  # leave it to whoever reads the ids. `not-a-twin` refuses a
-  # duplicate OUTCOME at the create door now, so a fault line here is
-  # a hole worth knowing about — a row written before the wall
-  # landed, or a standing row past the window the wall reads. The
-  # INSIGHT arm is not built at all (waymark-1ag), so for insights
-  # this report IS the only check, and it wears 1ag's own shape:
-  # shared evidence AND the same {offer_kind, offer_id, offer_action},
-  # because two findings citing one task are two findings until they
-  # answer the same question.
+  # leave it to whoever reads the ids. BOTH arms are doors now —
+  # `outcome/not-a-twin` and `insight/one-live-finding-per-offer` —
+  # so a fault line here is a hole worth knowing about rather than
+  # the only check: a row written before the walls landed, or a
+  # standing row past the window they read.
+  #
+  # The insight test below is UNCHANGED by 1ag landing, and that is
+  # the point: it already wore shared evidence AND the same
+  # {offer_kind, offer_id, offer_action}, and that is exactly the key
+  # the door settled on — two findings citing one task are two
+  # findings until they answer the same question off the same reading.
+  # (The door needs the evidence half for a reason this report never
+  # had to care about: without it, two diagnoses owed on one value
+  # would collide and no composer could discharge the second.)
   #
   # Evidence lives only at a row's OWN address (a collection answers a
   # projection), so every candidate and every standing row is read
@@ -812,9 +817,11 @@ jq '[.[] | select(.state == "current")
 #
 # MACHINE DEDUPE COMES FIRST. Every probe drops any subject the cited
 # set already names — a row an outcome or insight already speaks for.
-# The not-a-twin door (waymark-8gc) would refuse a duplicate outcome at
-# staging, but a refusal costs the run a round trip and teaches the
-# model nothing: the list it is handed is clean before it reads it.
+# The two dedupe doors (waymark-8gc's not-a-twin, waymark-1ag's
+# one-live-finding-per-offer) would refuse a duplicate outcome or a
+# duplicate finding at staging, but a refusal costs the run a round
+# trip and teaches the model nothing: the list it is handed is clean
+# before it reads it.
 WORK_ORDERS_N="${WAYMARK_WORK_ORDERS:-2}"
 # a ceiling that is not a number is not a ceiling — and jq would abort
 # the whole run on it, which is the one thing this block must never do

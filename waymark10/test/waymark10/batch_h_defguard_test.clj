@@ -6,7 +6,8 @@
   the stored document, zero?, present?, and sentence placeholders
   landing as (data …) garnish — all desugar at the def line, before
   validation."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [waymark10.declare :as d :refer [defguard refuse warn]]
             [waymark10.fingerprint :as fp]
             [waymark10.guards :as g]
@@ -133,3 +134,28 @@
          clojure.lang.ExceptionInfo #"not in the law's vocabulary"
          (d/sentence-guard :bad (refuse "sentence")
                            '(pushed? :beacon))))))
+
+;; ── the refusal's own list (waymark-g4e) ────────────────────────────
+
+(deftest listed-renders-every-offender-from-any-collection
+  (testing "a vector: sorted, de-duplicated, quoted"
+    (is (= "\"/api/tasks/a\", \"/api/tasks/b\""
+           (g/listed ["/api/tasks/b" "/api/tasks/a" "/api/tasks/b"])))
+    (is (= "\"a\", \"b\", \"c\"" (g/listed ["c" "b" "a"]))))
+  (testing "A SET, which is the whole bead: clojure.core/distinct
+            destructures [f :as xs] and nth is unsupported on a
+            PersistentHashSet, so an author who built its offenders
+            with (into #{} …) threw where it meant to refuse and the
+            router answered 500 with the sentence lost"
+    (is (= "\"a\", \"b\"" (g/listed #{"b" "a"})))
+    (is (= "\"one\"" (g/listed #{"one"})))
+    ;; a hash set big enough to leave the array-map/array-set path,
+    ;; because the trap only shows on the collection type the caller
+    ;; actually built
+    (is (= (str/join ", " (map pr-str (range 0 40)))
+           (g/listed (into #{} (range 0 40))))))
+  (testing "nil and empty render as the empty string — a guard's
+            sentence must never be the thing that fails"
+    (is (= "" (g/listed nil)))
+    (is (= "" (g/listed [])))
+    (is (= "" (g/listed #{})))))

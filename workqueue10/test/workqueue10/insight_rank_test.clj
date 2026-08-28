@@ -17,9 +17,20 @@
   - a line the house dismissed twice, once in a word, stands below a
     fresh one — the verdict record on the same offer is read, counted
     and quoted;
-  - an agent publishes six findings in one day and every one is
-    admitted; the rank, not a wall, decides what the page shows, and
-    the line's take is still the floor;
+  - an agent publishes six findings on six distinct next steps in one
+    day and every one is admitted; the rank, not a wall, decides what
+    the page shows, and the line's take is still the floor;
+  - and the one wall that DOES stand between two findings
+    (waymark-1ag): a second LIVE finding on the same
+    {offer_kind, offer_id, offer_action}, built on one of the same
+    evidence rows, is refused by name whoever wrote it — while a
+    dismissed prior admits a fresh one, a different next step on the
+    same row was never the same question, and neither was the same
+    next step read off a different row.
+    That wall is why the six above are six offers rather than six
+    findings on one task: *ranked, not capped* asks whether the door
+    counts a writer's rows, and it does not — dedupe counts
+    QUESTIONS, and the two claims want separate fixtures;
   - the six numbers ride the document, narrated;
   - and (waymark-42m) an offer's ADDRESS is derived at birth from the
     kind and id the finder named — a scenario can say the finding was
@@ -30,6 +41,15 @@
   router's default deny (rank_tuning_test's sentence), which proves
   nothing about any wall; the finder here holds `insight:create` and
   `value:create`, minted through the real grant door.
+
+  A NOTE ON THE PARENS, because it cost a suite its second deftest.
+  Until waymark-1ag the first deftest was one closing paren short, so
+  `the-offers-address-is-derived-and-still-checked` was READ as a form
+  inside its body: the var was def'd when the outer test ran, which is
+  after kaocha has finished collecting, and its assertions never
+  executed once. The run reported `1 tests` and looked green. If a
+  deftest here ever stops appearing in `--reporter
+  kaocha.report/documentation`, count parens before believing it.
 
   Assertions are order-independent (kaocha randomizes, and the
   deftests share one DB): the test names its own principals and its
@@ -154,12 +174,23 @@
   (long (.indexOf ^java.util.List ids id)))
 
 (defn- light-action-on
-  "The lightest verb the reader's own feed card offers on a task —
-  the pack's own way of naming an offer a card can honestly carry."
+  "The lightest verb the reader's own feed card offers on a task — the
+  pack's own way of naming an offer a card can honestly carry — or,
+  when the page had no room for that task, the same verb read off the
+  row's own envelope.
+
+  THE FALLBACK IS NOT A CONVENIENCE. `do_now`'s take is 5 and this
+  namespace mints more tasks than that (waymark-1ag turned one offer
+  into six), so without it the fixture would depend on which tasks the
+  day's rank happened to place — an order dependency in the file that
+  opens by promising there are none."
   [who tid]
   (let [card (some #(when (= (str "do_now/task/" tid) (str (:card_id %))) %)
                    (:cards (feed-as who)))]
-    (some-> (first (sort (keys (:actions card)))) name)))
+    (or (some-> (first (sort (keys (:actions card)))) name)
+        (first (sort (map (comp str :name)
+                          (:actions (json (req :get (str "/api/tasks/" tid)
+                                               (human who))))))))))
 
 (deftest the-findings-are-ranked-not-capped-and-every-card-says-why
   (let [who "colton-insight"
@@ -175,15 +206,25 @@
                     :scope "household"}
                    finder)
         vid (id-of value)
-        ;; three tasks, three plain offers: one for the plain finding,
-        ;; one for the line the house will dismiss twice, one for the
-        ;; six in a day
+        ;; the tasks, one plain offer each. Two named — the plain
+        ;; finding's and the line the house will dismiss twice — and
+        ;; SIX MORE for the six-in-a-day claim, which is six DISTINCT
+        ;; next steps since waymark-1ag: one live finding per offer is
+        ;; a law now, so six findings on one task would be one
+        ;; admitted and five refused by name, which is the OTHER
+        ;; claim (its own deftest below). What *ranked, not capped*
+        ;; ever needed from this fixture is six well-formed findings
+        ;; from one author in one day, all admitted, and six offers is
+        ;; how you ask that question without asking the dedupe wall's
+        ;; at the same time.
         task! (fn [title]
                 (id-of (req :post "/api/tasks" {:title title} (human who))))
         t-plain (task! "Sweep the porch")
         t-line (task! "Call about the gutters")
-        t-six (task! "Sort the garage shelf")
-        act (light-action-on who t-plain)]
+        ;; the verb is read while the page is still small — `do_now`'s
+        ;; take is 5, and the six below would push the porch off it
+        act (light-action-on who t-plain)
+        t-six (mapv #(task! (str "Sort the garage shelf (" % ")")) (range 1 7))]
     (is (= 201 (:status value)) (pr-str (json value)))
     (is (= "observed" (str (:state (json value)))))
     (is (some? act) "the task's own card offers a verb light enough to tap")
@@ -284,11 +325,11 @@
             (is (says-of c3 "wrong time"))
             (is (says-of c3 "Lift 6 in all"))))
 
-        ;; six in a day, one author, one offer
-        (let [six (mapv (fn [n]
+        ;; six in a day, one author, six next steps
+        (let [six (mapv (fn [[n tid]]
                           (publish! finder (str "The garage shelf, again (" n ")")
-                                    "tasks" t-six act))
-                        (range 1 7))
+                                    "tasks" tid act))
+                        (map vector (range 1 7) t-six))
               six-ids (mapv id-of six)]
           (testing "an agent publishes six findings in a day and every one is
                     admitted — no wall on writing, the rank decides"
@@ -325,7 +366,108 @@
 
           ;; leave the house as found: every live finding answered
           (doseq [id (into [d p q3] six-ids)]
-            (is (= 200 (:status (invoke! "insights" id :dismiss nil (human who)))))))))))
+            (is (= 200 (:status (invoke! "insights" id :dismiss nil (human who))))))))))))
+
+;; ── one live finding per offer (waymark-1ag) ────────────────────────
+;;
+;; `not-a-twin`'s law one kind over, and only a live engine can judge
+;; it for the reason waymark-8gc wrote down twice: the wall's whole
+;; question is what ANOTHER row already offers, and a declaration-time
+;; scenario holds one literal input over an empty store. Five claims,
+;; and the last three are the ones that keep this a law rather than a
+;; cap: a different next step on the same row was never the same
+;; question, the same next step read off a different row was never the
+;; same question either (the diagnosis duty depends on it), and a
+;; dismissed prior admits a fresh finding.
+
+(deftest a-second-live-finding-on-one-offer-is-refused-and-the-refusal-names-it
+  (let [who "colton-1ag"
+        finder (leash! "finder-1ag-a" who [{:kind "insight" :actions ["create"]}])
+        other (leash! "finder-1ag-b" who [{:kind "insight" :actions ["create"]}])
+        tid (id-of (req :post "/api/tasks" {:title "Clear the side gate"}
+                        (human who)))
+        elsewhere (id-of (req :post "/api/tasks" {:title "Restock the salt"}
+                              (human who)))
+        ;; the verb by NAME, `the-offers-address-is-derived`'s idiom:
+        ;; this deftest is about which questions the door admits, and
+        ;; reading the offer off a feed card would make it depend on
+        ;; how many tasks a sibling deftest left in do_now
+        act "complete"
+        first' (publish! finder "The side gate has been blocked since the delivery"
+                         "tasks" tid act)
+        fid (id-of first')]
+    (is (= 201 (:status first')) (pr-str (json first')))
+
+    (testing "a second finding offering the same action on the same row — from
+              ANOTHER author, because the question belongs to the house and not
+              to whoever asked it — is refused, naming the live finding"
+      (let [r (publish! other "The side gate, still blocked, said differently"
+                        "tasks" tid act)
+            says (str (json r))]
+        (is (= 409 (:status r)) says)
+        (is (= "one-live-finding-per-offer" (str (:guard (json r)))) says)
+        (is (str/includes? says (str "/api/insights/" fid))
+            "the refusal carries the live finding's own address")
+        (is (str/includes? says (str "/api/tasks/" tid))
+            "…and the address of the row the question is about, which is also
+             the row both findings read")
+        (is (str/includes? says "one question at a time")
+            "and it says out loud that it is not a cap")))
+
+    (testing "the first is untouched — a refusal at the door changes nothing"
+      ;; read as the author: `:own-surface true` is what lets a finder
+      ;; see what it published without a reader's grant
+      (is (= "published"
+             (str (:state (json (req :get (str "/api/insights/" fid) finder)))))))
+
+    (testing "a different next step on the same row is a different question"
+      (let [r (publish! finder "The side gate's rank is doing nothing for anyone"
+                        "tasks" tid "deprioritize")]
+        (is (= 201 (:status r)) (pr-str (json r)))
+        (is (= 200 (:status (invoke! "insights" (id-of r) :dismiss nil
+                                     (human who)))))))
+
+    (testing "the same next step on a different row likewise"
+      (let [r (publish! finder "The salt bin has been empty for two storms"
+                        "tasks" elsewhere act)]
+        (is (= 201 (:status r)) (pr-str (json r)))
+        (is (= 200 (:status (invoke! "insights" (id-of r) :dismiss nil
+                                     (human who)))))))
+
+    (testing "and the same next step read off a DIFFERENT row is a different
+              question — which is what keeps the diagnosis duty dischargeable:
+              two declined bundles on one value owe two diagnoses, both
+              offering that value's still_stands, and the composer cannot clear
+              the first one itself (the finder does not decide)"
+      (let [r (req :post "/api/insights"
+                   {:finding "The side gate came up again from somewhere else"
+                    :evidence [(str "/api/tasks/" elsewhere)]
+                    :offer_kind "task" :offer_id tid :offer_action act}
+                   finder)]
+        (is (= 201 (:status r)) (pr-str (json r)))
+        (is (= 200 (:status (invoke! "insights" (id-of r) :dismiss nil
+                                     (human who)))))))
+
+    (testing "and a DISMISSED prior blocks nothing: the wall is about the live
+              one, and what the house already answered is the rank's business
+              (feed/insight-record holds a repeat DOWN, never out)"
+      (let [no (invoke! "insights" fid :dismiss nil (human who))
+            again (publish! finder "The side gate is still blocked, a week on"
+                            "tasks" tid act)]
+        (is (= 200 (:status no)) (pr-str (json no)))
+        (is (= 201 (:status again)) (pr-str (json again)))
+        (testing "…and the fresh one is held down by that dismissal rather than
+                  refused for it"
+          (let [card (insight-card (feed-as who) (id-of again))]
+            (is (some? card) "the readmitted finding is on the reader's feed")
+            ;; TWO, and the arithmetic is the claim: the rank counts
+            ;; dismissals by OFFER, so both findings answered on
+            ;; task/complete above — the first one and the one read off
+            ;; a different row — weigh on this one
+            (is (= 2 (get-in card [:why :insight :dismissed])))))
+        ;; leave the house as found
+        (is (= 200 (:status (invoke! "insights" (id-of again) :dismiss nil
+                                     (human who)))))))))
 
 (deftest the-offers-address-is-derived-and-still-checked
   ;; waymark-42m: the create form declares `offer_href` hidden and the
@@ -379,4 +521,4 @@
 
     ;; leave the house as found
     (is (= 200 (:status (invoke! "insights" (id-of bare) :dismiss nil
-                                 (human who))))))))
+                                 (human who)))))))

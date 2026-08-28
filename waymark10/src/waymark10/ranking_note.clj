@@ -118,12 +118,6 @@
                (not (str/includes? (str s) "?")))
       {:plural (nth parts 2) :id (nth parts 3)})))
 
-(defn- listed
-  "A short, ordered rendering of what went wrong — every offender,
-  not the first."
-  [xs]
-  (str/join ", " (map pr-str (sort (distinct xs)))))
-
 (defn- addresses-of [inp]
   (into [] (remove str/blank?) (map str (:evidence inp))))
 
@@ -178,7 +172,7 @@
         (if (seq bad)
           (t/deny {:vars {:count (count ev)
                           :offenders (str "; this house has nothing at "
-                                          (listed bad))}})
+                                          (g/listed bad))}})
           (t/allow))))))
 
 (g/defguard not-your-own-row
