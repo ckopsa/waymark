@@ -423,6 +423,15 @@ states composition_requests "/api/composition_requests" offered answered expired
 states values      "/api/values"  observed declared retired
 states people      "/api/people"  observed current past
 collection tasks       "/api/tasks"
+# the NAMED lists a task belongs to (waymark-dgh). A task carries its
+# list as an id, and an id is a handle rather than a name: a session
+# goal reading "one task list (c07c9da8)" named nothing the household
+# would recognise. This read is what turns that id back into the
+# household own word for the list. A grant that does not admit the
+# `task_list` kind answers the concealment 404, the read degrades to
+# [], and the session probe then never ships a same-list cluster at
+# all — the honest outcome, not a fault.
+collection task_lists  "/api/task_lists"
 collection chore_runs  "/api/chore_runs"
 collection events      "/api/events"
 collection media       "/api/media"
@@ -686,30 +695,82 @@ if [ -z "${SINCE_ARR:-}" ]; then
 fi
 [ -n "${SINCE_ARR:-}" ] || SINCE_ARR="$(iso "$(( $(now_s) - 3600 ))")"
 
-# ARRIVALS: rows that are genuinely NEW — present now, absent from the
-# last run's snapshot. A person's remark, a new or Gate-synced task, a
-# new event: the concrete input this run reacts to. Keyed on self, NOT
-# on updated_at, because a mirror sync bumps updated_at on every row and
-# would drown a real arrival. When there is no prior snapshot (first
-# run) fall back to "updated in the last hour" so the run is not blind.
+# ARRIVALS ARE CREATIONS (waymark-dgh). A row is an arrival when it did
+# not exist at the watermark — a new or Gate-synced task, a new event, a
+# person's remark — plus one thing a clock cannot see: a person's turn
+# stays an arrival for as long as it is the last word of its thread,
+# whenever it was said, because it is still owed an answer.
+#
+# WHAT "CREATED" IS READ FROM. The engine's own log: a collection asked
+# with `?as-of=<instant>` answers the rows that EXISTED then (the
+# router's time-travel tier 1), so `now − then`, keyed on self, is
+# exactly the set created since. It needs no prior snapshot, which is
+# what makes it right on the ephemeral runner, and a Gate-synced task
+# that is new to the house counts by construction: the mirror's create
+# IS when the house first saw it, and the row is simply absent from the
+# as-of read.
+#
+# WHY NOT A TIMESTAMP. `meta` carries no created_at to compare, and
+# `version` cannot stand in for one — a mirrored row is born at version
+# 2 (the create, then the observation), so every synced arrival would be
+# missed. Until 2026-08-28 the no-snapshot arm keyed on
+# `meta.updated_at`, and a mirror resync bumps every row it touches: the
+# evening the owner swept the fridge, this list read 291 arrivals on a
+# house where nothing at all had been created since the last journal.
+#
+# An as-of read takes no other parameter (not even page[size] — the log
+# carries state, not data), so it is one GET per kind. A refusal falls
+# back to the prior snapshot's self-diff, and then to nothing for that
+# kind — and which basis each kind got is written down rather than
+# guessed at, because "no arrivals" and "we could not tell" are
+# different sentences.
 ARR_ACC="$(mktemp)"; echo '[]' > "$ARR_ACC"
 PREV_DIR="$([ -n "$PREV_MANIFEST" ] && dirname "$PREV_MANIFEST" || echo "")/rows"
+mkdir -p "$R/asof"
+: > "$D/arrivals_basis.jsonl"
 for kf in tasks remarks.full events media chore_runs; do
   cur="$R/$kf.json"; [ -f "$cur" ] || continue
-  prev="$PREV_DIR/$kf.json"
-  if [ -n "$PREV_MANIFEST" ] && [ -f "$prev" ]; then
+  plural="${kf%.full}"
+  then_f="$R/asof/$plural.json"
+  if [ "$(api "$then_f" "/api/${plural}?as-of=${SINCE_ARR}")" = "200" ]; then
+    jq '[.data.items[]?.self]' "$then_f" > "$then_f.selves" 2>/dev/null || echo '[]' > "$then_f.selves"
+    # the row is bound BEFORE index() is asked: `$seen | index(.self)`
+    # evaluates .self against $seen, which is an array — jq errors, the
+    # 2>/dev/null swallows it, and the whole diff silently reads empty
+    jq -s '(.[0] // []) as $seen
+           | .[1] | map(. as $r | select(($r.self != null)
+                                         and (($seen | index($r.self)) == null)))' \
+       "$then_f.selves" "$cur" > "$ARR_ACC.k" 2>/dev/null || echo '[]' > "$ARR_ACC.k"
+    arr_basis="the engine log (as-of)"
+  elif [ -n "$PREV_MANIFEST" ] && [ -f "$PREV_DIR/$kf.json" ]; then
     jq -s '(.[0] | map(.self)) as $seen
-           | .[1] | map(select((.self != null) and (($seen | index(.self)) == null)))' \
-       "$prev" "$cur" > "$ARR_ACC.k" 2>/dev/null || echo '[]' > "$ARR_ACC.k"
+           | .[1] | map(. as $r | select(($r.self != null)
+                                         and (($seen | index($r.self)) == null)))' \
+       "$PREV_DIR/$kf.json" "$cur" > "$ARR_ACC.k" 2>/dev/null || echo '[]' > "$ARR_ACC.k"
+    arr_basis="the last run's snapshot"
   else
-    jq --arg s "$SINCE_ARR" 'map(select((.self != null) and ((.meta.updated_at // "") > $s)))' \
-       "$cur" > "$ARR_ACC.k" 2>/dev/null || echo '[]' > "$ARR_ACC.k"
+    echo '[]' > "$ARR_ACC.k"
+    arr_basis="nothing — the log refused and there is no prior snapshot, so a creation of this kind cannot be seen from here"
   fi
+  jq -nc --arg k "$plural" --arg b "$arr_basis" \
+         --argjson n "$(jq 'length' "$ARR_ACC.k" 2>/dev/null || echo 0)" \
+     '{kind:$k, read_from:$b, created_since:$n}' >> "$D/arrivals_basis.jsonl"
   jq -s '.[0] + .[1]' "$ARR_ACC" "$ARR_ACC.k" > "$ARR_ACC.m" && mv "$ARR_ACC.m" "$ARR_ACC"
 done
-jq 'map({self, kind, state, at:(.meta.updated_at // null),
-         says:((.display.title // .summary // "") | .[0:160])})
+# and the turns still holding the end of a thread — owed on every run
+# until we answer them, however old the words are
+# (an `A && mv` here would be a whole compound command returning
+# non-zero when jq stumbles, and `set -e` would take the run down with
+# it — the failure has to leave the accumulator alone, not the run)
+if jq --slurpfile th "$D/unanswered_threads.json" --slurpfile full "$R/remarks.full.json" '
+     ([ ($th[0] // [])[] | .last.self ]) as $ends
+     | . + [ ($full[0] // [])[] | .self as $sf | select(($ends | index($sf)) != null) ]
+   ' "$ARR_ACC" > "$ARR_ACC.m" 2>/dev/null; then mv "$ARR_ACC.m" "$ARR_ACC"; fi
+jq 'unique_by(.self)
+    | map({self, kind, state, at:(.meta.updated_at // null),
+           says:((.display.title // .summary // "") | .[0:160])})
     | sort_by(.at) | reverse' "$ARR_ACC" > "$D/arrivals.json" 2>/dev/null || echo '[]' > "$D/arrivals.json"
+jq -s '.' "$D/arrivals_basis.jsonl" > "$D/arrivals_basis.json" 2>/dev/null || echo '[]' > "$D/arrivals_basis.json"
 rm -f "$ARR_ACC" "$ARR_ACC.k"
 
 # the CITED set — every row a STANDING outcome or a LIVE insight speaks
@@ -1383,9 +1444,34 @@ JQ_DATES='
 # single-subject and the ceiling text forbids extras, so nothing here
 # ever batched. This one clusters the OPEN tasks by SHAPE — the four
 # batches the household's own values name (pomodoro break phone calls,
-# one errand loop, a paperwork hour, the shop) plus every set that
-# shares a task list — and orders ONE outcome whose goal is the session
-# itself, with the block already held on the calendar.
+# one errand loop, a paperwork hour, the shop) — and orders ONE outcome
+# whose goal is the session itself, with the block already held on the
+# calendar.
+#
+# SHAPE FIRST, THE LIST ONLY AS A LAST RESORT (waymark-dgh). A shared
+# task list used to compete with the four shapes on size alone, and on
+# 2026-08-28 it won: the order that shipped was "one task list
+# (c07c9da8)" — a raw id for a goal, over a mixed bag of a realtor
+# list, a lapsed life-insurance policy, a brake booster, a steering
+# pump and a 401k. That is not one hour of one shape, it is a database
+# handle wearing an hour as a costume. So the shapes are RANKED AHEAD:
+# a same-list cluster ships only when no shape cluster has two free
+# tasks, and it ships under the household's own NAME for the list, read
+# from the task_lists rows. A list this grant cannot name is not a
+# cluster at all — an hour nobody can say out loud is not an hour
+# anyone holds.
+#
+# THE GARAGE IS NOT AN HOUR EITHER (waymark-dgh). A car repair —
+# replace / repair / install against a vehicle word — is a parts-and-lift
+# job of unknown length that ends when the part arrives, not at 11:00.
+# It could have been given a shape of its own, a Saturday block in the
+# driveway; it is not, because the block is the whole promise of this
+# probe and a two-hour hold on "replace the brake booster" is a promise
+# the household would decline. Worse, folded in beside three phone
+# calls it poisons the hour those three would have said yes to. So car
+# repairs are taken OUT of the clustering entirely and the order SAYS
+# so; they stay visible to every other probe as the bare tasks they
+# are.
 #
 # CLUSTERS ARE SEEN WHOLE; ORDERS ARE BUILT FROM WHAT IS FREE. A task a
 # standing outcome already cites is not free: `not-a-twin` refuses a
@@ -1399,12 +1485,26 @@ JQ_DATES='
 # is only allowed to work half of. A cluster needs two FREE tasks to be
 # worth an hour; when none has two, no order ships and the crowd-out
 # line below says why.
+#
+# FIVE PIECES IS THE CEILING (waymark-dgh). The outcome wall takes 2–5
+# pieces, and the session order used to prescribe one hold plus one
+# raise per free task — six pieces on a cluster of five, refused at the
+# door. So the block holds the calendar hold plus the FOUR nearest-due
+# free tasks, cites exactly those, and names the rest for the next
+# session in its NOTE rather than staging them.
 jq -c --slurpfile cited "$D/cited.json" --slurpfile standing "$D/standing_outcomes.json" \
-      --slurpfile values "$D/live_values.json" --argjson nows "$NOW_S" \
+      --slurpfile values "$D/live_values.json" --slurpfile lists "$R/task_lists.json" \
+      --argjson nows "$NOW_S" \
       --arg bstart "$SESSION_START" --arg bend "$SESSION_END" \
       --arg bday "$SESSION_WD" --arg bdate "$SESSION_DATE" --arg tz "$HOUSE_TZ" \
       "$JQ_DATES$JQ_KEYS"'
   ($cited[0] // []) as $c | ($standing[0] // []) as $st | ($values[0] // []) as $vals
+  # the household name for each list; an id is a handle, not a name
+  | ([ ($lists[0] // [])[]
+       | {id:((.self // "") | split("/") | last),
+          name:(((.display.title // .fields.title // .summary // "") | tostring)
+                | sub("^\\s+"; "") | sub("\\s+$"; ""))}
+       | select(.name != "") ]) as $listnames
   | [ .[] | (.fields // {}) as $f
           | select(($f.status // "open") == "open")
           | ((.display.title // $f.title // "") | tostring) as $t
@@ -1412,48 +1512,67 @@ jq -c --slurpfile cited "$D/cited.json" --slurpfile standing "$D/standing_outcom
           | .self as $sf
           | {self:$sf, title:$t, due_at:($f.due_at // null),
              task_list:($f.task_list // null),
-             cited: (($c | index($sf)) != null)} ] as $open
+             cited: (($c | index($sf)) != null)} ] as $all_open
+  # the garage, lifted out before anything is clustered
+  | ([ $all_open[] | . as $x | ($x.title | ascii_downcase) as $l
+       | select(($l | test("\\b(replace|repair|install|fix|swap|bleed|rotate|change)\\b"))
+                and ($l | test("\\b(edge|odyssey|car|van|truck|brakes?|booster|pumps?|tires?|tyres?|oil|alternator|radiator|transmission)\\b"))) ]) as $garage
+  | ([ $garage[] | .self ]) as $garage_ids
+  | ([ $all_open[] | . as $x | select(($garage_ids | index($x.self)) == null) ]) as $open
   # The four shapes are the household own words for its batches, taken
-  # off what its values say they love; the fifth is purely mechanical —
-  # a task list IS a set the household already grouped, and two tasks on
-  # one list are two tasks of one shape whatever the words say.
+  # off what its values say they love. The fifth is the task list, and
+  # it is a fallback rather than a peer: a list is a set the household
+  # already grouped, but the grouping can be a junk drawer, so it only
+  # gets an hour when no shape has two free tasks in it.
   | [ $open[] | . as $x | ($x.title | ascii_downcase) as $l
       | ( (if ($l | test("^(call|contact|phone|ring)\\b"))
               or ($l | test("[0-9]{3}[-. ][0-9]{3}[-. ][0-9]{4}"))
            then "the phone calls" else empty end),
           (if ($l | test("^(pick up|pickup|drop off|dropoff|mail|buy|purchase|return|deliver|go to)\\b"))
            then "the errand loop" else empty end),
+          # "board" is the shop word that leaks: a Trello board is not
+          # lumber, and with shapes ranked ahead of lists it decided a
+          # whole order on 2026-08-28. The software boards are named
+          # and excluded rather than the word being dropped, because
+          # every other board in this house is a piece of wood.
           (if ($l | test("woodwork|\\bshop\\b|\\bbuild|\\bsand\\b|glue|lumber|dowel|\\bboards?\\b|\\bsaw\\b|workbench"))
+              and (($l | test("trello|kanban|\\bjira\\b|scrum|sprint")) | not)
            then "the shop" else empty end),
           (if ($l | test("\\bforms?\\b|application|insurance|401k|address|paperwork|policy|placard|\\btax\\b|account"))
            then "the paperwork hour" else empty end) ) as $shape
-      | $x + {cluster:$shape} ]
+      | $x + {cluster:$shape, is_shape:true} ]
     + [ $open[] | select(.task_list != null) | . as $x
-        | $x + {cluster:("one task list (" + ($x.task_list | tostring | .[0:8]) + ")")} ]
+        | ([ $listnames[] | select(.id == ($x.task_list | tostring)) | .name ][0]) as $nm
+        | select($nm != null and $nm != "")
+        | $x + {cluster:("the " + $nm + " list"), is_shape:false} ]
   | group_by(.cluster)
-  | map({cluster:.[0].cluster,
+  | map({cluster:.[0].cluster, is_shape:.[0].is_shape,
          free:[ .[] | select(.cited | not) ],
          excluded:[ .[] | select(.cited) ]})
   | map(select((.free | length) >= 2))
   | map(.free = (.free | sort_by([(if .due_at == null then 1 else 0 end), (.due_at // "")])))
-  # most tasks first, then the nearest due — the biggest hour the house
-  # can actually have, soonest
-  | sort_by([ (0 - (.free | length)),
+  # a shape before a list, then most tasks, then the nearest due — the
+  # biggest hour of one shape the house can actually have, soonest
+  | sort_by([ (if .is_shape then 0 else 1 end),
+              (0 - (.free | length)),
               (if .free[0].due_at == null then 1 else 0 end),
               (.free[0].due_at // "") ])
   | .[0:1]
-  | map(. as $k | ($k.free[0]) as $lead
-        | (($k.free | length) | tostring) as $n
-        | (wm_value_fit(([$k.cluster] + [ $k.free[] | .title ] | join(" ")); $vals)) as $fit
+  | map(. as $k
+        | ($k.free[0:4]) as $held | ($k.free[4:]) as $later
+        | ($held[0]) as $lead
+        | (($held | length) | tostring) as $n
+        | (if $k.is_shape then "shape" else "list" end) as $kindword
+        | (wm_value_fit(([$k.cluster] + [ $held[] | .title ] | join(" ")); $vals)) as $fit
         | {probe:"session-of-like-tasks", rank:1,
            subject:$lead.self,
-           subject_says:($k.cluster + " — " + $n + " open tasks of one shape"),
+           subject_says:($k.cluster + " — " + $n + " open tasks of one " + $kindword),
            urgency_at:$lead.due_at,
            urgency_says:(if $lead.due_at
                          then ("the nearest of them is due " + ($lead.due_at|.[0:10])
                                + " (" + ($lead.due_at|when($nows)) + ")")
                          else "no due date on any of them" end),
-           why:("These " + $n + " open tasks are one shape — " + $k.cluster
+           why:("These " + $n + " open tasks are one " + $kindword + " — " + $k.cluster
                 + " — and the house is holding them as " + $n
                 + " separate evenings. Gathered into one held block they are one hour, and an hour on the calendar is the thing the household would actually say yes to."),
            gate_keys:[],
@@ -1461,7 +1580,7 @@ jq -c --slurpfile cited "$D/cited.json" --slurpfile standing "$D/standing_outcom
            material:{
              row:{self:$lead.self, title:$lead.title, due_at:$lead.due_at,
                   task_list:$lead.task_list, cluster:$k.cluster},
-             siblings:[ $k.free[] | select(.self != $lead.self)
+             siblings:[ $held[] | select(.self != $lead.self)
                         | {self, title, due_at, shares:("the same session: " + $k.cluster)} ],
              excluded:[ $k.excluded[] | . as $m
                         | {self:$m.self, title:$m.title,
@@ -1472,31 +1591,48 @@ jq -c --slurpfile cited "$D/cited.json" --slurpfile standing "$D/standing_outcom
                         fields:["goal", "value_id", "evidence", "2-5 outcome_pieces"],
                         finding:("One held block in which " + $k.cluster
                                  + " are finished together — the session as the end-state, said the way the household would say it out loud (\"" + $bday + " morning: " + $k.cluster + ", done\"). Not any one of the tasks restated, and not a heading over the list."),
-                        cite:([ $k.free[] | .self ]),
+                        cite:([ $held[] | .self ]),
                         offer:null,
                         value_id:$fit[0].id,
                         pieces:([ {form:"create", target_kind:"event", target_id:null, target_action:null,
                                    says:("Hold " + $bday + " " + $bdate + ", 9:00 to 11:00, for " + $k.cluster),
                                    prepared:{title:($bday + " morning: " + $k.cluster),
                                              starts_at:$bstart, ends_at:$bend, calendar:"family"}} ]
-                                 + [ $k.free[] | {form:"invoke", target_kind:"task",
-                                                  target_id:(.self|split("/")|last),
-                                                  target_action:"prioritize",
-                                                  says:("Raise \"" + .title + "\" into that block"),
-                                                  prepared:{priority:1}} ]),
+                                 + [ $held[] | {form:"invoke", target_kind:"task",
+                                                target_id:(.self|split("/")|last),
+                                                target_action:"prioritize",
+                                                says:("Raise \"" + .title + "\" into that block"),
+                                                prepared:{priority:1}} ]),
                         note:(wm_value_note($fit[0])
                               + " The block is already computed: " + $bstart + " to " + $bend
                               + " — 9:00 to 11:00 on " + $bday + " " + $bdate + " in " + $tz
                               + ", rendered UTC and ahead of the run time at the top of this manifest. Move it only if the house plainly says otherwise, and keep it in that zone and in the future."
+                              + " FIVE PIECES IS THE CEILING: the outcome wall takes 2 to 5, so this block is the hold plus the "
+                              + $n + " nearest-due tasks, and a sixth piece would be refused at the door. Cite those "
+                              + $n + " and no others."
+                              + (if (($later|length) > 0)
+                                 then (" NEXT SESSION, not this one: " + (($later|length)|tostring)
+                                       + " more free tasks of this " + $kindword + " did not fit under that ceiling — "
+                                       + ([ $later[] | "\"" + .title + "\" (" + .self + ")" ] | join(", "))
+                                       + ". Leave them free and say in the goal that this hour covers the ones it holds; the next sitting can hold a second block for them.")
+                                 else "" end)
+                              + (if (($garage|length) > 0)
+                                 then (" LEFT OUT OF EVERY SESSION: " + (($garage|length)|tostring)
+                                       + " car-repair " + (if ($garage|length) == 1 then "task" else "tasks" end)
+                                       + " — " + ([ $garage[] | "\"" + .title + "\"" ] | join(", "))
+                                       + ". A brake booster or a steering pump is a parts-and-lift job that ends when the part arrives, not at 11:00, so it is not an hour anyone holds, and folded in here it would poison the hour these tasks would have said yes to. Do not cite them, do not stage pieces for them, and do not name them in the goal.")
+                                 else "" end)
                               + (if (($k.excluded|length) > 0)
                                  then (" " + (($k.excluded|length)|tostring)
-                                       + (if ($k.excluded|length) == 1 then " more task" else " more tasks" end)
-                                       + " of this shape are listed above as EXCLUDED: a standing outcome already cites each of them, and `not-a-twin` refuses a bundle that shares an evidence row with one that stands. Do not cite them and do not stage pieces for them — say in the goal that this hour covers the ones that are free.")
+                                       + (if ($k.excluded|length) == 1
+                                          then (" more task of this " + $kindword + " is listed")
+                                          else (" more tasks of this " + $kindword + " are listed") end)
+                                       + " above as EXCLUDED: a standing outcome already cites each of them, and `not-a-twin` refuses a bundle that shares an evidence row with one that stands. Do not cite them and do not stage pieces for them — say in the goal that this hour covers the ones that are free.")
                                  else "" end))}
                   else {kind:"journal", door:"POST /api/journals",
                         fields:["title", "body"],
                         finding:("No live value carries this. Write nothing at the outcome door; in the journal say what value an hour of " + $k.cluster + " would serve, in one sentence — that skip IS the answer."),
-                        cite:([ $k.free[] | .self ]),
+                        cite:([ $held[] | .self ]),
                         offer:null, value_id:null, pieces:[],
                         note:("No live value owns a word these tasks say, so a session composed here would have to invent the value it serves — the wrapper the last grading caught.")}
                   end)})
@@ -2055,6 +2191,7 @@ jq -n \
   --slurpfile orders_all "$D/work_orders_all.json" \
   --slurpfile crowd "$D/crowd_out.json" \
   --arg since_arr "$SINCE_ARR" \
+  --slurpfile arr_basis "$D/arrivals_basis.json" \
   --slurpfile uncomposed "$D/uncomposed.json" \
   --slurpfile census "$D/uncomposed_census.json" \
   --slurpfile standing "$D/standing_outcomes.json" \
@@ -2085,6 +2222,7 @@ jq -n \
   crowd_out: ($crowd[0] // null),
   now: $started,
   arrivals_since: $since_arr,
+  arrivals_basis: ($arr_basis[0] // []),
   arrivals: ($arrivals[0] | .[0:40]),
   bare_tasks: ($bare[0] | .[0:40]),
   gate: $gate[0],
@@ -2222,7 +2360,13 @@ jq -n \
   echo "  A rig marked REFUSING will refuse every tool it lists — do not plan a dig through it, and never let its refusal become filler: say the source was unreachable, quote the sentence, and enrich from what the house itself holds."
   echo
   echo "## What arrived since the last run — process these"
-  jq -r '"  (new since " + .arrivals_since + ")"' "$RUN/manifest.json"
+  jq -r '"  (rows CREATED since " + .arrivals_since
+           + ", read from the engine log; plus any turn of a person still holding the end of its thread)"' "$RUN/manifest.json"
+  jq -r '[(.arrivals_basis // [])[] | select(.read_from | startswith("the engine log") | not)]
+          | if length == 0 then empty
+            else "  (NOT read from the engine log: "
+                 + (map("\(.kind) — \(.read_from)") | join("; "))
+                 + " — for those kinds a row created since the mark may be missing from this list)" end' "$RUN/manifest.json"
   jq -r 'if (.arrivals|length)==0 then "  (nothing new — a quiet run. If nothing below is owed either, journal nothing and leave: a no-op is a lawful run)" else (.arrivals[] | "- \(.self) [\(.kind) \(.state)] \(.says)") end' "$RUN/manifest.json"
   echo "  Each arrival is a concrete thing to ADVANCE as far as it honestly goes — no further. A person's remark is a work order (answer it). A new or synced task: read it in FULL, then either ENRICH it (below) or, only if it plus its situated graph implies a GOAL LARGER THAN ANY SINGLE ROW, COMPOSE an outcome. Do not manufacture an outcome to have done something: a run writes only what its work orders and the owed lists name, and skipping an order out loud in the journal is the right answer when the order does not hold."
   echo

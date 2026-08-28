@@ -130,16 +130,20 @@ tie-break:
    phone calls (a title beginning *Call / Contact / Phone / Ring*, or
    one carrying a phone number), the errand loop (*Pick up / Drop off
    / Mail / Buy / Return / Go to*), the shop (woodworking, boards,
-   dowel, glue, saw, workbench), the paperwork hour (form,
-   application, insurance, 401k, address, policy, placard, tax,
-   account) — plus, purely mechanically, every set that shares a task
-   list, because a task list is a set the household already grouped.
-   Material: the nearest-due free task, the other free tasks beside
-   it, and the EXCLUDED ones (see below). Expected write: an
-   **outcome** whose goal is the session itself, with pieces that hold
-   the block on the calendar (`event.create`, the instant already
-   converted) and raise each free task into it (`task.prioritize`,
-   legal now only while the task is open).
+   dowel, glue, saw, workbench — but never a Trello, kanban, Jira,
+   scrum or sprint board, because *board* is the shop word that
+   leaks), the paperwork hour (form, application, insurance, 401k,
+   address, policy, placard, tax, account) — and, only when none of
+   those holds two free tasks, a set that shares a task list, under
+   the household's own NAME for that list (see *shape first* below).
+   Car repairs are in no cluster at all (see *the garage is not an
+   hour*). Material: the nearest-due free task, the other free tasks
+   the block holds, and the EXCLUDED ones (see below). Expected write:
+   an **outcome** whose goal is the session itself, with pieces that
+   hold the block on the calendar (`event.create`, the instant already
+   converted) and raise each held task into it (`task.prioritize`,
+   legal now only while the task is open) — **five pieces at most**
+   (see *five pieces is the ceiling*).
 2. `commitments-in-messages` — a task or an event that exists only in
    a text or an email (waymark-is7). The owner's ideal outcome,
    2026-08-28: *"digging through old messages to find tasks/calendar
@@ -190,7 +194,7 @@ subject invisible to every other probe — it has no row yet to be found
 by. (A person's pull and a person's turn still outrank all six: those
 are owed lists, not probes, and `SITTING.md` puts them first.)
 
-Nine rules hold the whole thing up:
+These rules hold the whole thing up:
 
 - **Machine dedupe first.** Every probe drops any subject the cited
   set already names. The `not-a-twin` door would refuse a duplicate
@@ -207,6 +211,71 @@ Nine rules hold the whole thing up:
   bundle that already speaks for it and the reason (*"citing it too
   would be the twin `not-a-twin` refuses"*). A cluster needs two FREE
   tasks to be worth an hour.
+- **Shape first; a list only as a last resort, and only by name**
+  (waymark-dgh). A shared task list used to compete with the four
+  shapes on size alone, and on 2026-08-28 it won: the order that
+  shipped was *"one task list (c07c9da8)"* — a raw id standing in for
+  a goal, over a mixed bag of a realtor list, a lapsed life-insurance
+  policy, a brake booster, a steering pump and a 401k. A list is a set
+  the household already grouped, but the grouping can be a junk
+  drawer, and an id is a handle rather than a name, so that is not one
+  hour of one shape. The four shapes are therefore ranked AHEAD of
+  every same-list cluster: a list cluster ships only when no shape
+  cluster has two free tasks in it, and it ships under the
+  household's own name for the list, resolved from the `task_lists`
+  rows the driver now reads. A list this grant cannot name — the
+  `task_list` kind answers the concealment 404 outside a grant that
+  admits it — is not a cluster at all, because an hour nobody can say
+  out loud is not an hour anyone holds. Within a rank, most free
+  tasks wins, then the nearest due.
+- **The garage is not an hour** (waymark-dgh). A car repair — a title
+  saying *replace / repair / install / fix / swap / bleed / rotate /
+  change* against a vehicle word (*Edge, Odyssey, car, van, truck,
+  brake, booster, pump, tire, oil, alternator, radiator,
+  transmission*) — is a parts-and-lift job that ends when the part
+  arrives, not at 11:00. It could have been given a shape of its own,
+  a Saturday block in the driveway; it is not, because the held block
+  is this probe's whole promise and a two-hour hold on *"replace the
+  brake booster"* is a promise the household would decline — and
+  folded in beside three phone calls it poisons the hour those three
+  would have said yes to. So car repairs are lifted out before
+  anything is clustered, and the order's NOTE names the ones it left
+  out and why. They stay visible to every other probe as the bare
+  tasks they are.
+- **Five pieces is the ceiling** (waymark-dgh). The outcome wall takes
+  2–5 pieces, and the session order used to prescribe the calendar
+  hold plus one `prioritize` per free task — six pieces on a cluster
+  of five, refused at the door. The block now holds the hold plus the
+  **four nearest-due** free tasks, cites exactly those, and lists the
+  rest under *next session* in its NOTE rather than staging them. The
+  NOTE says the ceiling in so many words, so a model reading only the
+  order knows why the sixth task is named and not held.
+- **An arrival is a creation** (waymark-dgh). `advance_arrivals` is
+  the list of rows that did not exist at the watermark — a new or
+  Gate-synced task, a new event, a person's remark — plus one thing no
+  clock can see: a person's turn stays an arrival for as long as it is
+  the last word of its thread, whenever it was said, because it is
+  still owed an answer. It is read from the engine's own log: a
+  collection asked with `?as-of=<instant>` answers the rows that
+  existed then (the router's time-travel tier 1), so *now minus then*,
+  keyed on `self`, is exactly the set created since. That needs no
+  prior snapshot, which is what makes it right on the ephemeral
+  runner, and a Gate-synced task new to the house counts by
+  construction — the mirror's create IS when the house first saw it,
+  and the row is simply absent from the as-of read. Neither available
+  alternative works: `meta` carries no `created_at` to compare, and
+  `version` cannot stand in for one, because a mirrored row is born at
+  version 2 (the create, then the observation) and every synced
+  arrival would be missed. Until 2026-08-28 the no-snapshot arm keyed
+  on `meta.updated_at`, and a mirror resync bumps every row it
+  touches: the evening the owner swept 28 stale offers, the list read
+  **291** arrivals on a house where nothing at all had been created
+  since the last journal. An as-of read takes no other parameter (not
+  even `page[size]` — the log carries state, not data), so it is one
+  GET per kind; a refusal falls back to the prior snapshot's
+  self-diff, then to nothing for that kind, and the manifest prints
+  which basis each kind got, because *"no arrivals"* and *"we could
+  not tell"* are different sentences.
 - **The crowd-out line** (waymark-q23). Machine dedupe is right and it
   can also leave nothing to do: on 2026-08-28 thirty-one standing
   offered bundles cited every one of the sixteen open tasks, so no
