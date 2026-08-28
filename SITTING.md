@@ -211,7 +211,15 @@ holding your place in it.
    THAN ANY SINGLE EVIDENCE ROW — an end-state the household would
    want, not a task restated. **A bundle whose goal equals one task,
    or whose only work is re-prioritizing an existing task, is a
-   wrapper, not an outcome — enrich instead.** Every piece must serve
+   wrapper, not an outcome — enrich instead.** Two compositions are
+   lawful that are not any single row restated: a **work SESSION**,
+   whose goal is one held block in which several like tasks are
+   finished together and whose evidence is those tasks (they stand, so
+   `composes-from-what-stands` admits them); and a **commitment found
+   in a message**, whose goal is that commitment kept and whose
+   evidence is the person row of whoever said it plus any related task
+   or event — the message itself is never cited and never copied, its
+   source is named in the prose. Every piece must serve
    that one goal (an unrelated piece stuffed in is the tell of a
    manufactured bundle). Never a twin of a `standing_outcome` — a
    candidate whose goal says the same thing, or cites the same
