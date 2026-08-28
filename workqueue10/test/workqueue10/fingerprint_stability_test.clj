@@ -90,7 +90,7 @@
       ;; :tickler). The count is a census, not a law: it moves when the
       ;; house gains a kind and never otherwise, which is exactly the
       ;; change it is here to notice.
-      (is (= 37 (count before)) "the whole household is under the lens")
+      (is (= 38 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)

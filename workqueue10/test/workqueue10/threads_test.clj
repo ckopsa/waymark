@@ -339,8 +339,10 @@
 (defn- json [resp] (some-> (:body resp) wire/read-json))
 
 (defn- get! [uri]
-  (let [resp (*h* {:request-method :get :uri uri
-                   :headers {"x-waymark-principal" "colton"}})]
+  (let [[path query] (str/split uri #"\?" 2)
+        resp (*h* (cond-> {:request-method :get :uri path
+                           :headers {"x-waymark-principal" "colton"}}
+                    query (assoc :query-string query)))]
     (is (= 200 (:status resp)) (str uri ": " (:body resp)))
     (json resp)))
 
