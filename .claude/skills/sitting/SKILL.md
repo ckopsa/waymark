@@ -74,12 +74,28 @@ Every offered `composition_request` deserves an answer this sitting:
 an outcome whose `request_id` names it. Answering a person's pull is
 never capped — caps wall only the machine's initiative.
 
-## 4. Advance the arrivals — enrich, or compose for a real goal
+## 4. Work the work orders — enrich, or compose for a real goal
+
+The manifest opens with § "YOUR WORK ORDERS" (waymark-48a): at most
+two assignments a closed set of probes built out of the snapshot —
+a bare task due soonest, an event inside ten days nothing prepares
+for, a roster companion the last week of Gate traffic names and no
+insight records, a live value nothing standing serves. Each order
+already carries its subject's address, its material (rows beside it,
+and what the live Gate rigs answered), and the write it expects: the
+kind, the fields, the addresses to cite, the light door to offer. Do
+them in the order given, one row each; the machine already made every
+choice a machine can make. They are a CEILING: nothing past them is
+required, an order you cannot answer honestly is skipped and named in
+the journal, and `verify` will say `ORDER <probe> <subject>: answered
+by <row>` or `UNANSWERED` for each of them next run.
 
 There is NO floor (waymark-mho): a run advances what ARRIVED (the
-manifest's `arrivals`, new since the last run) and never manufactures
-an outcome to have done something. The MINIMUM is to enrich a bare
-task: for a `bare_tasks` entry (actionable, no detail, unspoken-for)
+manifest's `arrivals`, new since the last run — the material the
+probes drew from) and never manufactures an outcome to have done
+something. The MINIMUM is to enrich a bare task, and that is what a
+`bare-task-due-soon` order asks for: for a `bare_tasks` entry
+(actionable, no detail, unspoken-for)
 publish an insight that ANNOTATES it — evidence citing the task and
 the source you read, a finding that makes it actionable (what it is
 for, where/when/with what, its next physical step), an offer naming

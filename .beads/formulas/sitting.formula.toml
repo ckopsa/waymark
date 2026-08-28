@@ -41,8 +41,11 @@ grant with one GET, pulls every address below into
 defined in terms of — offered requests, threads whose last turn is
 not yours, turns no insight cites yet, bundles carrying no judgment
 of yours, declines owed a diagnosis — into `.sitting/latest/
-manifest.md`. Read the manifest; do not re-fetch what it already
-holds. If it stops, stop with it and report its sentence.
+manifest.md`. It also runs the composer PROBES and writes the run's
+WORK ORDERS at the top of that manifest: at most two assignments with
+their material already fetched and the write each expects. Read the
+manifest, work orders first; do not re-fetch what it already holds.
+If it stops, stop with it and report its sentence.
 
 Two shapes the driver already gets right and a hand-rolled read gets
 wrong: a COLLECTION answers a projection while a row read at its own
@@ -178,13 +181,28 @@ decide.
 
 [[steps]]
 id = "compose"
-title = "Advance the arrivals — enrich a bare task, compose only for a real goal"
+title = "Work the work orders — enrich a bare task, compose only for a real goal"
 depends_on = ["answer-requests", "answer-threads"]
 description = """
+THE READING THIS STEP WORKS FROM is the manifest's § "YOUR WORK
+ORDERS" (waymark-48a): at most two assignments a closed set of probes
+built out of the snapshot — a bare task due soonest, an event inside
+ten days nothing prepares for, a roster companion the last week of
+Gate traffic names and no insight records, a live value nothing
+standing serves. Each order already names its SUBJECT ADDRESS, the
+MATERIAL to read (rows beside it in the house, and whatever the live
+Gate rigs answered — material to act on, never an address to cite),
+and the EXPECTED WRITE: which kind, which fields, which addresses to
+cite, which light door to offer. Do them in the order given, one row
+each. They are a CEILING, not a floor: nothing past them is required,
+and an order you cannot answer honestly is SKIPPED and said so in the
+journal. Next run, `sitting-run.sh verify` prints one line per order
+— answered by <row>, or UNANSWERED.
 NO FLOOR (waymark-mho): this step does not owe an outcome. It
 advances the run's ARRIVALS (manifest `arrivals` — rows new since
-the last run) as far as the evidence honestly goes, and the MINIMUM
-it does is enrich a bare task.
+the last run, the material the probes drew from) as far as the
+evidence honestly goes, and the MINIMUM it does is enrich a bare
+task.
 ENRICH (the minimum, always lawful): for a manifest `bare_tasks`
 entry — actionable, no detail, unspoken-for — publish an insight
 (POST {{base_url}}/api/insights) that ANNOTATES it: evidence citing
@@ -294,7 +312,10 @@ something. Then close this molecule's steps and squash the wisp.
 LAST, always: run `scripts/sitting-run.sh verify` and put its output
 in your report. It lists every row this principal wrote since the
 run started, straight off the engine — the only proof from OUTSIDE
-the run that the sitting happened at all. A verify that says NOTHING
-after a manifest that owed something is a failed run, not a quiet
-one.
+the run that the sitting happened at all — and grades the manifest's
+work orders one line each (`ORDER <probe> <subject>: answered by
+<row>` / `UNANSWERED`, where answered means a row you wrote CITES the
+subject address). A verify that says NOTHING after a manifest that
+owed something is a failed run, not a quiet one; an UNANSWERED order
+is lawful only if the journal says why it was skipped.
 """
