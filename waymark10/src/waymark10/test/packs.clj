@@ -2700,9 +2700,13 @@
 ;; waymark-iqa.6's obligation, and the pack's new LAST one for the
 ;; same reason `:feed/ticklers` sits below the counting obligations:
 ;; it MINTS rows, and a minted finding is a card. It mints more than
-;; any other obligation does — six findings, since waymark-1uv.8,
+;; any other obligation does — up to six findings, since waymark-1uv.8,
 ;; because *ranked, not capped* is only provable by publishing more
-;; than the line's take and watching every one land.
+;; than the line's take and watching every one land. Since waymark-1ag
+;; those six sit on six DISTINCT next steps: one live finding per
+;; offer is a law now, so six on one row would prove the dedupe wall
+;; rather than the absence of a cap, and both claims are made here —
+;; separately, because they are separate claims.
 ;;
 ;; TWO PRINCIPALS, and they are not decoration. The four-eyes wall is
 ;; the whole of 'it only ever offers', so the author has to be
@@ -2743,10 +2747,10 @@
 
 (defn- feed-insight-violations
   "A finding cites what it read, offers something the house can tap,
-  is admitted however many came before it today, is RANKED on the
-  page by numbers the house can read (waymark-1uv.8), and is answered
-  by somebody other than whoever found it — from the wire, in that
-  order.
+  is admitted however many came before it today, asks each question
+  only once, is RANKED on the page by numbers the house can read
+  (waymark-1uv.8), and is answered by somebody other than whoever
+  found it — from the wire, in that order.
 
   The subject is the feed's own first row card ABOVE THE SEAM, the
   same fixture `:feed/ticklers` uses and for the same reason: the
@@ -2754,7 +2758,11 @@
   finished, because `feed/set-aside?` retires a finding whose offer is
   over. The citation is that row's address too — a real one, so the
   registry consult in `cites-what-it-claims` is answering about
-  something rather than about nothing.
+  something rather than about nothing. The `ranked, not capped` fill
+  walks the REST of those cards for its other offers, crossing each
+  with the light verbs it advertises, because since waymark-1ag a
+  second live finding on one offer is refused by name — the fill wants
+  distinct questions, and the refusal is claim 6's to prove.
 
   The ≤-selection door is proved with the card's OWN `heavier` entry
   when it has one: `.3`'s partition already named a verb of that kind
@@ -2768,9 +2776,10 @@
   rather than pass quietly."
   [ctx]
   (let [{:keys [doc]} (feed-doc ctx nil)
-        subject (first (remove #(or (= "insight" (str (:kind %)))
-                                    (not (above-seam (str (:section %)))))
-                               (feed-row-cards doc)))]
+        subjects (into [] (remove #(or (= "insight" (str (:kind %)))
+                                       (not (above-seam (str (:section %))))))
+                       (feed-row-cards doc))
+        subject (first subjects)]
     (if-not subject
       {:covered 0 :violations []}
       (let [day (str (:day doc))
@@ -2778,7 +2787,6 @@
             skind (str (:kind subject))
             self (str (:self subject))
             sid (id-of self)
-            light (some-> (first (sort (keys (:actions subject)))) name)
             heavy (some-> (first (:heavier subject)) :name str not-empty)
             offer {:offer_kind skind :offer_id sid :offer_href self}
             finding (fn [text extra]
@@ -2803,34 +2811,76 @@
                         (make-insight! ctx hs
                                        (finding "This one wants a keyboard"
                                                 {:offer_action heavy})))
-            ;; 5. RANKED, NOT CAPPED (waymark-1uv.8). Six well-formed
-            ;; findings in one day, one author, and every one of them
-            ;; is admitted — the inverse of the claim this obligation
-            ;; was born with, which published until the door said no
-            ;; and asserted the refusal named `insights-are-capped`.
-            ;; That wall was the outcome cap's precedent and the same
-            ;; proxy; what protects the reader now is the rank below,
-            ;; and the obligation watches it instead.
-            filled (when light
-                     (mapv (fn [n]
-                             (make-insight!
-                              ctx hs
-                              (finding (str "The house has not looked at this"
-                                            " in a while, and here is the"
-                                            " next step (" n ")")
-                                       {:offer_action light})))
-                           (range 1 7)))
+            ;; 5. RANKED, NOT CAPPED (waymark-1uv.8). Up to six
+            ;; well-formed findings in one day, one author, and every
+            ;; one of them admitted — the inverse of the claim this
+            ;; obligation was born with, which published until the door
+            ;; said no and asserted the refusal named
+            ;; `insights-are-capped`. That wall was the outcome cap's
+            ;; precedent and the same proxy; what protects the reader
+            ;; now is the rank below, and the obligation watches it
+            ;; instead.
+            ;;
+            ;; SIX DISTINCT OFFERS, not six findings on one offer
+            ;; (waymark-1ag). They were six on one until the dedupe law
+            ;; landed, and one live finding per {kind, id, action}
+            ;; would now make five of them refusals — a DIFFERENT
+            ;; claim, which claim 6 below makes on purpose. What
+            ;; *ranked, not capped* actually asks is whether the door
+            ;; counts a writer's ROWS, so the fixture only has to be
+            ;; six well-formed findings from one author on one day; the
+            ;; page's own above-seam cards, crossed with the light
+            ;; verbs each one advertises, are where the distinct next
+            ;; steps come from. A page with fewer than six of those
+            ;; asks the question at the size it can: every offer it
+            ;; found, every one admitted.
+            offers (into []
+                         (comp (mapcat
+                                (fn [c]
+                                  (let [cself (str (:self c))]
+                                    (map (fn [a]
+                                           {:offer_kind (str (:kind c))
+                                            :offer_id (id-of cself)
+                                            :offer_href cself
+                                            :evidence [cself]
+                                            :offer_action (name a)})
+                                         (sort (keys (:actions c)))))))
+                               (take 6))
+                         subjects)
+            filled (mapv (fn [n o]
+                           (make-insight!
+                            ctx hs
+                            (assoc o :finding
+                                   (str "The house has not looked at this"
+                                        " in a while, and here is the"
+                                        " next step (" n ")"))))
+                         (range 1 (inc (count offers)))
+                         offers)
             landed (filterv #(= 201 (:status %)) filled)
+            ;; 6. ONE LIVE FINDING PER OFFER (waymark-1ag), which is
+            ;; the law claim 5 is careful not to be. The first fill's
+            ;; own offer, asked a second time while the first is still
+            ;; unanswered: refused by name, and the sentence carries
+            ;; the live finding's address. Only asked when that first
+            ;; fill actually landed — a duplicate of a finding that
+            ;; never published would be a question about nothing.
+            twin (when (= 201 (:status (first filled)))
+                   (make-insight!
+                    ctx hs
+                    (assoc (first offers) :finding
+                           "The same question, asked a second time")))
             mine (into #{} (keep #(some-> (:self (:doc %)) id-of)) landed)
             ;; the walker's own feed: the finder's findings are the
             ;; walker's to answer, and the finder's own are not.
             ;; WHICHEVER of them the day's order put on the page is the
-            ;; one answered — the recipe's `:take` is smaller than six
-            ;; on purpose, and the rank decides which: six findings on
-            ;; one offer, published in one breath, are equals to the
-            ;; formula, so hash(seed ‖ card_id) places them. An
-            ;; obligation that insisted on the FIRST one published
-            ;; would be asserting an order nobody declared.
+            ;; one answered — the recipe's `:take` is smaller than the
+            ;; fill on purpose, and the rank decides which: the fills
+            ;; are published in one breath, none of their offers has
+            ;; ever been dismissed, and none is a diagnosis, so they
+            ;; are EQUALS to the formula whether they sit on one row or
+            ;; six, and hash(seed ‖ card_id) places them. An obligation
+            ;; that insisted on the FIRST one published would be
+            ;; asserting an order nobody declared.
             offered (:doc (feed-doc ctx nil))
             explained (:doc (feed-doc ctx nil "explain=1"))
             card (first (filter #(and (= "insight" (str (:kind %)))
@@ -2883,14 +2933,34 @@
                       " is the one place that rule refuses rather than"
                       " moves a button: " (pr-str (:doc too-heavy))))
 
-           (and light (not= 6 (count landed)))
-           (conj (str "feed: an agent published six well-formed findings in"
-                      " one day and " (count landed) " landed — ranked, not"
-                      " capped (waymark-1uv.8): no wall on writing stands at"
-                      " this door, and the rank below decides what the house"
-                      " is shown: "
+           (and (seq offers) (not= (count offers) (count landed)))
+           (conj (str "feed: an agent published " (count offers)
+                      " well-formed findings on " (count offers)
+                      " distinct next steps in one day and " (count landed)
+                      " landed — ranked, not capped (waymark-1uv.8): no wall"
+                      " on WRITING stands at this door, and the rank below"
+                      " decides what the house is shown: "
                       (pr-str (mapv (fn [r] [(:status r) (:guard (:doc r))])
                                     filled))))
+
+           ;; …and the one wall that DOES stand between two findings
+           (and twin (not= :one-live-finding-per-offer (refused-guard twin)))
+           (conj (str "feed: the same offer, published a second time while the"
+                      " first is still unanswered, answered " (:status twin)
+                      " — dedupe is a law, not a cap (waymark-1ag): one live"
+                      " finding per {offer_kind, offer_id, offer_action},"
+                      " because the rank places equals by a hash and would"
+                      " spend the line on one question: "
+                      (pr-str (:doc twin))))
+
+           (and twin (not (str/includes?
+                           (str (:doc twin))
+                           (str "/api/" (:plural (rdef ctx :insight)) "/"
+                                (some-> (:doc (first filled)) :self id-of)))))
+           (conj (str "feed: the duplicate's refusal does not name the live"
+                      " finding it folds into — a wall that cannot say WHICH"
+                      " row already asks the question leaves the author"
+                      " guessing: " (pr-str (:doc twin))))
 
            ;; ── the findings' rank (waymark-1uv.8) ────────────────────
            ;; Law 5 at the insights line: six numbers on every answer, a
@@ -6119,11 +6189,13 @@
      :needs #{[:route :feed] [:kind :tickler]}
      :run feed-tickler-violations}
     ;; …and :insights below IT, for the same reason one turn further:
-    ;; it is the obligation that mints the MOST rows (six findings,
-    ;; because *ranked, not capped* is only provable past the line's
-    ;; take — waymark-1uv.8), and a feed with six fresh findings in
-    ;; the decide section is a feed the two ticklers above would have
-    ;; had to share with them.
+    ;; it is the obligation that mints the MOST rows (up to six
+    ;; findings, because *ranked, not capped* is only provable past the
+    ;; line's take — waymark-1uv.8 — and since waymark-1ag they sit on
+    ;; six distinct offers, which is more of the page read and not
+    ;; more of it written), and a feed with six fresh findings in the
+    ;; decide section is a feed the two ticklers above would have had
+    ;; to share with them.
     {:name :feed/insights
      :needs #{[:route :feed] [:kind :insight]}
      :run feed-insight-violations}

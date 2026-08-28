@@ -50,6 +50,19 @@
     read back on every insight card), with `:take` as the exposure
     floor. A compiler may publish as many findings as it finds; the
     rank decides which two a person reads today.
+  - ONE LIVE FINDING PER OFFER, and it is not the cap coming back
+    (waymark-1ag). `one-live-finding-per-offer` refuses a finding
+    whose `{offer_kind, offer_id, offer_action}` a PUBLISHED finding
+    already carries AND which was built on one of the same evidence
+    rows, naming that finding's address and the shared row. A cap
+    refuses the Nth row because it is the Nth; this refuses a row
+    because the house is already asking exactly that question, off
+    exactly that reading, and nobody has answered it —
+    `outcome/not-a-twin`'s law one kind over. Answer the standing one
+    and the question is open again: a dismissed prior blocks nothing,
+    it only weighs on the rank. The evidence half of the key is what
+    keeps the diagnosis duty dischargeable; the wall's own section
+    below says why.
   - THE FINDER DOES NOT DECIDE. `:decider {:not {:field
     :authored_by}}` — the four-eyes wall doing real work. The agent
     that published a finding is structurally incapable of accepting
@@ -107,6 +120,7 @@
   (:require [clojure.string :as str]
             [waymark10.demand :as demand]
             [waymark10.dsl :refer [defguardfn defresource defscenario]]
+            [waymark10.guards :as g]
             [waymark10.schema :as schema]
             [waymark10.types :as t]))
 
@@ -131,14 +145,6 @@
                (not (str/blank? (nth parts 3)))
                (not (str/includes? (str s) "?")))
       {:plural (nth parts 2) :id (nth parts 3)})))
-
-(defn- listed
-  "A short, ordered rendering of what went wrong — the refusal names
-  every offending address rather than the first, because a compiler
-  fixing them one round trip at a time is a compiler wasting its
-  reader's morning."
-  [xs]
-  (str/join ", " (map pr-str (sort (distinct xs)))))
 
 ;; ── the create walls ────────────────────────────────────────────────
 ;;
@@ -179,7 +185,7 @@
         (if (seq bad)
           (t/deny {:vars {:count (count ev)
                           :offenders (str "; this house has nothing at "
-                                          (listed bad))}})
+                                          (g/listed bad))}})
           (t/allow))))))
 
 (defguardfn offers-something-light
@@ -218,7 +224,7 @@
           (nil? a)
           (deny (str (pr-str kind) " declares no action called "
                      (pr-str aname) "; it answers to "
-                     (listed (map name (keys (:actions rd)))) "."))
+                     (g/listed (map name (keys (:actions rd)))) "."))
 
           :else
           (let [effort (if (:input a)
@@ -249,6 +255,136 @@
                          (:plural rd) "/" oid "."))
 
               :else (t/allow))))))))
+
+;; ── one live finding per offer (waymark-1ag) ────────────────────────
+;;
+;; DEDUPE IS A LAW, NOT A CAP. `insights-are-capped` refused the Nth
+;; finding BECAUSE IT WAS THE Nth, and it left with waymark-1uv.8;
+;; nothing here brings it back. This wall refuses a finding because
+;; the house is ALREADY HOLDING the same question, unanswered — which
+;; is `not-a-twin`'s sentence one kind over (waymark-8gc), and why
+;; these were two beads rather than one: an outcome twins on the ROWS
+;; IT READ, a finding twins on the NEXT STEP IT OFFERS.
+;;
+;; Two findings citing one task are two findings. Two findings both
+;; offering `complete` on that same task, built on the same reading,
+;; are one card written twice, and the rank cannot tell them apart —
+;; it places equals by hash(seed ‖ card_id), so the insights line's
+;; take of two would go to one question.
+;;
+;; THE KEY IS THE OFFER TRIPLE **AND** A SHARED EVIDENCE ROW, and the
+;; second half was not in waymark-1ag's own sentence — it is what
+;; building the wall found. The triple alone DEADLOCKS THE DIAGNOSIS
+;; DUTY: `outcome/no-burial-without-a-diagnosis` makes a composer
+;; publish an insight citing the declined prior and offering the
+;; VALUE's `still_stands` before it may recompose, so two bundles on
+;; one value, declined a fortnight apart, owe two diagnoses with the
+;; identical offer triple — and the composer cannot clear the first
+;; one itself, because the four-eyes wall means the finder does not
+;; decide. A wall keyed on the triple alone would leave that composer
+;; unable to discharge a duty the house imposes on it, which is not a
+;; law, it is a trap. Two diagnoses about two different bundles cite
+;; different rows and are admitted; a finding re-asking the SAME
+;; question off the SAME reading is refused.
+;;
+;; This is also the shape the house had already written down for this
+;; arm before the door existed: waymark-8gc's own description
+;; ("identical evidence set + identical offer_kind/offer_id/
+;; offer_action") and `scripts/sitting-run.sh verify`'s insight fault
+;; line, which pairs shared evidence with the offer triple and needs
+;; no edit now that the door agrees with it. The honest boundary is
+;; `not-a-twin`'s: exact address overlap, nothing cleverer, and a
+;; compiler that genuinely read somewhere else is asking about
+;; something else.
+;;
+;; LIVE MEANS `published`. A taken finding was answered yes, a
+;; dismissed one answered no; both are terminal and both leave the
+;; feed, so neither stands in the way of asking again. The rank
+;; already owns the answered ones — `feed/insight-record` counts
+;; DISMISSED priors on the same offer and holds a fresh finding DOWN
+;; rather than out (waymark-1uv.8) — and the two must not disagree:
+;; the rank's business is what the house answered, this wall's is the
+;; one question still open.
+
+(def ^:private live-state
+  "The one state a finding STANDS in. `published` is this kind's open
+  state (the `:offered` sugar renamed — see `:decision` below), and
+  `taken` / `dismissed` are both terminal."
+  "published")
+
+(def ^:private live-page
+  "How deep the wall reads. `outcome/standing-page`'s number and its
+  reasoning: a household's feed holds tens of live findings, and a
+  bounded read that missed the far tail of a pathological store lets a
+  duplicate THROUGH rather than refusing a finding over a row it could
+  not see — the right way for a wall reading a window to be wrong."
+  200)
+
+(defn- offer-key
+  "The question a finding asks, as the triple that identifies it —
+  `[kind id action]`, each trimmed — or nil when any part is missing.
+  Nil means `offers-something-light` has already refused this finding
+  (shape first, world next), so this wall says nothing about it."
+  [kind id action]
+  (let [t #(some-> % str str/trim not-empty)
+        k (t kind) i (t id) a (t action)]
+    (when (and k i a) [k i a])))
+
+(defn- read-rows
+  "The set of row addresses a finding actually READ: its evidence,
+  trimmed and blank-free. `outcome/read-rows` without the value
+  subtraction, which has no meaning here — an insight serves no value,
+  so everything in its `evidence` is something it went and looked at."
+  [evidence]
+  (into #{} (comp (map #(str/trim (str %))) (remove str/blank?)) evidence))
+
+(defguardfn one-live-finding-per-offer
+  {:judges [:offer_kind :offer_id :offer_action :evidence]
+   :reads [:insight]
+   :vars [:standing :offer :address :shared]
+   :open "One live finding per next step, per reading. A finding nobody has answered is still asking its question, so a second finding built on one of the same rows and offering the same action on the same row asks it twice — and the rank, which places equals by a hash, would spend the line on one question. Answer the standing one, or read somewhere the house is not already being asked about."
+   :explain "The house is already asking that: /api/insights/{standing} offers {offer} on {address}, reads {shared} the way this one does, and nobody has answered it. Read that finding — if it is wrong, dismiss it, and a fresh one on the same next step is admitted the moment it is answered. This is not a cap on what you may publish; it is one question at a time."}
+  [_row inp ctx]
+  (let [find' (:find ctx)]
+    ;; the storage-free probe advertises optimistically, exactly as
+    ;; `cites-what-it-claims` and `outcome/not-a-twin` do — the write
+    ;; path always carries the consult
+    (if (nil? find')
+      (t/allow)
+      (if-some [k (offer-key (:offer_kind inp) (:offer_id inp)
+                             (:offer_action inp))]
+        (let [mine (read-rows (:evidence inp))
+              ;; a VECTOR out of the intersection, because `g/listed`
+              ;; renders it and a sorted list is the sentence
+              shared-with (fn [r]
+                            (into [] (filter mine)
+                                  (read-rows (get-in r [:data :evidence]))))
+              hit (->> (find' :insight {:state live-state} {:limit live-page})
+                       (into []
+                             (comp (filter #(= k (offer-key
+                                                  (get-in % [:data :offer_kind])
+                                                  (get-in % [:data :offer_id])
+                                                  (get-in % [:data :offer_action]))))
+                                   (map #(assoc % ::shared (shared-with %)))
+                                   (filter (comp seq ::shared))))
+                       (sort-by #(str (:id %)))
+                       first)]
+          (if (nil? hit)
+            (t/allow)
+            (t/deny {:vars {:standing (str (:id hit))
+                            :offer (nth k 2)
+                            ;; the offered row's own address, which the
+                            ;; standing finding carries because
+                            ;; `derive-the-offer-address` wrote it at
+                            ;; birth; the kind and the id are the
+                            ;; honest fallback for a row written before
+                            ;; that hook landed
+                            :address (or (some-> (get-in hit [:data :offer_href])
+                                                 str str/trim not-empty)
+                                         (str (nth k 0) " " (nth k 1)))
+                            :shared (g/listed (::shared hit))}})))
+        ;; no offer at all — `offers-something-light` owns that refusal
+        (t/allow)))))
 
 ;; ── the address, derived at birth ───────────────────────────────────
 
@@ -291,6 +427,19 @@
 ;; is the stronger proof anyway: what a CLIENT sees. The two verdict
 ;; scenarios are check tier, judged with no database in the same
 ;; breath as the usability warnings.
+;;
+;; AND NONE NAMES `one-live-finding-per-offer`, for the structural
+;; reason `outcome/not-a-twin` has none either (waymark-8gc, and the
+;; same paragraph one file over): the wall's whole question is what
+;; ANOTHER row already offers, and a scenario holds one literal
+;; `:input` over an empty store — so every scenario reaching this door
+;; would be an allow, and a green one would prove nothing. The claims
+;; (a second live finding on the same offer refused by name, the first
+;; still published; a DISMISSED prior admitting a fresh one; a
+;; different `offer_action` on the same row admitted) are proved by
+;; `workqueue10.insight-rank-test` over the real ring handler, where a
+;; first finding can actually stand, and by `:feed/insights` in the
+;; conformance pack from the wire.
 
 (def ^:private a-published-finding
   {:finding "The porch project has not moved since June, and the next physical step is one tap away"
@@ -554,11 +703,16 @@
     [:offer_href {:optional true :x-display {:hidden true}}
      [:maybe [:string {:max 200}]]]]
    :on-create derive-the-offer-address
-   ;; shape, and only shape: a malformed finding hears what is wrong
-   ;; with it, and a well-formed one is published however many came
-   ;; before it today — the feed's rank, not a wall here, decides
-   ;; which a person reads (waymark-1uv.8).
-   :create-guards [cites-what-it-claims offers-something-light]
+   ;; SHAPE FIRST, WORLD NEXT — outcome's ordering and its reason. A
+   ;; malformed finding hears what is wrong with it before it hears
+   ;; anything about the house it is landing in, and only the third
+   ;; wall reads another row at all. A well-formed finding on a next
+   ;; step nobody is already asking about is published however many
+   ;; came before it today: the feed's rank, not a wall here, decides
+   ;; which a person reads (waymark-1uv.8), and the third wall counts
+   ;; questions rather than rows (waymark-1ag).
+   :create-guards [cites-what-it-claims offers-something-light
+                   one-live-finding-per-offer]
    :scenarios [no-citation-no-publish
                no-offered-action-no-publish
                a-value-may-be-petitioned

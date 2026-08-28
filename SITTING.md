@@ -219,7 +219,17 @@ holding your place in it.
    now (`not-a-twin`, waymark-8gc): a shared evidence row with any
    standing bundle is refused at staging, naming it — so a twin costs
    you a round trip rather than passing quietly. The goal half is
-   still yours to judge. *ranked, not capped* (waymark-1uv.3)
+   still yours to judge. **The insight half is a door too**
+   (`one-live-finding-per-offer`, waymark-1ag): a second LIVE
+   (published) finding offering the same
+   `{offer_kind, offer_id, offer_action}` off one of the same evidence
+   rows is refused, naming the standing finding's address — so index
+   each question once. Answering it reopens it: a dismissed finding
+   blocks nothing (it only weighs on the rank), a different next step
+   on the same row is a different question, and so is the same next
+   step reached from a different reading — which is what keeps two
+   diagnoses owed on one value both publishable.
+   *ranked, not capped* (waymark-1uv.3)
    still holds for real outcomes: stage every genuinely distinct one,
    and the crown's rank chooses what fills attention.
 

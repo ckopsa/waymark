@@ -250,6 +250,27 @@
 
 ;; ── reasons and structured hope ─────────────────────────────────────
 
+(defn listed
+  "A short, ordered rendering of what a refusal found — EVERY
+  offender, not the first, because an author fixing them one round
+  trip at a time is an author wasting a morning. Sorted so the same
+  set of offenders always renders the same sentence, and `pr-str`'d so
+  a blank or a stray space is visible rather than swallowed.
+
+  THE ONE COPY (waymark-g4e). `outcome`, `insight` and `ranking_note`
+  each carried a private one, identical to the character, and the
+  trap in all three was `clojure.core/distinct`: it destructures
+  `[f :as xs]`, which calls `nth`, which a `PersistentHashSet` does
+  not support. A caller that built its offenders with `(into #{} …)`
+  therefore THREW where it meant to refuse, the router turned the
+  throw into a 500, and the refusal it was about to name was lost
+  (waymark-8gc did exactly this on 2026-08-28). `seq` first is a
+  no-op for every vector caller and is what makes a set an ordinary
+  argument; nil renders as the empty string rather than throwing,
+  because a guard's sentence must never be the thing that fails."
+  [xs]
+  (str/join ", " (map pr-str (sort (distinct (seq xs))))))
+
 (def ^:private placeholder #"\{([A-Za-z0-9_.-]+)\}")
 
 (defn- format-map
