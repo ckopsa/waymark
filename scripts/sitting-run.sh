@@ -179,6 +179,23 @@ if [ "$MODE" = "verify" ]; then
   check remark        "/api/remarks?said_by=$PRINCIPAL"           noted
   check journal       "/api/journals?owner=$PRINCIPAL"            written amended
   echo
+  # THIN — a finding that says nothing (waymark-46j). Not a door: a
+  # door cannot judge prose, and one that tried would be a door
+  # rewriting the house's sentences. So it is a HEURISTIC, printed
+  # beside what this run wrote, while the run that wrote it is still
+  # here to fix it: a finding too short to carry a fact, or one of the
+  # generic sentences that fit any task ever written.
+  thin="$(mktemp)"
+  if [ "$(api "$thin" "/api/insights?authored_by=$PRINCIPAL&state=published")" = "200" ]; then
+    jq -r --arg s "$SINCE" '
+      .data.items[]? | select(.meta.updated_at >= $s)
+      | ((.fields.finding // .summary) // "") as $f
+      | select(($f | length) < 40
+               or ($f | ascii_downcase
+                      | test("needs action|requires further action|needs attention|should be done")))
+      | "THIN: \(.self) — \($f)"' "$thin"
+  fi
+  rm -f "$thin"
   if [ "$wrote" -eq 0 ]; then
     echo "NOTHING written. Under waymark-mho there is NO floor: if the manifest's arrivals were all handled (or there were none) and no bare task was worth enriching, a run that wrote nothing is a lawful no-op. It is only a FAILED run if an arrival was a person's unanswered remark, or a bare task plainly needed enriching, and it was left alone."
   else
@@ -705,6 +722,7 @@ jq -n \
   echo "## Bare tasks — the minimum a run does: ENRICH one (never mutate it)"
   jq -r 'if (.bare_tasks|length)==0 then "  (none bare — every actionable task already carries detail or is spoken for)" else (.bare_tasks[] | "- \(.self) [\(.state)] \(.title)\(if .due_at then " · due " + .due_at[0:10] else "" end)") end' "$RUN/manifest.json"
   echo "  To enrich a bare task: publish an INSIGHT (POST /api/insights) whose evidence cites the task AND the source you read (a Gate email/chat, a related row), whose finding is the context that makes the task actionable (what it is really for, where/when/with what, its real next physical step), and whose offer_kind/offer_id/offer_action names the task's own next door. This ANNOTATES the task beside it — it does not touch the task's fields; only the household edits its own rows. An enrichment that does not change whether the task is actionable is not worth writing."
+  echo "  A finding must carry at least one FACT the task's row does not already state — what it is really for, who or where, when, or the next physical step — in a full sentence. \"This task needs action.\" is not an enrichment; verify flags as THIN any finding under 40 characters, or one reading 'needs action' / 'requires further action' / 'needs attention' / 'should be done'."
   echo
   echo "## When to COMPOSE instead of enrich"
   echo "  Compose an outcome only when the arrival + its situated graph (the same person / project / value / time-window rows) imply a GOAL that is larger than any single evidence row — an end-state the household would want, not a task restated. A bundle whose goal equals one task, or whose only work is re-prioritizing an existing task, is a wrapper, not an outcome: enrich instead. When a real goal is there, the uncomposed rows below and standing_outcomes above are the material and the twin-guard."

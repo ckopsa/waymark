@@ -636,3 +636,90 @@
         (is (= "the real self" (:about s)))
         (is (= "REAL entry" (:title j)))
         (is (= "the true words" (:body j)))))))
+
+;; ── 14. the entry names only what stands (waymark-46j) ──────────────
+;;
+;; A composer's journal claimed an outcome had been staged for a task
+;; id that exists in no state, and the door checked nothing. The body
+;; is still free prose — the wall reads ADDRESSES, the one shape the
+;; house's own URL bar wears, and refuses the ones that resolve to
+;; nothing. A bare id in a sentence is prose and is left alone.
+
+(deftest an-entry-points-only-at-rows-that-stand
+  (let [cairn (agent-headers "cairn-addr")
+        real (req :post "/api/journals"
+                  {:title "The sitting"
+                   :body "Read the house, answered what was owed, left."}
+                  cairn)
+        jid (id-of real)
+        ghost (str (java.util.UUID/randomUUID))
+        unserved (str "/api/outcomes/" ghost)]
+    (testing "the entry the later ones point AT is minted"
+      (is (= 201 (:status real))))
+
+    (testing "an entry citing a LIVE address is admitted"
+      (let [r (req :post "/api/journals"
+                   {:title "Yesterday, continued"
+                    :body (str "Picking up from /api/journals/" jid
+                               " — nothing new had arrived by morning.")}
+                   cairn)]
+        (is (= 201 (:status r)))
+        (is (str/includes? (get-in (json r) [:data :body]) jid))))
+
+    (testing "an address the house cannot show is REFUSED, and named"
+      (let [r (req :post "/api/journals"
+                   {:title "A sitting that overclaimed"
+                    :body (str "Staged " unserved " for the porch project.")}
+                   cairn)]
+        (is (>= (:status r) 400))
+        (is (not= 201 (:status r)))
+        (is (str/includes? (body-str r) unserved))))
+
+    (testing "a SERVED collection with a phantom id is refused too — the wall resolves the ROW, not just the plural"
+      (let [addr (str "/api/journals/" ghost)
+            r (req :post "/api/journals"
+                   {:title "A sitting that cited a ghost"
+                    :body (str "Continuing from " addr ", which is nowhere.")}
+                   cairn)]
+        (is (>= (:status r) 400))
+        (is (str/includes? (body-str r) addr))))
+
+    (testing "every offender is named at once, not the first one"
+      (let [a (str "/api/journals/" ghost)
+            b (str "/api/selves/" ghost)
+            r (req :post "/api/journals"
+                   {:title "Two ghosts"
+                    :body (str "Read " a " and then " b ", and neither is there.")}
+                   cairn)]
+        (is (>= (:status r) 400))
+        (is (str/includes? (body-str r) a))
+        (is (str/includes? (body-str r) b))))
+
+    (testing "a bare id in the prose is prose — no address, no wall"
+      (let [r (req :post "/api/journals"
+                   {:title "A sitting written in words"
+                    :body (str "Staged an outcome for task " ghost
+                               " — said in prose, addressed at nothing.")}
+                   cairn)]
+        (is (= 201 (:status r)))
+        (is (str/includes? (get-in (json r) [:data :body]) ghost))))
+
+    (testing "the same wall stands at the amend door, and the entry is untouched"
+      (let [a (edit "journals" jid "amend"
+                    {:title "The sitting, amended"
+                     :body (str "On reflection: " unserved " was staged.")}
+                    cairn)]
+        (is (>= (:status a) 400))
+        (is (not= 200 (:status a)))
+        (is (str/includes? (body-str a) unserved))
+        (let [d (:data (json (req :get (str "/api/journals/" jid) cairn)))]
+          (is (= "The sitting" (:title d)))
+          (is (str/includes? (:body d) "left.")))))
+
+    (testing "…and an amendment that points at a live row lands"
+      (let [a (edit "journals" jid "amend"
+                    {:title "The sitting, amended"
+                     :body (str "Kept, and it points at /api/journals/" jid ".")}
+                    cairn)]
+        (is (= 200 (:status a)))
+        (is (= "amended" (:state (json a))))))))
