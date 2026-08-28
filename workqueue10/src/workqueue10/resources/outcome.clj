@@ -929,8 +929,13 @@
                                      (map (fn [r]
                                             {:id (str (:id r))
                                              :state (name (:state r))
+                                             ;; a VECTOR, not a set:
+                                             ;; `listed` runs `distinct`
+                                             ;; over what it is handed
+                                             ;; and Clojure 1.12's
+                                             ;; `distinct` refuses a set
                                              :shared
-                                             (into #{}
+                                             (into []
                                                    (filter mine)
                                                    (read-rows
                                                     (get-in r [:data :evidence])
