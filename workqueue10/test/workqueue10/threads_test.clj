@@ -52,16 +52,22 @@
    :last_message_preview "✅ APPROVED"})
 
 (def ^:private kathy
-  {:name "Kathy Peppas" :snippet "Picture" :time "" :hash "749450b3"})
+  {:name "Kathy Peppas" :snippet "Picture" :time "9:05 AM"
+   :hash "749450b3" :last_message_at "2026-08-28T09:05:00-06:00"})
 
 (def ^:private shumways
   {:name (str "Amy Shumway, Calista Shumway, Wellesley Kopsa, "
               "(304) 482-6884")
-   :snippet "Celestia: Picture" :time "" :hash "deb10be2"})
+   :snippet "Celestia: Picture" :time "Yesterday" :hash "deb10be2"
+   ;; a date-only label: the rig resolves it to midday, because
+   ;; "Yesterday" knows the day and not the hour
+   :last_message_at "2026-08-27T12:00:00-06:00"})
 
+;; the label the rig could not read: it answers null rather than a
+;; guess, and this row is what proves nil still means nil
 (def ^:private walmart
   {:name "41646" :snippet "We're sorry, please return the item"
-   :time "" :hash "6d7a4fd2"})
+   :time "" :hash "6d7a4fd2" :last_message_at nil})
 
 ;; the words that must never appear in a stored document, whatever
 ;; shape the translation grows into
@@ -189,11 +195,25 @@
               "(304) 482-6884"]
              (:participant_names d)))))
 
-  (testing "THE CLOCK GAP, verified live: the rig answers an empty
-            time for every thread, so a messa row carries none — and
-            the gap renders rather than being invented"
-    (is (nil? (:last_message_at (messa/thread->doc kathy))))
-    (is (nil? (:last_message_at (messa/thread->doc shumways)))))
+  (testing "THE CLOCK GAP, CLOSED: the rig resolves its own relative
+            label to an instant, and the doc canonicalizes it to UTC
+            — the row ranks by recency at last"
+    (is (= "2026-08-28T15:05:00Z"
+           (:last_message_at (messa/thread->doc kathy))))
+    (is (= "2026-08-27T18:00:00Z"
+           (:last_message_at (messa/thread->doc shumways)))))
+
+  (testing "and the gap that remains still RENDERS: a label the rig
+            could not read answers null, which the doc carries as an
+            absent field rather than as an invented time"
+    (is (nil? (:last_message_at (messa/thread->doc walmart))))
+    (is (nil? (:last_message_at
+               (messa/thread->doc (assoc kathy :last_message_at
+                                         "not a clock"))))))
+
+  (testing "the human label itself never lands in the document — it
+            is `time`, which is on the forbidden list"
+    (is (nil? (:time (messa/thread->doc kathy)))))
 
   (testing "the snippet is the last message, and it never leaves the
             source"
@@ -395,10 +415,10 @@
       (is (= "tgram:5061625694"
              (:external_id (get rows "Wellesley Kopsa")))))
 
-    (testing "the phone answers no time, so its rows honestly carry
-              none while telegram's do"
+    (testing "both rigs speak a clock now, so every stored row carries
+              the cursor the driver windows on"
       (is (some? (:last_message_at (get rows "Wellesley Kopsa"))))
-      (is (nil? (:last_message_at (get rows "Kathy Peppas")))))
+      (is (some? (:last_message_at (get rows "Kathy Peppas")))))
 
     (testing "and a thread is never done: `live` is the only word a
               listed conversation has"

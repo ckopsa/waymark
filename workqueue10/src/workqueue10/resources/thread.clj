@@ -55,14 +55,16 @@
   the sitting driver's thread selection and the commitments probe's
   evidence address.
 
-  RECORDED GAPS, all healable without a change here:
+  RECORDED GAPS, all healable without a change here — and one of
+  them healed exactly that way: :last_message_at was nil for every
+  messa row, because that rig answered an empty time for every
+  thread; the rig learned to read its own timestamp on 2026-08-28 and
+  the field filled with no change in this file. What is still open:
   :message_count_window is nil at both wired rigs, because the only
-  way to count messages is to read them; :last_message_at is nil for
-  every messa row, because that rig answers an empty time for every
-  thread and every message in it (verified 2026-08-28); and a tgram
-  GROUP mirrors with no participants, because the listing exposes
-  none and this source will not read a group's messages to infer
-  them."
+  way to count messages is to read them; messa still answers no time
+  for an individual MESSAGE; and a tgram GROUP mirrors with no
+  participants, because the listing exposes none and this source will
+  not read a group's messages to infer them."
   (:require [waymark10.dsl :refer [resource]]
             [waymark10.server.mirror :as mirror]))
 
@@ -130,13 +132,14 @@
       ;; THE CURSOR THAT MATTERS. Neither rig takes a `since=`, so the
       ;; listing is the window and this is what the DRIVER windows on:
       ;; a thread whose last word moved since the watermark is an
-      ;; arrival. Nil for every messa row — that rig answers an empty
-      ;; time for every thread, and the gap renders.
+      ;; arrival. Both rigs speak a clock since 2026-08-28; nil is
+      ;; still reachable, and still means the rig read no time rather
+      ;; than that nothing was said.
       [:last_message_at {:optional true :sort :default
                          :x-display
                          {:showcase true
                           :label "When something was last said"
-                          :help "The rig's own timestamp for the last message. The phone's texts carry none, so their rows leave this empty."}}
+                          :help "The rig's own timestamp for the last message. A rig that could not read a time leaves this empty rather than guessing one."}}
        [:maybe :waymark/instant]]
       ;; declared and nil at both wired rigs: the only way to count
       ;; messages is to READ them, which is the thing this kind exists

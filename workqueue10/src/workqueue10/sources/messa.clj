@@ -4,23 +4,32 @@
   proves the protocol is not Telegram's shape wearing a general name.
 
   THE WIRE is one tool: `messa__threads {limit}`, verified live
-  2026-08-28. One object per thread, and only four fields:
+  2026-08-28. One object per thread:
 
       {:name \"Kevin Gallagher\", :snippet \"You: Sounds good\",
-       :time \"\", :hash \"d0d1123a\"}
+       :time \"9:05 AM\", :hash \"d0d1123a\",
+       :last_message_at \"2026-08-28T09:05:00-06:00\"}
 
   `snippet` never leaves this namespace — it is the last message,
   which is the one thing this kind exists not to carry.
 
-  THE CLOCK GAP, recorded loudly because it changes what the driver
-  can do (docs/spec-threads.md § 'The messa gap'): **`time` is the
-  empty string for every thread**, and `messa__read_messages` answers
-  `time: null` and `age: null` for every message inside one. So a
-  messa thread carries :last_message_at nil, never ranks by recency,
-  and can never become an arrival. It is still worth mirroring: the
-  thesis is ADDRESSES, and a commitment found in the Kathy Peppas
-  thread now has somewhere to point. The moment the rig speaks a
-  time this fills with no change here.
+  THE CLOCK GAP, CLOSED — 2026-08-28, messa's
+  fix/thread-last-message-at. It was recorded here loudly because of
+  what it cost the driver (docs/spec-threads.md § 'The messa gap'):
+  `time` was the empty string for every thread, so a messa row
+  carried :last_message_at nil, never ranked by recency, and could
+  never become an arrival. The rig had been reading a selector that
+  matched nothing; it now reads Google's own `mws-relative-timestamp`
+  and resolves that relative label (\"9:05 AM\", \"Yesterday\", \"Wed\",
+  \"Aug 12\") back to an instant in the phone's zone, published as
+  `last_message_at`. This namespace reads THAT field — never `time`,
+  which stays the human label and is forbidden from the document.
+
+  The gap is narrower, not gone. A label the rig cannot read answers
+  null rather than a guess, and a date-only label (\"Yesterday\",
+  \"Wed\") resolves to midday, so an older messa row is accurate to
+  the DAY and no finer. Nil still means nil: such a thread still
+  never ranks and never arrives.
 
   THE GROUP TRICK. Google Messages names a group thread after
   everybody in it — \"Amy Shumway, Calista Shumway, …, Wellesley
@@ -37,7 +46,8 @@
   :gone for every id it no longer carries."
   (:require [clojure.string :as str]
             [workqueue10.confluence :as conf]
-            [workqueue10.sources.gate-chat :as gc]))
+            [workqueue10.sources.gate-chat :as gc])
+  (:import (java.time Instant OffsetDateTime)))
 
 (set! *warn-on-reflection* true)
 
@@ -47,7 +57,7 @@
   "This namespace's translation version, composed into every etag —
   the rig mints none. Bump it when thread->doc changes shape and
   every stored row re-observes on its next pull."
-  "m1")
+  "m2")
 
 (def title-max
   "A group's title is a ROSTER rather than a headline, so it is
@@ -66,18 +76,38 @@
   (into [] (comp (map str/trim) (remove str/blank?))
         (str/split (str nm) #",")))
 
+(defn instant-string
+  "The rig's `last_message_at` — an RFC 3339 instant it has already
+  resolved in the phone's zone, \"2026-08-28T09:05:00-06:00\" — as the
+  canonical UTC instant the schema decodes, or nil when the rig read
+  no clock. Canonical rather than passed through, for tgram's reason:
+  a rig that changes its spelling should not churn every etag in the
+  kind."
+  [s]
+  (let [s (str/trim (str s))]
+    (when-not (str/blank? s)
+      (try (str (Instant/parse s))
+           (catch Exception _
+             (try (str (.toInstant (OffsetDateTime/parse s)))
+                  (catch Exception _ nil)))))))
+
 (defn thread->doc
-  "One listing entry → the canonical thread doc. No snippet, no
-  time (the rig has none), nothing anybody said."
+  "One listing entry → the canonical thread doc. No snippet, nothing
+  anybody said — and the time taken from `last_message_at`, the rig's
+  own resolved instant, never from `time`, which is the label the
+  list shows a human (\"Yesterday\") and is forbidden here."
   [th]
   (let [names (participants (:name th))
         title (str (:name th))]
-    {:title (subs title 0 (min (count title) title-max))
-     :status "live"
-     ;; a comma in the title is Google Messages saying "more than one
-     ;; person is here" — the only group signal the rig gives
-     :chat_kind (if (> (count names) 1) "group" "direct")
-     :participant_names names}))
+    (cond-> {:title (subs title 0 (min (count title) title-max))
+             :status "live"
+             ;; a comma in the title is Google Messages saying "more
+             ;; than one person is here" — the only group signal the
+             ;; rig gives
+             :chat_kind (if (> (count names) 1) "group" "direct")
+             :participant_names names}
+      (instant-string (:last_message_at th))
+      (assoc :last_message_at (instant-string (:last_message_at th))))))
 
 ;; ── the source ──────────────────────────────────────────────────────
 
