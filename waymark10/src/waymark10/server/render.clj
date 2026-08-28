@@ -352,6 +352,66 @@
                   "; the resource is " (summary/state-label state) ".")
      :becomes-available {:in-states (mapv name states)}}))
 
+(defn action-availability
+  "Is one named action OPEN on this row right now, for the principal
+  this ctx carries — the same question the envelope's
+  actions/unavailable partition answers, asked about one door, and
+  answered by the very same helpers in the very same order: the row's
+  own law resolves the action's guards (`judgment/resolve-action`),
+  the state has to be one the door leaves from, every guard probes in
+  declaration order, and an action whose required input has no
+  admissible value narrates as shut rather than advertising an empty
+  picker.
+
+  → `{:status :available}`, `{:status :unavailable :reason \"…\"
+  :denier <the guard that said so, or nil>}`, `{:status :hidden}`, or
+  nil when this kind declares no such non-bulk action.
+
+  THE DENIER RIDES ALONG because a caller may need to know WHAT KIND
+  of shut it is, and a guard's own `:reads` is the honest way to ask:
+  a denier reading `:principal` refused THIS HAND, and a caller asking
+  on somebody else's behalf (a staged piece another person will tap)
+  has no business treating that as a shut door. Out-of-state and
+  no-admissible-input carry no denier — nothing judged, the machine
+  and the acceptance set answered.
+
+  PUBLIC SINCE waymark-euj, and the reason is a rule about second
+  opinions: `outcome`'s `the-door-is-open-now` stages a piece against
+  ANOTHER kind's door and has to judge that door exactly as the
+  household's own screen will, or a staged button and a rendered one
+  would disagree about the same row on the same morning. A wall that
+  re-derived availability would be that second opinion, and it would
+  be wrong first — so it calls this instead.
+
+  ONE SEAM, RECORDED: the reason renders over the row as handed in,
+  where the envelope renders it over the redacted/hashed projection.
+  A caller holding a full row (a guard inside a write) has already
+  read it; a caller that must not print a concealed field hands in the
+  projection it may print."
+  [rdef action row ctx]
+  (let [aname (keyword (name action))
+        declared (get-in rdef [:actions aname])]
+    (when (and declared (not (:bulk declared)))
+      (let [defn' (judgment/resolve-action rdef (assoc declared :name aname)
+                                           (:law-revision row))
+            state (keyword (name (:state row)))]
+        (if (contains? (:from defn') state)
+          (let [{:keys [status deny denier]} (probe-transition defn' row ctx)]
+            (case status
+              :available (if-some [field (empty-required-admission
+                                          defn' row ctx)]
+                           {:status :unavailable
+                            :reason (:reason (no-admissible-entry defn' field))}
+                           {:status :available})
+              :unavailable {:status :unavailable
+                            :reason (g/render-reason denier deny row)
+                            :denier denier}
+              :hidden {:status :hidden}))
+          (if (probe-hidden-only? defn' row ctx)
+            {:status :hidden}
+            {:status :unavailable
+             :reason (:reason (out-of-state-entry defn' state))}))))))
+
 ;; ── parts: placed actions re-rendered per data item ─────────────────
 
 (defn- key-acceptance-leaves

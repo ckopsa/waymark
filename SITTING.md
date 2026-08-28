@@ -286,6 +286,18 @@ holding your place in it.
 
 - Name a live value; cite everything you read; 2–5 pieces; the
   prepared input must fit the target door.
+- **Compose from a book that is still open.** At least one row you
+  cite must still stand — a task nobody has finished, an event still
+  ahead, a person this house holds, a finding nobody has answered.
+  Your own value does not count: that is what the bundle SERVES, and
+  `value_id` already says it. A bundle whose every citation is a done
+  task or a Saturday that has been and gone is refused, naming each
+  row and the word it is finished with.
+- **Stage a piece only behind a button that is there.** An invoke
+  piece's door is judged AVAILABLE on that row now, exactly as the
+  row's own envelope judges it, and the refusal quotes that door's own
+  reason. A door shut only against YOUR hand is fine — a member taps,
+  not you.
 - **Every date you prepare is in the future.** The manifest gives you
   `now`; an event's `starts_at`/`ends_at`, a deadline, an hour held —
   all of them fall after it. A piece holding an hour already past is a

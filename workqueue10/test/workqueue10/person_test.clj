@@ -339,7 +339,15 @@
                :value_id value-id
                :routing "It runs through the shop, which this house wrote down as something it loves."
                :routes_through "the shop"
-               :evidence [(str "/api/values/" value-id)]}
+               ;; the value is what the bundle SERVES;
+               ;; `composes-from-what-stands` (waymark-euj) subtracts
+               ;; it and asks whether anything the composer READ is
+               ;; still open. A fresh address in a collection this
+               ;; house serves names a row the wall cannot classify,
+               ;; and an unclassifiable row stands.
+               :evidence [(str "/api/values/" value-id)
+                          (str "/api/tasks/01HZQ7PERREAD"
+                               (subs (str (random-uuid)) 0 8))]}
               extra)
        (human who)))
 
