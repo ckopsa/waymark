@@ -712,10 +712,16 @@ jq 'map({self, kind, state, at:(.meta.updated_at // null),
     | sort_by(.at) | reverse' "$ARR_ACC" > "$D/arrivals.json" 2>/dev/null || echo '[]' > "$D/arrivals.json"
 rm -f "$ARR_ACC" "$ARR_ACC.k"
 
-# the CITED set — every row an outcome or insight already speaks for
+# the CITED set — every row a STANDING outcome or a LIVE insight speaks
+# for. Standing means offered or accepted; live means published. A
+# declined, expired or dismissed row speaks for nothing — that is what
+# a verdict frees (not-a-twin reads the same two states). Until
+# 2026-08-28 this read every outcome in every state, so a swept fridge
+# (28 declines in one evening) still claimed all 16 open tasks and the
+# session probe could never find a free cluster.
 jq -s '(.[0] + .[1]) | unique' \
-   <(jq '[.[].data.evidence[]?]' "$R/outcomes.full.json") \
-   <(jq '[.[].data.evidence[]?]' "$R/insights.full.json") \
+   <(jq '[.[] | select(.state=="offered" or .state=="accepted") | .data.evidence[]?]' "$R/outcomes.full.json") \
+   <(jq '[.[] | select(.state=="published") | .data.evidence[]?]' "$R/insights.full.json") \
    > "$D/cited.json" 2>/dev/null || echo '[]' > "$D/cited.json"
 
 # BARE tasks — the lightest write, and what a quiet run does: enrich
