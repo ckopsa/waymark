@@ -90,3 +90,9 @@ Ideas considered and rejected, so they are not re-proposed:
 - **Replay-based history.** Rejected on the record in the time-travel spec:
   handlers reach the `ctx :create` door and push across process boundaries, so
   they are not replayable and should not be promised to be.
+- **The gate is decided in one workflow.** `tests.yml` carries no path
+  filter any more; a first `changes` job diffs base against head and every
+  suite is gated on its answer, so the `gate` check that branch protection
+  requires is computed by the same run that would have run the suites. The
+  `paths-ignore` mirror it replaced could report green on a MIXED diff while
+  those suites were still running — waymark-a7t, PR #29, PR #33.
