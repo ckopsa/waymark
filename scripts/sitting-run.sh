@@ -105,7 +105,7 @@ refusal() { jq -r '(.detail // .title // .error // "no sentence came back") | to
 # nothing else. A grant-gated collection is what proves the header:
 # outside the selected scope the resources answer 404, which is the
 # hole a run must never fall through quietly.
-PROBE="$(mktemp)"; trap 'rm -f "$PROBE"' EXIT
+PROBE="$(mktemp)"; trap 'rm -f "$PROBE" "${WELCOME:-}"' EXIT
 code="$(api "$PROBE" "/api/-/welcome")"
 if [ "$code" != "200" ]; then
   echo "the door refused the credential at $BASE/api/-/welcome (HTTP $code):" >&2
@@ -113,6 +113,7 @@ if [ "$code" != "200" ]; then
   echo "STOP. Check that the mint's client is the one this house knows; the sentence above names the fix." >&2
   exit 1
 fi
+WELCOME="$(mktemp)"; cp "$PROBE" "$WELCOME"   # $PROBE is reused for the grant check below
 GRANT_STATE="$(jq -r '.home.grant.state // "?"' "$PROBE")"
 GRANT_EXP="$(jq -r '.home.grant.expires_at // empty' "$PROBE")"
 GRANT_HOME="$(jq -r '.home.grant.id // empty' "$PROBE")"
@@ -202,7 +203,7 @@ RUN="$SITDIR/$STAMP"
 mkdir -p "$RUN/rows" "$RUN/doors"
 ln -sfn "$STAMP" "$SITDIR/latest"
 cp "$WHO" "$RUN/rows/well-known.json"; rm -f "$WHO"
-cp "$PROBE" "$RUN/rows/welcome.json"
+cp "$WELCOME" "$RUN/rows/welcome.json"; rm -f "$WELCOME"
 
 # The bearer, 0600, so the model's own door writes ride this run's
 # credential instead of minting a second one. It dies in an hour.
@@ -496,10 +497,18 @@ jq -s '(.[0] + .[1]) | unique' \
 # insight yet speaks for it. Enrichment ANNOTATES it (an insight citing
 # the source and offering the task's own next step); it NEVER edits the
 # task — only people decide what their own rows say.
+#
+# ACTIONABLE is the mirrored :status (open|done|dropped — the source's
+# own word, task.clj), NOT the waymark state: every mirror sits at
+# state=fresh whether its source says open or done, so a filter on
+# state alone handed a composer 24 finished July chores and dropped
+# gtasks as "bare" (the Fable sitting of 2026-08-27 read them out).
 jq --slurpfile cited "$D/cited.json" '
   ($cited[0] // []) as $c
   | [.[] | (.state // "") as $st
          | select($st=="fresh" or $st=="open" or $st=="active")
+         | select((.fields.status // "open") == "open")
+         | select(((.fields.title // .display.title // "") | tostring | length) > 0)
          | select(((.fields.detail // "") | tostring | length) == 0)
          | .self as $sf | select(($c | index($sf)) == null)
          | {self, state, title:(.display.title // .fields.title // .summary // ""),
