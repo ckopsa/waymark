@@ -32,11 +32,17 @@
   create the owner is stamped and enforced (an agent may only mint a
   row it owns; a human names whose row it is), and every edit is
   guarded to the owning agent or a person. The default-deny wall does
-  the concealing."
+  the concealing.
+
+  ONE more wall since waymark-46j, and it is about honesty rather than
+  access: `names-only-what-stands` refuses an entry whose body points
+  at an ADDRESS the house cannot show. The prose stays free; only the
+  addresses in it are held to being real."
   (:require [clojure.string :as str]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario]]
-            [waymark10.types :as t]))
+            [waymark10.types :as t]
+            [workqueue10.resources.insight :refer [row-address]]))
 
 ;; ── ownership: the one security concern this file owns ───────────────
 
@@ -385,6 +391,73 @@
                        :one-way "Restoring just returns the profile to active."}
               :display {:label "Restore" :order 1}}}})
 
+;; ── the entry may not name rows that are not there ──────────────────
+;;
+;; waymark-46j: a composer's journal claimed an outcome had been staged
+;; for a task id that exists in no state, and the door checked nothing
+;; about it. The body stays FREE PROSE — a day is not a form and this
+;; wall does not grade writing. But an ADDRESS is not prose. `/api/
+;; <collection>/<id>` is the one shape the house's own URL bar wears
+;; (insight/row-address, and the same shape a citation and an offer
+;; wear), it is a claim the reader will follow, and a claim the reader
+;; cannot follow is exactly what this refuses.
+;;
+;; What it deliberately does NOT do: resolve a BARE id. "staged an
+;; outcome for task 811da3b1" names nothing addressable, and a door
+;; that went hunting for ids in sentences would be a door reading
+;; prose. The wall checks addresses; the :open sentence says so, so a
+;; writer knows which half of the entry is being read.
+;;
+;; The row read is the ENGINE's, not the writer's — the same ctx :read
+;; hook existing-member? uses, so a curator writing about a row it
+;; cannot see is not refused for seeing wrongly. That does make the
+;; door answer "does this id exist" for an id the writer already holds;
+;; ids are ULIDs and UUIDs, so it enumerates nothing, and the
+;; alternative (a visibility-scoped read) would refuse a true sentence
+;; for the wrong reason.
+
+(def ^:private prose-address
+  "An address as it appears mid-sentence. The id charset stops at the
+  first character an id never carries, so a sentence-ending period or
+  a closing paren is punctuation rather than part of the id."
+  #"/api/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+")
+
+(defn- unserved-addresses
+  "Every address in the prose naming a row this house cannot show, in
+  the order a reader would meet them. nil when the ctx cannot answer —
+  the storage-free render probe carries no registry and no read hook,
+  and advertises optimistically the way cites-what-it-claims does;
+  the write path always carries both."
+  [body ctx]
+  (let [rdef-of (:rdef-of ctx)
+        read' (:read ctx)]
+    (when (and rdef-of read')
+      (into []
+            (remove (fn [href]
+                      ;; the plural → kind resolution is the registry's,
+                      ;; consulted exactly as insight's citation wall
+                      ;; consults it; then the row itself, through the
+                      ;; write's own transaction
+                      (let [{:keys [plural id]} (row-address href)
+                            rd (some-> plural rdef-of)]
+                        (and rd (some? (read' (:kind rd) id))))))
+            (distinct (re-seq prose-address (str body)))))))
+
+(defguardfn names-only-what-stands
+  {:judges [:body]
+   :reads [:storage]
+   :vars [:offenders]
+   :open "An entry may point at the rows it is about, as addresses — /api/tasks/01H… — and every address it names has to be a row this house actually serves. A bare id in a sentence is prose and is left alone: this reads addresses, not writing."
+   :explain "This entry points at rows the house cannot show: {offenders}. Point at what stands, or say it in prose without an address."}
+  [_row inp ctx]
+  (let [bad (unserved-addresses (:body inp) ctx)]
+    (if (seq bad)
+      ;; every offender at once — cites-what-it-claims' posture, and
+      ;; for its reason: a writer fixing them one refusal at a time is
+      ;; a writer losing the entry it sat down to write
+      (t/deny {:vars {:offenders (str/join ", " (map pr-str bad))}})
+      (t/allow))))
+
 ;; ── :journal — one row per entry, the shared history ────────────────
 
 (defhandler amend-entry [row inp _ctx]
@@ -428,7 +501,7 @@
    ;; the story reads newest-first; created_at is the engine column,
    ;; never a prose/body field
    :sortable {:fields [:created_at] :default "-created_at"}
-   :create-guards [owner-is-self-or-on-behalf]
+   :create-guards [owner-is-self-or-on-behalf names-only-what-stands]
    :on-create stamp-owner
    :actions
    {:amend {:from #{:written :amended} :to :amended
@@ -449,7 +522,7 @@
             ;; the entry. No shared draft surface is warranted for a
             ;; single-author page.
             :waives #{:large-effort}
-            :guards [edit-is-owner-or-human]
+            :guards [edit-is-owner-or-human names-only-what-stands]
             :safety {:idempotent true :reversible false :confirm false
                      :one-way "An amendment overwrites the entry; the log keeps what it said before."}
             :handler amend-entry
