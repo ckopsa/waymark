@@ -2543,6 +2543,33 @@ when bound, else the member id). scripts/ui-drive.mjs pins three
 checks: heartbeat → dot; the member Follow affordance; follow +
 simulated move → navigation.
 
+## The theme, light and dark (waymark-88k)
+
+The palette is a token block in `ui/020-base.css` and nowhere else:
+every colour the three stylesheets and the one JS line that paints a
+weather dot use is read through `var()`, so one block repaints the
+whole client. Dark is not a second design — the same token names,
+restated. It is written twice on purpose, because CSS cannot share a
+body across a media boundary: `@media (prefers-color-scheme: dark)
+{ :root:not([data-theme="light"]) { … } }` gives the system its say,
+and `:root[data-theme="dark"] { … }` lets an explicit choice win in
+the OTHER direction too. `ui_assembly_test` compares the two blocks
+declaration for declaration and greps the rest of the stylesheet for
+literal colours, so neither guard is a reviewer's eye.
+
+The switch is three-state — System / Light / Dark — and **System is
+the absence of a stamp**, not a third colour: with nothing stored the
+page keeps tracking the OS live, so a desktop that flips at dusk
+takes this page with it, no reload. A choice persists under
+`waymark.theme` (`ui_lite.html` shares the key, so the two pages
+agree) and is applied by a tiny `<script id="theme-boot">` in the
+head — the one script outside the page's single client block, there
+because it must stamp `<html data-theme=…>` BEFORE the first paint or
+the reader sees a frame of the wrong theme. Every storage touch is
+wrapped: a browser that refuses `localStorage` still toggles for the
+tab, it just forgets by the next visit. `<meta name="color-scheme"
+content="light dark">` carries native controls and scrollbars along.
+
 ## Recorded boundaries, each a sentence
 
 - A principal mid-request (an invoke, a GET) is invisible — only held

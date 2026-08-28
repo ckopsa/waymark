@@ -13,6 +13,12 @@
     .actions button { flex: 1 1 auto; }
   }
   @media (pointer: coarse) { button { padding: 9px 14px; } }
+  /* the theme chip stays a chip: the two rules above grow every
+     button for thumbs, and a segmented control that grows with them
+     would push the header into a second row on every phone */
+  @media (max-width: 600px), (pointer: coarse) {
+    .themepick button { font-size: 13px; padding: 7px 11px; }
+  }
 
   /* ── the mobile shell ──────────────────────────────────────────────
      Served when the request's User-Agent is a phone: the server

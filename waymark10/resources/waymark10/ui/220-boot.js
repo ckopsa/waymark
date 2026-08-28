@@ -229,5 +229,44 @@ sse("/api/-/intents", ({event, data: f}) => {
   paintIntents();
 });
 
+/* ── the theme control (waymark-88k) ───────────────────────────────
+   Three states, and only ONE of them is a colour: "system" is the
+   ABSENCE of a stamp, which is why it keeps working while the page
+   is open — a reader whose desktop flips to dark at dusk sees this
+   page follow with no reload, because prefers-color-scheme is a live
+   query and nothing on <html> is overriding it. "light"/"dark" stamp
+   <html data-theme=…>, and the stylesheet honours that in BOTH
+   directions: dark on a light system, light on a dark one.
+   The head's theme boot already applied the stored word before the
+   first paint; all that is left here is wiring the seats and marking
+   which one is pressed. Storage is best-effort at every touch — a
+   browser that refuses it still switches for this tab and simply
+   forgets by the next visit. */
+const THEMES = ["system", "light", "dark"];
+const themeSeats = () => document.querySelectorAll("#themepick button");
+function storedTheme() {
+  try {
+    const t = localStorage.getItem("waymark.theme");
+    return THEMES.includes(t) ? t : "system";
+  } catch (_e) { return "system"; }   /* storage can throw, not just miss */
+}
+function applyTheme(t) {
+  if (t === "light" || t === "dark")
+    document.documentElement.setAttribute("data-theme", t);
+  else document.documentElement.removeAttribute("data-theme");
+  for (const b of themeSeats())
+    b.setAttribute("aria-pressed", String(b.dataset.themeChoice === t));
+}
+function setTheme(t) {
+  try {
+    if (t === "system") localStorage.removeItem("waymark.theme");
+    else localStorage.setItem("waymark.theme", t);
+  } catch (_e) { /* this tab only, then */ }
+  applyTheme(t);
+}
+for (const b of themeSeats())
+  b.addEventListener("click", () => setTheme(b.dataset.themeChoice));
+applyTheme(storedTheme());
+
 $("#apphost").textContent = location.host;  // the honest app identity
 render();

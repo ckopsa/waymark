@@ -6,18 +6,85 @@
      for definition/deploy vocabulary — the law is visibly not an app
      concern, and nothing else may borrow its color.
      Self-contained: local font stacks only, no external hosts. */
+  /* ── the palette, in one place ────────────────────────────────────
+     EVERY colour this client paints is named here and nowhere else:
+     the three stylesheets and the one JS line that colours a dot read
+     tokens only, so this block — and only this block — repaints the
+     whole page. The light values are the ported waymark9 palette,
+     unchanged to the byte.
+
+     Dark is not a second design; it is the same design with the same
+     token names restated. The system's preference applies on its own,
+     and an explicit choice (data-theme on <html>, written before first
+     paint by the head's theme boot and switched by the header's
+     System/Light/Dark control) wins in BOTH directions — which is what
+     the :not([data-theme="light"]) inside the media query buys. */
   :root {
+    color-scheme: light;
     --paper: #FAFAF8; --panel: #FFFFFF; --ink: #20261F; --muted: #6B7268;
     --line: #E4E5E0; --chipbg: #EFF1EC;
     --verdigris: #2E6E4E; --verdigris-deep: #245A3F; --verdigris-wash: #E7F0EA;
     --refusal: #93342B; --refusal-wash: #F7ECEA;
     --warn: #8A5A00; --warn-wash: #F6EFDF;
     --law: #5B4B9E; --law-wash: #EDEAF6;
-    --radius: 4px;
+    /* ink that rides ON an action colour (button.primary, .chip.on,
+       button.danger:hover, the ledger pip) and the translucent chip
+       that rides on top of that again */
+    --on-accent: #FFFFFF; --on-accent-wash: rgba(255,255,255,.25);
+    /* the toast is a slab of its own: inverted under light, raised
+       under dark — never the page's own panel */
+    --toast-bg: #20261F; --toast-ink: #FFFFFF; --toast-action: #9FD0B5;
+    /* scrims, lifts, and the whisper a row makes under the pointer */
+    --scrim: rgba(32,38,31,.28);
     --shadow: 0 1px 2px rgba(32,38,31,.06);
+    --shadow-pop: 0 4px 14px rgba(0,0,0,.10);
+    --row-hover: rgba(32,38,31,.018);
+    /* the weather dot's quiet sky (120-nav-home.js reads this one) */
+    --sky-quiet: #4A6B8A;
+    --radius: 4px;
     --serif: Georgia, "Times New Roman", "Source Serif 4", serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, "IBM Plex Mono", monospace;
     --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  /* the system's word — unless this browser was explicitly told light.
+     KEEP THE TWO DARK BLOCKS IN LOCKSTEP: ui_assembly_test compares
+     them token for token, because CSS gives no way to share one body
+     across a media boundary, and a drifted copy is a theme that
+     changes when you toggle it away and back. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --paper: #151814; --panel: #1E211C; --ink: #E7E9E3; --muted: #9AA096;
+      --line: #3A3F37; --chipbg: #292D26;
+      --verdigris: #6FBF92; --verdigris-deep: #8ED3AB; --verdigris-wash: #1D3328;
+      --refusal: #E08A7E; --refusal-wash: #34211E;
+      --warn: #DCB264; --warn-wash: #332A16;
+      --law: #A99BE8; --law-wash: #262040;
+      --on-accent: #10211A; --on-accent-wash: rgba(0,0,0,.22);
+      --toast-bg: #2C322A; --toast-ink: #F0F2EC; --toast-action: #8ED3AB;
+      --scrim: rgba(0,0,0,.58);
+      --shadow: 0 1px 2px rgba(0,0,0,.45);
+      --shadow-pop: 0 6px 18px rgba(0,0,0,.55);
+      --row-hover: rgba(255,255,255,.045);
+      --sky-quiet: #8FB4D4;
+    }
+  }
+  /* the explicit word — dark on a light system too */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --paper: #151814; --panel: #1E211C; --ink: #E7E9E3; --muted: #9AA096;
+    --line: #3A3F37; --chipbg: #292D26;
+    --verdigris: #6FBF92; --verdigris-deep: #8ED3AB; --verdigris-wash: #1D3328;
+    --refusal: #E08A7E; --refusal-wash: #34211E;
+    --warn: #DCB264; --warn-wash: #332A16;
+    --law: #A99BE8; --law-wash: #262040;
+    --on-accent: #10211A; --on-accent-wash: rgba(0,0,0,.22);
+    --toast-bg: #2C322A; --toast-ink: #F0F2EC; --toast-action: #8ED3AB;
+    --scrim: rgba(0,0,0,.58);
+    --shadow: 0 1px 2px rgba(0,0,0,.45);
+    --shadow-pop: 0 6px 18px rgba(0,0,0,.55);
+    --row-hover: rgba(255,255,255,.045);
+    --sky-quiet: #8FB4D4;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--paper); color: var(--ink);
@@ -50,7 +117,7 @@
   .drawer-btn:hover { color: var(--ink); background: var(--chipbg); }
   .drawer-btn.on { display: inline-block; }
   .drawer-backdrop { display: none; position: fixed; inset: 0; z-index: 40;
-    background: rgba(32,38,31,.28); }
+    background: var(--scrim); }
   .drawer { position: fixed; top: 0; bottom: 0; left: 0; width: 250px;
     z-index: 41; background: var(--panel); border-right: 1px solid var(--line);
     box-shadow: var(--shadow); padding: 12px 18px 24px; overflow-y: auto;
@@ -67,6 +134,19 @@
     font-size: 12px; color: var(--muted); }
   .drawer .dr-second:hover { color: var(--verdigris-deep); }
   header .spacer { flex: 1; }
+  /* the theme control: one segmented chip, three seats — System,
+     Light, Dark. The pressed seat is the stored word, and "system"
+     is a real seat, not the gap left when neither colour is chosen. */
+  .themepick { display: inline-flex; align-items: stretch;
+               border: 1px solid var(--line); border-radius: 999px;
+               overflow: hidden; }
+  .themepick button { border: none; border-radius: 0; background: none;
+                      color: var(--muted); font-size: 12px; line-height: 1;
+                      padding: 5px 9px; }
+  .themepick button + button { border-left: 1px solid var(--line); }
+  .themepick button:hover { color: var(--ink); background: var(--chipbg); }
+  .themepick button[aria-pressed="true"] { background: var(--verdigris-wash);
+                      color: var(--verdigris-deep); font-weight: 700; }
   #who { width: 120px; padding: 4px 8px; border: 1px solid var(--line);
          border-radius: var(--radius); background: var(--paper);
          color: var(--ink); font: 13px var(--sans); }
@@ -124,27 +204,27 @@
   .combo-list { position: absolute; z-index: 30; left: 0; right: 0; top: 100%;
     max-height: 240px; overflow-y: auto; background: var(--panel);
     border: 1px solid var(--line); border-radius: var(--radius);
-    box-shadow: 0 4px 14px rgba(0,0,0,.10); }
+    box-shadow: var(--shadow-pop); }
   .combo-item { padding: 6px 9px; cursor: pointer; font-size: 13px; }
   .combo-item:hover { background: var(--chipbg); }
   .combo-more { padding: 6px 9px; font-size: 12px; color: var(--muted); }
   textarea.mono { font-family: var(--mono); font-size: 12px; }
   button { cursor: pointer; }
   button:hover { border-color: var(--muted); }
-  button.primary { background: var(--verdigris); color: #fff;
+  button.primary { background: var(--verdigris); color: var(--on-accent);
                    border-color: var(--verdigris); }
   button.primary:hover, button.primary:active {
     background: var(--verdigris-deep); border-color: var(--verdigris-deep); }
   button.danger  { background: var(--panel); color: var(--refusal);
                    border-color: var(--refusal); }
-  button.danger:hover { background: var(--refusal); color: #fff; }
+  button.danger:hover { background: var(--refusal); color: var(--on-accent); }
   button:disabled { opacity: .45; cursor: not-allowed; }
   /* effort as a subtle chip riding the button, not a text suffix */
   .effort-chip { font: 600 9.5px var(--sans); border-radius: 3px;
                  padding: 1px 5px; margin-left: 6px; vertical-align: 1px;
                  background: var(--chipbg); color: var(--muted); }
   button.primary .effort-chip, button.danger:hover .effort-chip {
-    background: rgba(255,255,255,.25); color: #fff; }
+    background: var(--on-accent-wash); color: var(--on-accent); }
 
   main { margin: 18px auto; padding: 0 20px; }
   .panel { background: var(--panel); border: 1px solid var(--line);
@@ -181,7 +261,7 @@
            align-items: center; }
   .chips .chip { cursor: pointer; }
   .chips .chip.static { cursor: default; }
-  .chips .chip.on { background: var(--verdigris); color: #fff;
+  .chips .chip.on { background: var(--verdigris); color: var(--on-accent);
                     border-color: var(--verdigris); }
   /* runtime vocabularies (waymark-8sg): the tokens a field's
      x-options source enumerates, offered as chips beside the box.
@@ -237,8 +317,8 @@
                   padding: 1px 5px; margin-left: 6px; vertical-align: 1px;
                   background: var(--verdigris-wash);
                   color: var(--verdigris-deep); }
-  button.primary .suggest-chip { background: rgba(255,255,255,.25);
-                                 color: #fff; }
+  button.primary .suggest-chip { background: var(--on-accent-wash);
+                                 color: var(--on-accent); }
   @keyframes remedy-pulse {
     50% { box-shadow: 0 0 0 6px var(--verdigris-wash); } }
   button.pulse { outline: 2px solid var(--verdigris); outline-offset: 1px;
