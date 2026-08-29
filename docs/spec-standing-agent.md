@@ -470,6 +470,125 @@ took out of reach, each with the bundle that cites it),
 `material.day_table` (the household clock), and `write.pieces` (the
 `outcome_piece` bodies, printed as JSON ready to POST).
 
+## The rework order carries a clock, and the note carries times
+
+Two faults found on one bundle, on the evening of 2026-08-29, and both
+of them live in the same gap: **a rework order used to hand a small
+model a note and expect arithmetic.**
+
+**The clock (waymark-thn).** Handed the order *"add Howie's 11AM
+birthday party in Spanish Fork"*, a composer staged
+`event.create` at `starts_at 2026-08-29T11:00:00Z` — five in the
+morning, Mountain. The manifest said *"times are America/Denver"* in
+prose and left the conversion to the model. The commitments probe had
+already solved this for its own orders: it prints a **household
+clock**, the coming days with a couple of local hours pre-converted,
+so a small model PICKS A ROW instead of doing zone arithmetic in its
+head. The rework section now prints the same table, from the same
+`den_utc` — the zone lives inside the date string, so it is
+DST-correct on both sides of the change rather than carrying today's
+offset a week forward.
+
+It is **today plus seven days**, at `08:00 09:30 11:00 13:00 14:00
+17:00 19:00` local, and it prints **once, at the top of the section**,
+with every bundle below pointing at it. The probes' own table starts
+*tomorrow*, because every instant a probe prepares has to be ahead of
+the run; a rework is usually about a day the household is already
+standing in, so this one starts today. Once rather than per bundle
+because the table is eight identical lines and the per-bundle text
+that has to stay legible is the marks lists. Under it, the rule in one
+sentence: *a clock time a person says is LOCAL — write the UTC beside
+it from the rows above, and never write the local hour with a Z.*
+
+**The note (waymark-o04).** The marks wall (waymark-wxk) is the
+enforced path, and it can only fire on marks. On the same bundle the
+household marked **nothing** and wrote three clock times into the
+note —
+
+> Howie's Party at 11AM in Spanish Fork
+> Wilfred's Party at 1PM in Provo at our home.
+> Payson inspection maybe 9:30-10:30?
+
+— and the composer committed a round that staged nothing, withdrew
+nothing, and said *"I've added the Payson inspection and Howie's
+party, and kept Wilfred's party."* That commit is **lawful**
+(waymark-vf8: in an unmarked round, standing by the plan is an
+answer), the wall could not fire, and the bundle went back on the
+household's feed reading as answered while every hour in it was still
+wrong. The promise had become a claim.
+
+So the driver **reads the note**. Every turn on a bundle's thread that
+is not the composer's own is split into sentences; each sentence is
+scanned for **clock atoms**; and each atom's sentence is matched to a
+piece by **shared nouns** — case-folded, four letters or longer,
+stopwords and when-words out, so *Howie / party / Spanish / Fork*
+matches the Howie piece and *Payson / inspection* matches the Payson
+hold. A lone GENERIC word is not a match (every party in the note
+would otherwise land on the first party in the plan), most shared
+nouns wins, and the longest shared noun breaks the tie. What comes out
+is three lists, printed under the rework order beside the marks:
+
+| the sentence matches | and then |
+| --- | --- |
+| a piece whose hour differs | **SUGGESTED RE-TIME** — the piece, its current local time, the note's time, and the UTC |
+| …a piece already **taken** | **SUGGESTED INVOKE** — its row exists; offer that row's own light door, or, when it exposes none, say plainly that the event exists and a **person** moves it |
+| no piece at all | **SUGGESTED ADD** — a new piece at that hour |
+
+**They are SUGGESTIONS, not marks.** Nothing here refuses anything —
+the marks wall is the enforced path and this is a reading printed
+beside it, in the manifest, where the composer can disagree with it.
+The sentence that carries the point sits above the list: *a note that
+names a time for a piece is a RE-TIME even when nobody tapped Wrong
+time.*
+
+Three details that keep the list honest. A phrase whose piece
+**already holds the hour prints nothing**, so the list empties itself
+as the rework lands. A household that says one thing across three
+turns gets **one** suggestion, citing the latest turn. And an
+**ADD only fires on a bundle actually handed back**: on an offered
+bundle nobody asked for a re-plan, and a time said in passing (*"we
+are at the gym from 8:30 to 10:00"*) is a constraint rather than a
+request, so there only a time that CONTRADICTS a staged piece is
+printed — under its own heading, *Offered, and a time the household
+named is STILL UNHELD*, which is exactly the shape a no-change rework
+leaves behind.
+
+**A bare number is never a time.** A phrase counts only when it
+carries a colon, an `am`/`pm`, or the word *noon* or *midnight* —
+otherwise *"Aug 29"* reads as half past eight and every note in the
+house grows a clock it never said. A dash or the word *to* between two
+atoms makes one phrase, and the second lends the first its meridiem
+(*"9 to 11am"*). The DAY is the weekday or month-day the sentence
+names, and otherwise **the day the matched piece already sits on** —
+a re-time keeps the day unless the note says otherwise, which is what
+makes *"at 11AM"* an answer rather than a question.
+
+**`verify` grades all of it, by the rows.**
+
+- `CLAIMED, NOT STAGED: <outcome> — says "<…>" but no piece changed` —
+  the revision moved (a round was committed), no piece was staged and
+  none withdrawn inside it, and the words posted with it match
+  `/\b(added|moved|re-?timed|changed|updated|rescheduled)\b/i`. The
+  words are read off the THREAD, because that is where the rework door
+  puts them: `says` is not a field on the bundle, it is the turn.
+- `NOTE TIME HONORED` / `NOTE TIME IGNORED: <piece> still <local>` —
+  for each SUGGESTED RE-TIME the last manifest carried, whether a
+  piece on that bundle now starts at the note's hour. IGNORED is a
+  fact, not automatically a failure: standing by the plan is an answer
+  as long as the journal says why.
+- `ODD HOUR: <piece> starts <local> (<utc>) — check the zone` — any
+  `create` piece written this run whose prepared start is before 06:00
+  or after 22:00 in the household's zone. A heuristic, printed beside
+  what the run wrote while the run is still here to fix it: nothing
+  can tell a deliberate dawn start from a zone mistake, and six hours
+  off is what a zone mistake looks like.
+
+**The fixture run.** There is no harness for the driver in this repo,
+so the documented substitute is the one *the marks are the work order*
+already uses: extract the jq programs and run them over small files.
+The specimen is recorded under *the driver* in
+`docs/spec-outcome-menu.md`.
+
 ## Running a sitting on Jules
 
 Everything below is set once, by the owner, in the Jules web UI — the

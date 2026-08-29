@@ -192,6 +192,15 @@ holding your place in it.
    is unanswered or a KEEP has been withdrawn, with the offenders
    listed. Where they marked nothing, the note is the whole order and
    the reading is yours.
+   **And a time in the note is a RE-TIME even where nobody tapped
+   wrong time** (waymark-o04, waymark-thn): the manifest reads the
+   household's own clock times out of the thread and prints them under
+   the bundle as SUGGESTED RE-TIME / INVOKE / ADD, beside a household
+   clock with every local hour already converted — pick a row and
+   write the UTC beside the local hour, never the local hour with a
+   `Z`, because a round that changes no piece while `says` claims it
+   added or moved one is a claim rather than an answer, and next run
+   `verify` prints `CLAIMED, NOT STAGED` against your name.
 4. **Answer every unanswered thread turn** — a `remark` whose last
    word is a person's is a work order: reply with a remark
    (`in_reply_to` naming theirs), restage citing the insight you
