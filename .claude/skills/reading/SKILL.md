@@ -120,10 +120,17 @@ wrong; say it in the journal. Then **score** every standing bundle you
 did not write (`ranking_note`: score 0–1, one sentence ≤240 chars on
 what the bundle stands on, evidence = the whole cite list). Then
 **dismiss** thin or false rows where your grant admits the door: the
-manifest names the four doors a review needs (`insight.dismiss`,
-`person.dismiss`, `ranking_note.dismiss`, `outcome.not_this_week`),
-whether the leash admits each, the THIN findings by other hands, and
-the anchored ask body. Inside the ask window the driver filed it as
+manifest names the five doors a review needs (`insight.dismiss`,
+`person.dismiss`, `ranking_note.dismiss`, `outcome.not_this_week`,
+`verdict_reason.create`), whether the leash admits each, the THIN
+findings by other hands, and the anchored ask body. **File the word
+with the dismissal** (waymark-hcr): `POST /api/verdict_reasons` with
+`subject_kind`, `subject_id`, `subject_href`, `about`, `verdict`
+`"dismiss"` and one word — a finding or a judgment takes the words a
+CLAIM runs along (`thin`, `unfounded`, `restated`, `untrue`), never
+the four about something the house was offered, and `wrong_time` on a
+finding is refused by name. The reason belongs on the row, never only
+in the journal: the rank reads it, and so does the next reading. Inside the ask window the driver filed it as
 the one extend-ask (see `grant_watch`); otherwise file it yourself
 (`POST /api/approval_requests`) only when you hold a row to act on and
 no ask of yours stands, and report the ask id. Four eyes: a row this

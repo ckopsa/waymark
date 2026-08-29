@@ -2511,6 +2511,100 @@ so the row-level wall has to be declared.**
   (`:own-field :composed_by`). A composer can never answer its own
   bundle, grant or no grant.
 
+### AMENDED 2026-08-29 (waymark-hcr): the words a dismissed CLAIM gets
+
+The first reading (2026-08-29) dismissed 22 published findings and
+had nowhere to put why. It tried the obvious thing — `{"reason":
+"thin", "words": "…"}` on the dismiss door — and got a 422 on an
+unexpected field, which is this section's own design working exactly
+as written: the verdict takes no body, ever. So the 22 reasons went
+into the reading's journal, which is a private own-surface kind. The
+rank could not read them. Neither could the next reading.
+
+**Nothing about the mechanism was wrong; the VOCABULARY was.** The
+four words are the four axes an OFFER runs along — when, what, how,
+ever — because those are the four things a composer would stage
+differently next time. A finding is not an offer. It is something an
+agent said was *true about this house*, and *wrong time* is not a
+thing anybody means about a sentence. The reading's own four words
+say what the axes actually are for a claim: **thin, false, restated,
+vibes**.
+
+So a claim gets its own four, declared beside the first four rather
+than instead of them:
+
+| axis | token | the household's words |
+|---|---|---|
+| is it worth doing? | `thin` | Too thin |
+| is it backed? | `unfounded` | Not backed |
+| is it new? | `restated` | Already known |
+| is it true? | `untrue` | Not true |
+
+`twin` — *this finding duplicates another* — was weighed and folded
+into `restated`: both say *the house already has this*, the composer's
+lesson is the same either way, and a fifth chip is the form this whole
+section refused. The token is `untrue` rather than the reading's own
+`false`, because a wire carrying `"reason": "false"` is a wire whose
+every reader has to know that string is a word.
+
+**Which four a subject gets rides the declaration, in one map.**
+`verdict-reason/reason-sets` is `{"default" …, "insight" …,
+"ranking_note" …}`; the schema's enum is the UNION, so any word may be
+stored, and `the-word-fits-the-subject` — a body-only wall, first in
+the create chain, no row loaded — refuses a word the subject's own set
+does not name. A closed enum cannot ask about a sibling field, and a
+multi-schema over every kind in the house would be exactly the
+kind-specific knowledge this kind's docstring refuses; the wall also
+answers a mismatch with a household sentence where the schema would
+answer *unexpected value*.
+
+**The chips follow the same read one key over.** `feed/reasons-doc`
+already took `post_to` off the kind's `:plural` and the labels off
+`:x-display {:choices …}`; it now takes the sets off `:x-display
+{:sets …}` and answers `{post_to, field, choices, by_kind, says}`.
+`choices` stays the DEFAULT set — a screen that knows nothing of
+`by_kind` still offers a declined piece the right four — and
+`135-feed-screen.js` picks `by_kind[subject.kind]` when the door names
+it. Eight chips on one settled card would have been the form this
+section refused; four, chosen by what was answered, is the same one
+optional tap it always was.
+
+**`ranking_note.dismiss` grew `:reasons true`**, and it is the first
+place that flag has been set on a kind that does not card. jfv.19 held
+it back on `value.dismiss` and `person.dismiss` for a good reason —
+the missing half was a screen — but the reader this amendment is for
+is a READING, and a reading reads the flag off the projected action
+rather than off a chip row. It is the one machine-readable place a
+door says *this verdict takes a word*. When the row screen grows chips
+(waymark-jfv.19) that door needs nothing further.
+
+**Who may file the word: an ordinary grant naming
+`verdict_reason.create`, and not the dismiss grant.** The dismiss
+scope was weighed and refused: a grant model where a scope on one kind
+silently confers a write on another is a hole, and the reading's leash
+already names its doors one at a time. The entry cannot be anchored to
+a row — the row it writes does not exist yet — so it is a plain create,
+paced like every anchorless create (20/hour/principal) rather than
+fenced by id. `.beads/formulas/reading.formula.toml` and the driver's
+review-ask now name five doors instead of four.
+
+**What reads it.** `feed/insight-record` already read the strongest
+word said on prior dismissals of the same `{offer_kind, offer_id,
+offer_action}` — that half of this was built by waymark-1uv.8 and was
+simply reading an empty set. `reason-weights` now knows both sets on
+one scale (`untrue` 4, `restated` 3, `unfounded` 2, `thin` 1, read
+from the last word back exactly as the first four are), so the
+findings' line narrates *8 for not true* where it used to narrate *8
+for never this*. A `ranking_note`'s dismissal is read by whoever
+queries the reasons by subject — the collection filters on
+`subject_kind` and `subject_id` — because the crown reads only LIVE
+notes and a dismissed one has left the rank by construction.
+
+**Fingerprints did not move.** `:display` rides no fingerprint facet,
+so `ranking_note`'s hash is where it was; `verdict_reason`'s create
+model gained enum values and a guard, which the census will show as
+that kind's line changing and no other.
+
 ## Built — jfv.17, the impact line (2026-08-25, waymark-jfv.17)
 
 The owner's discomfort, verbatim, is what this bead is downstream of:

@@ -86,6 +86,20 @@
           (str "the generic page never learns an application's kind or"
                " door — found " word)))))
 
+(deftest the-quick-reasons-follow-the-subject
+  ;; waymark-hcr: a house says different things about what it was
+  ;; OFFERED and about what an agent TOLD it, so the settled card's
+  ;; four words come off the document's own `reasons.by_kind`, keyed by
+  ;; the kind of the row the card just settled — read, never named,
+  ;; exactly as `post_to` and `choices` already are. Eight chips on one
+  ;; card would be the form jfv.16's whole design refused.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "function reasonWords"))
+    (is (str/includes? page "(door.by_kind || {})[String(kind || \"\")]")
+        "the words are looked up by the kind the card already carries")
+    (is (str/includes? page "(own && own.length) ? own : (door.choices || [])")
+        "…and a kind the door does not name gets the house's default four")))
+
 (deftest the-dashboard-renderer-rides-the-page
   ;; the dashboard screen (waymark-ggw): render() forks by kind to
   ;; renderDashboard (function declarations hoist across the one flat

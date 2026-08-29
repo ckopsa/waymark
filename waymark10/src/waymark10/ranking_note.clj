@@ -521,7 +521,28 @@
      :handler stamp-the-dismisser
      :safety {:idempotent true :reversible false :confirm false
               :one-way "The judgment stops counting and stays on record under the agent's name. Nothing is deleted; the crown ranks the row without it from the next read, and the agent may judge the row again in a new note."}
-     :display {:label "Dismiss" :order 2
+     ;; …AND IT MAY SAY WHY (waymark-hcr). `:reasons` is the same one
+     ;; word `insight.dismiss` wears, and it means what it means
+     ;; everywhere: this verdict, once it lands, may carry one of the
+     ;; subject kind's quick words as a `verdict_reason` row. The words
+     ;; a note gets are the finding's — a judgment is a CLAIM, so it is
+     ;; too thin, not backed, already known or not true, never *wrong
+     ;; time* (`verdict-reason/reason-sets`).
+     ;;
+     ;; A NOTE DOES NOT CARD, and that is why this flag is worth more
+     ;; here than the one jfv.19 held back on `value.dismiss`. The
+     ;; crown quotes a live note ON THE BUNDLE's card and the note's
+     ;; own dismissal happens on its own screen, which draws no chips —
+     ;; but the reader this bead is for is a READING, and a reading
+     ;; reads the flag off the projected action, not off a chip row. It
+     ;; is the one machine-readable place a door says *this verdict
+     ;; takes a word*, and the reading files the row itself under a
+     ;; scope naming `verdict_reason.create`. When the row screen grows
+     ;; chips (waymark-jfv.19) this door needs nothing further.
+     ;;
+     ;; `:display` rides no fingerprint facet, so the kind's hash does
+     ;; not move for it.
+     :display {:label "Dismiss" :order 2 :reasons true
                :description "Answer this judgment: not this agent's word, not on this row — the crown ranks without it"}}}
    :scenarios [a-person-does-not-write-a-judgment
                nobody-restates-somebody-elses-judgment

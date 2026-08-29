@@ -191,9 +191,11 @@ relation, and every published finding naming one of them); the
 the grade lines `verify` filed for each (`grades.txt` in the run dir;
 on an ephemeral runner there are none, and the manifest says so), the
 forms the last reading left and whether a row now speaks for each, the
-four doors a review needs (`insight.dismiss`, `person.dismiss`,
-`ranking_note.dismiss`, `outcome.not_this_week`) and whether the leash
-admits them, the THIN findings by other hands as the mechanical
+five doors a review needs (`insight.dismiss`, `person.dismiss`,
+`ranking_note.dismiss`, `outcome.not_this_week` and — since
+waymark-hcr, so a dismissal can say why on the record rather than in
+the journal — `verdict_reason.create`) and whether the leash admits
+them, the THIN findings by other hands as the mechanical
 candidates, and the anchored ask body (the grant's scope plus those
 doors, on rows by id where the review names them); and the closing
 **one extra, or none** paragraph (waymark-mqo). Inside the ask window a

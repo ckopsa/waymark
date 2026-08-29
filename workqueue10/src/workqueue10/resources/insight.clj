@@ -655,7 +655,12 @@
      {:name :dismiss :to :dismissed
       ;; …and it may say WHY (waymark-jfv.16): the four quick words on
       ;; the settled card, one more optional tap, a sentence one screen
-      ;; deeper. `:display` is spelled whole because a verdict's own
+      ;; deeper. Since waymark-hcr they are the FINDING's four rather
+      ;; than the household's — too thin, not backed, already known,
+      ;; not true — because a finding is a claim and *wrong time* is
+      ;; not a thing anybody means about a sentence; which four a
+      ;; subject gets is `verdict-reason/reason-sets`, and nothing here
+      ;; names them. `:display` is spelled whole because a verdict's own
       ;; display wins whole over the sugar's label/order pair; the two
       ;; facts are unchanged and `:display` rides no fingerprint facet,
       ;; so this kind's hash does not move.

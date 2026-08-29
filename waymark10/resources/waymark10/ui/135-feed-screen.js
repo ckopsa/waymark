@@ -487,6 +487,18 @@ async function renderFeedScreen(view, doc) {
      the only place anybody types is the verb's own note field, which
      the last chip opens through the ordinary dialog. */
 
+  /* WHICH four words this subject is answered with (waymark-hcr). The
+     door's `choices` is the house's default set — what it was OFFERED
+     runs along when/what/how/ever — and `by_kind` carries the kinds
+     that answer something the house was TOLD instead. Read, never
+     derived: this page still knows no kind's name, it only knows to
+     look up the one the card already told it. */
+  function reasonWords(door, kind) {
+    if (!door) return [];
+    const own = (door.by_kind || {})[String(kind || "")];
+    return (own && own.length) ? own : (door.choices || []);
+  }
+
   /* the part's own decline door — the verb that advertises quick
      reasons. Read off the projection, never named: a kind whose
      decline is spelled some other way is served by the same code. */
@@ -572,7 +584,7 @@ async function renderFeedScreen(view, doc) {
               + "not withdraw it"}, "Keep");
       keep.addEventListener("click", () => keep.setAttribute("aria-pressed", "true"));
       chips.append(keep);
-      for (const c of doc.reasons.choices || []) {
+      for (const c of reasonWords(doc.reasons, piece.kind)) {
         const b = el("button",
           {class: "chip mark", "data-mark-choice": c.value,
            title: doc.reasons.says || ""}, c.label);
@@ -683,20 +695,24 @@ async function renderFeedScreen(view, doc) {
      - WHERE to send it is the DOCUMENT's own door (`reasons.post_to`),
        read off the reason kind's `:plural` — the `views` precedent.
      - WHICH WORDS to offer is the same door's `choices`, which is the
-       declaration's own enum wearing its own `:x-display` prose. A
+       declaration's own enum wearing its own `:x-display` prose — or,
+       when the door names this subject's kind in `by_kind`, that
+       kind's own four (waymark-hcr): a house says different things
+       about what it was offered and about what an agent told it. A
        fifth word declared server-side is a fifth chip here with
-       nothing changed.
+       nothing changed, and so is a whole new set.
 
      Tapping none is a complete answer and nothing is written. */
   function reasonChips(bar, v) {
     const door = doc.reasons || null;
     if (!bar || !door || !door.post_to) return;
-    const choices = door.choices || [];
-    if (!choices.length) return;
     if (!(((v.entry || {}).display || {}).reasons)) return;
     const subject = v.doc || {};
     const self = String(subject.self || "");
     if (!self) return;
+    const kind = subject.kind || (v.card || {}).kind || "";
+    const choices = reasonWords(door, kind);
+    if (!choices.length) return;
     const row = el("div", {class: "feed-reasons", "data-reasons": ""});
     row.append(el("span", {class: "muted feed-reasons-ask"}, "Why?"));
     for (const c of choices) {
