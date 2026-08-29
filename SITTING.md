@@ -37,8 +37,9 @@ contradiction between rows; *clerk* when the write is one row at one
 door with the material inline. **A sitting takes the clerk orders
 only** — a fact a person stated (indexed, replied to), a marked rework
 or a clock-table re-time, an enrichment with its material inline, a
-journal-only skip, a thread arrival, and the forms a reading left
-under `notes-for-sittings`. Everything the manifest prints under
+journal-only skip, a thread arrival, and the forms a reading mailed
+you under **FORMS FROM THE LAST READING**. Everything the manifest
+prints under
 **"Waiting for a reading"** is not yours: leave it exactly as it
 stands, write nothing about it, and `verify` never faults you for it.
 A sitting has no extra: the orders are the ceiling.
@@ -158,6 +159,23 @@ holding your place in it.
 
 ## The priorities, in order
 
+0. **Open the letters on your shelf, before anything else**
+   (waymark-bbb). A reading's forms reach you as MAIL, not through
+   the journal — a journal is private to its own member, and the
+   readings run under another principal. The manifest prints them
+   under **FORMS FROM THE LAST READING**: each waiting letter, its
+   `POST /api/letters/<id>/-/open` door, and the `- do:` lines read
+   out of its body as clerk orders with their own door and cites.
+   Knock the open door FIRST — it takes no body and no grant scope
+   (a letter is two-party own-surface, yours as its addressee), and
+   the transition is the only record the house keeps that the form
+   was read. Then work the lines as written, ahead of the probes'
+   orders. A line the manifest marks `ALREADY ANSWERED` is not an
+   order: read the standing row, do not write it twice. A line whose
+   row is gone or whose door is shut is skipped **in the journal, out
+   loud, by name**. `verify` grades both halves — whether the letter
+   was opened, and whether a row you wrote cites each form's
+   addresses.
 1. **Index every fact a person said** — a person's turn that states
    something about the house ("Wellesley is sick", "we're
    rescheduling") becomes an `insight` first: one sentence, evidence

@@ -28,7 +28,7 @@
 # ask of its own stands. An ask decides nothing; a person taps it.
 
 formula = "reading"
-description = "One editor's reading at the waymark door: the house brief first; a person's question answered from the record; the unmarked reworks read against the pieces; compose only where a goal is larger than any row; one cited extra or none; the contradictions between rows; diagnoses only for priors being recomposed; the review of the sittings since the last reading — grade lines, scores, dismissals under a grant; and notes for the next sittings, as forms."
+description = "One editor's reading at the waymark door: the house brief first; a person's question answered from the record; the unmarked reworks read against the pieces; compose only where a goal is larger than any row; one cited extra or none; the contradictions between rows; diagnoses only for priors being recomposed; the review of the sittings since the last reading — grade lines, scores, dismissals under a grant; and notes for the next sittings, as forms, journaled AND mailed to the sitting principal as one letter."
 
 [vars]
 base_url = { default = "https://work.kopsa.info" }
@@ -218,7 +218,7 @@ it.
 
 [[steps]]
 id = "journal"
-title = "Journal the reading — and end it with notes_for_sittings"
+title = "Journal the reading — end it with notes_for_sittings, and MAIL that block"
 depends_on = ["review"]
 description = """
 One journal entry — POST {{base_url}}/api/journals with {title, body};
@@ -236,14 +236,35 @@ heading `## notes_for_sittings` and one form per line:
 
 Forms, not thoughts: one row, one door, every address the house serves
 (the journal door refuses an address it cannot show), the material in
-the sentence. The next sitting's manifest prints each line as a clerk
-order ahead of the probes' and drops a line whose subject a standing
-row already speaks for. Because the journal is a private own-surface
-kind, the notes reach a sitting only under the same principal the
-sittings run as. A reading that leaves no notes says so on purpose.
+the sentence. A reading that leaves no notes says so on purpose.
+
+THEN MAIL THE BLOCK (waymark-bbb). The journal is ONE-party
+own-surface — private to its own member, never grantable — so notes
+left there and nowhere else reach only a sitting wearing THIS
+principal. The sittings wear another. So send the same lines as one
+letter, to the address the driver prints
+(WAYMARK_SITTING_PRINCIPAL):
+
+  POST {{base_url}}/api/letters
+  {"to": "<the sitting principal>",
+   "title": "Forms from the reading of <date>",
+   "body": "<the same `- do:` lines, verbatim>"}
+
+ONE letter per reading. A letter is TWO-party own-surface — writer and
+addressee each see it with no grant, and no scope may name :letter, so
+this write rides your own identity: supply no `owner` (the door signs
+it in your name and refuses any other), and `to` must be a member the
+household actually has. Once sent it cannot be edited, re-addressed or
+taken back. The next sitting's manifest prints the letter under FORMS
+FROM THE LAST READING, each line a clerk order ahead of the probes',
+dropping a line whose subject a standing row already speaks for; the
+sitting opens the letter first, because the open transition is the
+audit that the form was read. The journal keeps the block too — that
+is this run's own record, and the letter is the delivery.
 
 LAST, always: `scripts/sitting-run.sh verify`, output in your report.
 It grades this run as a READING: EDITOR ORDER answered / SKIPPED OUT
 LOUD / UNANSWERED AND UNSAID, EXTRA or FILLER, SAYS-SO, NOTES FOR
-SITTINGS — beside everything it says about a sitting.
+SITTINGS, and LETTER FOR THE SITTINGS sent / NOT SENT — beside
+everything it says about a sitting.
 """

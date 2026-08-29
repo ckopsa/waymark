@@ -34,7 +34,9 @@
 # inline. A sitting takes the clerk forms — a fact a person stated, a
 # marked rework or a clock-table re-time, an enrichment with its
 # material inline, a journal-only skip, a thread arrival, the forms a
-# reading left under notes-for-sittings — and leaves everything under
+# reading MAILED it as a letter (waymark-bbb: a reading journal is
+# private to its own member, so the letter is the delivery — open it
+# first, the transition is the audit) — and leaves everything under
 # "Waiting for a reading" exactly as it stands. It is never faulted
 # for that, and it has no extra: the orders are the ceiling.
 
@@ -98,6 +100,10 @@ What it read, in the order the sitting wants it, writing NOTHING yet:
    index step never publishes a fact twice — and your own
    {{base_url}}/api/ranking_notes — so the score step knows which
    bundles still carry no judgment of yours.
+9. Your own shelf: {{base_url}}/api/letters?to=<you>&state=waiting —
+   the forms a reading mailed you (waymark-bbb). No grant scope names
+   :letter and none can: a letter is two-party own-surface, yours as
+   its addressee with no grant at all.
 Record what you found for the later steps: open requests, threads
 whose LAST turn is a person's, facts stated in those turns that no
 insight yet carries, declines with words, what has already been
@@ -106,9 +112,46 @@ composing from.
 """
 
 [[steps]]
+id = "letters"
+title = "Open the letters on your shelf — the forms a reading mailed you"
+depends_on = ["read"]
+description = """
+FIRST WRITE OF THE RUN, before anything else (waymark-bbb). A reading
+ends by leaving forms — "do X at door Y citing Z" — and it leaves
+them in TWO places: its own journal, which is one-party own-surface
+and therefore private to the reading own principal, and a LETTER
+addressed to you, which is how they actually arrive. The manifest
+prints them under FORMS FROM THE LAST READING: each waiting letter,
+its open door, and the `- do:` lines read out of its body as clerk
+orders with their own door and cites.
+
+  POST {{base_url}}/api/letters/<id>/-/open
+
+for EVERY letter listed there, before working a line of it. It takes
+no body and no grant scope — a letter is two-party own-surface, yours
+as its addressee, and no scope may name :letter — and the transition
+is the ONLY record the house keeps that the form was read. Opening is
+not optional and not deferrable: a run that works the forms and
+leaves the letter waiting has left the house unable to tell that the
+mail ever landed, and `verify` says so.
+
+Then work the lines as written, ahead of the probes' orders, one row
+each at the door the line names, citing the addresses it names. A
+line the manifest marks ALREADY ANSWERED is not an order — read the
+standing row and do not write it twice. A line whose row is gone or
+whose door is shut is skipped IN THE JOURNAL, out loud, by name; the
+form was written before this run read the house.
+
+If the shelf is empty the manifest says so and this step is a no-op.
+`discard` is yours too — the shelf is your own broom — but it takes
+the forms with it: discard only mail you have judged and said so
+about in the journal.
+"""
+
+[[steps]]
 id = "index"
 title = "Index what people said — a fact becomes a row before it becomes a plan"
-depends_on = ["read"]
+depends_on = ["letters"]
 description = """
 A person's turn often carries a FACT about the house — "Wellesley is
 sick", "we're rescheduling", "the wood arrived", "Grandpa lands on
@@ -140,7 +183,7 @@ holds no fact (a question, a thanks, a preference) indexes nothing.
 [[steps]]
 id = "answer-requests"
 title = "Answer every standing composition request"
-depends_on = ["read"]
+depends_on = ["letters"]
 description = """
 A person's pull is NEVER capped, and state=offered means UNANSWERED
 BY DEFINITION: the staging itself is what answers a request — in the
