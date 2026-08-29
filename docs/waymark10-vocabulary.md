@@ -547,3 +547,26 @@ by the generic client as an ordinary removable chip whose ✕ sends the param
 EMPTY rather than dropping it. Embedded collections (`embed.<rel>.*`) take
 no default filters — their href is the parent's, and their advertised
 columns drop the `default` the parent will not apply.
+
+## 13 · The two runs — a sitting and a reading
+
+Not declaration vocabulary, but the two words every composer file uses,
+defined once (waymark-nl0, the owner's split of 2026-08-29):
+
+| word | what it is | who runs it | the law |
+|---|---|---|---|
+| **sitting** | the CLERK's run: one visit to the house over HTTP that **fills forms** — every order fully specified, one row at one door, the material inline | a small model on the timer (Jules/Gemini, every ten minutes) | `SITTING.md`, `.beads/formulas/sitting.formula.toml` |
+| **reading** | the EDITOR's run: the same visit, a different set of duties — it **writes the forms**: reads across rows, answers a person's question from the record, reworks the unmarked bundle, composes only where a goal is larger than any row, allows itself one cited extra, reviews the sittings, and leaves `notes_for_sittings` | a strong model, locally (`claude -p "/reading"`), morning and evening or on demand | `READING.md`, `.beads/formulas/reading.formula.toml` |
+
+*A sitting fills forms; a reading writes them.* One driver serves both
+(`scripts/sitting-run.sh`, `WAYMARK_RUN=sitting|reading`), over one
+snapshot, and it **labels every order** by one rule: an order is
+`editor` when its expected write is an outcome, an unmarked rework, an
+answer to a person's question, an extra, or a contradiction between
+rows; `clerk` when the write is one row at one door with material
+inline. The sitting's manifest prints the editor orders under *Waiting
+for a reading* and does not count them as owed; the reading's prints
+both, opens with the house brief, and carries the review. Same walls,
+same leash, same journal (an own-surface kind — the notes cross only
+under one principal), and no engine door of their own: everything
+either run does is an ordinary grantable write.
