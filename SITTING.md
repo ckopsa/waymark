@@ -177,6 +177,20 @@ holding your place in it.
    a lawful answer**, the bundle goes back on the fridge, and the
    household decides. What is not an answer is silence dressed as
    one.
+   **And read the MARKS before you read the note** (waymark-wxk): the
+   manifest prints five lists per handed-back bundle, off the
+   household's own per-piece verdicts. A piece declined **wrong time**
+   is a **RE-TIME** — stage a NEW piece, the same step at a new hour.
+   **Wrong piece** or **not this way** is a **REPLACE** — a NEW piece,
+   a different step toward the same goal. **Never this**, or a decline
+   that carried no word at all, is a **DROP** and needs nothing: the
+   decline already took it out. A piece still standing is a **KEEP**
+   and is not yours to withdraw. What the note asks that no list
+   covers is an **ADD**. You never withdraw a marked piece — it is
+   already out — and the rework commit is REFUSED by name while a mark
+   is unanswered or a KEEP has been withdrawn, with the offenders
+   listed. Where they marked nothing, the note is the whole order and
+   the reading is yours.
 4. **Answer every unanswered thread turn** — a `remark` whose last
    word is a person's is a work order: reply with a remark
    (`in_reply_to` naming theirs), restage citing the insight you
@@ -360,6 +374,17 @@ holding your place in it.
   promise has no state and the thread would read as answered. Act at
   the door and say why in `says`. Every other hand still speaks: the
   person's turn, and an agent with no rework door on that row.
+- **And the marks the household made are the order** (waymark-wxk).
+  A piece declined with a quick word is a work order — wrong time is a
+  RE-TIME, wrong piece or not this way a REPLACE, never this (or no
+  word at all) a DROP that needs nothing — and a piece left standing
+  is a KEEP. `the-marks-are-the-work-order` refuses the rework commit
+  that withdraws a KEEP or leaves a RE-TIME or REPLACE without a new
+  piece staged this round, naming each offender and its list. A marked
+  piece is never withdrawn: a decline already takes it out, so a
+  RE-TIME and a REPLACE are each one NEW piece under the same bundle.
+  In a round where nothing was marked the wall stands down and the
+  note is the whole order.
 - Never tap a verdict or affirm a value or person unless your grant
   admits that door — and never on a row you wrote. Your standing
   sitting scope admits none of them, so under it the answer is still

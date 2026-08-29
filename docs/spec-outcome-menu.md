@@ -574,6 +574,7 @@ guard, refuses with a sentence that names the fix, and is proved by a scenario:
 | `a-person-answers` | an agent tapping a verdict **whose grant does not admit that door** (`g/unless-granted`, since waymark-sfe / 2026-08-28) — and, on every door, **the agent that composed the row**, grant or no grant. The refusal names the token a scope would have to carry |
 | `only-its-composer-reworks` | *(since waymark-9j2; grantable since waymark-9xn / 2026-08-28)* anybody but the row's own composer walking `outcome.rework` or `outcome_piece.rework` **without a grant that admits that door on that row** (`g/author-or-granted`). It is `a-person-answers` with the own-field exemption **inverted**: authorship is what opens this door rather than what closes it, so the composer walks it unasked and a second agent walks it only on a person's approved errand — which is what makes an ORPHANED bundle finishable |
 | `words-do-not-answer` | *(since waymark-vf8 / 2026-08-29; the one wall in this table that stands on ANOTHER kind's door)* an AGENT posting a `remark` whose subject is an outcome in `iterating` **when that agent is the one that could rework it** — its own `composed_by`, or a grant admitting `outcome.rework` on that row. It refuses with the door's own address, and it is declared by this kind (`:answered-at-a-door`) and enforced by the framework's thread kind, so the predicate is generic and the sentence is the household's. A person's turn, a bystanding agent's turn, and any turn a door files from inside itself (`:within`) all pass |
+| `the-marks-are-the-work-order` | *(since waymark-wxk / 2026-08-29)* a `rework` commit that, in a round where the household MARKED pieces, withdrew one they left standing (a KEEP) or left a RE-TIME or REPLACE without a new piece staged inside the round. A mark is the piece's own `not_this` plus a `verdict_reason` word — wrong time is a RE-TIME, wrong piece or not this way a REPLACE, never this (or no word at all) a DROP that needs nothing — and the round is the interval since `reworked_at`. The refusal names every offender with its list. In a round where NOTHING was marked the wall says nothing: the note is then the whole order |
 
 **The outcome's states, as they now stand** (waymark-9xn, 2026-08-28):
 `offered` → `iterating` → back to `offered`, with the three terminal answers
@@ -592,6 +593,11 @@ A piece's own doors read the parent's state: `take` is refused while the
 bundle is `iterating` (`the-bundle-is-taking-answers`), `rework` (withdraw)
 opens **only** while it is (`the-parent-invited-a-rework`), and a replacement
 piece **stages** under an iterating bundle, which is where a re-plan happens.
+`not_this` reads **nothing** about the parent, and since waymark-wxk that is
+load-bearing rather than incidental: a decline is how the household MARKS the
+piece that is wrong, so it stays open under a bundle being reworked — what
+`iterating` closes is the tap that would LAND a step of a plan the person
+called wrong, never the saying of what is wrong with it.
 
 And since waymark-vf8 the composer's **only** door on an iterating bundle is
 `rework`: the thread's own create door refuses that one hand a turn there, so
@@ -6449,4 +6455,189 @@ sentence. CI caught that one, which is what the pin is for. **No fingerprint mov
 move either; and `:answered-at-a-door` is a new key the projection does not
 name — advertisement-class, like `:nav` and `:over`. No migration: no state,
 column, filter or sort changed.
+
+## Built — wxk (2026-08-29): the marks ARE the rework order
+
+**The owner:** *part of my revising should be picking the pieces that need
+revision so that the AI can focus its attention.* Until this bead an iterate
+was **one note about a whole bundle**, and which pieces it meant was a guess.
+A strong model read the note and revised the right two; a weak one rewrote
+everything, or nothing, and neither could be held to it — the composer's
+attention was spent on inference the household could have spent one tap on.
+
+**Nothing new was added to say it, and that is the whole of why it is cheap.**
+The pieces already carry the household's own per-piece verdicts and
+`verdict_reason` already carries waymark-jfv.16's four quick words behind them.
+So a **MARK** is a piece's `not_this` plus a word, and the five lists are that
+word read as an order:
+
+| what the household did | list | what the composer owes |
+| --- | --- | --- |
+| declined it, **wrong time** | **RE-TIME** | one NEW piece — the same step at a new hour or on a new day |
+| declined it, **wrong piece** or **not this way** | **REPLACE** | one NEW piece — a different step toward the same goal |
+| declined it, **never this** | **DROP** | nothing. The decline already took it out |
+| declined it and said **no word at all** | **DROP** | nothing (see below) |
+| left it **offered** | **KEEP** | nothing — and it is not the composer's to withdraw |
+| asked in the note for something no piece covers | **ADD** | one NEW piece, the composer's reading of the note |
+
+**A wordless decline is a DROP**, which is waymark-jfv.16 read literally rather
+than a lenience: the quick word is optional there and *not tapping is a
+complete answer*, so a decline that said nothing spelled no order beyond *not
+this one* — and *not this one* is a piece already out of the bundle. A composer
+may well replace it, and the manifest says so; the wall holds it only to what
+the household actually said.
+
+**Nothing is withdrawn to answer a mark.** A declined piece is already out of
+the bundle (`make_it_so` takes only what is `offered`, and `a-bundle-is-small`
+counts only what is `offered`), and `outcome_piece.rework` leaves from
+`offered` alone — so a marked piece **cannot** be withdrawn and does not need
+to be. A RE-TIME and a REPLACE are each **one new piece staged under the same
+bundle**, and that is all.
+
+### The commit wall
+
+`the-marks-are-the-work-order` stands on `outcomes/{id}/-/rework`, beside
+waymark-vf8's `only-its-composer-reworks`. **The predicate**, in order:
+
+1. **The round has two boundaries because it has two sides.** What the
+   HOUSEHOLD said runs from the last commit (`reworked_at`, or the beginning of
+   time for a bundle nobody has reworked yet) — which is what admits a piece
+   declined *before* the iterate was tapped: marking the pieces and then
+   handing the plan back is the same gesture in the other order, and a person
+   does both. What the COMPOSER staged runs from the ask
+   (`iterate_requested_at`): a piece staged before the person tapped iterate is
+   part of the plan they were looking at when they marked it, so it cannot also
+   be the answer to those marks. One boundary for both was written first and
+   was wrong in exactly one place, which CI caught — with no commit yet
+   `reworked_at` is absent, so every original piece of a first round counted as
+   a replacement and the wall admitted a round that had staged nothing at all.
+   A bundle with no `iterate_requested_at` (no such row exists; the door stamps
+   it) falls back to the household's boundary, which is the lenient direction.
+2. **If nothing was marked in this round, the wall says nothing.** The note is
+   then the whole order and which pieces move is the composer's reading of it —
+   *add what it asks, or stand by the plan and say which in `says`*. Howie's
+   ride to the party was exactly that shape. A wall that read an unmarked round
+   as five KEEPs would have refused the honest re-plan of a note reading *move
+   the whole Saturday to Sunday*, which is a wall against the work it exists to
+   get.
+3. **Otherwise** it refuses when either arm holds, naming every offender with
+   its list:
+   - a piece the household **left standing** was withdrawn this round (state
+     `reworked`, `updated_at` inside the round) — *you withdrew
+     `/api/outcome_pieces/…` — … The household left that one standing while
+     marking others, which is a KEEP — a piece nobody marked is one they want,
+     and withdrawing it answers a question they did not ask.*
+   - fewer pieces stand than the marks owe — *the household marked N pieces for
+     a new one and this round has staged M — RE-TIME `/api/…` — said
+     wrong_time; REPLACE `/api/…` — said wrong_piece. …*
+
+**The arithmetic is a COUNT and is said as one.** Nothing pairs a replacement
+to the piece it replaces — no row records that, and the wall will not guess —
+so what it can honestly ask is that as many pieces stand as the marks owe. The
+refusal names every owed mark, so the composer knows what the count is about.
+
+**A no-change round stays lawful exactly where waymark-vf8 left it**: in a
+round where nothing was marked. In a marked round, *the plan stands* is not an
+answer to *this piece is at the wrong hour* — the person picked it out.
+
+### The card, and the lite page
+
+The iterate chip **expands in place** into one row per piece —
+**Keep · Wrong time · Wrong piece · Not this way · Never this** — and then the
+note. Tapping a word fires that piece's own decline and posts the word behind
+it, through the two doors the settled card already used; tapping the last chip
+opens the verb's ordinary note dialog. Every control is a tap; the only place
+anybody types is the note field that was always there.
+
+**No application name reaches either page.** The dispatch is a new
+advertisement on the action, `:display {:marks "pieces"}` — `:reasons`' own
+class, riding no fingerprint facet — whose **value is the link rel whose rows
+are the parts**. The feed already has those parts on the card (`pieces`, from
+the population) and needs only to know that this verb marks them;
+`ui_lite.html` has no card, so it follows that rel off the row's own declared
+links. Each part's decline door is found by the `display.reasons` it already
+advertises, never by name, and the four words come off the feed document's
+`reasons` — or, in the lite page, off the framework's own `verdict_reason`
+schema, that kind being waymark10's and enrolled into every engine, so the lite
+page naming it is the framework naming itself. Colours are tokens only; the
+assembly test greps for both.
+
+### The driver
+
+Under *Handed back for a rework — YOUR work orders*, each bundle now prints its
+**note beside its lists**, with the expected write spelled per list. A fixture
+run of the manifest section (`derived/rework_orders.json` over one bundle at
+plan v1 whose owner marked four of five pieces and whose composer has staged
+one replacement):
+
+```
+  ─ /api/outcomes/O1 — One Sunday that holds church, a walk and Howie at the party
+    THE NOTE: colton said “Sunday breakfast is fine but the walk clashes with
+              church, and Howie needs a ride to the party at 2.”  (/api/remarks/M1)
+    KEEP — write nothing, and withdrawing one of these is REFUSED:
+      · /api/outcome_pieces/P1 — Load the truck Friday evening — twenty minutes
+    MARKED — each is an order, and the commit is refused until it is answered:
+      · RE-TIME  /api/outcome_pieces/P2 — Park walk at 9am Sunday
+          said wrong_time — “It clashes with 9am church.”
+          write: POST /api/outcome_pieces — the SAME step at a new hour or on a
+                 new day, citing this bundle
+      · REPLACE  /api/outcome_pieces/P3 — Drive to the lumber yard for stock
+          said wrong_piece
+          write: POST /api/outcome_pieces — a DIFFERENT step toward the same
+                 goal, citing this bundle
+      · DROP  /api/outcome_pieces/P4 — Rope Grandma into babysitting
+          said never_this — “Never ask her for that.”
+          write: nothing — the decline already took it out of the bundle
+      · DROP  /api/outcome_pieces/P5 — Wash the car first
+          said no word at all, so it is a DROP
+          write: nothing — the decline already took it out of the bundle
+    ADD — whatever the note asks that no list above covers: a NEW piece citing
+          this bundle. Nothing else in the note is an order.
+    THIS ROUND SO FAR: 1 staged, 2 owed — 1 STILL UNANSWERED
+```
+
+`sitting-run.sh verify` grades the same order after the run, per handed-back
+bundle: each mark with its list, a DROP marked *answered by the decline
+itself*, then `ADDRESSED: N owed a new piece, M staged this round` or `NOT
+ADDRESSED: …`, plus `WITHDREW A KEEP: /api/outcome_pieces/…` for a piece the
+manifest listed under KEEP that now reads `reworked`. It grades against the
+boundary the MANIFEST recorded (`rework_orders[].boundary`), so a commit that
+has since moved `reworked_at` does not erase the evidence.
+
+**Reproducing the fixture run by hand** — there is no harness for the driver in
+this repo, and this is the documented substitute. Extract the two jq programs
+from `scripts/sitting-run.sh` (the one writing `derived/rework_orders.json`,
+and the one printing the manifest section) and run them over four small files:
+`pieces` (six `outcome_piece` rows — one offered before the boundary, four
+declined inside it, one offered inside it), `reasons` (three `verdict_reason`
+rows — `wrong_time`, `wrong_piece`, `never_this`), `threads` (one turn by the
+member), and `standing` (one iterating bundle at plan v1 whose `reworked_at`
+precedes the declines). The block above is what they print. Flipping the KEEP
+piece to `reworked` and adding a second replacement turns the verify grading
+from `NOT ADDRESSED` to `ADDRESSED … WITHDREW A KEEP`, which is the other arm.
+
+**Recorded for whoever comes next.** `make check-queue` is **38 kinds, 11
+warnings, 55 scenarios judged** (was 56), and the scenario that went is
+`only-the-composer-that-staged-an-outcome-reworks-it` — **deleted, not
+deferred**, and the deletion is forced rather than a retreat. It walked
+`outcome.rework`, which now carries a guard reading `:outcome_piece` and
+`:verdict_reason`, and a scenario is judged against its door's WHOLE guard
+chain (the chain rule that moved `remark`'s create scenario one bead ago,
+arriving here on an ACTION door). Deferred, it goes to the conformance walker,
+which stages its subject through the kind's own create door — and for an
+outcome that door demands a value this house holds and evidence it can read,
+rows a declaration-time literal cannot mint. `:core/law-scenarios` runs over
+the whole registry regardless of the pack's `:kinds`, so the deferral was a red
+suite, not a quiet no-op: *the row it describes could not be staged through its
+own door*. That is the sentence the note above `a-decline-is-allowed-from-under
+-a-rework` had already predicted for `the-plan-is-not-under-rework`, said out
+loud by CI. The refusal it stated is proved where it can be —
+`workqueue10.outcome-test` § 21's loop deftest, over the real ring handler,
+against a real value and a real bundle. `the-deferred-half-is-paid-by-the-suite`
+counts the FRAMEWORK's kinds and stays at **8**. **The `outcome`
+kind's fingerprint MOVES**: an action guard rides `machine.actions.*.guards.N`,
+so adding one to `rework` mints a law revision. **No migration**: no state, no
+field, no filter and no sort changed, so the storage facet is byte-identical
+and the migrate plan stays empty. `:display {:marks …}` is advertisement-class
+and moves nothing on its own.
 

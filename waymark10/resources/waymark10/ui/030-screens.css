@@ -477,6 +477,46 @@
   .feed-reasons button.chip.reason:disabled { opacity: .5; cursor: default; }
   .feed-reasons a.link-chip { font-size: 12px; padding: 4px 9px;
                               border-radius: 999px; }
+  /* ── the marks panel (waymark-wxk): the row a verb that says
+     `display.marks` opens IN PLACE on the card, before it collects
+     its note. One line per piece with one selection each — Keep is
+     the state the piece is already in, so it is pressed and inert,
+     and the four words are the same ones a settled decline offers.
+     It is inset like the pieces list above it because it is about
+     those pieces, and quieter than a verdict because none of it is
+     the answer to the bundle: the answer is the last chip. */
+  .feed-marks { margin: 8px 0 2px; padding: 10px 12px 8px;
+                border: 1px solid var(--line); border-radius: 12px;
+                background: var(--panel); }
+  .feed-marks-head { font-size: 12.5px; line-height: 1.45;
+                     margin-bottom: 8px; }
+  .feed-mark { padding: 6px 0; }
+  .feed-mark + .feed-mark { border-top: 1px solid var(--line); }
+  .feed-mark-say { font-size: 14px; line-height: 1.4; color: var(--ink); }
+  .feed-mark-chips { display: flex; flex-wrap: wrap; gap: 6px;
+                     align-items: center; margin-top: 5px; }
+  .feed-mark-chips button.chip.mark { font-family: var(--sans);
+    font-size: 12.5px; min-height: 30px; padding: 4px 10px; cursor: pointer;
+    border: 1px dashed var(--line); border-radius: 999px;
+    background: transparent; color: var(--muted); }
+  .feed-mark-chips button.chip.mark:hover { border-style: solid;
+    border-color: var(--verdigris); background: var(--verdigris-wash);
+    color: var(--ink); }
+  .feed-mark-chips button.chip.mark[aria-pressed="true"] {
+    border-style: solid; border-color: var(--verdigris);
+    background: var(--verdigris-wash); color: var(--ink); font-weight: 700; }
+  .feed-mark-chips button.chip.mark:disabled { opacity: .5; cursor: default; }
+  .feed-mark-problem:empty { display: none; }
+  .feed-marks-foot { display: flex; flex-wrap: wrap; gap: 6px;
+                     align-items: center; margin-top: 10px; }
+  .feed-marks-foot button.chip { font-family: var(--sans); font-size: 13px;
+    min-height: 32px; padding: 4px 12px; cursor: pointer;
+    border: 1px solid var(--line); border-radius: 999px;
+    background: transparent; color: var(--muted); }
+  .feed-marks-foot button.chip.primary { border-color: var(--verdigris);
+    color: var(--verdigris); font-weight: 700; }
+  .feed-marks-foot button.chip:hover { background: var(--verdigris-wash);
+                                       color: var(--ink); }
   .fcard .problem { margin-top: 8px; }
   /* ── a bundle's pieces (waymark-jfv.4): sub-rows with their own
      thumbs — an inset block inside the post, the way a timeline

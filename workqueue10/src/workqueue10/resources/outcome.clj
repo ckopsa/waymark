@@ -336,6 +336,13 @@
             ;; forming a second opinion about another kind's guards.
             [waymark10.server.render :as render]
             [waymark10.types :as t]
+            ;; the reason kind's own keyword (waymark-wxk), read by name
+            ;; rather than spelled here for `feed/crown-word`'s reason
+            ;; one ns over: the household's quick words are declared in
+            ;; that file, and the rework wall reads the rows they land
+            ;; in — one spelling of the kind, so a rename cannot leave
+            ;; this wall reading a collection nobody writes.
+            [waymark10.verdict-reason :as vr]
             [workqueue10.resources.tickler :as tickler])
   (:import (java.time Instant)))
 
@@ -1593,6 +1600,17 @@
   ;; stage the replacements: a bundle mid-rework, whose pieces are
   ;; half-withdrawn and half-new, and whose owner asked for exactly
   ;; that.
+  ;;
+  ;; AND IT STANDS ON `take` AND ON NOTHING ELSE, which since
+  ;; waymark-wxk is load-bearing rather than incidental. `not_this` on
+  ;; a piece is how the household MARKS the thing that is wrong, and a
+  ;; mark is the very sentence a bundle in `iterating` exists to
+  ;; collect — so the decline door stays open under a bundle being
+  ;; reworked, and a person may go on marking pieces after they have
+  ;; handed the plan back exactly as they could before. What
+  ;; `iterating` closes is the tap that would LAND a step of the plan
+  ;; the person called wrong. Saying more about that plan is the point
+  ;; of the state, not a thing to shut.
   [row inp ctx]
   (if (nil? (:read ctx))
     (t/allow)
@@ -1734,6 +1752,189 @@
                                       " for; without the ask, the pieces"
                                       " stand as offered for the household"
                                       " to answer.")}})))))
+
+;; ── the marks ARE the work order (waymark-wxk) ──────────────────────
+;;
+;; THE OWNER'S SENTENCE, and it is about attention: *part of my
+;; revising should be picking the pieces that need revision so that
+;; the AI can focus its attention.* Until this bead an iterate was one
+;; note about a whole bundle, and which pieces it meant was a guess —
+;; a strong model read the note and revised the right two, a weak one
+;; rewrote everything or nothing, and neither could be held to it.
+;;
+;; NOTHING NEW WAS ADDED TO SAY IT, which is the whole of why it is
+;; cheap. The pieces already carry the household's own per-piece
+;; verdicts and `verdict_reason` already carries the four quick words
+;; behind them, so a MARK is a `not_this` with a word, and the lists
+;; are that word read as an order:
+;;
+;;   wrong_time              → RE-TIME  the same step, a new hour
+;;   wrong_piece / wrong_way → REPLACE  a different step, same goal
+;;   never_this              → DROP     out, and nothing replaces it
+;;   declined with no word   → DROP     (see below)
+;;   still offered           → KEEP     do not touch it
+;;   what the note asks and no piece covers → ADD
+;;
+;; A DECLINE WITH NO WORD IS A DROP, and that is waymark-jfv.16 read
+;; literally rather than a lenience: the quick word is optional there
+;; and *not tapping is a complete answer*, so a wordless decline
+;; spelled no order beyond "not this one" — and "not this one" is a
+;; piece already out of the bundle. The composer may well replace it,
+;; and the manifest says so in as many words; this wall holds it only
+;; to what the household actually said.
+;;
+;; THE ROUND HAS TWO BOUNDARIES BECAUSE IT HAS TWO SIDES, and each is
+;; the honest one for the question it answers.
+;;
+;; WHAT THE HOUSEHOLD SAID runs from the LAST COMMIT (`reworked_at`, or
+;; the beginning of time for a bundle nobody has reworked yet). That is
+;; what admits a piece declined BEFORE the iterate was tapped: marking
+;; the pieces and then handing the plan back is the same gesture as
+;; handing it back and then marking, and a person does both.
+;;
+;; WHAT THE COMPOSER STAGED runs from THE ASK (`iterate_requested_at`).
+;; A piece staged before the person tapped iterate is part of the plan
+;; they were looking at when they marked it — it cannot also be the
+;; answer to their marks. One boundary for both was written first and
+;; was wrong in exactly one place, which CI caught: with no commit yet,
+;; `reworked_at` is absent, so every original piece of a first round
+;; counted as a replacement and the wall admitted a round that had
+;; staged nothing at all. A bundle with no `iterate_requested_at` (no
+;; such row exists — the door stamps it) falls back to the household's
+;; boundary rather than to nothing, which is the lenient direction.
+;;
+;; AND IT ONLY STANDS IN A MARKED ROUND. Where the household marked
+;; nothing, the NOTE is the whole order and which pieces move is the
+;; composer's reading of it — the bead's own ruling, *nothing marked
+;; plus a note is "add or stand by it", the composer's call, said in
+;; says* — and Howie's ride to the party was exactly that shape. Where
+;; they marked one piece they were choosing, so the pieces they left
+;; standing are chosen too and a KEEP is an instruction. A wall that
+;; read an unmarked round as five KEEPs would have refused the honest
+;; re-plan of a note reading *move the whole Saturday to Sunday*,
+;; which is a wall against the work it exists to get.
+
+(def ^:private mark-lists
+  "The household's quick word → the work order the composer reads off
+  it. The tokens are `verdict-reason/reasons`' own, which is where the
+  four words are declared; a fifth declared there and unnamed here
+  reads as a DROP, and that is the safe direction — the wall then
+  holds the composer to nothing it could not name."
+  {"wrong_time"  {:list "RE-TIME" :owes-a-piece true}
+   "wrong_piece" {:list "REPLACE" :owes-a-piece true}
+   "wrong_way"   {:list "REPLACE" :owes-a-piece true}
+   "never_this"  {:list "DROP"    :owes-a-piece false}})
+
+(defn- inside-the-round?
+  "Is this stamp inside the round being committed? The boundary is the
+  last commit; a bundle nobody has reworked yet is in its first round,
+  which began before anything, so everything counts.
+
+  A row carrying no stamp at all is OUTSIDE, because a wall that
+  guessed past what the record holds would refuse honest rounds for a
+  living — `composes-from-what-stands`' rule, three walls up."
+  [stamp boundary]
+  (and (instance? Instant stamp)
+       (or (not (instance? Instant boundary))
+           (.isAfter ^Instant stamp ^Instant boundary))))
+
+(defn- piece-said
+  "One piece as the refusal names it: its address and the composer's
+  own sentence for it, capped so a list of five stays readable."
+  [p]
+  (let [s (str (get-in p [:data :says]))]
+    (str "/api/outcome_pieces/" (:id p) " — "
+         (if (> (count s) 70) (str (subs s 0 69) "…") s))))
+
+(defguardfn the-marks-are-the-work-order
+  {:reads [:outcome_piece :verdict_reason]
+   :vars [:problem]
+   :open "When the household marks pieces, the marks ARE the rework order and this door holds the round to them: a piece declined saying WRONG TIME wants the same step at a new hour, one declined WRONG PIECE or NOT THIS WAY wants a different step toward the same goal — either is a NEW piece staged under this bundle before the round commits — and one declined NEVER THIS wants nothing more, the decline having already taken it out. A piece they left standing is a KEEP and is not yours to withdraw. Mark nothing and none of this applies: the note is then the whole order, and what to change is your reading of it."
+   :explain "This round does not answer what the household marked: {problem}"}
+  ;; NO :judges, `the-plan-is-not-under-rework`'s reasoning one door
+  ;; over: this door's input is the composer's `says`, and nothing here
+  ;; grades it — the subjects are the bundle's own pieces and the words
+  ;; filed against them, named through :reads.
+  [row _inp ctx]
+  (let [find' (:find ctx)]
+    (if (nil? find')
+      ;; the storage-free probe advertises optimistically, exactly as
+      ;; every other row-reading wall in this file does
+      (t/allow)
+      (let [boundary (get-in row [:data :reworked_at])
+            ;; the composer's own side of the round — see the block
+            ;; above: a piece staged before the ask is part of the plan
+            ;; that was marked, never the answer to the marks
+            asked (or (get-in row [:data :iterate_requested_at]) boundary)
+            pieces (find' :outcome_piece {:outcome_id (str (:id row))}
+                          {:limit 100})
+            word-of (fn [p]
+                      (some-> (first (find' vr/reason-kind
+                                            {:subject_kind "outcome_piece"
+                                             :subject_id (str (:id p))
+                                             :verdict "not_this"}
+                                            {:limit 1}))
+                              (get-in [:data :reason])
+                              str str/trim not-empty))
+            in? (fn [p k] (inside-the-round? (k p) boundary))
+            state-of (fn [p] (name (:state p)))
+            marked (into []
+                         (comp (filter #(= "declined" (state-of %)))
+                               (filter #(in? % :updated-at))
+                               (map (fn [p]
+                                      (let [w (word-of p)]
+                                        (assoc (or (mark-lists w)
+                                                   {:list "DROP"
+                                                    :owes-a-piece false})
+                                               :piece p :word w)))))
+                         pieces)
+            withdrawn (into [] (filter #(and (= "reworked" (state-of %))
+                                             (in? % :updated-at)))
+                            pieces)
+            staged (count (filter #(and (= "offered" (state-of %))
+                                        (inside-the-round? (:created-at %)
+                                                           asked))
+                                  pieces))
+            owed (filterv :owes-a-piece marked)
+            says (cond-> []
+                   (seq withdrawn)
+                   (conj (str "you withdrew "
+                              (str/join "; " (map piece-said withdrawn))
+                              ". The household left "
+                              (if (= 1 (count withdrawn)) "that one" "those")
+                              " standing while marking others, which is a"
+                              " KEEP — a piece nobody marked is one they"
+                              " want, and withdrawing it answers a question"
+                              " they did not ask. Stage it again as it was"
+                              " if it truly has to come back."))
+
+                   (< staged (count owed))
+                   (conj (str "the household marked " (count owed) " piece"
+                              (when (not= 1 (count owed)) "s")
+                              " for a new one and this round has staged "
+                              staged " — "
+                              (str/join "; "
+                                        (map (fn [m]
+                                               (str (:list m) " "
+                                                    (piece-said (:piece m))
+                                                    " — said "
+                                                    (or (:word m) "with no word")))
+                                             owed))
+                              ". A RE-TIME is that step at a new hour and a"
+                              " REPLACE is a different step toward the same"
+                              " goal; either way it is a NEW piece staged"
+                              " under this bundle (POST /api/outcome_pieces)"
+                              " before this commit. A DROP needs nothing —"
+                              " the decline already took it out.")))]
+        (cond
+          ;; AN UNMARKED ROUND IS THE COMPOSER'S READING OF THE NOTE
+          ;; (the block above). There is nothing here to be held to, so
+          ;; this wall says nothing — including about a withdrawal,
+          ;; because "keep all" is only an instruction where the
+          ;; household was choosing piece by piece.
+          (empty? marked) (t/allow)
+          (empty? says) (t/allow)
+          :else (t/deny {:vars {:problem (str/join " And " says)}}))))))
 
 ;; ── the verdict walls, shared by both kinds ─────────────────────────
 
@@ -2377,19 +2578,25 @@
    :expect  {:refused :a-person-answers
              :because "A person answers"}})
 
-(defscenario only-the-composer-that-staged-an-outcome-reworks-it
-  "The authorship wall on the bundle's own rework door: the composer
-   that staged the outcome commits the round, and nobody else reaches
-   its plan. A person answers the revised pieces; they do not rework
-   them, and a second agent does not either — a rework is un-proposing
-   your OWN suggestion, the mirror of the four-eyes wall."
-  {:kind    :outcome
-   :attempt :rework
-   :input   {:says "Moved breakfast after church and swapped the walk."}
-   :row     {:state :iterating :data a-composed-outcome}
-   :as      {:id "colton" :type :person}
-   :expect  {:refused :only-its-composer-reworks
-             :because "composer that staged"}})
+;; NO SCENARIO NAMES `only-its-composer-reworks` ON THE OUTCOME EITHER
+;; ANY MORE (waymark-wxk), and the removal is forced rather than a
+;; retreat. waymark-9xn wrote one and it ran at CHECK tier, where the
+;; rework door carried a single wall that reads the principal and the
+;; row. `the-marks-are-the-work-order` now stands beside it reading
+;; `:outcome_piece` and `:verdict_reason`, and a scenario is judged
+;; against its door's WHOLE guard chain — `remark`'s create scenario
+;; met the same rule one bead ago (waymark-vf8), arriving here on an
+;; ACTION door. Deferred, it goes to the conformance walker, which
+;; stages its subject through the kind's own create door: for an
+;; outcome that door demands a value this house holds and evidence it
+;; can read, which a declaration-time literal cannot mint, so the
+;; walker refuses it with *the row it describes could not be staged
+;; through its own door* — the exact sentence the note above
+;; `a-decline-is-allowed-from-under-a-rework` predicted for
+;; `the-plan-is-not-under-rework`, said out loud by CI. The refusal it
+;; stated is proved where it can be: workqueue10.outcome-test § 21,
+;; over the real ring handler, against a real value and a real bundle,
+;; person and second-agent arms both.
 
 ;; NO SCENARIO NAMES `the-plan-is-not-under-rework`, and the absence is
 ;; structural rather than an omission — the third time this file has
@@ -2404,6 +2611,17 @@
 ;; which is a fact about the walker rather than about the wall. It is
 ;; proved where it can be: workqueue10.outcome-test § 21, over the real
 ;; ring handler, against a real value and a real bundle.
+
+;; NO SCENARIO NAMES `the-marks-are-the-work-order` EITHER, for the
+;; structural reason this file has now written down five times: the
+;; wall's every arm is about OTHER ROWS — the bundle's pieces, their
+;; states, their stamps and the words filed against them — and a
+;; scenario holds one literal `:row` over an empty store, so every
+;; scenario reaching this door would find an unmarked round and be an
+;; allow. Both refusals (a KEEP withdrawn; a RE-TIME left standing
+;; with nothing staged) and both admissions (all marks answered; an
+;; unmarked round changing nothing) are proved by
+;; workqueue10.outcome-test § 21.
 
 (defscenario a-decline-is-allowed-from-under-a-rework
   "A decline is always allowed, and this is the half of `iterating` a
@@ -2875,7 +3093,7 @@
                :x-display
                {:widget "prose"
                 :label "What to change, and why"
-                :help "Say what is wrong with the PLAN while keeping the outcome — the wrong time, the conflict, the step that does not fit. The composer reads this as a turn in the thread and reworks the pieces; the outcome leaves your feed until it comes back revised."}}
+                :help "Say what is wrong with the PLAN while keeping the outcome — the wrong time, the conflict, the step that does not fit. Mark the pieces first if some of them are the problem: a piece you decline saying wrong time is a re-time, wrong piece or not this way is a replacement, never this drops it, and anything you leave alone is kept as it stands. Then this note says what none of the pieces covers — what to ADD. The composer reads it as a turn in the thread and is held to the marks; the outcome leaves your feed until it comes back revised."}}
               [:string {:min 1 :max 600}]]]
      :record true
      ;; a short note, and the wall against losing it on a mis-click is
@@ -2884,9 +3102,24 @@
      :waives #{:large-effort}
      :touches [{:kind :remark :action :create}]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "The outcome is kept — this does not accept it, decline it, or retire it. It tells the composer the goal is right but the plan needs work, in your own words, and hands the plan back for a rework. The bundle leaves your feed while it is being reworked and returns with revised pieces; your note joins the outcome's thread."}
-     :display {:label "Iterate" :order 3
-               :description "Keep the outcome, hand the plan back — say what is wrong, and it leaves your feed until the composer answers with revised pieces"}}
+              :one-way "The outcome is kept — this does not accept it, decline it, or retire it. It tells the composer the goal is right but the plan needs work, in your own words, and hands the plan back for a rework. Whatever you marked on the pieces goes with it as the order, and anything you left alone is kept. The bundle leaves your feed while it is being reworked and returns with revised pieces; your note joins the outcome's thread."}
+     ;; MARK THE PIECES, THEN SAY THE REST (waymark-wxk). `:marks` is
+     ;; advertisement, `:reasons`' own class one door over: it rides no
+     ;; fingerprint facet, and it says only this — before this verb
+     ;; collects its note, offer the household one selection per part,
+     ;; because which pieces are wrong is the thing a note cannot say
+     ;; precisely and a tap can.
+     ;;
+     ;; ITS VALUE IS THE LINK REL WHOSE ROWS ARE THE PARTS, and that
+     ;; is what keeps both screens free of this kind's name. The feed
+     ;; already has the parts on the card (`pieces`, from the
+     ;; population) and only needs to know that this verb marks them;
+     ;; the lite page has no card, so it follows THIS rel off the
+     ;; row's own declared links and reads each part's decline door
+     ;; off that part's own projected verbs. Neither page learns the
+     ;; word `outcome`, `outcome_piece`, or `iterate`.
+     :display {:label "Iterate" :order 3 :marks "pieces"
+               :description "Keep the outcome, hand the plan back — mark the pieces that need work, say what is missing, and it leaves your feed until the composer answers"}}
     ;; `rework` is the composer's commit of one re-plan round, and since
     ;; waymark-9xn it is THE DOOR BACK: `iterating → offered`. It counts
     ;; the round on the card, replies on the thread, and puts the bundle
@@ -2897,8 +3130,15 @@
     ;; STATE is the invitation, which is one fact instead of two stamps
     ;; that had to be kept in step.
     :rework
+    ;; …AND THE MARKS ARE THE ORDER (waymark-wxk). The second wall is
+    ;; what makes "pick the pieces that need revision" more than a
+    ;; convention: in a round where the household marked anything, this
+    ;; commit is refused until every mark is answered and every KEEP is
+    ;; still standing, with the offenders named and their lists said
+    ;; out loud. In a round where they marked nothing it says nothing,
+    ;; because then the note is the whole order.
     {:from #{:iterating} :to :offered
-     :guards [(reworks-wall :outcome)]
+     :guards [(reworks-wall :outcome) the-marks-are-the-work-order]
      :handler rework-the-plan
      ;; `says` IS THE ANSWER, so it is required and it is short
      ;; (waymark-vf8): the composer has no other turn on an iterating
@@ -2914,13 +3154,13 @@
                :x-display
                {:widget "prose"
                 :label "What you changed, and why"
-                :help "One turn back to the household: what the rework did to the plan, in answer to their note — or, when you read the note and the plan still stands, why it stands. This is your turn in the thread, and the card reads it as the reason the plan changed."}}
+                :help "One turn back to the household: what the rework did to the plan, in answer to their note and to the pieces they marked — or, when you read the note and the plan still stands, why it stands. This is your turn in the thread, and the card reads it as the reason the plan changed."}}
               [:string {:min 1 :max 240}]]]
      :record true
      :waives #{:large-effort}
      :touches [{:kind :remark :action :create}]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This commits a round of rework: it puts the bundle back on the household's feed, counts the round on the card, and replies on the thread with what you say here. Withdraw the pieces that were wrong and stage their replacements first — and if, having read the note, you stand by the plan, commit anyway and say why: a round that changes no piece is a lawful answer, and the household then decides for itself."}
+              :one-way "This commits a round of rework: it puts the bundle back on the household's feed, counts the round on the card, and replies on the thread with what you say here. Read the marks first — a piece declined wrong time wants the same step at a new hour, one declined wrong piece or not this way wants a different step toward the same goal, one declined never this wants nothing more, and one still standing is kept — and stage what they ask for before you commit; this door refuses a round that leaves a mark unanswered or withdraws a piece the household kept. If they marked nothing and, having read the note, you stand by the plan, commit anyway and say why: a round that changes no piece is a lawful answer, and the household then decides for itself."}
      :display {:label "Rework the plan" :order 4
                :description "Commit a round of re-planning an outcome the house handed back — returns it to the feed and counts the round"}}}
    :scenarios [the-composer-does-not-answer-its-own-outcome
@@ -2930,7 +3170,6 @@
                an-outcome-with-nothing-behind-it-is-refused
                an-outcome-names-a-value-this-house-holds
                an-agent-does-not-iterate-an-outcome
-               only-the-composer-that-staged-an-outcome-reworks-it
                a-decline-is-allowed-from-under-a-rework]})
 
 ;; ── :outcome_piece — one concrete thing, one tap ────────────────────

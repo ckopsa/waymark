@@ -1842,13 +1842,15 @@
 ;; composer holds the plan, the replacements stage under it all the
 ;; same, and the composer's commit is the only door back.
 ;;
-;; Five deftests. Three are the state's own promises: a decline is
+;; Eight deftests. Three are the state's own promises: a decline is
 ;; still allowed from under a rework (a person never waits on an agent
 ;; to say no), the leash keeps running so nothing is stuck when a
 ;; composer goes quiet, and an ORPHANED bundle is finishable — the
 ;; authorship wall is grantable in the direction four eyes is not. The
 ;; fifth (waymark-vf8) is the loop's other half: while a bundle is
-;; handed back its composer has ONE door, and words are not it.
+;; handed back its composer has ONE door, and words are not it. The
+;; last three (waymark-wxk) are what that door is held to: the
+;; household's own per-piece MARKS, read as a work order.
 
 (defn- remarks-on
   "The outcome's own thread, oldest-first (the remark kind's default
@@ -1973,6 +1975,18 @@
       (let [r (invoke! "outcome_pieces" walk :rework nil (human member))]
         (is (= 409 (:status r)))
         (is (= "only-its-composer-reworks" (guard-of r)))))
+
+    (testing "…and the same wall on the BUNDLE's own rework door: a person answers a plan, never re-plans it"
+      ;; the declaration used to carry a check-tier scenario for this
+      ;; one; since waymark-wxk that door reads rows, so the scenario
+      ;; defers — and the conformance walker cannot stage an outcome
+      ;; through its own create door. Proved here instead, where a real
+      ;; value and a real bundle exist.
+      (let [r (invoke! "outcomes" o :rework {:says "I will fix it myself."}
+                       (human member))]
+        (is (= 409 (:status r)))
+        (is (= "only-its-composer-reworks" (guard-of r)))
+        (is (str/includes? (detail r) "composer that staged"))))
 
     (testing "the composer withdraws the walk in place — reworked, not declined, not moot"
       (let [r (invoke! "outcome_pieces" walk :rework nil (human composer))]
@@ -2270,6 +2284,184 @@
 
     (testing "and off `iterating`, the composer's words are ordinary words again"
       (is (= 201 (:status (turn agent "Set aside for this week, then.")))))))
+
+;; ── the marks ARE the work order (waymark-wxk) ──────────────────────
+;;
+;; The owner's sentence: *part of my revising should be picking the
+;; pieces that need revision so that the AI can focus its attention.*
+;; A mark is nothing new — it is the piece's own `not_this` plus one of
+;; jfv.16's four quick words — and the lists are that word read as an
+;; order: wrong time is a RE-TIME, wrong piece or not this way is a
+;; REPLACE, never this (or a decline that said no word at all) is a
+;; DROP, and a piece still standing is a KEEP. What the commit door
+;; adds is that the composer is HELD to them.
+;;
+;; Three deftests, one per claim the wall makes: every mark answered
+;; before the round commits (and a round scoped to the last commit, so
+;; the marks of a round already answered are not asked for twice); a
+;; KEEP is not the composer's to withdraw; and where the household
+;; marked NOTHING none of it applies, because then the note is the
+;; whole order and what changes is the composer's reading of it.
+
+(defn- mark!
+  "One MARK: the piece's own decline, then the quick word behind it —
+  the two writes the card's marks panel makes in one gesture, made
+  here in the order it makes them. A nil word is a decline that said
+  nothing, which the lists read as a DROP: the quick word is optional
+  (waymark-jfv.16) and silence spells no order beyond `not this one`."
+  [who pid word]
+  (let [r (invoke! "outcome_pieces" pid :not_this nil (human who))]
+    (is (= 200 (:status r)) (pr-str (json r)))
+    (is (= "declined" (:state (json r))))
+    (when word
+      (let [said (req :post "/api/verdict_reasons"
+                      {:subject_kind "outcome_piece" :subject_id pid
+                       :verdict "not_this" :reason word}
+                      (human who))]
+        (is (= 201 (:status said)) (pr-str (json said)))))
+    r))
+
+(deftest every-mark-is-answered-before-the-round-commits
+  (let [member   "colton-marks"
+        composer "composer-marks"
+        v (declare-value! member "a Sunday that holds" ["the shop"])
+        o (id-of (stage-outcome! composer (vid v)))
+        kept (id-of (stage-piece! composer o "Load the truck Friday evening"
+                                  "task" {:title "Load the truck"}))
+        retimed (id-of (stage-piece! composer o "Park walk at 9am Sunday"
+                                     "task" {:title "Park walk, Sunday"}))
+        swapped (id-of (stage-piece! composer o "Drive to the lumber yard for stock"
+                                     "task" {:title "Lumber yard run"}))
+        dropped (id-of (stage-piece! composer o "Rope Grandma into babysitting"
+                                     "task" {:title "Ask Grandma to sit"}))]
+
+    (testing "a piece may be marked BEFORE the plan is handed back — the offered card is where the chips already are"
+      (mark! member retimed "wrong_time"))
+
+    (is (= 200 (:status (invoke! "outcomes" o :iterate
+                                 {:says (str "The walk clashes with 9am church,"
+                                             " and Howie needs a ride to the"
+                                             " party at two.")}
+                                 (human member)))))
+
+    (testing "and a piece may be marked AFTER it too: `iterating` closes the tap, never the decline"
+      (mark! member swapped "wrong_piece")
+      (mark! member dropped "never_this"))
+
+    (testing "a commit that answers none of them is refused, with every owed mark named and its list said"
+      (let [r (invoke! "outcomes" o :rework {:says "Reworked."} (human composer))]
+        (is (= 409 (:status r)) (pr-str (json r)))
+        (is (= "the-marks-are-the-work-order" (guard-of r)))
+        (is (str/includes? (detail r) "marked 2 pieces for a new one"))
+        (is (str/includes? (detail r) "has staged 0"))
+        (is (str/includes? (detail r) (str "RE-TIME /api/outcome_pieces/" retimed)))
+        (is (str/includes? (detail r) (str "REPLACE /api/outcome_pieces/" swapped)))
+        (is (not (str/includes? (detail r) (str "/api/outcome_pieces/" dropped)))
+            "a DROP needs nothing — the decline already took it out")
+        (is (not (str/includes? (detail r) (str "/api/outcome_pieces/" kept)))
+            "and a KEEP is not owed anything either")))
+
+    (testing "one replacement is not two: the count is the arithmetic, and it says so"
+      (is (= 201 (:status (stage-piece! composer o
+                                        "A shaded creek trail at 8am, before the heat"
+                                        "task" {:title "Creek trail, 8am"}))))
+      (let [r (invoke! "outcomes" o :rework {:says "Half of it."} (human composer))]
+        (is (= 409 (:status r)))
+        (is (= "the-marks-are-the-work-order" (guard-of r)))
+        (is (str/includes? (detail r) "has staged 1"))))
+
+    (testing "with both staged the round commits, and the bundle comes back revised"
+      (is (= 201 (:status (stage-piece! composer o
+                                        "The stock delivered, no lumber-yard trip"
+                                        "task" {:title "Order the stock delivered"}))))
+      (let [r (invoke! "outcomes" o :rework
+                       {:says (str "Walk moved to the creek at 8am and the"
+                                   " yard run swapped for a delivery.")}
+                       (human composer))]
+        (is (= 200 (:status r)) (pr-str (json r)))
+        (is (= "offered" (:state (json r))))
+        (is (= 1 (:plan_revision (fields r))))))
+
+    (testing "and a round already answered is not asked for again: the boundary is the last commit"
+      ;; the three declined pieces above still read `declined` — they
+      ;; are terminal — so a wall reading state alone would demand two
+      ;; more replacements every round from here to the end of time.
+      (is (= 200 (:status (invoke! "outcomes" o :iterate
+                                   {:says "Nearly. Nothing marked this time."}
+                                   (human member)))))
+      (let [r (invoke! "outcomes" o :rework
+                       {:says "Read it — the plan stands as it is."}
+                       (human composer))]
+        (is (= 200 (:status r)) (pr-str (json r)))
+        (is (= "offered" (:state (json r))))
+        (is (= 2 (:plan_revision (fields r))))))))
+
+(deftest a-keep-is-an-instruction-and-not-the-composers-to-withdraw
+  (let [member   "colton-keeps"
+        composer "composer-keeps"
+        v (declare-value! member "a Saturday that keeps what works" ["the shop"])
+        o (id-of (stage-outcome! composer (vid v)))
+        kept (id-of (stage-piece! composer o "The shop hour, Saturday morning"
+                                  "task" {:title "An hour in the shop"}))
+        swapped (id-of (stage-piece! composer o "Pick the hinges up Friday"
+                                     "task" {:title "Pick up the hinges"}))]
+    (is (= 200 (:status (invoke! "outcomes" o :iterate
+                                 {:says "The hinges are already here."}
+                                 (human member)))))
+    (mark! member swapped "wrong_piece")
+
+    (testing "the composer withdraws the piece nobody marked, and stages the one that was asked for"
+      (is (= 200 (:status (invoke! "outcome_pieces" kept :rework nil
+                                   (human composer)))))
+      (is (= 201 (:status (stage-piece! composer o "Cut the stock instead"
+                                        "task" {:title "Cut the box stock"})))))
+
+    (testing "the commit is refused BY NAME, and the refusal quotes the piece the household kept"
+      (let [r (invoke! "outcomes" o :rework {:says "Tidied it up."} (human composer))]
+        (is (= 409 (:status r)) (pr-str (json r)))
+        (is (= "the-marks-are-the-work-order" (guard-of r)))
+        (is (str/includes? (detail r) (str "you withdrew /api/outcome_pieces/" kept)))
+        (is (str/includes? (detail r) "which is a KEEP"))
+        (is (str/includes? (detail r) "answers a question they did not ask"))))
+
+    (testing "…and staging it again as it was is the way through, which the refusal says"
+      (is (= 201 (:status (stage-piece! composer o "The shop hour, Saturday morning"
+                                        "task" {:title "An hour in the shop"}))))
+      (let [r (invoke! "outcomes" o :rework {:says "Put the shop hour back."}
+                       (human composer))]
+        (is (= 409 (:status r)) (pr-str (json r)))
+        (is (str/includes? (detail r) (str "/api/outcome_pieces/" kept))
+            "the withdrawal itself is the offence and re-staging does not undo it")))))
+
+(deftest an-unmarked-round-is-the-composers-reading-of-the-note
+  (let [member   "colton-unmarked"
+        composer "composer-unmarked"
+        v (declare-value! member "a Saturday somebody has to read" ["the shop"])
+        o (id-of (stage-outcome! composer (vid v)))
+        one (id-of (stage-piece! composer o "The shop, Saturday at two"
+                                 "task" {:title "The shop, Saturday 2pm"}))
+        two (id-of (stage-piece! composer o "Stock cut Friday evening"
+                                 "task" {:title "Cut the stock"}))]
+    (is (= 200 (:status (invoke! "outcomes" o :iterate
+                                 {:says (str "Saturday is out entirely —"
+                                             " move the whole thing to Sunday.")}
+                                 (human member)))))
+
+    (testing "nothing was marked, so the note is the whole order and the composer re-plans on its reading"
+      (is (= 200 (:status (invoke! "outcome_pieces" one :rework nil
+                                   (human composer)))))
+      (is (= 200 (:status (invoke! "outcome_pieces" two :rework nil
+                                   (human composer)))))
+      (is (= 201 (:status (stage-piece! composer o "The shop, Sunday at two"
+                                        "task" {:title "The shop, Sunday 2pm"}))))
+      (is (= 201 (:status (stage-piece! composer o "Stock cut Saturday evening"
+                                        "task" {:title "Cut the stock Saturday"}))))
+      (let [r (invoke! "outcomes" o :rework {:says "Whole thing moved to Sunday."}
+                       (human composer))]
+        (is (= 200 (:status r)) (pr-str (json r)))
+        (is (= "offered" (:state (json r)))
+            "a wall that read an unmarked round as two KEEPs would have refused this")
+        (is (= 1 (:plan_revision (fields r))))))))
 
 ;; ── 22. not a twin: one standing bundle per evidence row (8gc) ───────
 ;;

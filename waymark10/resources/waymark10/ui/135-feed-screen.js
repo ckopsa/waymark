@@ -448,11 +448,161 @@ async function renderFeedScreen(view, doc) {
        title: (entry.display || {}).description ||
               (entry.safety || {}).one_way || ""},
       label(name, entry), (entry.safety || {}).confirm ? " …" : "");
-    chip.addEventListener("click", () => fireVerb({
-      card, article, chip, name, entry,
-      lbl: label(name, entry), doc: card,
-      href: entry.href, method: entry.method || "POST"}));
+    chip.addEventListener("click", () => {
+      /* MARK THE PARTS FIRST (waymark-wxk). A verb whose declaration
+         says `display.marks` is one the reader answers about the
+         PIECES before they answer about the whole — so on a card that
+         carries pieces this chip opens the marks panel rather than the
+         verb's own dialog, and the dialog is what the panel's last
+         chip opens. Everything about that dispatch is the wire's: the
+         advertisement rides the action entry, the parts ride the card,
+         and the words ride the document. */
+      if (marksOpen(card, entry))
+        return marksPanel({card, article, chip, name, entry});
+      fireVerb({card, article, chip, name, entry,
+                lbl: label(name, entry), doc: card,
+                href: entry.href, method: entry.method || "POST"});
+    });
     return chip;
+  }
+
+  /* ── marking the pieces (waymark-wxk) ───────────────────────────────
+     The owner's sentence: *part of my revising should be picking the
+     pieces that need revision so that the AI can focus its attention.*
+     A note about a whole bundle makes the composer guess which parts
+     it meant; a tap per part does not.
+
+     NO NEW WIRE AND NO NEW WORDS. A mark IS the piece's own decline
+     plus one of the four quick reasons the document already carries —
+     the same two writes `reasonChips` makes after a decline settles,
+     made here in one gesture and before the note instead of after the
+     verdict. So this page learns nothing: it reads `display.marks` off
+     the action entry, the parts off the card, each part's decline door
+     off that part's own projected verbs (the one that advertises
+     `display.reasons`, which is the same signal the settled row uses),
+     and the four words off `doc.reasons`.
+
+     EVERY CONTROL IS A TAP. Keep is the state a piece is already in,
+     so it is pressed and does nothing; the four words each fire; and
+     the only place anybody types is the verb's own note field, which
+     the last chip opens through the ordinary dialog. */
+
+  /* the part's own decline door — the verb that advertises quick
+     reasons. Read off the projection, never named: a kind whose
+     decline is spelled some other way is served by the same code. */
+  function markDoor(piece) {
+    for (const [name, entry] of Object.entries(piece.actions || {}))
+      if (((entry.display || {}).reasons) && !entry.input)
+        return {name, entry};
+    return null;
+  }
+
+  function markable(card) {
+    return (card.pieces || []).filter(p => markDoor(p));
+  }
+
+  function marksOpen(card, entry) {
+    return Boolean((entry.display || {}).marks &&
+                   (doc.reasons || {}).post_to &&
+                   ((doc.reasons || {}).choices || []).length &&
+                   markable(card).length);
+  }
+
+  /* one mark: the piece's decline, then the word behind it. Two writes
+     and the second is the one that carries the ORDER — a decline with
+     no word is a piece out of the bundle and nothing more, which is
+     what the rework door reads it as. */
+  async function fireMark(card, article, piece, door, choice, row) {
+    const chips = [...row.querySelectorAll("button")];
+    for (const b of chips) b.disabled = true;
+    const key = feedOriginKey(day, piece.card_id);
+    const res = await api(door.entry.href,
+      {method: door.entry.method || "POST", body: JSON.stringify({}),
+       headers: {"Idempotency-Key": key}});
+    if (!res.ok) {
+      for (const b of chips) b.disabled = false;
+      row.querySelector("[data-mark-problem]")
+         .replaceChildren(problemBox(res.body || {}));
+      return;
+    }
+    const self = String(piece.self || "");
+    const said = await api(doc.reasons.post_to, {
+      method: "POST", headers: {"Idempotency-Key": key},
+      body: JSON.stringify({
+        subject_kind: piece.kind || "",
+        subject_id: self.split("/").pop(),
+        subject_href: self,
+        about: piece.says || (piece.display || {}).title || piece.summary || "",
+        verdict: door.name,
+        [doc.reasons.field || "reason"]: choice.value})});
+    /* the verdict LANDED even if the word did not, and saying so is
+       the honest order: the piece is out either way, and a refusal
+       swallowed here would leave the reader thinking it was not. */
+    row.querySelector(".feed-mark-chips").replaceChildren(
+      el("span", {class: "feed-settled"},
+        el("span", {class: "ok"}, "✓ "),
+        said.ok ? choice.label : label(door.name, door.entry)));
+    if (!said.ok)
+      row.querySelector("[data-mark-problem]")
+         .replaceChildren(problemBox(said.body || {}));
+    /* …and the piece's own line in the bundle above settles with it,
+       so one gesture does not leave two live doors onto one row */
+    const li = article.querySelector(
+      `.fpiece[data-card-id="${CSS.escape(piece.card_id || "")}"]`);
+    if (li) settleBar(li.querySelector("[data-piece-verbs]"),
+                      label(door.name, door.entry), said.body);
+  }
+
+  function marksPanel(v) {
+    const {card, article, chip, name, entry} = v;
+    const old = article.querySelector("[data-marks]");
+    if (old) { old.remove(); chip.disabled = false; return; }
+    chip.disabled = true;
+    const panel = el("div", {class: "feed-marks", "data-marks": ""});
+    panel.append(el("div", {class: "feed-marks-head muted"},
+      "Mark the pieces that need work. Anything you leave on Keep "
+      + "stays as it is, and the note below says what is missing."));
+    for (const piece of markable(card)) {
+      const door = markDoor(piece);
+      const row = el("div", {class: "feed-mark", "data-mark": ""});
+      const chips = el("div", {class: "feed-mark-chips"});
+      const keep = el("button",
+        {class: "chip mark", "data-mark-choice": "keep", "aria-pressed": "true",
+         title: "leave this piece exactly as it stands — the composer may "
+              + "not withdraw it"}, "Keep");
+      keep.addEventListener("click", () => keep.setAttribute("aria-pressed", "true"));
+      chips.append(keep);
+      for (const c of doc.reasons.choices || []) {
+        const b = el("button",
+          {class: "chip mark", "data-mark-choice": c.value,
+           title: doc.reasons.says || ""}, c.label);
+        b.addEventListener("click", () => {
+          keep.setAttribute("aria-pressed", "false");
+          fireMark(card, article, piece, door, c, row);
+        });
+        chips.append(b);
+      }
+      row.append(
+        el("div", {class: "feed-mark-say prose"},
+          piece.says || piece.summary || "this piece"),
+        chips,
+        el("div", {class: "feed-mark-problem", "data-mark-problem": ""}));
+      panel.append(row);
+    }
+    const go = el("button", {class: "chip verb primary", "data-marks-note": "",
+      title: (entry.display || {}).description || ""},
+      label(name, entry) + " …");
+    go.addEventListener("click", () => {
+      panel.remove();
+      fireVerb({card, article, chip, name, entry,
+                lbl: label(name, entry), doc: card,
+                href: entry.href, method: entry.method || "POST"});
+    });
+    const back = el("button", {class: "chip", "data-marks-cancel": ""},
+      "Never mind");
+    back.addEventListener("click", () => { panel.remove(); chip.disabled = false; });
+    panel.append(el("div", {class: "feed-marks-foot"}, go, back));
+    article.querySelector("[data-feed-problem]").before(panel);
   }
 
   /* one tap, one origin key, one honest answer. A verb that wants a

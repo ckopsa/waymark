@@ -54,6 +54,38 @@
     (is (str/includes? page "prefillFromDoc(source, input)")
         "the draft branch reads the refetched source too")))
 
+(deftest the-marks-panel-rides-the-card
+  ;; waymark-wxk: a verb whose declaration says `display.marks` opens a
+  ;; per-piece selection IN PLACE on the card before it collects its
+  ;; note. Three things are asserted and all three are the reason it is
+  ;; a generic affordance rather than one kind's feature: the dispatch
+  ;; reads the ADVERTISEMENT (never an action name), the part's own
+  ;; decline door is found by the `display.reasons` it already carries
+  ;; (never named), and the words come off the document's own `reasons`
+  ;; — so no application kind name reaches this page. The markup hooks
+  ;; are asserted too, because the panel is the one control on the card
+  ;; that a person taps five of.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "function marksPanel"))
+    (is (str/includes? page "(entry.display || {}).marks")
+        "the dispatch is the declaration's advertisement")
+    (is (str/includes? page "((entry.display || {}).reasons) && !entry.input")
+        "a part's decline door is found by what it advertises, not by its name")
+    (is (str/includes? page "\"data-marks\": \"\""))
+    (is (str/includes? page "\"data-mark\": \"\""))
+    (is (str/includes? page "\"data-mark-choice\": \"keep\""))
+    (is (str/includes? page "\"aria-pressed\": \"true\"")
+        "Keep is the state a piece is already in, and the row says which")
+    (is (str/includes? page "async function fireMark")
+        "a mark is the decline and then the word behind it")
+    (is (str/includes? page ".feed-marks {") "the panel's own CSS survives assembly")
+    (is (str/includes? page "html[data-ui=\"mobile\"] .feed-mark-chips button.chip.mark")
+        "…and a mark is fingertip-sized on a phone, like every other chip")
+    (doseq [word ["outcome_piece" "not_this" "iterate"]]
+      (is (not (str/includes? page word))
+          (str "the generic page never learns an application's kind or"
+               " door — found " word)))))
+
 (deftest the-dashboard-renderer-rides-the-page
   ;; the dashboard screen (waymark-ggw): render() forks by kind to
   ;; renderDashboard (function declarations hoist across the one flat

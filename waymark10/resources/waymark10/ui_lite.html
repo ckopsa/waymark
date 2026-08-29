@@ -105,6 +105,13 @@ tr.rowlink:hover td { background: var(--chip); }
 .chip.on { background: var(--accent); color: var(--accent-ink);
   border-color: var(--accent); }
 .chip.static { cursor: default; }
+/* a mark that is currently chosen (waymark-wxk): Keep is pressed
+   until one of the quick words is tapped, so the row always says
+   which of the five it is sitting on */
+.chip[aria-pressed="true"] { background: var(--accent);
+  color: var(--accent-ink); border-color: var(--accent); font-weight: 700; }
+.chip:disabled { opacity: .5; cursor: default; }
+[data-mark] p { margin: 0 0 6px; }
 button { font: inherit; padding: 6px 14px; border-radius: 8px;
   border: 1px solid var(--line); background: var(--panel);
   color: var(--ink); cursor: pointer; }
@@ -548,6 +555,112 @@ function actionButton(name, entry, doc, onDone) {
     (entry.safety || {}).confirm ? " …"
       : entry.effort === "composition" ? " ✎" : "");
 }
+/* ── marking the parts (waymark-wxk) ─────────────────────────────────
+   The owner's sentence: *part of my revising should be picking the
+   pieces that need revision so that the AI can focus its attention.*
+   A verb whose declaration says `display.marks` is one a reader
+   answers about the PARTS before they answer about the whole, and the
+   value of that key is the LINK REL whose rows the parts are — so
+   this page follows the row's own link, reads each part's decline
+   door off that part's own projected verbs (the one advertising
+   `display.reasons`, exactly as the full client's settled row does),
+   and offers Keep plus the four quick words.
+
+   A MARK IS TWO WRITES AND NEITHER IS NEW: the part's own decline,
+   then a `verdict_reason` carrying the word behind it. That kind is
+   the FRAMEWORK's own and enrolled into every engine, which is why
+   this page may name it — it is naming itself, not an application —
+   and its four words are read off its published schema rather than
+   copied, so a fifth word declared server-side is a fifth chip here
+   with nothing changed. */
+async function quickWords() {
+  const idx = await wellKnown();
+  const res = ((idx || {}).resources || {})["verdict_reason"];
+  if (!res || !res.href) return null;
+  const prop = (((await kindSchema("verdict_reason")) || {}).properties
+                || {}).reason || {};
+  const choices = (prop["x-display"] || {}).choices || {};
+  if (!(prop.enum || []).length) return null;
+  return {post_to: res.href,
+          choices: prop.enum.map(v => ({value: String(v),
+                                        label: choices[v] || String(v)}))};
+}
+/* the part's own decline door, read off the projection and never
+   named — a kind whose decline is spelled some other way is served by
+   the same code */
+function markDoorOf(item) {
+  for (const [name, entry] of Object.entries(item.actions || {}))
+    if (((entry.display || {}).reasons) && !entry.input) return {name, entry};
+  return null;
+}
+async function marksPanel(doc) {
+  const found = Object.entries(doc.actions || {})
+    .find(([, e]) => (e.display || {}).marks);
+  if (!found) return null;
+  const rel = String((found[1].display || {}).marks);
+  const link = (doc.links || {})[rel];
+  if (!link || !link.href) return null;
+  const words = await quickWords();
+  if (!words) return null;
+  const listed = await api(link.href);
+  if (!listed.ok) return null;
+  const items = (((listed.body || {}).data) || {}).items || [];
+  const rows = [];
+  for (const item of items) {
+    const door = markDoorOf(item);
+    if (!door) continue;                    /* already answered, or not ours */
+    const chips = el("div", {class: "chips", "data-mark-chips": ""});
+    const problem = el("div", {"data-mark-problem": ""});
+    const keep = el("button",
+      {class: "chip", "data-mark-choice": "keep", "aria-pressed": "true",
+       title: "leave this part exactly as it stands",
+       onclick: () => keep.setAttribute("aria-pressed", "true")}, "Keep");
+    chips.append(keep);
+    for (const c of words.choices)
+      chips.append(el("button",
+        {class: "chip", "data-mark-choice": c.value,
+         onclick: async () => {
+           keep.setAttribute("aria-pressed", "false");
+           for (const b of chips.querySelectorAll("button")) b.disabled = true;
+           const fired = await api(door.entry.href,
+             {method: door.entry.method || "POST", body: "{}"});
+           if (!fired.ok) {
+             for (const b of chips.querySelectorAll("button")) b.disabled = false;
+             problem.replaceChildren(el("div", {class: "warnbox"},
+               ((fired.body || {}).detail) || ((fired.body || {}).title) ||
+               ("refused with " + fired.status)));
+             return;
+           }
+           const self = String(item.self || "");
+           const said = await api(words.post_to, {method: "POST",
+             body: JSON.stringify({
+               subject_kind: item.kind || "",
+               subject_id: self.split("/").pop(),
+               subject_href: self,
+               about: item.summary || "",
+               verdict: door.name,
+               reason: c.value})});
+           chips.replaceChildren(el("span", {class: "meta"},
+             "✓ " + (said.ok ? c.label
+                             : ((door.entry.display || {}).label
+                                || title(door.name)))));
+           if (!said.ok)
+             problem.replaceChildren(el("div", {class: "warnbox"},
+               "the part is declined; the word did not land — say it again "
+               + "from its own screen"));
+         }}, c.label));
+    rows.push(el("div", {class: "card", "data-mark": ""},
+      el("p", {}, item.summary || item.self), chips, problem));
+  }
+  if (!rows.length) return null;
+  return el("div", {"data-marks": ""},
+    el("h2", {}, "Mark the parts"),
+    el("p", {class: "meta"},
+      "Anything left on Keep stays as it is, and cannot be withdrawn. "
+      + "What none of these covers goes in the note on "
+      + ((found[1].display || {}).label || title(found[0])) + "."),
+    rows);
+}
 /* the declared links: a navigation strip, badges as scent */
 function linksStrip(doc) {
   const entries = Object.entries(doc.links || {})
@@ -633,6 +746,9 @@ async function renderResource(href) {
     : null;
 
   const surfaceChips = await surfaceLinks(doc);
+  /* the marks, when a verb here says it takes them (waymark-wxk) —
+     above the action row, because they are answered first */
+  const marks = await marksPanel(doc);
 
   /* fields a parts group re-renders (with buttons) leave the kv table */
   const partPaths = new Set(Object.keys(doc.parts || {}));
@@ -651,6 +767,7 @@ async function renderResource(href) {
         " · "), el("span", {class: "meta mono"}, doc.self)),
     linksStrip(doc),
     surfaceChips,
+    marks,
     el("div", {class: "actions"}, buttons, gatedButtons),
     notNow,
     ...partsSections(doc),
