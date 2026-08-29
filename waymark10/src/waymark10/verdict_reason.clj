@@ -241,7 +241,7 @@
    :reads []
    :vars [:word :kind :words]
    :open "The words are a closed list on purpose — a chip row is read standing up, and a menu of nine is a form wearing chips. What is not closed is WHICH list: a house says different things about what it was offered and about what it was told."
-   :explain "{word} is not a word this house says about a {kind}. That kind is answered with {words}. Something the house was OFFERED is answered along when, what, how and ever; something an agent CLAIMED — a finding, a judgment — is answered along worth, backing, newness and truth, because *wrong time* is not a thing anybody means about a sentence."}
+   :explain "{word} is not a word this house says about {kind} rows. That kind is answered with {words}. Something the house was OFFERED is answered along when, what, how and ever; something an agent CLAIMED — a finding, a judgment — is answered along worth, backing, newness and truth, because *wrong time* is not a thing anybody means about a sentence."}
   [_row inp _ctx]
   ;; THE FIT IS A GUARD AND NOT THE SCHEMA (waymark-hcr), and the
   ;; reason is the sentence above. A closed enum cannot ask about a
@@ -376,7 +376,7 @@
              :reason "wrong_time"}
    :as      {:id "colton" :type :person}
    :expect  {:refused :the-word-fits-the-subject
-             :because "the four axes a claim runs along"}})
+             :because "answered along worth, backing, newness and truth"}})
 
 (defscenario nobody-rewrites-somebody-elses-reason
   "…and the same sentence about the deeper layer. A composer holding a

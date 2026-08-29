@@ -391,7 +391,7 @@
           (testing "…and the rank reads the word, without opening a journal"
             (let [q5 (id-of (publish! finder "The shed door, still open"
                                       "tasks" t-shed act))
-                  doc (feed-as who)
+                  doc (feed-as who "explain=1")
                   c5 (insight-card doc q5)
                   says-of (fn [c s] (some #(str/includes? (str %) s)
                                           (get-in c [:why :says])))]

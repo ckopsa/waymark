@@ -1401,8 +1401,7 @@
                       ranks without the word at all"
               (let [live (json (req :get (str "/api/ranking_notes/" nid)
                                     (human who)))
-                    door (some #(when (= "dismiss" (str (:name %))) %)
-                               (:actions live))
+                    door (get-in live [:actions :dismiss])
                     by-agent (invoke! "ranking_notes" nid :dismiss nil cairn)
                     by-person (invoke! "ranking_notes" nid :dismiss nil (human who))
                     doc (feed-as who "explain=1")
