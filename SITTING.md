@@ -167,6 +167,16 @@ holding your place in it.
    decline. A bundle being reworked by somebody else is listed apart
    (*iterating, not yours to rework*) — leave it, and say so in the
    journal if its composer is gone.
+   **You cannot promise this one, you can only do it** (waymark-vf8):
+   while a bundle of yours is `iterating` the remark door is CLOSED to
+   you — a reply saying *understood, I will rework this* is refused by
+   name, at the rework door's own address — and `says` on the rework
+   is where your words go (required, 240). If you read the note and
+   the plan still stands, or you cannot stage what was asked, commit
+   the rework anyway and say that: **a round that changes no piece is
+   a lawful answer**, the bundle goes back on the fridge, and the
+   household decides. What is not an answer is silence dressed as
+   one.
 4. **Answer every unanswered thread turn** — a `remark` whose last
    word is a person's is a work order: reply with a remark
    (`in_reply_to` naming theirs), restage citing the insight you
@@ -343,6 +353,13 @@ holding your place in it.
   when its composer is gone. From `iterating` a person can still
   decline the whole bundle and the week can still end it; what they
   cannot do is accept a plan they have just called wrong.
+- **And on a bundle you could rework, words are refused.** While an
+  outcome sits in `iterating`, the one hand that can act on it — its
+  composer, or an agent under a grant naming `outcome.rework` on that
+  row — is refused a `remark` on it (`words-do-not-answer`), because a
+  promise has no state and the thread would read as answered. Act at
+  the door and say why in `says`. Every other hand still speaks: the
+  person's turn, and an agent with no rework door on that row.
 - Never tap a verdict or affirm a value or person unless your grant
   admits that door — and never on a row you wrote. Your standing
   sitting scope admits none of them, so under it the answer is still

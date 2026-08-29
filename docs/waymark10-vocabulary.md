@@ -224,6 +224,28 @@ refuse against) print from the REPL — `(waymark10.dev/vocab)` — and live in
 `[from action to opts?]`; per-origin rows of one action must agree on
 everything but `:confirm`.
 
+`:answered-at-a-door` names the states of this kind in which **words are
+not an answer** (waymark-vf8) — a row waiting on an ACT by whoever holds
+one particular door:
+
+```clojure
+:answered-at-a-door
+{:iterating {:door :rework
+             :whose :composed_by
+             :explain "This bundle is handed back for a rework. Answer at {door} — … Words alone do not answer an iterate."}}
+```
+
+`remark`'s create wall (`words-do-not-answer`) reads it off the SUBJECT's
+declaration and refuses a turn from the one hand that could act: an AGENT
+that is the row's `:whose`, or that presented a grant admitting
+`kind`.`:door` on that row. `{door}` in the sentence is filled with the
+row's own address (`/api/<plural>/<id>/-/<door>`); a person's turn, a
+bystanding agent's turn, and any turn a door files from inside itself
+(`(:within ctx)` — the wall fires at the wire only) all pass. Each clause validates at the def
+site: the state is declared, `:door` is an action of this kind, `:whose`
+is a schema field, and `:explain` says `{door}`. Advertisement-class — no
+fingerprint facet names it.
+
 `:views` declares alternate collection views, each its own closed map
 (`waymark10.declaration/view-keys`):
 

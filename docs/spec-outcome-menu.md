@@ -573,6 +573,7 @@ guard, refuses with a sentence that names the fix, and is proved by a scenario:
 | `the-composer-does-not-decide` | the stager answering its own plan or piece (`g/not-the-field :composed_by`) — **absolute**, and no grant opens it |
 | `a-person-answers` | an agent tapping a verdict **whose grant does not admit that door** (`g/unless-granted`, since waymark-sfe / 2026-08-28) — and, on every door, **the agent that composed the row**, grant or no grant. The refusal names the token a scope would have to carry |
 | `only-its-composer-reworks` | *(since waymark-9j2; grantable since waymark-9xn / 2026-08-28)* anybody but the row's own composer walking `outcome.rework` or `outcome_piece.rework` **without a grant that admits that door on that row** (`g/author-or-granted`). It is `a-person-answers` with the own-field exemption **inverted**: authorship is what opens this door rather than what closes it, so the composer walks it unasked and a second agent walks it only on a person's approved errand — which is what makes an ORPHANED bundle finishable |
+| `words-do-not-answer` | *(since waymark-vf8 / 2026-08-29; the one wall in this table that stands on ANOTHER kind's door)* an AGENT posting a `remark` whose subject is an outcome in `iterating` **when that agent is the one that could rework it** — its own `composed_by`, or a grant admitting `outcome.rework` on that row. It refuses with the door's own address, and it is declared by this kind (`:answered-at-a-door`) and enforced by the framework's thread kind, so the predicate is generic and the sentence is the household's. A person's turn, a bystanding agent's turn, and any turn a door files from inside itself (`:within`) all pass |
 
 **The outcome's states, as they now stand** (waymark-9xn, 2026-08-28):
 `offered` → `iterating` → back to `offered`, with the three terminal answers
@@ -591,6 +592,12 @@ A piece's own doors read the parent's state: `take` is refused while the
 bundle is `iterating` (`the-bundle-is-taking-answers`), `rework` (withdraw)
 opens **only** while it is (`the-parent-invited-a-rework`), and a replacement
 piece **stages** under an iterating bundle, which is where a re-plan happens.
+
+And since waymark-vf8 the composer's **only** door on an iterating bundle is
+`rework`: the thread's own create door refuses that one hand a turn there, so
+a promise cannot stand in for the act. `rework` requires `says` (1–240) and
+admits a round that changes **no** piece — the composer read the note and
+stands by the plan, which the household may then decline.
 
 **The two walls above are different in kind, and the difference is the
 whole of waymark-sfe.** `the-composer-does-not-decide` is *four eyes*:
@@ -6349,3 +6356,97 @@ the feed, and the composer's own commit is the only door back.
   iterate, and nothing sweeps `iterating` — the clock and the composer are the
   only two things that move a bundle out of it, which is the same posture
   `offered` has always had.
+
+### Ruling, 2026-08-29 (waymark-vf8): a composer cannot PROMISE a rework
+
+**The specimen.** The sitting of 00:15Z answered two iterate notes with
+remarks — *Understood. I will rework this to include getting Howie to his
+friend's birthday party*, *…a good step to include* — and reworked nothing.
+Both bundles (`217f5678`, `99c62050`) sat in `iterating` at revision 0, off
+the owner's feed, until some later composer acted, while their threads read as
+though they had been answered. **The owner:** *should we make it so it can't
+promise, it can only act — by only giving the option to resolve the iteration
+and include a comment?* Yes. The tap is the write; a promise has no state.
+
+- **The wall stands on the `remark` door, and it binds exactly one hand.** An
+  agent may not post a remark whose subject is an outcome in `iterating` when
+  it is that bundle's `composed_by` **or** holds a grant admitting
+  `outcome.rework` on that row (the admission is asked of `(:grant ctx)` —
+  `grants/visibility`'s own closure, the one `unless-granted` and
+  `author-or-granted` ask, so the wall and the projection cannot disagree).
+  The refusal is this kind's own sentence, with the address filled in: *This
+  bundle is handed back for a rework. Answer at /api/outcomes/<id>/-/rework —
+  withdraw or stage what changes and say why in says; a rework that changes
+  nothing is a lawful answer too. Words alone do not answer an iterate.*
+  Untouched: a **person's** remark (the act was never theirs to make), a
+  remark on an `offered` or answered bundle, the turn of an agent that holds
+  **no** rework door on that row — it has nothing but words, and taking those
+  would leave it mute — and any turn a DOOR files from inside itself.
+
+- **The framework owns the predicate; this kind owns the sentence.** `remark`
+  is a framework kind enrolled `:always` (one law per kind — an app cannot
+  re-declare it), and its whole posture is that it asks no kind-specific
+  question of the subject. So the SUBJECT declares the clause and the thread
+  kind reads it: a new top-level declaration key, `:answered-at-a-door {state
+  {:door … :whose … :explain …}}`, validated at the def site
+  (`checks/check-answered-at-a-door`: the state is declared, the door is an
+  action of this kind, `:whose` is a schema field, `:explain` names `{door}`),
+  read by `remark`'s `words-do-not-answer` through `(:rdef-of ctx)` and
+  `(:read ctx)` — `ranking_note/not-your-own-row`'s idiom exactly, one kind
+  over. Nothing in `waymark10/` learns the word *outcome*.
+
+- **The rework's own reply is not a promise, and `:within` is what says so.**
+  `rework-the-plan` posts its `says` as a turn on this very thread
+  (`:touches {:kind :remark :action :create}`), from the composer's own hand,
+  while the row it names is still `iterating`. A wall that could not tell the
+  answer from the promise would have closed the loop it exists to protect —
+  and would also have refused a granted delegate's second `iterate` note,
+  which rides the same seam. So the wall fires **at the wire only**: a remark
+  a door files from inside itself is that door's own record, judged by that
+  door's walls, and a promise is always a client's POST. `(:within ctx)`,
+  waymark-jfv.20's seam, whose second reader this is.
+
+- **`says` is required and short.** It was already required (`:min 1`); the
+  cap moves 600 → **240**, the house's own note ceiling
+  (`resource/verdict-action`). It is the composer's only turn on a handed-back
+  bundle, and one turn back to the household answering their note is a
+  sentence or two — the round's real answer is what the pieces now say. An
+  empty `says` is a 422 at the door, not a guard.
+
+- **A rework that changes nothing is a LAWFUL answer, and no new door was
+  added for it.** No guard ever demanded a diff (*stage the replacements
+  before you commit* was prose, in the skill and in `:one-way`), and none is
+  added: a round with no withdrawn and no added piece still bumps
+  `plan_revision`, stamps `reworked_at`, returns the bundle to `offered` and
+  replies with `says`. The composer read the note and stands by the plan, or
+  cannot stage what was asked; the crown shows the bundle again and the
+  person may decline it. A door that demanded a diff would teach the composer
+  to stage a cosmetic one, and a separate *decline to rework* door would be a
+  second way to say the one thing this door already says — **deliberately not
+  built**.
+
+- **The driver says it plainly, and grades it.** *Handed back for a rework —
+  YOUR work orders* now says the reply door is closed and the rework door is
+  the answer; `sitting-run.sh verify` prints **HANDED BACK, NOT REWORKED:
+  `<self>`** for every bundle of this principal that the last manifest listed
+  as `iterating` and that still stands at the same `plan_revision`. A promise
+  in the thread no longer reads as an answer anywhere.
+
+**Recorded for whoever comes next:** `make check-queue` is **38 kinds, 11
+warnings, 56 scenarios judged** (was 57). One scenario moved from judged to
+DEFERRED and no scenario was deleted: `remark`'s
+`nobody-speaks-in-somebody-elses-voice` walks the create door, which now
+carries a guard that reads `:storage`, and the declaration-time walker defers
+any door it cannot stage a world for — `ranking_note`'s posture exactly, whose
+create scenario defers for the same reason. **A deferral is not a loss**: the
+conformance tier picks it up, and `waymark10.law-scenarios-test/the-deferred-
+half-is-paid-by-the-suite` — the pin that says the two tiers add up to every
+scenario and no more — moves **7 → 8** with `remark`'s name added to its
+sentence. CI caught that one, which is what the pin is for. **No fingerprint moves.** Action
+`:input` schemas ride `fingerprint-of` only through their DEFAULTS
+(`create`/`input_defaults`), so the `says` cap does not mint a revision;
+`:create-guards` are outside the projection altogether, so `remark` does not
+move either; and `:answered-at-a-door` is a new key the projection does not
+name — advertisement-class, like `:nav` and `:over`. No migration: no state,
+column, filter or sort changed.
+

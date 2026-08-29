@@ -177,6 +177,18 @@ without opening the thread. NEVER reword anybody's turn but your own
 (the door refuses by name); NEVER read a remark as a verdict — words
 decline nothing, and the person's taps stay the only doors that
 decide.
+AND ONE THREAD YOU MAY NOT ANSWER IN WORDS AT ALL (waymark-vf8): an
+outcome in `iterating` is one the household handed back to YOU, and
+the remark door is closed to the hand that can rework it — a reply
+saying "understood, I will rework this" is refused by name
+(`words-do-not-answer`) at the rework door's own address, because a
+promise has no state while the bundle sits off their feed. Answer it
+at POST {{base_url}}/api/outcomes/<id>/-/rework, with your words in
+`says` (required, at most 240 characters — it is posted as your turn
+on the thread). A round that changes no piece is a LAWFUL answer:
+if the plan still stands, or you cannot stage what was asked, commit
+and say so — the bundle goes back on their feed and they may decline
+it. Leaving it in `iterating` is the one wrong answer.
 """
 
 [[steps]]

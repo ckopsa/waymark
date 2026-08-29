@@ -52,6 +52,17 @@
    ;; to be a literal set of kind names in grants.clj, relocated to
    ;; the seven declarations that always owned it
    :own-surface
+   ;; the states of this kind in which WORDS ARE NOT AN ANSWER
+   ;; (waymark-vf8): {state {:door … :whose … :explain "… {door} …"}}.
+   ;; A row sitting in such a state is waiting on an ACT by whoever
+   ;; holds that door, and `remark`'s create wall reads this map to
+   ;; refuse that one hand a promise in place of the act — naming the
+   ;; door, at this row's own address. Every other hand still speaks
+   ;; freely, which is why this is a clause on the SUBJECT's
+   ;; declaration rather than application vocabulary inside the
+   ;; thread kind: the framework owns the predicate, the kind owns
+   ;; the sentence
+   :answered-at-a-door
    ;; derivations & constraints
    :derived :one-of :unique :part-scopes
    ;; collection surface

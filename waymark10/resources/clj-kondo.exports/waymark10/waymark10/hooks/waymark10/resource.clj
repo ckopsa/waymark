@@ -21,7 +21,7 @@
     :display :label-template :summary :deviations
     :on-create :mirror
     :retain
-    :decision :own-surface
+    :decision :own-surface :answered-at-a-door
     :scenarios})
 
 (def action-keys
