@@ -1842,11 +1842,13 @@
 ;; composer holds the plan, the replacements stage under it all the
 ;; same, and the composer's commit is the only door back.
 ;;
-;; Four deftests, and the last three are the state's own promises: a
-;; decline is still allowed from under a rework (a person never waits
-;; on an agent to say no), the leash keeps running so nothing is stuck
-;; when a composer goes quiet, and an ORPHANED bundle is finishable —
-;; the authorship wall is grantable in the direction four eyes is not.
+;; Five deftests. Three are the state's own promises: a decline is
+;; still allowed from under a rework (a person never waits on an agent
+;; to say no), the leash keeps running so nothing is stuck when a
+;; composer goes quiet, and an ORPHANED bundle is finishable — the
+;; authorship wall is grantable in the direction four eyes is not. The
+;; fifth (waymark-vf8) is the loop's other half: while a bundle is
+;; handed back its composer has ONE door, and words are not it.
 
 (defn- remarks-on
   "The outcome's own thread, oldest-first (the remark kind's default
@@ -2147,6 +2149,127 @@
     (doseq [oid [o other]]
       (is (= 200 (:status (invoke! "outcomes" oid :not_this_week nil
                                    (human member))))))))
+
+;; A COMPOSER CANNOT PROMISE A REWORK (waymark-vf8). The specimen the
+;; bead was filed on: a sitting read two iterate notes and answered
+;; both in WORDS — *Understood. I will rework this to include getting
+;; Howie to his friend's birthday party* — reworked nothing, and left
+;; both bundles in `iterating` at revision 0, off the household's feed,
+;; with threads that read as though they had been answered. The owner:
+;; *should we make it so it can't promise, it can only act — by only
+;; giving the option to resolve the iteration and include a comment?*
+;;
+;; So on an iterating bundle the composer's ONE door is `rework`, and
+;; the remark door refuses it by that door's own address. Nearly
+;; everything else about the thread is untouched, and that is most of
+;; what this walk is: the person still speaks, an agent holding no
+;; rework door still speaks (words are all it has), and the composer
+;; speaks freely again the moment the bundle is back on the fridge.
+;;
+;; THE COMPOSER HERE IS AN AGENT, which is the one place in this file
+;; it has to be. The ns docstring's note — the composer is a person,
+;; and deliberately — is about the four-eyes walls, which compare IDS;
+;; this wall reads the principal's TYPE, because a person's turn was
+;; never a promise standing in for an act they could make.
+
+(deftest a-composer-answers-an-iterate-at-the-door-and-not-in-words
+  (let [member   "colton-promise"
+        composer "composer-promise"
+        agent (leash! composer
+                      [{:kind "outcome" :actions ["create" "rework"]}
+                       {:kind "outcome_piece" :actions ["create"]}
+                       {:kind "remark" :actions ["create"]}]
+                      :scope)
+        v (declare-value! member "a Saturday that holds everything"
+                          ["the shop"])
+        made (req :post "/api/outcomes"
+                  {:goal "One Saturday in the shop with Jack, and a finished box"
+                   :value_id (vid v)
+                   :routing "It runs through the shop, which you said you love."
+                   :evidence [(str "/api/values/" (vid v)) (a-row-read)]}
+                  agent)
+        o (id-of made)
+        turn (fn [hs says]
+               (req :post "/api/remarks"
+                    {:subject_kind "outcome" :subject_id o :says says} hs))
+        said-by-composer (fn []
+                           (->> (remarks-on member o)
+                                (filter #(= composer
+                                            (get-in % [:data :said_by])))
+                                (mapv #(get-in % [:data :says]))))]
+    (is (= 201 (:status made)) (pr-str (json made)))
+    (is (= composer (:composed_by (fields made))) "an AGENT staged this one")
+    (doseq [[says title] [["An hour in the shop, Saturday morning"
+                           "Finish the box with Jack"]
+                          ["The hinges, picked up Friday"
+                           "Pick up the box hinges"]]]
+      (let [p (req :post "/api/outcome_pieces"
+                   {:outcome_id o :says says
+                    :form "create" :target_kind "task"
+                    :prepared {:title title}}
+                   agent)]
+        (is (= 201 (:status p)) (pr-str (json p)))))
+    (wide-crown! member)
+
+    (testing "while the bundle is on the fridge the composer says whatever it likes"
+      (is (= 201 (:status (turn agent "Staged this one for Saturday morning.")))))
+
+    (is (= 200 (:status (invoke! "outcomes" o :iterate
+                                 {:says "Howie has a friend's birthday party Saturday — this misses it."}
+                                 (human member)))))
+
+    (testing "handed back, the composer's WORDS are refused — at the door that would have answered"
+      (let [r (turn agent "Understood. I will rework this to include the party.")]
+        (is (= 409 (:status r)) (pr-str (json r)))
+        (is (= "words-do-not-answer" (guard-of r)))
+        (is (str/includes? (detail r) (str "/api/outcomes/" o "/-/rework"))
+            "the refusal names the door at this row's own address")
+        (is (str/includes? (detail r)
+                           "a rework that changes nothing is a lawful answer too"))
+        (is (str/includes? (detail r) "Words alone do not answer an iterate"))
+        (is (= ["Staged this one for Saturday morning."] (said-by-composer))
+            "and the promise is not on the thread")))
+
+    (testing "the PERSON's turn on the same handed-back bundle is untouched"
+      (let [r (turn (human member) "Any time before three would work.")]
+        (is (= 201 (:status r)) (pr-str (json r)))))
+
+    (testing "and so is an agent that holds no rework door on it — words are all it has"
+      (let [bystander (leash! "delegate-words-only"
+                              [{:kind "remark" :actions ["create"]}] :scope)
+            r (turn bystander "The shop is free Saturday, for what it is worth.")]
+        (is (= 201 (:status r)) (pr-str (json r)))))
+
+    (testing "`says` is the answer, so a rework without one does not commit"
+      (is (= 422 (:status (invoke! "outcomes" o :rework {:says ""} agent))))
+      (is (= 422 (:status (invoke! "outcomes" o :rework {} agent)))))
+
+    (testing "a rework that changes NO piece is lawful: the composer stands by the plan and says so"
+      (let [note (str "Read the note — the shop hour is already before three,"
+                      " so the plan stands. Say no if it still misses the party.")
+            r (invoke! "outcomes" o :rework {:says note} agent)]
+        (is (= 200 (:status r)) (pr-str (json r)))
+        (is (= "offered" (:state (json r)))
+            "no piece withdrawn, no piece staged, and still the door back")
+        (is (= 1 (:plan_revision (fields r))) "the round is counted all the same")
+        (is (some? (:reworked_at (fields r))))
+        (testing "and the reply carries `says` as the composer's own turn"
+          (is (some #{note} (said-by-composer))))
+        (testing "with the plan itself exactly as it was — nothing withdrawn, nothing staged"
+          (let [offered (get-in (json (req :get
+                                           (str "/api/outcome_pieces?outcome_id=" o
+                                                "&state=offered")
+                                           (human member)))
+                                [:data :items])]
+            (is (= 2 (count offered)))))))
+
+    (testing "the household sees it again, and may still decline it — which is the point"
+      (is (some #{o} (crown-ids (feed-as member))))
+      (is (= 200 (:status (invoke! "outcomes" o :not_this_week nil
+                                   (human member))))))
+
+    (testing "and off `iterating`, the composer's words are ordinary words again"
+      (is (= 201 (:status (turn agent "Set aside for this week, then.")))))))
 
 ;; ── 22. not a twin: one standing bundle per evidence row (8gc) ───────
 ;;

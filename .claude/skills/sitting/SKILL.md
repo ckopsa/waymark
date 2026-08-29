@@ -145,7 +145,9 @@ what you chose not to compose and why.
   piece firing a completion door on a row that already stands records
   work nobody did.
 - Never answer your own plan or piece — that wall is four eyes and no
-  grant opens it. Never tap a verdict or affirm a value or person
+  grant opens it. On a bundle of yours in `iterating`, do not reply in
+  words either: the remark door refuses you there, and the rework's
+  `says` is your turn (§ 7). Never tap a verdict or affirm a value or person
   unless your grant admits that door: your standing sitting scope
   admits `create` / `restate` and nothing else, so `still_stands`,
   `revise`, `retire` and the verdict doors are simply not there for
@@ -213,6 +215,21 @@ replies on the thread (your turn, so the work order reads answered).
 Stage the replacements before you commit; the create door admits a
 piece under an iterating bundle precisely so you can. Read the thread
 for the note before you touch anything.
+
+**You cannot promise this, you can only do it (waymark-vf8).** While
+the bundle is `iterating`, the remark door is CLOSED to the hand that
+could rework it: a reply saying *understood, I will rework this to
+include the party* is refused by name (`words-do-not-answer`) at the
+rework door's own address, because a promise has no state and the
+thread would then read as answered while the household waits. Your
+words go in `says` on the rework — required, at most 240 characters,
+and it is posted as your turn on the thread. And if you read the note
+and the plan still stands, or you cannot stage what was asked for:
+**commit the rework anyway and say so** — a round that withdraws no
+piece and stages none is a lawful answer, it counts the round, it puts
+the bundle back on the fridge, and the person may then decline it.
+There is no *decline to rework* door and none is wanted. The only
+wrong answer is leaving it in `iterating`.
 
 Both doors are the composer's own: only the agent that staged a row
 reworks it unasked. A bundle in `iterating` that somebody else staged

@@ -1956,6 +1956,16 @@
   ;; the work order as answered. The pieces themselves are withdrawn and
   ;; re-staged through their own doors before this; this is the commit
   ;; that says the new plan is ready for the household to answer.
+  ;;
+  ;; AND NOTHING COUNTS THE CHANGES (waymark-vf8). A round that
+  ;; withdrew no piece and staged none is admitted exactly like any
+  ;; other: the composer read the note and stands by the plan, or
+  ;; cannot stage what was asked for, and either way the honest answer
+  ;; is to hand the bundle back with `says` telling the household so —
+  ;; the crown shows it again and they may still decline it. A door
+  ;; that demanded a diff would have taught the composer to stage a
+  ;; cosmetic one, and a separate "decline to rework" door would be a
+  ;; second way to say the one thing this door already says.
   (let [d (:data row)]
     (when (:create ctx)
       ((:create ctx) :remark
@@ -2586,6 +2596,30 @@
    :states [:offered :iterating :accepted :declined :expired]
    :initial :offered
    :terminal #{:accepted :declined :expired}
+   ;; WORDS DO NOT ANSWER AN ITERATE (waymark-vf8). The state above is
+   ;; a work order, and the specimen that filed the bead is what a work
+   ;; order looks like when it can be answered in prose: a sitting read
+   ;; two iterate notes, replied *understood, I will rework this to
+   ;; include getting Howie to his friend's birthday party*, reworked
+   ;; nothing, and left both bundles in `iterating` at revision 0 — off
+   ;; the household's feed, waiting on a composer, with the thread
+   ;; reading as though they had been answered. The owner: *should we
+   ;; make it so it can't promise, it can only act — by only giving the
+   ;; option to resolve the iteration and include a comment?*
+   ;;
+   ;; So the composer's only door on an iterating bundle is `rework`,
+   ;; and `remark`'s create wall reads THIS map to say so (the
+   ;; framework owns the predicate — agent, this state, holds this door
+   ;; — and this declaration owns the sentence). It binds exactly the
+   ;; hand that can act: the row's own `composed_by`, or an agent under
+   ;; a grant admitting `outcome.rework` on this very row. A person's
+   ;; turn is untouched, and so is the turn of an agent with no rework
+   ;; door — words are all it has.
+   :answered-at-a-door
+   {:iterating
+    {:door :rework
+     :whose :composed_by
+     :explain "This bundle is handed back for a rework. Answer at {door} — withdraw or stage what changes and say why in says; a rework that changes nothing is a lawful answer too. Words alone do not answer an iterate."}}
    :summary "{data.goal} · for {data.value_name} · {state}"
    :label-template "{data.goal}"
    ;; the title is the GOAL, templated (waymark-jfv.4). A static noun
@@ -2866,19 +2900,27 @@
     {:from #{:iterating} :to :offered
      :guards [(reworks-wall :outcome)]
      :handler rework-the-plan
+     ;; `says` IS THE ANSWER, so it is required and it is short
+     ;; (waymark-vf8): the composer has no other turn on an iterating
+     ;; bundle — the remark door is walled shut against the very hand
+     ;; that holds this one — and what rides here is posted on the
+     ;; thread as that turn. 240, the house's own note ceiling
+     ;; (`verdict-action`'s), because one turn back to the household
+     ;; answering their note is a sentence or two and not an essay;
+     ;; the round's real answer is what the pieces now say.
      :input [:map
              [:says
               {:examples ["Moved breakfast after church and swapped the park walk for the shaded creek trail at 8am, before the heat."]
                :x-display
                {:widget "prose"
                 :label "What you changed, and why"
-                :help "One turn back to the household: what the rework did to the plan, in answer to their note. This is your turn in the thread, and the card reads it as the reason the plan changed."}}
-              [:string {:min 1 :max 600}]]]
+                :help "One turn back to the household: what the rework did to the plan, in answer to their note — or, when you read the note and the plan still stands, why it stands. This is your turn in the thread, and the card reads it as the reason the plan changed."}}
+              [:string {:min 1 :max 240}]]]
      :record true
      :waives #{:large-effort}
      :touches [{:kind :remark :action :create}]
      :safety {:idempotent true :reversible false :confirm false
-              :one-way "This commits a round of rework: it puts the bundle back on the household's feed, counts the round on the card, and replies on the thread. Withdraw the pieces that were wrong and stage their replacements first — this is the commit that says the new plan is ready for the household to answer."}
+              :one-way "This commits a round of rework: it puts the bundle back on the household's feed, counts the round on the card, and replies on the thread with what you say here. Withdraw the pieces that were wrong and stage their replacements first — and if, having read the note, you stand by the plan, commit anyway and say why: a round that changes no piece is a lawful answer, and the household then decides for itself."}
      :display {:label "Rework the plan" :order 4
                :description "Commit a round of re-planning an outcome the house handed back — returns it to the feed and counts the round"}}}
    :scenarios [the-composer-does-not-answer-its-own-outcome

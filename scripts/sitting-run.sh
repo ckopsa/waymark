@@ -320,6 +320,39 @@ if [ "$MODE" = "verify" ]; then
   fi
   rm -f "$twins"
 
+  # ── HANDED BACK, NOT REWORKED (waymark-vf8) ───────────────────────
+  # The one work order a run can no longer answer in words, graded the
+  # same way the others are: by the row rather than by the prose. Every
+  # bundle the last manifest listed as ITERATING AND MINE is read back
+  # at its own address, and one still standing at the plan version it
+  # had is one this run left where it found it — a promise on the
+  # thread ("I will rework this to include the party") now refuses at
+  # the remark door, so a bundle sitting here means nothing was
+  # committed at all. Revision, not state: a bundle reworked and handed
+  # back again is ANSWERED, and its state would lie about that.
+  if [ -n "$prev" ]; then
+    unreworked="$(mktemp)"; : > "$unreworked"
+    while IFS="$(printf '\t')" read -r href rev; do
+      [ -n "$href" ] || continue
+      cur="$(mktemp)"
+      if [ "$(api "$cur" "$href")" = "200" ]; then
+        jq -r --arg r "$rev" --arg h "$href" '
+          if (((.data.plan_revision // 0) | tostring) == $r)
+          then "HANDED BACK, NOT REWORKED: \($h)"
+          else empty end' "$cur" >> "$unreworked"
+      fi
+      rm -f "$cur"
+    done < <(jq -r '[(.standing_outcomes // [])[]
+                      | select(.iterate_open and .mine)][]
+                     | "\(.self)\t\((.plan_revision // 0) | tostring)"' "$prev")
+    if [ -s "$unreworked" ]; then
+      echo
+      cat "$unreworked"
+      echo "  A bundle the household handed back and this run did not rework is a FAILED work order: it is off their feed until a composer commits, and words on the thread are not a commit (the remark door refuses that hand by name). Read the note, withdraw and stage what changes, and POST /api/outcomes/<id>/-/rework {says} — or, if the plan stands, commit a round that changes nothing and say so."
+    fi
+    rm -f "$unreworked"
+  fi
+
   # A SITTING LEAVES NO DIFF. The wisp appends to .beads/interactions.jsonl
   # (a tracked file) and a runner that diffs its tree would carry that
   # residue home as a patch; the snapshot is already gitignored.
@@ -2660,6 +2693,7 @@ jq -n \
           | if length==0 then "  (none — nothing of yours is being reworked)"
             else (.[] | "- \(.self) [iterating, plan v\(.plan_revision)] \(.goal[0:90])") end' "$RUN/manifest.json"
   echo "  An ITERATING bundle is one a person kept and sent back: the goal is right, the plan is wrong, and it has LEFT THEIR FEED until you answer. Read its thread for the note. Withdraw the pieces that were wrong (POST /api/outcome_pieces/<id>/-/rework — the piece goes reworked, never declined), stage the replacements, then commit with POST /api/outcomes/<id>/-/rework {says}. That commit is the only door back to offered; until it lands, nobody in the house can see the bundle at all. Do not stage a twin, and do not wait for a decline."
+  echo "  YOU CANNOT PROMISE THIS ONE, YOU CAN ONLY DO IT (waymark-vf8). The REPLY DOOR IS CLOSED on a bundle you could rework: POST /api/remarks on it is refused by name (words-do-not-answer) and the refusal names this door. Your words ride the rework itself — says, required, at most 240 characters, posted as your turn on the thread. And a rework that changes NO piece is a LAWFUL answer: if you read the note and the plan still stands, or you cannot stage what was asked for, commit anyway and say that — it counts the round, puts the bundle back on their feed, and they may then decline it. Leaving it in iterating is the one wrong answer, and next run verify prints HANDED BACK, NOT REWORKED against your name."
   echo
   echo "## Iterating, not yours to rework"
   jq -r 'if (.iterating_not_mine|length)==0 then "  (none)" else (.iterating_not_mine[] | "- \(.self) [iterating, plan v\(.plan_revision)] composed by \(.composed_by // "?") — \(.goal[0:80])") end' "$RUN/manifest.json"

@@ -1038,6 +1038,62 @@
                                  " reaches no declared " what
                                  " (directly or through the chain)"))))))))
 
+(defn- check-answered-at-a-door
+  "The states in which words are not an answer (waymark-vf8) validate
+  hard, because a typo here refuses NOBODY and prints no error: the
+  remark wall reads this map off the SUBJECT's declaration, and a
+  clause naming a state this kind does not have, or a door it does not
+  serve, is a wall that quietly never fires.
+
+  Every key is a declared state; every clause names a `:door` this
+  kind declares as an action, a `:whose` field its schema declares,
+  and an `:explain` sentence carrying `{door}` — the address the
+  framework fills in, which is the whole reason the refusal can send
+  the reader somewhere rather than to source."
+  [r]
+  (let [m (:answered-at-a-door r)]
+    (when (some? m)
+      (when-not (map? m)
+        (err r :answered-at-a-door
+             ":answered-at-a-door is {state {:door … :whose … :explain …}}"))
+      (let [states (set (:states r))
+            fields (set (keys (schema/entry-map (:schema r))))]
+        (doseq [[st clause] (sort-by (comp str key) m)]
+          (when-not (contains? states st)
+            (err r :answered-at-a-door
+                 (str "state " st " is not one this kind declares — a clause "
+                      "on a state no row can be in is a wall that never "
+                      "fires")))
+          (when-not (map? clause)
+            (err r :answered-at-a-door
+                 (str st " declares " (pr-str clause)
+                      "; a clause is {:door … :whose … :explain …}")))
+          (when-some [unknown (seq (sort (remove #{:door :whose :explain}
+                                                 (keys clause))))]
+            (err r :answered-at-a-door
+                 (str st " declares unknown key(s) " (vec unknown)
+                      "; a clause speaks [:door :explain :whose]")))
+          (let [{:keys [door whose explain]} clause]
+            (when-not (contains? (:actions r) door)
+              (err r :answered-at-a-door
+                   (str st " names the door " (pr-str door)
+                        ", which is no action of this kind — the refusal "
+                        "sends the reader to an address that would 404")))
+            (when-not (contains? fields whose)
+              (err r :answered-at-a-door
+                   (str st " names :whose " (pr-str whose)
+                        ", which this kind's schema does not declare — the "
+                        "wall could never tell whose row it is")))
+            (when (or (not (string? explain)) (str/blank? explain))
+              (err r :answered-at-a-door
+                   (str st " carries no :explain — the household's own "
+                        "sentence is what a refused reader hits")))
+            (when-not (str/includes? (str explain) "{door}")
+              (err r :answered-at-a-door
+                   (str st "'s :explain does not say {door} — a refusal "
+                        "that does not name the address is a refusal that "
+                        "sends the reader to read source")))))))))
+
 (defn- check-unless [r]
   (doseq [a (machine/actions-seq r)]
     (when-some [tr (:unless a)]
@@ -1120,4 +1176,4 @@
           check-filterable check-sortable check-default-filters
           check-faceted check-views check-oneof check-unique check-links
           check-derived check-renames check-unless check-require
-          check-defaults])})
+          check-defaults check-answered-at-a-door])})

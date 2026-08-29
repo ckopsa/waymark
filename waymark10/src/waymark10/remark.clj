@@ -48,13 +48,33 @@
 
   ── WHAT IT DOES NOT CHECK ──
 
-  Nothing here reads the subject — the tickler's posture, for the
-  tickler's reason: a turn naming any row in the house cannot ask a
-  kind-specific question of it, and a wall that tried would be a wall
-  that guessed. And there is no unique index, deliberately: a verdict
-  happens once and its reason is one row, but a conversation is many
-  turns on one subject, and a wall against saying two things would be
-  a wall against the very shape this kind exists for.
+  Nothing here asks a KIND-SPECIFIC question of the subject — the
+  tickler's posture, for the tickler's reason: a turn naming any row
+  in the house cannot know what an outcome or a chore run means, and a
+  wall that tried would be a wall that guessed. It reads the subject
+  all the same, exactly as `ranking_note`'s `not-your-own-row` does,
+  and only through what that row's own DECLARATION says about itself —
+  see the wall below. And there is no unique index, deliberately: a
+  verdict happens once and its reason is one row, but a conversation
+  is many turns on one subject, and a wall against saying two things
+  would be a wall against the very shape this kind exists for.
+
+  ── AND THE ONE THING WORDS CANNOT DO (waymark-vf8) ──
+
+  A turn is a turn, and on almost every row in the house that is the
+  end of it. The exception is a row waiting on somebody's ACT: an
+  outcome the household handed back for a re-plan sits in `iterating`,
+  off the feed, until its composer commits a rework — and a composer
+  answering that with *understood, I will rework this to include the
+  birthday party* has changed nothing at all while sounding like it
+  did. The tap is the write; a promise has no state. So a subject kind
+  may declare `:answered-at-a-door {state {:door … :whose … :explain
+  …}}`, and this kind's create door refuses a remark from the one hand
+  that holds that door — the row's own author, or an agent under a
+  grant naming it — with the address of the door in the refusal. A
+  person's words are never touched, and neither are the words of an
+  agent with no door to act at: words are all it has, and taking those
+  would leave it mute.
 
   ── WHO READS IT ──
 
@@ -107,6 +127,90 @@
     (if (= whose me)
       (t/allow)
       (t/deny {:vars {:whose whose :you me}}))))
+
+(defn- handed-back
+  "The subject row, WHEN its own kind says this state of it is answered
+  at a door rather than in words (waymark-vf8) — `{:rdef :row :clause}`,
+  and nil for every other row in the house.
+
+  It reads the subject the way `ranking_note`'s `not-your-own-row`
+  reads it: through `(:rdef-of ctx)` and `(:read ctx)`, so the kind
+  token in the body resolves against the registry this engine actually
+  serves and the row is read inside the write's own transaction. The
+  storage-free probe carries neither and answers nil — advertise
+  optimistically, the whole tree's posture."
+  [inp ctx]
+  (let [read' (:read ctx)
+        rdef-of (:rdef-of ctx)
+        k (some-> (:subject_kind inp) str str/trim not-empty)
+        sid (some-> (:subject_id inp) str str/trim not-empty)]
+    (when (and read' rdef-of k sid)
+      (when-some [rd (rdef-of k)]
+        (when-some [row (read' (:kind rd) sid)]
+          (when-some [clause (get (:answered-at-a-door rd)
+                                  (keyword (name (:state row))))]
+            {:rdef rd :row row :clause clause}))))))
+
+(g/defguard words-do-not-answer
+  {:reads [:storage :principal :grant :within]
+   :vars [:problem]
+   :open "Words answer everything in this house except a row that is waiting on YOUR act. A subject kind may name the states where the answer is a door — an outcome handed back for a rework is the first — and the one hand that holds that door is refused a turn there, by the door's own address. Everybody else speaks freely, and so does that hand on every other row."
+   :explain "{problem}"}
+  ;; NO :judges, `ranking_note/not-your-own-row`'s reasoning exactly:
+  ;; the subject of this wall is a ROW in another kind's collection,
+  ;; named through :reads, rather than the shape of a field in the body.
+  ;;
+  ;; THE PREDICATE, and every clause of it is load-bearing:
+  ;;
+  ;;   the principal is an AGENT — a person's turn is never a promise
+  ;;     in place of an act, because the act was never the person's to
+  ;;     make; AND
+  ;;   the subject row is in a state its own kind declared answered at
+  ;;     a door; AND
+  ;;   this agent HOLDS that door — it is the row's own author, or it
+  ;;     presented a grant admitting that door on that very row. The
+  ;;     admission is asked of `(:grant ctx)`, the same closure
+  ;;     `g/unless-granted` and `g/author-or-granted` ask, so what this
+  ;;     wall means by "may act here" is what the projection means; AND
+  ;;   the turn was POSTED AT THE WIRE rather than filed by a door from
+  ;;     inside itself. The rework's own commit posts its `says` as a
+  ;;     turn on this very thread (`:touches {:kind :remark :action
+  ;;     :create}`) while the row it names is still handed back, and a
+  ;;     wall that refused the answer for looking like the promise
+  ;;     would have closed the loop it exists to protect. So would one
+  ;;     that refused a granted delegate's second `iterate` note, which
+  ;;     rides the same seam. A remark a door files is that door's own
+  ;;     record, already judged by that door's walls; the promise this
+  ;;     wall is for is always a client's POST. `(:within ctx)` is the
+  ;;     one fact that tells them apart (waymark-jfv.20).
+  [_row inp ctx]
+  (let [p (:principal ctx)]
+    (if (not= :agent (:type p))
+      (t/allow)
+      (if-some [{:keys [rdef row clause]} (handed-back inp ctx)]
+        (let [{:keys [door whose explain]} clause
+              kind (:kind rdef)
+              g (:grant ctx)
+              mine (get-in row [:data whose])
+              holds-the-door?
+              (or (and (some? mine) (= mine (:id p)))
+                  (and (some? g)
+                       ((:action? g) kind door)
+                       ((:row? g) kind (:id row))))]
+          (cond
+            ;; a door filing its own record — the rework's reply first
+            ;; among them, which IS the answer
+            (some? (:within ctx)) (t/allow)
+
+            holds-the-door?
+            (t/deny {:vars {:problem
+                            (str/replace
+                             (str explain) "{door}"
+                             (str "/api/" (:plural rdef) "/" (:id row)
+                                  "/-/" (name door)))}})
+
+            :else (t/allow)))
+        (t/allow)))))
 
 (defhandler stamp-the-sayer
   [row ctx]
@@ -248,7 +352,9 @@
    ;; plus the door to answer, and nothing else
    :own-surface {:by :said_by :actions #{:reword}}
    :on-create stamp-the-sayer
-   :create-guards [a-remark-is-your-own]
+   ;; two: the words are the sayer's own, and words are not an answer
+   ;; where the subject's own kind says a door is (waymark-vf8)
+   :create-guards [a-remark-is-your-own words-do-not-answer]
    :actions
    {:reword
     {:from #{:noted} :to :noted
