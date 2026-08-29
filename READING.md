@@ -56,19 +56,34 @@ WAYMARK_RUN=reading scripts/sitting-run.sh
 The same driver, the same snapshot. What differs in the manifest it
 prints:
 
-- **THE HOUSE BRIEF** opens it (waymark-xnf): the people with relation
-  and age, the values with the words they love, every published
-  finding grouped by who or what it names (newest first), the next
-  thirty days of the calendar as one list, the open threads the owner
-  spoke in, and the last five journals' notes. Mechanical, from rows
-  the house already holds, capped by `WAYMARK_BRIEF_LINES` (80) and
-  saying what was cut. **Read it before any order.** It is the story
-  the rows tell; most of what a reading finds comes from it.
+- **THE HOUSE BRIEF** opens it (waymark-xnf), in this order
+  (waymark-wfa): the people with relation and age, the values with the
+  words they love, **the next thirty days of the calendar** — one line
+  each, the hour in the household's zone with the UTC beside it, and
+  any start before 06:00 or after 22:00 local flagged **ODD HOUR** —
+  the open threads with a person turn still owed an answer, the last
+  five journals' notes, and **last** the published findings, newest
+  first. Mechanical, from rows the house already holds. **The cap
+  (`WAYMARK_BRIEF_LINES`, 80) trims the findings and nothing else**:
+  everything above them is printed whole, and the findings that only
+  say a row back — a verdict word repeated, a task title restated, a
+  sentence `verify` would call THIN — are folded into one line saying
+  how many and why. **Read it before any order.** It is the story the
+  rows tell; most of what a reading finds comes from it.
 - **Every order is labeled** `CLERK` or `EDITOR`, and a reading owns
   both. The rule: an order is *editor* when its expected write is an
   outcome, an unmarked rework, an answer to a person's question, an
   extra, or a contradiction between rows; *clerk* when the write is
   one row at one door with the material inline.
+- **EVERY PERSON TURN A THREAD STILL OWES** is printed, not just the
+  last one (waymark-3wh): under each thread the manifest lists each
+  person's turn that is still owed an answer, with the agent turns
+  that followed it quoted beneath. A FACT is owed while no agent has
+  spoken since it; a **QUESTION is owed until this principal answers
+  it** — another agent's reply is not a check, it is the sentence to
+  check, and the manifest says so under it. `verify` grades a question
+  you answered where an agent had already replied `QUESTION
+  CORRECTED`, one you left `UNCHECKED QUESTION`.
 - **WHAT THE HOUSE ALREADY SAYS** is printed under every unanswered
   thread and every handed-back bundle (waymark-frv): the rows the
   bundle cites with their title and detail, and every published
@@ -87,11 +102,15 @@ pasting `scripts/sitting-run.sh verify`.
 1. **The brief first.** Read it whole. What the sittings could not see
    is in it: the appointment the placard is for, the summer somebody
    left, the day the household said was booked.
-2. **A person's question is answered from the record.** Under each
-   thread the manifest prints what the house already says. If those
-   rows answer the question, cite them and say so; if they contradict
-   the person, say which row and quote it; if they are silent, say
-   that and what would settle it. Never index a question as a fact —
+2. **A person's question is answered from the record — including the
+   ones an agent already answered** (waymark-3wh). Under each thread
+   the manifest prints every person turn still owed and what the house
+   already says. If those rows answer the question, cite them and say
+   so; if they contradict the person, say which row and quote it; if
+   they are silent, say that and what would settle it. Where a sitting
+   has already replied under the question, that reply is the thing to
+   check: read it against the rows and correct it in your own reply
+   where it is wrong. Never index a question as a fact —
    `verify` prints `SAYS-SO` against a finding with no task, event,
    person, thread or value row behind it. (Gemini, 2026-08-29:
    answered "Rod needs a state ID" while the TC-842 task detail said
@@ -209,11 +228,15 @@ pasting `scripts/sitting-run.sh verify`.
 
 Everything it says about a sitting, and: `EDITOR ORDER … answered by
 <row>` / `SKIPPED OUT LOUD` / `UNANSWERED AND UNSAID` (the fault —
-printed, never blocked); `EXTRA: cited, distinct` / `FILLER`;
-`SAYS-SO`; `NOTES FOR SITTINGS: N form(s) left`; and `LETTER FOR THE
-SITTINGS: sent — <address>` or `NOT SENT` (the fault the journal alone
-cannot cure: the forms stayed where the sittings cannot read them).
-A sitting is never
+printed, never blocked); `EXTRA: cited, distinct` / `FILLER` — and an
+extra is judged against the write each order asked for, so a row that
+merely cites an order's subject is still your extra (waymark-alj);
+`QUESTION CORRECTED` / `QUESTION ANSWERED` / `UNCHECKED QUESTION`
+(waymark-3wh); `SAYS-SO`; `NOTES FOR SITTINGS: N form(s) left` —
+counted off the journal body read at its own address, where a body
+actually lives; and `LETTER FOR THE SITTINGS: sent — <address>` or
+`NOT SENT` (the fault the journal alone cannot cure: the forms stayed
+where the sittings cannot read them). A sitting is never
 faulted for a line under *Waiting for a reading*; a reading is faulted
 for leaving one unaddressed and unsaid.
 

@@ -241,13 +241,16 @@ holding your place in it.
    `HANDED BACK, WAITING FOR A READING` rather than a fault. The marked
    round and the clocked round are yours; the note read against the
    pieces is a reading's.
-4. **Answer every unanswered FACT a person stated** — a `remark` whose
-   last word is a person's is a work order when it states a fact:
+4. **Answer every unanswered FACT a person stated** — a person's turn
+   nobody has answered since is a work order when it states a fact:
    reply with a remark (`in_reply_to` naming theirs), restage citing
    the insight you indexed from their words, or both. The manifest
-   labels each thread FACT or QUESTION and prints WHAT THE HOUSE
-   ALREADY SAYS under it (waymark-frv); **a QUESTION waits for a
-   reading** — its answer has to come from the record, and a sitting
+   lists EVERY person turn a thread still owes an answer, not just the
+   last one (waymark-3wh), with the agent turns that followed it
+   quoted beneath, labels each FACT or QUESTION and prints WHAT THE
+   HOUSE ALREADY SAYS under it (waymark-frv); **a QUESTION waits for a
+   reading, including one another agent has already replied to** — its
+   answer has to come from the record, and a sitting
    that answers from the question publishes a false fact (2026-08-29:
    "Rod needs a state ID" while the TC-842 task detail said SSN
    suffices). Never index a question as a fact. A turn by another

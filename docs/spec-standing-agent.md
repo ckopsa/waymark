@@ -158,7 +158,28 @@ are the editor's; an insight or a journal-only skip is a clerk form. A
 person's turn is labeled by its shape — a FACT stated is a clerk form,
 a QUESTION (a `?`, or an opening *can/could/should/is/what/when…*) is
 the editor's, because the answer has to come from the record
-(waymark-frv). A handed-back bundle is a clerk form when the household
+(waymark-frv).
+
+**Every person turn, not the last turn** (waymark-3wh). A thread is
+read at both ends now: the driver splits its turns into PERSON turns
+and AGENT turns — a speaker is an agent when that principal has
+composed an outcome, authored an insight or judged a ranking note in
+this house, and the owner is a person whatever else is true — and
+carries each person turn with the agent turns that followed it. A FACT
+is owed while no agent has spoken since it (the old rule, one turn
+further in). A **QUESTION is owed until THIS PRINCIPAL answers it**:
+another agent's reply is not a check, it is the sentence that has to be
+checked, which is a reading's work with the record in front of it. The
+thread's shape and label are read off its owed turns, so a thread whose
+last word is another agent's is no longer listed as an unanswered FACT
+— it was, nine times over, on the morning a person's question sat four
+turns up unanswered. (Gemini, 2026-08-29: answered the owner's placard
+question falsely and the thread read as *last turn is gemini's — not
+owed*.) A remark says who wrote it and not which run wrote it, so under
+a single principal a sitting that answered a question it was told to
+leave alone would clear it for the reading too — a recorded limit of
+merging the two, like the one on `notes_for_sittings`, and not a
+licence. A handed-back bundle is a clerk form when the household
 MARKED pieces or the note carries a clock time (the suggested re-time
 is the form), and the editor's when it is unmarked and unclocked. The
 ceiling is applied per label — `WAYMARK_WORK_ORDERS` clerk orders
@@ -178,14 +199,26 @@ outcome or insight beyond the orders is `FILLER`, because a sitting
 has no extra.
 
 **The reading's manifest** opens with **THE HOUSE BRIEF** (waymark-xnf,
-built here): mechanical, from rows the house holds — the current
-people with relation and age from `born`, the values with the words
-they love, every published finding grouped by the person, value or
-list its evidence names (newest first, dated), the next thirty days
-of the calendar as one list, the open threads the owner spoke in with
-the last turn quoted, and the last five journals' `notes_for_sittings`
-(or their first line). Capped by `WAYMARK_BRIEF_LINES` (80), saying
-what was cut; the whole brief is `derived/brief.json`. Then both
+built here): mechanical, from rows the house holds, in an order that is
+itself the priority (waymark-wfa) — the current people with relation
+and age from `born`; the values with the words they love; **the next
+thirty days of the calendar**, one line each, the hour converted to the
+household's zone with the UTC beside it and any start before 06:00 or
+after 22:00 local called **ODD HOUR** in the line; the open threads
+with a person turn still owed an answer, quoted, with any agent reply
+under it marked unchecked; the last five journals' `notes_for_sittings`
+(or their first line); and **last** every published finding, newest
+first, grouped by the person, value or list its evidence names.
+**`WAYMARK_BRIEF_LINES` (80) trims the findings and nothing else** —
+everything above them prints whole however long it runs — and the
+findings that only say a row back are FOLDED into one line naming how
+many and why: a verdict word repeated as a fact, a cited row's title
+with fewer than three words of its own added, or the sentence `verify`
+already calls THIN. Nothing is dismissed by the fold; the rows stand at
+their own addresses. (Before this, the 80-line cap fell on the calendar
+— nine lines, the last five days of the window and both sections under
+it — while some 17 of the 40 findings above them were filler.) The
+whole brief is `derived/brief.json`. Then both
 halves of the orders, labeled; WHAT THE HOUSE ALREADY SAYS under every
 unanswered thread and every handed-back bundle (waymark-frv: the
 bundle's cited rows with title and detail, starts and ends, name and
@@ -209,9 +242,27 @@ grades a reading against the reading's formula: `EDITOR ORDER …
 answered by` / `SKIPPED OUT LOUD` (the journal names it) /
 `UNANSWERED AND UNSAID` (the fault, printed, never blocked); `EXTRA:
 cited, distinct` or `FILLER` (uncited, a twin, a second one, or one the
-journal never explains); `SAYS-SO` for a finding with no task, event,
-person, thread or value row behind it; `NOTES FOR SITTINGS: N form(s)
-left`.
+journal never explains); `QUESTION CORRECTED` (a question an agent had
+already answered and this run checked against the record) / `QUESTION
+ANSWERED` / `UNCHECKED QUESTION`, waymark-3wh; `SAYS-SO` for a finding
+with no task, event, person, thread or value row behind it; `NOTES FOR
+SITTINGS: N form(s) left`.
+
+**What `verify` reads, and how much of it** (waymark-alj). Three of
+those grades were lying on the first reading, and all three for the
+same kind of reason. The journal text every "was it said out loud"
+grade asks was built off `.fields.body` on the JOURNALS COLLECTION,
+which is a projection carrying no body at all — so a 13k-character
+journal ending in four `notes_for_sittings` forms graded as `NOTES FOR
+SITTINGS: none`; the bodies are now read at each row's own address, the
+way `hydrate` does on the read side. The written-rows listing asked for
+no page size, took the door's default of 25, and reported "31 row(s)
+written" on a run that wrote 45; it pages now, to `WAYMARK_MAX_PAGES`.
+And an EXTRA was folded into an order because it CITED that order's
+subject: an order absorbs only its own **expected write**, so a chat
+fact citing the thread an order was about is still the reading's one
+extra, while the owed lists (threads, reworks, pulls, declines) keep
+matching by citation whatever shape the answer takes.
 
 **The notes cross as a LETTER** (waymark-bbb). A reading ends its
 journal with a `notes_for_sittings` block — one form per line, `- do:
