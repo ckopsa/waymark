@@ -35,14 +35,18 @@ brief first, then the orders, then the rest.
 
 ## 1. The brief, whole
 
-The manifest opens with THE HOUSE BRIEF: the current people with
-relation and age, the values with the words they love, every published
-finding grouped by who or what it names, the next thirty days as one
-list, the open threads the owner spoke in, the last five journals'
-notes. It is mechanical and capped (`WAYMARK_BRIEF_LINES`), and the
-manifest says what was cut; the whole thing is
-`derived/brief.json`. Read it before any order — the far appointment,
-the booked day, the person who left are here and nowhere else.
+The manifest opens with THE HOUSE BRIEF, in this order: the current
+people with relation and age, the values with the words they love, the
+next thirty days as one list — local hours, with any start before
+06:00 or after 22:00 flagged **ODD HOUR** — the open threads with a
+person turn still owed an answer, the last five journals' notes, and
+last every published finding, newest first, grouped by who or what it
+names. It is mechanical, and the cap (`WAYMARK_BRIEF_LINES`) trims
+the findings and nothing else; findings that only say a row back are
+folded into one line saying how many and why. The manifest says what
+was cut; the whole thing is `derived/brief.json`. Read it before any
+order — the far appointment, the booked day, the person who left are
+here and nowhere else.
 
 ## 2. The orders, both labels
 
@@ -59,17 +63,21 @@ UNSAID` against one that got neither.
 
 ## 3. A question is answered from the record
 
-Under every thread whose last turn is a person's, the manifest prints
-WHAT THE HOUSE ALREADY SAYS — the rows the bundle cites (title and
+Under every thread the manifest prints EVERY PERSON TURN still owed an
+answer — with the agent turns that followed it quoted beneath — and
+WHAT THE HOUSE ALREADY SAYS: the rows the bundle cites (title and
 detail, starts and ends, name and relation) and every published
 finding naming one of them, with addresses. A FACT the person stated
 is a clerk's form (index it, reply). A QUESTION is answered FROM those
 rows with a reply remark (`in_reply_to` naming their turn): cite the
 row that answers it; if the rows contradict the person, say which and
 quote it; if they are silent, say so and what would settle it. Never
-index a question as a fact (`SAYS-SO`). On a bundle of yours in
-`iterating`, the reply door is closed and `says` on the rework is your
-turn.
+index a question as a fact (`SAYS-SO`). A question a sitting has
+already replied to is still yours: that reply is what you check
+against the rows, and correct where it is wrong — `verify` grades it
+`QUESTION CORRECTED`, and one you leave `UNCHECKED QUESTION`. On a
+bundle of yours in `iterating`, the reply door is closed and `says` on
+the rework is your turn.
 
 ## 4. The unmarked rework
 

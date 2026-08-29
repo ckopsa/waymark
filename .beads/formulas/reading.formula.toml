@@ -43,11 +43,14 @@ FIRST, mechanically: `WAYMARK_RUN=reading scripts/sitting-run.sh`. It
 mints the bearer, proves it and the grant with one GET, pulls the same
 snapshot a sitting reads into `.sitting/latest/rows/`, works out the
 same owed lists, runs the same probes — and renders the READING's
-manifest: THE HOUSE BRIEF at the top (waymark-xnf: people with
-relation and age, values with the words they love, every published
-finding grouped by who or what it names, the next thirty days as one
-list, the open threads the owner spoke in, the last five journals'
-notes — capped by WAYMARK_BRIEF_LINES and saying what was cut), every
+manifest: THE HOUSE BRIEF at the top (waymark-xnf, ordered by
+waymark-wfa: people with relation and age, values with the words they
+love, the next thirty days in LOCAL hours with any start before 06:00
+or after 22:00 flagged ODD HOUR, the open threads with a person turn
+still owed an answer, the last five journals' notes, and last every
+published finding, newest first — WAYMARK_BRIEF_LINES trims the
+findings and nothing else, and the findings that only say a row back
+are folded into one line saying how many and why), every
 order LABELED clerk or editor, WHAT THE HOUSE ALREADY SAYS under every
 unanswered thread and handed-back bundle (waymark-frv), the REVIEW of
 the sittings since the last reading with their verify grade lines, the
@@ -67,13 +70,19 @@ id = "answer-from-the-record"
 title = "Answer a person's question FROM the record — never from the question"
 depends_on = ["read"]
 description = """
-The threads whose last turn is a person's are labeled FACT or
-QUESTION. A FACT is a clerk's form and you may take it (index it as an
-insight citing the remark and the rows it is about; reply in words). A
-QUESTION is yours alone (waymark-frv): on 2026-08-29 a sitting handed
-the thread alone answered "getting the ID would be a prerequisite"
-while the TC-842 task's own detail said SSN suffices, and published
-that as a finding — a false fact with an address.
+Every PERSON TURN a thread still owes an answer is listed, each with
+the agent turns that followed it and each labeled FACT or QUESTION
+(waymark-3wh). A FACT is a clerk's form and you may take it (index it
+as an insight citing the remark and the rows it is about; reply in
+words). A QUESTION is yours alone (waymark-frv), and it stays yours
+even where a sitting has already replied under it — on 2026-08-29 a
+sitting handed the thread alone answered "getting the ID would be a
+prerequisite" while the TC-842 task's own detail said SSN suffices,
+published that as a finding, and the thread then read as answered
+because the last word was an agent's. That reply is not the record; it
+is the sentence you check against the record and correct where it is
+wrong. verify grades it QUESTION CORRECTED, and one you leave
+UNCHECKED QUESTION.
 
 Under each thread the manifest prints WHAT THE HOUSE ALREADY SAYS: the
 rows the subject bundle cites (a task's title and detail, an event's
@@ -274,7 +283,10 @@ is this run's own record, and the letter is the delivery.
 
 LAST, always: `scripts/sitting-run.sh verify`, output in your report.
 It grades this run as a READING: EDITOR ORDER answered / SKIPPED OUT
-LOUD / UNANSWERED AND UNSAID, EXTRA or FILLER, SAYS-SO, NOTES FOR
-SITTINGS, and LETTER FOR THE SITTINGS sent / NOT SENT — beside
-everything it says about a sitting.
+LOUD / UNANSWERED AND UNSAID, EXTRA or FILLER, QUESTION CORRECTED /
+QUESTION ANSWERED / UNCHECKED QUESTION, SAYS-SO, NOTES FOR SITTINGS,
+and LETTER FOR THE SITTINGS sent / NOT SENT — beside everything it
+says about a sitting. It reads the journal body at its own address and
+pages the written rows, so those grades count what the run actually
+wrote (waymark-alj).
 """

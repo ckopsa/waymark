@@ -60,7 +60,8 @@
 # many of the household's conversations a sitting reads; the newest
 # four with activity in the window, groups included),
 # WAYMARK_BRIEF_LINES (80 — the cap on the house brief a reading opens
-# with), WAYMARK_REVIEW_SITTINGS (6 — how many graded sittings a
+# with; it trims the FINDINGS section and nothing else, waymark-wfa),
+# WAYMARK_REVIEW_SITTINGS (6 — how many graded sittings a
 # reading reviews), WAYMARK_RUN (sitting|reading — see above),
 # WAYMARK_SITTING_PRINCIPAL (the principal the SITTINGS run as — the
 # address a reading's forms are mailed to; default is the gemini
@@ -286,20 +287,34 @@ verify_run() {
   echo "what $DISPLAY ($PRINCIPAL) wrote at $BASE since $SINCE — graded as a $PREV_MODE"
   echo
   wrote=0
+  # EVERY PAGE, NOT THE FIRST (waymark-alj). This listing asked for no
+  # page size, so it got the door's default — 25 — and stopped there.
+  # The first reading scored 39 bundles; the report showed 25 ranking
+  # notes and then said "31 row(s) written by this principal", an
+  # undercount printed as a count, which is the one thing a report that
+  # grades a run may not do. So it pages, the way `collection` does on
+  # the read side, to the same WAYMARK_MAX_PAGES ceiling.
   check() { # check <label> <path> <states...>
     local label="$1" path="$2"; shift 2
-    local st out n
+    local st out n got page
     for st in "$@"; do
-      out="$(mktemp)"
-      if [ "$(api "$out" "${path}&state=${st}")" = "200" ]; then
+      page=1
+      while :; do
+        out="$(mktemp)"
+        if [ "$(api "$out" "${path}&state=${st}&page%5Bsize%5D=100&page%5Bnumber%5D=${page}")" != "200" ]; then
+          rm -f "$out"; break
+        fi
         n="$(jq --arg s "$SINCE" '[.data.items[]? | select(.meta.updated_at >= $s)] | length' "$out")"
         if [ "$n" -gt 0 ]; then
           wrote=$((wrote + n))
           jq -r --arg s "$SINCE" --arg l "$label" \
             '.data.items[]? | select(.meta.updated_at >= $s) | "  \($l)  \(.self)  \(.state)  \(.summary[0:110])"' "$out"
         fi
-      fi
-      rm -f "$out"
+        got="$(jq '(.data.items // []) | length' "$out")"
+        rm -f "$out"
+        [ "$got" -lt 100 ] && break
+        page=$((page + 1)); [ "$page" -gt "$MAXPAGES" ] && break
+      done
     done
   }
   check outcome       "/api/outcomes?composed_by=$PRINCIPAL"      offered iterating accepted declined expired
@@ -442,12 +457,30 @@ verify_run() {
   # WHAT THE JOURNAL SAID OUT LOUD. A skip is lawful only when the
   # journal names it, so the bodies written since the mark are read
   # once here and every grade that asks "was it said" asks this text.
+  #
+  # AND A BODY LIVES ONLY AT THE ROW'S OWN ADDRESS (waymark-alj). This
+  # built the text from `.fields.body` on the COLLECTION, and a
+  # collection answers a PROJECTION, which carries no body at all — so
+  # the text was empty on every run and every grade that asks "was it
+  # said" answered no. The first reading's journal is 13k characters
+  # ending in a four-form notes_for_sittings block, and it graded as
+  # NOTES FOR SITTINGS: none, its two journal-only orders as unsaid.
+  # The read half of this driver already knows the rule (`hydrate`);
+  # verify mints no run directory to keep a snapshot in, so it walks
+  # the same two steps inline: list what was written since the mark,
+  # then GET each row.
   jtext="$(mktemp)"; : > "$jtext"
   for st in written amended; do
     jout="$(mktemp)"
     if [ "$(api "$jout" "/api/journals?owner=$PRINCIPAL&state=${st}&page%5Bsize%5D=100")" = "200" ]; then
-      jq -r --arg s "$SINCE" '.data.items[]? | select((.meta.updated_at // "") >= $s)
-                               | ((.fields.title // "") + "\n" + (.fields.body // ""))' "$jout" >> "$jtext" 2>/dev/null || true
+      while IFS= read -r jhref; do
+        [ -n "$jhref" ] || continue
+        jfull="$(mktemp)"
+        if [ "$(api "$jfull" "$jhref")" = "200" ]; then
+          jq -r '((.data.title // "") + "\n" + (.data.body // ""))' "$jfull" >> "$jtext" 2>/dev/null || true
+        fi
+        rm -f "$jfull"
+      done < <(jq -r --arg s "$SINCE" '.data.items[]? | select((.meta.updated_at // "") >= $s) | .self' "$jout")
     fi
     rm -f "$jout"
   done
@@ -466,7 +499,13 @@ verify_run() {
       | if $ed and $mode == "sitting"
         then "\($word) \($o.probe) \($o.subject): WAITING FOR A READING — not for a sitting to answer, and never a fault against one"
         elif (($o.write.kind // "") == "journal")
-        then "\($word) \($o.probe) \($o.subject): JOURNAL-ONLY — no door write was asked (no live value carried it); it is answered in the journal or not at all"
+        then (if $said
+              # now that the body is read at its own address
+              # (waymark-alj), this grade can say which of the two it
+              # was instead of leaving the reader to guess
+              then "\($word) \($o.probe) \($o.subject): JOURNAL-ONLY, AND SAID — no door write was asked (no live value carried it), and the journal names it"
+              else "\($word) \($o.probe) \($o.subject): JOURNAL-ONLY AND UNSAID — no door write was asked (no live value carried it); it is answered in the journal or not at all, and this journal never names it"
+              end)
         elif ($hits | length) > 0
         then "\($word) \($o.probe) \($o.subject): answered by \($hits | join(", "))"
         elif $said
@@ -477,6 +516,78 @@ verify_run() {
         end' "$twins" 2>/dev/null
     jq -r 'if .crowd_out then "  CROWD-OUT, as the manifest said it: " + .crowd_out.says else empty end' "$prev"
     echo "  An order left UNANSWERED is only a failure if it could honestly have been answered — a Gate rig that refused, an event that needed nothing, a value with no goal in it are all lawful skips. The journal is where a skip is said out loud; an UNANSWERED order and a silent journal is a run that ignored its assignment."
+  fi
+
+  # ── A PERSON'S QUESTION, CHECKED OR NOT (waymark-3wh) ─────────────
+  # The grade that makes the new labeling observable. The manifest
+  # listed every person's question a thread still owed — including the
+  # ones an agent had already answered, which is the case this exists
+  # for: on 2026-08-29 gemini answered the owner's placard question
+  # from the question ("getting the ID would be a prerequisite") while
+  # the TC-842 row said SSN suffices, and no report said a word about
+  # it. So: a question this run answered where an agent's reply already
+  # stood is CORRECTED, one it answered on a silent thread is ANSWERED,
+  # and one it left is an UNCHECKED QUESTION — the fault, printed,
+  # never blocking, and lawful only when the journal says so out loud.
+  # A sitting is never faulted: a question is an editor order.
+  #
+  # "Answered" is read off the ROWS like everything else here: a remark
+  # of ours on that thread since the mark, or a finding of ours citing
+  # the question turn or its subject. A remark on the thread that
+  # answers some other turn would count too — the report will not read
+  # prose to tell them apart, and it says so rather than guessing.
+  if [ -n "$prev" ] \
+     && [ "$(jq '[(.unanswered_threads // [])[] | (.owed_turns // [])[] | select(.shape == "question")] | length' "$prev" 2>/dev/null || echo 0)" -gt 0 ]; then
+    qans="$(mktemp)"; : > "$qans"
+    while IFS="$(printf '\t')" read -r qk qi; do
+      [ -n "$qk" ] || continue
+      qout="$(mktemp)"
+      if [ "$(api "$qout" "/api/remarks?subject_kind=${qk}&subject_id=${qi}&page%5Bsize%5D=100")" = "200" ]; then
+        jq -c --arg s "$SINCE" --arg me "$PRINCIPAL" --arg k "$qk" --arg i "$qi" '
+          {subject: ($k + "/" + $i),
+           mine: [ .data.items[]? | select(((.fields.said_by) // "") == $me)
+                                  | select((.meta.updated_at // "") >= $s) | .self ]}' \
+          "$qout" >> "$qans" 2>/dev/null || true
+      fi
+      rm -f "$qout"
+    done < <(jq -r '[ (.unanswered_threads // [])[]
+                      | select(([ (.owed_turns // [])[] | select(.shape == "question") ] | length) > 0)
+                      | "\(.subject_kind)\t\(.subject_id)" ] | unique | .[]' "$prev")
+    questions="$(jq -rs --slurpfile m "$prev" --slurpfile tw "$twins" --arg s "$SINCE" \
+                        --arg me "$PRINCIPAL" --arg mode "$PREV_MODE" --rawfile jt "$jtext" '
+      . as $ans
+      | (($m[0].unanswered_threads) // [])[]
+      | . as $t
+      | ($t.subject_kind + "/" + $t.subject_id) as $subj
+      | ("/api/" + $t.subject_kind + "s/" + $t.subject_id) as $saddr
+      | ([ $ans[] | select(.subject == $subj) | .mine[] ]) as $replies
+      | ($t.owed_turns // [])[] | select(.shape == "question")
+      # one grade is one LINE: a remark carries newlines and grades.txt
+      # is read line by line, so the quote is squashed to one
+      | (. + {says: ((.says // "") | gsub("\\s+"; " "))}) as $q
+      | ([ $tw[] | select(.kind == "insight") | select(.at >= $s) | select(.by == $me)
+           | . as $i
+           | select((($i.cites | index($q.self)) != null)
+                    or (($i.cites | index($saddr)) != null))
+           | $i.self ]) as $findings
+      | ($replies + $findings) as $answers
+      | (($jt | contains($q.self)) or ($jt | contains($q.self | split("/") | last))) as $said
+      | if $mode != "reading"
+        then "QUESTION WAITING FOR A READING: \($subj) — \($q.said_by) asked “\($q.says[0:120])” (\($q.self)) — an editor order, and never a fault against a sitting"
+        elif ($answers | length) > 0
+        then (if $q.replied_to_by_an_agent
+              then "QUESTION CORRECTED: \($subj) — \($q.said_by) asked “\($q.says[0:100])”; an agent had already answered it and this run checked that reply against the record: \($answers | join(", "))"
+              else "QUESTION ANSWERED: \($subj) — \($q.said_by) asked “\($q.says[0:100])”, answered by \($answers | join(", "))" end)
+        elif $said
+        then "UNCHECKED QUESTION — SAID IN THE JOURNAL: \($subj) — \($q.said_by) asked “\($q.says[0:100])” (\($q.self)); no row of this run answers it, and the journal names it, so it is a skip said out loud"
+        else "UNCHECKED QUESTION: \($subj) — \($q.said_by) asked “\($q.says[0:100])” (\($q.self)) and nothing this run wrote answers it\(if $q.replied_to_by_an_agent then ", while an agent reply stands under it unchecked" else "" end)"
+        end' "$qans" 2>/dev/null || true)"
+    rm -f "$qans"
+    if [ -n "$questions" ]; then
+      echo
+      echo "$questions"
+      echo "  A person's question is answered FROM the record — the rows the manifest printed under it — or it is skipped out loud in the journal. An agent's reply standing under it is not an answer to check off; it is the sentence a reading has to check, and correct where the rows say otherwise."
+    fi
   fi
 
   # ── SAYS-SO (waymark-frv) ─────────────────────────────────────────
@@ -504,15 +615,30 @@ verify_run() {
   # owed decline. One and cited and not a twin is EXTRA; anything else
   # is FILLER, and a sitting has no extra at all, so on a sitting every
   # such row is filler by the ceiling.
+  #
+  # AN ORDER ABSORBS ONLY ITS OWN EXPECTED WRITE (waymark-alj). This
+  # subtracted any row that CITED an order's subject, and the first
+  # reading's one extra — a chat fact, which must cite its thread row —
+  # cited the very thread ORDER 2 was about. The order's expected write
+  # was a journal sentence; an insight is not that, and the reading was
+  # graded "EXTRA: none" for the row it had written on purpose. So an
+  # order's subject is matched WITH the kind the order asked for: a row
+  # answers an order when it is the write the order named, and a row
+  # that merely shares a subject with one is still an extra. The owed
+  # LISTS keep the old, kindless rule — a thread, a decline or a bundle
+  # is owed whatever shape the answer takes.
   if [ -n "$prev" ]; then
     extras="$(jq -rs --slurpfile m "$prev" --arg s "$SINCE" --arg me "$PRINCIPAL" \
                      --arg mode "$PREV_MODE" --rawfile jt "$jtext" --arg faults "$faults" '
       . as $rows
       | ($m[0]) as $mf
-      | ([ ($mf.work_orders // [])[] | .subject ]
-         + [ ($mf.work_orders // [])[] | (.write.cite // [])[] ]
-         + [ ($mf.unanswered_threads // [])[] | "/api/" + .subject_kind + "s/" + .subject_id ]
+      | ([ ($mf.work_orders // [])[]
+           | . as $o | (($o.write.kind) // "") as $wk
+           | ([$o.subject] + (($o.write.cite // []))) | map(select(. != null))
+           | .[] | {addr:., kind:$wk} ]) as $order_writes
+      | ([ ($mf.unanswered_threads // [])[] | "/api/" + .subject_kind + "s/" + .subject_id ]
          + [ ($mf.unanswered_threads // [])[] | .last.self ]
+         + [ ($mf.unanswered_threads // [])[] | (.person_turns // [])[] | .self ]
          + [ ($mf.rework_orders // [])[] | .self ]
          + [ ($mf.offered_requests // [])[] | .self ]
          + [ ($mf.declines // [])[] | select(.owed_a_diagnosis) | .cite[] ]
@@ -520,7 +646,14 @@ verify_run() {
          | map(select(. != null)) | unique) as $owed
       | [ $rows[] | select(.kind == "outcome" or .kind == "insight")
                   | select(.at >= $s) | select(.by == $me)
-                  | select(([ .cites[] | . as $c | select(($owed | index($c)) != null) ] | length) == 0) ] as $ex
+                  | . as $r
+                  | select(([ $r.cites[] | . as $c | select(($owed | index($c)) != null) ] | length) == 0)
+                  # the entry is bound BEFORE index() is asked: inside
+                  # index(f), `.` is the ARRAY being searched, so
+                  # index(.addr) reads .addr off $r.cites and jq dies
+                  | select(([ $order_writes[] | . as $ow
+                              | select($ow.kind == $r.kind)
+                              | select(($r.cites | index($ow.addr)) != null) ] | length) == 0) ] as $ex
       | if ($ex | length) == 0
         then (if $mode == "reading" then "EXTRA: none — lawful, and the journal says why or it says nothing" else empty end)
         elif $mode != "reading"
@@ -878,7 +1011,7 @@ if [ "$MODE" = "verify" ]; then
   if [ -n "$prev" ]; then
     vdir="$(dirname "$prev")"
     verify_run | tee "$vdir/verify.txt"
-    grep -E '^(ORDER|EDITOR ORDER|FORM|LETTER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|SAYS-SO|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
+    grep -E '^(ORDER|EDITOR ORDER|FORM|LETTER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|SAYS-SO|QUESTION|UNCHECKED QUESTION|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
       "$vdir/verify.txt" | sed "s/^\(NOTHING written\.\).*/\1/" > "$vdir/grades.txt" 2>/dev/null || true
     printf '%s\n' "$(iso "$(now_s)")" > "$vdir/verified_at"
   else
@@ -1052,20 +1185,95 @@ jq '[.[] | select(.state=="offered") | {id: (.self|split("/")|last), self, reque
       value_id: (.data.value_id // null), good_until: .data.good_until, says: (.data.says // .summary)}]' \
   "$R/composition_requests.full.json" > "$D/offered_requests.json"
 
+# WHO IS A PERSON, AND WHO IS ANOTHER AGENT (waymark-3wh). A remark
+# says WHO said it and nothing about what they are, so the two are told
+# apart by what else the id has done in this house: a principal that
+# has composed an outcome, authored an insight or judged a ranking note
+# is a COMPOSER, and every other speaker is a person. The owner is a
+# person by name whatever else is true of the id. This is read off the
+# snapshot, so it costs no request and it is right on a house whose
+# agents change.
+jq -s '[ .[][] | (.data.composed_by // .data.authored_by // .data.judged_by // empty) ]
+       | map(select(. != null and . != "")) | unique' \
+   "$R/outcomes.full.json" "$R/insights.full.json" "$R/ranking_notes.full.json" \
+   > "$D/agent_principals.json" 2>/dev/null || echo '[]' > "$D/agent_principals.json"
+
 # the threads, oldest turn first, and whose word is last
-jq --arg me "$PRINCIPAL" '
+#
+# EVERY PERSON'S TURN, NOT THE LAST TURN (waymark-3wh). A thread used
+# to be read at one end only: the last turn's shape was the thread's
+# shape and a thread whose last word was an agent's was answered by
+# definition. On 2026-08-29 the owner asked on the placard bundle "Can
+# he get this without having a proper utah ID yet?" and gemini answered
+# it FALSELY sixteen hours later — the TC-842 row says SSN suffices —
+# and that whole thread read as "last turn is not mine, a FACT, clerk"
+# on nine identical lines, with the question itself nowhere on the
+# manifest. The reading found it by reading the thread.
+#
+# So a thread now carries its PERSON TURNS, each with the turns that
+# followed it and its own shape. A FACT is owed while no agent has
+# spoken since it — the old rule, one turn further in. A QUESTION is
+# owed until THIS PRINCIPAL answers it: another agent's reply is not a
+# check, it is the thing that has to be checked, which is exactly what
+# a reading does with the record in front of it. A question therefore
+# clears when we answer it, and never before.
+#
+# THE LIMIT, said out loud: a remark says who wrote it and not which
+# RUN wrote it, so under a single principal a sitting that answers a
+# question — which SITTING.md forbids, and which the manifest prints as
+# an editor order it must leave alone — would clear it for the reading
+# too. Today the two runs wear different principals and the question
+# stands until a reading takes it. This is a recorded limit of merging
+# the two, the same shape as the one on notes_for_sittings, not a
+# licence for a sitting to answer.
+jq --arg me "$PRINCIPAL" --arg owner "$OWNER" \
+   --slurpfile agents "$D/agent_principals.json" '
+  (($agents[0] // []) + [$me] | unique) as $bots
+  # the turn is bound BEFORE index() is asked: inside index(f), `.` is
+  # the array being searched, so index(.said_by) reads .said_by off
+  # $bots and jq dies mid-stream
+  | def is_person: . as $t
+      | ($t.said_by == $owner) or (($bots | index($t.said_by)) == null);
+  def is_question($w): ($w | test("\\?"))
+    or ($w | test("^\\s*(can|could|should|would|will|is|are|do|does|did|what|when|where|who|how|why|which)\\b"; "i"));
   [.[] | {id:(.self|split("/")|last), self, at:.meta.updated_at,
           subject_kind:.data.subject_kind, subject_id:.data.subject_id,
           said_by:(.data.said_by // "?"), says:.data.says,
           in_reply_to:(.data.in_reply_to // null)}]
   | group_by(.subject_kind + "/" + .subject_id)
   | map(sort_by(.at))
-  | map({subject_kind: .[0].subject_kind, subject_id: .[0].subject_id,
-         turns: ., last: .[-1],
-         last_is_mine: (.[-1].said_by == $me)})
+  | map(. as $turns
+        | ([ range(0; ($turns | length)) | select($turns[.] | is_person) ]) as $pi
+        | {subject_kind: $turns[0].subject_kind, subject_id: $turns[0].subject_id,
+           turns: $turns, last: $turns[-1],
+           last_is_mine: ($turns[-1].said_by == $me),
+           person_turns:
+             [ range(0; ($pi | length)) | . as $k
+               | $pi[$k] as $i
+               | (if ($k + 1) < ($pi | length) then $pi[$k + 1] else ($turns | length) end) as $next
+               | $turns[$i] as $t
+               | (($t.says // "") | tostring) as $w
+               | ([ $turns[($i + 1):$next][] ]) as $replies
+               | ([ $turns[($i + 1):][] | select(.said_by == $me) ]) as $ours
+               | ([ $turns[($i + 1):][] | select(is_person | not) ]) as $agents_after
+               | (if is_question($w) then "question" else "fact" end) as $shape
+               | {self:$t.self, at:$t.at, said_by:$t.said_by, says:$w,
+                  said_by_owner: ($t.said_by == $owner),
+                  shape: $shape,
+                  replies: [ $replies[] | {self, at, said_by, says} ],
+                  answered_by_me: (($ours | length) > 0),
+                  replied_to_by_an_agent: (($agents_after | length) > 0),
+                  owed: (if $shape == "question"
+                         then (($ours | length) == 0)
+                         else (($agents_after | length) == 0) end)} ]})
 ' "$R/remarks.full.json" > "$D/threads.json"
 
-jq '[.[] | select(.last_is_mine|not)]' "$D/threads.json" > "$D/unanswered_threads.json"
+# a thread is owed when a PERSON's turn on it is owed — an unanswered
+# fact, or a question this principal has not checked against the record
+jq '[ .[] | . as $t
+      | ([ $t.person_turns[] | select(.owed) ]) as $owed
+      | select(($owed | length) > 0)
+      | $t + {owed_turns: $owed} ]' "$D/threads.json" > "$D/unanswered_threads.json"
 
 # ── WHOSE TURN IT IS TO ANSWER, AND FROM WHAT (waymark-nl0, waymark-frv) ─
 # A person's turn is one of two shapes. A FACT ("the wood arrived",
@@ -1084,13 +1292,20 @@ jq '[.[] | select(.last_is_mine|not)]' "$D/threads.json" > "$D/unanswered_thread
 # capped. A sitting answers the facts; a question waits for a reading,
 # and either run answers FROM these rows or says which row contradicts
 # the person.
-jq --arg owner "$OWNER" '
-  def is_question: (.last.says // "")
-    | (test("\\?")
-       or test("^\\s*(can|could|should|would|will|is|are|do|does|did|what|when|where|who|how|why|which)\\b"; "i"));
-  map(. + {said_by_owner: (.last.said_by == $owner),
-           shape: (if is_question then "question" else "fact" end),
-           label: (if is_question then "editor" else "clerk" end)})
+#
+# THE SHAPE IS READ OFF THE OWED TURNS, NOT OFF THE LAST ONE
+# (waymark-3wh): a thread carrying an unchecked question is the
+# editor's however many agent turns have piled on top of it, and an
+# agent's answer already standing under a person's question is not a
+# reason to leave it alone — it is the reason to read it.
+jq '
+  map(. as $t
+      | ([ $t.owed_turns[] | select(.shape == "question") ]) as $q
+      | . + {said_by_owner: (([ $t.owed_turns[] | select(.said_by_owner) ] | length) > 0),
+             shape: (if ($q | length) > 0 then "question" else "fact" end),
+             label: (if ($q | length) > 0 then "editor" else "clerk" end),
+             answered_wrongly_maybe:
+               (([ $q[] | select(.replied_to_by_an_agent) ] | length) > 0)})
 ' "$D/unanswered_threads.json" > "$D/unanswered_threads.tmp" \
   && mv "$D/unanswered_threads.tmp" "$D/unanswered_threads.json"
 
@@ -1408,13 +1623,16 @@ for kf in tasks remarks.full events media chore_runs; do
      '{kind:$k, read_from:$b, created_since:$n}' >> "$D/arrivals_basis.jsonl"
   jq -s '.[0] + .[1]' "$ARR_ACC" "$ARR_ACC.k" > "$ARR_ACC.m" && mv "$ARR_ACC.m" "$ARR_ACC"
 done
-# and the turns still holding the end of a thread — owed on every run
-# until we answer them, however old the words are
+# and the PERSON turns a thread still owes an answer to — owed on every
+# run until we answer them, however old the words are. It reads the
+# owed turns rather than each thread's last turn (waymark-3wh): the
+# last turn is often another agent's, and an agent's remark is not an
+# arrival, while a person's question buried four turns up is.
 # (an `A && mv` here would be a whole compound command returning
 # non-zero when jq stumbles, and `set -e` would take the run down with
 # it — the failure has to leave the accumulator alone, not the run)
 if jq --slurpfile th "$D/unanswered_threads.json" --slurpfile full "$R/remarks.full.json" '
-     ([ ($th[0] // [])[] | .last.self ]) as $ends
+     ([ ($th[0] // [])[] | (.owed_turns // [])[] | .self ]) as $ends
      | . + [ ($full[0] // [])[] | .self as $sf | select(($ends | index($sf)) != null) ]
    ' "$ARR_ACC" > "$ARR_ACC.m" 2>/dev/null; then mv "$ARR_ACC.m" "$ARR_ACC"; fi
 # …and the CONVERSATIONS THAT MOVED (waymark-36s). A thread row is
@@ -3828,23 +4046,73 @@ fi
 # is for — lives in journals and in whoever was in the room. Most of
 # the cross-row findings a strong model surfaces in chat come from that
 # story, not from the rows. So the driver composes it MECHANICALLY,
-# from rows the house already holds, no model summarization: the
-# standing facts (every published insight's finding, newest first,
-# grouped by the person, value or list its evidence names), the last
-# five journals' notes, the people with relation and age from `born`,
-# the values with the words they love, the open threads the owner
-# spoke in with the last turn quoted, and the next thirty days of the
-# calendar as one list. Capped at WAYMARK_BRIEF_LINES, and what was
-# cut is said. A reading reads it first; a sitting has it in the
-# manifest JSON and the rows.
+# from rows the house already holds, no model summarization: the people
+# with relation and age from `born`, the values with the words they
+# love, the next thirty days of the calendar in LOCAL hours, the open
+# threads with a person turn still owed an answer, the last five
+# journals and the notes they left, and LAST the standing facts — every
+# published finding, newest first, grouped by who or what it names. A
+# reading reads it first; a sitting has it in the manifest JSON and the
+# rows.
+#
+# THE ORDER IS THE FIX, AND THE CAP TRIMS FINDINGS ONLY (waymark-wfa).
+# The first reading opened on a brief whose 80-line cap fell on the
+# CALENDAR: nine lines went — the last five days of the window and both
+# sections under it — while some 17 of the 40 findings above them were
+# a verdict word said back ("Declined as wrong_time.") or a task title
+# repeated. A cap that eats the calendar to keep filler is a cap
+# applied to the wrong end, so the order below IS the priority: people,
+# values, the calendar, the threads, the journals, and only then the
+# findings. Everything before the findings is printed whole; the
+# findings are what the cap trims, newest first, with the restatements
+# FOLDED into one line saying how many and why.
+#
+# THE CALENDAR IN LOCAL HOURS, AND THE ODD ONES FLAGGED (waymark-wfa,
+# with waymark-thn's reading). "11:00Z" is five in the morning here,
+# and it sorted above the day it belonged to, so the party a person had
+# asked about twice never showed at all. jq cannot convert a zone and
+# `date` can, so the window is converted HERE, once per event — the
+# same walk the rework section already makes over its pieces — and a
+# local start before six in the morning or after ten at night is called
+# ODD HOUR in the brief itself, where a reading will see it.
+BRIEF_FROM="$(date -u -d "@$(( NOW_S - 86400 ))" +%Y-%m-%d 2>/dev/null || echo 0000-00-00)"
+BRIEF_TO="$(date -u -d "@$(( NOW_S + 2764800 ))" +%Y-%m-%d 2>/dev/null || echo 9999-99-99)"
+: > "$D/event_local.jsonl"
+while IFS="$(printf '\t')" read -r esf estart; do
+  [ -n "$esf" ] || continue
+  if [ "${#estart}" -le 10 ]; then
+    jq -nc --arg s "$esf" --arg u "$estart" \
+       --arg wd "$(TZ="$HOUSE_TZ" date -d "$estart" +%a 2>/dev/null || echo '?')" \
+       '{self:$s, starts_at:$u, weekday:$wd, local_date:($u | .[0:10]),
+         local_hm:null, all_day:true, odd:false}' >> "$D/event_local.jsonl" 2>/dev/null || true
+  else
+    eloc="$(TZ="$HOUSE_TZ" date -d "$estart" +'%Y-%m-%d %H:%M %a' 2>/dev/null || echo "")"
+    [ -n "$eloc" ] || continue
+    emins=$(( 10#${eloc:11:2} * 60 + 10#${eloc:14:2} ))
+    eodd=false
+    if [ "$emins" -lt 360 ] || [ "$emins" -gt 1320 ]; then eodd=true; fi
+    jq -nc --arg s "$esf" --arg u "$estart" --arg l "$eloc" --argjson o "$eodd" \
+       '{self:$s, starts_at:$u, weekday:($l | .[17:20]), local_date:($l | .[0:10]),
+         local_hm:($l | .[11:16]), all_day:false, odd:$o}' \
+       >> "$D/event_local.jsonl" 2>/dev/null || true
+  fi
+done < <(jq -r --arg from "$BRIEF_FROM" --arg to "$BRIEF_TO" '
+    .[] | . as $e | (((.fields.starts_at // .fields.date // "")) | tostring) as $s
+    | select($s != "")
+    | select(($s | .[0:10]) >= $from and ($s | .[0:10]) <= $to)
+    | "\($e.self)\t\($s)"' "$R/events.json" 2>/dev/null || true)
+jq -s '.' "$D/event_local.jsonl" > "$D/event_local.json" 2>/dev/null \
+  || echo '[]' > "$D/event_local.json"
+
 jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full.json" \
       --slurpfile values "$R/values.full.json" --slurpfile lists "$R/task_lists.json" \
       --slurpfile events "$R/events.json" --slurpfile journals "$R/journals.full.json" \
       --slurpfile threads "$D/unanswered_threads.json" \
+      --slurpfile tasks "$R/tasks.json" --slurpfile elocal "$D/event_local.json" \
       --argjson nows "$NOW_S" --arg owner "$OWNER" --arg tz "$HOUSE_TZ" "$JQ_DATES"'
   ($ins[0] // []) as $in | ($people[0] // []) as $pp | ($values[0] // []) as $vv
   | ($lists[0] // []) as $ll | ($events[0] // []) as $ev | ($journals[0] // []) as $jj
-  | ($threads[0] // []) as $th
+  | ($threads[0] // []) as $th | ($tasks[0] // []) as $tk | ($elocal[0] // []) as $loc
   | def name_of($addr):
       (if ($addr | test("^/api/people/")) then (([ $pp[] | select(.self == $addr) | .data.name ] | first) // null)
        elif ($addr | test("^/api/values/")) then (([ $vv[] | select(.self == $addr) | .data.name ] | first) // null)
@@ -3860,8 +4128,51 @@ jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full
           elif .on and ($l | test("^\\s*[-*]\\s+")) then .out += [($l | sub("^\\s*[-*]\\s+"; ""))]
           else . end)
       | .out;
-  # (c) the people, current first, with relation and age
-  ([ "## THE HOUSE BRIEF — mechanical, from rows the house holds; read it before any order",
+  # the content words a line is made of — four letters or longer, so
+  # "the" and "a" never make two sentences look alike
+  def bwords: (tostring | ascii_downcase | [ splits("[^a-z0-9]+") ]
+               | map(select(length >= 4)) | unique);
+  def title_of($addr):
+      (if ($addr | test("^/api/tasks/"))
+       then (([ $tk[] | select(.self == $addr) | ((.fields.title // .display.title // "") | tostring) ] | first) // "")
+       elif ($addr | test("^/api/events/"))
+       then (([ $ev[] | select(.self == $addr) | ((.fields.title // .display.title // "") | tostring) ] | first) // "")
+       else "" end);
+  # A FINDING THAT SAYS THE ROW BACK (waymark-wfa). Not a door and not
+  # a dismissal — a FOLD: the brief prints how many there are and why,
+  # and the rows themselves stand untouched at their own addresses.
+  # Three mechanical shapes, and nothing else is folded: the sentence
+  # `verify` already calls THIN, a verdict word repeated as though it
+  # were a fact, and a finding whose own words are the cited row title
+  # with fewer than three words of its own added.
+  def restates:
+      . as $i
+      | ((($i.data.finding) // "") | tostring) as $f
+      | ($f | ascii_downcase) as $lc
+      | ([ ($i.data.evidence // [])[] | title_of(.) ] | map(select(. != "")) | join(" ")) as $titles
+      | if ($f | length) < 40
+           or ($lc | test("needs action|requires further action|needs attention|should be done"))
+        then "say nothing the row does not"
+        elif ($lc | test("\\bdeclined\\b|no reason given|\\bnot good\\b|wrong_time|wrong_way|wrong_piece|never_this"))
+        then "restate a verdict"
+        elif (($titles | length) > 0)
+             and ((($f | bwords) - ($titles | bwords)) | length) < 3
+        then "restate the row title"
+        else null end;
+  ([ $in[] | select(.state == "published") ]) as $pub
+  | ([ $pub[] | . as $i | (restates) as $r | select($r != null) | {self:$i.self, why:$r} ]) as $folded
+  | ([ $pub[] | . as $i | select((restates) == null)
+       | (([ ($i.data.evidence // [])[] | select(test("^/api/(people|values|task_lists)/")) ] | first) // null) as $key
+       | {group: (if $key then (name_of($key) // $key) else "the house" end),
+          at: (($i.meta.updated_at // "") | .[0:10]),
+          line: ("    \(($i.meta.updated_at // "") | .[0:10]) \((($i.data.finding) // "") | .[0:170])  \($i.self)")} ]
+     | group_by(.group)
+     | map({group:.[0].group, newest:([ .[] | .at ] | max),
+            lines:(sort_by(.at) | reverse | map(.line))})
+     | sort_by(.newest) | reverse
+     | map([ "  [\(.group)]" ] + .lines) | add // []) as $facts
+  # (a) the people, current first, with relation and age
+  | ([ "## THE HOUSE BRIEF — mechanical, from rows the house holds; read it before any order",
      "People (current):" ]
    + ([ $pp[] | select(.state == "current")
         | "  - \(.data.name) — \(.data.relation // "?")\(if (.data.born // null) != null then " · age \(age_of(.data.born) // "?")" else "" end)  \(.self)" ]
@@ -3870,25 +4181,36 @@ jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full
    + ([ $vv[] | select(.state != "retired")
         | "  - \(.data.name) [\(.state)]\(if ((.data.loved // []) | length) > 0 then " — loves " + ((.data.loved) | join(", ")) else "" end)  \(.self)" ]
       | if length == 0 then ["  (none)"] else . end)
-   + [ "Standing facts (published findings, newest first, grouped by who or what they name):" ]
-   + ([ $in[] | select(.state == "published")
-        | . as $i
-        | (([ ($i.data.evidence // [])[] | select(test("^/api/(people|values|task_lists)/")) ] | first) // null) as $key
-        | {group: (if $key then (name_of($key) // $key) else "the house" end),
-           at: (($i.meta.updated_at // "") | .[0:10]),
-           line: ("    \(($i.meta.updated_at // "") | .[0:10]) \((.data.finding // "") | .[0:170])  \(.self)")} ]
-      | group_by(.group) | sort_by(.[0].group == "the house", .[0].group)
-      | map(([ "  [\(.[0].group)]" ] + (sort_by(.at) | reverse | map(.line))))
-      | add // ["  (no published finding stands)"])
-   + [ "The next 30 days:" ]
-   + ([ $ev[] | (.fields.starts_at // .fields.date // null) as $s
+   + [ "The next 30 days — one line each, the hour in \($tz) with the UTC beside it. NEVER cut:" ]
+   + ([ $ev[] | . as $e | ((.fields.starts_at // .fields.date // null)) as $s
         | select($s != null)
         | ($s | in_days($nows)) as $d
         | select($d != null and $d >= 0 and $d <= 30)
-        | {s:$s, line:("  - \($s | .[0:10]) \(if ($s | length) > 10 then ($s | .[11:16]) + "Z" else "all day" end) · \((.fields.title // .display.title // "") | tostring)\(if (.fields.location // "") != "" then " · " + .fields.location else "" end)  \(.self)")} ]
-      | sort_by(.s) | map(.line) | if length == 0 then ["  (nothing on the calendar)"] else . end)
-   + [ "Open threads the owner spoke in (last turn quoted):" ]
-   + ([ $th[] | select(.said_by_owner) | "  - \(.subject_kind)/\(.subject_id): “\(.last.says | .[0:160])”  (\(.last.self))" ]
+        | (([ $loc[] | select(.self == $e.self) ] | first) // null) as $lz
+        | {s:$s,
+           line:("  - "
+                 + (if $lz != null then "\($lz.weekday) \($lz.local_date)" else ($s | .[0:10]) end)
+                 + " "
+                 + (if $lz == null
+                    then (if ($s | length) > 10 then ($s | .[11:16]) + "Z (no local reading)" else "all day" end)
+                    elif $lz.all_day then "all day"
+                    else "\($lz.local_hm) local (\($s | .[11:16])Z)" end)
+                 + " · " + (((.fields.title // .display.title // "")) | tostring)
+                 + (if (.fields.location // "") != "" then " · " + .fields.location else "" end)
+                 + (if ($lz != null and $lz.odd)
+                    then "  — ODD HOUR: \($lz.local_hm) local. A clock time a person says is LOCAL, so a row that reads 11:00Z is five in the morning here; check the zone before anything is planned around it"
+                    else "" end)
+                 + "  " + $e.self)} ]
+      | sort_by(.s) | map(.line)
+      | if length == 0 then ["  (nothing on the calendar)"] else . end)
+   + [ "Open threads — every person turn still owed an answer (a QUESTION stays owed even where an agent replied):" ]
+   + ([ $th[] | . as $t | ($t.owed_turns // [])[]
+        | "  - \($t.subject_kind)/\($t.subject_id) [\(.shape | ascii_upcase)] "
+          + (if .said_by_owner then "the owner" else .said_by end)
+          + " said “\((.says // "") | .[0:150])”  (\(.self))"
+          + (if ((.replies // []) | length) > 0
+             then " — an agent replied \(((.replies | last).at) | .[0:10]), unchecked"
+             else "" end) ]
       | if length == 0 then ["  (none)"] else . end)
    + [ "The last 5 journals, and the notes they left:" ]
    + ([ $jj[] ] | sort_by(.meta.updated_at) | reverse | .[0:5]
@@ -3896,12 +4218,30 @@ jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full
             | [ "  - \(($j.meta.updated_at // "") | .[0:10]) \($j.data.title // "")  \($j.self)" ]
               + (if ($n | length) > 0 then ($n | map("      · " + .[0:150])) else [ "      " + (($j.data.body // "") | gsub("\\s+"; " ") | .[0:150]) ] end))
       | add // ["  (no journal yet)"])
-  ) as $lines
-  | {lines: $lines, total: ($lines | length)}
-' > "$D/brief.json" 2>>"$PROBE_ERRS" || echo '{"lines":[],"total":0}' > "$D/brief.json"
+   + [ "Standing facts — published findings, newest first, grouped by who or what they name. THIS IS THE ONLY SECTION THE CAP TRIMS:" ]
+   + (if ($folded | length) > 0
+      then [ "  (\($folded | length) finding(s) folded away — "
+             + (($folded | group_by(.why) | map("\(length) \(.[0].why)")) | join(", "))
+             + " — not shown; they stand at their own addresses all the same)" ]
+      else [] end)
+  ) as $head
+  | {head: $head, findings: $facts,
+     folded: ($folded | length), folded_rows: $folded,
+     lines: ($head + $facts), total: (($head | length) + ($facts | length))}
+' > "$D/brief.json" 2>>"$PROBE_ERRS" || echo '{"head":[],"findings":[],"lines":[],"total":0}' > "$D/brief.json"
+# THE CAP FALLS ON THE FINDINGS AND NOWHERE ELSE (waymark-wfa): the
+# head is printed whole however long it is, and what room is left over
+# is filled with findings, newest first. A cut that would leave a group
+# heading with nothing under it drops the heading too.
 jq --argjson cap "$BRIEF_LINES" '
-  . + {shown: (.lines | .[0:$cap]),
-       cut: (if (.lines | length) > $cap then (.lines | length) - $cap else 0 end)}' \
+  (.head | length) as $h
+  | (if $cap > $h then ($cap - $h) else 0 end) as $room
+  | (.findings | .[0:$room]) as $keep
+  | (if (($keep | length) > 0) and ((($keep | .[-1]) | test("^  \\[")))
+     then ($keep | .[0:-1]) else $keep end) as $kept
+  | . + {cap: $cap,
+         shown: (.head + $kept),
+         cut: ((.findings | length) - ($kept | length))}' \
    "$D/brief.json" > "$D/brief.tmp" && mv "$D/brief.tmp" "$D/brief.json"
 
 # ── THE REVIEW (waymark-nl0): the sittings since the last reading ────
@@ -4240,7 +4580,7 @@ jq -n \
     # the rows already tell, before any order asks for judgment
     jq -r '.brief.shown[]' "$RUN/manifest.json"
     jq -r 'if (.brief.cut // 0) > 0
-           then "  (… \(.brief.cut) more lines cut by WAYMARK_BRIEF_LINES=\(.brief.shown | length); the whole brief is \(.run.snapshot)/derived/brief.json)"
+           then "  (… \(.brief.cut) older standing finding(s) cut by WAYMARK_BRIEF_LINES=\(.brief.cap // 0) — the cap trims findings and nothing else, so nothing above this line was lost; the whole brief is \(.run.snapshot)/derived/brief.json)"
            else "  (the whole brief, nothing cut)" end' "$RUN/manifest.json"
     echo
   fi
@@ -4370,7 +4710,13 @@ jq -n \
         then "  (nothing — every order this run found is a clerk form)"
         else
           ($w.orders[] | "- ORDER \(.probe) · \(.subject) — \(.subject_says[0:100])\n    editor because: \(.why_label // "")\n    would write: one \(.write.kind | ascii_upcase) at \(.write.door)"),
-          ($w.threads[] | "- QUESTION on \(.subject_kind)/\(.subject_id): \(.last.said_by) asked “\(.last.says[0:140])” (\(.last.self))\n    editor because: the answer has to come from the record, not from the question — a reading answers it FROM what the house already says"),
+          ($w.threads[] | . as $t
+           | "- QUESTION on \(.subject_kind)/\(.subject_id): "
+             + ([ $t.owed_turns[] | select(.shape == "question")
+                  | "\(.said_by) asked “\(.says[0:140])” (\(.self))"
+                    + (if .replied_to_by_an_agent then " — and an agent has already replied to it, unchecked" else "" end) ]
+                | join("; "))
+             + "\n    editor because: the answer has to come from the record, not from the question — a reading answers it FROM what the house already says, and checks any agent reply already standing under it"),
           ($w.reworks[] | "- REWORK \(.self) [iterating, plan v\(.plan_revision)] \(.goal[0:80])\n    editor because: \(.why_label // "")\n    THE NOTE: " + (if .note then "\(.note.said_by) said “\(.note.says[0:160])”" else "(no turn on the thread)" end))
         end' "$RUN/manifest.json"
     echo "  Leave every one of these exactly as it stands: no reply in words, no piece, no insight, no rework commit. A reading (READING.md — a strong model, morning and evening or on demand) takes them with the whole house in view. verify never faults a sitting for a line on this list."
@@ -4380,9 +4726,9 @@ jq -n \
   jq -r 'if (.offered_requests|length)==0 then "  (none)" else (.offered_requests[] | "- \(.self) by \(.requested_by) good until \(.good_until)") end' "$RUN/manifest.json"
   echo
   if [ "$RUN_MODE" = "reading" ]; then
-    echo "## Threads whose last turn is not yours — facts and questions, and WHAT THE HOUSE ALREADY SAYS under each"
+    echo "## Threads with a person turn still owed an answer — every owed turn with the replies under it, and WHAT THE HOUSE ALREADY SAYS (waymark-3wh)"
   else
-    echo "## Threads whose last turn is not yours — the FACTS are yours; a QUESTION waits for a reading"
+    echo "## Threads with a person turn still owed an answer — the FACTS are yours; a QUESTION waits for a reading, even one an agent has already replied to (waymark-3wh)"
   fi
   jq -r --arg mode "$RUN_MODE" '
     . as $root
@@ -4390,10 +4736,15 @@ jq -n \
     | if ($mine|length)==0 then "  (none)" else
       ($mine[]
        | . as $t
-       | "- \(.subject_kind)/\(.subject_id): \(.last.said_by)\(if .said_by_owner then " (the owner)" else "" end) said \"\(.last.says[0:160])\" (\(.last.self))  [\(.shape | ascii_upcase) — \(.label)]",
-         (if .shape == "fact"
-          then "    a fact: index it as an insight citing the remark and the rows it is about, then reply in words (in_reply_to naming their turn)"
-          else "    a question: the answer comes FROM the rows below — cite the row that answers it; if the rows contradict the person, say which and quote it; never index a question as a fact" end),
+       | "- \(.subject_kind)/\(.subject_id) — \(.owed_turns | length) person turn(s) still owed an answer, of \(.turns | length) turn(s) on the thread  [\(.shape | ascii_upcase) — \(.label)]",
+         ($t.owed_turns[]
+          | "    · \(.said_by)\(if .said_by_owner then " (the owner)" else "" end) said “\(.says[0:220])”  (\(.self))  [\(.shape | ascii_upcase)]",
+            (.replies[] | "        ↳ \(.said_by) replied \(.at[0:16]): “\(.says[0:200])”  (\(.self))"),
+            (if .shape == "question" and .replied_to_by_an_agent
+             then "        ^ AN AGENT HAS ALREADY ANSWERED THIS AND NOBODY HAS CHECKED IT. That reply is not the record — it is the thing to check against the record. Read the rows below; if it is wrong, say which row says so and correct it in your own reply (verify grades that CORRECTED, and an unchecked one UNCHECKED QUESTION)."
+             elif .shape == "question"
+             then "        a question: the answer comes FROM the rows below — cite the row that answers it; if the rows contradict the person, say which and quote it; never index a question as a fact"
+             else "        a fact: index it as an insight citing the remark and the rows it is about, then reply in words (in_reply_to naming their turn)" end)),
          (([ ($root.house_says // [])[] | select(.outcome == ("/api/outcomes/" + $t.subject_id)) ] | first) as $h
           | if $h == null then "    WHAT THE HOUSE ALREADY SAYS: (the subject is not an outcome in the snapshot — read the row at its own address)"
             else "    WHAT THE HOUSE ALREADY SAYS about \($h.outcome) — \($h.goal[0:80]):",
