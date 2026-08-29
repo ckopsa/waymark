@@ -2978,10 +2978,15 @@
            (let [c (get-in offered [:recipe :insight_rank])
                  s (str (get-in offered [:recipe :insight_rank_says]))]
              (not (and (str/includes? s (str (:diagnosis c)))
-                       (str/includes? s "never this")
+                       ;; the FINDING's words since waymark-hcr — a
+                       ;; dismissed claim runs along worth, backing,
+                       ;; newness and truth, never along when/what/
+                       ;; how/ever, and the line narrates what it reads
+                       (str/includes? s "not true")
                        (str/includes? s "not capped"))))
            (conj (str "feed: recipe.insight_rank_says does not quote its own"
-                      " numbers, the four words and the ruling back — "
+                      " numbers, the finding's four words and the ruling"
+                      " back — "
                       (pr-str (get-in offered [:recipe :insight_rank_says]))))
 
            (and card (let [i (get-in card [:why :insight])]

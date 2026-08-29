@@ -246,7 +246,8 @@
         (is (str/includes? (str (get-in doc [:recipe :insight_rank_says]))
                            "ranked, not capped"))
         (is (str/includes? (str (get-in doc [:recipe :insight_rank_says]))
-                           "8 for never this"))))
+                           "8 for not true")
+            "the findings' line narrates the FINDING's own words (waymark-hcr)")))
 
     (let [d-resp (publish! finder "The shop has not been opened since June"
                            "values" vid "still_stands")
@@ -294,7 +295,7 @@
             no1 (invoke! "insights" q1 :dismiss nil (human who))
             said (req :post "/api/verdict_reasons"
                       {:subject_kind "insight" :subject_id q1
-                       :verdict "dismiss" :reason "wrong_time"}
+                       :verdict "dismiss" :reason "thin"}
                       (human who))
             q2 (id-of (publish! finder "The gutters are still waiting (2)"
                                 "tasks" t-line act))
@@ -317,13 +318,91 @@
             (is (nil? (insight-card doc q1)) "an answered finding leaves the feed")
             (is (< (index-of ids p) (index-of ids q3)))
             (is (= 2 (get-in c3 [:why :insight :dismissed])))
-            (is (= "wrong_time" (get-in c3 [:why :insight :declined])))
+            (is (= "thin" (get-in c3 [:why :insight :declined])))
             (is (= 6 (get-in c3 [:why :insight :lift]))
-                "14 fresh − 6 for two dismissals − 2 for wrong time")
+                "14 fresh − 6 for two dismissals − 2 for too thin")
             (is (says-of c3 "already dismissed 2 findings on this same next step"))
             (is (says-of c3 "holding it 6"))
-            (is (says-of c3 "wrong time"))
+            (is (says-of c3 "too thin"))
             (is (says-of c3 "Lift 6 in all"))))
+
+        ;; ── waymark-hcr: the reason rides the dismissal ─────────────
+        ;;
+        ;; The first reading (2026-08-29) dismissed 22 findings and had
+        ;; nowhere to put WHY: the dismiss door refuses a body, and the
+        ;; four words on the settled card were the four a house says
+        ;; about something it was OFFERED. So the reasons lived in a
+        ;; private journal, where neither the rank nor the next reading
+        ;; could read them. Three claims, and the house is left as
+        ;; found: a settled finding offers the FINDING's four; a
+        ;; reading dismisses under its grant and files the word itself,
+        ;; as a row citing the finding; and the rank reads that word on
+        ;; the next finding about the same next step.
+        (let [reviewer (leash! "reader-hcr" who
+                               [{:kind "insight" :actions ["dismiss"]}
+                                {:kind "verdict_reason" :actions ["create"]}])
+              t-shed (task! "Fix the shed door")
+              f (id-of (publish! finder "The shed door has hung open since May"
+                                 "tasks" t-shed act))
+              door (:reasons (feed-as who))
+              gone (invoke! "insights" f :dismiss nil reviewer)
+              said (req :post "/api/verdict_reasons"
+                        {:subject_kind "insight" :subject_id f
+                         :subject_href (str "/api/insights/" f)
+                         :about "The shed door has hung open since May"
+                         :verdict "dismiss" :reason "thin"}
+                        reviewer)
+              offers-word (req :post "/api/verdict_reasons"
+                               {:subject_kind "insight" :subject_id f
+                                :verdict "take" :reason "wrong_time"}
+                               reviewer)]
+          (testing "a settled finding is offered the FINDING's four words, and
+                    what the house was OFFERED keeps its own four as the default"
+            (is (= ["thin" "unfounded" "restated" "untrue"]
+                   (mapv :value (get-in door [:by_kind :insight])))
+                (pr-str door))
+            (is (= ["wrong_time" "wrong_piece" "wrong_way" "never_this"]
+                   (mapv :value (:choices door)))
+                "a declined piece is answered with when, what, how and ever")
+            (is (every? #(and (seq (str (:label %)))
+                              (not= (str (:label %)) (str (:value %))))
+                        (get-in door [:by_kind :insight]))
+                "the chips are the household's own words, declared once")
+            (is (true? (get-in (insight-card (feed-as who) q3)
+                               [:actions :dismiss :display :reasons]))
+                "…and the card's own decline says it may be asked why"))
+
+          (testing "a reading dismisses under its grant and files the word with
+                    the dismissal — the why lands as a ROW citing the finding,
+                    not as a line in a journal"
+            (is (= 200 (:status gone)) (pr-str (json gone)))
+            (is (= 201 (:status said)) (pr-str (json said)))
+            (let [row (json said)]
+              (is (= "insight" (get-in row [:data :subject_kind])))
+              (is (= f (get-in row [:data :subject_id])))
+              (is (= "dismiss" (get-in row [:data :verdict])))
+              (is (= "thin" (get-in row [:data :reason])))
+              (is (= "reader-hcr" (str (get-in row [:data :said_by])))
+                  "the word is the dismisser's own, stamped from whoever posted"))
+            (is (= 409 (:status offers-word)) (pr-str (json offers-word)))
+            (is (= "the-word-fits-the-subject" (str (:guard (json offers-word))))
+                "wrong time is not a thing anybody means about a finding"))
+
+          (testing "…and the rank reads the word, without opening a journal"
+            (let [q5 (id-of (publish! finder "The shed door, still open"
+                                      "tasks" t-shed act))
+                  doc (feed-as who "explain=1")
+                  c5 (insight-card doc q5)
+                  says-of (fn [c s] (some #(str/includes? (str %) s)
+                                          (get-in c [:why :says])))]
+              (is (= 1 (get-in c5 [:why :insight :dismissed])))
+              (is (= "thin" (get-in c5 [:why :insight :declined])))
+              (is (= 9 (get-in c5 [:why :insight :lift]))
+                  "14 fresh − 3 for one dismissal − 2 for too thin")
+              (is (says-of c5 "too thin"))
+              ;; leave the line as it was found
+              (is (= 200 (:status (invoke! "insights" q5 :dismiss nil
+                                           (human who))))))))
 
         ;; six in a day, one author, six next steps
         (let [six (mapv (fn [[n tid]]

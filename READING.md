@@ -136,9 +136,34 @@ pasting `scripts/sitting-run.sh verify`.
    a thin or false row where your grant admits the door — the formula
    names the scope a reading needs (`insight.dismiss`,
    `person.dismiss`, `ranking_note.dismiss`, `outcome.not_this_week`,
-   on rows by id), the driver builds the anchored ask and files it as
-   the one extend-ask when inside the window, and otherwise you file it
-   yourself when you hold a row to act on and no ask of yours stands.
+   on rows by id, and `verdict_reason.create`), the driver builds the
+   anchored ask and files it as the one extend-ask when inside the
+   window, and otherwise you file it yourself when you hold a row to
+   act on and no ask of yours stands.
+
+   **THE REASON RIDES THE DISMISSAL** (waymark-hcr). The dismiss door
+   itself takes no body — it is one tap and stays one — so the why is
+   a row of its own, filed straight after the verdict lands:
+
+   ```
+   POST /api/verdict_reasons
+   {"subject_kind": "insight", "subject_id": "<id>",
+    "subject_href": "/api/insights/<id>",
+    "about": "<the finding, as it read>",
+    "verdict": "dismiss", "reason": "thin"}
+   ```
+
+   A dismissed finding or judgment takes the words a CLAIM runs along
+   — `thin` (nothing to do with it), `unfounded` (nothing cited backs
+   it), `restated` (the house already holds it), `untrue` (the record
+   says otherwise) — never the four a house says about something it
+   was offered; `wrong_time` on a finding is refused by name. One row
+   per verdict, and `say_more` adds the sentence the word could not
+   carry. File one for every row you dismiss: the rank reads the word
+   on the next finding about the same next step, and the next reading
+   reads it off the row rather than out of your journal, which is
+   private. Say the same thing in the journal if you like — but the
+   journal is never where the reason lives.
    Four eyes hold whatever the grant says: a row this principal wrote
    is never yours to dismiss, whichever run wrote it — say so in the
    journal and leave it for the owner.

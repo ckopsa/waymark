@@ -21,7 +21,9 @@
 #
 # WHAT A READING NEEDS FROM THE LEASH beyond the sitting's scope: the
 # review doors, on rows by id — insight.dismiss, person.dismiss,
-# ranking_note.dismiss, outcome.not_this_week. The driver reads which
+# ranking_note.dismiss, outcome.not_this_week — and verdict_reason.create
+# beside them (waymark-hcr), which is a plain create because the row a
+# reason writes does not exist to be anchored to. The driver reads which
 # the grant admits, builds the anchored ask, and files it as the one
 # extend-ask when inside the window; otherwise the manifest prints the
 # body for the reading to file when it holds a row to act on and no
@@ -202,9 +204,9 @@ what the bundle STANDS ON in the house's own terms, and evidence = the
 bundle's whole cite list from the manifest (never the bundle alone).
 One live note per row per author; a changed mind restates. DISMISS a
 thin or false row where your grant admits the door: the manifest names
-the four doors a review needs — insight.dismiss, person.dismiss,
-ranking_note.dismiss, outcome.not_this_week — and whether the leash
-admits each, lists the THIN findings by other hands as the mechanical
+the five doors a review needs — insight.dismiss, person.dismiss,
+ranking_note.dismiss, outcome.not_this_week, verdict_reason.create —
+and whether the leash admits each, lists the THIN findings by other hands as the mechanical
 candidates, and prints the anchored ask body (scope = the grant's own
 plus those doors on rows by id). Inside the ask window the driver has
 already filed it as the one extend-ask (grant_watch says so); otherwise
@@ -212,8 +214,16 @@ file it yourself only when you hold a row to act on and no ask of
 yours stands — POST {{base_url}}/api/approval_requests — and REPORT THE
 ASK ID. Four eyes hold whatever the grant says: a row this principal
 wrote is never yours to dismiss, whichever run wrote it; say so and
-leave it for the owner. Never rewrite a sitting's row; answer beside
-it.
+leave it for the owner. AND FILE THE WORD WITH IT (waymark-hcr): a dismissal says why in a row
+of its own — POST {{base_url}}/api/verdict_reasons with subject_kind,
+subject_id, subject_href, about, verdict "dismiss" and one word. A
+finding or a judgment takes the words a CLAIM runs along — thin,
+unfounded, restated, untrue — never the four about something offered;
+wrong_time on a finding is refused by name. One row per verdict;
+say_more adds the sentence the word could not carry. The reason
+belongs on the row, never only in the journal: the rank reads it and
+so does the next reading. Never rewrite a sitting's row;
+answer beside it.
 """
 
 [[steps]]

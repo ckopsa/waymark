@@ -1530,6 +1530,15 @@
              (feed/reason-weight "wrong_piece") (feed/reason-weight "wrong_time")
              (feed/reason-weight nil)))
       (is (= 1 (feed/reason-weight "some_fifth_word"))))
+    (testing "…and the FINDING's four weigh in their own order (waymark-hcr):
+              a claim runs along worth, backing, newness and truth, and a
+              house that said NOT TRUE has said the most a dismissal can say"
+      (is (> (feed/reason-weight "untrue") (feed/reason-weight "restated")
+             (feed/reason-weight "unfounded") (feed/reason-weight "thin")
+             (feed/reason-weight nil)))
+      (is (= (feed/reason-weight "never_this") (feed/reason-weight "untrue"))
+          "the two sets are read on one scale — the rank multiplies one number")
+      (is (= (feed/reason-weight "wrong_time") (feed/reason-weight "thin"))))
     (testing "the order is a pure function of the inputs; the seed only breaks
               ties. Swap every hash and a strict order does not move"
       (let [cands [[:fresh fresh] [:observed observed] [:cooled cooled]
@@ -1672,8 +1681,11 @@
         declared {:value :declared :fresh-days 14}
         observed {:value :observed :fresh-days 13}
         cooled {:seen 3 :cooled 1 :fresh-days 14}
-        dismissed {:dismissed 2 :declined "wrong_time" :fresh-days 14}
-        never {:dismissed 1 :declined "never_this" :fresh-days 14}
+        ;; the FINDING's own words (waymark-hcr): a dismissed claim is
+        ;; too thin or not true, never *wrong time* — and the two sets
+        ;; are one scale, so the arithmetic below is unmoved
+        dismissed {:dismissed 2 :declined "thin" :fresh-days 14}
+        untrue {:dismissed 1 :declined "untrue" :fresh-days 14}
         old {:days-old 30 :fresh-days 0}]
     (testing "the arithmetic, predictable from the six numbers a household reads"
       (is (= 14 (feed/insight-lift w plain)) "14 days of freshness, nothing else")
@@ -1682,20 +1694,20 @@
       (is (= 19 (feed/insight-lift w declared)) "a declared value lifts 5")
       (is (= 13 (feed/insight-lift w observed)) "an observed value lifts nothing")
       (is (= 12 (feed/insight-lift w cooled)) "one cooled step holds 2")
-      (is (= 6 (feed/insight-lift w dismissed)) "two dismissals hold 6, wrong time 2")
-      (is (= 3 (feed/insight-lift w never)) "one dismissal holds 3, never this 8")
+      (is (= 6 (feed/insight-lift w dismissed)) "two dismissals hold 6, too thin 2")
+      (is (= 3 (feed/insight-lift w untrue)) "one dismissal holds 3, not true 8")
       (is (= 0 (feed/insight-lift w old)) "old is old, and sinks no further"))
     (testing "the order is a pure function of the inputs; the seed only breaks
               ties. Swap every hash and a strict order does not move"
       (let [cands [[:plain plain] [:diagnosis diagnosis] [:declared declared]
                    [:observed observed] [:cooled cooled] [:dismissed dismissed]
-                   [:never never] [:old old]]
+                   [:untrue untrue] [:old old]]
             order (fn [hash-of]
                     (mapv first (sort-by (fn [[k in]] (feed/insight-key w in (hash-of k)))
                                          cands)))
             a (order #(wire/sha256-hex (str "seed-a" %)))
             b (order #(wire/sha256-hex (str "seed-b" %)))]
-        (is (= [:diagnosis :declared :plain :observed :cooled :dismissed :never :old] a))
+        (is (= [:diagnosis :declared :plain :observed :cooled :dismissed :untrue :old] a))
         (is (= a b) "two seeds, one order — nothing here was tied")))
     (testing "…and between equals the seed decides, both ways — there is no tier"
       (let [twin {:fresh-days 14}
@@ -1709,7 +1721,7 @@
             "lift then hash, and nothing above the lift")))
     (testing "all six at zero is the seed alone"
       (let [off {:diagnosis 0 :declared 0 :cooled 0 :dismissed 0 :declined 0 :fresh 0}]
-        (is (= 0 (feed/insight-lift off never)))
+        (is (= 0 (feed/insight-lift off untrue)))
         (is (= [0 "h"] (feed/insight-key off diagnosis "h")))))))
 
 (deftest the-findings-rank-rides-the-recipe-and-refuses-at-assembly
@@ -1722,7 +1734,8 @@
                (:insight_rank recipe)))
         (is (str/includes? (:insight_rank_says recipe) "ranked, not capped"))
         (is (str/includes? (:insight_rank_says recipe) "is lifted 10 over a plain finding"))
-        (is (str/includes? (:insight_rank_says recipe) "8 for never this"))
+        (is (str/includes? (:insight_rank_says recipe) "8 for not true")
+            "the findings' line narrates the FINDING's words (waymark-hcr)")
         (is (str/includes? (:insight_rank_says recipe) "not an obligation"))
         (is (str/includes? (:guarantees recipe) "the findings' rank is six")))))
   (testing "a row that names none keeps the deployment's, and one that names

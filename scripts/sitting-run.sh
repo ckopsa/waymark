@@ -3944,10 +3944,16 @@ jq -s --argjson n "$REVIEW_N" --arg last "$LAST_READING" --slurpfile notes "$D/n
 # that is nobody, or declining a bundle in the owner's name are all
 # doors a person opens for an agent by approving an anchored ask
 # (waymark-sfe): insight.dismiss, person.dismiss, ranking_note.dismiss,
-# outcome.not_this_week — on rows by id, never the kind whole. The
-# driver reads which of those the grant already admits, names the thin
-# findings the review can already see as the ids an insight.dismiss
-# entry would carry, and builds the ask body. Inside the ask window the
+# outcome.not_this_week — on rows by id, never the kind whole — and,
+# since waymark-hcr, verdict_reason.create beside them, because a
+# dismissal that cannot say WHY leaves its reason in the journal where
+# neither the rank nor the next reading can read it. That fifth entry
+# is the one that cannot be anchored to a row: the row it writes does
+# not exist yet, so it is a plain create, paced like every anchorless
+# create rather than fenced by id. The driver reads which of those the
+# grant already admits, names the thin findings the review can already
+# see as the ids an insight.dismiss entry would carry, and builds the
+# ask body. Inside the ask window the
 # one extend-ask a reading files carries this scope with it (the same
 # file-once law: never a second ask while one stands); outside it, the
 # body is printed for the reading to file when it holds a row to act on.
@@ -3957,7 +3963,8 @@ jq -n --slurpfile grant "$R/grant.json" --slurpfile ins "$R/insights.full.json" 
       --arg me "$PRINCIPAL" --arg gid "$GRANT" "$SCOPE_MERGE_JQ"'
   ((($grant[0].data.scope // $grant[0].scope) // []) | merge_scope) as $scope
   | [ {kind:"insight", action:"dismiss"}, {kind:"person", action:"dismiss"},
-      {kind:"ranking_note", action:"dismiss"}, {kind:"outcome", action:"not_this_week"} ] as $doors
+      {kind:"ranking_note", action:"dismiss"}, {kind:"outcome", action:"not_this_week"},
+      {kind:"verdict_reason", action:"create"} ] as $doors
   | ([ ($ins[0] // [])[] | select(.state == "published")
        | select((.data.authored_by // "") != $me)
        | ((.data.finding // "") ) as $f

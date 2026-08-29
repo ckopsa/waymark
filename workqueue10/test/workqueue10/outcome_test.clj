@@ -1399,7 +1399,10 @@
 
             (testing "an agent does not dismiss; a person does — and the card then
                       ranks without the word at all"
-              (let [by-agent (invoke! "ranking_notes" nid :dismiss nil cairn)
+              (let [live (json (req :get (str "/api/ranking_notes/" nid)
+                                    (human who)))
+                    door (get-in live [:actions :dismiss])
+                    by-agent (invoke! "ranking_notes" nid :dismiss nil cairn)
                     by-person (invoke! "ranking_notes" nid :dismiss nil (human who))
                     doc (feed-as who "explain=1")
                     cb (crown-card doc b)]
@@ -1409,7 +1412,47 @@
                 (is (= 200 (:status by-person)) (pr-str (json by-person)))
                 (is (= "dismissed" (:state (json by-person))))
                 (is (= who (:dismissed_by (fields by-person))))
+                ;; waymark-hcr: and the door says, where a machine can
+                ;; read it, that this verdict may carry a word
+                (is (true? (get-in door [:display :reasons])) (pr-str door))
+                (is (nil? (:input door))
+                    "the dismissal itself is still one tap — the word is a row")
                 (is (not (contains? (get-in cb [:why :crown]) :judged)))))
+
+            ;; ── waymark-hcr: the word rides the dismissal ───────────
+            ;;
+            ;; A judgment is a CLAIM — an agent's word about a row — so
+            ;; it is answered with the finding's four rather than the
+            ;; household's four about an offer. The row is what makes
+            ;; the why readable without opening anybody's journal, and
+            ;; the create is open against a subject that is already
+            ;; terminal, which is the whole reason jfv.16 is a kind.
+            (testing "…and the dismissal may say why, in the words a claim runs
+                      along — never in the words an offer runs along"
+              (let [said (req :post "/api/verdict_reasons"
+                              {:subject_kind "ranking_note" :subject_id nid
+                               :subject_href (str "/api/ranking_notes/" nid)
+                               :about "the agent's score on this bundle"
+                               :verdict "dismiss" :reason "unfounded"}
+                              (human who))
+                    offers-word (req :post "/api/verdict_reasons"
+                                     {:subject_kind "ranking_note" :subject_id nid
+                                      :verdict "restate" :reason "wrong_time"}
+                                     (human who))
+                    back (mapv #(json (req :get (str (:self %)) (human who)))
+                               (get-in (json (req :get
+                                                  (str "/api/verdict_reasons"
+                                                       "?subject_kind=ranking_note"
+                                                       "&subject_id=" nid)
+                                                  (human who)))
+                                       [:data :items]))]
+                (is (= 201 (:status said)) (pr-str (json said)))
+                (is (= "unfounded" (:reason (fields said))))
+                (is (= 409 (:status offers-word)) (pr-str (json offers-word)))
+                (is (= "the-word-fits-the-subject" (str (guard-of offers-word)))
+                    "wrong time is not a thing anybody means about a judgment")
+                (is (= ["unfounded"] (mapv #(str (get-in % [:data :reason])) back))
+                    "the next reading reads the word off the row, by subject")))
 
             (testing "after a dismissal the same agent may judge the row again — a
                       dismissal answers a note, not the agent"

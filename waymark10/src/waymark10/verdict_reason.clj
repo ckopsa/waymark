@@ -24,7 +24,8 @@
   decline stays exactly what it was: input-free, `assent`, one tap.
 
   What speaks is the SETTLED CARD. After the verdict lands, the card
-  offers four quick reasons — a small closed enum, one more OPTIONAL
+  offers four quick reasons — WHICH four is the subject kind's own
+  (`reason-sets`) — a small closed enum, one more OPTIONAL
   tap, selection effort, still inside the card grammar. Tapping one
   CREATES A ROW HERE. Tapping none is a complete answer, and that is
   not a courtesy: silence is what a household says most of the time,
@@ -66,8 +67,10 @@
      one, as `{subject_kind, subject_id}` rather than as a ref, so ONE
      KIND SERVES EVERY VERDICT IN THE HOUSE. A declined outcome, a
      declined piece, a let-go tickler, a dismissed insight, a
-     dismissed guess about who somebody is: the same four words, the
-     same row, the same read.
+     dismissed guess about who somebody is: the same row and the same
+     read, and — since waymark-hcr — one of TWO small sets of words,
+     because a house says different things about what it was offered
+     and about what it was told (`reason-sets`).
 
   ── WHERE IT LIVES, AND WHY THAT IS THE FRAMEWORK ──
 
@@ -83,10 +86,15 @@
 
   ── WHAT IT DOES NOT CHECK ──
 
-  Nothing here reads the subject. The tickler's own posture, for the
-  tickler's own reason: a marker naming any row in the house cannot
-  ask a kind-specific question of it, and a wall that tried would be a
-  wall that guessed. The `verdict` is a plain string for `feed_view`'s
+  Nothing here reads the subject ROW. The tickler's own posture, for
+  the tickler's own reason: a marker naming any row in the house
+  cannot ask a kind-specific question of it, and a wall that tried
+  would be a wall that guessed. What waymark-hcr added is not a read:
+  `the-word-fits-the-subject` judges the subject KIND the body itself
+  names, against a map declared here, with no row loaded and no
+  registry consulted — which is why it stays a check-tier wall about
+  the body and the create door stays storage-free until the last
+  guard. The `verdict` is a plain string for `feed_view`'s
   reason one field over — a record whose schema refused an action name
   the engine has since renamed would be a record that could not be
   written, which is the wrong way round.
@@ -140,19 +148,121 @@
    ["wrong_way" "Not this way"]
    ["never_this" "Never this"]])
 
+(def finding-reasons
+  "THE OTHER FOUR (waymark-hcr), and they are what a house says about
+  a CLAIM rather than about an offer.
+
+  The four above run along the axes an OFFER runs along — WHEN, WHAT,
+  HOW and EVER — because those are the four things a composer would
+  stage differently next time. A dismissed FINDING is not an offer: it
+  is something an agent said was true about this house, and *wrong
+  time* is not a thing anybody means about a sentence. The first
+  reading (2026-08-29) proved it by having to write its 22 dismissals
+  into a private journal — thin, false, restated, vibes — because no
+  word on the card said any of them.
+
+  So a claim gets its own four, on the axes a claim runs along:
+
+    IS IT WORTH DOING?  thin       — true enough, and nothing to do
+    IS IT BACKED?       unfounded  — the rows cited do not carry it
+    IS IT NEW?          restated   — the house already holds this
+    IS IT TRUE?         untrue     — the record says otherwise
+
+  Listed weakest first, which is the same order `reasons` is listed in
+  and the order `feed/reason-weights` reads from the last word back: a
+  house that said *not true* about a finding on a next step has said
+  the most a dismissal can say about it.
+
+  TWO WORDS WEIGHED AND NOT TAKEN, recorded because the next kind will
+  weigh them again. `twin` — this finding duplicates another finding —
+  is folded into `restated`: both say *the house already has this*, a
+  composer's lesson is the same either way, and a fifth chip is a form
+  wearing chips. And the token is `untrue` rather than the reading's
+  own `false`, because a wire that carries `\"reason\": \"false\"` is a
+  wire whose reader has to know that string is a word; the household's
+  sentence beside it stays *Not true*."
+  [["thin" "Too thin"]
+   ["unfounded" "Not backed"]
+   ["restated" "Already known"]
+   ["untrue" "Not true"]])
+
+(def reason-sets
+  "WHICH FOUR A SUBJECT GETS — the whole of waymark-hcr's mechanism,
+  and it is one map rather than a second kind.
+
+  `\"default\"` is the house's answer for everything that offers
+  something: a piece, a bundle, a tickler. A subject kind named here
+  overrides it. The union is the schema's enum, so any word may be
+  STORED; which words a subject may be answered WITH is
+  `the-word-fits-the-subject`'s question, because a closed enum cannot
+  ask about a sibling field and a schema that tried would 422 with
+  'unexpected value' where the household has a sentence to say.
+
+  It rides the declaration (`:x-display {:sets …}` on `reason`), so
+  `feed/reasons-doc` answers per kind and a settled card offers FOUR
+  chips rather than eight — the same read that already takes the
+  labels off `:choices`, one key over. A house that gave a fifth kind
+  its own words changes this map and nothing else."
+  {"default" reasons
+   "insight" finding-reasons
+   "ranking_note" finding-reasons})
+
+(defn words-for
+  "The four a subject of this kind may be answered with — its own set,
+  or the house's default."
+  [subject-kind]
+  (get reason-sets (str subject-kind) (get reason-sets "default")))
+
 (def reason-enum
-  "The schema form `reason` wears — the same four, spelled as the
-  closed enum a form and a wire read."
-  (into [:enum] (map first) reasons))
+  "The schema form `reason` wears — every word any subject may carry,
+  spelled as the closed enum a form and a wire read. The enum is the
+  UNION and the guard is the fit: one kind serves every verdict in the
+  house, so one closed list has to hold every word the house says."
+  (into [:enum] (comp (mapcat val) (map first) (distinct))
+        (sort-by key reason-sets)))
 
 (def reason-choices
   "Token → the words a person reads. The generic form renders it
   (170-forms.js), the feed's settled card renders it as a chip
   (135-feed-screen.js, off the published schema rather than off a
   second copy), and the usability battery insists it exists."
-  (into {} reasons))
+  (into {} cat (vals reason-sets)))
+
+(def reason-tokens
+  "Subject kind → its tokens, in chip order — the `:sets` half of the
+  declaration `reasons-doc` reads. Tokens only: the words a person
+  reads are `:choices`, declared once."
+  (into {} (map (fn [[k ws]] [k (mapv first ws)])) reason-sets))
 
 ;; ── the walls ───────────────────────────────────────────────────────
+
+(g/defguard the-word-fits-the-subject
+  {:judges [:reason]
+   :reads []
+   :vars [:word :kind :words]
+   :open "The words are a closed list on purpose — a chip row is read standing up, and a menu of nine is a form wearing chips. What is not closed is WHICH list: a house says different things about what it was offered and about what it was told."
+   :explain "{word} is not a word this house says about {kind} rows. That kind is answered with {words}. Something the house was OFFERED is answered along when, what, how and ever; something an agent CLAIMED — a finding, a judgment — is answered along worth, backing, newness and truth, because *wrong time* is not a thing anybody means about a sentence."}
+  [_row inp _ctx]
+  ;; THE FIT IS A GUARD AND NOT THE SCHEMA (waymark-hcr), and the
+  ;; reason is the sentence above. A closed enum cannot ask about a
+  ;; sibling field, so a schema that tried to narrow `reason` by
+  ;; `subject_kind` would have to be a multi-schema over every kind in
+  ;; the house — the exact kind-specific knowledge this namespace's
+  ;; own docstring refuses — and would answer a mismatch with 422
+  ;; *unexpected value*, which is spelling where the household has a
+  ;; sentence. The enum still holds: a word no set names is refused
+  ;; before this wall ever runs.
+  ;;
+  ;; It reads the BODY and nothing else, which is why it stands first:
+  ;; a body that says the wrong word hears about itself before the
+  ;; house is read at all.
+  (let [k (str (:subject_kind inp))
+        word (str (:reason inp))
+        allowed (mapv first (words-for k))]
+    (if (some #(= word %) allowed)
+      (t/allow)
+      (t/deny {:vars {:word word :kind k
+                      :words (str/join ", " allowed)}}))))
 
 (g/defguard a-reason-is-your-own
   {:judges [:said_by]
@@ -251,6 +361,23 @@
    :expect  {:refused :a-reason-is-your-own
              :because "why the person who answered"}})
 
+(defscenario a-claim-is-not-answered-with-an-offers-word
+  "The words fit what was answered. A finding is something an agent
+   said was true about this house, not something it offered to do, and
+   *wrong time* is not a thing anybody means about a sentence — so a
+   dismissed finding is answered with the words a claim runs along
+   (waymark-hcr). The enum holds every word; this wall holds which
+   subject may carry which."
+  {:kind    :verdict_reason
+   :attempt :create
+   :input   {:subject_kind "insight"
+             :subject_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :verdict "dismiss"
+             :reason "wrong_time"}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :the-word-fits-the-subject
+             :because "answered along worth, backing, newness and truth"}})
+
 (defscenario nobody-rewrites-somebody-elses-reason
   "…and the same sentence about the deeper layer. A composer holding a
    read grant over this kind is ADVERTISED this door — the own-surface
@@ -300,7 +427,13 @@
    {:x-display
     {:label "The quick word"
      :choices reason-choices
-     :help "One of four, and one tap: the timing was wrong, this part was wrong, the shape of it was wrong, or this is not something to bring back at all. Pick the closest one and say the rest in your own words underneath."}}
+     ;; WHICH FOUR THIS SUBJECT GETS, on the declaration where the
+     ;; labels already live (waymark-hcr). `feed/reasons-doc` reads it
+     ;; the same way it reads `:choices`, so a settled card offers the
+     ;; four its own kind is answered with and the framework's screen
+     ;; still knows no application's kind names.
+     :sets reason-tokens
+     :help "One of four, and one tap. About something the house was OFFERED: the timing was wrong, this part was wrong, the shape of it was wrong, or this is not something to bring back at all. About something an agent CLAIMED — a finding, a judgment: it is too thin to act on, nothing cited backs it, the house already holds it, or it is not true. Pick the closest one and say the rest in your own words underneath."}}
    :words
    {:examples ["The Saturday is right — it is the drive there that never happens."]
     :x-display
@@ -396,7 +529,8 @@
    ;; body that says nothing hears about itself before it hears
    ;; anything about the house, and because the last wall reads ROWS a
    ;; refused create spends nothing.
-   :create-guards [a-reason-is-your-own
+   :create-guards [the-word-fits-the-subject
+                   a-reason-is-your-own
                    one-reason-per-verdict]
    :actions
    {;; THE SECOND LAYER, and it can never climb onto a card: a prose
@@ -421,4 +555,5 @@
      :display {:label "Say more" :order 1
                :description "Add the part the four words could not carry — or change what you wrote; the quick word stands either way"}}}
    :scenarios [nobody-explains-somebody-elses-no
+               a-claim-is-not-answered-with-an-offers-word
                nobody-rewrites-somebody-elses-reason]})

@@ -560,11 +560,24 @@
   namespace reads kinds the module enrols without requiring the
   namespaces that declare them. A word this map does not know weighs
   ONE — any word said is at least *wrong time*, because the house
-  turned the line down and said so."
+  turned the line down and said so.
+
+  THE SECOND FOUR ARE THE FINDING'S (waymark-hcr), and they are read
+  the same way: a dismissed CLAIM runs along WORTH, BACKING, NEWNESS
+  and TRUTH rather than along WHEN, WHAT, HOW and EVER, so a house
+  that said *not true* about a finding on a next step has said the
+  most a dismissal can say about it, and *too thin* the least. Which
+  four a subject may carry is `verdict-reason/reason-sets`; that this
+  map holds both is the same posture as above — tokens, not a
+  require."
   {"never_this" 4
    "wrong_way" 3
    "wrong_piece" 2
-   "wrong_time" 1})
+   "wrong_time" 1
+   "untrue" 4
+   "restated" 3
+   "unfounded" 2
+   "thin" 1})
 
 (defn reason-weight
   "The weight of one quick word, or zero for none said."
@@ -1156,6 +1169,17 @@
   drift from it. An engine whose reason kind grew a fifth word grows a
   fifth chip with nothing here changed.
 
+  AND WHICH FOUR RIDES THE SAME READ (waymark-hcr). The reason kind
+  may declare `:x-display {:sets {…}}` — a subject kind to its own
+  tokens — because a house says different things about what it was
+  OFFERED and about what it was TOLD, and eight chips on one settled
+  card would be the form this bead's whole design refused. `choices`
+  stays the default set, so a screen that knows nothing of `by_kind`
+  still offers the right four to a declined piece; `by_kind` carries
+  the overrides, and the card picks by the subject it settled. A kind
+  the map does not name gets the default, which is what makes the flag
+  safe on a kind whose own words nobody has thought about yet.
+
   WHICH VERBS OFFER THEM IS NOT THIS FUNCTION'S BUSINESS. A verdict
   says so itself, in `:display {:reasons true}` — advertisement, which
   rides no fingerprint facet — and it rides the action entry through
@@ -1167,19 +1191,37 @@
       (let [model (or (:create-schema rdef) (:schema rdef))
             prop (get-in (schema/json-schema model) [:properties :reason])
             choices (get-in prop [:x-display :choices])
-            label (fn [v] (or (get choices (str v))
-                              (get choices (keyword (str v)))
-                              (str v)))]
+            sets (get-in prop [:x-display :sets])
+            ;; a declaration may write these keys either way, and a
+            ;; door that read only one spelling would answer an
+            ;; engine's own declaration with silence
+            nm (fn [k] (if (keyword? k) (name k) (str k)))
+            at (fn [m k] (when (map? m)
+                           (or (get m (str k)) (get m (keyword (str k))))))
+            label (fn [v] (or (at choices v) (str v)))
+            words (fn [tokens]
+                    (mapv (fn [v] {:value (str v) :label (label v)}) tokens))
+            dflt (or (seq (at sets "default")) (:enum prop))
+            by-kind (into (sorted-map)
+                          (keep (fn [[k tokens]]
+                                  (when (and (not= "default" (nm k))
+                                             (seq tokens))
+                                    [(nm k) (words tokens)])))
+                          sets)]
         (when (seq (:enum prop))
-          {:post_to post-to
-           :field "reason"
-           :choices (mapv (fn [v] {:value (str v) :label (label v)})
-                          (:enum prop))
-           :says (str "A decline that has landed may say why, in one more"
-                      " optional tap. Nothing is written unless somebody"
-                      " taps — silence is a complete answer — and the"
-                      " sentence a quick word could not carry lives one"
-                      " screen deeper, at " post-to ".")})))))
+          (cond-> {:post_to post-to
+                   :field "reason"
+                   :choices (words dflt)
+                   :says (str "A verdict that has landed may say why, in one"
+                              " more optional tap. Nothing is written unless"
+                              " somebody taps — silence is a complete answer"
+                              " — and the sentence a quick word could not"
+                              " carry lives one screen deeper, at " post-to
+                              ". Some kinds are answered with their own four:"
+                              " what the house was offered runs along when,"
+                              " what, how and ever; what an agent told it runs"
+                              " along worth, backing, newness and truth.")}
+            (seq by-kind) (assoc :by_kind by-kind)))))))
 
 ;; ── the contest's one read (waymark-8um.3) ──────────────────────────
 
@@ -5081,9 +5123,9 @@
            " holds it " cooled "; each finding you already dismissed on the"
            " same next step holds a new one " dismissed ", and the strongest"
            " quick word you said on those holds it " (* 1 (long declined))
-           " for wrong time, " (* 2 (long declined)) " for wrong piece, "
-           (* 3 (long declined)) " for not this way and " (* 4 (long declined))
-           " for never this; and each day of freshness left in the same "
+           " for too thin, " (* 2 (long declined)) " for not backed, "
+           (* 3 (long declined)) " for already known and " (* 4 (long declined))
+           " for not true; and each day of freshness left in the same "
            window-days " lifts it " fresh ", so a finding published today"
            " stands above one from last week and an old one sinks to the"
            " bottom and no further. The floor still holds — the line shows"
@@ -5194,15 +5236,20 @@
          " it decides once a day.")))
 
 (def ^:private reason-words
-  "The four quick words as a sentence says them — the labels
+  "The quick words as a sentence says them — the labels
   `waymark10.verdict-reason` renders on the chip, lower-cased for the
-  middle of a clause. An unknown word reads as its token with the
-  underscore taken out, which is what a fifth word the house added
-  would look like until somebody wrote its label here."
+  middle of a clause, both sets of them. An unknown word reads as its
+  token with the underscore taken out, which is what a fifth word the
+  house added would look like until somebody wrote its label here."
   {"never_this" "never this"
    "wrong_way" "not this way"
    "wrong_piece" "wrong piece"
-   "wrong_time" "wrong time"})
+   "wrong_time" "wrong time"
+   ;; the finding's own four (waymark-hcr)
+   "untrue" "not true"
+   "restated" "already known"
+   "unfounded" "not backed"
+   "thin" "too thin"})
 
 (defn- reason-word ^String [token]
   (get reason-words (str token) (str/replace (str token) "_" " ")))

@@ -325,7 +325,7 @@
         mine (first (filter #(= :core/law-scenarios (:name %)) report))]
     (is (some? mine) "core's pack owes the obligation")
     (is (= [] (:violations mine)))
-    (is (= 8 (:covered mine))
+    (is (= 9 (:covered mine))
         (str "exactly the scenarios the check tier could not judge, and no"
              " more: ranking_note's one (waymark-1uv.6 — a person refused"
              " the birth door, deferred by the chain rule exactly as"
@@ -335,11 +335,12 @@
              " the house's own recipe rows), plus the two feed_view ones"
              " (waymark-8um.1 — the same shape, one door over: its create"
              " reads the member's switch and this member's own day), plus"
-             " verdict_reason's one (waymark-jfv.16 — and the deferral is"
-             " the CHAIN's rather than the wall's: nobody-explains-somebody"
-             "-elses-no reads only the caller, but its door's second guard"
-             " counts rows, and a create scenario is judged against the"
-             " whole chain), plus remark's one (waymark-vf8 — the chain"
+             " verdict_reason's TWO (waymark-jfv.16 and waymark-hcr — and"
+             " the deferral is the CHAIN's rather than either wall's:"
+             " nobody-explains-somebody-elses-no reads only the caller and"
+             " a-claim-is-not-answered-with-an-offers-word reads only the"
+             " body, but their door's last guard counts rows, and a create"
+             " scenario is judged against the whole chain), plus remark's one (waymark-vf8 — the chain"
              " rule again: nobody-speaks-in-somebody-elses-voice reads only"
              " the caller, and words-do-not-answer now stands beside it on"
              " that door reading the SUBJECT's row and its kind's own"
