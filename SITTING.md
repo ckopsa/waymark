@@ -41,7 +41,8 @@ reads every address the formula's "read the house" step names into
 `.sitting/latest/rows/`, and works out the lists the later steps are
 *defined in terms of*: the offered requests, the threads whose last
 turn is not yours, the turns no insight cites yet, the bundles
-carrying no judgment of yours, the declines owed a diagnosis.
+carrying no judgment of yours, the declines a recomposition this run
+carries would revive and that therefore owe a diagnosis.
 
 Then it goes one step further and writes your **work orders**
 (waymark-48a): a closed set of probes turns that snapshot into at
@@ -286,19 +287,44 @@ holding your place in it.
    still holds for real outcomes: stage every genuinely distinct one,
    and the crown's rank chooses what fills attention.
 
-   **The diagnosis duty** survives: a declined prior recomposes only
-   after its diagnosis insight is published (no burial without a
-   diagnosis) — the manifest's `declines` says which still owe one,
-   **only those**, never twice (`declines_owed_a_diagnosis: 0` means
-   diagnose nothing). A diagnosis cites the `verdict_reason` row and
-   quotes its word (wrong_time is not wrong_piece is not never_this);
-   an empty `reasons` means say "declined, no reason given" and cite
-   the outcome. Its offered step is a NO-INPUT door a STANDING row
-   admits now (the manifest's `offer_candidates` — `complete` on a
-   standing task is the usual shape; `prioritize` asks for a rank, so
-   the insight door refuses it and the rank belongs in an outcome
-   PIECE); the declined prior is terminal and admits none, so
-   `expire`/`retire` on it is burial, not a step.
+   **The diagnosis duty** survives, and it is owed at
+   **RECOMPOSITION** — not at every decline (waymark-me9). Read the
+   wall it serves: `no-burial-without-a-diagnosis` fires on
+   `supersedes`, so the duty is the gate in front of RE-PROPOSING a
+   line the house was shown and turned down. A decline nobody is
+   re-proposing owes nothing at all: no insight, no score, no remark.
+   An evening where the owner sweeps thirty stale wrappers must not
+   become a morning where you publish thirty one-line diagnoses about
+   wrappers — that is the feed flooded, not the law honored, and the
+   insight rank counts every one.
+
+   So the manifest splits the declines in two. **Declines OWED a
+   diagnosis** is *only a prior you are about to recompose*: it still
+   stands as shown-and-declined, no published insight cites it yet,
+   and a work order or an offered request this run carries would
+   recompose it — it works the rows the prior cited, or it names the
+   prior's address outright. Publish one each, **never twice**
+   (`declines_owed_a_diagnosis: 0` means diagnose nothing). Everything
+   else is **Declined, not being recomposed — no diagnosis owed**,
+   printed compactly with the house's own word so you can read the
+   household's mind without writing a row about it.
+
+   A diagnosis cites the `verdict_reason` row and quotes its word
+   (wrong_time is not wrong_piece is not never_this); an empty
+   `reasons` means say "declined, no reason given" and cite the
+   outcome. Where the house left a NOTE, **the diagnosis is already on
+   the record** — cite the note, do not restate it, and spend the
+   finding on what changes. And the finding says **what the
+   recomposition changes because of the decline**: "Declined with no
+   reason given." is the manifest line copied out, it fits every
+   declined row equally, and `verify` calls a run that publishes it
+   more than three times a **DIAGNOSIS FLOOD**. Its offered step is
+   ONE NO-INPUT door a STANDING row admits now (the manifest's
+   `offer_candidates` — `complete` on a standing task is the usual
+   shape; `prioritize` asks for a rank, so the insight door refuses it
+   and the rank belongs in an outcome PIECE); the declined prior is
+   terminal and admits none, so `expire`/`retire` on it is burial, not
+   a step.
 
    If nothing arrived and no bare task is worth enriching, a run that
    writes nothing is a lawful no-op — journal nothing and leave.
@@ -399,7 +425,8 @@ holding your place in it.
   unaffirmed person is not a usable companion.
 - Read the engine-written impact line back on everything you stage.
 - Before re-proposing anything declined: publish the diagnosis insight
-  citing the decline first (no burial without a diagnosis).
+  citing the decline first (no burial without a diagnosis) — and only
+  then: a decline nothing is re-proposing owes no insight at all.
 
 The full law: `docs/spec-outcome-menu.md` § "The composer contract".
 The same walk in prose: `.claude/skills/sitting/SKILL.md`.

@@ -793,6 +793,40 @@ what it stages will never reach a screen:
 4. **Unknown is unknown.** No diagnosis is owed and none can be honest;
    the honest move is to ask a member to turn their record on.
 
+**The ruling of 2026-08-28 (waymark-me9): the duty is owed at
+RECOMPOSITION, not at every decline.** Read item 2 again and note what
+it does *not* say — it says *recompose … with a diagnosis*, and the
+wall it names, `no-burial-without-a-diagnosis`, fires on `supersedes`.
+The duty is therefore the **gate in front of a re-proposal**, not a tax
+the house levies on every verdict it hands down. What forced the
+ruling: on 2026-08-27 the owner swept twenty-eight stale wrapper and
+twin outcomes in one evening, and the next composer sitting read
+twenty-five declines "owed a diagnosis" and published **eighteen
+identical insights** — *"Declined with no reason given."*, one per
+swept wrapper, each lawful under the letter of the driver's text and
+every one of them noise on the household's feed, counted by the
+insight rank. A run may not turn a tidy-up into a flood.
+
+So a decline owes a diagnosis when, and only when, three things hold
+together: **(a)** it still stands as a prior the house was shown and
+turned down; **(b)** no published insight cites it yet — the duty is
+discharged once, never twice; and **(c)** something the run is about to
+write **would recompose it** — a work order or an offered request whose
+own rows overlap the prior's evidence, or that names the prior's
+address outright, which is the `supersedes` the composer is about to
+write. Every other decline is read, not answered: `scripts/sitting-run.sh`
+lists them under *"Declined, not being recomposed — no diagnosis owed"*
+with the house's own verdict word or note beside each, so the composer
+can read the household's mind without writing a row about it. Where the
+house left a note, **the diagnosis is already on the record** — the
+insight cites the note rather than restating it — and a finding must
+say *what the recomposition changes because of the decline*, which is
+why the driver's `verify` flags more than three boilerplate or
+identical findings as a **DIAGNOSIS FLOOD**. Nothing about the wall
+changed; what changed is the driver's arithmetic, which had been
+reading law 4 as *per decline* where the wall reads it as *per
+recomposition*.
+
 Write three kinds, all create-only; read the values it must name, the work
 kinds it composes over and cites as evidence, and the owner's feed as the
 owner sees it. **Never** a verdict action, never `value` create or revise,

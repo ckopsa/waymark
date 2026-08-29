@@ -204,6 +204,24 @@ if [ "$MODE" = "verify" ]; then
                or ($f | ascii_downcase
                       | test("needs action|requires further action|needs attention|should be done")))
       | "THIN: \(.self) — \($f)"' "$thin"
+    # ── DIAGNOSIS FLOOD (waymark-me9) ────────────────────────────────
+    # The failure a swept fridge invites: the composer reads N declines
+    # owed a diagnosis, publishes N findings that are the manifest line
+    # copied out, and every one of them is lawful and none of them says
+    # anything. Graded like THIN — a heuristic printed while the run
+    # that wrote it is still here — and by the PROSE, because that is
+    # where this fault lives: the boilerplate sentence, or one finding
+    # repeated across rows.
+    jq -r --arg s "$SINCE" '
+      [ .data.items[]? | select(.meta.updated_at >= $s)
+        | ((.fields.finding // .summary) // "") ] as $f
+      | ([ $f[] | select(test("^Declined(,| with)? no reason"; "i")) ] | length) as $boiler
+      | ([ $f[] | ascii_downcase | gsub("\\s+"; " ") ]
+         | group_by(.) | map(length) | max // 0) as $same
+      | (if $boiler > $same then $boiler else $same end) as $n
+      | if $n > 3
+        then "DIAGNOSIS FLOOD: \($n) identical findings — the duty is owed at recomposition, not per decline"
+        else empty end' "$thin"
   fi
   rm -f "$thin"
   if [ "$wrote" -eq 0 ]; then
@@ -675,6 +693,7 @@ jq --slurpfile reasons "$R/verdict_reasons.full.json" --slurpfile cited "$D/insi
          | {id:$id, self:$sf, goal:.data.goal, composed_by:(.data.composed_by // "?"),
             declined_count:(.data.declined_count // 0),
             value:(.links.value.href // null),
+            evidence:(.data.evidence // []),
             reasons: [ $vr[] | select(.data.subject_id == $id)
                              | {self, verdict:.data.verdict, reason:.data.reason, words:(.data.words // null)} ],
             pieces: [ $pc[] | select(.data.outcome_id == $id) | {self, state, says:.data.says} ],
@@ -2606,6 +2625,70 @@ while [ "$wo_i" -lt "$wo_n" ]; do
 done
 jq -s '.' "$WO_ACC" > "$D/work_orders.json"
 
+# ── WHICH DECLINES ACTUALLY OWE A DIAGNOSIS (waymark-me9) ────────────
+# The duty is owed at RECOMPOSITION, not at every decline. Read the
+# wall it serves: `outcome/no-burial-without-a-diagnosis` fires on
+# `supersedes` — it is the gate a composer walks through on its way to
+# RE-PROPOSING a line the house was shown and turned down, and it says
+# nothing at all about a decline nobody is re-proposing. So an evening
+# where the owner sweeps thirty stale wrappers must not become a
+# morning where the composer publishes thirty one-line diagnoses about
+# wrappers: that is not the law being honored, it is the feed being
+# flooded, and the insight rank counts every one of them.
+#
+# A decline owes a diagnosis when all three hold:
+#   (a) it still stands as a prior the house was SHOWN and turned down
+#       — the `declines` list above, which is exactly that;
+#   (b) no published INSIGHT cites it yet (`diagnosis_stands`), because
+#       the duty is discharged once and never twice; and
+#   (c) something this run is about to write WOULD RECOMPOSE IT — a
+#       work order or an offered request whose own rows overlap the
+#       prior's evidence, or that names the prior's address outright
+#       (the `supersedes` the composer is about to write).
+# Everything else is listed, with the house's own word, so the composer
+# can read the household's mind without writing a row about it.
+#
+# The overlap is computed over the prior's evidence PLUS the value it
+# served, because a bundle's own value is the one row a recomposition
+# is guaranteed to name again.
+jq --slurpfile orders "$D/work_orders.json" \
+   --slurpfile reqs "$D/offered_requests.json" '
+  ($orders[0] // []) as $ords | ($reqs[0] // []) as $rqs
+  | map(. as $d
+        | (((.evidence // []) + (if .value then [.value] else [] end)) | unique) as $ev
+        | [ $ords[] | . as $o
+            | (([ $o.subject, ($o.material.row.self? // null) ]
+                + [ ($o.material.siblings // [])[].self ]
+                + ($o.write.cite? // [])
+                + [ ($o.write.supersedes? // null) ]
+                + [ ($o.write.offer.offer_id? // null) ])
+               | map(select(. != null)) | unique) as $touch
+            | (($ev - ($ev - $touch)) | unique) as $shared
+            | (($touch | index($d.self)) != null) as $names_prior
+            | select(($shared | length) > 0 or $names_prior)
+            | {kind:"work order", who:$o.probe, at:$o.subject,
+               why:(if $names_prior
+                    then "the order names the declined prior itself — writing it supersedes it"
+                    else "it works the same rows the prior cited: " + ($shared | join(", ")) end)} ] as $byorder
+        | [ $rqs[] | . as $r
+            | (((($r.says // "") | tostring) | contains($d.self))) as $names_prior
+            | select($names_prior
+                     or ($d.value != null and $r.value_id != null
+                         and ($d.value == ("/api/values/" + ($r.value_id | tostring)))))
+            | {kind:"offered request", who:($r.requested_by // "?"), at:$r.self,
+               why:(if $names_prior
+                    then "the pull names the declined prior by address"
+                    else "the pull stands on the same value the prior served (" + ($d.value | tostring) + ")" end)} ] as $byreq
+        | .recomposed_by = ($byorder + $byreq)
+        | .verdict_word = ([ .reasons[]? | .reason | select(. != null and . != "") ] | first)
+        | .note = ([ .reasons[]? | .words | select(. != null and . != "") ] | first)
+        | .house_says = (if .note then "\u201c" + .note + "\u201d"
+                         elif .verdict_word then .verdict_word
+                         else "no reason given" end)
+        | .owed_a_diagnosis = ((.diagnosis_stands | not) and ((.recomposed_by | length) > 0)))
+' "$D/declines.json" > "$D/declines.owed.json" \
+  && mv "$D/declines.owed.json" "$D/declines.json"
+
 # ── the leash: file the anchored extend-ask before it runs out ───────
 ASK='{"filed": false, "why": "the grant is not inside the ask window"}'
 if [ -n "$GRANT_EXP" ] && [ -z "${WAYMARK_NO_ASK:-}" ]; then
@@ -2685,7 +2768,7 @@ jq -n \
     answer_threads:  ($threads[0]  | length),
     index_facts:     ($facts[0]    | length),
     score_bundles:   ($unscored[0] | length),
-    declines_owed_a_diagnosis: ([$declines[0][] | select(.diagnosis_stands|not)] | length),
+    declines_owed_a_diagnosis: ([$declines[0][] | select(.owed_a_diagnosis)] | length),
     advance_arrivals: ($arrivals[0] | length),
     enrich_a_bare_task: ($bare[0] | length),
     # the rework orders the household handed back (waymark-9xn):
@@ -2836,12 +2919,17 @@ jq -n \
   jq -r 'if (.unscored_bundles|length)==0 then "  (none)" else (.unscored_bundles[] | "- \(.self) [\(.state)] \(.goal[0:100])\n    value: \(.value_name // "?")  pieces: \(.pieces|length)  decline words: \([.reasons[]|.reason]|tostring)\n    cite: \(.cite|tostring)") end' "$RUN/manifest.json"
   echo "  (a note's evidence is the whole cite list — a score read off the headline alone is not a judgment)"
   echo
-  echo "## Declines OWED a diagnosis — publish one each, then nothing more"
-  jq -r '[.declines[] | select(.diagnosis_stands|not)] | if length==0 then "  (none — every decline already carries one; DIAGNOSE NOTHING this sitting)" else (.[] | "- \(.self) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])\n    cite: \(.cite|tostring)\n    offer one of: \(if (.offer_candidates|length)==0 then "(no standing row to offer a door on — cite the outcome and offer nothing forward; do not offer a door on the declined prior)" else ([.offer_candidates[] | "\(.self) [\(.kind) \(.state)] tappable doors \((if (.light_doors|length)>0 then .light_doors else ["(none seen — read the row)"] end)|tostring) (all: \(.doors|tostring))"] | join("; ")) end)") end' "$RUN/manifest.json"
-  echo "  (quote the reason row you cite; reasons=[] means say \"no reason given\" and cite the outcome. The offered step is a TAPPABLE door the offered row admits NOW — offers-something-light refuses anything that takes input, prioritize included, so a rank goes in an outcome piece. The declined prior admits none, so expire/retire on it is not a step, it is burial)"
+  echo "## Declines OWED a diagnosis — only a prior something here is about to RECOMPOSE"
+  jq -r '[.declines[] | select(.owed_a_diagnosis)] | if length==0 then "  (none — nothing this run would write recomposes a declined prior, so DIAGNOSE NOTHING this sitting. The duty is the gate in front of a recomposition, not a tax on every verdict — waymark-me9)" else (.[] | "- \(.self) — \(.goal[0:80])\n    the house said: \(.house_says)\(if .verdict_word and .note then " (word: \(.verdict_word))" else "" end)\(if .note then "  — the diagnosis is ALREADY ON THE RECORD: cite the note, do not restate it" else "" end)\n    WOULD BE RECOMPOSED BY: \([.recomposed_by[] | "\(.kind) \(.who) (\(.at)) — \(.why)"] | join("; "))\n    cite: \(.cite|tostring)\(if (.reasons|length)>0 then "  — the verdict_reason row is in that list; quote its word" else "  — no verdict_reason row stands, so the citation is the outcome itself" end)\n    offer one of: \(if (.offer_candidates|length)==0 then "(no standing row to offer a door on — cite the outcome and offer nothing forward; do not offer a door on the declined prior)" else ([.offer_candidates[] | "\(.self) [\(.kind) \(.state)] tappable doors \((if (.light_doors|length)>0 then .light_doors else ["(none seen — read the row)"] end)|tostring) (all: \(.doors|tostring))"] | join("; ")) end)") end' "$RUN/manifest.json"
+  echo "  ONE light door on ONE standing row, off the offer_candidates above — the declined prior is terminal and admits none, so expire/retire on it is not a step, it is burial; offers-something-light refuses anything that takes input, prioritize included, so a rank goes in an outcome piece."
+  echo "  THE FINDING SAYS WHAT THE RECOMPOSITION CHANGES BECAUSE OF THE DECLINE. \"Declined with no reason given.\" is not a finding — it is the manifest line copied out, it fits every row above equally, and a run that publishes it N times has published nothing N times (verify calls that a DIAGNOSIS FLOOD). Where the house left a note, the diagnosis is already on the record: cite it and say what you are doing differently."
   echo
-  echo "## Declines already diagnosed — nothing to do"
-  jq -r '[.declines[] | select(.diagnosis_stands)] | if length==0 then "  (none)" else (.[] | "- \(.self) reasons=\([.reasons[]|.reason]|tostring) — \(.goal[0:80])") end' "$RUN/manifest.json"
+  echo "## Declined, not being recomposed — no diagnosis owed"
+  jq -r '[.declines[] | select(.owed_a_diagnosis|not) | select((.recomposed_by|length)==0)] | if length==0 then "  (none)" else (.[] | "- \(.self) · \(.goal[0:60]) · \(.house_says)\(if .diagnosis_stands then " · already diagnosed" else "" end)") end' "$RUN/manifest.json"
+  echo "  This is the household's mind, read without writing a row. Nothing on this list is owed anything: no insight, no score, no remark. If one of them ever comes back as a recomposition, it moves up to the list above and gets its diagnosis then."
+  echo
+  echo "## Declines already diagnosed, and under recomposition pressure — nothing to do"
+  jq -r '[.declines[] | select(.diagnosis_stands) | select((.recomposed_by|length)>0)] | if length==0 then "  (none)" else (.[] | "- \(.self) · \(.goal[0:60]) · \(.house_says) — its diagnosis stands; recompose freely") end' "$RUN/manifest.json"
   echo
   echo "## Handed back for a rework — YOUR work orders, and they are off the household's feed"
   jq -r '[.standing_outcomes[] | select(.iterate_open and .mine)]
