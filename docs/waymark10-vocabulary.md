@@ -246,6 +246,22 @@ site: the state is declared, `:door` is an action of this kind, `:whose`
 is a schema field, and `:explain` says `{door}`. Advertisement-class — no
 fingerprint facet names it.
 
+An action's `:display {:marks "<rel>"}` says that this verb is answered
+about the row's PARTS before it is answered about the row (waymark-wxk),
+and names the **link rel** whose rows those parts are:
+
+```clojure
+:iterate {… :display {:label "Iterate" :order 3 :marks "pieces"}}
+```
+
+The generic screens read it and nothing else: the feed card opens a
+per-part selection in place before the verb's own note, and `ui_lite.html`
+follows the named rel off the row's declared links. Each part's own
+selection door is found by the `:display {:reasons true}` it already
+advertises, and the words offered are the reason kind's own enum — so no
+application kind or door name reaches either page. Advertisement-class,
+like `:reasons` beside it: it rides no fingerprint facet.
+
 `:views` declares alternate collection views, each its own closed map
 (`waymark10.declaration/view-keys`):
 

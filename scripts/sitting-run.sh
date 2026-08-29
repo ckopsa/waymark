@@ -353,6 +353,58 @@ if [ "$MODE" = "verify" ]; then
     rm -f "$unreworked"
   fi
 
+  # ── THE MARKS, GRADED (waymark-wxk) ───────────────────────
+  # The rework orders the last manifest handed over, read back one
+  # bundle at a time: which of the household's marks this run answered
+  # and which it left standing. It grades by the ROWS, like every
+  # other check here — a DROP is answered by the decline that made it
+  # and needs nothing; a RE-TIME and a REPLACE each want one new piece
+  # staged inside the round, and the round's boundary is the one the
+  # manifest recorded (the bundle's own `reworked_at` at read time), so
+  # a commit that has since moved that stamp does not erase the
+  # evidence. Nothing pairs a replacement to the piece it replaces —
+  # no row says so and this report will not guess — so the arithmetic
+  # is a COUNT, said as a count, beside the marks themselves.
+  if [ -n "$prev" ] && \
+     [ "$(jq '((.rework_orders // []) | length)' "$prev" 2>/dev/null || echo 0)" -gt 0 ]; then
+    marks="$(mktemp)"; : > "$marks"
+    while IFS="$(printf '\t')" read -r msf mbnd; do
+      [ -n "$msf" ] || continue
+      pcs="$(mktemp)"
+      if [ "$(api "$pcs" "/api/outcome_pieces?outcome_id=${msf##*/}&page%5Bsize%5D=100")" = "200" ]; then
+        jq -r --arg self "$msf" --arg b "$mbnd" --slurpfile m "$prev" '
+          ([ $m[0].rework_orders[] | select(.self == $self) ] | first) as $o
+          | [ .data.items[]? ] as $now
+          | ([ $now[] | select(.state == "offered")
+                      | select((.meta.updated_at // "") > $b) ] | length) as $staged
+          | [ $o.marked[] | select(.list != "DROP") ] as $owed
+          | [ $o.keep[].self ] as $kept
+          | [ $now[] | select(.state == "reworked")
+                     | select(.self as $s | ($kept | index($s)) != null) ] as $lost
+          | "MARKS on \($self) \u2014 \($o.marked | length) marked, \($o.keep | length) kept",
+            ($o.marked[]
+             | if .list == "DROP"
+               then "  \(.list) \(.self) \u2014 answered by the decline itself"
+               else "  \(.list) \(.self) \u2014 \(.says[0:70])" end),
+            (if ($owed | length) == 0
+             then "  nothing here was owed a new piece"
+             elif $staged >= ($owed | length)
+             then "  ADDRESSED: \($owed | length) owed a new piece, \($staged) staged this round"
+             else "  NOT ADDRESSED: \($owed | length) owed a new piece, only \($staged) staged this round"
+             end),
+            ($lost[] | "  WITHDREW A KEEP: \(.self) \u2014 the household left that one standing")
+        ' "$pcs" >> "$marks"
+      fi
+      rm -f "$pcs"
+    done < <(jq -r '(.rework_orders // [])[] | "\(.self)\t\(.boundary // "")"' "$prev")
+    if [ -s "$marks" ]; then
+      echo
+      cat "$marks"
+      echo "  A mark is the household picking the piece that needs revision, and the rework door refuses a commit that leaves one unanswered or withdraws a piece they kept (the-marks-are-the-work-order). NOT ADDRESSED here means the round is still owed a new piece: POST /api/outcome_pieces citing the same bundle — the SAME step at a new hour for a RE-TIME, a DIFFERENT step toward the same goal for a REPLACE — and then commit."
+    fi
+    rm -f "$marks"
+  fi
+
   # A SITTING LEAVES NO DIFF. The wisp appends to .beads/interactions.jsonl
   # (a tracked file) and a runner that diffs its tree would carry that
   # residue home as a patch; the snapshot is already gitignored.
@@ -933,6 +985,13 @@ jq --arg me "$PRINCIPAL" '[.[] | select(.state=="offered" or .state=="iterating"
           evidence:(.data.evidence // []),
           composed_by:(.data.composed_by // null),
           plan_revision:(.data.plan_revision // 0),
+          # THE BOUNDARY OF THE ROUND (waymark-wxk): the last commit.
+          # Every mark and every replacement since it belongs to the
+          # round being asked for, which is the same reading the rework
+          # door makes — one fact, not two, so the manifest and the
+          # wall cannot disagree about what counts.
+          reworked_at:(.data.reworked_at // null),
+          iterate_requested_at:(.data.iterate_requested_at // null),
           mine:((.data.composed_by // "") == $me),
           iterate_open:(.state=="iterating")}]' \
    "$R/outcomes.full.json" > "$D/standing_outcomes.json"
@@ -947,6 +1006,84 @@ jq --arg me "$PRINCIPAL" '[.[] | select(.state=="offered" or .state=="iterating"
 jq '[.[] | select(.iterate_open and (.mine | not))
        | {self, goal, composed_by, plan_revision}]' \
    "$D/standing_outcomes.json" > "$D/iterating_not_mine.json"
+
+# ── THE MARKS, AS THE LISTS THEY ARE (waymark-wxk) ───────────────────
+# The owner's ruling: *part of my revising should be picking the pieces
+# that need revision so that the AI can focus its attention.* A note
+# about a whole bundle made this manifest hand over a paragraph and a
+# guess; the marks make it hand over a WORK ORDER PER PIECE, in the
+# five lists the rework door itself is written against.
+#
+# Nothing new is read to build them. A mark IS the piece's own
+# `not_this` plus the quick word filed against it in `verdict_reason`
+# — both already in the snapshot — and the lists are that word:
+#
+#   wrong_time              → RE-TIME  withdraw nothing; stage a NEW
+#                                      piece, same step, new hour
+#   wrong_piece / wrong_way → REPLACE  stage a NEW piece, a different
+#                                      step toward the same goal
+#   never_this              → DROP     nothing to write; the decline
+#                                      already took it out
+#   declined with no word   → DROP     the household said no order
+#                                      beyond "not this one"
+#   still offered           → KEEP     write nothing, and DO NOT
+#                                      withdraw it
+#   what the note asks and no list covers → ADD
+#
+# THE ROUND is everything since the last commit (`reworked_at`), which
+# is the same boundary the door reads: a piece declined BEFORE the
+# iterate was tapped is still this round's mark, because marking and
+# then handing the plan back is the same gesture in the other order.
+# `updated_at` on a piece IS the moment it was answered — a declined
+# piece is terminal and nothing writes it again — and on an OFFERED
+# piece it is the moment it was staged, which is how `staged_this_round`
+# counts the composer's own answer back.
+jq --slurpfile pieces "$R/outcome_pieces.full.json" \
+   --slurpfile reasons "$R/verdict_reasons.full.json" \
+   --slurpfile threads "$D/threads.json" \
+   --arg me "$PRINCIPAL" '
+  ($pieces[0] // []) as $pc | ($reasons[0] // []) as $vr
+  | ($threads[0] // []) as $th
+  | {wrong_time:"RE-TIME", wrong_piece:"REPLACE",
+     wrong_way:"REPLACE", never_this:"DROP"} as $lists
+  | [.[] | select(.iterate_open and .mine)
+      | (.self|split("/")|last) as $oid
+      | .reworked_at as $rw
+      | ($rw // "") as $b
+      | [ $pc[] | select(.data.outcome_id == $oid) ] as $mine
+      | {self, goal, plan_revision,
+         boundary: $b,
+         note: ([ $th[] | select(.subject_kind=="outcome" and .subject_id==$oid)
+                        | .turns[] | select(.said_by != $me) ] | last // null),
+         thread: ("/api/remarks?subject_kind=outcome&subject_id=" + $oid),
+         keep: [ $mine[] | select(.state=="offered")
+                         | select((.meta.updated_at // "") <= $b)
+                 | {self, says:.data.says, write:"nothing — leave it exactly as it stands"} ],
+         staged_this_round: [ $mine[] | select(.state=="offered")
+                                      | select((.meta.updated_at // "") > $b)
+                              | {self, says:.data.says} ],
+         marked: [ $mine[] | select(.state=="declined")
+                           | select((.meta.updated_at // "") > $b)
+                   | . as $p | ($p.self|split("/")|last) as $pid
+                   | ([ $vr[] | select(.data.subject_kind=="outcome_piece"
+                                       and .data.subject_id==$pid
+                                       and .data.verdict=="not_this") ] | first) as $r
+                   | ($r.data.reason // null) as $w
+                   | {self:$p.self, says:$p.data.says, word:$w,
+                      words:($r.data.words // null),
+                      list:($lists[$w // ""] // "DROP"),
+                      write:(if ($lists[$w // ""] // "DROP") == "RE-TIME"
+                             then "POST /api/outcome_pieces — the SAME step at a new hour or on a new day, citing this bundle"
+                             elif ($lists[$w // ""] // "DROP") == "REPLACE"
+                             then "POST /api/outcome_pieces — a DIFFERENT step toward the same goal, citing this bundle"
+                             else "nothing — the decline already took it out of the bundle" end)} ],
+         withdrawn_this_round: [ $mine[] | select(.state=="reworked")
+                                         | select((.meta.updated_at // "") > $b)
+                                 | {self, says:.data.says} ]}
+      | .owed = ([.marked[] | select(.list != "DROP")] | length)
+      | .unanswered = (.owed - (.staged_this_round | length))
+      | .marked_round = ((.marked | length) > 0) ]
+' "$D/standing_outcomes.json" > "$D/rework_orders.json"
 
 # a value must be LIVE to be named; a companion must be current
 # (`says` rides along because value-fit is tested on a value's OWN
@@ -2514,6 +2651,7 @@ jq -n \
   --slurpfile census "$D/uncomposed_census.json" \
   --slurpfile standing "$D/standing_outcomes.json" \
   --slurpfile notmine "$D/iterating_not_mine.json" \
+  --slurpfile reworkorders "$D/rework_orders.json" \
   --slurpfile ask "$D/extend_ask.json" \
   --slurpfile gate "$D/gate.json" \
   --slurpfile chatsel "$D/chat_selection.json" \
@@ -2563,6 +2701,10 @@ jq -n \
     read_this_run: $chatsel[0]
   },
   standing_outcomes: $standing[0],
+  # the marks read as the five lists, one entry per bundle handed back
+  # to THIS composer (waymark-wxk) — the work order the rework door
+  # itself is written against
+  rework_orders: $reworkorders[0],
   iterating_not_mine: $notmine[0],
   uncomposed_census: $census[0],
   uncomposed: ($uncomposed[0] | .[0:60]),
@@ -2693,6 +2835,23 @@ jq -n \
           | if length==0 then "  (none — nothing of yours is being reworked)"
             else (.[] | "- \(.self) [iterating, plan v\(.plan_revision)] \(.goal[0:90])") end' "$RUN/manifest.json"
   echo "  An ITERATING bundle is one a person kept and sent back: the goal is right, the plan is wrong, and it has LEFT THEIR FEED until you answer. Read its thread for the note. Withdraw the pieces that were wrong (POST /api/outcome_pieces/<id>/-/rework — the piece goes reworked, never declined), stage the replacements, then commit with POST /api/outcomes/<id>/-/rework {says}. That commit is the only door back to offered; until it lands, nobody in the house can see the bundle at all. Do not stage a twin, and do not wait for a decline."
+  jq -r '
+    if ((.rework_orders // []) | length) == 0 then empty else
+    (.rework_orders[]
+     | "",
+       "  \u2500 \(.self) \u2014 \(.goal[0:90])",
+       "    THE NOTE: " + (if .note then "\(.note.said_by) said \u201c\(.note.says)\u201d  (\(.note.self))" else "(no turn on the thread \u2014 read \(.thread))" end),
+       "    KEEP \u2014 write nothing, and withdrawing one of these is REFUSED:",
+       (if (.keep|length)==0 then "      (none still standing)"
+        else (.keep[] | "      \u00b7 \(.self) \u2014 \(.says[0:100])") end),
+       (if (.marked|length)==0
+        then "    MARKED: nothing. The note is then the WHOLE order and what changes is your reading of it \u2014 add what it asks, or stand by the plan and say so in says. Both are lawful; the wall stands down."
+        else "    MARKED \u2014 each is an order, and the commit is refused until it is answered:" end),
+       (.marked[] | "      \u00b7 \(.list)  \(.self) \u2014 \(.says[0:90])\n          said \(.word // "no word at all, so it is a DROP")\(if .words then " \u2014 \u201c\(.words)\u201d" else "" end)\n          write: \(.write)"),
+       "    ADD \u2014 whatever the note asks that no list above covers: a NEW piece citing this bundle. Nothing else in the note is an order.",
+       "    THIS ROUND SO FAR: \(.staged_this_round|length) staged, \(.owed) owed" + (if .unanswered > 0 then " \u2014 \(.unanswered) STILL UNANSWERED" else " \u2014 every mark answered" end) + (if (.withdrawn_this_round|length) > 0 then ", \(.withdrawn_this_round|length) withdrawn this round" else "" end))
+    end' "$RUN/manifest.json"
+  echo "  THE MARKS ARE THE ORDER (waymark-wxk). A piece the household declined is a work order and its quick word says which: WRONG TIME is a RE-TIME (the same step at a new hour), WRONG PIECE or NOT THIS WAY is a REPLACE (a different step toward the same goal), NEVER THIS \u2014 or a decline carrying no word at all \u2014 is a DROP that needs nothing more, and a piece still standing is a KEEP you may not withdraw. A RE-TIME and a REPLACE are each a NEW piece staged under the same bundle; you never withdraw the marked piece itself, because a declined piece is already out. POST /api/outcomes/<id>/-/rework is REFUSED by name while a mark is unanswered or a KEEP has been withdrawn, and the refusal lists the offenders with their lists. Where the household marked NOTHING, none of that applies and the note is the whole order."
   echo "  YOU CANNOT PROMISE THIS ONE, YOU CAN ONLY DO IT (waymark-vf8). The REPLY DOOR IS CLOSED on a bundle you could rework: POST /api/remarks on it is refused by name (words-do-not-answer) and the refusal names this door. Your words ride the rework itself — says, required, at most 240 characters, posted as your turn on the thread. And a rework that changes NO piece is a LAWFUL answer: if you read the note and the plan still stands, or you cannot stage what was asked for, commit anyway and say that — it counts the round, puts the bundle back on their feed, and they may then decline it. Leaving it in iterating is the one wrong answer, and next run verify prints HANDED BACK, NOT REWORKED against your name."
   echo
   echo "## Iterating, not yours to rework"

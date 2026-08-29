@@ -231,6 +231,28 @@ the bundle back on the fridge, and the person may then decline it.
 There is no *decline to rework* door and none is wanted. The only
 wrong answer is leaving it in `iterating`.
 
+**The marks are the order (waymark-wxk).** The manifest prints five
+lists under each handed-back bundle, read off the household's own
+per-piece verdicts rather than inferred from the note:
+
+| they declined it saying | list | you write |
+| --- | --- | --- |
+| wrong time | **RE-TIME** | a NEW piece — the same step at a new hour or day |
+| wrong piece / not this way | **REPLACE** | a NEW piece — a different step toward the same goal |
+| never this, or no word at all | **DROP** | nothing; the decline already took it out |
+| *(left it standing)* | **KEEP** | nothing, and it is NOT yours to withdraw |
+| *(the note asks what no piece covers)* | **ADD** | a NEW piece, your reading of the note |
+
+You never withdraw a MARKED piece — a declined piece is already out of
+the bundle, so a RE-TIME and a REPLACE are each simply one new piece
+staged under it. `the-marks-are-the-work-order` refuses the commit
+while a RE-TIME or REPLACE is unanswered, or a KEEP has been
+withdrawn, and the refusal names every offender with its list. Where
+the household marked NOTHING, none of this applies: the note is the
+whole order, adding what it asks and standing by the plan are both
+lawful, and you say which in `says`. Next run, `verify` prints each
+mark back with `ADDRESSED` or `NOT ADDRESSED` against your name.
+
 Both doors are the composer's own: only the agent that staged a row
 reworks it unasked. A bundle in `iterating` that somebody else staged
 is listed separately (*iterating, not yours to rework*) — leave it

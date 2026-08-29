@@ -150,6 +150,12 @@
      never smaller than a fingertip */
   html[data-ui="mobile"] .feed-reasons button.chip.reason { min-height: 38px;
     font-size: 14px; flex: 1 1 auto; }
+  /* and a mark is a thumb (waymark-wxk) — the whole gesture is taps,
+     so every one of them is fingertip-sized on a phone */
+  html[data-ui="mobile"] .feed-mark-chips button.chip.mark { min-height: 38px;
+    font-size: 14px; flex: 1 1 auto; }
+  html[data-ui="mobile"] .feed-marks-foot button.chip { min-height: 40px;
+    font-size: 14px; flex: 1 1 auto; }
   html[data-ui="mobile"] .feed-head h2 { font-size: 17px; }
   html[data-ui="mobile"] .feed-seam-say { font-size: 16px; }
 
