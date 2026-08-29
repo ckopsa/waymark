@@ -474,8 +474,99 @@
   (if (= :system (get-in ctx [:principal :type]))
     (t/allow) (t/deny)))
 
+;; ── the merge: an extension REPLACES per kind, never appends ────────
+;;
+;; THE FIELD FINDING (waymark-ycp, 2026-08-28). The standing composer's
+;; grant carried 74 scope entries for ~20 kinds. `extend-grant` used to
+;; concatenate the ask's scope onto the grant's, and the driver's
+;; anchored extend-ask copies the grant's scope verbatim — so every
+;; renewal doubled the list. `feed.preview_as` (filter-scoped to one
+;; member) appeared several times over, and the NEXT ask was refused at
+;; the door by scope-filters-are-filterable: "only ONE entry may filter
+;; a kind". A refused ask is no ask, so the leash lapsed on its own
+;; clock (18:15Z on the 28th, 14:05Z on the 29th) and every sitting was
+;; dark until a person re-granted by hand. The renewal loop ate itself.
+;;
+;; THE RULING. An extension MERGES per kind — one entry per kind, and
+;; the merged entry is what the grant stores. It is also the HEAL: the
+;; existing scope is folded in on the same pass, so a grant carrying 74
+;; entries collapses to one per kind the first time an approval lands.
+;;
+;;   actions  union — the widening the ask came for
+;;   ids      union, BUT openness absorbs: an entry with no :ids is the
+;;            whole kind (the schema's own help says so), and the whole
+;;            kind swallows any sibling's id list, exactly as
+;;            surface-of already reads it
+;;   hashed   union — a hashing restriction is never absorbed
+;;   filter,  the LAST entry that SPELLS the key decides, and silence
+;;   fields   INHERITS. A narrowing is not dropped because the ask
+;;            forgot to repeat it; an ask that means to drop one says
+;;            so out loud, with an explicit null. (This is the one
+;;            deliberate departure from surface-of's openness-absorbs:
+;;            there, an unfiltered sibling widens the kind. A merge
+;;            writes the leash down permanently, so it keeps the
+;;            narrower reading and leaves the widening path spelled.)
+;;   args     one spec per action, the last spelled winning
+;;
+;; The merge only ever changes the SHAPE of a stored scope. Nothing
+;; downstream cares: surface-of groups by kind before it reads
+;; anything, so 74 entries and 20 conferred the same surface all along
+;; — what the 74 broke was the DOOR the next ask had to walk through.
+
+(defn- scope-name
+  "One name off a scope entry, however the wire spelled it."
+  [x]
+  (cond (nil? x) nil (keyword? x) (name x) :else (str x)))
+
+(defn- union-scope-names
+  "The names across these lists, deduped, first-seen order kept — a
+  merged entry reads in the order a person built it, not sorted."
+  [lists]
+  (into [] (comp cat (keep scope-name) (distinct)) lists))
+
+(defn- spelled
+  "The value of an optional narrowing key, where SILENCE INHERITS and
+  an explicit null clears: the last entry that spells the key decides.
+  Boxed in a vector so `nobody spoke` and `spoke null` stay different
+  answers."
+  [k entries]
+  (when-some [spoke (seq (filter #(contains? % k) entries))]
+    [(get (last spoke) k)]))
+
+(defn- merge-scope-entries
+  "One kind's entries, folded to one."
+  [entries]
+  (let [ids (when-not (some #(nil? (:ids %)) entries)
+              (union-scope-names (map :ids entries)))
+        hashed (union-scope-names (map :hashed entries))
+        specs (remove nil? (mapcat :args entries))
+        last-spec (reduce (fn [m a] (assoc m (scope-name (:action a)) a)) {} specs)
+        args (into [] (comp (map (comp scope-name :action)) (distinct)
+                            (map last-spec))
+                   specs)
+        filt (spelled :filter entries)
+        flds (spelled :fields entries)]
+    (cond-> {:kind (:kind (first entries))
+             :actions (union-scope-names (map :actions entries))}
+      (some? ids)         (assoc :ids ids)
+      (seq hashed)        (assoc :hashed hashed)
+      (seq args)          (assoc :args args)
+      (first filt)        (assoc :filter (first filt))
+      (first flds)        (assoc :fields (first flds)))))
+
+(defn merge-scope
+  "The scopes folded into ONE ENTRY PER KIND, kinds in first-seen
+  order. Called with the grant's stored scope and the approved ask's,
+  it is both the extension and the heal."
+  [& scopes]
+  (let [entries (into [] (comp cat (filter map?)) scopes)
+        by-kind (group-by #(scope-name (:kind %)) entries)]
+    (into [] (comp (map #(scope-name (:kind %))) (distinct)
+                   (map #(merge-scope-entries (by-kind %))))
+          entries)))
+
 (defhandler extend-grant [row inp _ctx]
-  (cond-> (update-in row [:data :scope] (fn [s] (vec (concat s (:scope inp)))))
+  (cond-> (update-in row [:data :scope] merge-scope (:scope inp))
     (:expires_at inp) (assoc-in [:data :expires_at] (:expires_at inp))))
 
 ;; ── the grant resource ──────────────────────────────────────────────
@@ -913,7 +1004,9 @@
   replays instead of double-appending. The named grant EXTENDS when
   it exists (the anchored ask) and is MINTED when it does not (the
   anchorless ask, its id stamped by the approve handler): audience =
-  requester, scope = exactly the approved ask, then accepted through
+  requester, scope = the approved ask MERGED per kind into whatever the
+  grant already held (waymark-ycp — never appended, or the next ask is
+  refused for a capability filter-scoped twice), then accepted through
   the machine's own accept — the ask WAS the audience's consent, and
   the requester's next presentation of the stamped grant id scopes it
   in. A refusal here (the grant revoked between guard and effect) is
@@ -938,7 +1031,10 @@
           (do
             (inv/create! eng :grant
                          (cond-> {:audience (get-in row [:data :requested_by])
-                                  :scope (get-in row [:data :scope])}
+                                  ;; merged at the mint too, so a grant's
+                                  ;; stored scope has ONE shape wherever it
+                                  ;; came from (waymark-ycp)
+                                  :scope (merge-scope (get-in row [:data :scope]))}
                            expires (assoc :expires_at (str expires)))
                          {:principal approvals-actor
                           :id gid

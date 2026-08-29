@@ -65,6 +65,57 @@ the human's tap moves from "re-invite the agent" to "approve the ask
 in the feed". The asking door was always open to a named principal;
 scope still only widens through a human verdict.
 
+### The extension MERGES, and never appends (waymark-ycp)
+
+The loop ate itself twice before this was written down. An anchored
+approval used to CONCATENATE the ask's scope onto the grant's, and the
+ask copies the grant's scope — so every renewal doubled the list. The
+standing composer's grant reached 74 entries for ~20 kinds, with a
+filtered `feed.preview_as` spelled several times over, and the ask door
+refuses a capability filter-scoped twice ("only ONE entry may filter a
+kind"). The next ask was refused; a refused ask is no ask; the leash
+lapsed on its own clock with nobody asking (2026-08-28 18:15Z, again
+2026-08-29 14:05Z), and every sitting was dark until a person
+re-granted by hand.
+
+The ruling, in both halves:
+
+- **The engine.** On approval of an anchored ask the grant's scope
+  becomes the ask's scope MERGED PER KIND with the one already stored —
+  one entry per kind, actions unioned, ids unioned with openness
+  absorbing (an entry naming no ids is the whole kind), `hashed`
+  unioned because a tokenised field is never absorbed, and for the two
+  narrowings that cannot be unioned — `filter` and `fields` — the last
+  entry that SPELLS the key wins while silence INHERITS. A merge writes
+  the leash down permanently, so it keeps the narrower reading; an ask
+  that means to drop a filter says so out loud with an explicit null.
+  The same fold runs on the stored scope, so a grant already carrying
+  74 entries collapses to one per kind the first time an approval
+  lands: the fix is also the heal.
+- **The driver.** It folds the grant's scope the same way BEFORE
+  filing, so a not-yet-healed grant still produces a fileable ask —
+  keeping `actions` on every entry, empty list and all, because the
+  field is required even when empty and a merge that drops it takes a
+  422.
+
+### A leash is short — and the ask says so itself
+
+`asks-are-short` refuses anything past the house's grant-max-ttl of 24
+hours, so the driver caps what it proposes at 24h minus a minute
+(travel time for the request) whatever `WAYMARK_EXTEND_S` says. **The
+daily human tap is the law working, not a bug to route around** — every
+leash expires, and a person deciding once a day is the whole point of
+the leash. What the machine owes is that the ask is always THERE to
+tap.
+
+So the ask can never be quiet. `grant_watch` in the manifest carries
+`stands` (is an ask of ours open?) beside `inside_window` (does that
+matter yet?); when the two disagree the `why` opens with **NO ASK
+STANDS — a person must re-grant:** and carries the door's own refusal
+sentence, and the run prints that as its FIRST LINE, above the title,
+with the instant the grant dies. A refusal nobody read is what turned a
+one-line bug into two dark days.
+
 ## The sitting rides the pulse
 
 The tick keeps the credential alive; it never thinks. The thinking is
