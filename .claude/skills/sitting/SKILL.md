@@ -1,6 +1,6 @@
 ---
 name: sitting
-description: Run one composer SITTING at the waymark door — the clerk's run, which fills forms. Read the house, index the facts people said as insights, answer standing composition requests and fact-shaped turns, take the CLERK work orders as written (enriching a bare task is a whole answer; an outcome, a question, an unmarked rework and a contradiction wait for a reading), do the marked and clocked reworks, honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting" or on the scheduled composer timer; for "run a reading" use /reading.
+description: Run one composer SITTING at the waymark door — the clerk's run, which fills forms. Read the house, open the letters a reading mailed and work their forms first, index the facts people said as insights, answer standing composition requests and fact-shaped turns, take the CLERK work orders as written (enriching a bare task is a whole answer; an outcome, a question, an unmarked rework and a contradiction wait for a reading), do the marked and clocked reworks, honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting" or on the scheduled composer timer; for "run a reading" use /reading.
 ---
 
 # The sitting
@@ -45,6 +45,29 @@ In order, before staging anything:
    every state, `insights` (so a fact is never indexed twice), and
    your own `ranking_notes` (so you know which bundles still carry no
    judgment of yours).
+8. Your own shelf: `letters?to=<you>&state=waiting` — the forms a
+   reading mailed you (waymark-bbb). No grant scope names `:letter`
+   and none can; a letter is two-party own-surface, so it is yours as
+   its addressee.
+
+## 1b. Open the letters — before any other write (waymark-bbb)
+
+The manifest prints them under **FORMS FROM THE LAST READING**: each
+waiting letter, its `POST /api/letters/<id>/-/open` door, and the
+`- do:` lines read out of its body as clerk orders with their door
+and cites. **Knock the open door first** — no body, no scope, and the
+transition is the only record the house keeps that the form was read.
+The reading's journal carries the same block, but a journal is
+private to its own member and the readings run under another
+principal: the letter is the delivery, not a copy.
+
+Then work the lines as written, ahead of the probes' orders. A line
+the manifest marks `ALREADY ANSWERED` is not an order — read the
+standing row, do not write it twice. A line whose row is gone or
+whose door is shut is skipped in the journal, out loud, by name.
+`verify` grades both halves: `LETTER <address>: OPENED` / `STILL
+WAITING`, and `FORM <letter> <subject>: answered by <row>` /
+`UNANSWERED`.
 
 ## 2. Index what people said
 
@@ -87,7 +110,8 @@ row at one door with the material inline. A sitting takes the CLERK
 orders only: a bare task due soonest (an insight), an event inside ten
 days with a task beside it (an insight), a roster companion the last
 week of Gate traffic names (an insight), a journal-only skip, and any
-form a reading left under `notes-for-sittings`. Each order already
+form a reading MAILED you (§ 1b — those ride ahead of the probes').
+Each order already
 carries its subject's address, its material (rows beside it, and what
 the live Gate rigs answered), and the write it expects: the kind, the
 fields, the addresses to cite, the light door to offer. Do them in the

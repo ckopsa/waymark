@@ -145,6 +145,7 @@ as a clerk's form. So there are two runs, two words, two formulas, and
 | who | Jules/Gemini, queued by `scripts/queue-sitting.sh` on the ten-minute timer | a strong model, locally — `claude -p "/reading"`, via `scripts/queue-reading.sh` |
 | when | the timer | morning and evening, or on demand when a sitting has printed a bundle under *Waiting for a reading* |
 | the driver | `scripts/sitting-run.sh` (`WAYMARK_RUN=sitting`, the default) | the same, `WAYMARK_RUN=reading` |
+| the forms | opens the letters on its own shelf and works their lines ahead of the probes' | writes them: a `notes_for_sittings` block, journaled **and mailed** as one letter to `WAYMARK_SITTING_PRINCIPAL` |
 
 **The label.** The driver labels every order — the probes' and the
 owed lists' — by one rule: an order is **`editor`** when its expected
@@ -164,10 +165,12 @@ ceiling is applied per label — `WAYMARK_WORK_ORDERS` clerk orders
 (2), `WAYMARK_EDITOR_ORDERS` editor orders (3) — so an editor's order
 never crowds a clerk's form off the sitting's manifest.
 
-**The sitting's manifest** prints the clerk orders as *YOUR WORK
-ORDERS*, the editor half under **"Waiting for a reading"** (one line
-each, with why it is the editor's), and does not count that half as
-owed. The queued Jules prompt says so in its own words. `verify`
+**The sitting's manifest** prints **FORMS FROM THE LAST READING**
+first (the letters waiting on this principal's shelf, with the open
+door and every `- do:` line as a clerk order — see *The notes cross as
+a letter* below), then the clerk orders as *YOUR WORK ORDERS*, the
+editor half under **"Waiting for a reading"** (one line each, with why
+it is the editor's), and does not count that half as owed. The queued Jules prompt says so in its own words. `verify`
 grades a sitting against the sitting's formula: an editor order prints
 `WAITING FOR A READING — never a fault against one`; an unmarked,
 unclocked rework prints `HANDED BACK, WAITING FOR A READING`; and any
@@ -208,16 +211,46 @@ journal never explains); `SAYS-SO` for a finding with no task, event,
 person, thread or value row behind it; `NOTES FOR SITTINGS: N form(s)
 left`.
 
-**The notes cross through the journal.** A reading ends its journal
-with a `notes_for_sittings` block — one form per line, `- do: <write>
-at <door> citing </api/…> — <the sentence>` — and the next sitting's
-manifest prints each line as a clerk order ahead of the probes',
-dropping a line whose subject a standing row already speaks for. The
-journal is a private own-surface kind (never grantable), so the notes
-reach a sitting only when both runs wear the same principal — which
-today they do (the Fable sittings ran under the gemini principal). A
-reading under a principal of its own would leave notes only its own
-readings can read; that is a recorded limit, not a bug in either run.
+**The notes cross as a LETTER** (waymark-bbb). A reading ends its
+journal with a `notes_for_sittings` block — one form per line, `- do:
+<write> at <door> citing </api/…> — <the sentence>` — and then MAILS
+that block. The journal alone cannot deliver it: a journal is
+ONE-party own-surface (owner sees own, never grantable), so notes left
+there reach only a sitting wearing the reading's own principal, and
+the first reading (the claude agent, 2026-08-29) wrote four forms the
+gemini sittings they were addressed to could never see. The house
+already had the addressed kind for exactly this — `:letter`
+(`workqueue10/src/workqueue10/resources/letters.clj`, waymark-tti.3):
+TWO-party own-surface, where a row is yours iff you wrote it *or* it
+is addressed to you, so writer and addressee each see it with no
+grant, a third agent 404s it by construction, and no scope may name
+the kind at all. Nothing in the kind forbids an agent writing to
+another agent: the create guards are the pace, `letter-author-is-self`
+(the engine stamps you as author and refuses any other `owner`) and
+`letter-to-is-a-member` (`to` resolves to a delivery identity or is
+refused at the door, in one sentence that narrates no roster).
+
+So the reading writes **one letter per run** to
+`WAYMARK_SITTING_PRINCIPAL` (default the gemini member
+`813b24c2-18f3-481a-b62f-6095cd8a81e8`), body the same `- do:` lines,
+title naming the reading — and keeps the block in its journal as its
+own record. The driver reads the sitting's own shelf
+(`GET /api/letters?to=<me>&state=waiting`, no grant needed), prints it
+under **FORMS FROM THE LAST READING** — each letter, its
+`POST /api/letters/<id>/-/open` door, and every line rendered as a
+clerk order with its own door and cites — and puts the unanswered
+lines ahead of the probes' orders. The sitting's formula OPENS each
+letter first: opening is the recipient's act alone and the transition
+is the only audit the house keeps that the form was read. `verify`
+grades both halves, by rows and never by prose: `LETTER <address>:
+OPENED` / `STILL WAITING` / `DISCARDED`, and `FORM <letter>
+<subject>: answered by <row>` / `SKIPPED OUT LOUD` / `UNANSWERED` —
+answered exactly when a row this principal wrote since the mark cites
+the addresses the form's line names. On the reading side it says
+`LETTER FOR THE SITTINGS: sent — <address>` or `NOT SENT`. A sitting
+running under the reading's own principal still reads the journal
+block the old way; the two paths agree, and neither is the other's
+fallback.
 
 **Kept shared, on purpose:** the walls, the journal, the leash, the
 driver. No engine door exists for the reading; everything it does is
