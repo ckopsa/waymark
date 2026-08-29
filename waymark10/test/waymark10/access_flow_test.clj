@@ -4,11 +4,16 @@
   agent's ONE request binds the invitation and files its ask (scope +
   proposed leash); the human approves (four-eyes held); the agent
   acts under the minted grant; the leash dies on schedule and the
-  world 404s again."
+  world 404s again.
+
+  And the loop that keeps it alive (waymark-ycp): the anchored
+  extend-ask, whose approval MERGES per kind into the grant it names
+  instead of appending to it."
   (:require [clojure.test :refer [deftest is testing]]
             [waymark10.dev :as dev]
             [waymark10.dsl :as dsl]
             [waymark10.resource :as r]
+            [waymark10.server.grants :as grants]
             [waymark10.wire :as wire])
   (:import (java.time Instant)))
 
@@ -61,9 +66,26 @@
                                 :one-way "Locking in records the set; nothing external changes."}
                        :display {:label "Lock in"}}}})
 
+;; a kind with a FILTERABLE field, so a scope entry may be
+;; filter-scoped — the shape the merge bug was found on
+;; (feed.preview_as, filtered to one member, appearing twice)
+(r/defresource pool
+  {:kind :access_pool
+   :initial :open
+   :terminal #{:closed}
+   :summary "{data.name} · {state}"
+   :schema [:map
+            [:name [:string {:min 1 :max 80}]]
+            [:tag [:string {:min 1 :max 40}]]]
+   :filterable {:state #{:eq :in} :tag #{:eq}}
+   :flow [[:open :close :closed
+           {:one-way "Closing records it; nothing external changes."
+            :display {:label "Close"}}]]})
+
 (defn- scratch []
   (let [clock (atom (Instant/parse "2026-07-13T08:00:00Z"))
-        eng (dev/scratch! [chore errand memo winch] {:now-fn (fn [] @clock)})]
+        eng (dev/scratch! [chore errand memo winch pool]
+                          {:now-fn (fn [] @clock)})]
     {:clock clock :eng eng :h (dev/handler eng)}))
 
 (defn- req [h method uri {:keys [body headers]}]
@@ -255,3 +277,129 @@
             (is (= 404 (:status (req h :post "/api/access_errands"
                                      {:headers gh
                                       :body {:name "nope"}}))))))))))
+
+;; ── the renewal loop that used to eat itself (waymark-ycp) ──────────
+
+(deftest merge-scope-folds-one-entry-per-kind
+  ;; the rule, on data: what an approval writes into the grant.
+  (testing "actions and ids union; the kind appears once"
+    (is (= [{:kind "task" :actions ["claim" "complete"] :ids ["a" "b"]}]
+           (grants/merge-scope [{:kind "task" :actions ["claim"] :ids ["a"]}]
+                               [{:kind "task" :actions ["complete"] :ids ["b"]}]))))
+  (testing "openness absorbs on ids: an entry naming none is the whole
+            kind, and the whole kind swallows a sibling's list"
+    (is (= [{:kind "task" :actions ["claim"]}]
+           (grants/merge-scope [{:kind "task" :actions ["claim"] :ids ["a"]}]
+                               [{:kind "task" :actions ["claim"]}]))))
+  (testing "a filtered capability stays SINGLE — a second entry is the
+            refusal that started this bead"
+    (is (= [{:kind "feed.preview_as" :actions [] :filter {:member "colton"}}]
+           (grants/merge-scope [{:kind "feed.preview_as" :actions []
+                                 :filter {:member "colton"}}]
+                               [{:kind "feed.preview_as" :actions []
+                                 :filter {:member "colton"}}]))))
+  (testing "silence about a narrowing INHERITS it; an explicit null clears it"
+    (is (= {:member "colton"}
+           (:filter (first (grants/merge-scope
+                            [{:kind "feed.preview_as" :actions []
+                              :filter {:member "colton"}}]
+                            [{:kind "feed.preview_as" :actions ["preview"]}])))))
+    (is (nil? (:filter (first (grants/merge-scope
+                               [{:kind "feed.preview_as" :actions []
+                                 :filter {:member "colton"}}]
+                               [{:kind "feed.preview_as" :actions []
+                                 :filter nil}]))))))
+  (testing "hashing dominates: a tokenised field is never absorbed"
+    (is (= ["email"]
+           (:hashed (first (grants/merge-scope
+                            [{:kind "member" :actions [] :hashed ["email"]}]
+                            [{:kind "member" :actions []}]))))))
+  (testing "the heal: twenty kinds spelled seventy-four times collapse"
+    (let [fat (mapv (fn [i] {:kind (str "k" (mod i 20)) :actions ["read"]})
+                    (range 74))]
+      (is (= 20 (count (grants/merge-scope fat))))
+      (is (= 20 (count (grants/merge-scope fat fat))))))
+  (testing "kinds keep the order a person built them in"
+    (is (= ["b" "a"] (mapv :kind (grants/merge-scope
+                                  [{:kind "b" :actions []}
+                                   {:kind "a" :actions []}
+                                   {:kind "b" :actions ["x"]}]))))))
+
+(deftest the-anchored-extension-never-appends
+  ;; THE FIELD BUG. The standing agent's driver copies its grant's
+  ;; scope into an anchored ask and asks for more time. While the
+  ;; approval APPENDED, the stored scope doubled on every renewal
+  ;; until a filter-scoped kind appeared twice — and then the door
+  ;; refused the next ask ("only ONE entry may filter a kind"), so no
+  ;; ask could stand and the leash lapsed with nobody asking.
+  (let [{:keys [h]} (scratch)
+        ask! (fn [body] (req h :post "/api/approval_requests"
+                             {:headers (agent-headers) :body body}))
+        approve! (fn [resp]
+                   (let [self (:self (json resp))]
+                     (is (= 201 (:status resp)) (pr-str (json resp)))
+                     (is (= 200 (:status (req h :post (str self "/-/approve")
+                                              {:headers human}))))
+                     (get-in (json (req h :get self {:headers human}))
+                             [:data :grant_id])))
+        scope-of (fn [gid] (get-in (json (req h :get (str "/api/grants/" gid)
+                                              {:headers human}))
+                                   [:data :scope]))
+        entry (fn [gid k] (first (filter #(= k (:kind %)) (scope-of gid))))
+        gid (approve!
+             (ask! {:task "Watch the chores and the kitchen pool."
+                    :scope [{:kind "access_chore" :actions ["finish"] :ids ["c1"]}
+                            {:kind "access_pool" :actions []
+                             :filter {:tag "kitchen"}}]}))]
+
+    (testing "the bootstrap ask mints the grant with its scope as asked"
+      (is (some? gid))
+      (is (= 2 (count (scope-of gid)))))
+
+    (testing "the anchored extension merges: one entry per kind, actions
+              and ids unioned, the filtered kind still single"
+      (approve! (ask! {:grant_id gid
+                       :task "A little more of the same."
+                       :scope [{:kind "access_chore" :actions ["drop"] :ids ["c2"]}
+                               {:kind "access_pool" :actions []
+                                :filter {:tag "kitchen"}}]}))
+      (is (= 2 (count (scope-of gid))))
+      (let [e (entry gid "access_chore")]
+        (is (= #{"finish" "drop"} (set (:actions e))))
+        (is (= #{"c1" "c2"} (set (:ids e)))))
+      (is (= {:tag "kitchen"} (:filter (entry gid "access_pool")))))
+
+    (testing "the driver's own loop — copy the grant's scope, ask for
+              more time — is accepted every time, and the scope stands still"
+      (dotimes [_ 3]
+        (approve! (ask! {:grant_id gid
+                         :task "Keep my standing leash: the same scope, another day."
+                         :scope (scope-of gid)
+                         :expires_at "2026-07-14T07:00:00Z"})))
+      (is (= 2 (count (scope-of gid)))
+          "three renewals later, still one entry per kind")
+      (is (= "2026-07-14T07:00:00Z"
+             (str (get-in (json (req h :get (str "/api/grants/" gid)
+                                     {:headers human}))
+                          [:data :expires_at])))
+          "and the time is what the extension came for"))
+
+    (testing "a silent ask does not drop the filter the grant already carries"
+      (approve! (ask! {:grant_id gid
+                       :task "Close pools too."
+                       :scope [{:kind "access_pool" :actions ["close"]}]}))
+      (let [e (entry gid "access_pool")]
+        (is (= ["close"] (:actions e)))
+        (is (= {:tag "kitchen"} (:filter e)))))
+
+    (testing "the door that started it all still refuses a kind
+              filter-scoped twice — the merge is what keeps an ask from
+              ever spelling one"
+      (let [resp (ask! {:grant_id gid
+                        :task "Two filters on one kind."
+                        :scope [{:kind "access_pool" :actions []
+                                 :filter {:tag "kitchen"}}
+                                {:kind "access_pool" :actions []
+                                 :filter {:tag "garage"}}]})]
+        (is (= 409 (:status resp)))
+        (is (re-find #"cannot be filter-scoped" (str (:detail (json resp)))))))))

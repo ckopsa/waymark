@@ -50,7 +50,8 @@
 #
 # Optional: WAYMARK_BASE_URL (https://work.kopsa.info),
 # WAYMARK_SITTING_DIR (.sitting), WAYMARK_ASK_WINDOW_S (43200),
-# WAYMARK_EXTEND_S (86400), WAYMARK_MAX_PAGES (5),
+# WAYMARK_EXTEND_S (86400, and capped there: the door refuses a leash
+# longer than 24 hours), WAYMARK_MAX_PAGES (5),
 # WAYMARK_MAX_HYDRATE (120), WAYMARK_NO_GATE_PROBE (unset — set it to
 # skip the one-read-per-rig Gate liveness probe AND the Gate material
 # the work-order probes fetch), WAYMARK_WORK_ORDERS (2 — the ceiling on
@@ -76,6 +77,18 @@ AGENT="${WAYMARK_AGENT:-gemini}"
 SITDIR="${WAYMARK_SITTING_DIR:-$ROOT/.sitting}"
 ASK_WINDOW="${WAYMARK_ASK_WINDOW_S:-43200}"
 EXTEND="${WAYMARK_EXTEND_S:-86400}"
+# THE LEASH CAP IS LAW AT THE DOOR (waymark-ycp). asks-are-short
+# refuses anything past the house's grant-max-ttl (24h): "A leash is
+# short — at most 24 hours; this ask runs to <t>." A refused ask is NO
+# ask, and the grant then lapses on its own clock with nobody asking —
+# which is exactly how the standing composer went dark twice. So the
+# proposal is capped here whatever the runner asked for, a minute
+# inside the ceiling to leave the request its own travel time. The
+# daily human tap is the law working, not a bug to route around: every
+# leash expires. What the driver owes is that the ask always STANDS.
+case "$EXTEND" in ''|*[!0-9]*) EXTEND=86400 ;; esac
+EXTEND_CAP=$(( 86400 - 60 ))
+if [ "$EXTEND" -gt "$EXTEND_CAP" ]; then EXTEND="$EXTEND_CAP"; fi
 MAXPAGES="${WAYMARK_MAX_PAGES:-5}"
 MAXHYDRATE="${WAYMARK_MAX_HYDRATE:-120}"
 # the household zone, hoisted here because BOTH halves need it: the
@@ -144,6 +157,56 @@ api() { # api <outfile> <path> — GET, echoes the status code, NEVER aborts.
   return 0
 }
 refusal() { jq -r '(.detail // .title // .error // "no sentence came back") | tostring' "$1" 2>/dev/null || cat "$1"; }
+
+# ── ONE ENTRY PER KIND, or the ask is refused (waymark-ycp) ──────────
+#
+# THE FIELD BUG. This driver copies the grant's scope into its anchored
+# extend-ask. The engine used to APPEND the approved ask's scope onto
+# the grant's, so every renewal doubled the list: 74 entries for ~20
+# kinds, with feed.preview_as (filter-scoped to one member) spelled
+# several times over. The ask door refuses a capability filter-scoped
+# twice — "only ONE entry may filter a kind" — so the next ask was
+# refused, no ask stood, and the leash lapsed with nobody asking
+# (2026-08-28 18:15Z, 2026-08-29 14:05Z; every sitting dark until a
+# person re-granted by hand).
+#
+# The engine now merges rather than appends, which heals the stored
+# scope. This is the driver's half: whatever shape the grant is IN
+# right now, the ask it files is folded to one entry per kind first, so
+# a grant that has not been healed yet still gets a fileable ask. The
+# fold is the engine's rule, in jq:
+#
+#   actions  unioned, and ALWAYS PRESENT — "actions" is required even
+#            when empty; a merge that drops it on a read-only kind
+#            takes a 422
+#   ids      unioned, but openness absorbs: one entry naming no ids is
+#            the whole kind, and the whole kind swallows the rest
+#   hashed   unioned — a tokenised field is never absorbed
+#   filter,  the last entry that SPELLS the key wins, and silence
+#   fields   inherits: a narrowing is never dropped by forgetting to
+#            repeat it
+#   args     one spec per action, the last spelled winning
+SCOPE_MERGE_JQ='
+  def dedup: reduce .[] as $x ([]; if ((. | index($x)) | type) == "number" then . else . + [$x] end);
+  def merge_scope:
+    (. // []) as $s
+    | ([ $s[] | .kind ] | dedup) as $ks
+    | [ $ks[] as $k
+        | ([ $s[] | select(.kind == $k) ]) as $es
+        | ({kind: $k, actions: ([ $es[] | (.actions // [])[] ] | dedup)}
+           + (if ([ $es[] | select(has("ids") and (.ids != null)) ] | length) == ($es | length)
+              then {ids: ([ $es[] | .ids[] ] | dedup)} else {} end)
+           + (([ $es[] | select(has("hashed") and (.hashed != null)) | .hashed[] ] | dedup) as $h
+              | if ($h | length) > 0 then {hashed: $h} else {} end)
+           + (([ $es[] | select(has("filter")) ] | last) as $f
+              | if ($f == null or $f.filter == null) then {} else {filter: $f.filter} end)
+           + (([ $es[] | select(has("fields")) ] | last) as $g
+              | if ($g == null or $g.fields == null) then {} else {fields: $g.fields} end)
+           + (([ $es[] | select(has("args") and (.args != null)) | .args[] ]) as $as
+              | if ($as | length) == 0 then {}
+                else {args: ([ $as[] | .action ] | dedup
+                             | map(. as $a | ([ $as[] | select(.action == $a) ] | last)))} end)) ];
+'
 
 # ── two GETs, because a bearer and a grant are two separate things ───
 # /api/-/welcome answers to the BEARER and shows the agent its standing
@@ -3708,8 +3771,8 @@ jq -s --argjson n "$REVIEW_N" --arg last "$LAST_READING" --slurpfile notes "$D/n
 # Four eyes hold whatever the grant says: a row THIS principal wrote is
 # never its own to dismiss, and both runs may wear one principal.
 jq -n --slurpfile grant "$R/grant.json" --slurpfile ins "$R/insights.full.json" \
-      --arg me "$PRINCIPAL" --arg gid "$GRANT" '
-  (($grant[0].data.scope // $grant[0].scope) // []) as $scope
+      --arg me "$PRINCIPAL" --arg gid "$GRANT" "$SCOPE_MERGE_JQ"'
+  ((($grant[0].data.scope // $grant[0].scope) // []) | merge_scope) as $scope
   | [ {kind:"insight", action:"dismiss"}, {kind:"person", action:"dismiss"},
       {kind:"ranking_note", action:"dismiss"}, {kind:"outcome", action:"not_this_week"} ] as $doors
   | ([ ($ins[0] // [])[] | select(.state == "published")
@@ -3728,26 +3791,42 @@ jq -n --slurpfile grant "$R/grant.json" --slurpfile ins "$R/insights.full.json" 
                    + (if .kind == "insight" and ($thin | length) > 0 then {ids:[ $thin[] | .id ]} else {} end) ]),
      body: {grant_id:$gid,
             task:("Let the reading answer thin and false rows: " + ([ $missing[] | .kind + "." + .action ] | join(", ")) + " on the rows named, the same leash otherwise."),
-            scope: ($scope + [ $missing[] | {kind:.kind, actions:[.action]}
-                                + (if .kind == "insight" and ($thin | length) > 0 then {ids:[ $thin[] | .id ]} else {} end) ])}}
+            scope: (($scope + [ $missing[] | {kind:.kind, actions:[.action]}
+                                 + (if .kind == "insight" and ($thin | length) > 0 then {ids:[ $thin[] | .id ]} else {} end) ])
+                    | merge_scope)}}
 ' > "$D/review_ask.json" 2>>"$PROBE_ERRS" \
   || echo '{"doors":[],"thin_findings":[],"scope_add":[],"body":null}' > "$D/review_ask.json"
 
 # ── the leash: file the anchored extend-ask before it runs out ───────
-ASK='{"filed": false, "why": "the grant is not inside the ask window"}'
-if [ -n "$GRANT_EXP" ] && [ -z "${WAYMARK_NO_ASK:-}" ]; then
-  left=$(( $(to_s "$GRANT_EXP") - $(now_s) ))
-  if [ "$left" -lt "$ASK_WINDOW" ]; then
+#
+# THE ASK MUST NEVER BE QUIET (waymark-ycp). Every field the manifest
+# carries here answers one question: does an ask STAND? `stands` is
+# that answer, `inside_window` is whether it matters yet, and when the
+# two disagree the `why` opens with NO ASK STANDS and carries the
+# door's own sentence — because the failure mode this bead was filed
+# for is a refusal nobody read, followed by a leash that lapsed on
+# schedule with every sitting dark behind it.
+LEFT=$(( $(to_s "${GRANT_EXP:-1970-01-01T00:00:00Z}") - $(now_s) ))
+ASK='{"filed": false, "stands": false, "inside_window": false, "why": "the grant is not inside the ask window"}'
+if [ -n "$GRANT_EXP" ] && [ "$LEFT" -lt "$ASK_WINDOW" ]; then
+  if [ -n "${WAYMARK_NO_ASK:-}" ]; then
+    ASK='{"filed": false, "stands": false, "inside_window": true, "why": "NO ASK STANDS — a person must re-grant: the leash is inside the ask window and WAYMARK_NO_ASK is set on this runner, so nothing was filed"}'
+  else
     open_n="$(jq '[.[] | select(.state=="offered")] | length' "$R/approval_requests.json")"
     if [ "$open_n" -gt 0 ]; then
       ASK="$(jq -nc --arg id "$(jq -r '[.[]|select(.state=="offered")][0].self' "$R/approval_requests.json")" \
-        '{filed:false, why:"an extend-ask of ours is already offered and waiting for a human tap", ask:$id}')"
+        '{filed:false, stands:true, inside_window:true,
+          why:"an extend-ask of ours is already offered and waiting for a human tap", ask:$id}')"
     else
-      hours=$(( EXTEND / 3600 ))
+      # rounded, because the cap shaves a minute off the day: an ask
+      # for 86340 seconds is still "another 24 hours" to a reader
+      hours=$(( (EXTEND + 1800) / 3600 ))
       # a READING's extend-ask carries the review doors with it
       # (waymark-nl0): the same one-ask-at-a-time law, one body, and
       # the task names exactly what widens so the person's tap is an
-      # informed one. A sitting's ask is the scope copied, as ever.
+      # informed one. A sitting's ask is the scope copied, as ever —
+      # copied MERGED (waymark-ycp), one entry per kind, or the door
+      # refuses a capability filter-scoped twice and no ask stands.
       if [ "$RUN_MODE" = "reading" ] && [ "$(jq '(.scope_add // []) | length' "$D/review_ask.json" 2>/dev/null || echo 0)" -gt 0 ]; then
         body="$(jq -nc --arg g "$GRANT" --argjson hours "$hours" \
                        --slurpfile ra "$D/review_ask.json" \
@@ -3759,7 +3838,7 @@ if [ -n "$GRANT_EXP" ] && [ -z "${WAYMARK_NO_ASK:-}" ]; then
                   scope:$ra[0].body.scope, expires_at:$e}')"
       else
         body="$(jq -nc --arg g "$GRANT" --arg t "Keep my standing leash: the same scope, another $hours hours." \
-                       --argjson s "$(jq -c '.data.scope // .scope' "$R/grant.json")" \
+                       --argjson s "$(jq -c "$SCOPE_MERGE_JQ"' (.data.scope // .scope) | merge_scope' "$R/grant.json")" \
                        --arg e "$(iso "$(( $(now_s) + EXTEND ))")" \
                 '{grant_id:$g, task:$t, scope:$s, expires_at:$e}')"
       fi
@@ -3768,16 +3847,21 @@ if [ -n "$GRANT_EXP" ] && [ -z "${WAYMARK_NO_ASK:-}" ]; then
              -H "Authorization: Bearer $TOKEN" -H "X-Waymark-Grant: $GRANT" \
              -H "Content-Type: application/json" -d "$body")"
       if [ "$c" = "201" ] || [ "$c" = "200" ]; then
-        ASK="$(jq -c '{filed:true, ask:.self, state:.state,
+        ASK="$(jq -c '{filed:true, stands:true, inside_window:true, ask:.self, state:.state,
                        why:"the leash is inside the ask window; a human taps this to extend it in place"}' "$out")"
       else
+        # the door's own sentence, carried where the model and the
+        # human both read it — never swallowed
         ASK="$(jq -nc --arg c "$c" --arg s "$(refusal "$out")" \
-               '{filed:false, why:("the extend-ask was refused (HTTP " + $c + "): " + $s)}')"
+               '{filed:false, stands:false, inside_window:true, door_says:$s,
+                 why:("NO ASK STANDS — a person must re-grant: the extend-ask was refused (HTTP " + $c + "): " + $s)}')"
       fi
       rm -f "$out"
     fi
   fi
 fi
+ASK="$(printf '%s' "$ASK" | jq -c --arg e "${GRANT_EXP:-}" --argjson l "$LEFT" \
+        '. + {lapses_at:$e, seconds_left:$l}')"
 echo "$ASK" > "$D/extend_ask.json"
 
 # ── the manifest: the one file the model reads ───────────────────────
@@ -3786,7 +3870,7 @@ jq -n \
   --arg principal "$PRINCIPAL" --arg display "$DISPLAY" \
   --arg grant "$GRANT" --arg gstate "$GRANT_STATE" --arg gexp "$GRANT_EXP" \
   --arg owner "$OWNER" \
-  --argjson left "$(( $(to_s "${GRANT_EXP:-1970-01-01T00:00:00Z}") - $(now_s) ))" \
+  --argjson left "$LEFT" \
   --slurpfile reads <(jq -s '.' "$READS") \
   --slurpfile requests "$D/offered_requests.json" \
   --slurpfile threads "$D/unanswered_threads.json" \
@@ -3919,6 +4003,17 @@ jq -n \
 
 # the same thing in the sitting's own words, for the model to read first
 {
+  # FIRST LINE, ABOVE THE TITLE (waymark-ycp): inside the ask window
+  # with no ask standing, this run is the last one — or close to it —
+  # before every door in the house answers 404. It is not a footnote
+  # under the grant line; a person has to act, and the run says so
+  # before it says anything else.
+  jq -r 'if (.grant_watch.inside_window == true) and (.grant_watch.stands != true)
+         then "!! LEASH WARNING · " + .grant_watch.why
+              + " · the grant dies at " + (.grant_watch.lapses_at // "?")
+              + " (in " + (((.grant_watch.seconds_left // 0) / 3600 * 10 | floor) / 10 | tostring) + "h)"
+              + " — after that every read here is a 404 until a person approves an ask or re-grants by hand.\n"
+         else empty end' "$RUN/manifest.json"
   if [ "$RUN_MODE" = "reading" ]; then
     echo "# The house, read at $STARTED — a READING (the editor's run; the law is READING.md)"
   else
@@ -4096,7 +4191,7 @@ jq -n \
               ($a.thin_findings[] | "    · \(.self) — \(.finding)")
          else "  (no thin published finding by another hand — nothing mechanical to dismiss)" end),
         (if ($a.scope_add | length) > 0
-         then "  THE ASK that opens the absent doors — anchored to this grant, on rows by id where the review names them, never the kind whole. Inside the ask window the driver files it as the one extend-ask (grant_watch above says whether it did); otherwise, when you hold a row to act on and no ask of yours stands, POST /api/approval_requests with this body (add expires_at = the grant own expiry or later) and REPORT THE ASK ID:",
+         then "  THE ASK that opens the absent doors — anchored to this grant, on rows by id where the review names them, never the kind whole. Inside the ask window the driver files it as the one extend-ask (grant_watch above says whether it did); otherwise, when you hold a row to act on and no ask of yours stands, POST /api/approval_requests with this body (add expires_at, AT MOST 24 HOURS OUT — a leash is short, and the door refuses a longer one) and REPORT THE ASK ID:",
               "    \($a.body | tojson)"
          else "  (every review door is already in the leash)" end)' "$RUN/manifest.json"
     echo "  An ask decides nothing — a person taps it in the feed. Never a second ask while one stands; never a door the ask did not open."

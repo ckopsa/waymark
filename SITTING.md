@@ -478,6 +478,13 @@ in the manifest under `grant_watch`. That ask decides nothing: a human
 taps it in the feed. **Report the ask id** so somebody knows to look.
 Never widen the scope, never file a second ask while one stands.
 
+When `grant_watch.stands` is false inside the window, NO ASK STANDS:
+the `why` carries the door's own refusal sentence and the run opens
+with a LEASH WARNING above its title. Nothing you can do from here
+fixes that — **say it, first thing, in your report**, with the sentence
+the door gave and the instant the grant dies. A person has to approve
+an ask or re-grant by hand, or the next sitting reads a house of 404s.
+
 ## What a run never does
 
 No git commits, no pushes, no PRs, no edits to this repository, no
