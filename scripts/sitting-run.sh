@@ -15,6 +15,25 @@
 #   scripts/sitting-run.sh            # read the house, write the manifest
 #   scripts/sitting-run.sh verify     # what did the sitting actually write?
 #
+# ONE DRIVER, TWO RUNS (waymark-nl0). WAYMARK_RUN=sitting (default) or
+# reading. Same snapshot, same walls, same leash, same journal; what
+# differs is which orders the run owns. Every order the probes and the
+# owed lists produce is LABELED clerk or editor by one rule: an order
+# is `editor` when its expected write is an outcome, an unmarked
+# rework, an answer to a person's question, an extra, or a
+# contradiction between rows; `clerk` when the write is one row at one
+# door with the material inline. A SITTING (the clerk's run, on the
+# timer) takes the clerk orders and prints the editor orders under
+# "Waiting for a reading", not counted as owed. A READING (the editor's
+# run, morning/evening or on demand) takes both, opens with THE HOUSE
+# BRIEF, carries the REVIEW of the sittings since the last reading
+# (their verify grade lines, stored per run dir by `verify`), and
+# closes with the one-extra paragraph. `verify` grades against the
+# run's own formula: a sitting is never faulted for an editor order; a
+# reading is faulted (printed, never blocked) for an editor order it
+# neither answered nor skipped out loud, and for an extra that is
+# uncited or a twin.
+#
 # It writes NOTHING to the engine but one thing: when the leash is
 # nearly out it files the anchored extend-ask that
 # standing-agent-tick.sh files, in the same words. That ask decides
@@ -35,9 +54,13 @@
 # WAYMARK_MAX_HYDRATE (120), WAYMARK_NO_GATE_PROBE (unset — set it to
 # skip the one-read-per-rig Gate liveness probe AND the Gate material
 # the work-order probes fetch), WAYMARK_WORK_ORDERS (2 — the ceiling on
-# how many work orders the manifest presents), WAYMARK_THREADS (4 — how
+# how many CLERK work orders the manifest presents), WAYMARK_EDITOR_ORDERS
+# (3 — the same ceiling on editor orders), WAYMARK_THREADS (4 — how
 # many of the household's conversations a sitting reads; the newest
-# four with activity in the window, groups included).
+# four with activity in the window, groups included),
+# WAYMARK_BRIEF_LINES (80 — the cap on the house brief a reading opens
+# with), WAYMARK_REVIEW_SITTINGS (6 — how many graded sittings a
+# reading reviews), WAYMARK_RUN (sitting|reading — see above).
 #
 # A refusal is the end of the run: this script never knocks, never
 # spends re-entry, never invents another way in. It prints the door's
@@ -62,8 +85,20 @@ HOUSE_TZ="${WAYMARK_HOUSE_TZ:-America/Denver}"
 
 MODE="${1:-read}"
 case "$MODE" in read|verify) ;; -h|--help|help)
-  sed -n '2,45p' "${BASH_SOURCE[0]}"; exit 0 ;;
+  sed -n '2,65p' "${BASH_SOURCE[0]}"; exit 0 ;;
   *) echo "usage: $(basename "$0") [read|verify]" >&2; exit 2 ;; esac
+# WHICH RUN THIS IS (waymark-nl0): the clerk's sitting or the editor's
+# reading. One driver, one snapshot; the label on every order and the
+# rendering differ, and verify grades against the run's own formula.
+RUN_MODE="${WAYMARK_RUN:-sitting}"
+case "$RUN_MODE" in sitting|reading) ;;
+  *) echo "WAYMARK_RUN is '$RUN_MODE' — a run is a sitting or a reading, nothing else" >&2; exit 2 ;; esac
+EDITOR_ORDERS_N="${WAYMARK_EDITOR_ORDERS:-3}"
+case "$EDITOR_ORDERS_N" in ''|*[!0-9]*) EDITOR_ORDERS_N=3 ;; esac
+BRIEF_LINES="${WAYMARK_BRIEF_LINES:-80}"
+case "$BRIEF_LINES" in ''|*[!0-9]*) BRIEF_LINES=80 ;; esac
+REVIEW_N="${WAYMARK_REVIEW_SITTINGS:-6}"
+case "$REVIEW_N" in ''|*[!0-9]*) REVIEW_N=6 ;; esac
 
 command -v jq   >/dev/null || { echo "jq is required — apt-get install -y jq" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
@@ -156,18 +191,15 @@ STARTED="$(iso "$(now_s)")"
 # ══════════════════════════════════════════════════════════════════
 # It leaves no snapshot of its own: a verify that minted a run
 # directory would move the very "since" mark it reads.
-if [ "$MODE" = "verify" ]; then
-  rm -f "$WHO"
-  SINCE="${WAYMARK_SINCE:-}"
-  # the previous manifest is read for TWO things now — the "since" mark
-  # and the work orders this run was handed — so it is found whether or
-  # not WAYMARK_SINCE overrode the mark.
-  prev="$(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | sort | tail -n 1 || true)"
-  if [ -z "$SINCE" ] && [ -n "$prev" ]; then
-    SINCE="$(jq -r '.run.started_at' "$prev")"
-  fi
-  [ -n "$SINCE" ] || SINCE="$(iso "$(( $(now_s) - 7200 ))")"
-  echo "what $DISPLAY ($PRINCIPAL) wrote at $BASE since $SINCE"
+verify_run() {
+  # THE RUN'S OWN FORMULA (waymark-nl0): the manifest recorded which
+  # run it was, and every grade below reads against that. A sitting is
+  # never faulted for an editor order — it was printed under "Waiting
+  # for a reading" and never counted as owed — and a reading is faulted
+  # for one it neither answered nor skipped out loud.
+  local PREV_MODE
+  PREV_MODE="$([ -n "$prev" ] && jq -r '.run.mode // "sitting"' "$prev" 2>/dev/null || echo sitting)"
+  echo "what $DISPLAY ($PRINCIPAL) wrote at $BASE since $SINCE — graded as a $PREV_MODE"
   echo
   wrote=0
   check() { # check <label> <path> <states...>
@@ -323,24 +355,115 @@ if [ "$MODE" = "verify" ]; then
   # related. Nothing else grades it: the manifest named the subject,
   # the write and the citation, so answering is a fact about evidence,
   # which a script can check and a report cannot fake.
+  # WHAT THE JOURNAL SAID OUT LOUD. A skip is lawful only when the
+  # journal names it, so the bodies written since the mark are read
+  # once here and every grade that asks "was it said" asks this text.
+  jtext="$(mktemp)"; : > "$jtext"
+  for st in written amended; do
+    jout="$(mktemp)"
+    if [ "$(api "$jout" "/api/journals?owner=$PRINCIPAL&state=${st}&page%5Bsize%5D=100")" = "200" ]; then
+      jq -r --arg s "$SINCE" '.data.items[]? | select((.meta.updated_at // "") >= $s)
+                               | ((.fields.title // "") + "\n" + (.fields.body // ""))' "$jout" >> "$jtext" 2>/dev/null || true
+    fi
+    rm -f "$jout"
+  done
   if [ -n "$prev" ] && [ "$(jq '(.work_orders // []) | length' "$prev" 2>/dev/null || echo 0)" -gt 0 ]; then
     echo
-    jq -rs --slurpfile m "$prev" --arg s "$SINCE" --arg me "$PRINCIPAL" '
+    jq -rs --slurpfile m "$prev" --arg s "$SINCE" --arg me "$PRINCIPAL" \
+           --arg mode "$PREV_MODE" --rawfile jt "$jtext" '
       . as $rows
       | [ $rows[] | select(.at >= $s) | select(.by == $me) ] as $mine
       | (($m[0].work_orders) // [])[]
       | . as $o
       | [ $mine[] | select((.cites | index($o.subject)) != null) | .self ] as $hits
-      | if (($o.write.kind // "") == "journal")
-        then "ORDER \($o.probe) \($o.subject): JOURNAL-ONLY — no door write was asked (no live value carried it); it is answered in the journal or not at all"
+      | (($o.label // "clerk") == "editor") as $ed
+      | (($jt | contains($o.subject)) or ($jt | contains($o.subject | split("/") | last))) as $said
+      | (if $ed then "EDITOR ORDER" else "ORDER" end) as $word
+      | if $ed and $mode == "sitting"
+        then "\($word) \($o.probe) \($o.subject): WAITING FOR A READING — not for a sitting to answer, and never a fault against one"
+        elif (($o.write.kind // "") == "journal")
+        then "\($word) \($o.probe) \($o.subject): JOURNAL-ONLY — no door write was asked (no live value carried it); it is answered in the journal or not at all"
         elif ($hits | length) > 0
-        then "ORDER \($o.probe) \($o.subject): answered by \($hits | join(", "))"
-        else "ORDER \($o.probe) \($o.subject): UNANSWERED"
+        then "\($word) \($o.probe) \($o.subject): answered by \($hits | join(", "))"
+        elif $said
+        then "\($word) \($o.probe) \($o.subject): SKIPPED OUT LOUD — the journal names it"
+        elif $ed
+        then "\($word) \($o.probe) \($o.subject): UNANSWERED AND UNSAID — a reading answers an editor order or skips it out loud in the journal; this one did neither"
+        else "\($word) \($o.probe) \($o.subject): UNANSWERED"
         end' "$twins" 2>/dev/null
     jq -r 'if .crowd_out then "  CROWD-OUT, as the manifest said it: " + .crowd_out.says else empty end' "$prev"
     echo "  An order left UNANSWERED is only a failure if it could honestly have been answered — a Gate rig that refused, an event that needed nothing, a value with no goal in it are all lawful skips. The journal is where a skip is said out loud; an UNANSWERED order and a silent journal is a run that ignored its assignment."
   fi
-  rm -f "$twins"
+
+  # ── SAYS-SO (waymark-frv) ─────────────────────────────────────────
+  # A finding whose evidence is only a remark and an outcome has no
+  # house row behind it: it indexed what somebody SAID, which is the
+  # exact shape of the false fact a weak model publishes when it
+  # answers a question from the question. The contradiction itself
+  # (a finding against a task's detail) cannot be checked mechanically;
+  # this half can.
+  jq -rs --arg s "$SINCE" --arg me "$PRINCIPAL" '
+    . as $rows
+    | [ $rows[] | select(.kind == "insight") | select(.at >= $s) | select(.by == $me) ][]
+    | . as $i
+    | ([ $i.evidence[] | select(test("^/api/(tasks|events|people|threads|values|chore_runs|media|task_lists)/")) ] | length) as $house
+    | select($house == 0 and (($i.evidence | length) > 0))
+    | "SAYS-SO: \($i.self) — cites \($i.evidence | join(", ")) and no task, event, person, thread or value row: a fact with nothing in the house behind it. Read the rows the thread is about before it stands as the record."' \
+    "$twins" 2>/dev/null || true
+
+  # ── THE EXTRA (waymark-mqo), a reading's freedom, graded ──────────
+  # A reading may write ONE row the manifest did not order: cited to
+  # the rows it read, distinct from what stands, with a sentence in the
+  # journal on why it was worth a row. A row that answers nothing in
+  # the manifest is an extra by definition — it cites no order subject,
+  # no thread subject, no handed-back bundle, no offered request, no
+  # owed decline. One and cited and not a twin is EXTRA; anything else
+  # is FILLER, and a sitting has no extra at all, so on a sitting every
+  # such row is filler by the ceiling.
+  if [ -n "$prev" ]; then
+    extras="$(jq -rs --slurpfile m "$prev" --arg s "$SINCE" --arg me "$PRINCIPAL" \
+                     --arg mode "$PREV_MODE" --rawfile jt "$jtext" --arg faults "$faults" '
+      . as $rows
+      | ($m[0]) as $mf
+      | ([ ($mf.work_orders // [])[] | .subject ]
+         + [ ($mf.work_orders // [])[] | (.write.cite // [])[] ]
+         + [ ($mf.unanswered_threads // [])[] | "/api/" + .subject_kind + "s/" + .subject_id ]
+         + [ ($mf.unanswered_threads // [])[] | .last.self ]
+         + [ ($mf.rework_orders // [])[] | .self ]
+         + [ ($mf.offered_requests // [])[] | .self ]
+         + [ ($mf.declines // [])[] | select(.owed_a_diagnosis) | .cite[] ]
+         + [ ($mf.candidate_facts // [])[] | .self ]
+         | map(select(. != null)) | unique) as $owed
+      | [ $rows[] | select(.kind == "outcome" or .kind == "insight")
+                  | select(.at >= $s) | select(.by == $me)
+                  | select(([ .cites[] | . as $c | select(($owed | index($c)) != null) ] | length) == 0) ] as $ex
+      | if ($ex | length) == 0
+        then (if $mode == "reading" then "EXTRA: none — lawful, and the journal says why or it says nothing" else empty end)
+        elif $mode != "reading"
+        then ($ex[] | "FILLER: \(.self) answers nothing the manifest ordered or owed — a sitting has no extra; the orders are the ceiling")
+        elif ($ex | length) > 1
+        then ("FILLER: \($ex | length) rows beyond the orders — \([ $ex[] | .self ] | join(", ")) — and a reading gets ONE extra, or none")
+        else ($ex[0] | . as $x
+              | if (($x.evidence | length) == 0) then "FILLER: \($x.self) — the extra cites nothing"
+                elif ($faults | contains($x.self)) then "FILLER: \($x.self) — the extra is a twin (see TWIN above)"
+                elif (($jt | contains($x.self)) or ($jt | contains($x.self | split("/") | last)) | not)
+                then "EXTRA: cited, distinct — \($x.self) — but the journal never says why it was worth a row"
+                else "EXTRA: cited, distinct — \($x.self)" end)
+        end' "$twins" 2>/dev/null || true)"
+    if [ -n "$extras" ]; then echo; echo "$extras"; fi
+  fi
+
+  # ── NOTES FOR THE NEXT SITTINGS (waymark-nl0), a reading's last duty ─
+  if [ "$PREV_MODE" = "reading" ]; then
+    echo
+    nn="$(grep -ciE '^\s*[-*]\s*(do|write|reply|stage|score|index|publish|post)\b' <(awk 'BEGIN{p=0} /^#+[[:space:]]*notes_for_sittings|^notes_for_sittings[[:space:]]*:?[[:space:]]*$/{p=1; next} /^#/{p=0} p' "$jtext") 2>/dev/null || echo 0)"
+    if grep -qiE 'notes_for_sittings' "$jtext"; then
+      echo "NOTES FOR SITTINGS: $nn form(s) left under notes_for_sittings — the next sitting's manifest prints each as a clerk order"
+    else
+      echo "NOTES FOR SITTINGS: none — the journal carries no notes_for_sittings block, so the next sittings work from probes alone. Lawful, and worth saying on purpose."
+    fi
+  fi
+  rm -f "$twins" "$jtext"
 
   # ── HANDED BACK, NOT REWORKED (waymark-vf8) ───────────────────────
   # The one work order a run can no longer answer in words, graded the
@@ -354,23 +477,31 @@ if [ "$MODE" = "verify" ]; then
   # back again is ANSWERED, and its state would lie about that.
   if [ -n "$prev" ]; then
     unreworked="$(mktemp)"; : > "$unreworked"
-    while IFS="$(printf '\t')" read -r href rev; do
+    while IFS="$(printf '\t')" read -r href rev label; do
       [ -n "$href" ] || continue
       cur="$(mktemp)"
       if [ "$(api "$cur" "$href")" = "200" ]; then
-        jq -r --arg r "$rev" --arg h "$href" '
+        # an UNMARKED rework with no clock time in the note is the
+        # editor's (waymark-nl0): a sitting leaves it for a reading and
+        # is not faulted for that — it is said, so nobody reads the
+        # silence as nothing being wrong
+        jq -r --arg r "$rev" --arg h "$href" --arg l "${label:-clerk}" --arg mode "$PREV_MODE" '
           if (((.data.plan_revision // 0) | tostring) == $r)
-          then "HANDED BACK, NOT REWORKED: \($h)"
+          then (if ($l == "editor" and $mode == "sitting")
+                then "HANDED BACK, WAITING FOR A READING: \($h) — the note is unmarked and names no hour, so reading it against the pieces is the duty of a reading, not of a sitting"
+                else "HANDED BACK, NOT REWORKED: \($h)" end)
           else empty end' "$cur" >> "$unreworked"
       fi
       rm -f "$cur"
-    done < <(jq -r '[(.standing_outcomes // [])[]
-                      | select(.iterate_open and .mine)][]
-                     | "\(.self)\t\((.plan_revision // 0) | tostring)"' "$prev")
+    done < <(jq -r '. as $m
+                    | [(.standing_outcomes // [])[] | select(.iterate_open and .mine)][]
+                    | . as $s
+                    | (([ ($m.rework_orders // [])[] | select(.self == $s.self) | .label ] | first) // "clerk") as $l
+                    | "\($s.self)\t\(($s.plan_revision // 0) | tostring)\t\($l)"' "$prev")
     if [ -s "$unreworked" ]; then
       echo
       cat "$unreworked"
-      echo "  A bundle the household handed back and this run did not rework is a FAILED work order: it is off their feed until a composer commits, and words on the thread are not a commit (the remark door refuses that hand by name). Read the note, withdraw and stage what changes, and POST /api/outcomes/<id>/-/rework {says} — or, if the plan stands, commit a round that changes nothing and say so."
+      echo "  A bundle the household handed back and this run did not rework is a FAILED work order: it is off their feed until a composer commits, and words on the thread are not a commit (the remark door refuses that hand by name). Read the note, withdraw and stage what changes, and POST /api/outcomes/<id>/-/rework {says} — or, if the plan stands, commit a round that changes nothing and say so. WAITING FOR A READING is the one lawful exception, and it is lawful only until the next reading."
     fi
     rm -f "$unreworked"
   fi
@@ -565,6 +696,36 @@ if [ "$MODE" = "verify" ]; then
     left="$(git -C "$ROOT" status --porcelain 2>/dev/null | grep -v '^?? \.sitting' || true)"
     if [ -n "$left" ]; then echo; echo "tree not clean after the sitting — a sitting leaves no diff:"; echo "$left"; fi
   fi
+  return 0
+}
+
+if [ "$MODE" = "verify" ]; then
+  rm -f "$WHO"
+  SINCE="${WAYMARK_SINCE:-}"
+  # the previous manifest is read for TWO things now — the "since" mark
+  # and the work orders this run was handed — so it is found whether or
+  # not WAYMARK_SINCE overrode the mark.
+  prev="$(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | sort | tail -n 1 || true)"
+  if [ -z "$SINCE" ] && [ -n "$prev" ]; then
+    SINCE="$(jq -r '.run.started_at' "$prev")"
+  fi
+  [ -n "$SINCE" ] || SINCE="$(iso "$(( $(now_s) - 7200 ))")"
+  # THE GRADE LINES ARE KEPT (waymark-nl0): verify's whole report goes
+  # into the run dir it graded, and the lines that grade — ORDER, THIN,
+  # TWIN, HANDED BACK, CLAIMED, NOTE TIME, ODD HOUR, MARKS, EXTRA,
+  # FILLER, SAYS-SO — are filed beside it as grades.txt, which is what
+  # the next READING reads under REVIEW. On an ephemeral runner the dir
+  # does not survive, and the reading's manifest says so rather than
+  # pretending the sittings went ungraded.
+  if [ -n "$prev" ]; then
+    vdir="$(dirname "$prev")"
+    verify_run | tee "$vdir/verify.txt"
+    grep -E '^(ORDER|EDITOR ORDER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|SAYS-SO|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
+      "$vdir/verify.txt" | sed "s/^\(NOTHING written\.\).*/\1/" > "$vdir/grades.txt" 2>/dev/null || true
+    printf '%s\n' "$(iso "$(now_s)")" > "$vdir/verified_at"
+  else
+    verify_run
+  fi
   exit 0
 fi
 
@@ -739,6 +900,74 @@ jq --arg me "$PRINCIPAL" '
 ' "$R/remarks.full.json" > "$D/threads.json"
 
 jq '[.[] | select(.last_is_mine|not)]' "$D/threads.json" > "$D/unanswered_threads.json"
+
+# ── WHOSE TURN IT IS TO ANSWER, AND FROM WHAT (waymark-nl0, waymark-frv) ─
+# A person's turn is one of two shapes. A FACT ("the wood arrived",
+# "we are at the gym 8:30 to 10:00") is a clerk's form: index it as an
+# insight citing the remark and the rows it is about, reply in words.
+# A QUESTION ("can he get this without a state ID?") is the editor's:
+# the answer has to come from the RECORD, and on 2026-08-29 a weak
+# model handed the thread alone answered from the question instead —
+# "getting the ID would be a prerequisite" — and published that as a
+# fact, while the TC-842 task's own detail said SSN suffices. So every
+# unanswered thread is LABELED by its shape, and under each one the
+# manifest prints WHAT THE HOUSE ALREADY SAYS: the rows the subject
+# bundle cites (title + detail for a task, starts/ends for an event,
+# name + relation for a person) and every published insight whose
+# evidence names one of them, each with its address, newest first,
+# capped. A sitting answers the facts; a question waits for a reading,
+# and either run answers FROM these rows or says which row contradicts
+# the person.
+jq --arg owner "$OWNER" '
+  def is_question: (.last.says // "")
+    | (test("\\?")
+       or test("^\\s*(can|could|should|would|will|is|are|do|does|did|what|when|where|who|how|why|which)\\b"; "i"));
+  map(. + {said_by_owner: (.last.said_by == $owner),
+           shape: (if is_question then "question" else "fact" end),
+           label: (if is_question then "editor" else "clerk" end)})
+' "$D/unanswered_threads.json" > "$D/unanswered_threads.tmp" \
+  && mv "$D/unanswered_threads.tmp" "$D/unanswered_threads.json"
+
+jq -n --slurpfile out "$R/outcomes.full.json" --slurpfile tasks "$R/tasks.json" \
+      --slurpfile events "$R/events.json" --slurpfile people "$R/people.full.json" \
+      --slurpfile ins "$R/insights.full.json" --slurpfile th "$D/unanswered_threads.json" '
+  ($out[0] // []) as $o | ($tasks[0] // []) as $tk | ($events[0] // []) as $ev
+  | ($people[0] // []) as $pp | ($ins[0] // []) as $in
+  | ([ ($th[0] // [])[] | select(.subject_kind == "outcome") | .subject_id ]
+     + [ $o[] | select(.state == "iterating") | (.self | split("/") | last) ]
+     | unique) as $ids
+  | [ $ids[] | . as $id
+      | (([ $o[] | select((.self | split("/") | last) == $id) ] | first) // null) as $b
+      | select($b != null)
+      | ([$b.self] + ($b.data.evidence // [])) as $rows
+      | {outcome: $b.self,
+         goal: ($b.data.goal // ""),
+         rows: ([ $rows[] | . as $r
+                  | (if ($r | test("^/api/tasks/"))
+                     then (([ $tk[] | select(.self == $r) ] | first) // null) as $t
+                          | select($t != null)
+                          | {self:$r, kind:"task", says:(($t.fields.title // $t.display.title // "") | tostring)
+                                          + (if (($t.fields.status // "open") != "open") then " [" + $t.fields.status + "]" else "" end)
+                                          + (if ($t.fields.due_at // "") != "" then " · due " + ($t.fields.due_at | .[0:10]) else "" end),
+                             detail:(($t.fields.detail // "") | tostring | gsub("\\s+"; " ") | .[0:400])}
+                     elif ($r | test("^/api/events/"))
+                     then (([ $ev[] | select(.self == $r) ] | first) // null) as $e
+                          | select($e != null)
+                          | {self:$r, kind:"event", says:(($e.fields.title // $e.display.title // "") | tostring)
+                                          + " · " + (($e.fields.starts_at // $e.fields.date // "?") | tostring)
+                                          + (if ($e.fields.ends_at // "") != "" then " to " + ($e.fields.ends_at | tostring) else "" end)
+                                          + (if ($e.fields.location // "") != "" then " · " + $e.fields.location else "" end),
+                             detail:""}
+                     elif ($r | test("^/api/people/"))
+                     then (([ $pp[] | select(.self == $r) ] | first) // null) as $p
+                          | select($p != null)
+                          | {self:$r, kind:"person", says:(($p.data.name // "") + " — " + ($p.data.relation // "?") + " [" + $p.state + "]"), detail:""}
+                     else empty end) ]),
+         findings: ([ $in[] | select(.state == "published")
+                     | . as $i | select(([ ($i.data.evidence // [])[] | . as $e | select(($rows | index($e)) != null) ] | length) > 0)
+                     | {self, at:(.meta.updated_at // ""), finding:(.data.finding // "" | .[0:300])} ]
+                    | sort_by(.at) | reverse | .[0:8])} ]
+' > "$D/house_says.json" 2>/dev/null || echo '[]' > "$D/house_says.json"
 
 # a turn nobody has indexed: a remark not ours that no insight cites
 jq --arg me "$PRINCIPAL" --slurpfile cited "$D/insight_cited.json" '
@@ -1887,6 +2116,26 @@ jq --slurpfile pieces "$R/outcome_pieces.full.json" \
          goal:$o.goal, suggestions:$sugg} ]
 ' "$D/note_time_subjects.json" > "$D/note_times.json" 2>>"$PROBE_ERRS" \
   || echo '[]' > "$D/note_times.json"
+
+# ── WHOSE REWORK IT IS (waymark-nl0) ─────────────────────────────────
+# A MARKED round is a clerk's form: the marks say which piece and the
+# lists say what to write. So is an unmarked round whose note carries a
+# clock time — the suggestions above are the form. An unmarked round
+# with no hour in it is the editor's: the note has to be read against
+# the pieces, and that is judgment. A sitting prints those under
+# "Waiting for a reading" and is not faulted for leaving them; a
+# reading takes them.
+jq --slurpfile nt "$D/note_times.json" '
+  ($nt[0] // []) as $times
+  | map(. as $o
+        | ([ $times[] | select(.self == $o.self) | .suggestions[] ] | length) as $ns
+        | . + {suggested: $ns,
+               label: (if .marked_round or ($ns > 0) then "clerk" else "editor" end),
+               why_label: (if .marked_round then "the household marked pieces — the marks are the form"
+                           elif $ns > 0 then "the note names a clock time — the suggested re-time is the form"
+                           else "unmarked, and no hour in the note: the note must be read against the pieces" end)})
+' "$D/rework_orders.json" > "$D/rework_orders.tmp" 2>>"$PROBE_ERRS" \
+  && mv "$D/rework_orders.tmp" "$D/rework_orders.json" || true
 # One rig answers with a JSON array, one with objects side by side, one
 # with an envelope around them, one with plain lines — and `fromjson`
 # over the concatenation of two objects fails, which is what once
@@ -3019,6 +3268,99 @@ jq -c --slurpfile out "$R/outcomes.full.json" --slurpfile cited "$D/cited.json" 
                   end)})
   | .[]' "$D/live_values.json" >> "$CAND" 2>>"$PROBE_ERRS" || probe_stumbled value-with-no-live-outcome
 
+# ── probe 7: stale-relative-date (waymark-63s, an EDITOR order) ──────
+# Contradictions live BETWEEN two rows and no single-subject probe
+# reaches them. This one is the cheapest of the four 63s named: a task
+# whose detail says "Monday" or "tomorrow" or "next week" and whose
+# due date is already past — prose that was true when it was written
+# and is now a lie nothing flags ("Realtor meeting is Monday" on a task
+# overdue since Aug 18). The write is judgment, so the order is the
+# editor's: an insight offering `complete` when the day has plainly
+# come and gone, or a rework note when the task is still live — which
+# of the two is exactly what a reading is for.
+jq -c --slurpfile cited "$D/cited.json" --argjson nows "$NOW_S" "$JQ_DATES$JQ_KEYS"'
+  ($cited[0] // []) as $c
+  | [ .[] | (.fields // {}) as $f
+          | select(($f.status // "open") == "open")
+          | ((.display.title // $f.title // "") | tostring) as $t
+          | (($f.detail // "") | tostring) as $d
+          | select($d != "")
+          | select($d | test("\\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|tonight|next week|this week(end)?)\\b"; "i"))
+          | (($f.due_at // null) | in_days($nows)) as $days
+          | select($days != null and $days < 0)
+          | {self, title:$t, detail:($d | gsub("\\s+"; " ") | .[0:300]), due_at:$f.due_at, days:$days,
+             words:([ $d | match("\\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|tonight|next week|this week(end)?)\\b"; "gi") | .string ] | unique)} ]
+  | sort_by(.due_at) | .[0:1]
+  | map(. as $t
+        | {probe:"stale-relative-date", rank:7, label:"editor",
+           subject:$t.self, subject_says:$t.title,
+           urgency_at:$t.due_at,
+           urgency_says:("due " + ($t.due_at | .[0:10]) + " (" + ((0 - $t.days) | tostring) + " days ago) and the detail still says \"" + ($t.words | join("\", \"")) + "\""),
+           why:("The task is overdue and its detail names a relative day — " + ($t.words | join(", ")) + " — that has already come and gone. Stale prose is a contradiction between the row and the calendar, and nothing in the house flags it. Read the detail against the date and say which it is: a day that passed and a task that is done, or a task still live whose detail is simply wrong."),
+           gate_keys:[],
+           material:{row:{self:$t.self, title:$t.title, due_at:$t.due_at, detail:$t.detail},
+                     siblings:[], gate:null},
+           write:{kind:"insight", door:"POST /api/insights",
+                  fields:["finding", "evidence", "offer_kind", "offer_id", "offer_action"],
+                  finding:"One sentence saying what the stale day in the detail actually refers to now — which date it named, whether that day passed, and what the task therefore is (done, or still owed on a real date).",
+                  cite:[$t.self],
+                  offer:{offer_kind:"task", offer_id:($t.self|split("/")|last), offer_action:"complete"},
+                  note:"Offer `complete` only if the day plainly passed and the work with it; if the task is still live, the finding says the real date and the offer still names the task own light door — it is the household that taps, never you."}})
+  | .[]' "$R/tasks.json" >> "$CAND" 2>>"$PROBE_ERRS" || probe_stumbled stale-relative-date
+
+# ── probe 8: far-event-names-a-task (waymark-63s, an EDITOR order) ───
+# The event probe looks ten days out and the placard task's real
+# deadline was the Sep 15 VA appointment — outside the window, but its
+# title shares a word with the open task's purpose. So: events 10 to 45
+# days out, token-matched against open task titles and details on words
+# of five letters or more, the cited set dropped. The write is an
+# insight giving the task the event's date as its deadline; whether the
+# match is real is the editor's call, so the order is labeled so.
+jq -c --slurpfile cited "$D/cited.json" --slurpfile tasks "$R/tasks.json" \
+      --argjson nows "$NOW_S" "$JQ_DATES$JQ_KEYS"'
+  ($cited[0] // []) as $c | ($tasks[0] // []) as $tk
+  | [ .[] | . as $x
+          | (.fields.starts_at // .fields.date // null) as $start
+          | select($start != null)
+          | ($start | in_days($nows)) as $d
+          | select($d != null and $d > 10 and $d <= 45)
+          | {self, start:$start, days:$d,
+             title:((.fields.title // .display.title // "") | tostring),
+             location:(.fields.location // null)} ]
+  | map(select(.title != ""))
+  | map(. as $e
+        | ([ ($e.title + " " + ($e.location // "")) | wm_words[] | select(length >= 5) ]) as $words
+        | ([ $tk[] | select((.fields.status // "open") == "open")
+                   | ((.display.title // .fields.title // "") | tostring) as $tt
+                   | select($tt != "")
+                   | .self as $ts | select(($c | index($ts)) == null)
+                   | (($tt + " " + ((.fields.detail // "") | tostring)) | wm_words) as $tw
+                   | ([ $words[] as $w | select(($tw | index($w)) != null) | $w ]) as $shared
+                   | select(($shared | length) > 0)
+                   | {self:$ts, title:$tt, due_at:(.fields.due_at // null),
+                      detail:(((.fields.detail // "") | tostring) | gsub("\\s+"; " ") | .[0:240]),
+                      shares:("the word \"" + $shared[0] + "\""), matched:$shared[0]} ]) as $near
+        | select(($near | length) > 0)
+        | . + {near:$near})
+  | sort_by(.start) | .[0:1]
+  | map(. as $e
+        | {probe:"far-event-names-a-task", rank:8, label:"editor",
+           subject:$e.near[0].self, subject_says:($e.near[0].title + " — named by " + $e.title + " on " + ($e.start | .[0:10])),
+           urgency_at:$e.start,
+           urgency_says:("the event is " + ($e.start | when($nows)) + " (" + ($e.start | .[0:10]) + "); the task " + (if $e.near[0].due_at then "is due " + ($e.near[0].due_at | .[0:10]) else "carries no due date" end)),
+           why:("An event " + ($e.start | when($nows)) + " — outside the ten-day prep window — shares " + $e.near[0].shares + " with an open task. If the event is what the task is FOR, the task real deadline is the event date, not whatever the row says, and nothing in the house connects the two."),
+           gate_keys:[],
+           material:{row:{self:$e.self, title:$e.title, starts_at:$e.start, location:$e.location},
+                     siblings:($e.near | .[0:3] | map({self, title, due_at, detail, shares})),
+                     gate:null},
+           write:{kind:"insight", door:"POST /api/insights",
+                  fields:["finding", "evidence", "offer_kind", "offer_id", "offer_action"],
+                  finding:("One sentence saying that " + $e.title + " on " + ($e.start | .[0:10]) + " is what the task is for and therefore its real deadline — with the lead time the task detail implies (a mail-in that takes weeks is due weeks before). If the match is a coincidence of words, write nothing and say so in the journal."),
+                  cite:([$e.self] + [ $e.near[0].self ]),
+                  offer:{offer_kind:"task", offer_id:($e.near[0].self|split("/")|last), offer_action:"complete"},
+                  note:"The match is on a shared word, which is a reading and not a fact: judge it. A finding that connects the two cites both rows."}})
+  | .[]' "$R/events.json" >> "$CAND" 2>>"$PROBE_ERRS" || probe_stumbled far-event-names-a-task
+
 # ── the crowd-out warning (waymark-q23) ──────────────────────────────
 # Machine dedupe is right and it can also leave nothing to do. On
 # 2026-08-28 thirty-one standing offered bundles cited all sixteen open
@@ -3047,9 +3389,31 @@ jq -n --slurpfile tasks "$R/tasks.json" --slurpfile standing "$D/standing_outcom
 # ── the ceiling: rank by urgency, keep the top N, and only THEN pay for
 # the Gate material. A probe whose order never ships costs no outside
 # read at all.
-jq -s 'sort_by([(if .urgency_at == null then 1 else 0 end), (.urgency_at // ""), .rank])' \
+# ── THE LABEL (waymark-nl0), one rule, applied here to every order ──
+# An order is EDITOR when its expected write is an outcome, an unmarked
+# rework, an answer to a person's question, an extra, or a
+# contradiction between rows; CLERK when the write is one row at one
+# door with the material inline. Over the probes that is: an `outcome`
+# write is the editor's (a goal larger than any row is judgment), a
+# contradiction probe is the editor's whatever it writes (it said so
+# in its own label), and an insight or a journal-only skip is a form.
+# The ceiling is then applied PER LABEL — WAYMARK_WORK_ORDERS clerk
+# orders and WAYMARK_EDITOR_ORDERS editor orders — so an editor's order
+# never crowds a clerk's form off the sitting's manifest, and a reading
+# sees both.
+jq -s 'map(. + {label: (if (.label // "") == "editor" then "editor"
+                        elif ((.write.kind // "") == "outcome") then "editor"
+                        else "clerk" end)})
+       | map(. + {why_label: (if .label == "editor"
+                              then (if ((.write.kind // "") == "outcome") then "the write is an outcome — a goal larger than any row is judgment"
+                                    else "a contradiction between rows — which row is right is judgment" end)
+                              else "one row at one door, the material inline" end)})
+       | sort_by([(if .urgency_at == null then 1 else 0 end), (.urgency_at // ""), .rank])' \
    "$CAND" > "$D/work_orders_all.json" 2>/dev/null || echo '[]' > "$D/work_orders_all.json"
-jq --argjson n "$WORK_ORDERS_N" '.[0:$n]' "$D/work_orders_all.json" > "$D/work_orders.json"
+jq --argjson n "$WORK_ORDERS_N" --argjson m "$EDITOR_ORDERS_N" '
+  ([ .[] | select(.label == "clerk") ] | .[0:$n])
+  + ([ .[] | select(.label == "editor") ] | .[0:$m])' \
+   "$D/work_orders_all.json" > "$D/work_orders.json"
 
 WO_ACC="$D/work_orders.jsonl"; : > "$WO_ACC"
 wo_n="$(jq 'length' "$D/work_orders.json")"
@@ -3057,7 +3421,11 @@ wo_i=0
 while [ "$wo_i" -lt "$wo_n" ]; do
   ord="$(jq -c --argjson k "$wo_i" '.[$k]' "$D/work_orders.json")"
   gacc="$(mktemp)"; echo '[]' > "$gacc"
-  if [ "$(printf '%s' "$ord" | jq -r '.material.gate | type')" = "null" ]; then
+  # a sitting pays for no Gate material on an order it will not take:
+  # the editor's orders are printed under "Waiting for a reading" and
+  # the reading runs this driver again with its own reads
+  if [ "$(printf '%s' "$ord" | jq -r '.material.gate | type')" = "null" ] \
+     && { [ "$RUN_MODE" = "reading" ] || [ "$(printf '%s' "$ord" | jq -r '.label')" = "clerk" ]; }; then
     k1="$(printf '%s' "$ord" | jq -r '(.gate_keys // [])[0] // ""')"
     k2="$(printf '%s' "$ord" | jq -r '(.gate_keys // [])[1] // ""')"
     if [ -n "$k1" ]; then
@@ -3148,6 +3516,223 @@ jq --slurpfile orders "$D/work_orders.json" \
 ' "$D/declines.json" > "$D/declines.owed.json" \
   && mv "$D/declines.owed.json" "$D/declines.json"
 
+# ── NOTES FOR THE NEXT SITTINGS (waymark-nl0) ────────────────────────
+# A reading's last duty is to leave FORMS: a `notes_for_sittings` block
+# in its journal, one line per form — "do X at door Y citing Z". The
+# journal is an own-surface kind (private to its principal, never
+# grantable), so the notes cross from a reading to a sitting only when
+# the two runs wear the SAME principal — which is what "same journal"
+# in READING.md means literally. The newest journal carrying the block
+# is the one read; each line becomes a clerk order on a sitting's
+# manifest, and a line whose subject a standing row already speaks for
+# is dropped as answered.
+jq --slurpfile cited "$D/cited.json" --arg me "$PRINCIPAL" '
+  ($cited[0] // []) as $c
+  | def notes_block:
+      ((.data.body // "") | split("\n"))
+      | reduce .[] as $l ({on:false, out:[]};
+          if ($l | test("^#+\\s*notes_for_sittings|^notes_for_sittings\\s*:?\\s*$"; "i")) then .on = true
+          elif ($l | test("^#")) then .on = false
+          elif .on and ($l | test("^\\s*[-*]\\s+")) then .out += [($l | sub("^\\s*[-*]\\s+"; "") | gsub("\\s+$"; ""))]
+          else . end)
+      | .out;
+  def addrs: [ match("/api/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+"; "g") | .string ] | unique;
+  def door_of:
+      ascii_downcase
+      | if test("ranking_note|\\bscore\\b") then {kind:"ranking_note", door:"POST /api/ranking_notes"}
+        elif test("outcome_piece|\\bpiece\\b") then {kind:"outcome_piece", door:"POST /api/outcome_pieces"}
+        elif test("\\brework\\b") then {kind:"outcome", door:"POST /api/outcomes/<id>/-/rework"}
+        elif test("\\bremark\\b|\\breply\\b|\\banswer\\b") then {kind:"remark", door:"POST /api/remarks"}
+        elif test("\\binsight\\b|\\bfinding\\b|\\bindex\\b|\\benrich\\b") then {kind:"insight", door:"POST /api/insights"}
+        elif test("\\boutcome\\b|\\bcompose\\b") then {kind:"outcome", door:"POST /api/outcomes"}
+        else {kind:"journal", door:"the door the note names"} end;
+  ([ .[] | select((.data.body // "") | test("notes_for_sittings"; "i")) ]
+   | sort_by(.meta.updated_at) | last) as $j
+  | if $j == null then [] else
+    [ ($j | notes_block)[] | . as $line
+      | ($line | addrs) as $a
+      | ($line | door_of) as $d
+      | {probe:"notes-for-sittings", rank:0, label:"clerk",
+         why_label:"a reading left this form; the note is the whole order",
+         subject:($a[0] // null), subject_says:($line | .[0:140]),
+         urgency_at:null,
+         urgency_says:("left by the reading of " + (($j.meta.updated_at // "") | .[0:10]) + " (" + $j.self + ")"),
+         why:"A reading read across the rows and wrote this form for a sitting: one row, one door, the material in the sentence.",
+         gate_keys:[], material:{row:null, siblings:[], gate:null},
+         write:{kind:$d.kind, door:$d.door, fields:[],
+                finding:$line, cite:$a, offer:null,
+                note:"Do exactly what the line says and nothing beside it. If a row it names is gone, or a door it names is shut, skip it and say so in the journal — the note was written before this run read the house."},
+         from_journal:$j.self, left_at:($j.meta.updated_at // null),
+         answered: (if $a[0] != null then (($c | index($a[0])) != null) else false end)} ]
+    end
+' "$R/journals.full.json" > "$D/notes_for_sittings.json" 2>>"$PROBE_ERRS" \
+  || echo '[]' > "$D/notes_for_sittings.json"
+# on a SITTING the open notes are orders, ahead of the probes' — a
+# reading already chose them; on a READING they are printed under the
+# review as what the last reading left and whether it was taken
+if [ "$RUN_MODE" = "sitting" ]; then
+  jq -s '([ .[0][] | select(.answered | not) ] | .[0:5]) + .[1]' \
+     "$D/notes_for_sittings.json" "$D/work_orders.json" > "$D/work_orders.tmp" 2>>"$PROBE_ERRS" \
+    && mv "$D/work_orders.tmp" "$D/work_orders.json" || true
+fi
+
+# ── THE HOUSE BRIEF (waymark-xnf, built here under waymark-nl0) ──────
+# A run starts cold with a manifest and the rows; the NARRATIVE — who
+# is one year old, who left this summer, which appointment the placard
+# is for — lives in journals and in whoever was in the room. Most of
+# the cross-row findings a strong model surfaces in chat come from that
+# story, not from the rows. So the driver composes it MECHANICALLY,
+# from rows the house already holds, no model summarization: the
+# standing facts (every published insight's finding, newest first,
+# grouped by the person, value or list its evidence names), the last
+# five journals' notes, the people with relation and age from `born`,
+# the values with the words they love, the open threads the owner
+# spoke in with the last turn quoted, and the next thirty days of the
+# calendar as one list. Capped at WAYMARK_BRIEF_LINES, and what was
+# cut is said. A reading reads it first; a sitting has it in the
+# manifest JSON and the rows.
+jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full.json" \
+      --slurpfile values "$R/values.full.json" --slurpfile lists "$R/task_lists.json" \
+      --slurpfile events "$R/events.json" --slurpfile journals "$R/journals.full.json" \
+      --slurpfile threads "$D/unanswered_threads.json" \
+      --argjson nows "$NOW_S" --arg owner "$OWNER" --arg tz "$HOUSE_TZ" "$JQ_DATES"'
+  ($ins[0] // []) as $in | ($people[0] // []) as $pp | ($values[0] // []) as $vv
+  | ($lists[0] // []) as $ll | ($events[0] // []) as $ev | ($journals[0] // []) as $jj
+  | ($threads[0] // []) as $th
+  | def name_of($addr):
+      (if ($addr | test("^/api/people/")) then (([ $pp[] | select(.self == $addr) | .data.name ] | first) // null)
+       elif ($addr | test("^/api/values/")) then (([ $vv[] | select(.self == $addr) | .data.name ] | first) // null)
+       elif ($addr | test("^/api/task_lists/")) then (([ $ll[] | select(.self == $addr) | ((.display.title // .fields.title // "") | tostring) ] | first) // null)
+       else null end);
+  def age_of($born): ($born | to_epoch) as $b
+      | if $b == null then null else ((($nows - $b) / 31557600) | floor) end;
+  def notes_of:
+      ((.data.body // "") | split("\n"))
+      | reduce .[] as $l ({on:false, out:[]};
+          if ($l | test("^#+\\s*notes_for_sittings|^notes_for_sittings\\s*:?\\s*$"; "i")) then .on = true
+          elif ($l | test("^#")) then .on = false
+          elif .on and ($l | test("^\\s*[-*]\\s+")) then .out += [($l | sub("^\\s*[-*]\\s+"; ""))]
+          else . end)
+      | .out;
+  # (c) the people, current first, with relation and age
+  ([ "## THE HOUSE BRIEF — mechanical, from rows the house holds; read it before any order",
+     "People (current):" ]
+   + ([ $pp[] | select(.state == "current")
+        | "  - \(.data.name) — \(.data.relation // "?")\(if (.data.born // null) != null then " · age \(age_of(.data.born) // "?")" else "" end)  \(.self)" ]
+      | if length == 0 then ["  (nobody affirmed — every person row is observed)"] else . end)
+   + [ "Values (with the words they love):" ]
+   + ([ $vv[] | select(.state != "retired")
+        | "  - \(.data.name) [\(.state)]\(if ((.data.loved // []) | length) > 0 then " — loves " + ((.data.loved) | join(", ")) else "" end)  \(.self)" ]
+      | if length == 0 then ["  (none)"] else . end)
+   + [ "Standing facts (published findings, newest first, grouped by who or what they name):" ]
+   + ([ $in[] | select(.state == "published")
+        | . as $i
+        | (([ ($i.data.evidence // [])[] | select(test("^/api/(people|values|task_lists)/")) ] | first) // null) as $key
+        | {group: (if $key then (name_of($key) // $key) else "the house" end),
+           at: (($i.meta.updated_at // "") | .[0:10]),
+           line: ("    \(($i.meta.updated_at // "") | .[0:10]) \((.data.finding // "") | .[0:170])  \(.self)")} ]
+      | group_by(.group) | sort_by(.[0].group == "the house", .[0].group)
+      | map(([ "  [\(.[0].group)]" ] + (sort_by(.at) | reverse | map(.line))))
+      | add // ["  (no published finding stands)"])
+   + [ "The next 30 days:" ]
+   + ([ $ev[] | (.fields.starts_at // .fields.date // null) as $s
+        | select($s != null)
+        | ($s | in_days($nows)) as $d
+        | select($d != null and $d >= 0 and $d <= 30)
+        | {s:$s, line:("  - \($s | .[0:10]) \(if ($s | length) > 10 then ($s | .[11:16]) + "Z" else "all day" end) · \((.fields.title // .display.title // "") | tostring)\(if (.fields.location // "") != "" then " · " + .fields.location else "" end)  \(.self)")} ]
+      | sort_by(.s) | map(.line) | if length == 0 then ["  (nothing on the calendar)"] else . end)
+   + [ "Open threads the owner spoke in (last turn quoted):" ]
+   + ([ $th[] | select(.said_by_owner) | "  - \(.subject_kind)/\(.subject_id): “\(.last.says | .[0:160])”  (\(.last.self))" ]
+      | if length == 0 then ["  (none)"] else . end)
+   + [ "The last 5 journals, and the notes they left:" ]
+   + ([ $jj[] ] | sort_by(.meta.updated_at) | reverse | .[0:5]
+      | map(. as $j | (notes_of) as $n
+            | [ "  - \(($j.meta.updated_at // "") | .[0:10]) \($j.data.title // "")  \($j.self)" ]
+              + (if ($n | length) > 0 then ($n | map("      · " + .[0:150])) else [ "      " + (($j.data.body // "") | gsub("\\s+"; " ") | .[0:150]) ] end))
+      | add // ["  (no journal yet)"])
+  ) as $lines
+  | {lines: $lines, total: ($lines | length)}
+' > "$D/brief.json" 2>>"$PROBE_ERRS" || echo '{"lines":[],"total":0}' > "$D/brief.json"
+jq --argjson cap "$BRIEF_LINES" '
+  . + {shown: (.lines | .[0:$cap]),
+       cut: (if (.lines | length) > $cap then (.lines | length) - $cap else 0 end)}' \
+   "$D/brief.json" > "$D/brief.tmp" && mv "$D/brief.tmp" "$D/brief.json"
+
+# ── THE REVIEW (waymark-nl0): the sittings since the last reading ────
+# A reading REVIEWS the clerk's runs: it reads their verify grade lines
+# (filed per run dir by `verify`), scores the standing bundles it did
+# not write, dismisses thin or false rows where its grant admits the
+# door, and leaves notes. The list here is the run directories on this
+# machine whose manifest says `sitting`, newer than the last one that
+# says `reading`, capped at WAYMARK_REVIEW_SITTINGS, each with its
+# grades.txt when verify was run after it. On an ephemeral runner there
+# are none, and the manifest says so rather than reading silence as a
+# clean record.
+LAST_READING=""
+for mf in $(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | sort || true); do
+  case "$mf" in */"$STAMP"/manifest.json) continue ;; esac
+  if [ "$(jq -r '.run.mode // "sitting"' "$mf" 2>/dev/null)" = "reading" ]; then LAST_READING="$(basename "$(dirname "$mf")")"; fi
+done
+: > "$D/review.jsonl"
+for mf in $(ls -1 "$SITDIR"/*/manifest.json 2>/dev/null | sort || true); do
+  rd="$(dirname "$mf")"; st="$(basename "$rd")"
+  [ "$st" = "$STAMP" ] && continue
+  [ "$(jq -r '.run.mode // "sitting"' "$mf" 2>/dev/null)" = "sitting" ] || continue
+  if [ -n "$LAST_READING" ] && ! [ "$st" \> "$LAST_READING" ]; then continue; fi
+  jq -nc --arg st "$st" --arg at "$(jq -r '.run.started_at // ""' "$mf")" \
+         --argjson orders "$(jq '(.work_orders // []) | length' "$mf" 2>/dev/null || echo 0)" \
+         --argjson graded "$([ -f "$rd/grades.txt" ] && echo true || echo false)" \
+         --rawfile g "$([ -f "$rd/grades.txt" ] && echo "$rd/grades.txt" || echo /dev/null)" \
+         '{stamp:$st, started_at:$at, orders:$orders, graded:$graded,
+           grades:($g | split("\n") | map(select(length > 0)))}' >> "$D/review.jsonl"
+done
+jq -s --argjson n "$REVIEW_N" --arg last "$LAST_READING" --slurpfile notes "$D/notes_for_sittings.json" '
+  {since: (if $last == "" then null else $last end),
+   sittings: (.[-$n:] // []),
+   found: length,
+   notes_left: ($notes[0] // [])}' "$D/review.jsonl" > "$D/review.json" 2>>"$PROBE_ERRS" \
+  || echo '{"since":null,"sittings":[],"found":0,"notes_left":[]}' > "$D/review.json"
+
+# ── WHAT A REVIEW NEEDS FROM THE LEASH, AND THE ASK THAT OPENS IT ────
+# Dismissing a thin finding, a wrong ranking note, an observed person
+# that is nobody, or declining a bundle in the owner's name are all
+# doors a person opens for an agent by approving an anchored ask
+# (waymark-sfe): insight.dismiss, person.dismiss, ranking_note.dismiss,
+# outcome.not_this_week — on rows by id, never the kind whole. The
+# driver reads which of those the grant already admits, names the thin
+# findings the review can already see as the ids an insight.dismiss
+# entry would carry, and builds the ask body. Inside the ask window the
+# one extend-ask a reading files carries this scope with it (the same
+# file-once law: never a second ask while one stands); outside it, the
+# body is printed for the reading to file when it holds a row to act on.
+# Four eyes hold whatever the grant says: a row THIS principal wrote is
+# never its own to dismiss, and both runs may wear one principal.
+jq -n --slurpfile grant "$R/grant.json" --slurpfile ins "$R/insights.full.json" \
+      --arg me "$PRINCIPAL" --arg gid "$GRANT" '
+  (($grant[0].data.scope // $grant[0].scope) // []) as $scope
+  | [ {kind:"insight", action:"dismiss"}, {kind:"person", action:"dismiss"},
+      {kind:"ranking_note", action:"dismiss"}, {kind:"outcome", action:"not_this_week"} ] as $doors
+  | ([ ($ins[0] // [])[] | select(.state == "published")
+       | select((.data.authored_by // "") != $me)
+       | ((.data.finding // "") ) as $f
+       | select(($f | length) < 40
+                or ($f | ascii_downcase | test("needs action|requires further action|needs attention|should be done")))
+       | {self, id:(.self | split("/") | last), finding:($f | .[0:120])} ]) as $thin
+  | [ $doors[] | . as $d
+      | (([ $scope[] | select(.kind == $d.kind) | select((.actions // []) | index($d.action) != null) ] | length) > 0) as $has
+      | $d + {admitted:$has} ] as $checked
+  | ([ $checked[] | select(.admitted | not) ]) as $missing
+  | {doors:$checked,
+     thin_findings:$thin,
+     scope_add: ([ $missing[] | {kind:.kind, actions:[.action]}
+                   + (if .kind == "insight" and ($thin | length) > 0 then {ids:[ $thin[] | .id ]} else {} end) ]),
+     body: {grant_id:$gid,
+            task:("Let the reading answer thin and false rows: " + ([ $missing[] | .kind + "." + .action ] | join(", ")) + " on the rows named, the same leash otherwise."),
+            scope: ($scope + [ $missing[] | {kind:.kind, actions:[.action]}
+                                + (if .kind == "insight" and ($thin | length) > 0 then {ids:[ $thin[] | .id ]} else {} end) ])}}
+' > "$D/review_ask.json" 2>>"$PROBE_ERRS" \
+  || echo '{"doors":[],"thin_findings":[],"scope_add":[],"body":null}' > "$D/review_ask.json"
+
 # ── the leash: file the anchored extend-ask before it runs out ───────
 ASK='{"filed": false, "why": "the grant is not inside the ask window"}'
 if [ -n "$GRANT_EXP" ] && [ -z "${WAYMARK_NO_ASK:-}" ]; then
@@ -3159,10 +3744,25 @@ if [ -n "$GRANT_EXP" ] && [ -z "${WAYMARK_NO_ASK:-}" ]; then
         '{filed:false, why:"an extend-ask of ours is already offered and waiting for a human tap", ask:$id}')"
     else
       hours=$(( EXTEND / 3600 ))
-      body="$(jq -nc --arg g "$GRANT" --arg t "Keep my standing leash: the same scope, another $hours hours." \
-                     --argjson s "$(jq -c '.data.scope // .scope' "$R/grant.json")" \
-                     --arg e "$(iso "$(( $(now_s) + EXTEND ))")" \
-              '{grant_id:$g, task:$t, scope:$s, expires_at:$e}')"
+      # a READING's extend-ask carries the review doors with it
+      # (waymark-nl0): the same one-ask-at-a-time law, one body, and
+      # the task names exactly what widens so the person's tap is an
+      # informed one. A sitting's ask is the scope copied, as ever.
+      if [ "$RUN_MODE" = "reading" ] && [ "$(jq '(.scope_add // []) | length' "$D/review_ask.json" 2>/dev/null || echo 0)" -gt 0 ]; then
+        body="$(jq -nc --arg g "$GRANT" --argjson hours "$hours" \
+                       --slurpfile ra "$D/review_ask.json" \
+                       --arg e "$(iso "$(( $(now_s) + EXTEND ))")" '
+                 {grant_id:$g,
+                  task:("Keep my standing leash another " + ($hours|tostring) + " hours, and let the reading answer thin and false rows: "
+                        + ([ $ra[0].scope_add[] | .kind + "." + (.actions | join("/")) + (if .ids then " on " + ((.ids|length)|tostring) + " named rows" else "" end) ] | join(", "))
+                        + ". Everything else the same."),
+                  scope:$ra[0].body.scope, expires_at:$e}')"
+      else
+        body="$(jq -nc --arg g "$GRANT" --arg t "Keep my standing leash: the same scope, another $hours hours." \
+                       --argjson s "$(jq -c '.data.scope // .scope' "$R/grant.json")" \
+                       --arg e "$(iso "$(( $(now_s) + EXTEND ))")" \
+                '{grant_id:$g, task:$t, scope:$s, expires_at:$e}')"
+      fi
       out="$(mktemp)"
       c="$(curl -sS --max-time 30 -o "$out" -w '%{http_code}' -X POST "$BASE/api/approval_requests" \
              -H "Authorization: Bearer $TOKEN" -H "X-Waymark-Grant: $GRANT" \
@@ -3216,9 +3816,29 @@ jq -n \
   --arg thread_basis "$THREAD_BASIS" \
   --slurpfile diag "$RUN/rows/diagnosis.json" \
   --slurpfile journals "$RUN/rows/journals.full.json" \
-'{
+  --arg mode "$RUN_MODE" \
+  --slurpfile brief "$D/brief.json" \
+  --slurpfile review "$D/review.json" \
+  --slurpfile review_ask "$D/review_ask.json" \
+  --slurpfile house_says "$D/house_says.json" \
+  --slurpfile notes "$D/notes_for_sittings.json" \
+'
+  # WHAT THIS RUN OWNS (waymark-nl0). A sitting owns the clerk orders,
+  # the fact-shaped turns and the marked (or clocked) reworks; the
+  # editor half is listed under waiting_for_a_reading and not counted.
+  # A reading owns both halves.
+  ($mode == "sitting") as $sit
+  | ([ $orders[0][] | select(.label == "clerk") ]) as $clerk_orders
+  | ([ $orders[0][] | select(.label == "editor") ]) as $editor_orders
+  | ([ $threads[0][] | select(.label == "clerk") ]) as $clerk_threads
+  | ([ $threads[0][] | select(.label == "editor") ]) as $editor_threads
+  | ([ $reworkorders[0][] | select(.label == "clerk") ]) as $clerk_reworks
+  | ([ $reworkorders[0][] | select(.label == "editor") ]) as $editor_reworks
+  | {
   run: {started_at:$started, base_url:$base, snapshot:$run, principal:$principal,
         display:$display, owner_member:$owner,
+        mode: $mode,
+        formula: (if $sit then "sitting" else "reading" end),
         grant:{id:$grant, state:$gstate, expires_at:$gexp, seconds_left:$left},
         bearer_file: ($run + "/bearer"),
         note: "Every request wears BOTH Authorization: Bearer <bearer_file> and X-Waymark-Grant: <grant.id>. A collection answers a PROJECTION; a row read at its own address answers `data` in full — the snapshot has both (rows/<kind>.json and rows/<kind>.full.json)."},
@@ -3226,7 +3846,7 @@ jq -n \
   reads: $reads[0],
   duties: {
     answer_requests: ($requests[0] | length),
-    answer_threads:  ($threads[0]  | length),
+    answer_threads:  (if $sit then ($clerk_threads | length) else ($threads[0] | length) end),
     index_facts:     ($facts[0]    | length),
     score_bundles:   ($unscored[0] | length),
     declines_owed_a_diagnosis: ([$declines[0][] | select(.owed_a_diagnosis)] | length),
@@ -3234,10 +3854,18 @@ jq -n \
     enrich_a_bare_task: ($bare[0] | length),
     # the rework orders the household handed back (waymark-9xn):
     # bundles off its feed until this composer answers
-    rework_iterating: ([$standing[0][] | select(.iterate_open and .mine)] | length),
-    work_orders: ($orders[0] | length)
+    rework_iterating: (if $sit then ($clerk_reworks | length) else ([$standing[0][] | select(.iterate_open and .mine)] | length) end),
+    work_orders: (if $sit then ($clerk_orders | length) else ($orders[0] | length) end),
+    # what a sitting leaves for the editor, counted apart and never owed
+    waiting_for_a_reading: (if $sit then (($editor_orders | length) + ($editor_threads | length) + ($editor_reworks | length)) else 0 end)
   },
   work_orders: $orders[0],
+  waiting_for_a_reading: (if $sit then {orders:$editor_orders, threads:$editor_threads, reworks:$editor_reworks} else null end),
+  brief: $brief[0],
+  review: (if $sit then null else $review[0] end),
+  review_ask: (if $sit then null else $review_ask[0] end),
+  house_says: $house_says[0],
+  notes_for_sittings: $notes[0],
   work_orders_found: ($orders_all[0] | length),
   crowd_out: ($crowd[0] // null),
   now: $started,
@@ -3291,7 +3919,11 @@ jq -n \
 
 # the same thing in the sitting's own words, for the model to read first
 {
-  echo "# The house, read at $STARTED"
+  if [ "$RUN_MODE" = "reading" ]; then
+    echo "# The house, read at $STARTED — a READING (the editor's run; the law is READING.md)"
+  else
+    echo "# The house, read at $STARTED — a SITTING (the clerk's run; the law is SITTING.md)"
+  fi
   echo
   echo "You are $DISPLAY ($PRINCIPAL) at $BASE."
   echo "Grant $GRANT is $GRANT_STATE and expires $GRANT_EXP."
@@ -3299,21 +3931,40 @@ jq -n \
   echo "Bearer for this run: $RUN/bearer (0600, one hour)."
   echo "Snapshot: $RUN/rows/*.json — <kind>.json is the collection projection, <kind>.full.json each row read at its own address (evidence and routing live only there)."
   echo
+  if [ "$RUN_MODE" = "reading" ]; then
+    # THE HOUSE BRIEF comes first on a reading (waymark-xnf): the story
+    # the rows already tell, before any order asks for judgment
+    jq -r '.brief.shown[]' "$RUN/manifest.json"
+    jq -r 'if (.brief.cut // 0) > 0
+           then "  (… \(.brief.cut) more lines cut by WAYMARK_BRIEF_LINES=\(.brief.shown | length); the whole brief is \(.run.snapshot)/derived/brief.json)"
+           else "  (the whole brief, nothing cut)" end' "$RUN/manifest.json"
+    echo
+  fi
   echo "## What is owed"
   jq -r '.duties | to_entries[] | "- \(.key): \(.value)"' "$RUN/manifest.json"
+  if [ "$RUN_MODE" = "sitting" ]; then
+    echo "  (waiting_for_a_reading is counted apart and is NOT owed to this run — see that section below)"
+  fi
   echo
-  echo "## YOUR WORK ORDERS — this run's assignment (waymark-48a)"
-  jq -r '"  (\(.work_orders|length) presented of \(.work_orders_found) the probes found — a CEILING, set by WAYMARK_WORK_ORDERS)"' "$RUN/manifest.json"
+  if [ "$RUN_MODE" = "reading" ]; then
+    echo "## YOUR ORDERS — the clerk's forms AND the editor's orders, labeled (waymark-48a, waymark-nl0)"
+    jq -r '"  (\(.work_orders|length) presented of \(.work_orders_found) the probes found — a CEILING per label: WAYMARK_WORK_ORDERS clerk, WAYMARK_EDITOR_ORDERS editor)"' "$RUN/manifest.json"
+  else
+    echo "## YOUR WORK ORDERS — this run's assignment (waymark-48a)"
+    jq -r '"  (\([.work_orders[] | select(.label == "clerk")]|length) clerk orders presented of \(.work_orders_found) the probes found — a CEILING, set by WAYMARK_WORK_ORDERS; the editor orders are under Waiting for a reading)"' "$RUN/manifest.json"
+  fi
   jq -r 'if .crowd_out then "  CROWD-OUT: " + .crowd_out.says else empty end' "$RUN/manifest.json"
-  jq -r '
-    if (.work_orders|length) == 0 then
-      "  (no order this run — every probe came up empty)"
+  jq -r --arg mode "$RUN_MODE" '
+    ([ .work_orders[] | select($mode == "reading" or .label == "clerk") ]) as $mine
+    | if ($mine|length) == 0 then
+      (if $mode == "reading" then "  (no order this run — every probe came up empty)"
+       else "  (no clerk order this run — every probe came up empty or handed its order to the editor)" end)
     else
       (. as $root
-       | .work_orders | to_entries[]
+       | $mine | to_entries[]
        | (.key + 1) as $n | .value as $o
        | ([ "",
-            "ORDER \($n) · \($o.probe) · \($o.subject)",
+            "ORDER \($n) · \($o.probe) · \($o.subject)  [\($o.label | ascii_upcase) — \($o.why_label // "")]",
             "    subject: \($o.subject_says)",
             "    urgency: \($o.urgency_says)",
             "    why:     \($o.why)",
@@ -3368,19 +4019,89 @@ jq -n \
           | .[]))
     end' "$RUN/manifest.json"
   echo
-  echo "  These orders ARE the assignment, and they are its ceiling. Do what is owed above first (a person's pull and a person's turn outrank any probe), then execute these in the order given — each is one row at one door, and the material to write it is already here. Everything else in this manifest is OPTIONAL material: read it if an order needs it, and stage nothing extra to look busy. An order you cannot answer honestly is skipped and said so in the journal. A run with no work orders and nothing owed writes NOTHING AT ALL, and that is a lawful, complete run (waymark-mho)."
+  if [ "$RUN_MODE" = "reading" ]; then
+    echo "  These orders are the assignment. Do what is owed first (a person's pull and a person's turn outrank any probe), then the clerk forms as written, then the EDITOR orders — each of those asks for a reading of the rows, and the lawful answers are the write it names, or a skip said out loud in the journal; next run verify prints UNANSWERED AND UNSAID against an editor order that got neither. A goal larger than any row is composed only when the rows imply one."
+    echo
+    echo "  ONE EXTRA, OR NONE (waymark-mqo). Beyond the orders, a reading may write ONE finding of its own: a row this manifest did not order, cited to the rows you actually read, distinct from everything standing, with one sentence in the journal on why it was worth a row. Not two. A sitting has none. verify grades it EXTRA (cited, distinct) or FILLER (uncited, a twin, or a second one) — so the freedom stays observable. If nothing you read deserves it, write none and say so; that is the usual answer."
+  else
+    echo "  These orders ARE the assignment, and they are its ceiling. Do what is owed above first (a person's pull and a person's turn outrank any probe), then execute these in the order given — each is one row at one door, and the material to write it is already here. Everything else in this manifest is OPTIONAL material: read it if an order needs it, and stage nothing extra to look busy. An order you cannot answer honestly is skipped and said so in the journal. A run with no work orders and nothing owed writes NOTHING AT ALL, and that is a lawful, complete run (waymark-mho). A sitting fills forms; it has no extra."
+    echo
+    echo "## Waiting for a reading — the editor's orders; NOT yours, and never owed to this run (waymark-nl0)"
+    jq -r '
+      .waiting_for_a_reading as $w
+      | if (($w.orders|length) + ($w.threads|length) + ($w.reworks|length)) == 0
+        then "  (nothing — every order this run found is a clerk form)"
+        else
+          ($w.orders[] | "- ORDER \(.probe) · \(.subject) — \(.subject_says[0:100])\n    editor because: \(.why_label // "")\n    would write: one \(.write.kind | ascii_upcase) at \(.write.door)"),
+          ($w.threads[] | "- QUESTION on \(.subject_kind)/\(.subject_id): \(.last.said_by) asked “\(.last.says[0:140])” (\(.last.self))\n    editor because: the answer has to come from the record, not from the question — a reading answers it FROM what the house already says"),
+          ($w.reworks[] | "- REWORK \(.self) [iterating, plan v\(.plan_revision)] \(.goal[0:80])\n    editor because: \(.why_label // "")\n    THE NOTE: " + (if .note then "\(.note.said_by) said “\(.note.says[0:160])”" else "(no turn on the thread)" end))
+        end' "$RUN/manifest.json"
+    echo "  Leave every one of these exactly as it stands: no reply in words, no piece, no insight, no rework commit. A reading (READING.md — a strong model, morning and evening or on demand) takes them with the whole house in view. verify never faults a sitting for a line on this list."
+  fi
   echo
   echo "## Offered requests — a person's pull is never capped"
   jq -r 'if (.offered_requests|length)==0 then "  (none)" else (.offered_requests[] | "- \(.self) by \(.requested_by) good until \(.good_until)") end' "$RUN/manifest.json"
   echo
-  echo "## Threads whose last turn is not yours"
-  jq -r 'if (.unanswered_threads|length)==0 then "  (none)" else (.unanswered_threads[] | "- \(.subject_kind)/\(.subject_id): \(.last.said_by) said \"\(.last.says[0:120])\" (\(.last.self))") end' "$RUN/manifest.json"
-  echo "  (a turn by another AGENT is not a work order — only a person's is; judge who said it)"
+  if [ "$RUN_MODE" = "reading" ]; then
+    echo "## Threads whose last turn is not yours — facts and questions, and WHAT THE HOUSE ALREADY SAYS under each"
+  else
+    echo "## Threads whose last turn is not yours — the FACTS are yours; a QUESTION waits for a reading"
+  fi
+  jq -r --arg mode "$RUN_MODE" '
+    . as $root
+    | [ .unanswered_threads[] | select($mode == "reading" or .label == "clerk") ] as $mine
+    | if ($mine|length)==0 then "  (none)" else
+      ($mine[]
+       | . as $t
+       | "- \(.subject_kind)/\(.subject_id): \(.last.said_by)\(if .said_by_owner then " (the owner)" else "" end) said \"\(.last.says[0:160])\" (\(.last.self))  [\(.shape | ascii_upcase) — \(.label)]",
+         (if .shape == "fact"
+          then "    a fact: index it as an insight citing the remark and the rows it is about, then reply in words (in_reply_to naming their turn)"
+          else "    a question: the answer comes FROM the rows below — cite the row that answers it; if the rows contradict the person, say which and quote it; never index a question as a fact" end),
+         (([ ($root.house_says // [])[] | select(.outcome == ("/api/outcomes/" + $t.subject_id)) ] | first) as $h
+          | if $h == null then "    WHAT THE HOUSE ALREADY SAYS: (the subject is not an outcome in the snapshot — read the row at its own address)"
+            else "    WHAT THE HOUSE ALREADY SAYS about \($h.outcome) — \($h.goal[0:80]):",
+                 ($h.rows[] | "      · \(.kind) \(.self): \(.says)" + (if .detail != "" then "\n          detail: \(.detail)" else "" end)),
+                 (if ($h.findings|length) > 0 then ($h.findings[] | "      · finding \(.at[0:10]) \(.self): \(.finding)") else "      · (no published finding names these rows)" end)
+            end))
+      end' "$RUN/manifest.json"
+  echo "  (a turn by another AGENT is not a work order — only a person's is; judge who said it. Answer FROM the rows printed: if they answer the question, cite them and say so; if they contradict the person, say which row and quote it. Never index a person's question as a fact — verify prints SAYS-SO against a finding with no house row behind it.)"
   echo
   echo "## Turns no insight cites yet — index the FACTS among them"
   jq -r 'if (.candidate_facts|length)==0 then "  (none)" else (.candidate_facts[] | "- \(.self) on \(.subject_kind)/\(.subject_id): \"\(.says[0:120])\"") end' "$RUN/manifest.json"
   echo "  (a question, a thanks or a preference indexes nothing)"
   echo
+  if [ "$RUN_MODE" = "reading" ]; then
+    echo "## REVIEW — the sittings since the last reading (waymark-nl0)"
+    jq -r '
+      .review as $r
+      | (if $r.since then "  since the reading of \($r.since)" else "  (no earlier reading on this machine — every sitting snapshot here is in scope)" end),
+        (if ($r.sittings | length) == 0
+         then "  NO GRADED SITTINGS TO REVIEW: no sitting snapshot with a manifest is on this machine since then. verify files each sitting grade lines into its run dir (grades.txt); on an ephemeral runner those do not survive, so this list is empty by construction there, not because the sittings were clean. Review from the rows instead: the bundles below, the published findings in the brief, the journals."
+         else ($r.sittings[]
+               | "  ─ sitting \(.stamp) (\(.orders) orders)" + (if .graded then ":" else " — NOT GRADED (verify was never run after it, or its dir was lost)" end),
+                 (if .graded then (if (.grades|length) == 0 then "      (verify wrote no grade line)" else (.grades[] | "      \(.)") end) else empty end))
+         end),
+        (if ($r.notes_left | length) > 0
+         then "  THE FORMS THE LAST READING LEFT (notes_for_sittings), and whether a row now speaks for each:",
+              ($r.notes_left[] | "      · \(if .answered then "ANSWERED" else "STILL OPEN" end) — \(.subject_says)")
+         else "  (the last reading left no notes_for_sittings block)" end)' "$RUN/manifest.json"
+    echo "  What the review WRITES: a ranking_note on every standing bundle you did not write (the list below), a dismissal on a thin or false row where your grant admits the door, and the journal sentence on what the sittings got wrong and why. What it never does: rewrite a sitting row, score its own, or dismiss a row this principal wrote — four eyes, always."
+    echo
+    echo "  THE DOORS A REVIEW NEEDS, and whether the leash admits them:"
+    jq -r '.review_ask.doors[] | "    · \(.kind).\(.action): \(if .admitted then "admitted" else "ABSENT from the grant" end)"' "$RUN/manifest.json"
+    jq -r '
+      .review_ask as $a
+      | (if ($a.thin_findings | length) > 0
+         then "  THIN published findings by other hands (the mechanical candidates for insight.dismiss):",
+              ($a.thin_findings[] | "    · \(.self) — \(.finding)")
+         else "  (no thin published finding by another hand — nothing mechanical to dismiss)" end),
+        (if ($a.scope_add | length) > 0
+         then "  THE ASK that opens the absent doors — anchored to this grant, on rows by id where the review names them, never the kind whole. Inside the ask window the driver files it as the one extend-ask (grant_watch above says whether it did); otherwise, when you hold a row to act on and no ask of yours stands, POST /api/approval_requests with this body (add expires_at = the grant own expiry or later) and REPORT THE ASK ID:",
+              "    \($a.body | tojson)"
+         else "  (every review door is already in the leash)" end)' "$RUN/manifest.json"
+    echo "  An ask decides nothing — a person taps it in the feed. Never a second ask while one stands; never a door the ask did not open."
+    echo
+  fi
   echo "## Bundles carrying no live judgment of yours — newest first"
   jq -r 'if (.unscored_bundles|length)==0 then "  (none)" else (.unscored_bundles[] | "- \(.self) [\(.state)] \(.goal[0:100])\n    value: \(.value_name // "?")  pieces: \(.pieces|length)  decline words: \([.reasons[]|.reason]|tostring)\n    cite: \(.cite|tostring)") end' "$RUN/manifest.json"
   echo "  (a note's evidence is the whole cite list — a score read off the headline alone is not a judgment)"
@@ -3397,10 +4118,15 @@ jq -n \
   echo "## Declines already diagnosed, and under recomposition pressure — nothing to do"
   jq -r '[.declines[] | select(.diagnosis_stands) | select((.recomposed_by|length)>0)] | if length==0 then "  (none)" else (.[] | "- \(.self) · \(.goal[0:60]) · \(.house_says) — its diagnosis stands; recompose freely") end' "$RUN/manifest.json"
   echo
-  echo "## Handed back for a rework — YOUR work orders, and they are off the household's feed"
-  jq -r '[.standing_outcomes[] | select(.iterate_open and .mine)]
-          | if length==0 then "  (none — nothing of yours is being reworked)"
-            else (.[] | "- \(.self) [iterating, plan v\(.plan_revision)] \(.goal[0:90])") end' "$RUN/manifest.json"
+  if [ "$RUN_MODE" = "reading" ]; then
+    echo "## Handed back for a rework — YOUR work orders, marked and unmarked alike, and they are off the household's feed"
+  else
+    echo "## Handed back for a rework — YOUR work orders (the MARKED and the CLOCKED ones), and they are off the household's feed"
+  fi
+  jq -r --arg mode "$RUN_MODE" '
+    [ (.rework_orders // [])[] | select($mode == "reading" or .label == "clerk") ]
+    | if length==0 then "  (none — nothing of yours is being reworked" + (if $mode == "sitting" then " by a form; an unmarked, unclocked note is under Waiting for a reading" else "" end) + ")"
+      else (.[] | "- \(.self) [iterating, plan v\(.plan_revision)] \(.goal[0:90])  [\(.label | ascii_upcase) — \(.why_label // "")]") end' "$RUN/manifest.json"
   echo "  An ITERATING bundle is one a person kept and sent back: the goal is right, the plan is wrong, and it has LEFT THEIR FEED until you answer. Read its thread for the note. Withdraw the pieces that were wrong (POST /api/outcome_pieces/<id>/-/rework — the piece goes reworked, never declined), stage the replacements, then commit with POST /api/outcomes/<id>/-/rework {says}. That commit is the only door back to offered; until it lands, nobody in the house can see the bundle at all. Do not stage a twin, and do not wait for a decline."
   jq -r '
     if (((.rework_orders // []) | length) == 0
@@ -3415,14 +4141,21 @@ jq -n \
             | join("  "))),
       "  A clock time a person says is LOCAL. Write the UTC beside it from the rows above and NEVER write the local hour with a Z: an 11 AM party posted as 11:00:00Z is five in the morning, Mountain, which is how waymark-thn was found. A day this table does not carry is a day you convert from the nearest row on it, and say so.")
     end' "$RUN/manifest.json"
-  jq -r '
+  jq -r --arg mode "$RUN_MODE" '
     . as $root
-    | if ((.rework_orders // []) | length) == 0 then empty else
-    (.rework_orders[]
+    | [ (.rework_orders // [])[] | select($mode == "reading" or .label == "clerk") ] as $mine
+    | if ($mine | length) == 0 then empty else
+    ($mine[]
      | . as $o
      | "",
-       "  \u2500 \(.self) \u2014 \(.goal[0:90])",
+       "  \u2500 \(.self) \u2014 \(.goal[0:90])  [\(.label | ascii_upcase)]",
        "    THE NOTE: " + (if .note then "\(.note.said_by) said \u201c\(.note.says)\u201d  (\(.note.self))" else "(no turn on the thread \u2014 read \(.thread))" end),
+       (([ ($root.house_says // [])[] | select(.outcome == $o.self) ] | first) as $h
+        | if $h == null then empty
+          else "    WHAT THE HOUSE ALREADY SAYS (read the note against these before you touch a piece):",
+               ($h.rows[] | "      \u00b7 \(.kind) \(.self): \(.says)" + (if .detail != "" then "\n          detail: \(.detail)" else "" end)),
+               (if ($h.findings|length) > 0 then ($h.findings[] | "      \u00b7 finding \(.at[0:10]) \(.self): \(.finding)") else empty end)
+          end),
        "    KEEP \u2014 write nothing, and withdrawing one of these is REFUSED:",
        (if (.keep|length)==0 then "      (none still standing)"
         else (.keep[] | "      \u00b7 \(.self) \u2014 \(.says[0:100])") end),
@@ -3522,4 +4255,8 @@ echo
 cat "$RUN/manifest.md"
 echo
 echo "manifest: $RUN/manifest.json"
-echo "read it, then do the judgment: $ROOT/.beads/formulas/sitting.formula.toml is the work order."
+if [ "$RUN_MODE" = "reading" ]; then
+  echo "read it, then do the judgment: $ROOT/.beads/formulas/reading.formula.toml is the work order, and READING.md the law. End the journal with a notes_for_sittings block — one line per form: '- do <write> at <door> citing </api/…> — <the sentence>'."
+else
+  echo "read it, then do the judgment: $ROOT/.beads/formulas/sitting.formula.toml is the work order."
+fi
