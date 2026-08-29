@@ -162,18 +162,39 @@ what you chose not to compose and why.
 ## 6. The diagnosis duty (8um law 4)
 
 Non-engagement with a high-value plan is your work order, not a
-verdict on the person. Before any recomposition of a
-shown-and-declined prior: read the words (`verdict_reason` rows —
+verdict on the person. **The duty is owed at RECOMPOSITION, not at
+every decline** (waymark-me9): `no-burial-without-a-diagnosis` fires
+on `supersedes`, so it is the gate in front of RE-PROPOSING a
+shown-and-declined line — never a tax on every verdict the house
+hands down. A decline nobody is re-proposing owes nothing: an evening
+where the owner sweeps thirty stale wrappers must not become a
+morning of thirty one-line diagnoses about wrappers.
+
+The manifest does that division for you. **Declines OWED a
+diagnosis** lists *only a prior you are about to recompose* — it
+still stands as shown-and-declined, no published insight cites it
+yet, and a work order or offered request this run carries would
+revive it (it works the rows the prior cited, or names the prior's
+address outright). **Declined, not being recomposed — no diagnosis
+owed** is everything else, compact, with the house's own word: read
+it to know the household's mind, write nothing about it.
+
+For one that IS owed: read the words (`verdict_reason` rows —
 wrong_time is not wrong_piece is not never_this), publish an insight
 citing the `verdict_reason` row and quoting its word — or saying "no
 reason given" and citing the outcome when none stands (the
-`no-burial-without-a-diagnosis` wall demands the citation) — only
-for a decline that still owes one, never twice — whose offered step
-is a no-input door a *standing* row admits now (a prior's evidence
-task, `complete`); never `prioritize`, which takes a rank and is
-refused at the insight door — a rank belongs in an outcome piece.
-The declined prior is terminal and admits none, so `expire`/`retire`
-on it is burial, not a step. Respect the
+`no-burial-without-a-diagnosis` wall demands the citation) — never
+twice. Where the house left a NOTE, the diagnosis is already on the
+record: cite the note, do not restate it. The finding says **what the
+recomposition changes because of the decline**; "Declined with no
+reason given." is the manifest line copied out and is not a finding —
+`sitting-run.sh verify` calls more than three of those a **DIAGNOSIS
+FLOOD**. Its offered step is ONE no-input door a *standing* row
+admits now (a prior's evidence task, `complete`); never `prioritize`,
+which takes a rank and is refused at the insight door — a rank
+belongs in an outcome piece. The declined prior is terminal and
+admits none, so `expire`/`retire` on it is burial, not a step.
+Respect the
 `not_before` date the prior verdict stamped. A decline for timing means hold things ready, not hours.
 
 ## 7. The unanswered turn

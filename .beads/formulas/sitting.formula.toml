@@ -40,7 +40,8 @@ grant with one GET, pulls every address below into
 `.sitting/latest/rows/`, and works out the lists the later steps are
 defined in terms of — offered requests, threads whose last turn is
 not yours, turns no insight cites yet, bundles carrying no judgment
-of yours, declines owed a diagnosis — into `.sitting/latest/
+of yours, the declines a recomposition this run carries would revive
+and that therefore owe a diagnosis — into `.sitting/latest/
 manifest.md`. It also runs the composer PROBES and writes the run's
 WORK ORDERS at the top of that manifest: at most two assignments with
 their material already fetched and the write each expects. Read the
@@ -259,15 +260,29 @@ stands — a candidate with the same goal, or citing the same evidence
 row, as one already standing — the rank cannot tell twins apart, so a duplicate
 adds noise where the law wants choice. Sameness is the only
 scarcity; quantity is free.
-THE DIAGNOSIS DUTY (8um law 4) survives the cap's deletion whole:
-before any recomposition of a shown-and-declined prior, read its
-verdict_reason words (wrong_time is not wrong_piece is not
-never_this), publish an insight at POST {{base_url}}/api/insights
-CITING the decline — the verdict_reason row, its word quoted; when
-no reason row stands say "no reason given" and cite the outcome (the
-manifest's `declines[].cite` is the list). ONLY a decline that owes
-one: diagnosis_stands=true means nothing, ever — never twice. Its
-offered step is a NO-INPUT door the offered row admits NOW, from the
+THE DIAGNOSIS DUTY (8um law 4) survives the cap's deletion whole,
+and it is owed AT RECOMPOSITION, NOT AT EVERY DECLINE (waymark-me9):
+the no-burial-without-a-diagnosis wall fires on `supersedes`, so the
+duty is the gate in front of re-proposing a shown-and-declined line
+and never a tax on every verdict. Diagnose ONLY A PRIOR YOU ARE
+ABOUT TO RECOMPOSE — the manifest's "Declines OWED a diagnosis" list
+is exactly that (it still stands declined, no published insight
+cites it, and a work order or offered request this run carries would
+revive it). Everything under "Declined, not being recomposed — no
+diagnosis owed" is owed NOTHING: read it for the household's mind
+and write no row about it. A swept fridge is not a work order.
+For one that is owed: read its verdict_reason words (wrong_time is
+not wrong_piece is not never_this), publish an insight at POST
+{{base_url}}/api/insights CITING the decline — the verdict_reason
+row, its word quoted; when no reason row stands say "no reason
+given" and cite the outcome (the manifest's `declines[].cite` is the
+list). Never twice: diagnosis_stands=true means nothing, ever. Where
+the house left a NOTE, the diagnosis is already on the record — cite
+the note, do not restate it. The finding says WHAT THE RECOMPOSITION
+CHANGES BECAUSE OF THE DECLINE; "Declined with no reason given." is
+the manifest line copied out, not a finding, and verify calls more
+than three of those a DIAGNOSIS FLOOD. Its
+offered step is ONE NO-INPUT door the offered row admits NOW, from the
 manifest's `offer_candidates` (the prior's standing evidence rows
 and their declared doors — complete on a standing task is the usual
 shape; prioritize takes a rank and is refused); the declined prior
