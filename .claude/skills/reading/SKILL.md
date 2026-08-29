@@ -1,6 +1,6 @@
 ---
 name: reading
-description: Run one editor's READING of the waymark house — the strong model's run beside the clerk's sitting. Runs the driver in reading mode, reads the house brief first, answers a person's questions from the record, reworks the unmarked bundles, composes only where a goal is larger than any row, allows itself ONE cited extra, reads the contradictions between rows, reviews the sittings since the last reading (grade lines, scores, dismissals under a grant), and leaves notes_for_sittings as forms. Use when asked to "run a reading", "read the house", "review the sittings", or on the morning/evening reading cron.
+description: Run one editor's READING of the waymark house — the strong model's run beside the clerk's sitting. Runs the driver in reading mode, reads the house brief first, answers a person's questions from the record, reworks the unmarked bundles, composes only where a goal is larger than any row, allows itself ONE cited extra, reads the contradictions between rows, reviews the sittings since the last reading (grade lines, scores, dismissals under a grant), and leaves notes_for_sittings as forms — journaled AND mailed to the sitting principal as a letter, because the journal is private to its own member. Use when asked to "run a reading", "read the house", "review the sittings", or on the morning/evening reading cron.
 ---
 
 # The reading
@@ -149,10 +149,32 @@ none; the review paragraph. Then end the body with:
 ```
 
 Forms, not thoughts — one row, one door, every address one the house
-serves. The next sitting's manifest prints each as a clerk order ahead
-of the probes'. The journal is private to its principal, so the notes
-reach a sitting only under the principal the sittings run as. Then
-`scripts/sitting-run.sh verify`, and paste it.
+serves.
+
+## 10. Mail the block — the journal does not deliver it (waymark-bbb)
+
+A journal is one-party own-surface: private to its own member, never
+grantable. The sittings run under another principal and never see it.
+So send the same lines as ONE letter, to the address the driver
+prints (`WAYMARK_SITTING_PRINCIPAL`):
+
+```
+POST /api/letters
+{"to": "<the sitting principal>",
+ "title": "Forms from the reading of <date>",
+ "body": "<the same `- do:` lines, verbatim>"}
+```
+
+No grant scope names `:letter` and none can — a letter is two-party
+own-surface, so writer and addressee each see it with no grant. Supply
+no `owner`; the door signs it in your own name and refuses any other.
+Once sent it cannot be edited or taken back. The next sitting's
+manifest prints it under **FORMS FROM THE LAST READING**, each line a
+clerk order ahead of the probes'; the sitting opens the letter first,
+because the open transition is the audit that the form was read. The
+journal keeps the block as this run's own record.
+
+Then `scripts/sitting-run.sh verify`, and paste it.
 
 ## Scheduling
 

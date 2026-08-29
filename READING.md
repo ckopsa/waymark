@@ -28,13 +28,23 @@ editor's judgment as a clerk's form. So the runs are two:
 | extras | none — the orders are the ceiling | **one** cited, distinct finding of its own, or none |
 | contradictions | none | the four 63s shapes, two of them mechanical orders |
 | review | none | the sittings since the last reading: their grade lines, the bundles they left unscored, the thin rows |
-| leaves | a journal | a journal ending in **`notes_for_sittings`** — forms the next sittings work from |
+| leaves | a journal | a journal ending in **`notes_for_sittings`** — forms the next sittings work from — **and one LETTER carrying that block to the sitting principal** |
 
-**Same walls, same leash, same journal, same driver.** No engine door
-exists for a reading; everything it does is an ordinary grantable
-write. "Same journal" is literal: the journal is a private own-surface
-kind, so a reading's `notes_for_sittings` reach a sitting only when the
-two runs wear the same principal (the grant the sittings run under).
+**Same walls, same leash, same driver.** No engine door exists for a
+reading; everything it does is an ordinary grantable write.
+
+**The journal is not the delivery** (waymark-bbb). A journal is
+ONE-party own-surface — private to its own member, never grantable —
+so notes left there and nowhere else reach only a sitting wearing the
+reading's own principal. The gemini sittings, the runs the forms are
+FOR, never saw one word of the first reading's block. So a reading
+also MAILS it: one `:letter` to the sitting principal, body the same
+`- do:` lines. A letter is TWO-party own-surface — writer and
+addressee each see it with no grant, a third agent 404s it — so the
+sitting reads its own shelf with the leash it already holds and OPENS
+each letter before working it; the open transition is the audit that
+the form was read. The journal keeps the block too: that is the
+reading's own record, and the letter is the delivery.
 
 ## Step one, every reading: the driver, in reading mode
 
@@ -166,18 +176,44 @@ pasting `scripts/sitting-run.sh verify`.
    - do: reply with a REMARK at POST /api/remarks on outcome/<id> (in_reply_to /api/remarks/<id>) — <the words>
    ```
 
-   The next sitting's manifest prints each line as a clerk order
-   ahead of the probes', and drops a line whose subject a standing row
-   already speaks for. Write forms, not thoughts: one row, one door,
-   the material in the sentence. A reading that leaves no notes says
-   so on purpose; `verify` prints `NOTES FOR SITTINGS: none`.
+   Write forms, not thoughts: one row, one door, the material in the
+   sentence. A reading that leaves no notes says so on purpose;
+   `verify` prints `NOTES FOR SITTINGS: none`.
+
+10. **Mail the block** (waymark-bbb). The journal is private to this
+    principal; the sittings are not. So send the same lines as one
+    letter — the driver prints the address it is expecting:
+
+    ```
+    POST /api/letters
+    {"to": "<WAYMARK_SITTING_PRINCIPAL>",
+     "title": "Forms from the reading of <date>",
+     "body": "<the same `- do:` lines, verbatim>"}
+    ```
+
+    ONE letter per reading. No grant scope names `:letter` and none
+    can — it is a private own-surface kind — so this write rides your
+    own identity: the door stamps you as the author and refuses any
+    other `owner`, and `to` must be a member the household actually
+    has (the refusal names the shape of a good address, never who is
+    on the roster). Once sent it cannot be edited, re-addressed or
+    taken back, so say it the way you mean it. The next sitting's
+    manifest prints the letter under **FORMS FROM THE LAST READING**,
+    each line a clerk order ahead of the probes', dropping a line
+    whose subject a standing row already speaks for; the sitting opens
+    the letter first, and `verify` grades the run on both — whether
+    the letter was opened, and whether a row it wrote cites each
+    form's addresses.
 
 ## What verify says about a reading
 
 Everything it says about a sitting, and: `EDITOR ORDER … answered by
 <row>` / `SKIPPED OUT LOUD` / `UNANSWERED AND UNSAID` (the fault —
 printed, never blocked); `EXTRA: cited, distinct` / `FILLER`;
-`SAYS-SO`; `NOTES FOR SITTINGS: N form(s) left`. A sitting is never
+`SAYS-SO`; `NOTES FOR SITTINGS: N form(s) left`; and `LETTER FOR THE
+SITTINGS: sent — <address>` or `NOT SENT` (the fault the journal alone
+cannot cure: the forms stayed where the sittings cannot read them).
+A sitting is never
 faulted for a line under *Waiting for a reading*; a reading is faulted
 for leaving one unaddressed and unsaid.
 

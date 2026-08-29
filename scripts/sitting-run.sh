@@ -61,7 +61,22 @@
 # four with activity in the window, groups included),
 # WAYMARK_BRIEF_LINES (80 — the cap on the house brief a reading opens
 # with), WAYMARK_REVIEW_SITTINGS (6 — how many graded sittings a
-# reading reviews), WAYMARK_RUN (sitting|reading — see above).
+# reading reviews), WAYMARK_RUN (sitting|reading — see above),
+# WAYMARK_SITTING_PRINCIPAL (the principal the SITTINGS run as — the
+# address a reading's forms are mailed to; default is the gemini
+# member 813b24c2-18f3-481a-b62f-6095cd8a81e8, see LETTERS below).
+#
+# THE FORMS CROSS PRINCIPALS AS LETTERS (waymark-bbb). A reading's
+# notes_for_sittings live in its journal, and a journal is ONE-party
+# own-surface: the sittings — the runs the notes are FOR — never see
+# it unless they wear the same principal. So a reading also MAILS the
+# block: one :letter to WAYMARK_SITTING_PRINCIPAL, body the same
+# `- do:` forms. A letter is TWO-party own-surface — writer and
+# addressee each see it with no grant, and it is never grantable — so
+# the sitting reads its own shelf (GET /api/letters?to=<me>&state=
+# waiting) with the leash it already has, prints the forms under
+# FORMS FROM THE LAST READING, and OPENS each letter before working
+# it: the open transition is the audit that the form was read.
 #
 # A refusal is the end of the run: this script never knocks, never
 # spends re-entry, never invents another way in. It prints the door's
@@ -112,6 +127,12 @@ BRIEF_LINES="${WAYMARK_BRIEF_LINES:-80}"
 case "$BRIEF_LINES" in ''|*[!0-9]*) BRIEF_LINES=80 ;; esac
 REVIEW_N="${WAYMARK_REVIEW_SITTINGS:-6}"
 case "$REVIEW_N" in ''|*[!0-9]*) REVIEW_N=6 ;; esac
+# WHERE A READING'S FORMS ARE MAILED (waymark-bbb). The default is the
+# principal the standing sittings run as today — the gemini member.
+# A house that moves its clerk to another principal sets this; a
+# reading that runs AS the sitting principal mails itself, which is
+# lawful (a letter to yourself is legitimate) and costs one row.
+SITTING_PRINCIPAL="${WAYMARK_SITTING_PRINCIPAL:-813b24c2-18f3-481a-b62f-6095cd8a81e8}"
 
 command -v jq   >/dev/null || { echo "jq is required — apt-get install -y jq" >&2; exit 1; }
 command -v curl >/dev/null || { echo "curl is required" >&2; exit 1; }
@@ -525,6 +546,80 @@ verify_run() {
     else
       echo "NOTES FOR SITTINGS: none — the journal carries no notes_for_sittings block, so the next sittings work from probes alone. Lawful, and worth saying on purpose."
     fi
+    # ── WAS THE BLOCK MAILED (waymark-bbb) ──────────────────────────
+    # The journal is one-party own-surface: notes left there and
+    # nowhere else reach only a sitting wearing this same principal.
+    # A reading's last act is therefore a LETTER to the sitting
+    # principal carrying the same forms. Graded by the row: any
+    # letter this principal authored since the mark.
+    lout="$(mktemp)"
+    lcode="$(api "$lout" "/api/letters?owner=$PRINCIPAL&state=waiting&page%5Bsize%5D=100")"
+    if [ "$lcode" = "200" ]; then
+      jq -r --arg s "$SINCE" --arg sp "$SITTING_PRINCIPAL" '
+        [ .data.items[]? | select((.meta.updated_at // "") >= $s) ] as $sent
+        | if ($sent | length) == 0
+          then "LETTER FOR THE SITTINGS: NOT SENT — the forms sit in the journal only, and a journal is private to its own member: the sittings this reading wrote them for cannot see one word. POST /api/letters {to: \"" + $sp + "\", title, body} with the same `- do:` lines; no grant scope names :letter and none can."
+          else ($sent[] | "LETTER FOR THE SITTINGS: sent — \(.self) to \(.fields.to // "?") · \(.fields.title // "(untitled)")")
+          end' "$lout"
+    else
+      echo "LETTER FOR THE SITTINGS: could not be read back — the letters shelf answered HTTP $lcode. Say in the journal whether the block was mailed."
+    fi
+    rm -f "$lout"
+  fi
+
+  # ── THE MAILED FORMS, GRADED (waymark-bbb) ────────────────────────
+  # The letters this run was handed, and what it did with them. Two
+  # facts, both read off rows and neither takeable on trust: the
+  # letter's own STATE (opening is the audit that the form was read —
+  # a form worked out of an unopened letter leaves the house no
+  # record that it ever landed), and whether a row this principal
+  # wrote since the mark CITES the addresses the form's line names —
+  # the same rule every other order is graded by.
+  if [ -n "$prev" ] && [ "$(jq '(.letter_forms // []) | length' "$prev" 2>/dev/null || echo 0)" -gt 0 ]; then
+    echo
+    lstates="$(mktemp)"; : > "$lstates"
+    while IFS= read -r lhref; do
+      [ -n "$lhref" ] || continue
+      lrow="$(mktemp)"
+      if [ "$(api "$lrow" "$lhref")" = "200" ]; then
+        jq -c '{self, state}' "$lrow" >> "$lstates"
+      else
+        jq -nc --arg s "$lhref" '{self:$s, state:"unreadable"}' >> "$lstates"
+      fi
+      rm -f "$lrow"
+    done < <(jq -r '(.letters // [])[].self' "$prev" 2>/dev/null)
+    jq -rs --slurpfile m "$prev" --slurpfile ls <(jq -s '.' "$lstates") \
+           --arg s "$SINCE" --arg me "$PRINCIPAL" --rawfile jt "$jtext" '
+      . as $rows
+      | ($ls[0] // []) as $states
+      | [ $rows[] | select(.at >= $s) | select(.by == $me) ] as $mine
+      | (($m[0].letters) // []) as $shelf
+      | ($shelf[]
+         | . as $L
+         | (([ $states[] | select(.self == $L.self) | .state ] | first) // "unread") as $st
+         | if $st == "opened" then "LETTER \($L.self): OPENED — the house has the record that its forms were read"
+           elif $st == "discarded" then "LETTER \($L.self): DISCARDED — lawful (the shelf is yours to clear), but the forms in it were never taken; say so in the journal"
+           elif $st == "waiting" then "LETTER \($L.self): STILL WAITING — never opened. Whatever was written this run, the house has no record that this letter landed: \($L.open)"
+           else "LETTER \($L.self): could not be read back (\($st)) — the shelf answered nothing this run could grade"
+           end),
+        ((($m[0].letter_forms) // [])[]
+         | . as $f
+         | [ $mine[] | select($f.subject != null) | select((.cites | index($f.subject)) != null) | .self ] as $hits
+         | (($f.subject != null)
+            and (($jt | contains($f.subject))
+                 or ($jt | contains($f.subject | split("/") | last)))) as $said
+         | if ($hits | length) > 0
+           then "FORM \($f.letter_id) \($f.subject): answered by \($hits | join(", "))"
+           elif $f.subject == null
+           then "FORM \($f.letter_id) (the line names no address): UNGRADEABLE — a form the driver could not tie to a row; the journal is the only place it can be answered"
+           elif $said
+           then "FORM \($f.letter_id) \($f.subject): SKIPPED OUT LOUD — the journal names it"
+           elif ($f.answered // false)
+           then "FORM \($f.letter_id) \($f.subject): ALREADY ANSWERED BEFORE THIS RUN — a standing row cited it when the manifest was built, so it was never an order; no fault"
+           else "FORM \($f.letter_id) \($f.subject): UNANSWERED"
+           end)' "$twins" 2>/dev/null || true
+    rm -f "$lstates"
+    echo "  A mailed form is answered the same way every order is: by a row this principal wrote citing the addresses the line names. UNANSWERED is a failure only where the form could honestly have been answered — a row that is gone, a door that is shut and a line already answered by a standing row are lawful skips, said out loud in the journal."
   fi
   rm -f "$twins" "$jtext"
 
@@ -783,7 +878,7 @@ if [ "$MODE" = "verify" ]; then
   if [ -n "$prev" ]; then
     vdir="$(dirname "$prev")"
     verify_run | tee "$vdir/verify.txt"
-    grep -E '^(ORDER|EDITOR ORDER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|SAYS-SO|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
+    grep -E '^(ORDER|EDITOR ORDER|FORM|LETTER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|SAYS-SO|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
       "$vdir/verify.txt" | sed "s/^\(NOTHING written\.\).*/\1/" > "$vdir/grades.txt" 2>/dev/null || true
     printf '%s\n' "$(iso "$(now_s)")" > "$vdir/verified_at"
   else
@@ -925,10 +1020,18 @@ states outcome_pieces "/api/outcome_pieces" offered taken declined moot reworked
 states insights      "/api/insights"      published taken dismissed
 states ranking_notes "/api/ranking_notes" live dismissed
 states journals      "/api/journals?owner=$PRINCIPAL" written amended
+# THE SHELF (waymark-bbb): the letters addressed to THIS principal and
+# still waiting. No grant scope names :letter and none can — it is a
+# private own-surface kind — so this read rides the bearer's own
+# identity: a letter is yours as its author or as its addressee, and
+# a third agent 404s the row by construction. The `to=` filter is the
+# addressee half; the collection would answer the author half too, and
+# a reading has no use for the mail it sent itself.
+collection letters "/api/letters?to=$PRINCIPAL&state=waiting"
 collection approval_requests "/api/approval_requests?grant_id=$GRANT"
 doc grant "/api/grants/$GRANT"
 
-for k in composition_requests values people outcomes outcome_pieces insights ranking_notes remarks verdict_reasons journals chat_threads; do
+for k in composition_requests values people outcomes outcome_pieces insights ranking_notes remarks verdict_reasons journals chat_threads letters; do
   hydrate "$k"
 done
 
@@ -3639,6 +3742,86 @@ if [ "$RUN_MODE" = "sitting" ]; then
     && mv "$D/work_orders.tmp" "$D/work_orders.json" || true
 fi
 
+# ── THE FORMS THAT CROSSED PRINCIPALS (waymark-bbb) ──────────────────
+# The block above only ever reaches a sitting that wears the READING's
+# principal, because a journal is one-party own-surface. The gemini
+# sittings — the runs the notes are actually for — never saw a word of
+# it. So the reading also MAILS the block: one :letter to
+# WAYMARK_SITTING_PRINCIPAL, body the same `- do:` forms. A letter is
+# TWO-party own-surface (author and addressee, no grant, never
+# grantable), so this principal's own shelf is the delivery.
+#
+# Each `- do:` line becomes a clerk order of exactly the shape the
+# journal notes take — the sentence IS the order — and each carries
+# the LETTER it came in and that letter's open door, because opening
+# is the audit that the form was read. The forms of one letter are one
+# assignment: the sitting opens the letter first and then works its
+# lines. A line whose subject a standing row already speaks for is
+# marked answered and dropped from the orders, the same rule the
+# journal notes wear; the letter is still opened, because a letter
+# read and found already answered is still a letter read.
+jq --slurpfile cited "$D/cited.json" '
+  ($cited[0] // []) as $c
+  | def form_lines:
+      # the body IS the block: a letter carries nothing but the forms.
+      # A reading that pasted its journal heading in too is still read
+      # correctly — the heading is a `#` line and every form is a
+      # bullet, so bullets are the whole of it either way.
+      ((.data.body // "") | split("\n"))
+      | map(select(test("^\\s*[-*]\\s+")) | sub("^\\s*[-*]\\s+"; "") | gsub("\\s+$"; ""))
+      | map(select(length > 0));
+  def addrs: [ match("/api/[A-Za-z0-9_-]+/[A-Za-z0-9_-]+"; "g") | .string ] | unique;
+  def door_of:
+      ascii_downcase
+      | if test("ranking_note|\\bscore\\b") then {kind:"ranking_note", door:"POST /api/ranking_notes"}
+        elif test("outcome_piece|\\bpiece\\b") then {kind:"outcome_piece", door:"POST /api/outcome_pieces"}
+        elif test("\\brework\\b") then {kind:"outcome", door:"POST /api/outcomes/<id>/-/rework"}
+        elif test("\\bremark\\b|\\breply\\b|\\banswer\\b") then {kind:"remark", door:"POST /api/remarks"}
+        elif test("\\binsight\\b|\\bfinding\\b|\\bindex\\b|\\benrich\\b") then {kind:"insight", door:"POST /api/insights"}
+        elif test("\\boutcome\\b|\\bcompose\\b") then {kind:"outcome", door:"POST /api/outcomes"}
+        else {kind:"journal", door:"the door the note names"} end;
+  [ .[] | select(.state == "waiting") | . as $L
+    | ($L.self | split("/") | last) as $lid
+    | ($L | form_lines)[] | . as $line
+    | ($line | addrs) as $a
+    | ($line | door_of) as $d
+    | {probe:"forms-from-the-last-reading", rank:0, label:"clerk",
+       why_label:"a reading mailed this form; the note is the whole order",
+       subject:($a[0] // null), subject_says:($line | .[0:140]),
+       urgency_at:null,
+       urgency_says:("mailed by the reading of " + (($L.meta.updated_at // "") | .[0:10]) + " (" + $L.self + ")"),
+       why:"A reading read across the rows and wrote this form for a sitting, then MAILED it — the journal it also sits in is private to the reading own principal, so the letter is how it reached you. Open the letter first; the open transition is the audit that the form was read.",
+       gate_keys:[], material:{row:null, siblings:[], gate:null},
+       write:{kind:$d.kind, door:$d.door, fields:[],
+              finding:$line, cite:$a, offer:null,
+              note:"Do exactly what the line says and nothing beside it. If a row it names is gone, or a door it names is shut, skip it and say so in the journal — the form was written before this run read the house."},
+       from_letter:$L.self, letter_id:$lid,
+       letter_from:($L.data.owner // null),
+       letter_title:($L.data.title // null),
+       letter_open:("POST /api/letters/" + $lid + "/-/open"),
+       left_at:($L.meta.updated_at // null),
+       answered: (if $a[0] != null then (($c | index($a[0])) != null) else false end)} ]
+' "$R/letters.full.json" > "$D/letter_forms.json" 2>>"$PROBE_ERRS" \
+  || echo '[]' > "$D/letter_forms.json"
+# the shelf itself, one entry per waiting letter with its open door —
+# the manifest prints the letters and their forms together, and verify
+# reads this list back to grade each form
+jq '[ .[] | select(.state == "waiting")
+      | (.self | split("/") | last) as $lid
+      | {self, id:$lid, from:(.data.owner // null), to:(.data.to // null),
+         title:(.data.title // null), at:(.meta.updated_at // null),
+         open:("POST /api/letters/" + $lid + "/-/open"),
+         body:(.data.body // "")} ]' \
+   "$R/letters.full.json" > "$D/letters_waiting.json" 2>>"$PROBE_ERRS" \
+  || echo '[]' > "$D/letters_waiting.json"
+# on a SITTING the mailed forms are orders, ahead of everything — a
+# reading already chose them, and they crossed a wall to get here
+if [ "$RUN_MODE" = "sitting" ]; then
+  jq -s '([ .[0][] | select(.answered | not) ] | .[0:5]) + .[1]' \
+     "$D/letter_forms.json" "$D/work_orders.json" > "$D/work_orders.tmp" 2>>"$PROBE_ERRS" \
+    && mv "$D/work_orders.tmp" "$D/work_orders.json" || true
+fi
+
 # ── THE HOUSE BRIEF (waymark-xnf, built here under waymark-nl0) ──────
 # A run starts cold with a manifest and the rows; the NARRATIVE — who
 # is one year old, who left this summer, which appointment the placard
@@ -3913,6 +4096,9 @@ jq -n \
   --slurpfile review_ask "$D/review_ask.json" \
   --slurpfile house_says "$D/house_says.json" \
   --slurpfile notes "$D/notes_for_sittings.json" \
+  --slurpfile lforms "$D/letter_forms.json" \
+  --slurpfile shelf "$D/letters_waiting.json" \
+  --arg sitting_principal "$SITTING_PRINCIPAL" \
 '
   # WHAT THIS RUN OWNS (waymark-nl0). A sitting owns the clerk orders,
   # the fact-shaped turns and the marked (or clocked) reworks; the
@@ -3946,6 +4132,10 @@ jq -n \
     # the rework orders the household handed back (waymark-9xn):
     # bundles off its feed until this composer answers
     rework_iterating: (if $sit then ($clerk_reworks | length) else ([$standing[0][] | select(.iterate_open and .mine)] | length) end),
+    # the letters waiting on the shelf of this principal (waymark-bbb):
+    # opening each is owed BEFORE its forms are worked, and the open
+    # is the only audit the house keeps that the form was read
+    open_letters: ($shelf[0] | length),
     work_orders: (if $sit then ($clerk_orders | length) else ($orders[0] | length) end),
     # what a sitting leaves for the editor, counted apart and never owed
     waiting_for_a_reading: (if $sit then (($editor_orders | length) + ($editor_threads | length) + ($editor_reworks | length)) else 0 end)
@@ -3957,6 +4147,18 @@ jq -n \
   review_ask: (if $sit then null else $review_ask[0] end),
   house_says: $house_says[0],
   notes_for_sittings: $notes[0],
+  # THE FORMS THAT CROSSED PRINCIPALS (waymark-bbb): the letters
+  # waiting on the shelf of THIS principal, and the `- do:` forms read
+  # out of them. `letters.open` is the door the sitting knocks FIRST —
+  # the open transition is the audit that the form was read. On a
+  # reading, `sitting_principal` is the address the next block of
+  # notes is mailed to (WAYMARK_SITTING_PRINCIPAL).
+  letters: $shelf[0],
+  letter_forms: $lforms[0],
+  sitting_principal: $sitting_principal,
+  letter_door: {create:"POST /api/letters",
+                fields:["to", "title", "body"],
+                note:"A letter is two-party own-surface: no grant scope names :letter and none can. The author is stamped by the engine — supply no `owner`, or your own id. `to` must be a member the household actually has; it is resolved to the delivery identity at the door and cannot be re-addressed once sent."},
   work_orders_found: ($orders_all[0] | length),
   crowd_out: ($crowd[0] // null),
   now: $started,
@@ -4047,6 +4249,39 @@ jq -n \
   if [ "$RUN_MODE" = "sitting" ]; then
     echo "  (waiting_for_a_reading is counted apart and is NOT owed to this run — see that section below)"
   fi
+  echo
+  # ── FORMS FROM THE LAST READING (waymark-bbb) ──────────────────────
+  # The reading's notes reach a sitting as MAIL, because a journal is
+  # one-party own-surface and a letter is two-party. This block is the
+  # shelf: each waiting letter, its open door, and the `- do:` lines
+  # read out of its body as clerk orders with their own door and
+  # cites. It prints on both runs — a reading has a shelf too.
+  jq -r '
+    if ((.letters // []) | length) == 0
+    then "## FORMS FROM THE LAST READING — none (no letter is waiting on your shelf)"
+    else
+      "## FORMS FROM THE LAST READING — \((.letters | length)) letter(s) waiting on your shelf (waymark-bbb)",
+      "  OPEN EACH LETTER FIRST, then work its forms: the open transition is the only audit the house keeps that the form was read. Opening takes no body and no grant — a letter is two-party own-surface, yours as its addressee.",
+      (. as $root
+       | .letters[]
+       | . as $L
+       | "",
+         "  ─ LETTER \($L.self)",
+         "    from \($L.from // "?") · \($L.title // "(untitled)") · left \(($L.at // "")[0:16])",
+         "    OPEN IT: \($L.open)   (no body; from waiting → opened)",
+         ([ $root.letter_forms[] | select(.from_letter == $L.self) ]
+          | if length == 0
+            then "    (the letter carries no `- do:` line — read its body in the manifest JSON under letters[].body and judge it)"
+            else (to_entries[]
+                  | "    FORM \(.key + 1)\(if .value.answered then " — ALREADY ANSWERED: a standing row cites \(.value.subject); read it, do not write it twice" else "" end)",
+                    "      subject: \(.value.subject // "(the line names no address — the sentence is the whole of it)")",
+                    "      write:   \(.value.write.kind) at \(.value.write.door)",
+                    "      cite:    \(if ((.value.write.cite // []) | length) == 0 then "(the line names none — cite what you read)" else (.value.write.cite | join(", ")) end)",
+                    "      says:    \(.value.write.finding)")
+            end)),
+        "",
+        "  A form is done when a row YOU write cites the addresses the line names — that is exactly how verify grades it. A form whose row is gone or whose door is shut is skipped in the journal, out loud, by name."
+    end' "$RUN/manifest.json"
   echo
   if [ "$RUN_MODE" = "reading" ]; then
     echo "## YOUR ORDERS — the clerk's forms AND the editor's orders, labeled (waymark-48a, waymark-nl0)"
@@ -4359,6 +4594,7 @@ echo
 echo "manifest: $RUN/manifest.json"
 if [ "$RUN_MODE" = "reading" ]; then
   echo "read it, then do the judgment: $ROOT/.beads/formulas/reading.formula.toml is the work order, and READING.md the law. End the journal with a notes_for_sittings block — one line per form: '- do <write> at <door> citing </api/…> — <the sentence>'."
+  echo "THEN MAIL IT (waymark-bbb): the journal is private to this principal, so POST /api/letters {\"to\":\"$SITTING_PRINCIPAL\",\"title\":\"Forms from the reading of <date>\",\"body\":\"<the same - do: lines, verbatim>\"} — ONE letter per reading, no grant scope needed and none possible. The journal keeps the block too; that is this run's own record."
 else
   echo "read it, then do the judgment: $ROOT/.beads/formulas/sitting.formula.toml is the work order."
 fi
