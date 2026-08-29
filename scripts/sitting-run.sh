@@ -55,6 +55,10 @@ ASK_WINDOW="${WAYMARK_ASK_WINDOW_S:-43200}"
 EXTEND="${WAYMARK_EXTEND_S:-86400}"
 MAXPAGES="${WAYMARK_MAX_PAGES:-5}"
 MAXHYDRATE="${WAYMARK_MAX_HYDRATE:-120}"
+# the household zone, hoisted here because BOTH halves need it: the
+# read half converts every instant it prepares, and verify reads the
+# wall clock back off what was written (waymark-thn).
+HOUSE_TZ="${WAYMARK_HOUSE_TZ:-America/Denver}"
 
 MODE="${1:-read}"
 case "$MODE" in read|verify) ;; -h|--help|help)
@@ -370,6 +374,131 @@ if [ "$MODE" = "verify" ]; then
     fi
     rm -f "$unreworked"
   fi
+
+
+  # ── CLAIMED, NOT STAGED (waymark-o04) ─────────────────────────────
+  # The other half of vf8, and the one the rows can still see. A
+  # no-change rework is LAWFUL where nothing was marked — but a
+  # no-change rework whose `says` announces a change is a PROMISE
+  # standing in for the work: on 2026-08-29 a composer committed
+  # "I've added the Payson inspection and Howie's party, and kept
+  # Wilfred's party." on a round that staged nothing and withdrew
+  # nothing, and the bundle went back on the household feed looking
+  # answered while every hour in it was still wrong.
+  #
+  # Graded by the ROWS, like everything else here: the revision moved
+  # (a round was committed), no piece was staged and none withdrawn
+  # inside it, and the words posted with it claim otherwise. The words
+  # are read off the THREAD, because that is where the rework door
+  # puts them — `says` is not a field on the bundle, it is the turn.
+  if [ -n "$prev" ]; then
+    claims="$(mktemp)"; : > "$claims"
+    while IFS="$(printf '\t')" read -r href rev asked; do
+      [ -n "$href" ] || continue
+      cur="$(mktemp)"
+      if [ "$(api "$cur" "$href")" = "200" ] \
+         && [ "$(jq -r --arg r "$rev" '(((.data.plan_revision // 0) | tostring) != $r)' "$cur")" = "true" ]; then
+        oid="${href##*/}"
+        pcs="$(mktemp)"; rem="$(mktemp)"
+        api "$pcs" "/api/outcome_pieces?outcome_id=${oid}&page%5Bsize%5D=100" >/dev/null
+        api "$rem" "/api/remarks?subject_kind=outcome&subject_id=${oid}&page%5Bsize%5D=100" >/dev/null
+        jq -r --slurpfile r "$rem" --arg me "$PRINCIPAL" --arg b "$asked" --arg h "$href" '
+          ([ .data.items[]? | select(.state == "offered")
+                            | select((.meta.updated_at // "") > $b) ] | length) as $staged
+          | ([ .data.items[]? | select(.state == "reworked")
+                             | select((.meta.updated_at // "") > $b) ] | length) as $withdrawn
+          | ([ (($r[0].data.items) // [])[]
+               | select(((.fields.said_by) // "") == $me)
+               | select((.meta.updated_at // "") > $b) ]
+             | sort_by(.meta.updated_at) | last) as $turn
+          | (($turn.fields.says) // "") as $w
+          | if $staged == 0 and $withdrawn == 0
+               and ($w | test("\\b(added|moved|re-?timed|changed|updated|rescheduled)\\b"; "i"))
+            then "CLAIMED, NOT STAGED: \($h) — says “\($w)” but no piece changed"
+            else empty end' "$pcs" >> "$claims"
+        rm -f "$pcs" "$rem"
+      fi
+      rm -f "$cur"
+    done < <(jq -r '[(.standing_outcomes // [])[] | select(.iterate_open and .mine)][]
+                     | "\(.self)\t\((.plan_revision // 0) | tostring)\t\(((.iterate_requested_at // .reworked_at) // ""))"' "$prev")
+    if [ -s "$claims" ]; then
+      echo
+      cat "$claims"
+      echo "  A round that changes nothing is lawful; a round that changes nothing while SAYING it changed something is not an answer, it is a claim. The bundle is back on the household feed reading as done, and nobody there can see that the hour they asked for was never staged. Withdraw and stage what the note asks, commit again, and let says describe the pieces that actually moved."
+    fi
+    rm -f "$claims"
+  fi
+
+  # ── DID THE NOTE OWN HOUR LAND? (waymark-o04) ─────────────────────
+  # The manifest suggested a RE-TIME off a clock time the household
+  # wrote into the note. This reads back whether any piece on that
+  # bundle now starts at that hour — the same local hour, which on a
+  # given day is the same UTC hour, so it is one string comparison and
+  # no zone arithmetic. It grades the SUGGESTION, not the composer:
+  # IGNORED is a fact, and standing by the plan is a lawful answer to
+  # it as long as the journal says so.
+  if [ -n "$prev" ] \
+     && [ "$(jq '[((.note_times // [])[] | .suggestions[] | select(.kind == "RE-TIME"))] | length' "$prev" 2>/dev/null || echo 0)" -gt 0 ]; then
+    honored="$(mktemp)"; : > "$honored"
+    while IFS= read -r osf; do
+      [ -n "$osf" ] || continue
+      pcs="$(mktemp)"
+      if [ "$(api "$pcs" "/api/outcome_pieces?outcome_id=${osf##*/}&page%5Bsize%5D=100")" = "200" ]; then
+        jq -r --slurpfile m "$prev" --arg self "$osf" '
+          ([ .data.items[]? | select(.state == "offered" or .state == "taken")
+             | (((.fields.prepared.starts_at) // "")) ] | map(select(. != ""))) as $starts
+          | (($m[0].note_times) // [])[] | select(.self == $self)
+          | .suggestions[] | select(.kind == "RE-TIME") | . as $g
+          | if ([ $starts[] | select(.[0:13] == ($g.note_utc | .[0:13])) ] | length) > 0
+            then "NOTE TIME HONORED: \($g.piece) — a piece on \($self) now starts \($g.note_local) local (\($g.note_utc))"
+            else "NOTE TIME IGNORED: \($g.piece) still \($g.piece_local) — the note said \($g.note_local) local (\($g.note_utc))"
+            end' "$pcs" >> "$honored"
+      fi
+      rm -f "$pcs"
+    done < <(jq -r '[(.note_times // [])[]
+                      | select(([.suggestions[] | select(.kind == "RE-TIME")] | length) > 0)
+                      | .self] | .[]' "$prev")
+    if [ -s "$honored" ]; then
+      echo
+      sort -u "$honored"
+      echo "  A time in the note is a re-time even where nobody tapped Wrong time. IGNORED is not automatically a failure — the plan may still stand — but it is only an answer if the journal says out loud why the hour the household named was not taken."
+    fi
+    rm -f "$honored"
+  fi
+
+  # ── ODD HOUR (waymark-thn) ────────────────────────────────────────
+  # The fault that started it: an 11 AM party written as 11:00:00Z,
+  # which is five in the morning here. Nothing can tell a deliberate
+  # dawn start from a zone mistake, so this is a HEURISTIC printed
+  # beside what the run wrote while the run is still here to fix it —
+  # a prepared start before six in the morning or after ten at night,
+  # local, read off the wall clock rather than off the string.
+  odd="$(mktemp)"; : > "$odd"
+  for st in offered taken; do
+    out="$(mktemp)"
+    if [ "$(api "$out" "/api/outcome_pieces?composed_by=$PRINCIPAL&state=${st}&page%5Bsize%5D=100")" = "200" ]; then
+      while IFS="$(printf '\t')" read -r psf pstart; do
+        [ -n "$psf" ] || continue
+        loc="$(TZ="$HOUSE_TZ" date -d "$pstart" +'%Y-%m-%d %H:%M' 2>/dev/null || echo "")"
+        [ -n "$loc" ] || continue
+        mins=$(( 10#${loc:11:2} * 60 + 10#${loc:14:2} ))
+        if [ "$mins" -lt 360 ] || [ "$mins" -gt 1320 ]; then
+          echo "ODD HOUR: $psf starts $loc ($pstart) — check the zone" >> "$odd"
+        fi
+      done < <(jq -r --arg s "$SINCE" '.data.items[]?
+                  | select((.meta.updated_at // "") >= $s)
+                  | select(((.fields.form) // "") == "create")
+                  | select((((.fields.prepared.starts_at)) // "") != "")
+                  | "\(.self)\t\(.fields.prepared.starts_at)"' "$out")
+    fi
+    rm -f "$out"
+  done
+  if [ -s "$odd" ]; then
+    echo
+    sort -u "$odd"
+    echo "  Times in this house are $HOUSE_TZ. A clock time a person says is LOCAL and the row wants UTC, so 11 AM is 17:00Z in August and 18:00Z in December — the manifest rework section prints the whole table already converted. If the hour above really is what the household asked for, leave it; if it is six hours off, it is the zone."
+  fi
+  rm -f "$odd"
 
   # ── THE MARKS, GRADED (waymark-wxk) ───────────────────────
   # The rework orders the last manifest handed over, read back one
@@ -1213,7 +1342,6 @@ IMAP_SINCE="SINCE $(date -u -d "@$(( NOW_S - 604800 ))" +%d-%b-%Y 2>/dev/null ||
 # conversion is asked of `date` with the ZONE INSIDE THE STRING, which
 # is DST-correct on both sides of the change rather than carrying
 # today's offset a week forward.
-HOUSE_TZ="${WAYMARK_HOUSE_TZ:-America/Denver}"
 den_utc() { # den_utc <YYYY-MM-DD> <HH:MM> — a local wall clock, as UTC
   date -u -d "TZ=\"$HOUSE_TZ\" $1 $2" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
     || iso "$(to_s "$1T$2:00$(TZ="$HOUSE_TZ" date +%z 2>/dev/null || echo +0000)")"
@@ -1428,6 +1556,337 @@ JQ_KEYS='
        then " That value is OBSERVED, not affirmed: the house has not said it in so many words, only its record has. Name it anyway — `names-a-value` holds an observed value, and the crown ranks it lower rather than refusing it — and say in the goal that it serves a reading of this household rather than a word the household gave."
        else "" end);
 '
+
+# ── THE HOUSEHOLD CLOCK A REWORK ORDER CARRIES (waymark-thn) ─────────
+# Jules answered the order "add Howie's 11AM birthday party" with an
+# event at 11:00Z — five in the morning, Mountain. The manifest said
+# "times are America/Denver" in prose and left the arithmetic to a
+# small model, which is the one thing this driver has learned not to
+# do: the commitments probe already hands its order a table of
+# pre-converted rows so the model PICKS one. A rework order writes
+# instants too, so it gets the same table, built by the same `den_utc`
+# — the zone is inside the date string, so it is DST-correct on both
+# sides of the change rather than carrying today's offset a week on.
+#
+# It starts TODAY rather than tomorrow (the probes' table starts
+# tomorrow because every instant they PREPARE has to be ahead of the
+# run): a rework is usually about a day the household is already
+# standing in, and the specimen's whole argument was about a Saturday
+# that had already begun.
+#
+# It is printed ONCE, at the top of the rework section, and every
+# bundle below it points at it. Per-bundle would be eight lines of
+# identical arithmetic repeated under every order, and the marks lists
+# are what has to stay legible per bundle.
+REWORK_HOURS="08:00 09:30 11:00 13:00 14:00 17:00 19:00"
+REWORK_CLOCK="$(
+  acc="$(mktemp)"; : > "$acc"
+  i=0
+  while [ "$i" -le 7 ]; do
+    d="$(TZ="$HOUSE_TZ" date -d "+$i day" +%Y-%m-%d 2>/dev/null || true)"
+    [ -n "$d" ] || break
+    hacc="$(mktemp)"; : > "$hacc"
+    for hh in $REWORK_HOURS; do
+      jq -nc --arg l "$hh" --arg u "$(den_utc "$d" "$hh")" '{local:$l, utc:$u}' >> "$hacc"
+    done
+    jq -sc --arg d "$d" \
+       --arg wd "$(TZ="$HOUSE_TZ" date -d "$d" +%A 2>/dev/null || echo '?')" \
+       --arg z "$(TZ="$HOUSE_TZ" date -d "$d 12:00" +'%Z, UTC%:z' 2>/dev/null || echo '?')" \
+       '{date:$d, weekday:$wd, zone:$z, hours:.}' "$hacc" >> "$acc"
+    rm -f "$hacc"
+    i=$((i + 1))
+  done
+  jq -sc '.' "$acc"; rm -f "$acc"
+)"
+jq -e 'type == "array"' <<< "$REWORK_CLOCK" >/dev/null 2>&1 || REWORK_CLOCK='[]'
+
+# ── A TIME IN THE NOTE IS A RE-TIME (waymark-o04) ────────────────────
+# The failure the marks wall cannot see. On an iterating bundle where
+# the household marked NOTHING and wrote three clock times into the
+# note — "Howie's Party at 11AM in Spanish Fork / Wilfred's Party at
+# 1PM in Provo at our home. / Payson inspection maybe 9:30-10:30?" —
+# the composer committed a no-change rework saying "I've added the
+# Payson inspection and Howie's party, and kept Wilfred's party." and
+# nothing moved. That commit is LAWFUL (waymark-vf8: a no-change round
+# is an answer where nothing was marked), the wall could not fire
+# because nothing was marked, and the bundle went back on the feed
+# looking answered while every hour in it was still wrong.
+#
+# So the note is READ. Every turn on the bundle's thread that is not
+# ours is split into sentences, each sentence is scanned for CLOCK
+# ATOMS, and each atom's sentence is matched to a piece by SHARED
+# NOUNS — case-folded, four letters or longer, stopwords and when-words
+# out. What comes out is three lists, and they are SUGGESTIONS rather
+# than marks: the marks wall (waymark-wxk) is the enforced path, and
+# nothing here refuses anything.
+#
+#   the sentence matches a piece whose hour differs   → RE-TIME
+#   …and that piece is already TAKEN (its row exists) → INVOKE
+#   the sentence matches no piece at all              → ADD
+#
+# A phrase whose piece ALREADY holds the hour prints nothing: the list
+# is what is still unheld, so it empties itself as the rework lands.
+#
+# The subjects are the bundles handed back to us AND our own OFFERED
+# bundles, because the specimen's shape is exactly the second one: a
+# no-change rework puts a bundle back on the feed still carrying the
+# note's unanswered hour, and a driver reading only `iterating` would
+# go quiet at the moment the fault appears.
+jq '[.[] | select(.mine) | select(.iterate_open or .state == "offered")
+      | {self, state, goal, plan_revision, iterate_open,
+         boundary:(.reworked_at // ""),
+         asked:(.iterate_requested_at // .reworked_at // "")}]' \
+   "$D/standing_outcomes.json" > "$D/note_time_subjects.json" 2>>"$PROBE_ERRS" \
+  || echo '[]' > "$D/note_time_subjects.json"
+
+# WHAT LOCAL TIME EACH PIECE ALREADY HOLDS. `date` does this and jq
+# cannot, so it is done here, once per piece, and what the manifest
+# prints is the reading a person would take off a wall.
+: > "$D/piece_local.jsonl"
+while IFS="$(printf '\t')" read -r psf pstart pend; do
+  [ -n "$psf" ] || continue
+  lstart="$(TZ="$HOUSE_TZ" date -d "$pstart" +'%Y-%m-%d %H:%M' 2>/dev/null || echo "")"
+  lend=""
+  [ -n "$pend" ] && lend="$(TZ="$HOUSE_TZ" date -d "$pend" +'%H:%M' 2>/dev/null || echo "")"
+  jq -nc --arg s "$psf" --arg u "$pstart" --arg l "$lstart" --arg e "$lend" \
+     '{self:$s, starts_at:$u, local:$l,
+       local_date:($l | .[0:10]), local_hm:($l | .[11:16]), local_end:$e}' \
+     >> "$D/piece_local.jsonl" 2>/dev/null || true
+done < <(jq -r --slurpfile subj "$D/note_time_subjects.json" '
+    ([ ($subj[0] // [])[] | (.self | split("/") | last) ]) as $ids
+    | .[] | . as $p | select(($ids | index($p.data.outcome_id)) != null)
+    | select((($p.data.prepared.starts_at) // "") != "")
+    | [.self, .data.prepared.starts_at, ((.data.prepared.ends_at) // "")] | @tsv' \
+    "$R/outcome_pieces.full.json" 2>>"$PROBE_ERRS")
+jq -s '.' "$D/piece_local.jsonl" > "$D/piece_local.json" 2>/dev/null \
+  || echo '[]' > "$D/piece_local.json"
+
+# THE ZONE, AS A NUMBER PER DAY. A local wall clock becomes UTC by
+# subtracting that day's offset, and the offset is asked of `date` once
+# per day rather than assumed — which is the whole of the DST
+# correctness here. Yesterday through a fortnight out covers every day
+# a note is likely to name; a date outside it falls back to the first
+# offset in the table.
+: > "$D/tz_offsets.jsonl"
+{ i=-1; while [ "$i" -le 14 ]; do
+    TZ="$HOUSE_TZ" date -d "$i day" +%Y-%m-%d 2>/dev/null || true; i=$((i + 1)); done
+  jq -r '.[] | .local_date' "$D/piece_local.json" 2>/dev/null || true; } \
+  | grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' | sort -u | while read -r d; do
+    z="$(TZ="$HOUSE_TZ" date -d "$d 12:00" +%z 2>/dev/null || echo +0000)"
+    sgn=1; case "$z" in -*) sgn=-1 ;; esac
+    jq -nc --arg d "$d" \
+       --argjson s "$(( sgn * (10#${z:1:2} * 3600 + 10#${z:3:2} * 60) ))" \
+       '{date:$d, offset:$s}'
+  done >> "$D/tz_offsets.jsonl" 2>>"$PROBE_ERRS" || true
+jq -s 'map({key:.date, value:.offset}) | from_entries' "$D/tz_offsets.jsonl" \
+   > "$D/tz_offsets.json" 2>/dev/null || echo '{}' > "$D/tz_offsets.json"
+
+# THE PARSER. It lives beside wm_keys because it is the same vocabulary
+# one question over: wm_keys asks what a line is ABOUT, this asks WHEN
+# it says a thing happens.
+JQ_NOTETIMES='
+  # the words that say WHEN rather than WHAT — they must never be the
+  # noun a sentence is matched to a piece on
+  def wm_when_stop: ["today","tonight","tomorrow","yesterday","morning",
+                     "afternoon","evening","night","noon","midnight",
+                     "monday","tuesday","wednesday","thursday","friday",
+                     "saturday","sunday","january","february","march",
+                     "april","june","july","august","september","october",
+                     "november","december","sept","maybe","about","around",
+                     "also","just","then","than","some","time","times",
+                     "hour","hours","early","late","said","please","think",
+                     "want","wants","wanting","need","needs","make","fixes",
+                     "consider","comments","still","again"];
+  # the NOUNS of a sentence or of a piece. Letters only, four or longer:
+  # a clock time is never a noun ("11AM" would otherwise fold to "am",
+  # and "9:30" to nothing at all, which is the honest answer).
+  def wm_nouns:
+    (wm_stop + wm_when_stop) as $drop
+    | wm_tokens | map(ascii_downcase | gsub("[^a-z]"; ""))
+    | map(select(length >= 4))
+    | [ .[] as $w | select(($drop | index($w)) == null) | $w ]
+    | unique;
+  # a note is SENTENCES. "p.m." is one word and a full stop is an end,
+  # so the dots come out first; a slash, a semicolon and a newline all
+  # end a sentence too, because a household writes its list either way.
+  def wm_sentences:
+    (tostring
+     | gsub("(?<x>[aApP])\\.\\s*[mM]\\.?"; "\(.x)m")
+     | gsub("(?<x>[.?!])\\s"; "\n")
+     | gsub("[.?!]+$"; "")
+     | [ splits("[\\n;/]+") ]
+     | map(gsub("^\\s+"; "") | gsub("\\s+$"; ""))
+     | map(select(length > 0)));
+  def wm_cap($m; $n): ([ $m.captures[] | select(.name == $n) | .string ]
+                       | map(select(. != null)) | first // null);
+  # 11AM is eleven; 1PM is thirteen; a bare 9:30 is morning and a bare
+  # 1:30 is afternoon — the reading a household would give it out loud.
+  def wm_h24($h; $ap):
+    ($h | tonumber) as $n
+    | if $ap == null
+      then (if $n >= 13 then $n elif $n == 0 then 0
+            elif $n >= 7 and $n <= 12 then $n else $n + 12 end)
+      elif ($ap | ascii_downcase | startswith("p"))
+      then (if $n == 12 then 12 else $n + 12 end)
+      else (if $n == 12 then 0 else $n end) end;
+  # A BARE NUMBER IS NEVER A TIME. A phrase counts only when it carries
+  # a colon, an am/pm, or the word noon or midnight — otherwise "Aug
+  # 29" reads as half past eight and every note in the house grows a
+  # clock it never said.
+  def wm_atoms:
+    [ match("(?<a>[0-9]{1,2}):(?<b>[0-9]{2})\\s*(?<c>[ap]m)?|(?<d>[0-9]{1,2})\\s*(?<e>[ap]m)|(?<n>noon)|(?<m>midnight)"; "gi")
+      | . as $mt
+      | (wm_cap($mt; "a")) as $ha | (wm_cap($mt; "d")) as $hd
+      | (wm_cap($mt; "n")) as $nn | (wm_cap($mt; "m")) as $mn
+      | {offset:$mt.offset, length:$mt.length, text:$mt.string,
+         h:(if $ha != null then $ha elif $hd != null then $hd
+            elif $nn != null then "12" elif $mn != null then "0" else null end),
+         mi:((wm_cap($mt; "b")) // "00"),
+         ap:(if $nn != null then "pm" elif $mn != null then "am"
+             else ((wm_cap($mt; "c")) // (wm_cap($mt; "e"))) end)}
+      | select(.h != null)
+      | select((.h | tonumber) <= 23 and (.mi | tonumber) <= 59) ];
+  # two atoms with nothing but a dash or the word "to" between them are
+  # ONE phrase, a start and an end — and the end lends the start its
+  # am/pm ("9 to 11am"), which is how a household actually writes a
+  # window down
+  def wm_phrases:
+    . as $s
+    | (wm_atoms) as $at
+    | [ range(0; ($at | length)) as $i
+        | $at[$i] as $a
+        | (if ($i + 1) < ($at | length)
+           then ($s[($a.offset + $a.length):($at[$i + 1].offset)]) else null end) as $gap
+        | {i:$i, a:$a,
+           b:(if ($gap != null
+                  and ($gap | test("^\\s*(-|–|—|to|until|till|thru|through)\\s*$"; "i")))
+              then $at[$i + 1] else null end)} ] as $pairs
+    | ([ $pairs[] | select(.b != null) | .i + 1 ]) as $ends
+    | [ $pairs[] | . as $q | select(($ends | index($q.i)) == null) ]
+    | map(. as $p
+          | (($p.a.ap) // ($p.b.ap)) as $ap
+          | {text:(($p.a.text | sub("\\s+$"; ""))
+                   + (if $p.b then " to " + ($p.b.text | sub("\\s+$"; "")) else "" end)),
+             h24: wm_h24($p.a.h; $ap), mi: ($p.a.mi | tonumber),
+             end_h24: (if $p.b then wm_h24($p.b.h; (($p.b.ap) // $ap)) else null end),
+             end_mi: (if $p.b then ($p.b.mi | tonumber) else null end)});
+  def wm_pad2($n): (($n | tostring) | if length == 1 then "0" + . else . end);
+  def wm_hhmm($h; $m): wm_pad2($h) + ":" + wm_pad2($m);
+  def wm_months: {"jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,"jul":7,
+                  "aug":8,"sep":9,"oct":10,"nov":11,"dec":12};
+  # WHICH DAY the phrase lands on: the weekday or the month-day the
+  # sentence names, else the day the matched piece already sits on. A
+  # re-time keeps the day unless the note says otherwise — that is what
+  # makes "at 11AM" an answer rather than a question.
+  def wm_note_date($sentence; $days; $default):
+    ($sentence | ascii_downcase) as $t
+    | (wm_months) as $mons
+    | ([ $days[] | . as $d
+         | select($t | test("\\b" + ($d.weekday | ascii_downcase) + "\\b")) ] | first) as $wd
+    | (($t | match("\\b(?<mo>january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)\\.?\\s+(?<dy>[0-9]{1,2})\\b"; "i")) // null) as $md
+    | if $md != null
+      then ((($days[0].date) // $default) | .[0:4]) + "-"
+           + wm_pad2($mons[(wm_cap($md; "mo") | ascii_downcase)])
+           + "-" + wm_pad2((wm_cap($md; "dy") | tonumber))
+      elif $wd != null then $wd.date
+      elif ($t | test("\\btomorrow\\b")) then ((($days[1]).date) // $default)
+      elif ($t | test("\\b(today|tonight)\\b")) then ((($days[0]).date) // $default)
+      else $default end;
+  # a local wall clock, as UTC — that day own offset subtracted, which
+  # is the same arithmetic the clock table above prints
+  def wm_utc($date; $h; $m; $offs):
+    ((($offs[$date]) // ($offs | to_entries | map(.value) | first) // 0)) as $o
+    | ((($date + "T" + wm_hhmm($h; $m) + ":00Z")
+        | strptime("%Y-%m-%dT%H:%M:%SZ") | mktime) - $o) | todate;
+  # the piece a sentence is ABOUT: most shared nouns wins, the longest
+  # shared noun breaks the tie, and a lone GENERIC word ("party",
+  # "birthday") is not a match at all — every party in the note would
+  # otherwise land on the first party in the plan.
+  def wm_match_piece($sentence; $pieces):
+    ($sentence | wm_nouns) as $sn
+    | [ $pieces[] | . as $p
+        | ([ ($p.words[]) as $w | select(($sn | index($w)) != null) | $w ]) as $shared
+        | select(($shared | length) > 0)
+        | select((($shared | length) > 1)
+                 or ((wm_generic | index($shared[0])) == null))
+        | {piece:$p, shared:$shared,
+           score:[($shared | length), ($shared | map(length) | add)]} ]
+    | sort_by(.score) | last // null;
+'
+
+jq --slurpfile pieces "$R/outcome_pieces.full.json" \
+   --slurpfile threads "$D/threads.json" \
+   --slurpfile local "$D/piece_local.json" \
+   --slurpfile rows "$D/all_rows.json" \
+   --slurpfile offs "$D/tz_offsets.json" \
+   --argjson days "$REWORK_CLOCK" \
+   --arg me "$PRINCIPAL" \
+   "$JQ_KEYS$JQ_NOTETIMES"'
+  ($pieces[0] // []) as $pc | ($threads[0] // []) as $th
+  | ($local[0] // []) as $lc | ($rows[0] // []) as $all
+  | ($offs[0] // {}) as $offsets
+  | [ .[] | . as $o | ($o.self | split("/") | last) as $oid
+      | ([ $pc[] | select(.data.outcome_id == $oid)
+           | . as $p | (([ $lc[] | select(.self == $p.self) ] | first) // null) as $l
+           | {self:$p.self, state:$p.state, says:($p.data.says // ""),
+              form:($p.data.form // null),
+              target_kind:($p.data.target_kind // null),
+              materialized:($p.data.materialized // null),
+              starts_at:(($p.data.prepared.starts_at) // null),
+              local:($l.local // null), local_date:($l.local_date // null),
+              local_hm:($l.local_hm // null), local_end:($l.local_end // null),
+              words:(([($p.data.says // ""),
+                       (($p.data.prepared.title) // ""),
+                       (($p.data.prepared.location) // "")] | join(" ")) | wm_nouns)} ]) as $plist
+      | ([ $th[] | select(.subject_kind == "outcome" and .subject_id == $oid)
+                 | .turns[] | select(.said_by != $me) ]) as $turns
+      | ([ $turns[] | . as $turn
+           | (($turn.says // "") | wm_sentences | .[]) as $sentence
+           | ($sentence | wm_phrases | .[]) as $ph
+           | (wm_match_piece($sentence; $plist)) as $hit
+           | ($hit.piece) as $p
+           | (wm_note_date($sentence; $days; (($p.local_date) // (($days[0]).date) // "")))
+             as $ndate
+           | select($ndate != "")
+           | (wm_hhmm($ph.h24; $ph.mi)) as $nhm
+           | (if $ph.end_h24 != null then wm_hhmm($ph.end_h24; $ph.end_mi) else null end) as $nend
+           # the piece already holds it — nothing to suggest, and the
+           # list empties itself as the rework lands
+           | select($p == null
+                    or ($p.local_date != $ndate) or ($p.local_hm != $nhm))
+           # AN ADD IS ONLY AN ORDER ON A BUNDLE HANDED BACK. On an
+           # offered bundle nobody asked for a re-plan, and a time said
+           # in passing ("we are at the gym from 8:30 to 10:00") is a
+           # constraint rather than a request — so there only a time
+           # that CONTRADICTS a piece already staged is worth printing.
+           | select($p != null or $o.iterate_open)
+           | {kind: (if $p == null then "ADD"
+                     elif $p.state == "taken" then "INVOKE"
+                     else "RE-TIME" end),
+              said_by:$turn.said_by, remark:$turn.self, at:$turn.at,
+              sentence:$sentence, phrase:$ph.text,
+              piece:($p.self // null), piece_says:(($p.says // "") | .[0:90]),
+              piece_state:($p.state // null),
+              piece_local:($p.local // null), piece_local_end:($p.local_end // null),
+              piece_target_kind:($p.target_kind // null),
+              materialized:($p.materialized // null),
+              light_doors:([ $all[] | select(.self == (($p.materialized) // " "))
+                                    | (.light_doors // [])[] ] | unique),
+              matched_on:($hit.shared // []),
+              note_date:$ndate, note_local:$nhm, note_local_end:$nend,
+              note_utc:(wm_utc($ndate; $ph.h24; $ph.mi; $offsets)),
+              note_utc_end:(if $ph.end_h24 != null
+                            then wm_utc($ndate; $ph.end_h24; $ph.end_mi; $offsets)
+                            else null end)} ]
+         # a household says a thing three times over three turns and it
+         # is still ONE suggestion; the LATEST turn is the one cited
+         | group_by([.kind, (.piece // .sentence), .note_utc, (.note_utc_end // "")])
+         | map(max_by(.at)) | sort_by(.kind, .note_utc)) as $sugg
+      | select(($sugg | length) > 0)
+      | {self:$o.self, state:$o.state, iterate_open:$o.iterate_open,
+         goal:$o.goal, suggestions:$sugg} ]
+' "$D/note_time_subjects.json" > "$D/note_times.json" 2>>"$PROBE_ERRS" \
+  || echo '[]' > "$D/note_times.json"
 # One rig answers with a JSON array, one with objects side by side, one
 # with an envelope around them, one with plain lines — and `fromjson`
 # over the concatenation of two objects fails, which is what once
@@ -2748,6 +3207,8 @@ jq -n \
   --slurpfile standing "$D/standing_outcomes.json" \
   --slurpfile notmine "$D/iterating_not_mine.json" \
   --slurpfile reworkorders "$D/rework_orders.json" \
+  --slurpfile notetimes "$D/note_times.json" \
+  --argjson rework_clock "$REWORK_CLOCK" \
   --slurpfile ask "$D/extend_ask.json" \
   --slurpfile gate "$D/gate.json" \
   --slurpfile chatsel "$D/chat_selection.json" \
@@ -2801,6 +3262,11 @@ jq -n \
   # to THIS composer (waymark-wxk) — the work order the rework door
   # itself is written against
   rework_orders: $reworkorders[0],
+  # the clock a rework order writes its instants from (waymark-thn),
+  # and the clock times the note itself already named (waymark-o04) —
+  # suggestions beside the marks, never marks
+  rework_clock: $rework_clock,
+  note_times: $notetimes[0],
   iterating_not_mine: $notmine[0],
   uncomposed_census: $census[0],
   uncomposed: ($uncomposed[0] | .[0:60]),
@@ -2937,8 +3403,23 @@ jq -n \
             else (.[] | "- \(.self) [iterating, plan v\(.plan_revision)] \(.goal[0:90])") end' "$RUN/manifest.json"
   echo "  An ITERATING bundle is one a person kept and sent back: the goal is right, the plan is wrong, and it has LEFT THEIR FEED until you answer. Read its thread for the note. Withdraw the pieces that were wrong (POST /api/outcome_pieces/<id>/-/rework — the piece goes reworked, never declined), stage the replacements, then commit with POST /api/outcomes/<id>/-/rework {says}. That commit is the only door back to offered; until it lands, nobody in the house can see the bundle at all. Do not stage a twin, and do not wait for a decline."
   jq -r '
-    if ((.rework_orders // []) | length) == 0 then empty else
+    if (((.rework_orders // []) | length) == 0
+        and ((.note_times // []) | length) == 0) then empty
+    else ("",
+      "  THE HOUSEHOLD CLOCK — a rework writes instants, so here they are already converted. Every hour below is a WALL CLOCK in America/Denver rendered UTC; the day own offset is asked of the zone, so it is right on both sides of the change.",
+      (((.rework_clock // [])[]) | . as $row
+       | "    · \(.weekday) \(.date) (\(.zone))  "
+         + ([ $row.hours[]
+              | "\(.local)→\(.utc[11:16])Z"
+                + (if (.utc[0:10]) != $row.date then "(+1d)" else "" end) ]
+            | join("  "))),
+      "  A clock time a person says is LOCAL. Write the UTC beside it from the rows above and NEVER write the local hour with a Z: an 11 AM party posted as 11:00:00Z is five in the morning, Mountain, which is how waymark-thn was found. A day this table does not carry is a day you convert from the nearest row on it, and say so.")
+    end' "$RUN/manifest.json"
+  jq -r '
+    . as $root
+    | if ((.rework_orders // []) | length) == 0 then empty else
     (.rework_orders[]
+     | . as $o
      | "",
        "  \u2500 \(.self) \u2014 \(.goal[0:90])",
        "    THE NOTE: " + (if .note then "\(.note.said_by) said \u201c\(.note.says)\u201d  (\(.note.self))" else "(no turn on the thread \u2014 read \(.thread))" end),
@@ -2950,10 +3431,41 @@ jq -n \
         else "    MARKED \u2014 each is an order, and the commit is refused until it is answered:" end),
        (.marked[] | "      \u00b7 \(.list)  \(.self) \u2014 \(.says[0:90])\n          said \(.word // "no word at all, so it is a DROP")\(if .words then " \u2014 \u201c\(.words)\u201d" else "" end)\n          write: \(.write)"),
        "    ADD \u2014 whatever the note asks that no list above covers: a NEW piece citing this bundle. Nothing else in the note is an order.",
-       "    THIS ROUND SO FAR: \(.staged_this_round|length) staged, \(.owed) owed" + (if .unanswered > 0 then " \u2014 \(.unanswered) STILL UNANSWERED" else " \u2014 every mark answered" end) + (if (.withdrawn_this_round|length) > 0 then ", \(.withdrawn_this_round|length) withdrawn this round" else "" end))
+       "    THIS ROUND SO FAR: \(.staged_this_round|length) staged, \(.owed) owed" + (if .unanswered > 0 then " \u2014 \(.unanswered) STILL UNANSWERED" else " \u2014 every mark answered" end) + (if (.withdrawn_this_round|length) > 0 then ", \(.withdrawn_this_round|length) withdrawn this round" else "" end),
+       ( [ ($root.note_times // [])[] | select(.self == $o.self) | .suggestions[] ] as $sg
+         | if ($sg | length) == 0 then empty
+           else "    THE NOTE OWN CLOCK TIMES — SUGGESTIONS, not marks; no door refuses any of them:",
+                "      A note that names a time for a piece is a RE-TIME even when nobody tapped Wrong time — write the UTC beside the local hour from the household clock above; never write the local hour with a Z.",
+                ($sg[]
+                 | "      · \(.kind)  \(.piece // "(no piece in this plan matches)") — the note says \(.note_local)\(if .note_local_end then " to " + .note_local_end else "" end) local on \(.note_date)"
+                   + "\n          from “\(.sentence)” — \(.said_by) said it in \(.remark)"
+                   + (if .piece then "\n          the piece holds \(.piece_local) local\(if .piece_local_end then " to " + .piece_local_end else "" end) — \(.piece_says)" else "" end)
+                   + (if ((.matched_on // []) | length) > 0 then "\n          matched on \((.matched_on) | join(", "))" else "" end)
+                   + "\n          the UTC for that hour: starts_at \(.note_utc)\(if .note_utc_end then ", ends_at " + .note_utc_end else "" end)"
+                   + "\n          write: "
+                   + (if .kind == "RE-TIME"
+                      then "POST /api/outcome_pieces — the SAME step at that hour (form create, target_kind \(.piece_target_kind // "event"), prepared.starts_at the UTC above), citing this bundle. Do NOT withdraw \(.piece): a piece nobody marked is a KEEP."
+                      elif .kind == "INVOKE"
+                      then (if ((.light_doors // []) | length) > 0
+                            then "that piece is already TAKEN and its row exists — \(.materialized). Offer that row own light door (\((.light_doors) | join(", "))) rather than staging a second one."
+                            else "that piece is already TAKEN and its row exists — \(.materialized // "the row it made"). That row exposes no light door to you, so THE EVENT EXISTS AND A PERSON MOVES IT: say so in `says`, and do NOT stage a second event at the new hour." end)
+                      else "POST /api/outcome_pieces — a NEW piece at that hour, citing this bundle. No piece in the plan shares a word with this sentence." end)) end ))
     end' "$RUN/manifest.json"
   echo "  THE MARKS ARE THE ORDER (waymark-wxk). A piece the household declined is a work order and its quick word says which: WRONG TIME is a RE-TIME (the same step at a new hour), WRONG PIECE or NOT THIS WAY is a REPLACE (a different step toward the same goal), NEVER THIS \u2014 or a decline carrying no word at all \u2014 is a DROP that needs nothing more, and a piece still standing is a KEEP you may not withdraw. A RE-TIME and a REPLACE are each a NEW piece staged under the same bundle; you never withdraw the marked piece itself, because a declined piece is already out. POST /api/outcomes/<id>/-/rework is REFUSED by name while a mark is unanswered or a KEEP has been withdrawn, and the refusal lists the offenders with their lists. Where the household marked NOTHING, none of that applies and the note is the whole order."
   echo "  YOU CANNOT PROMISE THIS ONE, YOU CAN ONLY DO IT (waymark-vf8). The REPLY DOOR IS CLOSED on a bundle you could rework: POST /api/remarks on it is refused by name (words-do-not-answer) and the refusal names this door. Your words ride the rework itself — says, required, at most 240 characters, posted as your turn on the thread. And a rework that changes NO piece is a LAWFUL answer: if you read the note and the plan still stands, or you cannot stage what was asked for, commit anyway and say that — it counts the round, puts the bundle back on their feed, and they may then decline it. Leaving it in iterating is the one wrong answer, and next run verify prints HANDED BACK, NOT REWORKED against your name."
+  jq -r '
+    [ (.note_times // [])[] | select(.iterate_open | not) ] as $off
+    | if ($off | length) == 0 then empty
+      else "",
+           "## Offered, and a time the household named is STILL UNHELD (waymark-o04)",
+           "  Nobody handed these back, so there is no rework door to walk on them — and that is the point: a NO-CHANGE rework is what usually leaves a bundle here. The round was counted, the bundle went back on the feed looking answered, and the hour the note asked for was never staged. Say it in the journal in one sentence; if the household hands the bundle back, the lines below ARE the order.",
+           ($off[]
+            | "", "  ─ \(.self) — \(.goal[0:90])",
+              (.suggestions[]
+               | "      · \(.kind)  \(.piece // "(no piece in this plan matches)") — the note says \(.note_local)\(if .note_local_end then " to " + .note_local_end else "" end) local on \(.note_date) = \(.note_utc)"
+                 + (if .piece then ", while the piece holds \(.piece_local) local" else "" end)
+                 + "\n          from “\(.sentence)” — \(.said_by) said it in \(.remark)"))
+      end' "$RUN/manifest.json"
   echo
   echo "## Iterating, not yours to rework"
   jq -r 'if (.iterating_not_mine|length)==0 then "  (none)" else (.iterating_not_mine[] | "- \(.self) [iterating, plan v\(.plan_revision)] composed by \(.composed_by // "?") — \(.goal[0:80])") end' "$RUN/manifest.json"

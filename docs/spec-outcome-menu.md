@@ -6675,3 +6675,147 @@ field, no filter and no sort changed, so the storage facet is byte-identical
 and the migrate plan stays empty. `:display {:marks …}` is advertisement-class
 and moves nothing on its own.
 
+
+## Built — o04 + thn (2026-08-29): a time in the note is a re-time, and the order carries a clock
+
+Two faults on one bundle, one evening apart, and both of them the same gap:
+**the rework order handed a small model a note and expected arithmetic.** Both
+are driver-and-docs only — no kind moved, no door changed, nothing here
+refuses anything. The design lives in `docs/spec-standing-agent.md` §
+*The rework order carries a clock, and the note carries times*; what follows
+is the record and the fixture.
+
+**thn — the clock.** Handed the order *"add Howie's 11AM birthday party in
+Spanish Fork"*, a composer staged `event.create` at `starts_at
+2026-08-29T11:00:00Z` — five in the morning, Mountain. The manifest said
+*"times are America/Denver"* in prose. The commitments probe had already
+solved this for its own orders by printing a **household clock** with the
+hours pre-converted so a small model picks a row; the rework section now
+prints the same table from the same `den_utc`, **today plus seven days** at
+`08:00 09:30 11:00 13:00 14:00 17:00 19:00` local, **once at the top of the
+section** with every bundle pointing at it. Once rather than per bundle
+because the table is eight identical lines and the per-bundle text that has
+to stay legible is the marks lists.
+
+**o04 — the note.** On the same bundle the household marked **nothing** and
+wrote three clock times into the note; the composer committed a round that
+staged nothing, withdrew nothing, and said *"I've added the Payson inspection
+and Howie's party, and kept Wilfred's party."* Lawful under waymark-vf8, and
+the wall could not fire because nothing was marked — so the bundle went back
+on the feed reading as answered while every hour in it was still wrong. The
+driver now reads the note: sentences, clock atoms, and a match to a piece by
+**shared nouns**, printed under the order beside the marks as **SUGGESTED
+RE-TIME / INVOKE / ADD**.
+
+### The driver, on the specimen
+
+A fixture run of `derived/note_times.json` and its render, over the specimen
+bundle at plan v2 — three pieces (Howie at `11:00Z`, Payson at `20:00–23:00Z`,
+Wilfred `taken` at `16:00–19:00Z` with its event row already made), the
+household's note of 02:44Z, and a last turn (*"Consider the comments so far
+and make fixes"*) that names no time at all:
+
+```
+  THE HOUSEHOLD CLOCK — a rework writes instants, so here they are already
+  converted. Every hour below is a WALL CLOCK in America/Denver rendered UTC;
+  the day own offset is asked of the zone, so it is right on both sides of the
+  change.
+    · Friday 2026-08-28 (MDT, UTC-06:00)  08:00→14:00Z  09:30→15:30Z
+      11:00→17:00Z  13:00→19:00Z  14:00→20:00Z  17:00→23:00Z  19:00→01:00Z(+1d)
+    · Saturday 2026-08-29 (MDT, UTC-06:00)  08:00→14:00Z  09:30→15:30Z
+      11:00→17:00Z  13:00→19:00Z  14:00→20:00Z  17:00→23:00Z  19:00→01:00Z(+1d)
+    … (six more days)
+  A clock time a person says is LOCAL. Write the UTC beside it from the rows
+  above and NEVER write the local hour with a Z: an 11 AM party posted as
+  11:00:00Z is five in the morning, Mountain, which is how waymark-thn was
+  found.
+
+  ─ /api/outcomes/O1 — Saturday, August 29 reads on the family calendar …
+    THE NOTE: MEMBER said “Consider the comments so far and make fixes”  (/api/remarks/M3)
+    KEEP — write nothing, and withdrawing one of these is REFUSED:
+      · /api/outcome_pieces/P-HOWIE — Add Howie's 11AM birthday party …
+      · /api/outcome_pieces/P-PAYSON — Hold the Payson inspection and touch-ups …
+    MARKED: nothing. The note is then the WHOLE order …
+    ADD — whatever the note asks that no list above covers …
+    THIS ROUND SO FAR: 0 staged, 0 owed — every mark answered
+    THE NOTE OWN CLOCK TIMES — SUGGESTIONS, not marks; no door refuses any of them:
+      A note that names a time for a piece is a RE-TIME even when nobody tapped
+      Wrong time — write the UTC beside the local hour from the household clock
+      above; never write the local hour with a Z.
+      · INVOKE  /api/outcome_pieces/P-WILFRED — the note says 13:00 local on 2026-08-29
+          from “Wilfred's Party at 1PM in Provo at our home” — MEMBER said it in /api/remarks/M1
+          the piece holds 2026-08-29 10:00 local to 13:00 — Put Wilfred's first birthday party …
+          matched on party, wilfred
+          the UTC for that hour: starts_at 2026-08-29T19:00:00Z
+          write: that piece is already TAKEN and its row exists — /api/events/E-WILFRED.
+                 That row exposes no light door to you, so THE EVENT EXISTS AND A
+                 PERSON MOVES IT: say so in `says`, and do NOT stage a second event
+                 at the new hour.
+      · RE-TIME  /api/outcome_pieces/P-PAYSON — the note says 09:30 to 10:30 local on 2026-08-29
+          from “Payson inspection maybe 9:30-10:30” — MEMBER said it in /api/remarks/M1
+          the piece holds 2026-08-29 14:00 local to 17:00 — Hold the Payson inspection …
+          matched on inspection, payson
+          the UTC for that hour: starts_at 2026-08-29T15:30:00Z, ends_at 2026-08-29T16:30:00Z
+          write: POST /api/outcome_pieces — the SAME step at that hour (form create,
+                 target_kind event, prepared.starts_at the UTC above), citing this
+                 bundle. Do NOT withdraw /api/outcome_pieces/P-PAYSON: a piece nobody
+                 marked is a KEEP.
+      · RE-TIME  /api/outcome_pieces/P-HOWIE — the note says 11:00 local on 2026-08-29
+          from “Howie's Party at 11AM in Spanish Fork” — MEMBER said it in /api/remarks/M1
+          the piece holds 2026-08-29 05:00 local to 07:00 — Add Howie's 11AM birthday party …
+          matched on fork, howie, party, spanish
+          the UTC for that hour: starts_at 2026-08-29T17:00:00Z
+          write: POST /api/outcome_pieces — the SAME step at that hour …
+```
+
+**Two RE-TIMEs and one INVOKE, off a note nobody marked and a last turn that
+says nothing.** The matches are the point: *Howie / party / Spanish / Fork*
+against the Howie piece, *Payson / inspection* against the Payson hold, and
+*party / Wilfred* against Wilfred's — while *party* alone matches nothing,
+because a lone generic word would land every party in the note on the first
+party in the plan. `9:30-10:30` reads as one phrase and converts to
+`15:30Z–16:30Z`; `11AM` and `1PM` each keep the day the matched piece already
+sits on, because a re-time keeps the day unless the note says otherwise.
+
+### `verify`, on the same specimen
+
+```
+CLAIMED, NOT STAGED: /api/outcomes/O1 — says “I've added the Payson inspection
+  and Howie's party, and kept Wilfred's party.” but no piece changed
+NOTE TIME IGNORED: /api/outcome_pieces/P-HOWIE still 2026-08-29 05:00 — the note
+  said 11:00 local (2026-08-29T17:00:00Z)
+NOTE TIME IGNORED: /api/outcome_pieces/P-PAYSON still 2026-08-29 14:00 — the note
+  said 09:30 local (2026-08-29T15:30:00Z)
+ODD HOUR: /api/outcome_pieces/P-HOWIE starts 2026-08-29 05:00
+  (2026-08-29T11:00:00Z) — check the zone
+```
+
+`CLAIMED, NOT STAGED` fires on the ROWS: the revision moved, no piece was
+staged and none withdrawn inside the round, and the words posted with the
+commit match `/\b(added|moved|re-?timed|changed|updated|rescheduled)\b/i`.
+The words are read off the THREAD, because that is where the rework door puts
+them — `says` is not a field on the bundle, it is the turn. `ODD HOUR` is a
+heuristic and says so: nothing can tell a deliberate dawn start from a zone
+mistake, and six hours off is what a zone mistake looks like.
+
+**Reproducing the fixture run by hand** — the same documented substitute the
+wxk block above uses, because there is still no harness for the driver in this
+repo. Extract the `derived/note_times.json` jq (and its shell preamble:
+`HOUSE_TZ`, `den_utc`, `REWORK_CLOCK`, `derived/piece_local.json`,
+`derived/tz_offsets.json`) together with the manifest-section printer, and run
+them over four small files: `standing_outcomes` (one iterating bundle of ours
+at plan v2), `outcome_pieces.full` (the three pieces above), `threads` (the
+four turns, two of them the composer's own), and `all_rows` (the Wilfred event
+with `light_doors: []`). The block above is what they print. Flipping the Howie
+piece to `taken` turns its line from RE-TIME to INVOKE, which is the other arm
+— and is what the LIVE house showed once the household tapped it.
+
+**Recorded for whoever comes next.** No kind, door, guard or scenario moved,
+so `make check-queue` is unchanged at **38 kinds, 11 warnings, 55 scenarios
+judged** and no fingerprint or migration is minted. Three jq traps were paid
+for here and are worth naming, because every one of them fails SILENTLY behind
+a `2>/dev/null`: `index(f)` evaluates `f` against the ARRAY, not the row (the
+driver's own `as-of` comment already warned about it and the first cut made the
+mistake three more times); `select($t | test(re))` evaluates `re` against `$t`
+for the same reason; and a month alternation ending in `[a-z]*` reads *"maybe
+9:30"* as **May 9th**. Bind the row before you ask.

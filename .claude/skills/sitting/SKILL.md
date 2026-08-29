@@ -274,6 +274,16 @@ whole order, adding what it asks and standing by the plan are both
 lawful, and you say which in `says`. Next run, `verify` prints each
 mark back with `ADDRESSED` or `NOT ADDRESSED` against your name.
 
+**And a time in the note is a RE-TIME even where nobody tapped wrong
+time** (waymark-o04, waymark-thn): the manifest reads the household's
+own clock times out of the thread and prints them under the bundle as
+SUGGESTED RE-TIME / INVOKE / ADD beside a household clock with every
+local hour already converted, so pick a row and write the UTC beside
+the local hour — never the local hour with a `Z` — because a round
+that changes no piece while `says` claims it added or moved one is a
+claim, not an answer, and next run `verify` prints `CLAIMED, NOT
+STAGED` against your name.
+
 Both doors are the composer's own: only the agent that staged a row
 reworks it unasked. A bundle in `iterating` that somebody else staged
 is listed separately (*iterating, not yours to rework*) — leave it
