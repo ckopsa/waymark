@@ -359,20 +359,24 @@ if [ "$MODE" = "verify" ]; then
   # and which it left standing. It grades by the ROWS, like every
   # other check here — a DROP is answered by the decline that made it
   # and needs nothing; a RE-TIME and a REPLACE each want one new piece
-  # staged inside the round, and the round's boundary is the one the
-  # manifest recorded (the bundle's own `reworked_at` at read time), so
-  # a commit that has since moved that stamp does not erase the
-  # evidence. Nothing pairs a replacement to the piece it replaces —
+  # staged inside the round, counted from the boundary the MANIFEST
+  # recorded — the bundle's `iterate_requested_at` as it stood at read
+  # time, which is the same side of the round the door counts the
+  # composer's answer from — so a commit that has since moved
+  # `reworked_at` does not erase the evidence. `mbnd` (the household's
+  # own boundary) is read alongside it and left unused here: the marks
+  # themselves were already classified against it when the manifest was
+  # written. Nothing pairs a replacement to the piece it replaces —
   # no row says so and this report will not guess — so the arithmetic
   # is a COUNT, said as a count, beside the marks themselves.
   if [ -n "$prev" ] && \
      [ "$(jq '((.rework_orders // []) | length)' "$prev" 2>/dev/null || echo 0)" -gt 0 ]; then
     marks="$(mktemp)"; : > "$marks"
-    while IFS="$(printf '\t')" read -r msf mbnd; do
+    while IFS="$(printf '\t')" read -r msf mbnd masked; do
       [ -n "$msf" ] || continue
       pcs="$(mktemp)"
       if [ "$(api "$pcs" "/api/outcome_pieces?outcome_id=${msf##*/}&page%5Bsize%5D=100")" = "200" ]; then
-        jq -r --arg self "$msf" --arg b "$mbnd" --slurpfile m "$prev" '
+        jq -r --arg self "$msf" --arg b "$masked" --slurpfile m "$prev" '
           ([ $m[0].rework_orders[] | select(.self == $self) ] | first) as $o
           | [ .data.items[]? ] as $now
           | ([ $now[] | select(.state == "offered")
@@ -396,7 +400,8 @@ if [ "$MODE" = "verify" ]; then
         ' "$pcs" >> "$marks"
       fi
       rm -f "$pcs"
-    done < <(jq -r '(.rework_orders // [])[] | "\(.self)\t\(.boundary // "")"' "$prev")
+    done < <(jq -r '(.rework_orders // [])[]
+                     | "\(.self)\t\(.boundary // "")\t\(.asked // .boundary // "")"' "$prev")
     if [ -s "$marks" ]; then
       echo
       cat "$marks"
@@ -1034,6 +1039,14 @@ jq '[.[] | select(.iterate_open and (.mine | not))
 # is the same boundary the door reads: a piece declined BEFORE the
 # iterate was tapped is still this round's mark, because marking and
 # then handing the plan back is the same gesture in the other order.
+#
+# THE COMPOSER'S OWN SIDE RUNS FROM THE ASK (`iterate_requested_at`),
+# and the asymmetry is the door's too: a piece staged before the
+# person tapped iterate is part of the plan they were LOOKING at when
+# they marked it, so it cannot also be the answer to those marks. One
+# boundary for both counted every original piece of a first round as a
+# replacement, which is what CI caught.
+#
 # `updated_at` on a piece IS the moment it was answered — a declined
 # piece is terminal and nothing writes it again — and on an OFFERED
 # piece it is the moment it was staged, which is how `staged_this_round`
@@ -1048,19 +1061,19 @@ jq --slurpfile pieces "$R/outcome_pieces.full.json" \
      wrong_way:"REPLACE", never_this:"DROP"} as $lists
   | [.[] | select(.iterate_open and .mine)
       | (.self|split("/")|last) as $oid
-      | .reworked_at as $rw
-      | ($rw // "") as $b
+      | ((.reworked_at // "")) as $b
+      | ((.iterate_requested_at // .reworked_at // "")) as $ask
       | [ $pc[] | select(.data.outcome_id == $oid) ] as $mine
       | {self, goal, plan_revision,
-         boundary: $b,
+         boundary: $b, asked: $ask,
          note: ([ $th[] | select(.subject_kind=="outcome" and .subject_id==$oid)
                         | .turns[] | select(.said_by != $me) ] | last // null),
          thread: ("/api/remarks?subject_kind=outcome&subject_id=" + $oid),
          keep: [ $mine[] | select(.state=="offered")
-                         | select((.meta.updated_at // "") <= $b)
+                         | select((.meta.updated_at // "") <= $ask)
                  | {self, says:.data.says, write:"nothing — leave it exactly as it stands"} ],
          staged_this_round: [ $mine[] | select(.state=="offered")
-                                      | select((.meta.updated_at // "") > $b)
+                                      | select((.meta.updated_at // "") > $ask)
                               | {self, says:.data.says} ],
          marked: [ $mine[] | select(.state=="declined")
                            | select((.meta.updated_at // "") > $b)

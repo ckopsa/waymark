@@ -1976,6 +1976,18 @@
         (is (= 409 (:status r)))
         (is (= "only-its-composer-reworks" (guard-of r)))))
 
+    (testing "…and the same wall on the BUNDLE's own rework door: a person answers a plan, never re-plans it"
+      ;; the declaration used to carry a check-tier scenario for this
+      ;; one; since waymark-wxk that door reads rows, so the scenario
+      ;; defers — and the conformance walker cannot stage an outcome
+      ;; through its own create door. Proved here instead, where a real
+      ;; value and a real bundle exist.
+      (let [r (invoke! "outcomes" o :rework {:says "I will fix it myself."}
+                       (human member))]
+        (is (= 409 (:status r)))
+        (is (= "only-its-composer-reworks" (guard-of r)))
+        (is (str/includes? (detail r) "composer that staged"))))
+
     (testing "the composer withdraws the walk in place — reworked, not declined, not moot"
       (let [r (invoke! "outcome_pieces" walk :rework nil (human composer))]
         (is (= 200 (:status r)))

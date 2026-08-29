@@ -1783,15 +1783,25 @@
 ;; and the manifest says so in as many words; this wall holds it only
 ;; to what the household actually said.
 ;;
-;; THE ROUND IS THE INTERVAL SINCE THE LAST COMMIT — one boundary,
-;; `reworked_at`, and not two. Everything the household said since
-;; then is this round's order, which is what admits a piece declined
-;; BEFORE the iterate was tapped: marking the pieces and then handing
-;; the plan back is the same gesture as handing it back and then
-;; marking, and a person does both. Everything the composer staged
-;; since then is this round's answer. A second boundary at
-;; `iterate_requested_at` would have split those two readings apart
-;; and left the wall two facts to keep in step.
+;; THE ROUND HAS TWO BOUNDARIES BECAUSE IT HAS TWO SIDES, and each is
+;; the honest one for the question it answers.
+;;
+;; WHAT THE HOUSEHOLD SAID runs from the LAST COMMIT (`reworked_at`, or
+;; the beginning of time for a bundle nobody has reworked yet). That is
+;; what admits a piece declined BEFORE the iterate was tapped: marking
+;; the pieces and then handing the plan back is the same gesture as
+;; handing it back and then marking, and a person does both.
+;;
+;; WHAT THE COMPOSER STAGED runs from THE ASK (`iterate_requested_at`).
+;; A piece staged before the person tapped iterate is part of the plan
+;; they were looking at when they marked it — it cannot also be the
+;; answer to their marks. One boundary for both was written first and
+;; was wrong in exactly one place, which CI caught: with no commit yet,
+;; `reworked_at` is absent, so every original piece of a first round
+;; counted as a replacement and the wall admitted a round that had
+;; staged nothing at all. A bundle with no `iterate_requested_at` (no
+;; such row exists — the door stamps it) falls back to the household's
+;; boundary rather than to nothing, which is the lenient direction.
 ;;
 ;; AND IT ONLY STANDS IN A MARKED ROUND. Where the household marked
 ;; nothing, the NOTE is the whole order and which pieces move is the
@@ -1852,6 +1862,10 @@
       ;; every other row-reading wall in this file does
       (t/allow)
       (let [boundary (get-in row [:data :reworked_at])
+            ;; the composer's own side of the round — see the block
+            ;; above: a piece staged before the ask is part of the plan
+            ;; that was marked, never the answer to the marks
+            asked (or (get-in row [:data :iterate_requested_at]) boundary)
             pieces (find' :outcome_piece {:outcome_id (str (:id row))}
                           {:limit 100})
             word-of (fn [p]
@@ -1878,7 +1892,8 @@
                                              (in? % :updated-at)))
                             pieces)
             staged (count (filter #(and (= "offered" (state-of %))
-                                        (in? % :created-at))
+                                        (inside-the-round? (:created-at %)
+                                                           asked))
                                   pieces))
             owed (filterv :owes-a-piece marked)
             says (cond-> []
@@ -2563,19 +2578,25 @@
    :expect  {:refused :a-person-answers
              :because "A person answers"}})
 
-(defscenario only-the-composer-that-staged-an-outcome-reworks-it
-  "The authorship wall on the bundle's own rework door: the composer
-   that staged the outcome commits the round, and nobody else reaches
-   its plan. A person answers the revised pieces; they do not rework
-   them, and a second agent does not either — a rework is un-proposing
-   your OWN suggestion, the mirror of the four-eyes wall."
-  {:kind    :outcome
-   :attempt :rework
-   :input   {:says "Moved breakfast after church and swapped the walk."}
-   :row     {:state :iterating :data a-composed-outcome}
-   :as      {:id "colton" :type :person}
-   :expect  {:refused :only-its-composer-reworks
-             :because "composer that staged"}})
+;; NO SCENARIO NAMES `only-its-composer-reworks` ON THE OUTCOME EITHER
+;; ANY MORE (waymark-wxk), and the removal is forced rather than a
+;; retreat. waymark-9xn wrote one and it ran at CHECK tier, where the
+;; rework door carried a single wall that reads the principal and the
+;; row. `the-marks-are-the-work-order` now stands beside it reading
+;; `:outcome_piece` and `:verdict_reason`, and a scenario is judged
+;; against its door's WHOLE guard chain — `remark`'s create scenario
+;; met the same rule one bead ago (waymark-vf8), arriving here on an
+;; ACTION door. Deferred, it goes to the conformance walker, which
+;; stages its subject through the kind's own create door: for an
+;; outcome that door demands a value this house holds and evidence it
+;; can read, which a declaration-time literal cannot mint, so the
+;; walker refuses it with *the row it describes could not be staged
+;; through its own door* — the exact sentence the note above
+;; `a-decline-is-allowed-from-under-a-rework` predicted for
+;; `the-plan-is-not-under-rework`, said out loud by CI. The refusal it
+;; stated is proved where it can be: workqueue10.outcome-test § 21,
+;; over the real ring handler, against a real value and a real bundle,
+;; person and second-agent arms both.
 
 ;; NO SCENARIO NAMES `the-plan-is-not-under-rework`, and the absence is
 ;; structural rather than an omission — the third time this file has
@@ -2590,20 +2611,6 @@
 ;; which is a fact about the walker rather than about the wall. It is
 ;; proved where it can be: workqueue10.outcome-test § 21, over the real
 ;; ring handler, against a real value and a real bundle.
-
-;; …AND SINCE waymark-wxk THE SCENARIO ABOVE DEFERS, which is a fact
-;; about the door rather than about the wall it names.
-;; `the-marks-are-the-work-order` now stands beside
-;; `only-its-composer-reworks` on `rework` and it reads
-;; `:outcome_piece` and `:verdict_reason`, and a scenario is judged
-;; against its door's WHOLE guard chain — the chain rule that moved
-;; `remark`'s create scenario one bead ago (waymark-vf8), arriving here
-;; on an action door. No conformance run walks `outcome` (the queue's
-;; pack holds task, task_list, media and thread), so what a deferred
-;; scenario on this kind buys is the declaration read as prose and
-;; nothing executable; the authorship refusal it states is proved
-;; where it can be, by workqueue10.outcome-test § 21 over the real ring
-;; handler, and so is every arm of the marks wall.
 
 ;; NO SCENARIO NAMES `the-marks-are-the-work-order` EITHER, for the
 ;; structural reason this file has now written down five times: the
@@ -3163,7 +3170,6 @@
                an-outcome-with-nothing-behind-it-is-refused
                an-outcome-names-a-value-this-house-holds
                an-agent-does-not-iterate-an-outcome
-               only-the-composer-that-staged-an-outcome-reworks-it
                a-decline-is-allowed-from-under-a-rework]})
 
 ;; ── :outcome_piece — one concrete thing, one tap ────────────────────

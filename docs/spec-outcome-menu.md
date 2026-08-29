@@ -6499,14 +6499,20 @@ bundle**, and that is all.
 `the-marks-are-the-work-order` stands on `outcomes/{id}/-/rework`, beside
 waymark-vf8's `only-its-composer-reworks`. **The predicate**, in order:
 
-1. **The round is the interval since the last commit** — one boundary,
-   `reworked_at`, or the beginning of time for a bundle nobody has reworked
-   yet. Everything the household said since then is this round's order (which
-   is what admits a piece declined *before* the iterate was tapped: marking the
-   pieces and then handing the plan back is the same gesture in the other
-   order, and a person does both). Everything the composer staged since then is
-   this round's answer. A second boundary at `iterate_requested_at` would have
-   split those two readings apart and left the wall two facts to keep in step.
+1. **The round has two boundaries because it has two sides.** What the
+   HOUSEHOLD said runs from the last commit (`reworked_at`, or the beginning of
+   time for a bundle nobody has reworked yet) — which is what admits a piece
+   declined *before* the iterate was tapped: marking the pieces and then
+   handing the plan back is the same gesture in the other order, and a person
+   does both. What the COMPOSER staged runs from the ask
+   (`iterate_requested_at`): a piece staged before the person tapped iterate is
+   part of the plan they were looking at when they marked it, so it cannot also
+   be the answer to those marks. One boundary for both was written first and
+   was wrong in exactly one place, which CI caught — with no commit yet
+   `reworked_at` is absent, so every original piece of a first round counted as
+   a replacement and the wall admitted a round that had staged nothing at all.
+   A bundle with no `iterate_requested_at` (no such row exists; the door stamps
+   it) falls back to the household's boundary, which is the lenient direction.
 2. **If nothing was marked in this round, the wall says nothing.** The note is
    then the whole order and which pieces move is the composer's reading of it —
    *add what it asks, or stand by the plan and say which in `says`*. Howie's
@@ -6611,17 +6617,24 @@ piece to `reworked` and adding a second replacement turns the verify grading
 from `NOT ADDRESSED` to `ADDRESSED … WITHDREW A KEEP`, which is the other arm.
 
 **Recorded for whoever comes next.** `make check-queue` is **38 kinds, 11
-warnings, 55 scenarios judged** (was 56). One scenario moved from judged to
-DEFERRED and none was deleted:
-`only-the-composer-that-staged-an-outcome-reworks-it` walks `outcome.rework`,
-which now carries a guard reading `:outcome_piece` and `:verdict_reason`, and a
-scenario is judged against its door's WHOLE guard chain — the chain rule that
-moved `remark`'s create scenario one bead ago, arriving here on an ACTION
-door. It moves no pin: `the-deferred-half-is-paid-by-the-suite` counts the
-FRAMEWORK's kinds (`:kinds [:errand]`) and stays at **8**, and no conformance
-run walks `outcome` at all (the queue's pack holds `task`, `task_list`, `media`
-and `thread`), so the authorship refusal is proved where it always was —
-`workqueue10.outcome-test` § 21, over the real ring handler. **The `outcome`
+warnings, 55 scenarios judged** (was 56), and the scenario that went is
+`only-the-composer-that-staged-an-outcome-reworks-it` — **deleted, not
+deferred**, and the deletion is forced rather than a retreat. It walked
+`outcome.rework`, which now carries a guard reading `:outcome_piece` and
+`:verdict_reason`, and a scenario is judged against its door's WHOLE guard
+chain (the chain rule that moved `remark`'s create scenario one bead ago,
+arriving here on an ACTION door). Deferred, it goes to the conformance walker,
+which stages its subject through the kind's own create door — and for an
+outcome that door demands a value this house holds and evidence it can read,
+rows a declaration-time literal cannot mint. `:core/law-scenarios` runs over
+the whole registry regardless of the pack's `:kinds`, so the deferral was a red
+suite, not a quiet no-op: *the row it describes could not be staged through its
+own door*. That is the sentence the note above `a-decline-is-allowed-from-under
+-a-rework` had already predicted for `the-plan-is-not-under-rework`, said out
+loud by CI. The refusal it stated is proved where it can be —
+`workqueue10.outcome-test` § 21's loop deftest, over the real ring handler,
+against a real value and a real bundle. `the-deferred-half-is-paid-by-the-suite`
+counts the FRAMEWORK's kinds and stays at **8**. **The `outcome`
 kind's fingerprint MOVES**: an action guard rides `machine.actions.*.guards.N`,
 so adding one to `rework` mints a law revision. **No migration**: no state, no
 field, no filter and no sort changed, so the storage facet is byte-identical
