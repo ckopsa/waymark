@@ -1,6 +1,6 @@
 ---
 name: sitting
-description: Run one composer sitting at the waymark MCP door — read the house, index the facts people said as insights, answer standing composition requests and threads, advance the arrivals (enriching a bare task is a whole answer, compose an outcome only for a real goal), honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting", "compose outcomes", or on a scheduled composer run.
+description: Run one composer SITTING at the waymark door — the clerk's run, which fills forms. Read the house, index the facts people said as insights, answer standing composition requests and fact-shaped turns, take the CLERK work orders as written (enriching a bare task is a whole answer; an outcome, a question, an unmarked rework and a contradiction wait for a reading), do the marked and clocked reworks, honor the diagnosis duty, score what you did not write, journal. Use when asked to "run a sitting" or on the scheduled composer timer; for "run a reading" use /reading.
 ---
 
 # The sitting
@@ -74,21 +74,33 @@ Every offered `composition_request` deserves an answer this sitting:
 an outcome whose `request_id` names it. Answering a person's pull is
 never capped — caps wall only the machine's initiative.
 
-## 4. Work the work orders — enrich, or compose for a real goal
+## 4. Work the CLERK orders — enrich; composing waits for a reading
 
-The manifest opens with § "YOUR WORK ORDERS" (waymark-48a): at most
-two assignments a closed set of probes built out of the snapshot —
-a bare task due soonest, an event inside ten days nothing prepares
-for, a roster companion the last week of Gate traffic names and no
-insight records, a live value nothing standing serves. Each order
-already carries its subject's address, its material (rows beside it,
-and what the live Gate rigs answered), and the write it expects: the
-kind, the fields, the addresses to cite, the light door to offer. Do
-them in the order given, one row each; the machine already made every
-choice a machine can make. They are a CEILING: nothing past them is
-required, an order you cannot answer honestly is skipped and named in
-the journal, and `verify` will say `ORDER <probe> <subject>: answered
-by <row>` or `UNANSWERED` for each of them next run.
+**A sitting is the clerk's run, and it fills forms** (waymark-nl0;
+the editor's run is `/reading`, READING.md). The manifest opens with
+§ "YOUR WORK ORDERS" (waymark-48a): the assignments a closed set of
+probes built out of the snapshot, **every one labeled CLERK or
+EDITOR** by one rule — an order is *editor* when its expected write is
+an outcome, an unmarked rework, an answer to a person's question, an
+extra, or a contradiction between rows; *clerk* when the write is one
+row at one door with the material inline. A sitting takes the CLERK
+orders only: a bare task due soonest (an insight), an event inside ten
+days with a task beside it (an insight), a roster companion the last
+week of Gate traffic names (an insight), a journal-only skip, and any
+form a reading left under `notes-for-sittings`. Each order already
+carries its subject's address, its material (rows beside it, and what
+the live Gate rigs answered), and the write it expects: the kind, the
+fields, the addresses to cite, the light door to offer. Do them in the
+order given, one row each; the machine already made every choice a
+machine can make. They are a CEILING: nothing past them is required, a
+sitting has NO extra (a row beyond the orders is `FILLER`), an order
+you cannot answer honestly is skipped and named in the journal, and
+`verify` will say `ORDER <probe> <subject>: answered by <row>` or
+`UNANSWERED` for each of them next run. Everything under **"Waiting
+for a reading"** — the outcome orders, the contradiction orders, a
+person's question, an unmarked and unclocked rework — is not yours:
+leave it exactly as it stands, write nothing about it, and `verify`
+prints `WAITING FOR A READING`, never a fault.
 
 A run writes only what its work orders and the owed lists name
 (waymark-mho): it advances what ARRIVED (the manifest's `arrivals`,
@@ -103,25 +115,20 @@ for, where/when/with what, its next physical step), an offer naming
 its next door. Never edit the task's fields. Dig beyond the house for
 that context through the Gate door (`GET /api/-/gate`: email,
 Telegram, texts) — evidence to act on, never an address to cite; name
-the source in prose, copy no message body, read tools only. COMPOSE
-an outcome only when an arrival plus its graph implies a GOAL LARGER
-THAN ANY SINGLE ROW — an end-state, not a task restated; a bundle
-whose goal equals one task, or that only re-prioritizes one, is a
-wrapper, enrich instead. Never a twin of a standing outcome. A run
-that advanced its arrivals, enriched what was bare, and owed nothing
-else may write nothing — a lawful no-op. Only an honest dig that
-finds nothing distinct stages nothing, and then the journal (step 9)
-notes what was
-searched and why. There is no cap on staging (waymark-1uv.3): the
-machine writes without limit and the crown's declared rank chooses
-what fills the person's attention. Stage every DISTINCT bundle the evidence
-honestly supports — but never a twin of one that already stands
-(the manifest's `standing_outcomes` names them; a candidate with the
-same goal, or citing the same evidence row, is a twin): the rank
-cannot tell twins apart, so sameness is the only scarcity.
-A declined prior recomposes only after its diagnosis (step 6) and
-re-enters cooled, never buried. The journal (step 9) still records
-what you chose not to compose and why.
+the source in prose, copy no message body, read tools only. COMPOSING
+IS THE EDITOR'S: whether an arrival plus its graph implies a goal
+larger than any single row is judgment, so every order that expects an
+outcome is labeled EDITOR and waits for a reading. The only outcomes a
+sitting stages are a person's pull answered (§ 3) and the pieces a
+marked or clocked rework asks for (§ 7) — forms, with the material
+given — and there the walls hold as ever: a live value, everything
+cited, 2–5 pieces, never a twin of a standing outcome (the manifest's
+`standing_outcomes` names them; `not-a-twin` refuses at the door). A
+run that advanced its arrivals, enriched what was bare, and owed
+nothing else may write nothing — a lawful no-op. A declined prior
+recomposes only after its diagnosis (step 6) and re-enters cooled,
+never buried. The journal (step 9) still records what you chose not to
+write and why.
 
 ## 5. The walls, in one breath
 
@@ -201,12 +208,17 @@ Respect the
 
 A thread whose last turn is a person's and not yours is a work order
 (waymark-b4s): they said something about your subject and nothing
-answered. Answer every one, this sitting — with a reply `remark`
-(`in_reply_to` naming their turn), with a recomposition whose
-evidence cites what they said, or both. A question gets words; a
-fact ("the wood arrived") gets a composition that uses it; a
-suggestion gets either an outcome that takes it or a turn saying
-honestly why not. When the turn changes the standing of the outcome
+answered. The manifest labels each one **FACT** or **QUESTION** and
+prints WHAT THE HOUSE ALREADY SAYS under it (waymark-frv). **Only the
+facts are a sitting's.** Answer every fact-shaped turn, this sitting —
+with a reply `remark` (`in_reply_to` naming their turn), with the
+insight you indexed from it, or both; a suggestion gets a turn saying
+honestly what you did with it. **A QUESTION waits for a reading**: its
+answer has to come from the record, and a sitting that answers from
+the question publishes a false fact with an address (2026-08-29: "Rod
+needs a state ID" while the TC-842 task detail said SSN suffices).
+Leave it exactly as it stands, and never index a question as a fact
+(`verify` prints `SAYS-SO`). When the turn changes the standing of the outcome
 it sits on — a date slid, a plan on hold, someone sick — say so on
 that outcome in a reply: what changed, what you did about it (the
 insight indexed, the follow-up staged, by id), what you left alone.
@@ -269,9 +281,13 @@ the bundle, so a RE-TIME and a REPLACE are each simply one new piece
 staged under it. `the-marks-are-the-work-order` refuses the commit
 while a RE-TIME or REPLACE is unanswered, or a KEEP has been
 withdrawn, and the refusal names every offender with its list. Where
-the household marked NOTHING, none of this applies: the note is the
-whole order, adding what it asks and standing by the plan are both
-lawful, and you say which in `says`. Next run, `verify` prints each
+the household marked NOTHING, none of this applies — and then the
+label decides whose round it is (waymark-nl0): an unmarked note that
+names a CLOCK TIME is still a clerk's form (the suggested re-time
+below is the row to pick), while an unmarked note with no hour in it
+is the EDITOR'S, printed under *Waiting for a reading*; leave that
+one exactly as it stands, and `verify` prints `HANDED BACK, WAITING
+FOR A READING` rather than a fault. Next run, `verify` prints each
 mark back with `ADDRESSED` or `NOT ADDRESSED` against your name.
 
 **And a time in the note is a RE-TIME even where nobody tapped wrong

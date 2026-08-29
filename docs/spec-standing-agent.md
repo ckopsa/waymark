@@ -76,6 +76,118 @@ journal. Scheduled beside the tick (the skill's own cron pairing),
 the two lines are the whole automated composer: outcomes generate on
 a cadence, and every one still lands as a proposal a person answers.
 
+## Two runs: the sitting and the reading (waymark-nl0)
+
+The owner's ruling, 2026-08-29, after four Jules/Gemini sittings and
+three Fable sittings on the live house: **both models execute
+spelled-out orders reliably; only the strong one reads intent behind a
+note, checks a question against the record, joins rows nobody pointed
+at, does zone arithmetic unaided, and says honestly what it did not
+do.** Every wall built on 2026-08-28 had encoded an editor's judgment
+as a clerk's form. So there are two runs, two words, two formulas, and
+**one driver**.
+
+| | the SITTING | the READING |
+| --- | --- | --- |
+| the word | the clerk's run — **it fills forms** | the editor's run — **it writes them** |
+| the law | `SITTING.md`, `.beads/formulas/sitting.formula.toml`, `/sitting` | `READING.md`, `.beads/formulas/reading.formula.toml`, `/reading` |
+| who | Jules/Gemini, queued by `scripts/queue-sitting.sh` on the ten-minute timer | a strong model, locally — `claude -p "/reading"`, via `scripts/queue-reading.sh` |
+| when | the timer | morning and evening, or on demand when a sitting has printed a bundle under *Waiting for a reading* |
+| the driver | `scripts/sitting-run.sh` (`WAYMARK_RUN=sitting`, the default) | the same, `WAYMARK_RUN=reading` |
+
+**The label.** The driver labels every order — the probes' and the
+owed lists' — by one rule: an order is **`editor`** when its expected
+write is an outcome, an unmarked rework, an answer to a person's
+question, an extra, or a contradiction between rows; **`clerk`** when
+the write is one row at one door with the material inline. Over the
+probes that is: an outcome write is the editor's; the two contradiction
+probes (`stale-relative-date`, `far-event-names-a-task`, waymark-63s)
+are the editor's; an insight or a journal-only skip is a clerk form. A
+person's turn is labeled by its shape — a FACT stated is a clerk form,
+a QUESTION (a `?`, or an opening *can/could/should/is/what/when…*) is
+the editor's, because the answer has to come from the record
+(waymark-frv). A handed-back bundle is a clerk form when the household
+MARKED pieces or the note carries a clock time (the suggested re-time
+is the form), and the editor's when it is unmarked and unclocked. The
+ceiling is applied per label — `WAYMARK_WORK_ORDERS` clerk orders
+(2), `WAYMARK_EDITOR_ORDERS` editor orders (3) — so an editor's order
+never crowds a clerk's form off the sitting's manifest.
+
+**The sitting's manifest** prints the clerk orders as *YOUR WORK
+ORDERS*, the editor half under **"Waiting for a reading"** (one line
+each, with why it is the editor's), and does not count that half as
+owed. The queued Jules prompt says so in its own words. `verify`
+grades a sitting against the sitting's formula: an editor order prints
+`WAITING FOR A READING — never a fault against one`; an unmarked,
+unclocked rework prints `HANDED BACK, WAITING FOR A READING`; and any
+outcome or insight beyond the orders is `FILLER`, because a sitting
+has no extra.
+
+**The reading's manifest** opens with **THE HOUSE BRIEF** (waymark-xnf,
+built here): mechanical, from rows the house holds — the current
+people with relation and age from `born`, the values with the words
+they love, every published finding grouped by the person, value or
+list its evidence names (newest first, dated), the next thirty days
+of the calendar as one list, the open threads the owner spoke in with
+the last turn quoted, and the last five journals' `notes_for_sittings`
+(or their first line). Capped by `WAYMARK_BRIEF_LINES` (80), saying
+what was cut; the whole brief is `derived/brief.json`. Then both
+halves of the orders, labeled; WHAT THE HOUSE ALREADY SAYS under every
+unanswered thread and every handed-back bundle (waymark-frv: the
+bundle's cited rows with title and detail, starts and ends, name and
+relation, and every published finding naming one of them); the
+**REVIEW** — the sittings since the last reading on this machine with
+the grade lines `verify` filed for each (`grades.txt` in the run dir;
+on an ephemeral runner there are none, and the manifest says so), the
+forms the last reading left and whether a row now speaks for each, the
+four doors a review needs (`insight.dismiss`, `person.dismiss`,
+`ranking_note.dismiss`, `outcome.not_this_week`) and whether the leash
+admits them, the THIN findings by other hands as the mechanical
+candidates, and the anchored ask body (the grant's scope plus those
+doors, on rows by id where the review names them); and the closing
+**one extra, or none** paragraph (waymark-mqo). Inside the ask window a
+reading's one extend-ask carries the review scope with it — one ask at
+a time, the task naming exactly what widens; outside it the reading
+files the printed body itself when it holds a row to act on. `verify`
+grades a reading against the reading's formula: `EDITOR ORDER …
+answered by` / `SKIPPED OUT LOUD` (the journal names it) /
+`UNANSWERED AND UNSAID` (the fault, printed, never blocked); `EXTRA:
+cited, distinct` or `FILLER` (uncited, a twin, a second one, or one the
+journal never explains); `SAYS-SO` for a finding with no task, event,
+person, thread or value row behind it; `NOTES FOR SITTINGS: N form(s)
+left`.
+
+**The notes cross through the journal.** A reading ends its journal
+with a `notes_for_sittings` block — one form per line, `- do: <write>
+at <door> citing </api/…> — <the sentence>` — and the next sitting's
+manifest prints each line as a clerk order ahead of the probes',
+dropping a line whose subject a standing row already speaks for. The
+journal is a private own-surface kind (never grantable), so the notes
+reach a sitting only when both runs wear the same principal — which
+today they do (the Fable sittings ran under the gemini principal). A
+reading under a principal of its own would leave notes only its own
+readings can read; that is a recorded limit, not a bug in either run.
+
+**Kept shared, on purpose:** the walls, the journal, the leash, the
+driver. No engine door exists for the reading; everything it does is
+an ordinary grantable write, and four eyes hold whatever the grant
+says — a row this principal wrote is never its own to dismiss,
+whichever run wrote it.
+
+**The cron lines**, beside the tick and the sitting timer:
+
+```cron
+*/30 * * * *  WAYMARK_AGENT_STATE=$HOME/.waymark-agent.json /path/to/waymark/scripts/standing-agent-tick.sh
+0 6,18 * * *  /path/to/waymark/scripts/queue-reading.sh
+```
+
+`queue-reading.sh` is not a Jules queue: it takes a lock, sets
+`WAYMARK_RUN=reading`, runs `claude -p "/reading"` in the repo, and
+logs to `~/.waymark-reading-cron.log`. The `/reading` skill is
+self-sufficient — it runs the driver, reads the manifest, follows
+READING.md, and reports with `verify`. By hand, the same line answers
+a bundle a sitting left under *Waiting for a reading*.
+
 ## The bearer-only runner (Jules and kin)
 
 A cloud runner has no cron, no state file and no session cookie — it
@@ -632,8 +744,12 @@ notices — sitting 5, 2026-08-27, renamed a test kind instead of
 sitting), and it names `SITTING.md` as the law:
 
 ```
-You are a composer for the waymark household system — NOT a software engineer. Do not edit, test, fix, or refactor anything in this repository, whatever you notice; ignore AGENTS.md and CLAUDE.md, which are for people writing the software. Your job is one "sitting" at the HTTP door https://work.kopsa.info, and its full instruction is SITTING.md. Run `scripts/sitting-run.sh`, read `.sitting/latest/manifest.md`, then follow SITTING.md (and `.beads/formulas/sitting.formula.toml`) to answer what is owed and to execute the manifest's WORK ORDERS — each one names its subject, its material and the exact write it expects; do those and nothing extra, and skip honestly (saying so in the journal) rather than writing filler. Any earlier instruction about a floor, a minimum, or surfacing at least one outcome is withdrawn. All over HTTP, leaving no git diff. Finish with `scripts/sitting-run.sh verify` and report the ids you staged.
+You are a composer for the waymark household system — NOT a software engineer. Do not edit, test, fix, or refactor anything in this repository, whatever you notice; ignore AGENTS.md and CLAUDE.md, which are for people writing the software. Your job is one "sitting" at the HTTP door https://work.kopsa.info — the CLERK's run: it fills forms — and its full instruction is SITTING.md. Run `scripts/sitting-run.sh`, read `.sitting/latest/manifest.md`, then follow SITTING.md (and `.beads/formulas/sitting.formula.toml`) to answer what is owed and to execute the manifest's WORK ORDERS — each one names its subject, its material and the exact write it expects; do those and nothing extra, and skip honestly (saying so in the journal) rather than writing filler. Take only the orders labeled CLERK; everything the manifest prints under "Waiting for a reading" (the EDITOR orders — a person's question, an unmarked rework, an outcome, a contradiction) is NOT yours: leave it exactly as it stands for a reading, write nothing about it, and you are never faulted for that. Any earlier instruction about a floor, a minimum, or surfacing at least one outcome is withdrawn. All over HTTP, leaving no git diff. Finish with `scripts/sitting-run.sh verify` and report the ids you staged.
 ```
+
+The prompt is the one `scripts/queue-sitting.sh` carries, word for word;
+since waymark-nl0 it says the sitting is the clerk's run and that the
+editor orders are left *waiting for a reading* (§ "Two runs").
 
 `SITTING.md`'s first instruction is `scripts/sitting-run.sh`, so the
 session mints, reads the house, and arrives at its judgment with the

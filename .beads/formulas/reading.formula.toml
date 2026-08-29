@@ -1,0 +1,249 @@
+# The editor's READING as a beads formula (waymark-nl0, the owner's
+# split of 2026-08-29): the run beside the clerk's sitting. Same walls,
+# same leash, same journal, same driver — a different set of duties.
+# A sitting fills forms; a reading writes them. Wisp it per run —
+# `bd mol wisp reading` — claim the steps oldest-first, do what each
+# says, close it, and `bd mol squash` the wisp when the reading ends.
+#
+# The law is READING.md, over SITTING.md; the walls are
+# docs/spec-outcome-menu.md § "The composer contract" and every door
+# refuses with a sentence that names the fix. The same walk in prose is
+# .claude/skills/reading/SKILL.md.
+#
+# WHO RUNS IT: a strong model, locally (`claude -p "/reading"`),
+# morning and evening on the cron line docs/spec-standing-agent.md
+# names, or on demand when a bundle is handed back unmarked. Not Jules.
+#
+# CREDENTIALS are the sitting's, unchanged: `WAYMARK_RUN=reading
+# scripts/sitting-run.sh` mints the bearer and leaves it at
+# `.sitting/latest/bearer`; every request wears it plus
+# `X-Waymark-Grant: $WAYMARK_GRANT_ID`. A refusal means STOP.
+#
+# WHAT A READING NEEDS FROM THE LEASH beyond the sitting's scope: the
+# review doors, on rows by id — insight.dismiss, person.dismiss,
+# ranking_note.dismiss, outcome.not_this_week. The driver reads which
+# the grant admits, builds the anchored ask, and files it as the one
+# extend-ask when inside the window; otherwise the manifest prints the
+# body for the reading to file when it holds a row to act on and no
+# ask of its own stands. An ask decides nothing; a person taps it.
+
+formula = "reading"
+description = "One editor's reading at the waymark door: the house brief first; a person's question answered from the record; the unmarked reworks read against the pieces; compose only where a goal is larger than any row; one cited extra or none; the contradictions between rows; diagnoses only for priors being recomposed; the review of the sittings since the last reading — grade lines, scores, dismissals under a grant; and notes for the next sittings, as forms."
+
+[vars]
+base_url = { default = "https://work.kopsa.info" }
+
+[[steps]]
+id = "read"
+title = "Read the house — the brief before any order"
+description = """
+FIRST, mechanically: `WAYMARK_RUN=reading scripts/sitting-run.sh`. It
+mints the bearer, proves it and the grant with one GET, pulls the same
+snapshot a sitting reads into `.sitting/latest/rows/`, works out the
+same owed lists, runs the same probes — and renders the READING's
+manifest: THE HOUSE BRIEF at the top (waymark-xnf: people with
+relation and age, values with the words they love, every published
+finding grouped by who or what it names, the next thirty days as one
+list, the open threads the owner spoke in, the last five journals'
+notes — capped by WAYMARK_BRIEF_LINES and saying what was cut), every
+order LABELED clerk or editor, WHAT THE HOUSE ALREADY SAYS under every
+unanswered thread and handed-back bundle (waymark-frv), the REVIEW of
+the sittings since the last reading with their verify grade lines, the
+doors a review needs and the ask that opens them, and the one-extra
+paragraph. If it stops, stop with it and report its sentence.
+
+Read the brief WHOLE before any order. It is the story the rows tell
+— the appointment the placard is for, the day the household called
+booked, the summer somebody left — and it is where a reading's
+findings come from. The snapshot stays beside it: <kind>.json is the
+projection, <kind>.full.json each row at its own address; evidence
+and routing live only in the latter.
+"""
+
+[[steps]]
+id = "answer-from-the-record"
+title = "Answer a person's question FROM the record — never from the question"
+depends_on = ["read"]
+description = """
+The threads whose last turn is a person's are labeled FACT or
+QUESTION. A FACT is a clerk's form and you may take it (index it as an
+insight citing the remark and the rows it is about; reply in words). A
+QUESTION is yours alone (waymark-frv): on 2026-08-29 a sitting handed
+the thread alone answered "getting the ID would be a prerequisite"
+while the TC-842 task's own detail said SSN suffices, and published
+that as a finding — a false fact with an address.
+
+Under each thread the manifest prints WHAT THE HOUSE ALREADY SAYS: the
+rows the subject bundle cites (a task's title and detail, an event's
+starts/ends, a person's name and relation) and every published finding
+that names one of them, each with its address. Answer FROM those rows
+with a reply remark (POST {{base_url}}/api/remarks, same
+subject_kind/subject_id, in_reply_to naming their turn): if the rows
+answer the question, cite them and say so; if they contradict the
+person, say which row and quote it; if they are silent, say that and
+what would settle it. Never index a question as a fact — verify prints
+SAYS-SO against a finding that cites no task, event, person, thread or
+value row. On a bundle of yours in `iterating` the remark door is
+closed (words-do-not-answer): the answer is the rework's `says`.
+"""
+
+[[steps]]
+id = "rework-unmarked"
+title = "The unmarked rework — read the note against the pieces"
+depends_on = ["read"]
+description = """
+A bundle handed back with NO piece marked and NO clock time in the
+note is the editor's (a marked round, and an unmarked round with a
+suggested re-time, are the clerk's forms and a sitting takes them). The
+manifest lists yours under "Handed back for a rework" with the label
+EDITOR, the note quoted, and WHAT THE HOUSE ALREADY SAYS beneath it.
+Read the note against the pieces and those rows; withdraw a piece the
+note says is wrong (POST {{base_url}}/api/outcome_pieces/<id>/-/rework
+— it goes reworked, never declined); stage what the note asks (POST
+{{base_url}}/api/outcome_pieces under the same bundle, every instant a
+wall clock in the household zone rendered UTC from the clock table
+the manifest prints — never the local hour with a Z); commit with POST
+{{base_url}}/api/outcomes/<id>/-/rework {says} — required, 240, posted
+as your turn. A round that changes no piece is a lawful answer when the
+plan honestly stands; say so in `says`, and never claim a change you
+did not stage (verify prints CLAIMED, NOT STAGED). Leaving it in
+`iterating` is the one wrong answer. The marks law (waymark-wxk) still
+governs any round where the household marked after all.
+"""
+
+[[steps]]
+id = "compose"
+title = "Compose only where a goal is larger than any row"
+depends_on = ["answer-from-the-record", "rework-unmarked"]
+description = """
+The manifest's orders are labeled. Take the CLERK forms as written
+(one row at one door, the material inline — an insight enriching a
+bare task, a journal-only skip). Then the EDITOR orders whose expected
+write is an OUTCOME — a session of like tasks with its block already
+computed, a commitment living only in a message, an event with no task
+beside it, a value nothing standing serves — and any goal the brief
+implies that no probe reached. Stage an outcome ONLY when the rows
+imply an end-state larger than any single evidence row; a bundle whose
+goal equals one task, or that only re-prioritizes one, is a wrapper —
+enrich instead. The doors hold everything a sitting's do: a live
+value, everything read cited, 2-5 pieces, the prepared input fitting
+its door, every date ahead of the run, not-a-twin,
+composes-from-what-stands, the-door-is-open-now. An order the rows do
+not carry is SKIPPED AND SAID SO in the journal — verify prints
+UNANSWERED AND UNSAID against an editor order that got neither an
+answer nor a sentence.
+
+THE DIAGNOSIS DUTY is the sitting's unchanged (waymark-me9): only a
+prior you are about to recompose, the manifest's "Declines OWED a
+diagnosis" list, one each, never twice, the finding saying what the
+recomposition changes because of the decline, never the manifest line
+copied out.
+"""
+
+[[steps]]
+id = "contradictions"
+title = "Contradictions between rows — the four shapes"
+depends_on = ["read"]
+description = """
+A contradiction lives BETWEEN two rows and no single-subject probe
+reaches it (waymark-63s). Two shapes are mechanical EDITOR orders on
+the manifest, each expecting an insight citing both rows and offering
+the task's own light door: `stale-relative-date` — an overdue task
+whose detail still says "Monday" or "next week" (say which day it
+named, whether it passed, and what the task therefore is);
+`far-event-names-a-task` — an event 10-45 days out whose words match
+an open task's purpose (say the event is what the task is for, and
+therefore its real deadline, with the lead time the detail implies —
+or that the match is a coincidence of words, in the journal). Two
+shapes are yours to read from the brief: a day an insight or a remark
+calls BOOKED with no event on it (the write is an outcome whose pieces
+CREATE the missing events, and a remark on any standing bundle
+holding that day); and two open task details that cancel each other
+on a requirement (the write is an insight offering the moot task's
+`complete`). A held block never lands on a day the record calls
+booked — read the facts before you compute an hour.
+"""
+
+[[steps]]
+id = "one-extra"
+title = "ONE finding of your own, or none"
+depends_on = ["compose", "contradictions"]
+description = """
+Beyond the orders a reading may write ONE row the manifest did not
+order (waymark-mqo): a finding or an outcome cited to the rows you
+actually read, distinct from everything standing (the doors refuse a
+twin; the goal half is yours to judge), with one sentence in the
+journal on why it was worth a row. Not two. verify grades it EXTRA
+(cited, distinct) or FILLER (uncited, a twin, a second one, or one
+the journal never explains). If nothing you read deserves a row,
+write none and say so — that is the usual answer, and a lawful one.
+The evidence for this step: on 2026-08-28 a strong model read
+Grandpa-care facts and a VA caretaker stipend in the household chats
+and wrote none of it, because the sitting's ceiling forbade extras.
+"""
+
+[[steps]]
+id = "review"
+title = "Review the sittings since the last reading — grade lines, scores, dismissals"
+depends_on = ["one-extra"]
+description = """
+The manifest's REVIEW section lists the sittings since the last
+reading with the grade lines `verify` filed for each (ORDER answered
+or UNANSWERED, THIN, TWIN, DIAGNOSIS FLOOD, HANDED BACK, CLAIMED NOT
+STAGED, NOTE TIME, ODD HOUR, MARKS), or says plainly that none are on
+this machine. Read them for what the clerk got wrong and why, and
+say it in the journal in one paragraph — the next sitting reads that.
+
+Then the two writes a review owes. SCORE every standing bundle you did
+not write (the "Bundles carrying no live judgment of yours" list,
+newest first): POST {{base_url}}/api/ranking_notes with subject_kind /
+subject_id, a score 0-1, one sentence of at most 240 characters saying
+what the bundle STANDS ON in the house's own terms, and evidence = the
+bundle's whole cite list from the manifest (never the bundle alone).
+One live note per row per author; a changed mind restates. DISMISS a
+thin or false row where your grant admits the door: the manifest names
+the four doors a review needs — insight.dismiss, person.dismiss,
+ranking_note.dismiss, outcome.not_this_week — and whether the leash
+admits each, lists the THIN findings by other hands as the mechanical
+candidates, and prints the anchored ask body (scope = the grant's own
+plus those doors on rows by id). Inside the ask window the driver has
+already filed it as the one extend-ask (grant_watch says so); otherwise
+file it yourself only when you hold a row to act on and no ask of
+yours stands — POST {{base_url}}/api/approval_requests — and REPORT THE
+ASK ID. Four eyes hold whatever the grant says: a row this principal
+wrote is never yours to dismiss, whichever run wrote it; say so and
+leave it for the owner. Never rewrite a sitting's row; answer beside
+it.
+"""
+
+[[steps]]
+id = "journal"
+title = "Journal the reading — and end it with notes_for_sittings"
+depends_on = ["review"]
+description = """
+One journal entry — POST {{base_url}}/api/journals with {title, body};
+no grant scope needed, the journal is your own surface. The body
+closes the reading the way a sitting's does (what was staged, indexed,
+answered, reworked, diagnosed, scored, dismissed, by id; what was
+deliberately not written and why; the one extra and why it was worth
+a row, or that there was none), plus the review paragraph.
+
+THEN THE BLOCK THE NEXT SITTINGS WORK FROM. End the body with a
+heading `## notes_for_sittings` and one form per line:
+
+  - do: publish an INSIGHT at POST /api/insights citing /api/tasks/<id> and /api/events/<id> — <the complete sentence>
+  - do: reply with a REMARK at POST /api/remarks on outcome/<id> (in_reply_to /api/remarks/<id>) — <the words>
+
+Forms, not thoughts: one row, one door, every address the house serves
+(the journal door refuses an address it cannot show), the material in
+the sentence. The next sitting's manifest prints each line as a clerk
+order ahead of the probes' and drops a line whose subject a standing
+row already speaks for. Because the journal is a private own-surface
+kind, the notes reach a sitting only under the same principal the
+sittings run as. A reading that leaves no notes says so on purpose.
+
+LAST, always: `scripts/sitting-run.sh verify`, output in your report.
+It grades this run as a READING: EDITOR ORDER answered / SKIPPED OUT
+LOUD / UNANSWERED AND UNSAID, EXTRA or FILLER, SAYS-SO, NOTES FOR
+SITTINGS — beside everything it says about a sitting.
+"""

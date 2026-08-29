@@ -27,6 +27,22 @@ whole answer, and an outcome is composed only when a real goal
 emerges. A run writes only what its work orders and the owed lists
 name; a quiet house is a complete run.
 
+**A sitting is the CLERK's run, and it fills forms** (waymark-nl0).
+Beside it runs the **reading** — the editor's run, `READING.md`: the
+same door, walls, leash, journal and driver, a different set of
+duties. The driver labels every order `CLERK` or `EDITOR` by one rule:
+an order is *editor* when its expected write is an outcome, an
+unmarked rework, an answer to a person's question, an extra, or a
+contradiction between rows; *clerk* when the write is one row at one
+door with the material inline. **A sitting takes the clerk orders
+only** — a fact a person stated (indexed, replied to), a marked rework
+or a clock-table re-time, an enrichment with its material inline, a
+journal-only skip, a thread arrival, and the forms a reading left
+under `notes-for-sittings`. Everything the manifest prints under
+**"Waiting for a reading"** is not yours: leave it exactly as it
+stands, write nothing about it, and `verify` never faults you for it.
+A sitting has no extra: the orders are the ceiling.
+
 ## Step one, every run: the driver
 
 ```bash
@@ -201,12 +217,23 @@ holding your place in it.
    `Z`, because a round that changes no piece while `says` claims it
    added or moved one is a claim rather than an answer, and next run
    `verify` prints `CLAIMED, NOT STAGED` against your name.
-4. **Answer every unanswered thread turn** — a `remark` whose last
-   word is a person's is a work order: reply with a remark
-   (`in_reply_to` naming theirs), restage citing the insight you
-   indexed from their words, or both. The manifest lists the threads
-   whose last turn is not yours; a turn by another *agent* is not a
-   work order, so read who said it. When their turn changes an
+   **And an unmarked note with no hour in it is the EDITOR'S**
+   (waymark-nl0): the manifest prints that bundle under *Waiting for a
+   reading*; leave it exactly as it stands, and `verify` prints
+   `HANDED BACK, WAITING FOR A READING` rather than a fault. The marked
+   round and the clocked round are yours; the note read against the
+   pieces is a reading's.
+4. **Answer every unanswered FACT a person stated** — a `remark` whose
+   last word is a person's is a work order when it states a fact:
+   reply with a remark (`in_reply_to` naming theirs), restage citing
+   the insight you indexed from their words, or both. The manifest
+   labels each thread FACT or QUESTION and prints WHAT THE HOUSE
+   ALREADY SAYS under it (waymark-frv); **a QUESTION waits for a
+   reading** — its answer has to come from the record, and a sitting
+   that answers from the question publishes a false fact (2026-08-29:
+   "Rod needs a state ID" while the TC-842 task detail said SSN
+   suffices). Never index a question as a fact. A turn by another
+   *agent* is not a work order, so read who said it. When their turn changes an
    outcome's standing (a date slid, someone is sick), say so on that
    outcome in a reply — what changed, what you did, by id — so the
    feed can read why a bundle slipped without opening the thread.
@@ -438,7 +465,10 @@ holding your place in it.
   then: a decline nothing is re-proposing owes no insight at all.
 
 The full law: `docs/spec-outcome-menu.md` § "The composer contract".
-The same walk in prose: `.claude/skills/sitting/SKILL.md`.
+The same walk in prose: `.claude/skills/sitting/SKILL.md`. The
+editor's run beside this one: `READING.md` (the reading — same walls,
+same leash, same journal, a different set of duties; the split and the
+schedule are `docs/spec-standing-agent.md` § "Two runs").
 
 ## The leash
 
