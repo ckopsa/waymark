@@ -325,7 +325,7 @@
         mine (first (filter #(= :core/law-scenarios (:name %)) report))]
     (is (some? mine) "core's pack owes the obligation")
     (is (= [] (:violations mine)))
-    (is (= 7 (:covered mine))
+    (is (= 8 (:covered mine))
         (str "exactly the scenarios the check tier could not judge, and no"
              " more: ranking_note's one (waymark-1uv.6 — a person refused"
              " the birth door, deferred by the chain rule exactly as"
@@ -339,5 +339,9 @@
              " the CHAIN's rather than the wall's: nobody-explains-somebody"
              "-elses-no reads only the caller, but its door's second guard"
              " counts rows, and a create scenario is judged against the"
-             " whole chain). The other three of errand's are not re-run"
-             " here"))))
+             " whole chain), plus remark's one (waymark-vf8 — the chain"
+             " rule again: nobody-speaks-in-somebody-elses-voice reads only"
+             " the caller, and words-do-not-answer now stands beside it on"
+             " that door reading the SUBJECT's row and its kind's own"
+             " :answered-at-a-door). The other three of errand's are not"
+             " re-run here"))))

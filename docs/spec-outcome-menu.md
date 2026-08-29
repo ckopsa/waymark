@@ -6438,7 +6438,11 @@ DEFERRED and no scenario was deleted: `remark`'s
 `nobody-speaks-in-somebody-elses-voice` walks the create door, which now
 carries a guard that reads `:storage`, and the declaration-time walker defers
 any door it cannot stage a world for — `ranking_note`'s posture exactly, whose
-create scenario defers for the same reason. **No fingerprint moves.** Action
+create scenario defers for the same reason. **A deferral is not a loss**: the
+conformance tier picks it up, and `waymark10.law-scenarios-test/the-deferred-
+half-is-paid-by-the-suite` — the pin that says the two tiers add up to every
+scenario and no more — moves **7 → 8** with `remark`'s name added to its
+sentence. CI caught that one, which is what the pin is for. **No fingerprint moves.** Action
 `:input` schemas ride `fingerprint-of` only through their DEFAULTS
 (`create`/`input_defaults`), so the `says` cap does not mint a revision;
 `:create-guards` are outside the projection altogether, so `remark` does not
