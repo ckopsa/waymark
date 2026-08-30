@@ -6913,3 +6913,82 @@ driver's own `as-of` comment already warned about it and the first cut made the
 mistake three more times); `select($t | test(re))` evaluates `re` against `$t`
 for the same reason; and a month alternation ending in `[a-z]*` reads *"maybe
 9:30"* as **May 9th**. Bind the row before you ask.
+
+## Built — 2m2, typed evidence on the finding and what moved this week (2026-08-30, waymark-2m2)
+
+The hypotheses epic's first slice (waymark-2pj), built to
+`docs/spec-hypotheses.md` § *The evidence atom*, § *The LR table as data* and
+§ *The updater*. It lands in this file because `insight` lives here, in
+§ *Ranked, not capped* and § *Built — 1ag*, and because the number-as-data
+posture it copies is § *Built — 1uv.2*'s.
+
+**The finding grows four optional fields, and optional is the whole of the
+compatibility story.** `evidence_type` (nine tokens), `solicited` (boolean),
+`cost` (`none` / `low` / `high`), `episode` (a source and a day, *"thread/
+7fda11c6 2026-08-24"*). Each is advertised with help in the household's voice
+and each may be left blank; a finding carrying none of them weighs a likelihood
+ratio of **1**, which is silence, and that is what every finding published
+before today weighs. No backfill is owed, no migration is minted, and nothing
+about a standing finding changed meaning.
+
+**One new wall, and it is not a wall on typing.**
+`the-typing-agrees-with-itself` refuses exactly two sentences that contradict
+themselves — an `unprompted_mention` the house asked for, and a
+`costly_action` that `cost` `none` — because the number behind each of those
+words assumes the word is true. It is shape-only, so both its scenarios are
+judged with no database. A costly action carrying no `cost` at all is admitted
+and reads at the LOW number, which is the conservative direction.
+
+**The LR table is data on the recipe row**, `evidence_lr`, defaulted in
+`feed/default-evidence-lr` and merged the way `crown-rank-of` merges. Twenty-
+two numbers: ten ratios (costly action **20** high / **5** low, unprompted
+mention **8**, statement against interest **6**, specific detail **4**,
+question asked **3**, complaint while continuing **3**, solicited praise
+**1.05**, minimal response **0.9**, declined invite **0.2**), the
+`solicited_discount` **0.25**, nine per-type half-lives in days (540 / 365 /
+365 / 180 / 180 / 180 / 90 / 60 / 60), and the two walls on the arithmetic —
+`episode_intensity` **1.5** and `log_odds_clamp` **6**. They ride the wire at
+`recipe.evidence_lr` with `recipe.evidence_lr_says` quoting them back, and
+they are proposable through `recipe_proposal` (`evidence_lr` /
+`current_evidence_lr`, the same staleness wall, `evidence-lr-diff` saying each
+moved number in the household's words) exactly as `crown_rank` is.
+
+**The honest cost, stated rather than discovered** — the spec asked for it in
+writing: with this field the `feed_recipe` row stops being only the feed's
+editorial frame and becomes **the house's table of numbers a person may argue
+with**. A kind of its own was weighed and lost; it would have meant a second
+staleness wall, a second diff vocabulary and a second apply door for one map.
+
+**WHAT MOVED THIS WEEK is computed on the fly and stores nothing.**
+`scripts/movements.jq`, run by the reading's driver into the house brief above
+the standing findings. The three rules are the spec's: log-odds addition
+(cost-graded, discounted where the house asked, clamped); one count per
+episode with the intensity; decay by type toward silence. *Moved this week* is
+that fold run **twice** — today, and with the clock set back seven days — so a
+row moves when a new fact lands **and** when an old one fades, and both are
+real news. No hypothesis kind exists yet, so the mover is the ABOUT-ROW the
+atom cites, and the line says `CLAIM-LESS MOVER` to say so out loud: the
+number points, and the claim is the reading's to make in a sentence with the
+atoms cited. Dismissed findings are left out — the house said the claim was
+wrong, and an atom on a rejected claim is not evidence.
+
+**The empty case is the one that had to read well**, because it is the state
+every house is in today: with no typed fact the section says so in one
+sentence and stops.
+
+**Where the arithmetic is checked.** `scripts/movements-fixture.sh` — six
+synthetic atoms, two episodes, three about-rows, every log-odds hand-computed
+in its own comments, plus the clamp, the empty case, the missing episode, the
+nothing-new-this-week case and the dismissed case. It needs no database and no
+network, and CI runs it in the `quick` job; `scripts/movements.jq` and the
+fixture are the two `scripts/` paths the `changes` job now counts as code, so
+a diff touching only them still runs it. `verify` gained one gentle line,
+`EPISODE:`, for a typed fact with no occasion — a cost, never a fault, and the
+line says what the cost is.
+
+**Recorded for whoever comes next.** `make check-queue` is unchanged at
+**38 kinds, 11 warnings** and moves from 55 to 55 scenarios judged — the three
+new `insight` scenarios all defer to the suite, because that kind's create
+door reads storage. `insight` and `feed_recipe` fingerprints DO move
+(schema widening on both, one new create guard on the first), which is
+expected and needs no file edit: nothing in this tree pins a hash.

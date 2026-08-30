@@ -357,6 +357,25 @@ verify_run() {
       | if $n > 3
         then "DIAGNOSIS FLOOD: \($n) identical findings — the duty is owed at recomposition, not per decline"
         else empty end' "$thin"
+    # ── EPISODE (waymark-2m2) ────────────────────────────────────────
+    # THE GENTLEST LINE IN THIS FILE, and deliberately so. A finding
+    # that carries one of the nine evidence words and no `episode` is
+    # entirely lawful — every one of the four fields is optional and
+    # nothing anywhere refuses a finding for leaving them blank. This
+    # is not a fault, it is a COST, and the line says what the cost is
+    # rather than what the clerk did wrong: without an occasion the
+    # reading dates the fact by when it was indexed rather than by when
+    # it happened, and counts it as an evening of its own — so two
+    # facts from one conversation move an about-row twice instead of
+    # once and a half. Overstating, never hiding, which is the safe
+    # direction; but it is still not what happened.
+    jq -r --arg s "$SINCE" '
+      .data.items[]? | select(.meta.updated_at >= $s)
+      | ((.fields.evidence_type // "") | tostring) as $ty
+      | select($ty != "")
+      | select(((.fields.episode // "") | tostring) == "")
+      | "EPISODE: \(.self) is typed \($ty) and names no occasion — the reading will date it by when you indexed it and count it as an evening of its own. Next time, a source and a day: \"thread/7fda11c6 2026-08-24\". Nothing is wrong with the row; it just says less than it could."' \
+      "$thin"
   fi
   rm -f "$thin"
   if [ "$wrote" -eq 0 ]; then
@@ -1004,14 +1023,14 @@ if [ "$MODE" = "verify" ]; then
   # THE GRADE LINES ARE KEPT (waymark-nl0): verify's whole report goes
   # into the run dir it graded, and the lines that grade — ORDER, THIN,
   # TWIN, HANDED BACK, CLAIMED, NOTE TIME, ODD HOUR, MARKS, EXTRA,
-  # FILLER, SAYS-SO — are filed beside it as grades.txt, which is what
+  # FILLER, SAYS-SO, EPISODE — are filed beside it as grades.txt, which is what
   # the next READING reads under REVIEW. On an ephemeral runner the dir
   # does not survive, and the reading's manifest says so rather than
   # pretending the sittings went ungraded.
   if [ -n "$prev" ]; then
     vdir="$(dirname "$prev")"
     verify_run | tee "$vdir/verify.txt"
-    grep -E '^(ORDER|EDITOR ORDER|FORM|LETTER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|SAYS-SO|QUESTION|UNCHECKED QUESTION|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
+    grep -E '^(ORDER|EDITOR ORDER|FORM|LETTER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|SAYS-SO|EPISODE|QUESTION|UNCHECKED QUESTION|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
       "$vdir/verify.txt" | sed "s/^\(NOTHING written\.\).*/\1/" > "$vdir/grades.txt" 2>/dev/null || true
     printf '%s\n' "$(iso "$(now_s)")" > "$vdir/verified_at"
   else
@@ -1107,6 +1126,16 @@ echo "reading the house as $DISPLAY ($PRINCIPAL) at $BASE"
 doc diagnosis "/api/-/diagnosis"
 # 4. the feed through the owner's eyes — a preview writes nothing
 if [ -n "$OWNER" ]; then doc feed-preview "/api/-/feed?preview_as=$OWNER"; fi
+# …and this composer's own feed, read for ONE thing: recipe.evidence_lr
+# and recipe.evidence_half_life, the table WHAT MOVED THIS WEEK weighs
+# facts by (waymark-2m2). The numbers are the house's, tunable in the
+# recipe form, and a driver carrying its own copy would be a second
+# opinion nobody could see — so it reads them off the wire and says
+# which document answered. The preview above would do when the grant
+# carries feed.preview_as; this read is what makes the table available
+# when it does not. A closed door degrades to the built-in fallback
+# and the section's own line says so.
+doc feed-own "/api/-/feed"
 
 # 3. the standing pulls
 states composition_requests "/api/composition_requests" offered answered expired
@@ -4040,6 +4069,78 @@ if [ "$RUN_MODE" = "sitting" ]; then
     && mv "$D/work_orders.tmp" "$D/work_orders.json" || true
 fi
 
+# ── WHAT MOVED THIS WEEK (waymark-2m2) ───────────────────────────────
+# The hypotheses epic's first slice, built to docs/spec-hypotheses.md.
+# The house holds no belief anywhere, so this is COMPUTED ON THE FLY,
+# every reading, from the atoms and the table, and nothing it produces
+# is written back. There is no hypothesis kind yet — that is slice 2 —
+# so the thing that moves is the ABOUT-ROW: the person, the value, the
+# thread an atom cites. Hence CLAIM-LESS MOVER; the claim is the
+# reading's own to say, in words, from what it sees moved.
+#
+# The arithmetic is `scripts/movements.jq` and its three rules are
+# written out at the top of that file. Two things belong HERE, because
+# they are the driver's rather than the arithmetic's:
+#
+#   1. the TABLE comes off the wire, never from a copy carried here;
+#   2. everything degrades rather than aborts — a closed feed door,
+#      a missing snapshot, a jq that throws — because a reading that
+#      lost its whole brief over a belief section would have traded
+#      something that works for something that is new.
+
+# the table, off the wire — the owner's preview first, this composer's
+# own feed next, and only then a built-in fallback, which exists so a
+# closed feed door degrades to numbers rather than to nothing. THE
+# SECTION'S OWN LINE NAMES THE SOURCE, so a table that came from the
+# fallback is visible rather than assumed: the numbers decide what the
+# house believes about the people in it, and a house reading numbers
+# it never wrote must be able to tell.
+jq -n --slurpfile prev "$RUN/rows/feed-preview.json" \
+      --slurpfile own "$RUN/rows/feed-own.json" '
+  ([ ($prev[0] // {}), ($own[0] // {}) ]
+   | map(.recipe // {})
+   | map(select(((.evidence_lr // null) | type) == "object"))
+   | first) as $r
+  | if $r == null
+    then {source: "the fallback in scripts/sitting-run.sh — NO feed document answered, so these are not necessarily the numbers this house wrote",
+          lr: {costly_action_high: 20, costly_action_low: 5,
+               unprompted_mention: 8, statement_against_interest: 6,
+               specific_detail: 4, question_asked: 3,
+               complaint_while_continuing: 3, solicited_praise: 1.05,
+               minimal_response: 0.9, declined_invite: 0.2,
+               solicited_discount: 0.25,
+               half_life_costly_action: 540,
+               half_life_statement_against_interest: 365,
+               half_life_declined_invite: 365,
+               half_life_specific_detail: 180,
+               half_life_unprompted_mention: 180,
+               half_life_complaint_while_continuing: 180,
+               half_life_question_asked: 90,
+               half_life_solicited_praise: 60,
+               half_life_minimal_response: 60,
+               episode_intensity: 1.5, log_odds_clamp: 6}}
+    else {source: "the recipe of this house, off its own feed document",
+          lr: $r.evidence_lr} end
+' > "$D/evidence_table.json" 2>>"$PROBE_ERRS" \
+  || echo '{"source":"unavailable","lr":{}}' > "$D/evidence_table.json"
+
+# The arithmetic itself is `scripts/movements.jq` and not a heredoc
+# here, and it is the only probe in this file that is: it is the only
+# one that COMPUTES rather than selects, and a program a fixture can be
+# pointed at is worth one indirection. `scripts/movements-fixture.sh`
+# runs that exact file over six synthetic atoms with the log-odds hand
+# computed in its comments, and CI runs the fixture.
+jq -n --slurpfile ins "$RUN/rows/insights.full.json" \
+      --slurpfile tbl "$D/evidence_table.json" \
+      --slurpfile people "$RUN/rows/people.full.json" \
+      --slurpfile values "$RUN/rows/values.full.json" \
+      --slurpfile chats "$RUN/rows/chat_threads.json" \
+      --slurpfile lists "$RUN/rows/task_lists.json" \
+      --argjson nows "$NOW_S" \
+      -f "$ROOT/scripts/movements.jq" \
+  > "$D/movements.json" 2>>"$PROBE_ERRS" \
+  || echo '{"typed":0,"source":"unavailable","new_this_week":0,"movers":[],"all_movers":[],"bare_episodes":[],"lines":[]}' > "$D/movements.json"
+
 # ── THE HOUSE BRIEF (waymark-xnf, built here under waymark-nl0) ──────
 # A run starts cold with a manifest and the rows; the NARRATIVE — who
 # is one year old, who left this summer, which appointment the placard
@@ -4109,6 +4210,7 @@ jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full
       --slurpfile events "$R/events.json" --slurpfile journals "$R/journals.full.json" \
       --slurpfile threads "$D/unanswered_threads.json" \
       --slurpfile tasks "$R/tasks.json" --slurpfile elocal "$D/event_local.json" \
+      --slurpfile mv "$D/movements.json" \
       --argjson nows "$NOW_S" --arg owner "$OWNER" --arg tz "$HOUSE_TZ" "$JQ_DATES"'
   ($ins[0] // []) as $in | ($people[0] // []) as $pp | ($values[0] // []) as $vv
   | ($lists[0] // []) as $ll | ($events[0] // []) as $ev | ($journals[0] // []) as $jj
@@ -4218,6 +4320,7 @@ jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full
             | [ "  - \(($j.meta.updated_at // "") | .[0:10]) \($j.data.title // "")  \($j.self)" ]
               + (if ($n | length) > 0 then ($n | map("      · " + .[0:150])) else [ "      " + (($j.data.body // "") | gsub("\\s+"; " ") | .[0:150]) ] end))
       | add // ["  (no journal yet)"])
+   + ($mv[0].lines // [])
    + [ "Standing facts — published findings, newest first, grouped by who or what they name. THIS IS THE ONLY SECTION THE CAP TRIMS:" ]
    + (if ($folded | length) > 0
       then [ "  (\($folded | length) finding(s) folded away — "
@@ -4432,6 +4535,7 @@ jq -n \
   --slurpfile journals "$RUN/rows/journals.full.json" \
   --arg mode "$RUN_MODE" \
   --slurpfile brief "$D/brief.json" \
+  --slurpfile movements "$D/movements.json" \
   --slurpfile review "$D/review.json" \
   --slurpfile review_ask "$D/review_ask.json" \
   --slurpfile house_says "$D/house_says.json" \
@@ -4483,6 +4587,13 @@ jq -n \
   work_orders: $orders[0],
   waiting_for_a_reading: (if $sit then {orders:$editor_orders, threads:$editor_threads, reworks:$editor_reworks} else null end),
   brief: $brief[0],
+  # the belief arithmetic of this reading, whole (waymark-2m2). The
+  # LINES of it ride the brief above; this is the working — the weight
+  # of every atom, every episode fold, every mover, and which document
+  # the table came from. A reading that wants to check a number reads
+  # it here rather than trusting the sentence, and the updater of
+  # slice 2 will read it too.
+  movements: $movements[0],
   review: (if $sit then null else $review[0] end),
   review_ask: (if $sit then null else $review_ask[0] end),
   house_says: $house_says[0],

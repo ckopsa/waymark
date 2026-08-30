@@ -601,3 +601,135 @@
     ;; leave the house as found
     (is (= 200 (:status (invoke! "insights" (id-of bare) :dismiss nil
                                  (human who)))))))
+
+(deftest typed-evidence-lands-untyped-stays-lawful-and-the-table-rides-the-wire
+  ;; waymark-2m2, the hypotheses epic's first slice. Three claims, and
+  ;; the first two are about a wall that is deliberately NOT there.
+  ;;
+  ;; The four fields — `evidence_type`, `solicited`, `cost`, `episode` —
+  ;; are every one of them optional, and that is the load-bearing fact
+  ;; rather than a convenience: an untyped finding is exactly as lawful
+  ;; as it was the day before the bead, and weighs a likelihood ratio
+  ;; of 1, which is silence. A clerk that does not know which of the
+  ;; nine words a fact is leaves them blank; nothing anywhere refuses
+  ;; it for that, and this is where *nothing anywhere* is proved rather
+  ;; than promised.
+  ;;
+  ;; What IS refused is a word the enum does not know, and it is
+  ;; refused by the SCHEMA at 422 rather than by a guard at 409 — no
+  ;; guard was written for it, because the legal tokens are published
+  ;; in the door's own JSON Schema and a wall that re-said them would
+  ;; be a second copy of a closed list drifting from the first.
+  ;;
+  ;; (The two SELF-CONTRADICTIONS the door does refuse by name — an
+  ;; unprompted mention the house asked for, a costly action that cost
+  ;; nothing — are `the-typing-agrees-with-itself`'s, and they are
+  ;; proved by its two scenarios with no database at all, in the same
+  ;; breath as `make check-queue`. Nothing about them needs a live
+  ;; engine, so nothing about them is repeated here.)
+  ;;
+  ;; The third claim is the table: what a fact somebody said is worth,
+  ;; how fast each kind forgets, and the two walls on the arithmetic,
+  ;; on every feed document beside `crown_rank`, with one sentence
+  ;; quoting them back. That is law 5 at the reading's brief — a weight
+  ;; a household cannot read is the hidden model, whatever it is
+  ;; weighing — and the reading's driver reads the numbers off this
+  ;; very document rather than carrying a copy of them.
+  (let [who "colton-2m2"
+        finder (leash! "finder-2m2" who [{:kind "insight" :actions ["create"]}])
+        tid (id-of (req :post "/api/tasks" {:title "Ask about the darkroom"}
+                        (human who)))
+        self (str "/api/tasks/" tid)
+        typed (req :post "/api/insights"
+                   {:finding "Iris asked twice how the enlarger works, unprompted"
+                    :evidence [self]
+                    :offer_kind "task" :offer_id tid :offer_action "complete"
+                    :evidence_type "unprompted_mention"
+                    :solicited false
+                    :cost "none"
+                    :episode "thread/7fda11c6 2026-08-24"}
+                   finder)]
+
+    (testing "a typed finding lands, and reads back with all four words on it"
+      (is (= 201 (:status typed)) (pr-str (json typed)))
+      (let [seen (json (req :get (str "/api/insights/" (id-of typed))
+                            (human who)))]
+        (is (= "unprompted_mention" (str (get-in seen [:data :evidence_type]))))
+        (is (false? (get-in seen [:data :solicited]))
+            "the boolean survives the round trip as a boolean")
+        (is (= "none" (str (get-in seen [:data :cost]))))
+        (is (= "thread/7fda11c6 2026-08-24" (str (get-in seen [:data :episode])))
+            "the occasion is kept verbatim — the reading parses the day out of it")
+        (is (= "published" (str (:state seen)))
+            "typing a fact is not a second state machine")))
+
+    (testing "a word the enum does not know is refused at the door, by the schema"
+      (let [bad (req :post "/api/insights"
+                     {:finding "Iris seemed keen about the darkroom"
+                      :evidence [self]
+                      :offer_kind "task" :offer_id tid :offer_action "complete"
+                      :evidence_type "seemed_keen"
+                      :episode "thread/7fda11c6 2026-08-24"}
+                     finder)
+            says (str (json bad))]
+        (is (= 422 (:status bad)) says)
+        (is (str/includes? says "evidence_type") says)))
+
+    (testing "an untyped finding is exactly as lawful as it ever was"
+      ;; a DIFFERENT next step, because `one-live-finding-per-offer`
+      ;; would otherwise fold this into the typed one above — same
+      ;; offer triple, same cited row — and that refusal would be the
+      ;; other wall answering rather than this claim.
+      (let [plain (req :post "/api/insights"
+                       {:finding "The darkroom task has waited since the spring"
+                        :evidence [self]
+                        :offer_kind "task" :offer_id tid
+                        :offer_action "deprioritize"}
+                       finder)]
+        (is (= 201 (:status plain)) (pr-str (json plain)))
+        (let [seen (json (req :get (str "/api/insights/" (id-of plain))
+                              (human who)))]
+          (is (nil? (get-in seen [:data :evidence_type]))
+              "no word on it, and the house took it anyway — LR 1 is silence")
+          (is (nil? (get-in seen [:data :episode]))))
+        (is (= 200 (:status (invoke! "insights" (id-of plain) :dismiss nil
+                                     (human who)))))))
+
+    (testing "the evidence table rides every feed document, as data and as a sentence"
+      (let [doc (feed-as who)
+            lr (get-in doc [:recipe :evidence_lr])
+            says (str (get-in doc [:recipe :evidence_lr_says]))]
+        (is (= 22 (count lr))
+            "ten ratios, a discount, nine half-lives and two walls")
+        ;; the numbers the spec fixed by name, top and bottom
+        (is (= 20 (long (:costly_action_high lr))))
+        (is (= 5 (long (:costly_action_low lr)))
+            "the one cost-graded type carries two numbers, not one")
+        (is (= 8 (long (:unprompted_mention lr))))
+        (is (= 1.05 (double (:solicited_praise lr)))
+            "asked-for praise is very nearly nothing, and it is not an int")
+        (is (= 0.2 (double (:declined_invite lr)))
+            "a no pushes down, which is the whole of what a ratio under 1 means")
+        (is (= 0.25 (double (:solicited_discount lr)))
+            "and a fact the house asked for is worth a quarter of the same words")
+        (is (= 540 (long (:half_life_costly_action lr)))
+            "what was expensive to produce stays true longest")
+        (is (= 60 (long (:half_life_solicited_praise lr)))
+            "and what was cheap and prompted goes stale fastest")
+        (is (= 1.5 (double (:episode_intensity lr)))
+            "an excited evening is warmth, not four observations")
+        (is (= 6 (long (:log_odds_clamp lr)))
+            "and no pile of facts becomes certainty")
+        (is (str/includes? says "20") "the sentence quotes its own numbers back")
+        (is (str/includes? says "1.05"))
+        (is (str/includes? says "540"))
+        (is (str/includes? says "an untyped fact is a lawful fact")
+            "law 5 at the reading's brief says the wall it is NOT")
+        (is (str/includes? says "counts ONCE")
+            "and it says the episode fold, which is the part a person argues with")
+        (is (str/includes? says "no pile of facts becomes certainty")
+            "and the clamp, which is this house's whole posture in one clause")))
+
+    ;; leave the house as found
+    (is (= 200 (:status (invoke! "insights" (id-of typed) :dismiss nil
+                                 (human who)))))))

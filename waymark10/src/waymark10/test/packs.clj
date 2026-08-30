@@ -2989,6 +2989,60 @@
                       " back — "
                       (pr-str (get-in offered [:recipe :insight_rank_says]))))
 
+           ;; ── the evidence table (waymark-2m2) ──────────────────────
+           ;; Law 5 one surface over, and the reason it is checked HERE
+           ;; rather than only in a suite: the reading's driver reads
+           ;; these numbers off this document to compute WHAT MOVED
+           ;; THIS WEEK, so a deployment whose feed stopped carrying
+           ;; them would silently fall back to the driver's own copy
+           ;; and grade a household's beliefs by numbers nobody in that
+           ;; household had ever seen. Ten ratios, a discount, nine
+           ;; half-lives and two walls, on every answer.
+           (let [lr (get-in offered [:recipe :evidence_lr])
+                 every-key ["costly_action_high" "costly_action_low"
+                            "unprompted_mention" "statement_against_interest"
+                            "specific_detail" "question_asked"
+                            "complaint_while_continuing" "solicited_praise"
+                            "minimal_response" "declined_invite"
+                            "solicited_discount"
+                            "half_life_costly_action"
+                            "half_life_statement_against_interest"
+                            "half_life_declined_invite"
+                            "half_life_specific_detail"
+                            "half_life_unprompted_mention"
+                            "half_life_complaint_while_continuing"
+                            "half_life_question_asked"
+                            "half_life_solicited_praise"
+                            "half_life_minimal_response"
+                            "episode_intensity" "log_odds_clamp"]]
+             (not (and (map? lr)
+                       (every? #(number? (get lr (keyword %))) every-key))))
+           (conj (str "feed: recipe.evidence_lr reads "
+                      (pr-str (get-in offered [:recipe :evidence_lr]))
+                      " — what a FACT somebody said is worth, how long it"
+                      " stays worth it and what the arithmetic may not do are"
+                      " numbers the household can read, on every answer, or"
+                      " they are the hidden model law 5 forbids one surface"
+                      " over"))
+
+           (let [lr (get-in offered [:recipe :evidence_lr])
+                 s (str (get-in offered [:recipe :evidence_lr_says]))]
+             (not (and (str/includes?
+                        s (str (long (or (:costly_action_high lr) 0))))
+                       ;; the wall it is NOT, which is the half a person
+                       ;; most needs said out loud
+                       (str/includes? s "an untyped fact is a lawful fact")
+                       ;; the episode fold, the part somebody will want
+                       ;; to argue with
+                       (str/includes? s "counts ONCE")
+                       ;; and the clamp, which is the promise that this
+                       ;; house proposes and never believes
+                       (str/includes? s "no pile of facts becomes certainty"))))
+           (conj (str "feed: recipe.evidence_lr_says does not quote its own"
+                      " numbers, the episode fold, the clamp and the wall it"
+                      " is not back — "
+                      (pr-str (get-in offered [:recipe :evidence_lr_says]))))
+
            (and card (let [i (get-in card [:why :insight])]
                        (not (and (int? (:lift i))
                                  (contains? #{"none" "affirmation" "recomposition"}

@@ -223,7 +223,7 @@ jobs:
           while IFS= read -r f; do
             [ -n "$f" ] || continue
             case "$f" in
-              waymark10/*|calendar10/*|workqueue10/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*)
+              waymark10/*|calendar10/*|workqueue10/*|.github/workflows/tests.yml|.github/actions/*|.github/scripts/*|scripts/movements.jq|scripts/movements-fixture.sh)
                 echo "code path: $f"
                 code=true ;;
             esac
@@ -251,6 +251,17 @@ jobs:
         run: cd workqueue10 && clojure -M:check
       - name: calendar10 — pure translation, no database or network
         run: cd calendar10 && clojure -M:test
+      # The reading's belief arithmetic (waymark-2m2). scripts/ is not
+      # a code path in general — the driver is graded by its own verify
+      # against a live house, not by CI — but movements.jq COMPUTES,
+      # and a log-odds fold that silently changed would reach the owner
+      # as a sentence about his own family with no way to tell. So this
+      # one program has a fixture with the numbers hand-computed in its
+      # comments, and the fixture runs here: jq only, no database, no
+      # network, a second or two. The two files are named in the
+      # `changes` job above so a diff touching only them still runs it.
+      - name: movements fixture — the reading's log-odds, over synthetic atoms
+        run: bash scripts/movements-fixture.sh
 
   # The matrix is built from the tree, so adding a test file needs no
   # edit here. Namespaces come from paths: test/a/b_test.clj is

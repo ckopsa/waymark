@@ -86,10 +86,41 @@ task, `take_it_back` on a tickler, `still_stands` on a value. A door
 that takes input is refused however natural it reads: `prioritize`
 wants a rank, and a card offers a decision, never a form. Prepared
 input is an outcome PIECE's business, not a finding's. Those three
-fields are all you send — the address is derived from the kind and
+fields are the whole OFFER — the address is derived from the kind and
 the id, so never spell `offer_href`. Then compose *from* the insight
 and cite it. State the fact, never judge it; a question or a thanks
 indexes nothing.
+
+**Type the fact, in four optional words (waymark-2m2).** Beside the
+finding and its offer, an insight may carry how the fact ARRIVED —
+which is what the reading's WHAT MOVED THIS WEEK weighs:
+
+| field | what you are answering |
+|---|---|
+| `evidence_type` | one of nine: `unprompted_mention` (nobody asked and they said it), `solicited_praise` (something nice, because you asked), `question_asked`, `specific_detail` (a name, a date, how it works), `costly_action` (money, a day, a drive), `declined_invite`, `statement_against_interest` (it cost them to say), `complaint_while_continuing` (grumbled and kept going), `minimal_response` (a word, a thumb, nothing after) |
+| `solicited` | true if the house asked, false if they volunteered. A DISCOUNT, not a tenth word: an answer to a question you put in somebody's mouth counts for a fraction of the same words unprompted |
+| `cost` | `none` / `low` / `high` — what it cost THEM. It prices `costly_action`, the only cost-graded word; on the other eight it is simply recorded |
+| `episode` | the occasion: a source and a day, `"thread/7fda11c6 2026-08-24"`. The same evening counts once, however excited it was |
+
+**You classify; you never see a belief.** Every one of the four is a
+question you could answer from the message alone, and every one is
+OPTIONAL — leave them blank rather than guess. An untyped fact is a
+lawful fact and weighs a likelihood ratio of 1, which is silence, and
+that is what every fact weighed before this existed. What the numbers
+are, and what they do, is `recipe.evidence_lr` on the feed document,
+in the household's own hand.
+
+**Two combinations are refused, and only two.**
+`unprompted_mention` + `solicited: true` — the type says nobody asked
+and the flag says the house did, and only you know which word is
+wrong. `costly_action` + `cost: "none"` — an action that cost nothing
+is not a costly action. `the-typing-agrees-with-itself` names both
+and says which word to change; everything else, including all four
+blank, is lawful.
+
+`verify` names a typed fact with no `episode` once, gently: without an
+occasion the reading dates it by when you indexed it and counts it as
+an evening of its own.
 
 ## 3. Answer the pulls
 

@@ -133,8 +133,28 @@
 
   `:tickler_rank` joined with waymark-1uv.9 for the same reason again:
   the ticklers line ranks its due pile by five numbers a person can
-  read, and they live where the crown's six live."
-  [:label :order :formula :crown_rank :insight_rank :tickler_rank])
+  read, and they live where the crown's six live.
+
+  `:evidence_lr` joined with waymark-2m2 and it is the first field
+  here that ranks NOTHING. It is what a FACT somebody said is worth,
+  how fast each kind forgets, and the two walls on the arithmetic —
+  the reading's WHAT MOVED THIS WEEK reads it and nothing on the feed
+  page does — and it is here anyway for law 5's reason said one
+  surface over: a likelihood ratio a household cannot read is the
+  hidden model, whether it is placing a card or grading a belief.
+  Riding this row buys it the same four properties `:formula` bought:
+  the form that already exists, `recipe_proposal`'s diff,
+  `written-by-a-person`, and the row's own transitions as its tuning
+  history.
+
+  THE COST, STATED RATHER THAN DISCOVERED (docs/spec-hypotheses.md):
+  with that field this row stops being only the feed's editorial frame
+  and becomes the house's table of numbers a person may argue with.
+  That widening was weighed against a kind of its own and the kind
+  lost — a second kind would mean a second staleness wall, a second
+  diff vocabulary and a second apply door for one map."
+  [:label :order :formula :crown_rank :insight_rank :tickler_rank
+   :evidence_lr])
 
 ;; ── the wire shape ↔ the recipe map ─────────────────────────────────
 
@@ -196,7 +216,20 @@
                               (keep (fn [[k v]]
                                       (when (some? v)
                                         [k (if (string? v) (parse-long v) v)])))
-                              m))]
+                              m))
+        ;; the same fold for a map whose numbers are not all whole
+        ;; (waymark-2m2): a likelihood ratio of 1.05 is a number a
+        ;; household writes and `parse-long` reads as nil. Whole first
+        ;; all the same, so a half-life that reached storage as a
+        ;; string comes back an int and the assembly check's `int?`
+        ;; still recognises it.
+        ratios (fn [m] (into {}
+                             (keep (fn [[k v]]
+                                     (when (some? v)
+                                       [k (if (string? v)
+                                            (or (parse-long v) (parse-double v))
+                                            v)])))
+                             m))]
     (cond-> {:order (mapv line-of (:order data))}
       (map? (:formula data))
       (assoc :formula
@@ -226,7 +259,18 @@
                        :not_now (get-in data [:tickler_rank :not_now])
                        :cooled (get-in data [:tickler_rank :cooled])
                        :front_door (get-in data [:tickler_rank :front_door])
-                       :age (get-in data [:tickler_rank :age])})))))
+                       :age (get-in data [:tickler_rank :age])}))
+      ;; …and the evidence table (waymark-2m2). It goes through
+      ;; `ratios` rather than `numbers` for the one difference that
+      ;; matters: its numbers are not all whole. 1.05 is a real number
+      ;; a household may write, and `parse-long` would read it as
+      ;; nothing at all — a table quietly missing an entry, which is
+      ;; the worst failure available here, because the atom would then
+      ;; weigh the deployment's number while the form showed the
+      ;; house's. `parse-double` reads a whole number too, so the nine
+      ;; half-lives lose nothing by riding the same fold.
+      (map? (:evidence_lr data))
+      (assoc :evidence-lr (ratios (:evidence_lr data))))))
 
 ;; ── the guards ──────────────────────────────────────────────────────
 
@@ -601,6 +645,106 @@
                       :help "How much each month an item's row has sat on the dropped pile lifts it, so the things the house forgot longest come back first among equals."}}
     [:maybe [:int {:min 0 :max 100}]]]])
 
+(def ^:private evidence-entries
+  "THE EVIDENCE TABLE'S FORM, one row per number, in the household's
+  own words (waymark-2m2; docs/spec-hypotheses.md § 'The LR table as
+  data'). Spelled as data and folded into a `[:map]` below rather than
+  written out as twenty-two literal entries, because the nine
+  half-lives are one sentence with nine nouns in it and nine hand
+  copies would be nine places for it to drift.
+
+  Each row is `[key bound label help]`, and the BOUND says which of the
+  three shapes this number is: `:ratio` a decimal strictly above zero
+  (a ratio of 0 says the observation is impossible, which nothing
+  somebody actually said ever is — the way to silence a kind of
+  evidence is 1), `:days` a whole number of days at least one
+  (`2^(−age ÷ 0)` has no answer), and the two walls their own.
+
+  The bounds are the ones `feed/check-recipe!`'s eighth check applies,
+  said here so the FORM refuses a nonsense number before anybody has
+  to read a guard's sentence about it."
+  (into
+   [[:costly_action_high :ratio
+     "Somebody spent something real"
+     "How much a fact somebody spent money, a Saturday or social capital on counts. The strongest thing this record can hold, because talk is free and this was not."]
+    [:costly_action_low :ratio
+     "Somebody spent a little"
+     "The same, where it cost only some minutes or a small effort. A fact marked as a costly action that cost NOTHING is refused at the door — an action that cost nothing is not a costly action."]
+    [:unprompted_mention :ratio
+     "Somebody brought it up unasked"
+     "How much a fact somebody volunteered — nobody asked and they said it anyway — counts. Nearly all the power in ordinary conversation lives here, which is why 'did somebody ask?' is asked beside it."]
+    [:statement_against_interest :ratio
+     "Somebody said a thing that cost them"
+     "How much an admission counts — a preference that makes them look worse, a plan that inconveniences them, something it cost them to say."]
+    [:specific_detail :ratio
+     "Somebody knew a detail"
+     "How much knowing the part number, the trail name, the year counts. Detail is expensive to fake and cheap to have when the thing is real."]
+    [:question_asked :ratio
+     "Somebody asked about it"
+     "How much a question counts. Curiosity is weaker than a deed and much stronger than agreement."]
+    [:complaint_while_continuing :ratio
+     "Somebody complained and kept going"
+     "How much grumbling-while-continuing counts. The complaint reads as negative and the CONTINUING is the evidence; this number exists so nothing here scores the grumble as a no."]
+    [:solicited_praise :ratio
+     "Somebody said something nice because you asked"
+     "How much asked-for praise counts. Almost nothing on purpose: politeness is the null hypothesis in a family, and pricing this higher would let a run manufacture belief by asking leading questions."]
+    [:minimal_response :ratio
+     "Somebody answered, barely"
+     "How much a word, a thumb and nothing after counts. Under 1 it counts AGAINST — weakly, and never strongly: silence has a hundred causes and only one of them is disinterest."]
+    [:declined_invite :ratio
+     "Somebody was asked and said no"
+     "How much a no counts. Under 1 it counts against, and the smaller it is the harder — the strongest ordinary evidence against, and the mirror of somebody spending a Saturday."]
+    [:solicited_discount :ratio
+     "A fact you asked for is worth"
+     "What a fact the house ASKED for is worth, as a fraction of what the same words unprompted would be worth. An answer to a question you put in somebody's mouth is not the same evidence as the thing they said unbidden."]]
+   (map (fn [[k noun]]
+          [(keyword (str "half_life_" (name k))) :days
+           (str noun " — worth half after")
+           (str "How many days before " noun " is worth half what it was,"
+                " then half again. Longer for what was expensive to produce"
+                " — a spent Saturday still says what it said a year and a"
+                " half later — and shorter for what was cheap and asked for."
+                " At least one day; to make a kind of fact say nothing at"
+                " all, set what it counts to 1 instead.")])
+        [[:costly_action "Something somebody spent on"]
+         [:statement_against_interest "An admission"]
+         [:declined_invite "A no"]
+         [:specific_detail "A detail somebody knew"]
+         [:unprompted_mention "Something brought up unasked"]
+         [:complaint_while_continuing "A complaint from somebody still doing it"]
+         [:question_asked "A question somebody asked"]
+         [:solicited_praise "Praise you asked for"]
+         [:minimal_response "A one-word answer"]])))
+
+(def evidence-lr-schema
+  "THE EVIDENCE TABLE (waymark-2m2, laws v3 law 5 at the reading's
+  brief): what each kind of fact somebody said is worth, how fast each
+  forgets, and the two walls on the arithmetic. Every entry optional
+  and the whole map optional — absent leaves the deployment's own
+  standing, and a fact carrying none of the nine words weighs 1
+  whatever is written here.
+
+  DECIMAL rather than int for the ratios, which is the one place this
+  schema departs from the three rank schemas above, and it is not a
+  convenience: the difference between *asked-for praise means nothing*
+  (1.05) and *asked-for praise means something* (2) is exactly the
+  distinction this table exists to draw, and rounding it to a whole
+  number would delete it. `:gt 0` rather than `:min 0` for the reason
+  `waymark/decimal` grew exclusive bounds at all."
+  (into [:map]
+        (map (fn [[k bound label help]]
+               [k {:optional true :x-display {:label label :help help}}
+                (case bound
+                  :ratio [:maybe [:decimal {:gt 0 :max 1000}]]
+                  :days [:maybe [:int {:min 1 :max 36500}]])]))
+        (conj (vec evidence-entries)
+              [:episode_intensity :ratio
+               "An occasion with more than one fact counts"
+               "What an evening that carried more than one fact counts, as a multiple of its strongest one alone — and no further, however many it carried. Enthusiasm in a single conversation is warmth, not four separate observations. At least 1: a busier evening must never count for less than a quieter one."]
+              [:log_odds_clamp :ratio
+               "Nothing may move further than"
+               "How far any pile of facts may move a belief, in log-odds. 6 is about a quarter of a percent either end. No finite pile becomes certainty, because a belief that reaches certainty stops reading evidence — this house proposes and never believes."])))
+
 (def ^:private prose
   "The household's own words for the authored fields, spelled ONCE and
   worn by all three doors — the row schema, the create form's narrower
@@ -626,6 +770,24 @@
    :tickler_rank {:examples [{:overdue 1 :not_now 4 :cooled 2 :front_door 5 :age 1}]
                   :x-display {:label "The fridge's rank"
                               :help "Five numbers, and the whole of how the things you set aside are ranked when their date comes round: what each day past its own date lifts an item, what each not-now already said holds it, what each cooled step holds it, what a row this house goes to lifts it, and what each month on the dropped pile lifts it. An item a person set aside by their own hand stands first whatever these say. The floor still shows every slot the take promises; the rank only chooses which. Leave it empty for this deployment's own numbers; set all five to 0 for the seed alone."}}
+   :evidence_lr {:examples [{:costly_action_high 20 :costly_action_low 5
+                             :unprompted_mention 8
+                             :statement_against_interest 6 :specific_detail 4
+                             :question_asked 3 :complaint_while_continuing 3
+                             :solicited_praise 1.05 :minimal_response 0.9
+                             :declined_invite 0.2 :solicited_discount 0.25
+                             :half_life_costly_action 540
+                             :half_life_statement_against_interest 365
+                             :half_life_declined_invite 365
+                             :half_life_specific_detail 180
+                             :half_life_unprompted_mention 180
+                             :half_life_complaint_while_continuing 180
+                             :half_life_question_asked 90
+                             :half_life_solicited_praise 60
+                             :half_life_minimal_response 60
+                             :episode_intensity 1.5 :log_odds_clamp 6}]
+                 :x-display {:label "What a fact somebody said is worth"
+                             :help "The whole of how the reading weighs a fact — nothing on the feed page reads any of it. Ten numbers for what each kind of fact counts (how much likelier it would be if the thing were true than if it were not: over 1 counts for, under 1 counts against, 1 says nothing), one for what a fact you ASKED for is worth beside the same words unprompted, nine for how many days each kind takes to be worth half what it was, and two walls — what an evening carrying more than one fact counts, and how far any pile may move a belief at all. A fact nobody typed weighs 1 whatever is written here, and most facts are untyped. No belief is stored anywhere; the reading recomputes what moved every time it runs. Leave it empty for this deployment's own numbers."}}
    :order {:examples [order-example]
            :x-display {:label "The order, line by line"
                        :help "The whole feed, top to bottom: one entry per line, and the vector's order IS the page's order. The house's current order rides the feed document at recipe.order in exactly this shape — copy it and edit a line. Exactly one line is the seam; the bottomless line is last; the sections keep census order; every population is one this engine holds. A line that breaks any of those is refused here, with the sentence that says which."}}})
@@ -650,7 +812,10 @@
    (entry :formula {:optional true} [:maybe formula-schema])
    (entry :crown_rank {:optional true} [:maybe crown-rank-schema])
    (entry :insight_rank {:optional true} [:maybe insight-rank-schema])
-   (entry :tickler_rank {:optional true} [:maybe tickler-rank-schema])])
+   (entry :tickler_rank {:optional true} [:maybe tickler-rank-schema])
+   ;; …and the evidence table's two halves (waymark-2m2), which rank
+   ;; nothing and ride the same authored surface for law 5's reason
+   (entry :evidence_lr {:optional true} [:maybe evidence-lr-schema])])
 
 ;; ── the law, written down ───────────────────────────────────────────
 ;; The one sentence this kind most wants checked, and the reason it
@@ -718,7 +883,9 @@
             (entry :formula {:optional true} [:maybe formula-schema])
             (entry :crown_rank {:optional true} [:maybe crown-rank-schema])
             (entry :insight_rank {:optional true} [:maybe insight-rank-schema])
-            (entry :tickler_rank {:optional true} [:maybe tickler-rank-schema])]
+            (entry :tickler_rank {:optional true} [:maybe tickler-rank-schema])
+            (entry :evidence_lr {:optional true}
+                   [:maybe evidence-lr-schema])]
    ;; the client states whose order and what it says; the OWNER is the
    ;; engine's stamp (dashboard_slot's split, and dwelling's reason)
    :create-schema [:map
@@ -731,7 +898,9 @@
                    (entry :insight_rank {:optional true}
                           [:maybe insight-rank-schema])
                    (entry :tickler_rank {:optional true}
-                          [:maybe tickler-rank-schema])]
+                          [:maybe tickler-rank-schema])
+                   (entry :evidence_lr {:optional true}
+                          [:maybe evidence-lr-schema])]
    ;; scope and owner carry their own :filter on the schema entries
    ;; above — one concern, one home — so only the machine's own column
    ;; is spelled here
@@ -750,9 +919,10 @@
              ;; numbers back would clear them every time somebody moved
              ;; a line — and the crown's four (waymark-1uv.2), the
              ;; findings' six (waymark-1uv.8) and the fridge's five
-             ;; (waymark-1uv.9), for the same reason each time
+             ;; (waymark-1uv.9), and the evidence table (waymark-2m2),
+             ;; for the same reason each time
              :edit {:prefill [:label :order :formula :crown_rank :insight_rank
-                              :tickler_rank]}
+                              :tickler_rank :evidence_lr]}
              ;; the overwrite writes the whole authored surface and is
              ;; non-reversible, so the log carries what was written —
              ;; which is what makes the transitions the tuning history

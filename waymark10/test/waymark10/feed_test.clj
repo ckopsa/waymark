@@ -1805,6 +1805,101 @@
           (is (= 200 (:status revised)) (pr-str (:doc revised)))
           (is (str/includes? (get-in off [:recipe :insight_rank_says])
                              "The findings' rank is off")))))))
+
+;; ── the evidence table (waymark-2m2) ───────────────────────────────
+;;
+;; The fourth set of numbers on the recipe row and the first that ranks
+;; nothing on this page: what a FACT somebody said is worth, how fast
+;; each kind forgets, and the two walls on the arithmetic. Nothing in
+;; this namespace consumes them — the consumer is the reading's driver,
+;; and `scripts/movements-fixture.sh` is where the arithmetic itself is
+;; checked against hand-computed log-odds. What is proved HERE is the
+;; half law 5 cares about: the numbers reach a person, they say what
+;; they are in the household's words, a nonsense number refuses at
+;; assembly, and a household that writes its own is answered by them.
+
+(deftest what-a-fact-is-worth-is-a-table-a-person-can-read
+  (testing "the table rides the wire as data and as a sentence"
+    (let [recipe (:recipe (:doc (feed! (boot-house))))
+          lr (:evidence_lr recipe)]
+      (is (= 22 (count lr))
+          "ten ratios, a discount, nine half-lives and two walls")
+      (is (= 20 (long (:costly_action_high lr))))
+      (is (= 5 (long (:costly_action_low lr)))
+          "the one cost-graded type carries two numbers, not one")
+      (is (= 1.05 (double (:solicited_praise lr)))
+          "asked-for praise is very nearly nothing, and it is not an int")
+      (is (= 0.2 (double (:declined_invite lr)))
+          "and a no pushes down, which is what a ratio under 1 means")
+      (is (= 540 (long (:half_life_costly_action lr))))
+      (is (= 6 (long (:log_odds_clamp lr))))
+      (is (str/includes? (:evidence_lr_says recipe) "counts 20")
+          "the sentence quotes its own numbers back")
+      (is (str/includes? (:evidence_lr_says recipe) "counts ONCE")
+          "…and the episode fold, which is the part a person argues with")
+      (is (str/includes? (:evidence_lr_says recipe)
+                         "no pile of facts becomes certainty")
+          "…and the clamp, which is this house's posture in one clause")
+      (is (str/includes? (:evidence_lr_says recipe)
+                         "an untyped fact is a lawful fact")
+          "…and the wall it is NOT, which is the half most easily lost")
+      (is (str/includes? (:guarantees recipe)
+                         "what a fact somebody said is worth"))))
+
+  (testing "a row that names none keeps the deployment's, and one that names
+            some keeps the rest"
+    (is (= feed/default-evidence-lr (feed/evidence-lr-of {})))
+    (is (= 12 (:unprompted_mention
+               (feed/evidence-lr-of {:evidence-lr {:unprompted_mention 12}}))))
+    (is (= 540 (:half_life_costly_action
+                (feed/evidence-lr-of {:evidence-lr {:unprompted_mention 12}})))
+        "naming one number does not clear the other twenty-one"))
+
+  (testing "the bounds are the arithmetic's, and each refuses by name"
+    (let [says (fn [t] (str (try (feed/check-recipe!
+                                  (assoc feed/default-recipe :evidence-lr t))
+                                 (catch Exception e (ex-message e)))))]
+      (is (str/includes? (says {:declined_invite 0}) "0 would mean impossible")
+          "a ratio of 0 says the observation is impossible, and none is")
+      (is (str/includes? (says {:half_life_question_asked 0})
+                         "set its ratio to 1 instead")
+          "a half-life of 0 has no answer, and the refusal says what to do")
+      (is (str/includes? (says {:episode_intensity 0.5})
+                         "a busier evening would count for less")
+          "an occasion with more facts may never count for less")
+      (is (str/includes? (says {:log_odds_clamp 0})
+                         "nothing could ever move at all"))
+      (is (str/includes? (says {:solicited_praise "polite"})
+                         ":evidence-lr :solicited_praise"))))
+
+  (testing "the household writes its own numbers and the next read is
+            answered by them — with the other twenty-one untouched"
+    (let [eng (boot-house)]
+      (post! eng "fd_errands" {:title "one"})
+      (let [before (:doc (feed! eng))
+            made (call! eng :post "/api/feed_recipes"
+                        :body {:label "Politeness means more here"
+                               :scope "household"
+                               :order (get-in before [:recipe :order])
+                               :evidence_lr {:solicited_praise 2
+                                             :half_life_solicited_praise 120}})
+            after (:doc (feed! eng))]
+        (is (= 201 (:status made)) (pr-str (:doc made)))
+        (is (= 2 (long (get-in after [:recipe :evidence_lr :solicited_praise]))))
+        (is (= 120 (long (get-in after [:recipe :evidence_lr
+                                        :half_life_solicited_praise]))))
+        (is (= 20 (long (get-in after [:recipe :evidence_lr :costly_action_high])))
+            "everything the row did not name is still the deployment's")
+        (is (str/includes? (get-in after [:recipe :evidence_lr_says])
+                           "you asked counts 2")
+            "and the sentence quotes the house's own number, not the built-in")
+        (is (str/includes? (get-in after [:recipe :evidence_lr_says])
+                           "higher than the number this engine ships with")
+            "…and stops calling it very nearly nothing, because it is not")
+        (is (= (get-in before [:recipe :crown_rank])
+               (get-in after [:recipe :crown_rank]))
+            "the crown is untouched by a row that named only the facts'")))))
+
 ;; ── the ticklers line's rank (waymark-1uv.9) ────────────────────────
 ;;
 ;; This world holds no tickler kind, so what can be proved here is the

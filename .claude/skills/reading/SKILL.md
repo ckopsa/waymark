@@ -39,7 +39,8 @@ The manifest opens with THE HOUSE BRIEF, in this order: the current
 people with relation and age, the values with the words they love, the
 next thirty days as one list — local hours, with any start before
 06:00 or after 22:00 flagged **ODD HOUR** — the open threads with a
-person turn still owed an answer, the last five journals' notes, and
+person turn still owed an answer, the last five journals' notes,
+WHAT MOVED THIS WEEK, and
 last every published finding, newest first, grouped by who or what it
 names. It is mechanical, and the cap (`WAYMARK_BRIEF_LINES`) trims
 the findings and nothing else; findings that only say a row back are
@@ -47,6 +48,25 @@ folded into one line saying how many and why. The manifest says what
 was cut; the whole thing is `derived/brief.json`. Read it before any
 order — the far appointment, the booked day, the person who left are
 here and nowhere else.
+
+**WHAT MOVED THIS WEEK** (waymark-2m2) is the one section of the
+brief that is arithmetic. Where a clerk typed a fact — how it
+arrived, in one of nine words, with what it cost and which evening it
+was — the reading turns those facts into log-odds and prints the ten
+biggest movers as `CLAIM-LESS MOVER: <about-row> moved +2.13 this
+week (standing at +1.9) — atoms: …`. **Nothing is stored**: it is
+recomputed every run from `scripts/movements.jq` (log-odds addition
+with a clamp, one count per occasion, decay by type — the three rules
+in `docs/spec-hypotheses.md`), over the household's own numbers at
+`recipe.evidence_lr`, and written back nowhere. *Moved this week* is
+that fold run twice, today and with the clock set back seven days, so
+a row moves when a new fact lands AND when an old one fades. There is no
+hypothesis kind yet, so what moves is the ABOUT-ROW — the person, the
+value, the thread the fact cites — and the CLAIM IS YOURS: the
+number says where to look, and saying what it means, in a sentence,
+citing the atoms, is the reading's own work. The working is in the
+manifest at `movements`. If nothing is typed the section says so and
+stops, and that is the honest answer rather than a fault.
 
 ## 2. The orders, both labels
 
