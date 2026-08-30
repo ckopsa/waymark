@@ -38,23 +38,52 @@ fi
 echo "dispatched: ${id}"
 
 # Batch allocs are short, but a cold image pull is not. 15 minutes.
+# THE LOGS MUST BE READ WHILE THE ALLOC LIVES (2026-08-30): a dead
+# batch alloc is garbage-collected by the client within seconds when
+# the node is busy, and a read after death answers 404/empty — which
+# this script then judged as "named neither an empty plan nor a step
+# list" and failed a perfectly healthy dry-run (image 5a523b3, four
+# clean ADD COLUMN steps, exit 1 by design). So: poll every 2s, keep
+# the LARGEST capture of each stream, and stop when the alloc stops.
 status=pending
-for _ in $(seq 1 90); do
+alloc=""
+logdir="$(mktemp -d)"; trap 'rm -rf "$logdir"' EXIT
+best_out=0; best_err=0
+for _ in $(seq 1 450); do
+  if [ -z "$alloc" ]; then
+    alloc="$(nomad job allocs -json "$id" | jq -r '[.[]] | sort_by(.CreateTime) | last | .ID // empty')"
+  fi
+  if [ -n "$alloc" ]; then
+    if nomad alloc logs "$alloc" migrate > "$logdir/out.tmp" 2>/dev/null; then
+      sz=$(wc -c < "$logdir/out.tmp")
+      [ "$sz" -gt "$best_out" ] && { mv "$logdir/out.tmp" "$logdir/out.log"; best_out=$sz; }
+    fi
+    if nomad alloc logs -stderr "$alloc" migrate > "$logdir/err.tmp" 2>/dev/null; then
+      sz=$(wc -c < "$logdir/err.tmp")
+      [ "$sz" -gt "$best_err" ] && { mv "$logdir/err.tmp" "$logdir/err.log"; best_err=$sz; }
+    fi
+  fi
   status="$(nomad job allocs -json "$id" | jq -r '[.[]] | sort_by(.CreateTime) | last | .ClientStatus // "pending"')"
   case "$status" in complete | failed) break ;; esac
-  sleep 10
+  sleep 2
 done
 
-alloc="$(nomad job allocs -json "$id" | jq -r '[.[]] | sort_by(.CreateTime) | last | .ID // empty')"
 if [ -z "$alloc" ]; then
   echo "the dispatch never produced an allocation (last status: ${status})"
   exit 1
 fi
 echo "allocation: ${alloc} (${status})"
 
-# Both streams: the plan rides stdout, a stack trace rides stderr.
-logs="$(nomad alloc logs "$alloc" migrate 2>/dev/null || true)"
-errs="$(nomad alloc logs -stderr "$alloc" migrate 2>/dev/null || true)"
+# One last read each, in case the tail landed between polls and the
+# alloc still lives; keep whichever capture is larger.
+if nomad alloc logs "$alloc" migrate > "$logdir/out.tmp" 2>/dev/null; then
+  sz=$(wc -c < "$logdir/out.tmp"); [ "$sz" -gt "$best_out" ] && mv "$logdir/out.tmp" "$logdir/out.log"
+fi
+if nomad alloc logs -stderr "$alloc" migrate > "$logdir/err.tmp" 2>/dev/null; then
+  sz=$(wc -c < "$logdir/err.tmp"); [ "$sz" -gt "$best_err" ] && mv "$logdir/err.tmp" "$logdir/err.log"
+fi
+logs="$(cat "$logdir/out.log" 2>/dev/null || true)"
+errs="$(cat "$logdir/err.log" 2>/dev/null || true)"
 
 echo "--- migrate output ---"
 printf '%s\n' "$logs"
