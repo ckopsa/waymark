@@ -647,15 +647,23 @@
    finding lands exactly as it always did, and the reading reads it as
    a likelihood ratio of 1 — which is silence. Every finding written
    before the hypotheses epic is in this state, and none of them owes
-   a backfill."
+   a backfill.
+
+   ITS OWN ROW, and the reason is worth keeping: this is the only one
+   of the three that is an ALLOW, so it is the only one that reaches
+   the third wall — and `one-live-finding-per-offer` refused it in the
+   conformance pack, off the finding `an-offer-needs-no-address`
+   leaves standing on the shared tickler. Shape-first ordering hides
+   that from the two refusals above (the typing wall answers them
+   before the world is read); an allow has to walk the whole door."
   {:kind    :insight
    :attempt :create
    :at      "2026-08-30T09:00:00Z"
    :as      {:id "compiler" :type :agent}
    :input   {:finding "The gutters have gone another fortnight without a call"
-             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9C1"]
              :offer_kind "tickler"
-             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9C1"
              :offer_action "take_it_back"}
    :expect  {:allowed true}})
 
@@ -678,7 +686,7 @@
              :solicited true
              :episode "thread/7fda11c6 2026-08-24"}
    :expect  {:refused :the-typing-agrees-with-itself
-             :because "nobody asked"}})
+             :because "NOBODY ASKED"}})
 
 (defscenario a-costly-action-cost-something
   "The whole of why a costly action counts most is that talk is free
