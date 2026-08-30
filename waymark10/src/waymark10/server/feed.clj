@@ -3795,6 +3795,75 @@
             (refuse (str ":tickler-rank " k " is " what ", 0–100 — read "
                          (pr-str v))
                     {:tickler-rank c})))))
+    ;; …and the eighth (waymark-2m2): the evidence table's numbers are
+    ;; numbers, for the fifth check's own reason. The BOUNDS are what
+    ;; differs from every check above, and they are the arithmetic's
+    ;; rather than a taste's.
+    ;;
+    ;; A LIKELIHOOD RATIO IS STRICTLY POSITIVE, because 0 says *this
+    ;; observation is impossible* and nothing a person actually said
+    ;; ever is; the way to silence a kind of evidence is 1. A HALF-LIFE
+    ;; is strictly positive because `2^(−age ÷ half-life)` has no
+    ;; answer at zero — an atom that vanished the instant it was
+    ;; written would be a bug wearing a number's clothes. THE INTENSITY
+    ;; IS AT LEAST 1, because an occasion that carried more facts may
+    ;; not count for less than one that carried one. AND THE CLAMP IS
+    ;; POSITIVE: a clamp of 0 would pin every belief at even odds
+    ;; forever, which is not caution, it is deafness.
+    ;;
+    ;; The keys are spelled here rather than read off
+    ;; `evidence-lr-keys` because this check runs above that def, and a
+    ;; `declare` to save a vector would be a forward reference costing
+    ;; more than the repetition.
+    (when-some [c (:evidence-lr recipe)]
+      (when-not (map? c)
+        (refuse (str ":evidence-lr is the evidence table — what each kind of"
+                     " fact is worth, how fast each forgets, and the two"
+                     " walls on the arithmetic — or absent for the"
+                     " deployment's own (see feed/default-evidence-lr)")
+                {:evidence-lr c}))
+      (doseq [k [:costly_action_high :costly_action_low :unprompted_mention
+                 :statement_against_interest :specific_detail :question_asked
+                 :complaint_while_continuing :solicited_praise
+                 :minimal_response :declined_invite :solicited_discount]]
+        (when-some [v (get c k)]
+          (when-not (and (number? v) (pos? (double v))
+                         (<= (double v) 1000.0))
+            (refuse (str ":evidence-lr " k " is how much likelier that"
+                         " observation is if the claim is true than if it is"
+                         " false — greater than 0, up to 1000. 1 is silence,"
+                         " and 0 would mean impossible, which nothing"
+                         " somebody actually said ever is. Read " (pr-str v))
+                    {:evidence-lr c}))))
+      (doseq [k [:half_life_costly_action :half_life_statement_against_interest
+                 :half_life_declined_invite :half_life_specific_detail
+                 :half_life_unprompted_mention
+                 :half_life_complaint_while_continuing
+                 :half_life_question_asked :half_life_solicited_praise
+                 :half_life_minimal_response]]
+        (when-some [v (get c k)]
+          (when-not (and (int? v) (<= 1 (long v) 36500))
+            (refuse (str ":evidence-lr " k " is how many days that kind of"
+                         " fact takes to be worth half what it was, 1–36500"
+                         " — 0 is not a number this arithmetic has an answer"
+                         " for; to make a kind of evidence say nothing, set"
+                         " its ratio to 1 instead. Read " (pr-str v))
+                    {:evidence-lr c}))))
+      (when-some [v (:episode_intensity c)]
+        (when-not (and (number? v) (<= 1.0 (double v) 10.0))
+          (refuse (str ":evidence-lr :episode_intensity is what an occasion"
+                       " that carried more than one fact counts, as a"
+                       " multiple of its strongest one alone — 1 to 10. Under"
+                       " 1 a busier evening would count for less than a"
+                       " quieter one. Read " (pr-str v))
+                  {:evidence-lr c})))
+      (when-some [v (:log_odds_clamp c)]
+        (when-not (and (number? v) (pos? (double v)) (<= (double v) 50.0))
+          (refuse (str ":evidence-lr :log_odds_clamp is how far any pile of"
+                       " facts may move a belief, in log-odds — greater than"
+                       " 0, up to 50. At 0 nothing could ever move at all,"
+                       " which is not caution. Read " (pr-str v))
+                  {:evidence-lr c}))))
     (reduce (fn [seen e]
               (let [s (if (:seam e) :seam (:section e))
                     r (census-rank s)]
@@ -4714,6 +4783,398 @@
                           (str "Among findings, insight_rank " (name k) " is "
                                y " instead of " x "."))))))
             ks))))
+;; ── the evidence table (waymark-2m2, the hypotheses epic slice 1) ────
+;;
+;; NOT A RANK. Everything above this line places CARDS on a page; this
+;; places nothing. It is what the house thinks a FACT is worth — the
+;; likelihood ratio of one typed atom on an `insight`, how fast that
+;; weight forgets, and the two walls on the arithmetic itself — and
+;; the only thing in the tree that reads it today is the reading's
+;; brief, which recomputes WHAT MOVED THIS WEEK on the fly and stores
+;; no posterior anywhere.
+;;
+;; docs/spec-hypotheses.md § 'The LR table as data' is the design
+;; record and this is its build. It lives here, on the recipe row and
+;; on the wire beside the three ranks, for law 5's own reason and no
+;; other: *the formula is DATA the owner can read.* A likelihood ratio
+;; a household cannot see is a hidden model whether it is ranking a
+;; card or grading a belief, and grading a belief is the more
+;; frightening of the two. So the numbers are printed on every feed
+;; document with a sentence quoting them back, they are editable
+;; through the recipe's own form, and an agent that wants them changed
+;; stages a `recipe_proposal` a person taps — the same three
+;; properties `crown_rank` has, arrived at the same way (waymark-1uv.5).
+;;
+;; THE HONEST COST, RECORDED, because the spec asked for it to be
+;; stated rather than discovered: the recipe row stops being only the
+;; feed's editorial frame and becomes the house's table of numbers a
+;; person may argue with. That is a widening, it was weighed against a
+;; kind of its own, and the kind lost — a second kind would mean a
+;; second staleness wall, a second diff vocabulary and a second apply
+;; door for one map.
+;;
+;; ONE MAP AND NOT THREE. The likelihood ratios, the two modifiers,
+;; the nine half-lives and the two walls are one flat map, the way the
+;; spec spells it — because they are one thought (what a fact is worth
+;; and for how long) and because `evidence-lr-diff` walking one map is
+;; one function rather than three.
+;;
+;; EVERY KEY IS OPTIONAL AND SO IS THE WHOLE MAP. An untyped insight
+;; carries no `evidence_type` and weighs 1, which in log-odds is zero
+;; — silence. That is the state of every finding written before this
+;; bead and of every finding a clerk was unsure about, and it is why
+;; nothing here can be a wall.
+
+(def default-evidence-lr
+  "WHAT EACH KIND OF EVIDENCE IS WORTH, as the odds multiplier a
+  person can argue with, plus how fast each forgets and the two walls
+  on the arithmetic. docs/spec-hypotheses.md's own table, spelled as
+  the declaration.
+
+  Read a likelihood ratio as *how much likelier this observation is if
+  the claim is true than if it is false.* Above 1 an atom pushes UP,
+  below 1 it pushes DOWN, and 1 is silence. The reading adds the
+  natural logs, which is what makes the polarity arithmetic rather
+  than a special case: `declined_invite` at 0.2 subtracts as surely as
+  a costly action at 20 adds, and no `if` anywhere knows which way a
+  word points.
+
+  ── THE TEN RATIOS, and why each is priced there ──
+
+  `costly_action_high` 20 / `costly_action_low` 5 — he spent money, a
+  Saturday, or social capital on it. The strongest thing a record can
+  hold, because talk is free and this was not; `cost` chooses between
+  the two, and `cost: none` is refused at the door, since an action
+  that cost nothing is not a costly action.
+
+  `unprompted_mention` 8 — he brought it up when nobody asked. Nearly
+  all the diagnostic power in ordinary conversation lives here, which
+  is exactly why `solicited` exists to keep it honest.
+
+  `statement_against_interest` 6 — he said something that cost him to
+  say: an admission, a preference that makes him look bad, a plan that
+  inconveniences him.
+
+  `specific_detail` 4 — he knew the part number, the trail name, the
+  year. Detail is expensive to fake and cheap to have when the thing
+  is real.
+
+  `question_asked` 3 — curiosity is weaker than a deed and much
+  stronger than agreement.
+
+  `complaint_while_continuing` 3 — he grumbled and kept doing it. The
+  complaint reads as negative and THE CONTINUING is the evidence; this
+  entry exists so a naive reader does not score the grumble as a no.
+
+  `solicited_praise` 1.05 — we asked, he said yes. Almost worthless on
+  purpose: politeness is the null hypothesis in a family, and pricing
+  this at 2 would let a run manufacture belief by asking leading
+  questions.
+
+  `minimal_response` 0.9 — we raised it and he said little. Weak
+  evidence against, never strong: silence has a hundred causes and
+  only one of them is disinterest.
+
+  `declined_invite` 0.2 — he was offered the thing and said no. The
+  strongest ordinary evidence against, and the mirror of a costly
+  action.
+
+  ── THE MODIFIER ──
+
+  `solicited_discount` 0.25 — a discount rather than a tenth type. An
+  answer to a question you put in somebody's mouth is a quarter of the
+  evidence of the same words unprompted, so a solicited atom's
+  LOG-ODDS contribution is scaled by this. `solicited_praise` needs no
+  discount: the type IS the discount.
+
+  ── THE NINE HALF-LIVES, in days ──
+
+  Per type, because FORGETTING is per type. A Saturday spent building
+  something is still evidence eighteen months later; a polite yes at
+  dinner is not evidence at all by autumn. One global rate would have
+  made the weakest evidence outlive its usefulness and the strongest
+  evidence expire before the household's own memory of it.
+
+  540 for a costly action, 365 for an admission and for a no, 180 for
+  a detail, an unprompted mention and a complaint-while-continuing, 90
+  for a question, and 60 for asked-for praise and for a one-word
+  answer.
+
+  Zero is not legal: `2^(−age ÷ 0)` has no answer, and an atom that
+  vanished the instant a clerk wrote it would be a bug wearing a
+  number's clothes. The way to make a kind of evidence stop counting
+  is its RATIO, set to 1 — the atoms then stay on the record saying
+  nothing, which is the honest version of the same wish.
+
+  ── THE TWO WALLS ON THE ARITHMETIC ──
+
+  `episode_intensity` 1.5 — atoms sharing an occasion collapse to ONE
+  contribution, and if there were two or more the survivor is
+  multiplied by this and no further. Enthusiasm in a single
+  conversation is WARMTH, not four independent observations.
+
+  `log_odds_clamp` 6 — about 0.25% to 99.75%. No finite pile of atoms
+  becomes certainty, because a belief that reaches certainty stops
+  reading evidence, and this house's posture is that the system
+  proposes and never believes.
+
+  A house that disagrees with any of these edits the number in the
+  recipe form and the next reading uses the new one. That is the whole
+  of the tuning story, and it is why the numbers are here rather than
+  inside the driver."
+  {:costly_action_high 20
+   :costly_action_low 5
+   :unprompted_mention 8
+   :statement_against_interest 6
+   :specific_detail 4
+   :question_asked 3
+   :complaint_while_continuing 3
+   :solicited_praise 1.05
+   :minimal_response 0.9
+   :declined_invite 0.2
+   ;; the modifier
+   :solicited_discount 0.25
+   ;; how a type forgets, in DAYS
+   :half_life_costly_action 540
+   :half_life_statement_against_interest 365
+   :half_life_declined_invite 365
+   :half_life_specific_detail 180
+   :half_life_unprompted_mention 180
+   :half_life_complaint_while_continuing 180
+   :half_life_question_asked 90
+   :half_life_solicited_praise 60
+   :half_life_minimal_response 60
+   ;; the walls on the arithmetic itself
+   :episode_intensity 1.5
+   :log_odds_clamp 6})
+
+(def evidence-lr-keys
+  "The table's keys, in the order the wire, the diff and the sentence
+  read them — the ten ratios strongest first, then the modifier, then
+  the nine half-lives, then the two walls. Spelled once here so three
+  surfaces cannot drift into three different orders.
+
+  The nine TYPE tokens inside them are `insight`'s own enum, and they
+  are spelled here rather than read off that kind for the reason
+  `reason-weights` gives one section up: this namespace names what the
+  module enrols without requiring the namespaces that declare it."
+  [:costly_action_high :costly_action_low :unprompted_mention
+   :statement_against_interest :specific_detail :question_asked
+   :complaint_while_continuing :solicited_praise :minimal_response
+   :declined_invite
+   :solicited_discount
+   :half_life_costly_action :half_life_statement_against_interest
+   :half_life_declined_invite :half_life_specific_detail
+   :half_life_unprompted_mention :half_life_complaint_while_continuing
+   :half_life_question_asked :half_life_solicited_praise
+   :half_life_minimal_response
+   :episode_intensity :log_odds_clamp])
+
+(defn evidence-lr-of
+  "The table this recipe reads: the household's own, with the
+  deployment's filled in for anything it did not state —
+  `crown-rank-of`'s shape, one table over, and the spec's own
+  sentence: *`evidence-lr-of` mirrors `crown-rank-of` exactly.*"
+  [recipe]
+  (merge default-evidence-lr (:evidence-lr recipe)))
+
+(defn- table-num
+  "A table number as the wire and the sentences spell it: `20` rather
+  than `20.0`, `1.05` rather than `1.0500000000000000444`. The values
+  are read back by the reading's jq and quoted in prose, and neither
+  wants a tail of zeroes it did not ask for."
+  ^String [v]
+  (let [d (double (or v 0))]
+    (if (== d (Math/rint d))
+      (str (long d))
+      (str (.stripTrailingZeros
+            (java.math.BigDecimal/valueOf
+             (/ (Math/rint (* d 10000.0)) 10000.0)))))))
+
+(def evidence-lr-words
+  "The household's own sentence for a change to each number in the
+  evidence table — `crown-rank-words`' shape one table over, read
+  generically by `evidence-lr-diff` so a tenth kind of evidence could
+  arrive without the diff learning its name. A key with no words here
+  still says which number moved, by its wire name.
+
+  The spec's own test of this map: a proposal that raises
+  `unprompted_mention` from 8 to 12 must say *an unprompted mention
+  now counts half again as much* and not `{:unprompted_mention 12}`.
+  The nine half-lives are written from the tokens rather than by hand,
+  because every one says the same sentence with its own noun in it and
+  nine copies would be nine places for one thought to drift."
+  (merge
+   {:costly_action_high
+    (fn [a b] (str "A fact somebody SPENT something real on — money, a"
+                   " Saturday, social capital — now weighs " (table-num b)
+                   " instead of " (table-num a) "."))
+    :costly_action_low
+    (fn [a b] (str "A fact somebody spent a LITTLE on now weighs "
+                   (table-num b) " instead of " (table-num a) "."))
+    :unprompted_mention
+    (fn [a b] (str "A fact somebody brought up when nobody asked now weighs "
+                   (table-num b) " instead of " (table-num a) "."))
+    :statement_against_interest
+    (fn [a b] (str "A fact somebody said that cost them to say now weighs "
+                   (table-num b) " instead of " (table-num a) "."))
+    :specific_detail
+    (fn [a b] (str "A detail only somebody who has been near the thing would"
+                   " know now weighs " (table-num b) " instead of "
+                   (table-num a) "."))
+    :question_asked
+    (fn [a b] (str "A question somebody asked about it now weighs "
+                   (table-num b) " instead of " (table-num a) "."))
+    :complaint_while_continuing
+    (fn [a b] (str "A complaint from somebody who kept doing it anyway now"
+                   " weighs " (table-num b) " instead of " (table-num a)
+                   " — the grumble is not the signal, the staying is."))
+    :solicited_praise
+    (fn [a b] (str "Something nice somebody said BECAUSE you asked now weighs "
+                   (table-num b) " instead of " (table-num a)
+                   " — at 1 it says nothing at all, and under 1 it would"
+                   " count against."))
+    :minimal_response
+    (fn [a b] (str "A one-word answer with nothing after it now weighs "
+                   (table-num b) " instead of " (table-num a)
+                   " — under 1 it counts against, over 1 it counts for."))
+    :declined_invite
+    (fn [a b] (str "Being asked and saying no now weighs " (table-num b)
+                   " instead of " (table-num a)
+                   " — under 1 it counts against, and the smaller it is the"
+                   " harder it counts."))
+    :solicited_discount
+    (fn [a b] (str "A fact the house ASKED for is now worth " (table-num b)
+                   " of what the same words unprompted would be worth,"
+                   " instead of " (table-num a) "."))
+    :episode_intensity
+    (fn [a b] (str "An occasion that carried more than one fact now counts "
+                   (table-num b) " times what its strongest one alone would,"
+                   " instead of " (table-num a)
+                   " — and no further, however many facts it carried."))
+    :log_odds_clamp
+    (fn [a b] (str "No pile of facts may move a belief further than "
+                   (table-num b) " in log-odds, instead of " (table-num a)
+                   " — a belief that reaches certainty stops reading"
+                   " evidence."))}
+   (into {}
+         (map (fn [k]
+                [(keyword (str "half_life_" (name k)))
+                 (fn [a b]
+                   (str "A " (str/replace (name k) "_" " ")
+                        " is worth half what it was after " (table-num b)
+                        " days instead of " (table-num a) "."))]))
+         [:costly_action :statement_against_interest :declined_invite
+          :specific_detail :unprompted_mention :complaint_while_continuing
+          :question_asked :solicited_praise :minimal_response])))
+
+(defn evidence-lr-diff
+  "The evidence table, read side by side — `crown-rank-diff`'s shape
+  one table over, and empty when nothing moved. Both arguments are
+  recipe-map tables, nil for *whatever the deployment says*. It walks
+  the KEYS of the two maps — the deployment's first, in
+  `evidence-lr-keys`' own order, then anything either side names
+  beyond those — so the table may grow a number without this function
+  learning its name.
+
+  No *turns OFF* arm, and that is the difference from the three ranks:
+  all-zero is a meaningful posture for a rank (the seed alone) and an
+  incoherent one here — a likelihood ratio of 0 says the observation
+  is impossible, which nothing a person actually said ever is. The way
+  to silence a kind of evidence is 1, and its sentence says so."
+  [was now]
+  (let [a (evidence-lr-of {:evidence-lr was})
+        b (evidence-lr-of {:evidence-lr now})
+        ks (distinct (concat evidence-lr-keys (sort (keys a)) (sort (keys b))))]
+    (into []
+          (keep (fn [k]
+                  (let [x (get a k) y (get b k)]
+                    (when (not= (some-> x double) (some-> y double))
+                      (if-some [say (get evidence-lr-words k)]
+                        (say x y)
+                        (str "In the evidence table, " (name k) " is "
+                             (table-num y) " instead of " (table-num x)
+                             "."))))))
+          ks)))
+
+(defn evidence-lr-as-written
+  "The evidence table in the shape the EDITOR takes — the wire
+  spelling of `waymark10.feed-recipe`'s `evidence_lr` field, so what a
+  person copies out of a feed document is what the form takes back
+  (`crown-rank-as-written`'s sentence, one table over). It is also
+  where the reading's driver reads the numbers FROM, which is the
+  whole reason it rides the wire at all: a driver carrying its own
+  copy would be a second opinion nobody could see."
+  [recipe]
+  (let [t (evidence-lr-of recipe)]
+    (into {} (map (fn [k] [(name k) (get t k)])) evidence-lr-keys)))
+
+(defn evidence-lr-says
+  "The evidence table, narrated in household words with its own
+  numbers quoted back — the recipe view's half of law 5 at the
+  reading's brief (waymark-2m2). A pure function of the recipe, like
+  every other line of `recipe-view`: what the table did to THIS
+  reading is the reading's business, and it prints its own working in
+  the brief.
+
+  One sentence-run for the whole table, because what a fact is worth,
+  how long it stays worth it and what the arithmetic may not do are
+  one thought, and a person reading them apart would have to hold two
+  of them in their head."
+  ^String [recipe]
+  (let [t (evidence-lr-of recipe)
+        n (fn [k] (table-num (get t k)))]
+    (str "How the reading weighs a FACT somebody said, and this is the whole"
+         " of it — no belief is stored anywhere and the reading recomputes it"
+         " every time it runs. A fact a clerk indexed with none of these"
+         " words on it weighs 1, which is silence, and most facts do. Of the"
+         " ones that carry a word: somebody who SPENT something real on it —"
+         " money, a Saturday, social capital — counts " (n :costly_action_high)
+         ", or " (n :costly_action_low) " where it cost only a little;"
+         " somebody who brought it up when nobody asked counts "
+         (n :unprompted_mention) "; somebody who said a thing that cost them"
+         " to say counts " (n :statement_against_interest)
+         "; a detail only somebody who has been near it would know counts "
+         (n :specific_detail) "; a question asked, and a complaint from"
+         " somebody who kept doing it anyway, count " (n :question_asked)
+         " each; and something nice said BECAUSE you asked counts "
+         (n :solicited_praise)
+         ;; the clause is a claim ABOUT the number, so it goes when the
+         ;; number does: a house that raised asked-for praise to 2 must
+         ;; not be told it is very nearly nothing, and must be told why
+         ;; the built-in was low, so it can put it back knowingly
+         (if (< (double (get t :solicited_praise 1.05)) 1.5)
+           (str ", which is very nearly nothing, on purpose — politeness is"
+                " the null hypothesis in a family")
+           (str " — higher than the number this engine ships with, which is"
+                " near 1 because politeness is the null hypothesis in a"
+                " family"))
+         ". Two count the other"
+         " way: a one-word answer with nothing after it counts "
+         (n :minimal_response) " and being asked and saying no counts "
+         (n :declined_invite) ", and anything under 1 pushes down. Anything"
+         " the house ASKED for is worth " (n :solicited_discount)
+         " of what the same words unprompted would be worth. The same evening"
+         " counts ONCE however excited it was — five messages in one"
+         " conversation are one occasion — and an occasion that carried more"
+         " than one fact counts " (n :episode_intensity)
+         " times its strongest, never five. Then it forgets, by halves: a"
+         " spent Saturday is worth half after " (n :half_life_costly_action)
+         " days, an admission after " (n :half_life_statement_against_interest)
+         ", a no after " (n :half_life_declined_invite) ", a detail after "
+         (n :half_life_specific_detail) ", an unprompted mention after "
+         (n :half_life_unprompted_mention) ", a complaint after "
+         (n :half_life_complaint_while_continuing) ", a question after "
+         (n :half_life_question_asked) ", a one-word answer after "
+         (n :half_life_minimal_response) " and asked-for praise after "
+         (n :half_life_solicited_praise)
+         " — because what was expensive to produce stays true longest and"
+         " what was cheap and prompted goes stale fastest, and a record that"
+         " forgets is honest about a person who has changed. Nothing may move"
+         " further than " (n :log_odds_clamp) " either way, so no pile of"
+         " facts becomes certainty. Nothing here ranks a card, nothing here"
+         " acts, and nothing here is a wall: an untyped fact is a lawful fact"
+         " and it weighs 1.")))
 
 ;; ── the ticklers line's rank, narrated (waymark-1uv.9) ──────────────
 ;; The crown's four sentences, one line down: the words a diff says
@@ -4943,7 +5404,13 @@
               (into (crown-rank-diff (:crown-rank was) (:crown-rank now)))
               (into (insight-rank-diff (:insight-rank was) (:insight-rank now)))
               ;; …and the fridge's (waymark-1uv.9)
-              (into (tickler-rank-diff (:tickler-rank was) (:tickler-rank now))))]
+              (into (tickler-rank-diff (:tickler-rank was) (:tickler-rank now)))
+              ;; …and the EVIDENCE TABLE (waymark-2m2), which is the
+              ;; one half of this diff that is not about the page at
+              ;; all — it says what a household thinks a fact somebody
+              ;; said is worth, and a person tapping *apply* under a
+              ;; number that changes that deserves the sentence most
+              (into (evidence-lr-diff (:evidence-lr was) (:evidence-lr now))))]
     (cond
       (and (not moved?) (empty? f)) [order-unchanged]
       (not moved?) (into ["The order itself is unchanged, line for line."] f)
@@ -4965,8 +5432,10 @@
        " is last and bottomless; every line names a population this"
        " engine actually holds; the contest is two numbers a person can"
        " read; the crown's rank is six, the findings' rank is six, and the"
-       " fridge's is five, for the things set aside. A recipe that broke"
-       " any of those would have refused to start rather than serve you a"
+       " fridge's is five, for the things set aside; and what a fact"
+       " somebody said is worth is a table of numbers you can read too,"
+       " though nothing on this page reads it. A recipe that broke any of"
+       " those would have refused to start rather than serve you a"
        " surprise."))
 
 (defn formula-as-written
@@ -5192,6 +5661,14 @@
    ;; …and the fridge's rank, the same two ways (waymark-1uv.9)
    "tickler_rank" (tickler-rank-as-written recipe)
    "tickler_rank_says" (tickler-rank-says recipe)
+   ;; …and the EVIDENCE TABLE (waymark-2m2), which ranks nothing on
+   ;; this page and rides it anyway. The reading's WHAT MOVED THIS
+   ;; WEEK reads its numbers out of here rather than carrying a copy,
+   ;; so the recipe form is the only place they are tuned — and a
+   ;; household can read what its own facts weigh in the same document
+   ;; that says what its cards weigh.
+   "evidence_lr" (evidence-lr-as-written recipe)
+   "evidence_lr_says" (evidence-lr-says recipe)
    "lines" (into []
                  (map-indexed
                   (fn [i e]

@@ -386,6 +386,63 @@
         ;; no offer at all — `offers-something-light` owns that refusal
         (t/allow)))))
 
+;; ── the typing agrees with itself (waymark-2m2) ─────────────────────
+;;
+;; THE FOURTH WALL, AND IT IS NOT A WALL ON TYPING. Every one of the
+;; four evidence fields is optional and this guard says nothing about a
+;; finding that carries none of them, or one of them, or all four
+;; coherently. It refuses exactly two sentences that CONTRADICT
+;; THEMSELVES — a typed fact whose words cannot both be true — and it
+;; refuses them because the likelihood ratio behind each word assumes
+;; the word means what it says.
+;;
+;; 1. `unprompted_mention` with `solicited: true`. The type IS *nobody
+;;    asked*; the flag IS *the house asked*. One of the two words is
+;;    wrong and the clerk knows which, and the refusal says so rather
+;;    than silently discounting an atom priced at 8 for having been
+;;    prompted — which is how a table gets quietly wrong.
+;;
+;; 2. `costly_action` with `cost: "none"`. An action that cost nothing
+;;    is not a costly action; it is a mention, or a detail, or nothing.
+;;    This is the door docs/spec-hypotheses.md names when it prices the
+;;    type at 20 for `high` and 5 for `low` — there is no third number,
+;;    because there is no third case.
+;;
+;; A costly action with NO `cost` at all is admitted and reads as the
+;; LOW number, which is the conservative direction and the one worth
+;; being wrong in: a fact somebody spent something on counts for
+;; something even where the clerk could not say how much.
+;;
+;; Shape-only, so it needs no storage and both scenarios below are
+;; judged in the same breath as `make check-queue`.
+
+(defguardfn the-typing-agrees-with-itself
+  {:judges [:evidence_type :solicited :cost]
+   :vars [:problem]
+   :open "Two of the nine words carry a second fact inside them: an unprompted mention is one NOBODY ASKED for, and a costly action is one that COST something. Say either of those and then contradict it, and the finding is refused — not because typing a fact is hard, but because the number behind each word assumes the word is true. All four typing fields stay optional; leaving them blank is always lawful."
+   :explain "Those words disagree with each other: {problem}"}
+  [_row inp _ctx]
+  (let [ty (some-> (:evidence_type inp) str str/trim not-empty)
+        cost (some-> (:cost inp) str str/trim not-empty)
+        solicited (:solicited inp)
+        deny (fn [problem] (t/deny {:vars {:problem problem}}))]
+    (cond
+      (and (= "unprompted_mention" ty) (true? solicited))
+      (deny (str "an unprompted mention is one NOBODY ASKED for, and"
+                 " solicited says the house asked. If somebody put it to"
+                 " them, this is not an unprompted mention — try"
+                 " solicited_praise, or question_asked, or minimal_response."
+                 " If they truly volunteered it, solicited is false."))
+
+      (and (= "costly_action" ty) (= "none" cost))
+      (deny (str "a costly action that cost nothing is not a costly action —"
+                 " the whole of why this one counts most is that talk is free"
+                 " and this was not. Say low or high if it cost them"
+                 " something, and otherwise this is an unprompted mention, a"
+                 " specific detail, or nothing at all."))
+
+      :else (t/allow))))
+
 ;; ── the address, derived at birth ───────────────────────────────────
 
 (defn- derive-the-offer-address
@@ -583,6 +640,66 @@
              :offer_action "prioritize"}
    :expect  {:refused :offers-something-light}})
 
+(defscenario a-typed-fact-may-be-left-untyped
+  "The load-bearing scenario of waymark-2m2, and it proves a wall that
+   is NOT there. All four typing fields are optional: a clerk that
+   cannot say which of the nine words a fact is leaves them blank, the
+   finding lands exactly as it always did, and the reading reads it as
+   a likelihood ratio of 1 — which is silence. Every finding written
+   before the hypotheses epic is in this state, and none of them owes
+   a backfill."
+  {:kind    :insight
+   :attempt :create
+   :at      "2026-08-30T09:00:00Z"
+   :as      {:id "compiler" :type :agent}
+   :input   {:finding "The gutters have gone another fortnight without a call"
+             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :offer_kind "tickler"
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_action "take_it_back"}
+   :expect  {:allowed true}})
+
+(defscenario nobody-asked-for-an-unprompted-mention
+  "A fact cannot be both volunteered and asked for. The type says
+   nobody asked; the flag says the house did; one of the two words is
+   wrong, and the clerk is the only one who knows which — so the
+   refusal names both and lets it choose, rather than quietly
+   discounting an atom priced at 8 for having been prompted."
+  {:kind    :insight
+   :attempt :create
+   :at      "2026-08-30T09:00:00Z"
+   :as      {:id "compiler" :type :agent}
+   :input   {:finding "Iris talked about the darkroom again"
+             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :offer_kind "tickler"
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_action "take_it_back"
+             :evidence_type "unprompted_mention"
+             :solicited true
+             :episode "thread/7fda11c6 2026-08-24"}
+   :expect  {:refused :the-typing-agrees-with-itself
+             :because "nobody asked"}})
+
+(defscenario a-costly-action-cost-something
+  "The whole of why a costly action counts most is that talk is free
+   and this was not — so an action that cost NOTHING is not one. Said
+   at the door rather than priced at some third number, because there
+   is no third case: it was a mention, or a detail, or nothing."
+  {:kind    :insight
+   :attempt :create
+   :at      "2026-08-30T09:00:00Z"
+   :as      {:id "compiler" :type :agent}
+   :input   {:finding "Iris put the darkroom weekend on the calendar"
+             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"]
+             :offer_kind "tickler"
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :offer_action "take_it_back"
+             :evidence_type "costly_action"
+             :cost "none"
+             :episode "thread/7fda11c6 2026-08-24"}
+   :expect  {:refused :the-typing-agrees-with-itself
+             :because "cost nothing is not a costly action"}})
+
 ;; ── :insight — the finding, with a next step attached ───────────────
 
 (defresource insight
@@ -706,7 +823,79 @@
     ;; from the two fields above. It stays writable so a caller that
     ;; already holds the address may say it — and be held to it.
     [:offer_href {:optional true :x-display {:hidden true}}
-     [:maybe [:string {:max 200}]]]]
+     [:maybe [:string {:max 200}]]]
+    ;; ── WHAT KIND OF EVIDENCE THIS IS (waymark-2m2) ─────────────────
+    ;;
+    ;; Four OPTIONAL fields, and optional is load-bearing: an untyped
+    ;; finding is exactly as lawful as it was the day before this bead
+    ;; and weighs exactly what it always weighed — a likelihood ratio
+    ;; of 1, which is silence. Nothing here is a wall, nothing here is
+    ;; required by any guard, and a clerk who does not know which of
+    ;; the nine words a fact is leaves all four blank rather than
+    ;; guessing. That is the honest failure and it costs nothing.
+    ;;
+    ;; The nine words are a TAXONOMY OF HOW THE FACT ARRIVED, never a
+    ;; judgment of what it means. A clerk filling these has read one
+    ;; message and is answering *did anybody ask them?*, *what did it
+    ;; cost them?*, *when was this?* — questions a person could answer
+    ;; from the same message without holding any belief at all. The
+    ;; belief is the reading's, and the reading computes it from these
+    ;; on the fly (`scripts/sitting-run.sh`'s WHAT MOVED THIS WEEK);
+    ;; nothing is stored here but what was observed.
+    ;;
+    ;; The numbers each word carries are DATA on the feed_recipe row —
+    ;; `feed/default-evidence-lr`, printed on every feed document
+    ;; beside `crown_rank` with a sentence quoting them back, tunable
+    ;; through `recipe_proposal`. Law 5's posture one surface over: a
+    ;; weight a household cannot read is the hidden model, whatever it
+    ;; is weighing.
+    ;;
+    ;; ONE WALL STANDS OVER THE FOUR AND IT IS NOT ABOUT TYPING:
+    ;; `the-typing-agrees-with-itself` refuses the two sentences that
+    ;; contradict themselves — an unprompted mention the house asked
+    ;; for, a costly action that cost nothing — because the number
+    ;; behind each of those words assumes the word is true. Everything
+    ;; else about these fields is optional, always.
+    [:evidence_type
+     {:optional true :filter #{:eq}
+      :x-display
+      {:label "How the fact arrived"
+       :help "Which of the nine ways this fact reached the house — how it arrived, never what it means. Leave it blank if none of them fits; an untyped fact is a lawful fact and the reading simply reads it as saying nothing either way."
+       :choices
+       {"unprompted_mention" "They brought it up themselves — nobody asked, and they said it anyway"
+        "solicited_praise" "They said something nice about it because you asked — the politest thing a person can say, and the least it can mean"
+        "question_asked" "They asked a question about it — wanting to know more is cheap to say and hard to fake"
+        "specific_detail" "They knew a detail — a name, a date, how it works — that only somebody who has actually been near it would know"
+        "costly_action" "They spent something real on it — money, a day, a drive, a thing they gave up to do it. Say what it cost below: high or low, never none"
+        "declined_invite" "They were asked and said no — a real answer, and it points the other way"
+        "statement_against_interest" "They said something that cost them to say — an admission, a thing that made them look worse"
+        "complaint_while_continuing" "They complained about it and kept doing it anyway — the grumbling is not the signal, the staying is"
+        "minimal_response" "They answered, barely — a word, a thumb, and nothing after it"}}}
+     [:maybe [:enum "unprompted_mention" "solicited_praise" "question_asked"
+              "specific_detail" "costly_action" "declined_invite"
+              "statement_against_interest" "complaint_while_continuing"
+              "minimal_response"]]]
+    [:solicited
+     {:optional true :filter #{:eq}
+      :x-display
+      {:label "Did somebody ask them?"
+       :help "True if this came out because the house asked — a question, a nudge, a poll. False if they volunteered it. It is a DISCOUNT rather than a tenth word: an answer to a question you put in somebody's mouth counts for a fraction of the same words unprompted, and the fraction is on the recipe row where anybody can read it. True on an unprompted mention is refused, because those two words cannot both be right."}}
+     [:maybe :boolean]]
+    [:cost
+     {:optional true :filter #{:eq}
+      :x-display
+      {:label "What it cost them"
+       :help "It PRICES a costly action — low and high are the two numbers that word carries, and none is refused there, because an action that cost nothing is not a costly action. On any of the other eight words it is simply recorded and reads at 1; the house keeps it so it can find out later whether the other eight want a cost-graded scale too."
+       :choices {"none" "Nothing — a word, a tap, a moment"
+                 "low" "A little — some minutes, a small effort, mild awkwardness"
+                 "high" "Something real — money, a day, giving something else up, saying a thing that made them look worse"}}}
+     [:maybe [:enum "none" "low" "high"]]]
+    [:episode
+     {:optional true :filter #{:eq}
+      :x-display
+      {:label "Which occasion"
+       :help "Where and when this happened, as a source and a day — \"thread/7fda11c6 2026-08-24\". The same evening counts once, however excited it was: five messages in one conversation are one occasion, and the reading folds them together rather than counting the excitement five times. Two different days are two occasions even if the words were identical."}}
+     [:maybe [:string {:max 120}]]]]
    :on-create derive-the-offer-address
    ;; SHAPE FIRST, WORLD NEXT — outcome's ordering and its reason. A
    ;; malformed finding hears what is wrong with it before it hears
@@ -717,6 +906,9 @@
    ;; which a person reads (waymark-1uv.8), and the third wall counts
    ;; questions rather than rows (waymark-1ag).
    :create-guards [cites-what-it-claims offers-something-light
+                   ;; the typing wall is SHAPE, so it stands with the
+                   ;; other two and above the one that reads the world
+                   the-typing-agrees-with-itself
                    one-live-finding-per-offer]
    :scenarios [no-citation-no-publish
                no-offered-action-no-publish
@@ -724,5 +916,8 @@
                an-offer-needs-no-address
                an-offer-points-at-its-own-row
                a-form-is-not-a-tap
+               a-typed-fact-may-be-left-untyped
+               nobody-asked-for-an-unprompted-mention
+               a-costly-action-cost-something
                the-finder-does-not-decide
                a-dismissed-finding-does-not-come-back]})

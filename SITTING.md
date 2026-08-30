@@ -179,11 +179,58 @@ holding your place in it.
 1. **Index every fact a person said** — a person's turn that states
    something about the house ("Wellesley is sick", "we're
    rescheduling") becomes an `insight` first: one sentence, evidence
-   citing the remark, one light next step. A fact left in a thread
-   is invisible to the next run and to the rank; a fact in a row is
-   the house's record. The manifest's `candidate_facts` are the turns
-   no insight cites yet — judge which of them carry a fact. Never
-   index twice; never index a question.
+   citing the remark, one light next step, and — where you can say it
+   plainly — the four words that TYPE the fact (see below). A fact
+   left in a thread is invisible to the next run and to the rank; a
+   fact in a row is the house's record. The manifest's
+   `candidate_facts` are the turns no insight cites yet — judge which
+   of them carry a fact. Never index twice; never index a question.
+
+   **Type the fact while you have it in front of you.** Four optional
+   fields on the insight, and they are what the reading's WHAT MOVED
+   THIS WEEK weighs (waymark-2m2):
+
+   - `evidence_type` — one of nine, and every one of them describes
+     HOW THE FACT ARRIVED, never what it means:
+     `unprompted_mention` (they brought it up, nobody asked),
+     `solicited_praise` (something nice, because you asked),
+     `question_asked` (they wanted to know more),
+     `specific_detail` (they knew a name, a date, how it works),
+     `costly_action` (they spent money, a day, a drive),
+     `declined_invite` (asked, and said no),
+     `statement_against_interest` (they said a thing that cost them),
+     `complaint_while_continuing` (they grumbled and kept going),
+     `minimal_response` (a word, a thumb, nothing after).
+   - `solicited` — true if the house asked, false if they volunteered.
+     It is a DISCOUNT, not a tenth word: an answer to a question you
+     put in somebody's mouth counts for a fraction of the same words
+     unprompted.
+   - `cost` — `none` / `low` / `high`: what it cost THEM. It prices
+     `costly_action` (the only cost-graded word) and is simply
+     recorded on the other eight.
+   - `episode` — the occasion, as a source and a day:
+     `"thread/7fda11c6 2026-08-24"`. The same evening counts once,
+     however excited it was, and this field is how the reading knows
+     which messages were one evening.
+
+   **You are classifying, not judging, and you never see a belief.**
+   Every one of the four is optional; leave them blank rather than
+   guess, and the fact still lands and still counts as silence — an
+   untyped fact weighs a likelihood ratio of 1, which is exactly what
+   it weighed before this existed.
+
+   **Two combinations are refused, and only two.** An
+   `unprompted_mention` with `solicited: true` (the type says nobody
+   asked, the flag says the house did — one of them is wrong and only
+   you know which), and a `costly_action` with `cost: "none"` (an
+   action that cost nothing is not a costly action; it is a mention,
+   or a detail, or nothing). `the-typing-agrees-with-itself` names
+   both and says which word to change. Everything else about these
+   fields is lawful, including all four blank.
+
+   `verify` will name a typed fact with no `episode`, gently, once:
+   without an occasion the reading dates it by when YOU indexed it and
+   counts it as an evening of its own.
 2. **Answer every standing composition request** — a person's pull is
    never capped. The manifest's `offered_requests` is the list, and
    `offered` means unanswered by definition.
@@ -287,7 +334,11 @@ holding your place in it.
    tap. `prioritize` takes a rank, so it is refused here however well
    it reads; a rank is prepared input and prepared input is an outcome
    PIECE's business. You never send `offer_href`: the engine derives
-   the address from the kind and the id you named. This ANNOTATES the
+   the address from the kind and the id you named. Where the
+   enrichment rests on something a PERSON said, the four typing fields
+   of priority 1 (`evidence_type`, `solicited`, `cost`, `episode`)
+   belong on it too — same fields, same rule, all four optional.
+   This ANNOTATES the
    task beside it; it never edits the task's fields, because only the
    household edits its own rows. An enrichment that does not change
    whether the task is actionable is not worth writing.

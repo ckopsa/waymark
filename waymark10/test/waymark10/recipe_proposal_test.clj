@@ -564,6 +564,58 @@
                                   :early 0 :judged 0 :recomposed 0}))
                          "every one of its 7 numbers is 0")))))
 
+(deftest the-evidence-table-is-diffed-beside-the-crown
+  ;; waymark-2m2. The fourth set of numbers on the recipe row and the
+  ;; first that ranks nothing: it says what the house thinks a FACT
+  ;; somebody said is worth, and only the reading reads it. It arrives
+  ;; here for the same reason the crown's did — a person tapping
+  ;; *apply* has to be told what changes, in words — and it matters
+  ;; more here than anywhere else on this row, because a card that
+  ;; reordered a page can be re-read and a belief that was regraded
+  ;; cannot.
+  (let [wire (walk/keywordize-keys (feed/order-as-written feed/default-recipe))
+        now (walk/keywordize-keys
+             (feed/evidence-lr-as-written feed/default-recipe))]
+    (testing "a proposal that touches only the table says the order is
+              unchanged, then each moved number in the household's words"
+      (is (= ["The order itself is unchanged, line for line."
+              "A fact somebody brought up when nobody asked now weighs 12 instead of 8."
+              "A costly action is worth half what it was after 700 days instead of 540."]
+             (proposal/diff-of wire wire nil nil nil nil
+                               now (assoc now :unprompted_mention 12
+                                          :half_life_costly_action 700)))))
+
+    (testing "the walls on the arithmetic get sentences of their own, because
+              they are the two numbers a person would never guess the effect of"
+      (is (= ["The order itself is unchanged, line for line."
+              (str "An occasion that carried more than one fact now counts 2"
+                   " times what its strongest one alone would, instead of 1.5"
+                   " — and no further, however many facts it carried.")
+              (str "No pile of facts may move a belief further than 4 in"
+                   " log-odds, instead of 6 — a belief that reaches certainty"
+                   " stops reading evidence.")]
+             (proposal/diff-of wire wire nil nil nil nil
+                               now (assoc now :episode_intensity 2
+                                          :log_odds_clamp 4)))))
+
+    (testing "an absent table and one spelling the deployment's numbers are the
+              same table, and neither reads as a change — the comparison is by
+              value, so 1.05 said twice is not a movement"
+      (is (= [feed/order-unchanged]
+             (proposal/diff-of wire wire nil nil nil nil nil now)))
+      (is (= [feed/order-unchanged]
+             (proposal/diff-of wire wire nil nil nil nil now nil))))
+
+    (testing "the six-argument spelling still says nothing about the table —
+              which is what every proposal staged before waymark-2m2 said"
+      (is (= [feed/order-unchanged]
+             (proposal/diff-of wire wire nil nil nil nil))))
+
+    (testing "a number the table grows later renders the day it lands, by its
+              wire name — the diff walks the map's keys and never names ten"
+      (is (= ["In the evidence table, gift_given is 9 instead of 0."]
+             (feed/evidence-lr-diff nil {:gift_given 9}))))))
+
 (deftest an-agent-tunes-the-crown-and-a-member-applies-it
   (let [{:keys [eng]} (boot)
         made (call! eng :post "/api/feed_recipes"

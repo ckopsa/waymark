@@ -240,26 +240,61 @@
   (= (feed/crown-rank-of {:crown-rank (as-crown-rank a)})
      (feed/crown-rank-of {:crown-rank (as-crown-rank b)})))
 
+(defn- as-evidence-lr
+  "One evidence table in the EDITOR's wire shape → the recipe-map
+  shape, or nil for *whatever the deployment says* — `as-crown-rank`,
+  one field over, through the same one converter (waymark-2m2)."
+  [wire-table]
+  (:evidence-lr (feed-recipe/recipe-of {:evidence_lr wire-table})))
+
+(defn- same-evidence-lr?
+  "Do two evidence tables say the same thing? Compared after the
+  deployment's own numbers are filled in (`feed/evidence-lr-of`), for
+  `same-formula?`'s reason: an absent table and one spelling the
+  built-in's numbers are the same table, and a proposal refused for
+  the difference would be a refusal nobody could act on.
+
+  The comparison is by DOUBLE rather than by value, which is where
+  this differs from its three siblings: these numbers are not all
+  whole, so 1.05 stored as a decimal and 1.05 arriving as a float are
+  the same number said twice, and a table refused for that would be a
+  staleness wall inventing staleness."
+  [a b]
+  (let [n (fn [t] (into {} (map (fn [[k v]] [k (double v)]))
+                        (feed/evidence-lr-of {:evidence-lr (as-evidence-lr t)})))]
+    (= (n a) (n b))))
+
 (defn diff-of
   "The staged diff: what changes — line by line in the order, number by
-  number in the contest, and number by number in the crown's rank — in
-  the household's own words. Public because it is what the create hook
-  writes and what a test reads back, and pure, so the same two recipes
-  answer the same sentences in a scenario, in a suite and in the house.
+  number in the contest, number by number in the crown's rank, and
+  number by number in the evidence table — in the household's own
+  words. Public because it is what the create hook writes and what a
+  test reads back, and pure, so the same two recipes answer the same
+  sentences in a scenario, in a suite and in the house.
 
   The four-argument spelling is the one 8um.3 left; it says nothing
   about the crown, which is what a proposal staged before waymark-1uv.5
-  said."
+  said. The six-argument one is 1uv.5's, and it says nothing about the
+  evidence table, which is what a proposal staged before waymark-2m2
+  said. Each arity means *and nothing else moved*, which is true of
+  every proposal that predates the field it does not mention."
   ([current proposed current-formula proposed-formula]
    (diff-of current proposed current-formula proposed-formula nil nil))
   ([current proposed current-formula proposed-formula
     current-crown-rank proposed-crown-rank]
+   (diff-of current proposed current-formula proposed-formula
+            current-crown-rank proposed-crown-rank nil nil))
+  ([current proposed current-formula proposed-formula
+    current-crown-rank proposed-crown-rank current-evidence-lr
+    proposed-evidence-lr]
    (feed/recipe-diff {:order (as-recipe-order current)
                       :formula (as-formula current-formula)
-                      :crown-rank (as-crown-rank current-crown-rank)}
+                      :crown-rank (as-crown-rank current-crown-rank)
+                      :evidence-lr (as-evidence-lr current-evidence-lr)}
                      {:order (as-recipe-order proposed)
                       :formula (as-formula proposed-formula)
-                      :crown-rank (as-crown-rank proposed-crown-rank)})))
+                      :crown-rank (as-crown-rank proposed-crown-rank)
+                      :evidence-lr (as-evidence-lr proposed-evidence-lr)})))
 
 ;; ── addresses, read rather than guessed ─────────────────────────────
 
@@ -312,7 +347,7 @@
 ;; earning a warning nobody could ever clear.
 
 (g/defguard the-prepared-input-fits-the-door
-  {:judges [:label :order :formula :crown_rank]
+  {:judges [:label :order :formula :crown_rank :evidence_lr]
    :vars [:problems]
    :explain "That is not something feed_recipe's revise door would take, so nobody could ever apply it: {problems}"}
   [_row inp _ctx]
@@ -323,7 +358,9 @@
                                   (some? (:formula inp))
                                   (assoc :formula (:formula inp))
                                   (some? (:crown_rank inp))
-                                  (assoc :crown_rank (:crown_rank inp))))]
+                                  (assoc :crown_rank (:crown_rank inp))
+                                  (some? (:evidence_lr inp))
+                                  (assoc :evidence_lr (:evidence_lr inp))))]
     (t/deny {:vars {:problems (pr-str errs)}})
     (t/allow)))
 
@@ -342,7 +379,17 @@
                           (some? (:formula inp))
                           (assoc :formula (as-formula (:formula inp)))
                           (some? (:crown_rank inp))
-                          (assoc :crown-rank (as-crown-rank (:crown_rank inp)))))
+                          (assoc :crown-rank (as-crown-rank (:crown_rank inp)))
+                          ;; …and the evidence table (waymark-2m2):
+                          ;; check-recipe!'s eighth check judges a
+                          ;; ratio at 0 and a half-life at 0, and both
+                          ;; are numbers the published schema also
+                          ;; refuses — so this arm catches what reaches
+                          ;; the door another way, exactly as the crown's
+                          ;; does
+                          (some? (:evidence_lr inp))
+                          (assoc :evidence-lr
+                                 (as-evidence-lr (:evidence_lr inp)))))
     (t/allow)
     (catch clojure.lang.ExceptionInfo e
       (if (:waymark10/definition-error (ex-data e))
@@ -455,6 +502,19 @@
                        " Read recipe.crown_rank out of the feed document and"
                        " stage against that — applying would carry the old"
                        " numbers back in."))
+
+            ;; …and about the evidence table (waymark-2m2), for the
+            ;; same reason once more, and with the most at stake: these
+            ;; numbers say what the house thinks a fact somebody said
+            ;; is worth, and an apply that carried a stale table back
+            ;; in would regrade every belief the next reading computes.
+            (not (same-evidence-lr? (:current_evidence_lr inp)
+                                    (get-in row [:data :evidence_lr])))
+            (deny (str "/api/feed_recipes/" tid " weighs a fact somebody"
+                       " said differently today than this proposal says it"
+                       " does. Read recipe.evidence_lr out of the feed"
+                       " document and stage against that — applying would"
+                       " carry the old numbers back in."))
 
             :else (t/allow)))
         ;; NO TARGET: the proposal stages a CREATE against the order
@@ -573,6 +633,12 @@
             (deny (str "/api/feed_recipes/" tid " ranks its crown"
                        " differently now than it did when this was staged."))
 
+            (not (same-evidence-lr? (:current_evidence_lr d)
+                                    (get-in target [:data :evidence_lr])))
+            (deny (str "/api/feed_recipes/" tid " weighs a fact somebody"
+                       " said differently now than it did when this was"
+                       " staged."))
+
             :else (t/allow)))
         (let [held (when find'
                      (find' :feed_recipe {:scope "household" :state "active"}
@@ -602,7 +668,9 @@
         (assoc-in [:data :diff] (diff-of (:current_order d) (:order d)
                                          (:current_formula d) (:formula d)
                                          (:current_crown_rank d)
-                                         (:crown_rank d))))))
+                                         (:crown_rank d)
+                                         (:current_evidence_lr d)
+                                         (:evidence_lr d))))))
 
 (defhandler apply-the-order
   [row _inp ctx]
@@ -654,6 +722,21 @@
                    (get-in ((:read ctx) :feed_recipe tid)
                            [:data :insight_rank]))
         input (cond-> input (some? findings) (assoc :insight_rank findings))
+        ;; …and the EVIDENCE TABLE (waymark-2m2), which a proposal CAN
+        ;; name, so it rides the write the crown's own way: the numbers
+        ;; this proposal named, else the numbers it was staged against,
+        ;; else the target's own read now. The last arm matters most
+        ;; here: clearing a rank silently reorders a page, and the
+        ;; household sees a page it did not choose; clearing THIS
+        ;; silently regrades every belief the next reading computes —
+        ;; a house that had decided asked-for praise means nothing
+        ;; would be told, next Sunday, that it means something, by an
+        ;; apply about the order of the fuel section.
+        atoms (or (:evidence_lr d) (:current_evidence_lr d)
+                  (when (and tid (:read ctx))
+                    (get-in ((:read ctx) :feed_recipe tid)
+                            [:data :evidence_lr])))
+        input (cond-> input (some? atoms) (assoc :evidence_lr atoms))
         res (if tid
               ;; feed_recipe's :revise declares an :edit, and an edit
               ;; IMPLIES the fence (resource.clj: "an Edit implies the
@@ -852,6 +935,16 @@
     :x-display
     {:label "The crown's rank you propose in its place"
      :help "How the crown chooses which composed weeks fill its slots: what serving a value this house declared lifts a bundle, what each cooled step holds it, what each rank of the house's quick word about a line of thinking holds it, and what each day left on its week lifts it. A bundle answering a person's own request stands first whatever these say. Leave it out to leave the numbers exactly as they are; say what you read (feed_view rows, verdicts and their words) in the evidence."}}
+   ;; …and the evidence table (waymark-2m2), the crown's own pair one
+   ;; field over — and the one on this row that changes no page at all
+   :current_evidence_lr
+   {:x-display
+    {:label "What a fact is worth today"
+     :help "The table the house weighs a fact by today, copied out of the feed document at recipe.evidence_lr. Leave it out if you are not proposing to change it — but if the house has its own numbers and you leave it out, this is refused, for the same reason a stale order is: the diff a person taps under has to describe the world they are reading it in."}}
+   :evidence_lr
+   {:x-display
+    {:label "What a fact should be worth instead"
+     :help "What each kind of fact somebody said counts for, how many days each takes to be worth half what it was, and the two walls on the arithmetic. Nothing on the feed page reads any of it; the reading does, when it works out what moved this week. These are the numbers that decide what the house BELIEVES about the people in it, so say what you read in the evidence and expect to be read closely. Leave it out to leave them exactly as they are."}}
    :diff
    {:x-display
     {:label "What changes"
@@ -906,6 +999,11 @@
            [:maybe feed-recipe/crown-rank-schema])
     (entry :crown_rank {:optional true}
            [:maybe feed-recipe/crown-rank-schema])
+    ;; …and the evidence table, the same way (waymark-2m2)
+    (entry :current_evidence_lr {:optional true}
+           [:maybe feed-recipe/evidence-lr-schema])
+    (entry :evidence_lr {:optional true}
+           [:maybe feed-recipe/evidence-lr-schema])
     (entry :evidence {:optional true}
            [:maybe [:vector [:string {:min 1 :max 200}]]])
     ;; ENGINE-WRITTEN, all four. They are in the row schema because
@@ -933,6 +1031,10 @@
            [:maybe feed-recipe/crown-rank-schema])
     (entry :crown_rank {:optional true}
            [:maybe feed-recipe/crown-rank-schema])
+    (entry :current_evidence_lr {:optional true}
+           [:maybe feed-recipe/evidence-lr-schema])
+    (entry :evidence_lr {:optional true}
+           [:maybe feed-recipe/evidence-lr-schema])
     (entry :evidence {:optional true}
            [:maybe [:vector [:string {:min 1 :max 200}]]])]
    :filterable {:state #{:eq :in}}

@@ -62,7 +62,8 @@ prints:
   each, the hour in the household's zone with the UTC beside it, and
   any start before 06:00 or after 22:00 local flagged **ODD HOUR** —
   the open threads with a person turn still owed an answer, the last
-  five journals' notes, and **last** the published findings, newest
+  five journals' notes, **WHAT MOVED THIS WEEK**, and **last** the
+  published findings, newest
   first. Mechanical, from rows the house already holds. **The cap
   (`WAYMARK_BRIEF_LINES`, 80) trims the findings and nothing else**:
   everything above them is printed whole, and the findings that only
@@ -70,6 +71,53 @@ prints:
   sentence `verify` would call THIN — are folded into one line saying
   how many and why. **Read it before any order.** It is the story the
   rows tell; most of what a reading finds comes from it.
+- **WHAT MOVED THIS WEEK** sits inside that brief, just above the
+  findings (waymark-2m2), and it is the only section of it that is
+  ARITHMETIC rather than a list. When a clerk indexes a fact it may
+  type it — how the fact arrived, in one of nine words, plus what it
+  cost and which evening it was — and the reading turns those typed
+  facts into log-odds and prints the ten biggest movers:
+
+  ```
+  CLAIM-LESS MOVER: Iris  /api/people/iris moved +4.48 this week
+    (standing at +3.18) — atoms: thread/7fda11c6 2026-08-24 —
+    costly_action, unprompted_mention (2 facts, one occasion —
+    counted once and 50% again); thread/9c02af31 2026-05-02 —
+    declined_invite
+  ```
+
+  **What it is for, and what it is not.** The house stores NO belief
+  anywhere: this is recomputed from scratch on every reading, off
+  `scripts/movements.jq`, and nothing it produces is written back.
+  There is no hypothesis kind yet, so the thing that moves is the
+  ABOUT-ROW — the person, the value, the thread a fact cites — which
+  is why it says CLAIM-LESS. **The claim is yours.** The number tells
+  you where to look; saying what it MEANS, in a sentence, with the
+  atoms cited, is the reading's own work and the only place a claim
+  may be made at all.
+
+  Three rules, and `docs/spec-hypotheses.md` is the design record for
+  all of them. **One:** each fact contributes `ln(likelihood ratio)`,
+  cost-graded where somebody spent something, discounted where the
+  house ASKED, and the sum is clamped — no pile of facts becomes
+  certainty. **Two:** one occasion contributes its strongest fact,
+  half again if it carried more than one, because enthusiasm in a
+  single conversation is warmth and not four observations. **Three:**
+  every contribution decays by `2^(−age ÷ half-life)`, per type, so a
+  row nothing has fed for two years does not reverse — it forgets.
+  *Moved this week* is that fold run twice, today and with the clock
+  set back seven days; so a row moves when a new fact lands **and**
+  when an old one fades, and both are real news.
+
+  The numbers are the household's, on the feed document at
+  `recipe.evidence_lr`, narrated at `recipe.evidence_lr_says`, and
+  editable in the recipe's own form or through a `recipe_proposal` a
+  person taps. A finding the house DISMISSED is left out — the house
+  said the claim was wrong, and an atom on a rejected claim is not
+  evidence. **If nothing is typed, the section says so and stops**,
+  which is where every house starts. The working — every atom, every
+  fold, and which document the table came from — is in the manifest at
+  `movements`.
 - **Every order is labeled** `CLERK` or `EDITOR`, and a reading owns
   both. The rule: an order is *editor* when its expected write is an
   outcome, an unmarked rework, an answer to a person's question, an
