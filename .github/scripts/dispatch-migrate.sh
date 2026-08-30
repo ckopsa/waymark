@@ -99,20 +99,42 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   } >> "$GITHUB_STEP_SUMMARY"
 fi
 
-if printf '%s' "$logs" | grep -q 'empty plan\.'; then
-  empty=true
-elif printf '%s' "$logs" | grep -qE '[0-9]+ migration step\(s\):'; then
-  empty=false
-else
-  echo "migrate named neither an empty plan nor a step list — this is a failure, not a gate."
-  exit 1
-fi
+# THE EXIT CODE IS THE JUDGMENT (2026-08-30, second half of the log-race
+# fix): migrate! exits 0 on an empty plan and 1 while steps remain, by
+# its own docstring, and the task's exit code rides the ALLOC RECORD on
+# the server — which survives the client's log GC. The logs above are
+# for people; the code below is for the gate. A poll loop cannot win
+# the race (the CI specimen: 40s of "task not started yet" during the
+# image pull, then death and GC inside one 2-second gap).
+exit_code="$(nomad job allocs -json "$id" \
+  | jq -r '[.[]] | sort_by(.CreateTime) | last
+           | [.TaskStates.migrate.Events[]? | select(.Type == "Terminated")
+              | (.Details.exit_code // .ExitCode // empty)]
+           | last // empty')"
+echo "migrate task exit code: ${exit_code:-unknown}"
+
+case "${exit_code:-}" in
+  0) empty=true ;;
+  1) empty=false ;;
+  *)
+    # No terminated event on the record — fall back to the log text,
+    # then give up loudly.
+    if printf '%s' "$logs" | grep -q 'empty plan\.'; then
+      empty=true
+    elif printf '%s' "$logs" | grep -qE '[0-9]+ migration step\(s\):'; then
+      empty=false
+    else
+      echo "no exit code on the alloc record and the logs named neither an empty plan nor a step list — this is a failure, not a gate."
+      exit 1
+    fi
+    ;;
+esac
 
 if [ "$MODE" = "apply" ]; then
   # migrate! exits 0 only once every step is applied; a skipped
   # destructive step keeps it at 1, and Nomad renders that as failed.
-  if [ "$status" != "complete" ]; then
-    echo "the apply did not complete (status: ${status})."
+  if [ "${exit_code:-}" != "0" ] && [ "$status" != "complete" ]; then
+    echo "the apply did not complete (status: ${status}, exit code: ${exit_code:-unknown})."
     echo "if migrate skipped destructive steps, they are a person's job:"
     echo "  nomad alloc exec -task postgres <alloc> psql -U workqueue -d workqueue10 -c '...'"
     exit 1
