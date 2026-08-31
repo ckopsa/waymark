@@ -26,7 +26,8 @@ editor's judgment as a clerk's form. So the runs are two:
 | a rework | MARKED pieces, and a clock time in the note (the suggested re-time) | UNMARKED, the note read against the pieces |
 | an outcome | never composes; a form that would need one is the editor's | composes only where a goal is larger than any row |
 | extras | none — the orders are the ceiling | **one** cited, distinct finding of its own, or none |
-| contradictions | none | the four 63s shapes, two of them mechanical orders |
+| contradictions | none | the two mechanical 63s orders, and the brief's **GAPS** — an intent belief against a pattern belief about the same rows |
+| beliefs | never sees one | writes them, reads what moved, reads the **GAPS**, and composes the smallest real trial for an **EXPERIMENT** |
 | review | none | the sittings since the last reading: their grade lines, the bundles they left unscored, the thin rows |
 | leaves | a journal | a journal ending in **`notes_for_sittings`** — forms the next sittings work from — **and one LETTER carrying that block to the sitting principal** |
 
@@ -62,7 +63,8 @@ prints:
   each, the hour in the household's zone with the UTC beside it, and
   any start before 06:00 or after 22:00 local flagged **ODD HOUR** —
   the open threads with a person turn still owed an answer, the last
-  five journals' notes, **WHAT MOVED THIS WEEK**, and **last** the
+  five journals' notes, **WHAT MOVED THIS WEEK**, **GAPS**,
+  **EXPERIMENTS**, and **last** the
   published findings, newest
   first. Mechanical, from rows the house already holds. **The cap
   (`WAYMARK_BRIEF_LINES`, 80) trims the findings and nothing else**:
@@ -164,6 +166,75 @@ prints:
   (`not-a-second-belief`) and the refusal names the row to reword: two
   beliefs about one thing split their evidence and neither moves.
   Reword the standing one with `restate` instead.
+
+  **CITE THE ROW YOU OFFERED ON** (waymark-dl1, 2026-08-31). The join
+  reads a finding's `evidence` and nothing else — `offer_href` does
+  not feed a belief, because an offer is what a finding PROPOSES and
+  evidence is what it READ. Put the value's, the person's, the
+  thread's address in `evidence` whenever you actually read it, even
+  where you also offer on it. `SITTING.md` § 1 carries the same line;
+  the ruling is in `docs/spec-hypotheses.md` § *Built — slice 3*.
+- **GAPS — where what this house SAYS and what it DOES disagree**
+  (waymark-4t9). Inside the brief, under the movements. An `intent`
+  belief against a `pattern` belief about the same rows, more than
+  `test_band` apart in log-odds, widest first, **each side naming its
+  atoms**:
+
+  ```
+  ABOUT /api/people/01H… — 2.45 apart, and the two STRADDLE even odds:
+    the record says he means to and says he does not, at the same time
+    SAYS (intent, observed) "…" at 61% (+0.45 log-odds) off 4 fact(s)
+        atoms: 2026-08-24 unprompted_mention ×8; 2026-08-19 declined_invite ×0.2
+    DOES (pattern, affirmed) "…" at 12% (−2.0 log-odds) off 3 fact(s)
+        atoms: 2026-08-01 costly_action ×20
+  ```
+
+  **What to do with one.** If the distance is real it is itself a
+  claim: write it down as a `gap` hypothesis citing the same rows. If
+  one side is simply wrong, `restate` it where it is yours, or offer
+  the owner the tap on it. **Both sides always have atoms** — a belief
+  nothing has fed has not disagreed with anything, and a house arguing
+  with its own untested guess is reading itself, not a gap.
+
+  **THIS IS WHERE waymark-63s's LAST TWO CONTRADICTION SHAPES WENT.**
+  A contradiction between rows *is* a gap between what was said and
+  what was done, so the two shapes that stayed prose duties — a day the
+  record calls booked with no event on it, two task details that cancel
+  each other — are answered by writing the two claims down as beliefs
+  and letting one query find the distance. The two mechanical orders
+  (`stale-relative-date`, `far-event-names-a-task`) stay as they are.
+- **EXPERIMENTS — the beliefs a cheap test would settle** (waymark-4t9),
+  under the gaps, and this is the one thing a belief is FOR: *a
+  hypothesis is a proposal for an experiment, never a verdict.* Every
+  standing belief within `test_band` of even odds, ranked by how much
+  one trial would tell you, each with the word that put it there:
+
+  - **CONTESTED** — the facts argue with each other. The strongest
+    candidate there is: one trial decides something.
+  - **THIN** — almost nothing has fed it, so any fact at all is news.
+    A belief with *no* atoms belongs here and nowhere else: it may
+    propose an experiment and it may never appear in a gap or lift a
+    crown card.
+  - **BALANCED** — real evidence that agrees on the middle. The least
+    urgent of the three, and still a fair question.
+  - **UNMEASURED** — the row was folded before the engine started
+    keeping the weight. Not a judgment about the belief.
+
+  **Compose the SMALLEST REAL TRIAL.** `POST /api/outcomes` naming the
+  belief in **`tests`** — never in `evidence`, and the door refuses an
+  address in both. `evidence` is what the bundle was built from;
+  `tests` is what it would find out. Keep it small: the point is to
+  find out, not to convince, and a bundle claiming to settle three
+  questions settles none.
+
+  **A DECLINE IS THE ANSWER, and it has to reach the fold.** When the
+  household turns down a bundle that carried `tests`, that decline is
+  the most informative thing the experiment could produce. The
+  diagnosis you write before recomposing must **cite the belief's own
+  address in `evidence`** and carry `evidence_type: "declined_invite"`
+  — the recompose door refuses without it, and names the belief it is
+  asking about. A decline that ends in prose is a fact the rank cannot
+  read.
 - **Every order is labeled** `CLERK` or `EDITOR`, and a reading owns
   both. The rule: an order is *editor* when its expected write is an
   outcome, an unmarked rework, an answer to a person's question, an
@@ -242,14 +313,26 @@ pasting `scripts/sitting-run.sh verify`.
 6. **Contradictions between rows** (waymark-63s). Two are mechanical
    orders on the manifest: `stale-relative-date` (a task overdue whose
    detail still says "Monday") and `far-event-names-a-task` (an event
-   10–45 days out whose words match an open task's purpose). Two are
-   yours to read from the brief: a day an insight or remark calls
-   *booked* with no event on it, and two task details that cancel each
-   other. A held block never lands on a day the record calls booked.
+   10–45 days out whose words match an open task's purpose). The other
+   two — a day an insight or remark calls *booked* with no event on it,
+   and two task details that cancel each other — are read from the
+   brief's **GAPS** section now (waymark-4t9): write the two sides down
+   as an `intent` and a `pattern` belief and the query finds the
+   distance, instead of somebody having to think of each shape in
+   advance. A held block never lands on a day the record calls booked.
 7. **Diagnoses only for priors being recomposed** (waymark-me9), as in
    a sitting: the manifest's *Declines OWED a diagnosis* list, one
-   each, never twice, never the manifest line copied out.
-8. **REVIEW the sittings since the last reading.** Read their grade
+   each, never twice, never the manifest line copied out. **A prior
+   that carried `tests` is a diagnosis with a belief in it**
+   (waymark-4t9): cite the hypothesis's address in `evidence` and type
+   the finding `declined_invite`, so the decline reaches the fold. The
+   recompose door refuses a diagnosis that forgot the question it was
+   staged to answer.
+8. **EXPERIMENTS** (waymark-4t9). The brief's experiments section is a
+   list of questions, not orders — answering one is composing the
+   smallest real trial and naming the belief in the outcome's `tests`
+   field. It spends the compose step, never the ONE extra.
+9. **REVIEW the sittings since the last reading.** Read their grade
    lines under REVIEW: an `UNANSWERED` order beside a silent journal, a
    `THIN` finding, a `TWIN`, a `CLAIMED, NOT STAGED`, an `ODD HOUR`.
    Then: **score** every standing bundle you did not write
@@ -288,7 +371,7 @@ pasting `scripts/sitting-run.sh verify`.
    Four eyes hold whatever the grant says: a row this principal wrote
    is never yours to dismiss, whichever run wrote it — say so in the
    journal and leave it for the owner.
-9. **Notes for the next sittings.** End the journal with a
+10. **Notes for the next sittings.** End the journal with a
    `notes_for_sittings` block, one form per line:
 
    ```
@@ -301,7 +384,7 @@ pasting `scripts/sitting-run.sh verify`.
    sentence. A reading that leaves no notes says so on purpose;
    `verify` prints `NOTES FOR SITTINGS: none`.
 
-10. **Mail the block** (waymark-bbb). The journal is private to this
+11. **Mail the block** (waymark-bbb). The journal is private to this
     principal; the sittings are not. So send the same lines as one
     letter — the driver prints the address it is expecting:
 

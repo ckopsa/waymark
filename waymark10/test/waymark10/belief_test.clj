@@ -376,3 +376,172 @@
         (is (= 2 (:atom_count b)))
         (is (close? (+ (belief/logit 0.1M) 2.079442 1.098612)
                     (:posterior_log_odds b) 1e-4))))))
+
+;; ── SLICE 3: WHAT THE POSTERIOR CANNOT SAY (waymark-4t9) ────────────
+
+(deftest the-mass-of-the-evidence-and-how-much-of-it-cancels
+  (testing "the fixture's own mass, from the same five occasions rule 2 left
+            — the ns docstring's numbers with the sign taken off"
+    ;; 2.972749 + 3.047921 + 1.281461 + 0.218328 + 1.048999 = 8.569458
+    (let [cs (belief/contributions table atoms now)]
+      (is (= 5 (count cs)) "five occasions, exactly as rule 2 folded them")
+      (is (close? 8.569458 (belief/evidence-weight cs) 1e-4))
+      (is (close? 6.006536 (reduce + (map :w cs)) 1e-4)
+          "and the SUM is still the fold — the mass is a second reading of
+           the same working, never a second working")
+      (is (close? (- 8.569458 6.006536) (belief/contested cs) 1e-4)
+          "what cancels is the mass less the net, which here is twice the
+           declined invitation")))
+
+  (testing "evidence that all points one way cancels nothing"
+    (let [agreeing [{:href "/api/insights/1" :evidence_type "question_asked"
+                     :episode "e1" :at now}
+                    {:href "/api/insights/2" :evidence_type "specific_detail"
+                     :episode "e2" :at now}]
+          cs (belief/contributions table agreeing now)]
+      (is (close? 0.0 (belief/contested cs) 1e-9))
+      (is (close? (belief/evidence-weight cs) (reduce + (map :w cs)) 1e-9))))
+
+  (testing "…and evidence that exactly cancels leaves a belief at its prior
+            with a great deal of weight under it — the case the posterior
+            alone cannot tell from silence"
+    (let [fighting [{:href "/api/insights/1" :evidence_type "costly_action"
+                     :cost "low" :episode "e1" :at now}
+                    {:href "/api/insights/2" :evidence_type "declined_invite"
+                     :episode "e2" :at now}]
+          cs (belief/contributions table fighting now)]
+      (is (close? 0.0 (reduce + (map :w cs)) 1e-6)
+          "ln 5 and ln 0.2 are equal and opposite")
+      (is (close? (* 2 1.609438) (belief/evidence-weight cs) 1e-5))
+      (is (close? (* 2 1.609438) (belief/contested cs) 1e-5))))
+
+  (testing "the two numbers are cached on the row beside the posterior, so
+            nothing downstream has to refold to ask the question"
+    (let [b (belief/belief table 0.1M atoms now)]
+      (is (close? 8.5695 (:evidence_weight b) 1e-3))
+      (is (close? 2.5629 (:evidence_contested b) 1e-3))
+      (is (contains? (belief/cached b) :evidence_weight))
+      (is (contains? (belief/cached b) :evidence_contested)))))
+
+(defn- hyp
+  "A hypothesis ROW in the shape the store holds one, for the two
+  section readers below. They fold nothing: every number here is one
+  the pass would already have cached."
+  [id shape state about lo p n & [weight contested]]
+  {:id id :state state
+   :data (cond-> {:claim (str "claim " id) :shape shape :about about
+                  :posterior (bigdec p) :posterior_log_odds (bigdec lo)
+                  :atom_count n}
+           weight (assoc :evidence_weight (bigdec weight))
+           contested (assoc :evidence_contested (bigdec contested)))})
+
+(deftest an-experiment-is-a-belief-near-even-odds-and-the-reason-it-is-there
+  (let [near-band {:test_band 1.1 :thin_evidence 1.5}
+        settled (hyp "S" "interest" :observed ["/api/people/p"] 6.0 0.9975 40
+                     14.0 0.2)
+        contested (hyp "C" "interest" :observed ["/api/people/p"] 0.1 0.52 6
+                       5.2 3.1)
+        thin (hyp "T" "intent" :observed ["/api/values/v"] -0.85 0.30 0
+                  0.0 0.0)
+        balanced (hyp "B" "pattern" :observed ["/api/people/q"] 0.2 0.55 4
+                      3.0 0.1)
+        answered (hyp "A" "interest" :dismissed ["/api/people/r"] 0.0 0.5 3
+                      2.0 1.9)]
+    (testing "THE CLAMP IS WHAT MAKES THE GATE REAL. On 2026-08-31 seven of
+              this house's fourteen beliefs stood AT ±6 — the atoms having
+              already answered — and not one of them is a question"
+      (is (nil? (belief/experiment near-band settled))))
+
+    (testing "a belief the facts argue about is the strongest candidate there
+              is: one trial decides something"
+      (let [e (belief/experiment near-band contested)]
+        (is (= "contested" (:why e)))
+        (is (close? (+ (- 1.1 0.1) 3.1 0.0) (:score e) 1e-6))))
+
+    (testing "a belief nothing has fed is a candidate TOO, and for the
+              opposite reason — the dl1 ruling's own asymmetry: it may
+              propose an experiment where it may never lift a card"
+      (let [e (belief/experiment near-band thin)]
+        (is (= "thin" (:why e)))
+        (is (zero? (:atom_count e)))
+        (is (close? (+ (- 1.1 0.85) 0.0 1.5) (:score e) 1e-6))))
+
+    (testing "…and a belief with real evidence that agrees on the middle is
+              the least urgent of the three and still a fair question"
+      (is (= "balanced" (:why (belief/experiment near-band balanced)))))
+
+    (testing "a belief the house ANSWERED is never a candidate: staging a
+              Saturday to settle a question somebody closed is the machine
+              arguing with a person"
+      (is (nil? (belief/experiment near-band answered))))
+
+    (testing "the order is the score, and it is a pure function of the rows"
+      (is (= ["/api/hypotheses/C" "/api/hypotheses/T" "/api/hypotheses/B"]
+             (mapv :href (belief/experiments
+                          near-band [balanced settled thin contested
+                                     answered])))))
+
+    (testing "the band is the household's, off its own recipe row"
+      (is (nil? (belief/experiment {:test_band 0.05} contested))
+          "a narrower band asks about fewer beliefs")
+      (is (some? (belief/experiment {:test_band 8} settled))
+          "…and a wider one asks about beliefs the atoms have settled,
+           which is the household's own mistake to make and to unmake"))))
+
+(deftest a-gap-is-an-intent-against-a-pattern-and-both-sides-must-have-atoms
+  (let [tbl {:test_band 1.1}
+        means-to (hyp "I" "intent" :observed ["/api/people/p" "/api/values/v"]
+                      0.45 0.61 4 3.2 2.1)
+        does-not (hyp "P" "pattern" :affirmed ["/api/people/p"] -2.0 0.12 3
+                      2.4 0.0)
+        agrees (hyp "P2" "pattern" :observed ["/api/people/p"] 0.5 0.62 2
+                    2.0 0.0)
+        unfed (hyp "P3" "pattern" :observed ["/api/people/p"] -3.0 0.05 0
+                   0.0 0.0)
+        elsewhere (hyp "P4" "pattern" :observed ["/api/people/z"] -3.0 0.05 5
+                       4.0 0.0)
+        interest (hyp "N" "interest" :observed ["/api/people/p"] -3.0 0.05 5
+                      4.0 0.0)]
+    (testing "the distance between what the record says he MEANS and what it
+              says he DOES, about the same row"
+      (let [g (belief/gap tbl (belief/row-belief means-to)
+                          (belief/row-belief does-not))]
+        (is (= ["/api/people/p"] (:shared g)))
+        (is (close? 2.45 (:distance g) 1e-6))
+        (is (true? (:straddles g))
+            "one above even odds and one below: the record is saying he
+             means to and he does not, at the same time")
+        (is (= "/api/hypotheses/I" (get-in g [:intent :href])))
+        (is (seq (get-in g [:pattern :claim]))
+            "and both sides come back whole, because the section's whole ask
+             is that each one names its atoms")))
+
+    (testing "the argument runs either way round the arguments"
+      (is (some? (belief/gap tbl (belief/row-belief does-not)
+                             (belief/row-belief means-to)))))
+
+    (testing "two beliefs that AGREE are not a gap, however much they overlap"
+      (is (nil? (belief/gap tbl (belief/row-belief means-to)
+                            (belief/row-belief agrees)))))
+
+    (testing "A BELIEF NOTHING HAS FED HAS NOT DISAGREED WITH ANYTHING — the
+              dl1 ruling of 2026-08-31. A house arguing with its own untested
+              guess is not reading a gap, it is reading itself"
+      (is (nil? (belief/gap tbl (belief/row-belief means-to)
+                            (belief/row-belief unfed)))))
+
+    (testing "…nor is a disagreement about different rows a gap, and the
+              comparison is by ADDRESS and never by sentence"
+      (is (nil? (belief/gap tbl (belief/row-belief means-to)
+                            (belief/row-belief elsewhere)))))
+
+    (testing "…and no other pairing of shapes is one: an intent against an
+              interest is two claims, not a distance between saying and doing"
+      (is (nil? (belief/gap tbl (belief/row-belief means-to)
+                            (belief/row-belief interest)))))
+
+    (testing "every pair is considered once, widest first"
+      (let [gs (belief/gaps tbl [means-to does-not agrees unfed elsewhere
+                                 interest])]
+        (is (= 1 (count gs)))
+        (is (= "/api/hypotheses/P" (get-in (first gs) [:pattern :href])))))))
