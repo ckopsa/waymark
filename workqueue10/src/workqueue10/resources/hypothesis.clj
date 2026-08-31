@@ -750,11 +750,23 @@
    ;; asks for the beliefs that have been noticed and not yet answered.
    :filterable {:state #{:eq :in}}
    :sortable {:fields [:created_at] :default "-created_at"}
-   ;; the observer reads and corrects its own rows with no grant — a
-   ;; reading that could not see what it noticed would notice it again
-   ;; tomorrow. It may not ANSWER them; that wall is the own-field arm
-   ;; of `the-answer-is-a-persons`, and no courtesy touches it.
-   :own-surface {:by :observed_by :actions #{:restate}}
+   ;; THE COURTESY, AND IT IS WHAT MAKES A READING'S WORK POSSIBLE AT
+   ;; ALL. Since waymark-rci an agent presenting no grant is scoped to
+   ;; nothing, so the doors it may KNOCK ON are exactly its own
+   ;; surface's — and `:actions` is that list. `create` and `restate`,
+   ;; the two doors that are a reading's own: writing down what it
+   ;; noticed, and correcting it while it is still a guess. The
+   ;; `:decision` sugar spells the same pair one kind over
+   ;; (`{:actions (into #{"create"} verdict-names)}`), and this kind is
+   ;; hand-written, so it says it by hand.
+   ;;
+   ;; ANSWERING IS NOT ON IT, deliberately: `still_stands`, `revise`,
+   ;; `dismiss` and `retire` are behind `the-answer-is-a-persons`, and
+   ;; the courtesy only decides which doors are visible enough to knock
+   ;; on — the guards judge every invoke regardless. Leaving them off
+   ;; means an ungranted agent meets a mute 404 rather than a narrated
+   ;; refusal at a door it was never going to pass.
+   :own-surface {:by :observed_by :actions #{:create :restate}}
    ;; SHAPE FIRST, WORLD NEXT — `insight`'s ordering and its reason. A
    ;; malformed belief hears what is wrong with it before it hears
    ;; anything about the house it is landing in, and only the last

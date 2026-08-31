@@ -6424,17 +6424,36 @@
                 (nil? (get-in after [:data :last_moved]))
                 (conj (str "feed: the belief moved and says nothing about"
                            " when the fact behind it was said")))
-            itself (invoke-http ctx :hypothesis id :still_stands nil
-                                {:headers hs})
+            ;; FOUR EYES, AND THE LEASH IS WHAT MAKES IT A CLAIM. An
+            ;; unleashed agent is already answered 404 by the router's
+            ;; default deny, which proves nothing about any wall — so
+            ;; the reading that wrote this row is handed a grant NAMING
+            ;; `hypothesis.still_stands` and knocks with it. The wall
+            ;; refuses anyway, because it wrote the row, and that is
+            ;; the arm no grant opens.
+            leashed (leash! ctx who [{:kind "hypothesis"
+                                      :actions ["still_stands"]}])
+            itself (when leashed
+                     (invoke-http ctx :hypothesis id :still_stands nil
+                                  {:headers leashed}))
             v (cond-> v
-                (not= 409 (:status itself))
+                (nil? leashed)
+                (conj (str "feed: could not leash the reading over"
+                           " hypothesis.still_stands — the four-eyes claim"
+                           " below is only a claim when the agent making"
+                           " it holds a grant that names the door"))
+
+                (and leashed (not= 409 (:status itself)))
                 (conj (str "feed: the reading that noticed a belief"
                            " answered it (" (:status itself)
-                           ") — the run that read the evidence is never"
-                           " the run that says what it means"))
+                           ") under a grant that names the door — the run"
+                           " that read the evidence is never the run that"
+                           " says what it means, and no grant opens that"
+                           " arm"))
 
-                (not= "the-answer-is-a-persons"
-                      (str (:guard (json ctx itself))))
+                (and leashed
+                     (not= "the-answer-is-a-persons"
+                           (str (:guard (json ctx itself)))))
                 (conj (str "feed: the four-eyes refusal named "
                            (pr-str (str (:guard (json ctx itself))))
                            " rather than the wall it is")))

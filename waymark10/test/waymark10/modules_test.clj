@@ -293,9 +293,14 @@
             :jobs-worker :jobs-orphan-sweeper
             :curtain :presence :intents
             :discovery
-            ;; the feed module's one surface (waymark-1uv.9): the sweep
-            ;; over the dropped pile, gated on a tickler kind being served
-            :tickler-sweeper]
+            ;; the feed module's two surfaces. :tickler-sweeper
+            ;; (waymark-1uv.9) sweeps the dropped pile, gated on a
+            ;; tickler kind being served; :belief-sweeper (waymark-bug)
+            ;; refolds every hypothesis's posterior nightly, gated on a
+            ;; hypothesis kind being served. Both are :elected — one
+            ;; holder per storage — and both start LAST because they are
+            ;; the module's own and nothing waits on them.
+            :tickler-sweeper :belief-sweeper]
            (hook-order nil))))
   (testing "and no runtime key twice — a key names one surface"
     (let [ks (hook-order nil)]
