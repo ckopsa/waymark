@@ -5390,7 +5390,15 @@
          " what was cheap and prompted goes stale fastest, and a record that"
          " forgets is honest about a person who has changed. Nothing may move"
          " further than " (n :log_odds_clamp) " either way, so no pile of"
-         " facts becomes certainty. Nothing here ranks a card, nothing here"
+         " facts becomes certainty. Then the reading asks two questions of"
+         " what it has: a belief standing within " (n :test_band)
+         " of even odds is one a cheap test would settle, and two beliefs"
+         " about the same rows that far apart are a GAP between what this"
+         " house says and what it does; and a belief with less than "
+         (n :thin_evidence) " of evidence behind it, added up with the sign"
+         " taken off, is called THIN — so *nothing has fed this* and *the"
+         " facts disagree* are two different sentences and never one."
+         " Nothing here ranks a card, nothing here"
          " acts, and nothing here is a wall: an untyped fact is a lawful fact"
          " and it weighs 1.")))
 

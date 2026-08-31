@@ -1854,8 +1854,14 @@
   (testing "the table rides the wire as data and as a sentence"
     (let [recipe (:recipe (:doc (feed! (boot-house))))
           lr (:evidence_lr recipe)]
-      (is (= 22 (count lr))
-          "ten ratios, a discount, nine half-lives and two walls")
+      (is (= 24 (count lr))
+          "ten ratios, a discount, nine half-lives, two walls, and the two
+           the reading asks its questions with (waymark-4t9)")
+      (is (= 1.1 (double (:test_band lr)))
+          "how near even odds a belief has to stand before a reading calls
+           it worth testing — and how far apart two of them are a gap")
+      (is (= 1.5 (double (:thin_evidence lr)))
+          "…and how little evidence counts as none")
       (is (= 20 (long (:costly_action_high lr))))
       (is (= 5 (long (:costly_action_low lr)))
           "the one cost-graded type carries two numbers, not one")
@@ -1885,7 +1891,7 @@
                (feed/evidence-lr-of {:evidence-lr {:unprompted_mention 12}}))))
     (is (= 540 (:half_life_costly_action
                 (feed/evidence-lr-of {:evidence-lr {:unprompted_mention 12}})))
-        "naming one number does not clear the other twenty-one"))
+        "naming one number does not clear the other twenty-three"))
 
   (testing "the bounds are the arithmetic's, and each refuses by name"
     (let [says (fn [t] (str (try (feed/check-recipe!
