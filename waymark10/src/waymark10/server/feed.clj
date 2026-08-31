@@ -169,6 +169,7 @@
   contribution table being closed at four on purpose — so the feed is
   found by a client knowing it exists, exactly as the MCP door is."
   (:require [clojure.string :as str]
+            [waymark10.belief :as belief]
             [waymark10.demand :as demand]
             [waymark10.server.collections :as coll]
             [waymark10.server.history :as history]
@@ -480,8 +481,14 @@
   own request, because that is law 6 read at the crown.
 
   `:declared` — what serving a value a PERSON declared lifts a bundle
-  over one serving a value an agent only observed (waymark-jfv.10's
-  `observed` state, read off `value-standing`).
+  over one serving a value nobody has affirmed (waymark-jfv.10's
+  `observed` state, read off `value-standing`). Since waymark-4t9 the
+  unaffirmed case is GRADED rather than flat: a bundle serving a value
+  the house has an intent hypothesis about, with atoms under it, is
+  lifted `⌊this × the posterior⌋` (`value-lift`). The tier survives
+  arithmetically — the clamp keeps every posterior under 1 and the
+  lift is floored, so a person's declared word always outranks a
+  number, and a belief nobody has fed lifts nothing at all.
 
   `:cooled` — what each step the contest's own arithmetic says a bundle
   has cooled holds it back. The step is `cooling-step` over the same
@@ -638,19 +645,50 @@
     (let [x (* (double weight) (- (* 2.0 (double score)) 1.0))]
       (long (* (Math/signum x) (Math/round (Math/abs x)))))))
 
+(defn value-lift
+  "THE FIRST TERM OF THE CROWN'S ARITHMETIC, and since waymark-4t9 it
+  has two arms rather than one:
+
+      declared × 1                      the value is a person's word
+      ⌊declared × posterior⌋            it is not, and the record has
+                                        a belief about it with atoms
+      0                                 neither
+
+  THE TIER HOLDS ARITHMETICALLY. `log_odds_clamp` keeps every
+  posterior strictly under 1, and the floor takes the rest, so the
+  graded arm is at most `weight − 1` and a value a person declared
+  always outranks a value the record merely supports. That is the
+  spec's *`declared` stays a TIER* made structural rather than
+  promised: there is no `if` here anybody could edit out and no number
+  a household can write on its recipe row that inverts it.
+
+  A BELIEF NOBODY HAS FED READS AS THE THIRD ARM. `value-beliefs`
+  admits only hypotheses with atoms under them (the dl1 ruling), so a
+  bundle serving a value whose intent hypothesis stands at the prior
+  somebody typed is lifted by nothing at all — exactly as it was
+  before this slice. A number born of no evidence must not read as
+  evidence."
+  ^long [^long weight believed]
+  (let [p (double (or (:posterior believed) 0))]
+    (if (and believed (pos? p))
+      (long (Math/floor (* (double weight) p)))
+      0)))
+
 (defn crown-lift
   "THE CROWN'S ARITHMETIC, and this is the whole of it:
 
       lift = declared × [the value is declared]
+                      (or × the posterior of its intent hypothesis)
            − cooled   × steps cooled
            − declined × weight of the strongest word on the chain
            + fresh    × days left on the week
            − early    × days before the house said it would hear it
            + judged   × (2 × the agent's score − 1)
 
-  over one bundle's inputs — `{:value :declared|:observed, :cooled n,
-  :declined word-or-nil, :days-left n, :early n, :judged {:score s
-  :by who :says sentence}}` — and the recipe's six numbers. Higher
+  over one bundle's inputs — `{:value :declared|:observed, :believed
+  {:posterior p …}, :cooled n, :declined word-or-nil, :days-left n,
+  :early n, :judged {:score s :by who :says sentence}}` — and the
+  recipe's six numbers. Higher
   stands higher. It is only ever a SORT KEY: the crown still shows
   exactly as many bundles as its `:take` says whenever that many
   exist, and there is no arithmetic here that can drop one — a
@@ -664,9 +702,11 @@
   `:asked` is not in it, on purpose: a bundle that answers a person's
   own request is a tier above every uncited one (`crown-key`), and no
   weight a household writes moves it down."
-  ^long [weights {:keys [value cooled declined days-left early judged]}]
+  ^long [weights {:keys [value believed cooled declined days-left early judged]}]
   (let [w (fn ^long [k] (long (get weights k 0)))]
-    (+ (if (= :declared value) (w :declared) 0)
+    (+ (if (= :declared value)
+         (w :declared)
+         (value-lift (w :declared) believed))
        (- (* (w :cooled) (long (or cooled 0))))
        (- (* (w :declined) (reason-weight declined)))
        (* (w :fresh) (long (or days-left 0)))
@@ -2616,6 +2656,102 @@
       (when-some [raw (load-raw ctx :value vid)]
         (#{:declared :observed} (keyword (name (:state raw))))))))
 
+;; ── THE CROWN READS A POSTERIOR (waymark-4t9, slice 3) ──────────────
+;;
+;; docs/spec-hypotheses.md § 'What merges', last row: *the crown's
+;; `:declared` weight reads the POSTERIOR of the value's intent
+;; hypothesis for the observed case; `declared` stays a TIER.*
+;;
+;; What that replaces is the flat treatment of every unaffirmed value
+;; as equally uncertain. Before this, a bundle serving a value nobody
+;; had put their name to got zero of the `:declared` weight whether the
+;; record supported the value overwhelmingly or not at all. Now it gets
+;; the weight SCALED BY WHAT THE RECORD SAYS — and never all of it.
+;;
+;; THE TIER HOLDS BY CONSTRUCTION AND NOT BY AN `if`. `log_odds_clamp`
+;; keeps every posterior strictly under 1 (6 log-odds is 99.75%), and
+;; the graded arm FLOORS `weight × posterior`, so an unaffirmed value
+;; can never reach the number a declared value gets. A person's word
+;; outranks a number, always — `crown-key`'s own rule about *asked
+;; for*, read one input over — and here it outranks it arithmetically
+;; rather than by a special case somebody could edit out.
+;;
+;; A POSTERIOR BORN FROM ZERO ATOMS LIFTS NOTHING. THE dl1 RULING
+;; (2026-08-31, docs/spec-hypotheses.md § 'Built — slice 3'): the
+;; belief join reads a finding's `evidence` and not its `offer_href`,
+;; because an offer is what a finding PROPOSES and evidence is what it
+;; READ, and a run that could feed a belief by choosing where to point
+;; an offer is the extraction-blind rule broken from the other end. The
+;; honest consequence is that a house whose findings offered on values
+;; without citing them has intent hypotheses standing at their priors
+;; with nothing under them — and those must not lift a card. So
+;; `value-beliefs` admits only beliefs with atoms, and a belief nobody
+;; has fed reads here exactly as it did before this slice: nothing.
+
+(def value-belief-scan-cap
+  "How many intent hypotheses one crown read walks. A household that
+  holds more than this many beliefs about what it means to do has
+  stopped believing and started collecting — `server.belief`'s own
+  sentence at its own cap, and the same posture: a bound on the READ,
+  never on any write."
+  400)
+
+(defn value-beliefs
+  "Every value's INTENT hypothesis, keyed by the value's own address —
+  `{\"/api/values/01H…\" {:posterior p :atoms n :href … :claim …}}`.
+
+  One read for the whole crown rather than one per bundle: the caller
+  computes this once and hands it down under `:value-beliefs`, the way
+  `:cooling` is handed to the sort. A caller that does not (the
+  composer's diagnosis, reading one bundle) gets the same answer from
+  the same query, paid once.
+
+  FOUR REFUSALS, and each is a place this could have guessed:
+
+  - only `intent`. The other four shapes are claims about this house
+    that are not claims about what it means to do, and a `pattern`
+    posterior standing in for a value's standing would be the crown
+    ranking a bundle by what already happens rather than by what the
+    household wants;
+  - only STANDING beliefs. A dismissed reading is the house saying the
+    claim was wrong; a retired one is the house saying it was true and
+    is not now. Neither is a reason to lift a Saturday;
+  - only beliefs WITH ATOMS (the dl1 ruling above) — a posterior
+    nobody has fed is a prior somebody typed;
+  - only `about` entries that are VALUE addresses. A belief about a
+    person and a value at once feeds the value's standing through the
+    value's address and through nothing else.
+
+  Where two intent beliefs name one value — which `not-a-second-belief`
+  refuses at the door and a migration could still produce — the one
+  with more atoms under it wins, and the address breaks the tie, so the
+  answer is a pure function of the rows."
+  [ctx]
+  (if-not (get (resources ctx) :hypothesis)
+    {}
+    (->> (rows-of ctx :hypothesis {:shape "intent"} value-belief-scan-cap)
+         (map belief/row-belief)
+         (filter belief/standing?)
+         (filter belief/fed?)
+         (mapcat (fn [b]
+                   (for [a (:about b)
+                         :when (str/starts-with? (str a) "/api/values/")]
+                     [a b])))
+         (sort-by (fn [[a b]] [(- (long (:atom_count b))) (:href b) a]))
+         (reduce (fn [acc [a b]] (if (contains? acc a) acc (assoc acc a b)))
+                 {}))))
+
+(defn- value-belief
+  "The intent hypothesis behind the value THIS bundle serves, or nil.
+  Reads the map the caller computed when there is one and pays for its
+  own query when there is not — `crown-word`'s posture, one input
+  over: the read is bounded either way and the answer is the same."
+  [ctx d]
+  (when (get (resources ctx) :hypothesis)
+    (when-some [vid (some-> (get-in d [:data :value_id]) str not-empty)]
+      (get (or (:value-beliefs ctx) (value-beliefs ctx))
+           (str "/api/values/" vid)))))
+
 (defn- offered?
   "Is this piece still asking? The one spelling, because three
   populations of one card read it now: the bundle's own candidacy,
@@ -2800,6 +2936,13 @@
     (cond-> {:asked (some? (some-> (get-in d [:data :request_id])
                                    str not-empty))
              :value (value-standing ctx d)
+             ;; …and what the RECORD says about that value, when the
+             ;; house holds a belief about it with atoms under it
+             ;; (waymark-4t9). Read for every bundle, weighed by
+             ;; `value-lift` only where the value is not a person's own
+             ;; word: a declared value needs no number and may not be
+             ;; graded by one.
+             :believed (value-belief ctx d)
              :declined (crown-word ctx d)
              :days-left (days-left now (get-in d [:data :good_until]))
              ;; the agent's word, when one was said (waymark-1uv.6)
@@ -2918,7 +3061,16 @@
             ;; composer's `rework` puts it in `offered` again, re-ranked
             ;; as the fresh thing it now is.
             scanned (rows-of ctx :outcome {:state "offered"}
-                             (inc (long crown-scan-cap)))]
+                             (inc (long crown-scan-cap)))
+            ;; ONE READ FOR THE WHOLE CROWN (waymark-4t9): every
+            ;; value's intent hypothesis, keyed by the value's address,
+            ;; handed down under `:value-beliefs` so `crown-inputs`
+            ;; pays for it once rather than once per bundle. The
+            ;; composer's diagnosis, which reads a single bundle,
+            ;; passes no map and gets the same answer from the same
+            ;; query — so the number a composer reads there is the
+            ;; number the crown sorted by, which is that path's own law.
+            ctx (assoc ctx :value-beliefs (value-beliefs ctx))]
         {:reached-cap (> (count scanned) (long crown-scan-cap))
          :candidates
          (into []
@@ -3863,6 +4015,31 @@
                        " facts may move a belief, in log-odds — greater than"
                        " 0, up to 50. At 0 nothing could ever move at all,"
                        " which is not caution. Read " (pr-str v))
+                  {:evidence-lr c})))
+      ;; …and the two the READING asks its questions with (waymark-4t9).
+      ;; Strictly positive for the same reason a half-life is: a band of
+      ;; 0 admits only a belief standing at exactly even odds, which no
+      ;; stored decimal ever is, so the experiments section would go
+      ;; silent and say nothing about why. The way to turn the section
+      ;; off is to write no beliefs, not to zero the number that reads
+      ;; them.
+      (when-some [v (:test_band c)]
+        (when-not (and (number? v) (pos? (double v)) (<= (double v) 20.0))
+          (refuse (str ":evidence-lr :test_band is how near even odds a"
+                       " belief has to stand before a reading calls it worth"
+                       " testing — and how far apart two beliefs have to be"
+                       " before it calls them a gap — in log-odds, greater"
+                       " than 0, up to 20. At 0 nothing is ever near enough"
+                       " and no question is ever asked. Read " (pr-str v))
+                  {:evidence-lr c})))
+      (when-some [v (:thin_evidence c)]
+        (when-not (and (number? v) (pos? (double v)) (<= (double v) 50.0))
+          (refuse (str ":evidence-lr :thin_evidence is how little evidence"
+                       " counts as none, as the mass of the fold in log-odds"
+                       " — greater than 0, up to 50. At 0 no belief is ever"
+                       " thin, and a claim nothing has fed would be reported"
+                       " as one the facts merely disagree about. Read "
+                       (pr-str v))
                   {:evidence-lr c}))))
     (reduce (fn [seen e]
               (let [s (if (:seam e) :seam (:section e))
@@ -4918,6 +5095,30 @@
   reading evidence, and this house's posture is that the system
   proposes and never believes.
 
+  ── THE TWO NUMBERS THE READING ASKS QUESTIONS WITH (waymark-4t9) ──
+
+  `test_band` 1.1 — how near even odds, in log-odds, a belief has to
+  stand before a cheap test is worth a person's Saturday. About 25% to
+  75%: a belief the record already puts at nine-to-one is not a
+  question, it is an answer. The SAME number decides when two beliefs
+  DISAGREE in the reading's GAPS section, and the reuse is argued: it
+  is the one thing this household says about its own beliefs — how far
+  apart two numbers must be before the difference is worth reading —
+  and stating it twice would let one drift under the other.
+
+  `thin_evidence` 1.5 — how little evidence counts as none, measured
+  as the mass of the fold (`Σ|contribution|`, sign taken off). About
+  one unprompted mention, decayed a little. Below it a belief is
+  standing on its prior and whatever noise reached it, and the honest
+  word for that is THIN. It GRADES the experiments rather than gating
+  them: a thin belief near even odds is a candidate BECAUSE it is
+  thin, and the section says so.
+
+  Neither number can move a card, hide a row or route anything —
+  § 'What is deliberately lost', 3, holds whole. They decide what a
+  READING is shown and in what order, which is a rank on the house's
+  own claims about itself.
+
   A house that disagrees with any of these edits the number in the
   recipe form and the next reading uses the new one. That is the whole
   of the tuning story, and it is why the numbers are here rather than
@@ -4946,7 +5147,10 @@
    :half_life_minimal_response 60
    ;; the walls on the arithmetic itself
    :episode_intensity 1.5
-   :log_odds_clamp 6})
+   :log_odds_clamp 6
+   ;; …and the two the reading asks its questions with (waymark-4t9)
+   :test_band 1.1
+   :thin_evidence 1.5})
 
 (def evidence-lr-keys
   "The table's keys, in the order the wire, the diff and the sentence
@@ -4968,7 +5172,8 @@
    :half_life_unprompted_mention :half_life_complaint_while_continuing
    :half_life_question_asked :half_life_solicited_praise
    :half_life_minimal_response
-   :episode_intensity :log_odds_clamp])
+   :episode_intensity :log_odds_clamp
+   :test_band :thin_evidence])
 
 (defn evidence-lr-of
   "The table this recipe reads: the household's own, with the
@@ -5056,7 +5261,20 @@
     (fn [a b] (str "No pile of facts may move a belief further than "
                    (table-num b) " in log-odds, instead of " (table-num a)
                    " — a belief that reaches certainty stops reading"
-                   " evidence."))}
+                   " evidence."))
+    :test_band
+    (fn [a b] (str "A belief now has to stand within " (table-num b)
+                   " of even odds, instead of " (table-num a)
+                   ", before a reading calls it worth testing — and two"
+                   " beliefs have to be that far apart before it calls them"
+                   " a gap. Wider asks more questions; narrower asks only"
+                   " about the ones nobody can call."))
+    :thin_evidence
+    (fn [a b] (str "A belief with less than " (table-num b)
+                   " of evidence behind it — instead of " (table-num a)
+                   " — is now called THIN, and a reading is told that what"
+                   " is holding it near even odds is that nothing has fed"
+                   " it, rather than that the facts disagree."))}
    (into {}
          (map (fn [k]
                 [(keyword (str "half_life_" (name k)))
@@ -5172,7 +5390,15 @@
          " what was cheap and prompted goes stale fastest, and a record that"
          " forgets is honest about a person who has changed. Nothing may move"
          " further than " (n :log_odds_clamp) " either way, so no pile of"
-         " facts becomes certainty. Nothing here ranks a card, nothing here"
+         " facts becomes certainty. Then the reading asks two questions of"
+         " what it has: a belief standing within " (n :test_band)
+         " of even odds is one a cheap test would settle, and two beliefs"
+         " about the same rows that far apart are a GAP between what this"
+         " house says and what it does; and a belief with less than "
+         (n :thin_evidence) " of evidence behind it, added up with the sign"
+         " taken off, is called THIN — so *nothing has fed this* and *the"
+         " facts disagree* are two different sentences and never one."
+         " Nothing here ranks a card, nothing here"
          " acts, and nothing here is a wall: an untyped fact is a lawful fact"
          " and it weighs 1.")))
 
@@ -5744,12 +5970,25 @@
   read, the name the sentence is quoted under, and the sentence,
   which is the agent's and never the engine's. Public because the
   packs assert the shape."
-  [weights {:keys [asked value seen cooled declined days-left
+  [weights {:keys [asked value believed seen cooled declined days-left
                    early turned-down not-before judged] :as inputs}]
   (cond-> {"lift" (crown-lift weights inputs)
            "asked" (boolean asked)
            "value" (name (or value :declared))
            "days_left" (long (or days-left 0))}
+    ;; …and the BELIEF behind the value, when the house holds one with
+    ;; atoms under it (waymark-4t9). It rides only when there is one,
+    ;; so a reader can tell *nothing believed* from *believed at 12%*,
+    ;; and it carries the row's own address and atom count, because a
+    ;; number on a card that nobody can walk back to its evidence is
+    ;; the thing this whole epic exists not to print.
+    (some? believed)
+    (assoc "believed" {"posterior" (:posterior believed)
+                       "atoms" (long (or (:atom_count believed) 0))
+                       "href" (:href believed)
+                       "claim" (:claim believed)
+                       "lift" (value-lift (long (get weights :declared 0))
+                                          believed)})
     (some? seen) (assoc "seen" seen "cooled" cooled)
     (some? declined) (assoc "declined" (str declined))
     (some? early) (assoc "early" (long early)
@@ -5802,7 +6041,7 @@
   nothing then."
   ^String [{:keys [rank of crown crown-weights formula]}]
   (let [w (fn ^long [k] (long (get crown-weights k 0)))
-        {:keys [asked value seen cooled declined days-left
+        {:keys [asked value believed seen cooled declined days-left
                 early turned-down not-before judged]} crown
         lift (crown-lift crown-weights crown)
         window (:window-days formula)
@@ -5817,12 +6056,37 @@
                 " here moves it below one. ")
            (str "Nobody asked for this one, so any bundle that answers a"
                 " request stands above it. "))
-         (if (= :declared value)
+         ;; THE VALUE CLAUSE, AND SINCE waymark-4t9 IT HAS A NUMBER IN
+         ;; IT. A declared value is a person's word and reads as it
+         ;; always did. A value nobody has affirmed reads what the
+         ;; RECORD says about it, through the posterior of its intent
+         ;; hypothesis — the belief's own claim quoted, its address
+         ;; given, so the household can walk from the card to the atoms
+         ;; — and the sentence says out loud that the number can never
+         ;; reach what a person's word would, because the clamp keeps
+         ;; every posterior under 1 and the lift is floored.
+         (cond
+           (= :declared value)
            (str "It serves a value this house declared, which lifts it "
                 (w :declared) ". ")
+
+           believed
+           (str "It serves a value nobody has affirmed, so what lifts it is"
+                " what the record SAYS about that value: “"
+                (:claim believed) "” stands at "
+                (Math/round (* 100.0 (double (or (:posterior believed) 0))))
+                "% off " (:atom_count believed) " fact"
+                (when (not= 1 (long (or (:atom_count believed) 0))) "s")
+                ", which lifts it " (value-lift (w :declared) believed)
+                " of the " (w :declared) " a declared value would — a number"
+                " can never reach a person's word here. " (:href believed)
+                ". ")
+
+           :else
            (str "It serves a value an agent observed and nobody has yet"
-                " affirmed, so the " (w :declared) " a declared value would"
-                " lift it is not there. "))
+                " affirmed, and this house holds no belief with evidence"
+                " under it about that value, so the " (w :declared)
+                " a declared value would lift it is not there. "))
          (cond
            (nil? seen)
            (str "Nothing about what you have been shown moves it, because"

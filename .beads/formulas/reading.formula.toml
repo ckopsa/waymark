@@ -48,7 +48,7 @@ waymark-wfa: people with relation and age, values with the words they
 love, the next thirty days in LOCAL hours with any start before 06:00
 or after 22:00 flagged ODD HOUR, the open threads with a person turn
 still owed an answer, the last five journals' notes, WHAT MOVED THIS
-WEEK, and last every
+WEEK, GAPS, EXPERIMENTS, and last every
 published finding, newest first — WAYMARK_BRIEF_LINES trims the
 findings and nothing else, and the findings that only say a row back
 are folded into one line saying how many and why), every
@@ -112,6 +112,52 @@ run that says what it means. So the way you ask is the petition path:
 a finding, the rows it read, and that row still_stands as the one next
 step. A second belief of the same shape about the same row is refused
 by name (not-a-second-belief) and the refusal names the row to reword.
+
+CITE THE ROW YOU OFFERED ON (waymark-dl1, 2026-08-31). The join reads
+a finding's evidence and nothing else: offer_href does not feed a
+belief, because an offer is what a finding PROPOSES and evidence is
+what it READ. Put the value's or the person's address in evidence
+whenever you actually read it, even where you also offer on it.
+
+GAPS (waymark-4t9) sit under the movements: an intent belief against a
+pattern belief about the same rows, more than test_band apart in
+log-odds, EACH SIDE NAMING ITS ATOMS, widest first — SAYS (the intent)
+over DOES (the pattern), and STRADDLE where one stands above even odds
+and the other below. That distance is the distance between what this
+house says and what it does. If it is real, write it down as a `gap`
+hypothesis citing the same rows; if one side is simply wrong, restate
+it where it is yours or offer the owner the tap. Both sides always
+carry atoms — a belief nothing has fed has not disagreed with
+anything. THIS IS WHERE waymark-63s's LAST TWO CONTRADICTION SHAPES
+WENT: write the two claims down as beliefs, and one query finds the
+distance instead of somebody thinking of each shape in advance.
+
+EXPERIMENTS (waymark-4t9) sit under the gaps, and this is the one
+thing a belief is FOR: a hypothesis is a proposal for an experiment,
+never a verdict. Every standing belief within test_band of even odds,
+ranked by how much one trial would tell you, each with the word that
+put it there — CONTESTED (the facts argue with each other; one trial
+decides), THIN (almost nothing has fed it, so any fact at all is news;
+a belief with NO atoms belongs here and nowhere else — it may propose
+an experiment and may never appear in a gap or lift a crown card),
+BALANCED (real evidence agreeing on the middle) or UNMEASURED (the row
+was folded before the engine kept the weight — not a judgment about
+the belief).
+
+ANSWERING ONE IS COMPOSING THE SMALLEST REAL TRIAL: POST /api/outcomes
+naming the belief in `tests` and NEVER in `evidence` — the door
+refuses an address in both, because evidence is what the bundle was
+built from and tests is what it would find out. Keep it small; the
+point is to find out, not to convince, and a bundle claiming to settle
+three questions settles none. It spends the compose step, never the
+ONE extra.
+
+AND A DECLINE IS THE ANSWER. When the household turns down a bundle
+that carried tests, that decline is the most informative thing the
+experiment could produce — so the diagnosis you write before
+recomposing CITES the belief's own address in evidence and carries
+evidence_type "declined_invite". The recompose door refuses a
+diagnosis that forgot the question, and names the belief.
 """
 
 [[steps]]
@@ -208,19 +254,28 @@ description = """
 A contradiction lives BETWEEN two rows and no single-subject probe
 reaches it (waymark-63s). Two shapes are mechanical EDITOR orders on
 the manifest, each expecting an insight citing both rows and offering
-the task's own light door: `stale-relative-date` — an overdue task
+the task's own light door (the other two went to the brief's GAPS
+section under waymark-4t9 — see below):
+`stale-relative-date` — an overdue task
 whose detail still says "Monday" or "next week" (say which day it
 named, whether it passed, and what the task therefore is);
 `far-event-names-a-task` — an event 10-45 days out whose words match
 an open task's purpose (say the event is what the task is for, and
 therefore its real deadline, with the lead time the detail implies —
-or that the match is a coincidence of words, in the journal). Two
-shapes are yours to read from the brief: a day an insight or a remark
-calls BOOKED with no event on it (the write is an outcome whose pieces
-CREATE the missing events, and a remark on any standing bundle
-holding that day); and two open task details that cancel each other
-on a requirement (the write is an insight offering the moot task's
-`complete`). A held block never lands on a day the record calls
+or that the match is a coincidence of words, in the journal).
+
+THE OTHER TWO ARE READ FROM THE BRIEF'S GAPS SECTION NOW
+(waymark-4t9). A day an insight or a remark calls BOOKED with no event
+on it, and two open task details that cancel each other on a
+requirement, are both the same thing one level up: a distance between
+what this house SAYS and what it DOES. So they are answered by writing
+the two sides down as beliefs — an `intent` and a `pattern` about the
+same rows — and letting one query over disagreeing posteriors find the
+distance, instead of somebody having to think of each shape in
+advance. The writes are unchanged where the gap is real: an outcome
+whose pieces CREATE the missing events plus a remark on any standing
+bundle holding that day; an insight offering the moot task's
+`complete`. A held block never lands on a day the record calls
 booked — read the facts before you compute an hour.
 """
 

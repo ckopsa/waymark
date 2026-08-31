@@ -222,18 +222,27 @@
 
 ;; ── the fold ────────────────────────────────────────────────────────
 
-(defn fold
-  "Rules 3, 2 and 1 in that order, over one hypothesis's atoms at one
-  moment: decay each atom to `at-ms`, keep one per occasion with the
-  intensity where the occasion carried more, add. Returns the SUM in
-  log-odds, unclamped and WITHOUT the prior — `posterior-log-odds`
-  adds both, and `movement` wants the difference of two folds where
-  the prior would only cancel.
+(defn contributions
+  "Rules 3 and 2, over one hypothesis's atoms at one moment: decay each
+  atom to `at-ms`, then keep ONE contribution per occasion — the
+  strongest — multiplied by the intensity where the occasion carried
+  more than one. Returns `[{:key [type episode] :w <log-odds> :n
+  <atoms in the occasion>} …]`, which is the working rule 1 then adds
+  up.
+
+  It is a separate function from `fold` because slice 3 asks a
+  question the sum cannot answer: HOW MUCH EVIDENCE IS THERE, and how
+  much of it cancels. A posterior at even odds off six atoms that
+  fight each other and a posterior at even odds off nothing at all are
+  the same number and are not the same belief, and `evidence-weight`
+  and `contested` are what tell them apart (§ 'Recorded punts' — the
+  experiments section is the one place the DISTRIBUTION matters, and
+  this is the whole of what this house is willing to say about it).
 
   Atoms that had not happened yet at `at-ms` are simply not there,
   which is what makes the clock-set-back fold honest rather than a
   reweighting."
-  ^double [table atoms ^long at-ms]
+  [table atoms ^long at-ms]
   (let [intensity (double (or (:episode_intensity table) 1.5))]
     (->> atoms
          (keep (fn [a]
@@ -245,12 +254,56 @@
                          {:key (occasion a)
                           :w (* (double w0) (Math/pow 0.5 (/ age-days hl)))}))))))
          (group-by :key)
-         (reduce (fn [^double acc [_ group]]
-                   (let [strongest (apply max-key #(Math/abs (double (:w %)))
-                                          group)]
-                     (+ acc (* (double (:w strongest))
-                               (if (> (count group) 1) intensity 1.0)))))
-                 0.0))))
+         (mapv (fn [[k group]]
+                 (let [strongest (apply max-key #(Math/abs (double (:w %)))
+                                        group)]
+                   {:key k
+                    :n (count group)
+                    :w (* (double (:w strongest))
+                          (if (> (count group) 1) intensity 1.0))}))))))
+
+(defn fold
+  "Rule 1's sum over rules 3 and 2's working: add the occasions up.
+  Returns the SUM in log-odds, unclamped and WITHOUT the prior —
+  `posterior-log-odds` adds both, and `movement` wants the difference
+  of two folds where the prior would only cancel."
+  ^double [table atoms ^long at-ms]
+  (reduce (fn [^double acc c] (+ acc (double (:w c))))
+          0.0 (contributions table atoms at-ms)))
+
+(defn evidence-weight
+  "HOW MUCH EVIDENCE THERE IS, in log-odds: `Σ |w|` over the occasions,
+  counting every one at its full size whichever way it points. The
+  fold's own mass, and the number that separates *nothing has fed
+  this* from *a great deal has*.
+
+  It is not a confidence and it is not a variance in the statistical
+  sense — this house does not hold a distribution over its beliefs and
+  is not going to start (§ 'What is deliberately lost', 4). It is one
+  readable quantity a person can check by adding the atoms' own
+  contributions with the sign taken off."
+  ^double [contribs]
+  (reduce (fn [^double acc c] (+ acc (Math/abs (double (:w c)))))
+          0.0 contribs))
+
+(defn contested
+  "HOW MUCH OF THE EVIDENCE CANCELS ITSELF: `Σ|w| − |Σ w|`, which is
+  zero when every occasion points the same way and grows with the
+  weight of whichever side is losing.
+
+  This is the number that makes the experiments section honest. A
+  belief sitting at even odds because two costly actions and two
+  declined invitations are pulling against each other is the most
+  testable thing in the house; a belief sitting at even odds because
+  nobody has ever said anything about it is testable for the opposite
+  reason, and `evidence-weight` is the one that catches THAT. Neither
+  is visible in the posterior alone, which is exactly why a posterior
+  alone is not enough to pick an experiment from."
+  ^double [contribs]
+  (let [mass (double (evidence-weight contribs))
+        net (double (reduce (fn [^double acc c] (+ acc (double (:w c))))
+                            0.0 contribs))]
+    (max 0.0 (- mass (Math/abs net)))))
 
 (defn clamp
   "±`log_odds_clamp` (default 6, about 0.25%–99.75%). No finite pile
@@ -323,13 +376,26 @@
 
   A pure function of (table, prior, atoms, now), which is the row's
   own guarantee: delete every posterior in the store and one pass
-  rebuilds them identically."
+  rebuilds them identically.
+
+  `evidence_weight` and `evidence_contested` ride since slice 3
+  (waymark-4t9), and they are the same class of thing as
+  `posterior_log_odds`: a number the fold already computed, cached so
+  a reader does not have to redo the fold to ask a question the
+  posterior cannot answer. The experiments section asks exactly that
+  question — *is this belief at even odds because the evidence
+  fights, or because there is none* — and a brief that had to refold
+  every atom to answer it would be a second arithmetic beside the
+  engine's, which is the thing this design most needs not to be."
   [table prior atoms ^long now-ms]
   (let [lo (posterior-log-odds table prior atoms now-ms)
+        contribs (contributions table atoms now-ms)
         priced (filter #(some? (atom-lr table %)) atoms)]
     {:posterior (scaled (probability lo))
      :posterior_log_odds (scaled lo)
      :movement_7d (scaled (movement table prior atoms now-ms))
+     :evidence_weight (scaled (evidence-weight contribs))
+     :evidence_contested (scaled (contested contribs))
      :atom_count (count priced)
      :last_moved (some->> priced (map :at) (remove nil?) seq (apply max)
                           (java.time.Instant/ofEpochMilli))
@@ -473,6 +539,252 @@
   (cond-> {:posterior (:posterior folded)
            :posterior_log_odds (:posterior_log_odds folded)
            :movement_7d (:movement_7d folded)
+           :evidence_weight (:evidence_weight folded)
+           :evidence_contested (:evidence_contested folded)
            :atom_count (:atom_count folded)
            :atoms (:atoms folded)}
     (:last_moved folded) (assoc :last_moved (str (:last_moved folded)))))
+
+;; ── GAPS AND EXPERIMENTS (waymark-4t9, slice 3) ─────────────────────
+;;
+;; Everything below reads STORED ROWS and folds nothing. That is the
+;; point rather than a shortcut: the posterior, its log-odds, the mass
+;; of evidence under it and how much of that mass cancels are all
+;; cached by the pass above, so a gap query and an experiment pick are
+;; arithmetic over numbers the engine already wrote — one arithmetic,
+;; checkable against the atoms listed on the row itself. A second fold
+;; here would be a second opinion nobody can see, which is the mistake
+;; slice 2 corrected in `scripts/movements.jq` and is not going to
+;; make again one section down.
+;;
+;; A BELIEF WITH NO ATOMS SPEAKS IN EXACTLY ONE OF THESE TWO PLACES,
+;; and the asymmetry is the ruling of 2026-08-31 (waymark-dl1,
+;; docs/spec-hypotheses.md § 'Built — slice 3'):
+;;
+;;   - it may PROPOSE AN EXPERIMENT. A claim standing at its prior
+;;     with nothing behind it is the purest case for a cheap test:
+;;     there is no evidence, so any evidence is news.
+;;   - it may never appear in a GAP, and it may never lift a crown
+;;     card. A gap is a disagreement between two things the record
+;;     says; a posterior nobody has fed says nothing, and treating it
+;;     as though it did would be the house arguing with its own guess
+;;     and calling the argument evidence.
+
+(def standing-belief-states
+  "The two states a belief STANDS in — `value`'s pair, one kind over.
+  A dismissed or retired hypothesis has been answered, and neither a
+  gap nor an experiment is owed on a question the house has closed."
+  #{:observed :affirmed "observed" "affirmed"})
+
+(defn test-band
+  "HOW NEAR EVEN ODDS a belief must stand before a cheap test is worth
+  a person's Saturday, in log-odds. 1.1 by default, which is about 25%
+  to 75%: a belief the record already puts at nine-to-one is not a
+  question, it is an answer, and an experiment on it would only
+  confirm what the atoms already say.
+
+  The SAME number is what makes two beliefs disagree in `gap`, and the
+  reuse is argued rather than thrifty: this is the one quantity the
+  household states about its own beliefs — how far apart two numbers
+  have to be before the difference is worth reading — and stating it
+  twice would let one drift under the other."
+  ^double [table]
+  (let [d (double (or (:test_band table) 1.1))]
+    (if (pos? d) d 1.1)))
+
+(defn thin-evidence
+  "HOW LITTLE EVIDENCE COUNTS AS NONE, in log-odds of mass. 1.5 by
+  default — about one unprompted mention, decayed a little — because
+  below roughly one ordinary fact a belief is standing on its prior
+  and whatever noise reached it, and the honest word for that is
+  THIN.
+
+  It grades the experiments, and it does not gate them: a thin belief
+  near even odds is a candidate BECAUSE it is thin, and the section
+  says which reason each candidate is there for."
+  ^double [table]
+  (let [d (double (or (:thin_evidence table) 1.5))]
+    (if (pos? d) d 1.5)))
+
+(defn- num-of
+  "A stored decimal as a double, nil-safe — the row's numbers arrive
+  as BigDecimals off the store and as doubles off the wire, and every
+  reader below wants one kind."
+  ^double [x]
+  (double (if (number? x) x 0)))
+
+(defn row-belief
+  "One hypothesis ROW as the two sections below read it: its identity,
+  its claim in the household's words, and the numbers the pass cached.
+  Nothing is recomputed and nothing is guessed — a row whose fields the
+  pass has not written yet reads as zero, which is a belief at even
+  odds with no evidence, which is what it is."
+  [row]
+  (let [d (:data row)]
+    {:href (str "/api/hypotheses/" (:id row))
+     :claim (str (:claim d))
+     :shape (some-> (:shape d) str str/trim not-empty)
+     :state (some-> (:state row) name)
+     :about (into [] (comp (map #(str/trim (str %))) (remove str/blank?))
+                  (:about d))
+     :posterior (num-of (:posterior d))
+     :log_odds (num-of (:posterior_log_odds d))
+     :moved (num-of (:movement_7d d))
+     :weight (num-of (:evidence_weight d))
+     :contested (num-of (:evidence_contested d))
+     :atom_count (long (or (:atom_count d) 0))
+     :atoms (into [] (:atoms d))}))
+
+(defn standing?
+  "Is this belief one the house is still holding open? `row-belief`'s
+  shape, so both sections filter through one predicate."
+  [b]
+  (contains? standing-belief-states (:state b)))
+
+(defn fed?
+  "Has anything actually fed this belief? The dl1 ruling's own
+  predicate, spelled once so the two sections cannot disagree about
+  what an unfed belief may do."
+  [b]
+  (pos? (long (or (:atom_count b) 0))))
+
+;; ── experiments: the beliefs a cheap test would settle ──────────────
+
+(defn experiment
+  "Is this belief worth a cheap test, and WHY — nil when it is not.
+
+  A candidate stands NEAR EVEN ODDS: `|log_odds| ≤ test_band`. That is
+  the whole gate, and under the clamp it is a real filter rather than
+  a formality — a house whose beliefs pile up at ±6 has beliefs the
+  atoms have already settled, and none of them is a question. The
+  three numbers that come back GRADE the candidate rather than
+  admitting it:
+
+    near      how far inside the band it stands — a belief at exactly
+              even odds is the most a test could move
+    contested how much of its evidence cancels — atoms pulling both
+              ways, which is the case where one trial decides
+              something
+    thinness  how far under `thin_evidence` its mass is — a belief
+              nothing has fed, where any evidence at all is news
+
+  `score` is their sum, in log-odds throughout, so the order is
+  arguable in the same units as everything else here. `why` is the
+  household's word for which of the three put it on the list, and the
+  section prints it: *contested*, *thin*, or *balanced* — a belief at
+  even odds with real evidence that agrees on the middle, which is the
+  least urgent of the three and still a fair question.
+
+  A DISMISSED OR RETIRED BELIEF IS NOT A CANDIDATE. The house answered
+  it, and staging a Saturday to test a question somebody closed is the
+  machine arguing with a person."
+  [table row]
+  (let [b (if (:href row) row (row-belief row))
+        band (test-band table)
+        thin (thin-evidence table)]
+    (when (standing? b)
+      (let [lo (double (:log_odds b))
+            near (- band (Math/abs lo))]
+        (when (>= near 0.0)
+          (let [w (double (:weight b))
+                c (double (:contested b))
+                thinness (max 0.0 (- thin w))]
+            (assoc b
+                   :near near
+                   :thinness thinness
+                   :score (+ near c thinness)
+                   :why (cond (< w thin) "thin"
+                              (>= c thin) "contested"
+                              :else "balanced"))))))))
+
+(defn experiments
+  "Every belief a cheap test would settle, strongest question first —
+  `experiment` over a pile of hypothesis rows, nils dropped, sorted by
+  `score` descending with the address breaking ties so the order is a
+  pure function of the rows.
+
+  THE SMALLEST REAL TRIAL is what the bundle composed from one of
+  these has to be, and that sentence is the section's rather than this
+  function's: what comes back here is a question, and the outcome that
+  answers it is a person's Saturday. `outcome`'s `tests` field is the
+  link back — a bundle names the belief it is testing there, never in
+  `evidence`, because a hypothesis a bundle is TESTING is not a row it
+  READ."
+  [table rows]
+  (->> rows
+       (keep #(experiment table %))
+       (sort-by (juxt #(- (double (:score %))) :href))
+       vec))
+
+;; ── gaps: what the house says against what it does ──────────────────
+
+(defn gap
+  "Two beliefs that disagree about the same rows, or nil.
+
+  A GAP IS AN `intent` AGAINST A `pattern`. That pairing is the whole
+  definition and it is the household's own vocabulary read literally:
+  an intent is *somebody means to do this*, a pattern is *this is what
+  actually happens here week after week*, and the distance between
+  them is the distance between what this house says and what it does.
+  The `gap` SHAPE on the kind is what a reading writes when it decides
+  the distance is itself a claim; this function is what finds the
+  distance in the first place.
+
+  Four conditions, each of them a refusal to guess:
+
+    1. one `intent`, one `pattern` — no other pairing is a gap;
+    2. they share at least one address in `about` — the same subject,
+       compared by ADDRESS and never by sentence (§ 'What is
+       deliberately lost', 2);
+    3. BOTH are standing, and BOTH have atoms. A belief nobody has fed
+       has not disagreed with anything (the dl1 ruling, above);
+    4. they are more than `test_band` apart in log-odds.
+
+  `straddles` is the sharpest kind: one belief above even odds and the
+  other below, so the record is saying *he means to* and *he does
+  not* at the same time. The pair comes back with both sides' atoms
+  ON it, because the whole ask of the reading's GAPS section is that
+  each side NAMES ITS ATOMS BOTH WAYS — a distance nobody can audit
+  is a number, and this house does not print those."
+  [table a b]
+  (let [[intent pattern] (cond (and (= "intent" (:shape a))
+                                    (= "pattern" (:shape b))) [a b]
+                               (and (= "pattern" (:shape a))
+                                    (= "intent" (:shape b))) [b a])]
+    (when (and intent pattern
+               (standing? intent) (standing? pattern)
+               (fed? intent) (fed? pattern))
+      (let [shared (vec (sort (filter (set (:about pattern))
+                                      (distinct (:about intent)))))
+            distance (Math/abs (- (double (:log_odds intent))
+                                  (double (:log_odds pattern))))]
+        (when (and (seq shared) (> distance (test-band table)))
+          {:shared shared
+           :distance distance
+           :straddles (not= (>= (double (:posterior intent)) 0.5)
+                            (>= (double (:posterior pattern)) 0.5))
+           :intent intent
+           :pattern pattern})))))
+
+(defn gaps
+  "Every gap in a pile of hypothesis rows, widest first — the reading's
+  GAPS section, and the shape waymark-63s's four hand-written
+  contradiction probes were re-scoped into (§ 'What merges'): *a
+  contradiction between rows is exactly a gap between what was said
+  and what was done*, so one query over disagreeing posteriors
+  replaces the shapes somebody would otherwise have had to think of
+  one at a time.
+
+  Every pair is considered once, and a belief may appear in more than
+  one gap: an intent about a person and two patterns about the same
+  person are two different disagreements and the reading wants both."
+  [table rows]
+  (let [bs (mapv #(if (:href %) % (row-belief %)) rows)]
+    (->> (for [[i a] (map-indexed vector bs)
+               b (drop (inc i) bs)
+               :let [g (gap table a b)]
+               :when g]
+           g)
+         (sort-by (juxt #(- (double (:distance %)))
+                        #(get-in % [:intent :href])))
+         vec)))

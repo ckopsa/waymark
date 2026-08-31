@@ -4243,6 +4243,176 @@ jq -n --slurpfile hyp "$RUN/rows/hypotheses.full.json" \
     end
 ' > "$D/beliefs.json" 2>>"$PROBE_ERRS" || cp "$D/movements.json" "$D/beliefs.json"
 
+# ── GAPS — WHERE WHAT THIS HOUSE SAYS AND WHAT IT DOES DISAGREE ──────
+# waymark-4t9, slice 3, built to docs/spec-hypotheses.md § 'What
+# merges' (the contradiction-probes row). A gap is an `intent` belief
+# against a `pattern` belief: an intent is *somebody means to do this*
+# and a pattern is *this is what actually happens here week after
+# week*, so the distance between two of them about the same rows IS
+# the distance between what this house says and what it does.
+#
+# THIS IS WHERE waymark-63s's REMAINING PROBES WENT. Four hand-written
+# contradiction shapes were filed there; two shipped as mechanical
+# editor orders (stale-relative-date, far-event-names-a-task) and two
+# stayed prose duties nobody could mechanise — a day the record calls
+# booked with no event on it, two task details that cancel each other.
+# The spec's own sentence is that a contradiction between rows is
+# exactly a gap between what was said and what was done, so the two
+# prose duties become ONE QUERY over disagreeing posteriors: whatever
+# the reading writes down as a belief is compared with every other
+# belief about the same rows, and nobody has to think of the shape in
+# advance.
+#
+# NOTHING IS FOLDED HERE. Every number read is one the engine already
+# cached on the row (`waymark10.belief/cached`), so the section is
+# arithmetic over the store rather than a second opinion about it —
+# slice 2's correction of `scripts/movements.jq`, kept.
+#
+# AND BOTH SIDES MUST HAVE ATOMS (the dl1 ruling of 2026-08-31,
+# docs/spec-hypotheses.md § 'Built — slice 3'): a belief nothing has
+# fed has not disagreed with anything, and a house arguing with its
+# own untested guess is not reading a gap, it is reading itself.
+jq -n --slurpfile hyp "$RUN/rows/hypotheses.full.json" \
+      --slurpfile tbl "$D/evidence_table.json" '
+  ($hyp[0] // []) as $H
+  | (($tbl[0].lr.test_band // 1.1) | tonumber) as $band
+  # the atoms, said the way a person can check them against the row
+  | def atomline: "        atoms: "
+      + ([ .[0:6][] | (((.at // "") | .[0:10]) + " " + (.evidence_type // "?")
+                       + " ×" + ((.lr_applied // 1) | tostring)
+                       + (if .solicited then " (we asked)" else "" end)
+                       + (if .episode then " [" + .episode + "]" else "" end)) ]
+         | if length == 0 then "(none)" else join("; ") end)
+      + (if (. | length) > 6 then " …and \((. | length) - 6) more" else "" end);
+  def side($what; $b): [
+      "    " + $what + " (" + $b.shape + ", " + $b.state + ") “" + $b.claim
+      + "” at " + (($b.posterior * 100 | round) | tostring) + "% ("
+      + (($b.logodds * 100 | round) / 100
+         | (if . >= 0 then "+" else "" end) + tostring)
+      + " log-odds) off \($b.n) fact(s)  \($b.self)",
+      ($b.atoms | atomline) ];
+  [ $H[] | select(.state == "observed" or .state == "affirmed")
+         | select(((.data.atom_count // 0) | tonumber) > 0)
+         | {self, claim: (.data.claim // ""), shape: (.data.shape // ""),
+            state: (.state // ""), about: (.data.about // []),
+            posterior: ((.data.posterior // 0) | tonumber),
+            logodds: ((.data.posterior_log_odds // 0) | tonumber),
+            n: ((.data.atom_count // 0) | tonumber),
+            atoms: (.data.atoms // [])} ] as $B
+  | [ ($B[] | select(.shape == "intent")) as $i
+    | ($B[] | select(.shape == "pattern")) as $p
+    | ([ $i.about[] | . as $a | select(($p.about | index($a)) != null) ]) as $shared
+    | select(($shared | length) > 0)
+    | (($i.logodds - $p.logodds) | fabs) as $d
+    | select($d > $band)
+    | {shared:$shared, distance:$d,
+       straddles: (($i.posterior >= 0.5) != ($p.posterior >= 0.5)),
+       intent:$i, pattern:$p} ]
+  | sort_by(-.distance) as $all
+  | ($all | .[0:5]) as $G
+  | {found: ($all | length), band: $band,
+     lines:
+       (if ($G | length) == 0 then []
+        else
+          [ "GAPS — where what this house SAYS and what it DOES disagree: \($all | length) intent/pattern pair(s) about the same rows, more than \($band) apart in log-odds, widest first. Both sides carry evidence — a belief nothing has fed has not disagreed with anything and is not listed. If the distance is real it is itself a claim: write it as a `gap` hypothesis citing the same rows. If one side is simply wrong, restate that one (yours) or offer the owner the tap on it:" ]
+          + ([ $G[] | ([ "  ABOUT \(.shared | join(", ")) — \(.distance * 100 | round | . / 100) apart"
+                         + (if .straddles then ", and the two STRADDLE even odds: the record says he means to and says he does not, at the same time" else "" end) ]
+                       + side("SAYS"; .intent) + side("DOES"; .pattern)) ] | add)
+        end)}
+' > "$D/gaps.json" 2>>"$PROBE_ERRS" \
+  || echo '{"found":0,"band":1.1,"lines":[]}' > "$D/gaps.json"
+
+# ── EXPERIMENTS — THE BELIEFS A CHEAP TEST WOULD SETTLE ──────────────
+# waymark-4t9, built to docs/spec-hypotheses.md § 'What is deliberately
+# lost', 4: *a hypothesis is a PROPOSAL FOR AN EXPERIMENT, and slice 3
+# makes that literal — a near-50% belief gets a cheap-test outcome.*
+#
+# THE CANDIDATE GATE IS ONE LINE: the belief stands within `test_band`
+# of even odds. Under the clamp that is a real filter and not a
+# formality — on 2026-08-31 seven of this house's fourteen beliefs sat
+# AT the clamp (±6 log-odds), which is the atoms having already
+# answered the question, and none of those is a candidate. The three
+# that sat between 40% and 61% are the population this section is for.
+#
+# WHAT RANKS THEM IS NOT THE POSTERIOR, because the posterior cannot
+# tell the two interesting cases apart. A belief at even odds because
+# six facts pull against each other and a belief at even odds because
+# nothing has ever fed it are the same percentage and are not the same
+# question. So the engine caches two more numbers (`evidence_weight`,
+# the mass of the fold with the sign taken off, and `evidence_contested`,
+# how much of that mass cancels) and the rank is their sum with the
+# nearness:
+#
+#     score = (band − |log-odds|)  +  contested  +  max(0, thin − weight)
+#
+# all three in log-odds, all three readable, and the section prints
+# WHICH of them put each candidate on the list: CONTESTED (the facts
+# argue), THIN (there are none) or BALANCED (there are, and they agree
+# on the middle).
+#
+# A BELIEF WITH NO ATOMS IS A CANDIDATE HERE AND NOWHERE ELSE (the dl1
+# ruling): it may not appear in a gap and it may not lift a crown card,
+# because a posterior nobody has fed is a prior somebody typed — but it
+# is the purest case for a cheap trial, since any evidence at all would
+# be news. The line says `off 0 fact(s)` so nobody mistakes it.
+#
+# UNMEASURED rather than THIN on a row the engine folded before slice 3
+# deployed: the field is ABSENT, not zero, and saying "nothing has fed
+# it" about a belief with four atoms because a column had not shipped
+# would be the driver inventing a fact.
+jq -n --slurpfile hyp "$RUN/rows/hypotheses.full.json" \
+      --slurpfile tbl "$D/evidence_table.json" '
+  ($hyp[0] // []) as $H
+  | (($tbl[0].lr.test_band // 1.1) | tonumber) as $band
+  | (($tbl[0].lr.thin_evidence // 1.5) | tonumber) as $thin
+  | def atomline: "      atoms: "
+      + ([ .[0:6][] | (((.at // "") | .[0:10]) + " " + (.evidence_type // "?")
+                       + " ×" + ((.lr_applied // 1) | tostring)) ]
+         | if length == 0 then "(none — nothing has fed this belief)" else join("; ") end);
+  [ $H[] | select(.state == "observed" or .state == "affirmed")
+         | {self, claim: (.data.claim // ""), shape: (.data.shape // ""),
+            state: (.state // ""),
+            posterior: ((.data.posterior // 0) | tonumber),
+            logodds: ((.data.posterior_log_odds // 0) | tonumber),
+            n: ((.data.atom_count // 0) | tonumber),
+            weight: (if (.data | has("evidence_weight"))
+                     then ((.data.evidence_weight) | tonumber) else null end),
+            contested: (if (.data | has("evidence_contested"))
+                        then ((.data.evidence_contested) | tonumber) else null end),
+            atoms: (.data.atoms // [])}
+         | ($band - (.logodds | fabs)) as $near
+         | select($near >= 0)
+         | . + {near: $near,
+                thinness: (if .weight == null then 0
+                           else ([0, ($thin - .weight)] | max) end),
+                why: (if .weight == null then "UNMEASURED"
+                      elif .weight < $thin then "THIN"
+                      elif .contested >= $thin then "CONTESTED"
+                      else "BALANCED" end)}
+         | . + {score: (.near + (.contested // 0) + .thinness)} ]
+  | sort_by(-.score) as $all
+  | ($all | .[0:5]) as $E
+  | {found: ($all | length), band: $band, thin: $thin,
+     lines:
+       (if ($E | length) == 0 then []
+        else
+          [ "EXPERIMENTS — the beliefs a cheap test would settle: \($all | length) standing within \($band) log-odds of even odds, ranked by how much one trial would tell you. This is the one thing a belief is FOR (a hypothesis is a proposal for an experiment, never a verdict). Compose the SMALLEST REAL TRIAL — POST /api/outcomes naming the belief in `tests` and NEVER in `evidence`, with pieces a person could actually do this week. The point is to find out, not to convince; and if the household declines it, that decline is evidence about the belief, so the diagnosis cites the belief and types it declined_invite:" ]
+          + ([ $E[] | ([ "  \(.why) · “\(.claim)” [\(.shape), \(.state)] at "
+                         + ((.posterior * 100 | round) | tostring) + "% ("
+                         + ((.logodds * 100 | round) / 100
+                            | (if . >= 0 then "+" else "" end) + tostring)
+                         + ") off \(.n) fact(s)"
+                         + (if .weight == null
+                            then "; how much evidence is behind it was not measured on this row — it was folded before the engine started keeping the number"
+                            elif .why == "THIN" then "; \(.weight * 100 | round | . / 100) of evidence behind it, which is next to none — any fact at all would be news"
+                            elif .why == "CONTESTED" then "; \(.weight * 100 | round | . / 100) of evidence, \(.contested * 100 | round | . / 100) of it pulling the other way — the facts argue, and one trial decides"
+                            else "; \(.weight * 100 | round | . / 100) of evidence and it agrees on the middle" end)
+                         + "  \(.self)" ]
+                       + [ (.atoms | atomline) ]) ] | add)
+        end)}
+' > "$D/experiments.json" 2>>"$PROBE_ERRS" \
+  || echo '{"found":0,"band":1.1,"thin":1.5,"lines":[]}' > "$D/experiments.json"
+
 # ── THE EXTRACTION-BLIND RULE, ENFORCED HERE AND NOWHERE ELSE ────────
 # docs/spec-hypotheses.md § 'The extraction-blind rule': THE CLERK
 # FILLS THE TYPES AND NEVER SEES A POSTERIOR. No belief on its
@@ -4255,15 +4425,27 @@ jq -n --slurpfile hyp "$RUN/rows/hypotheses.full.json" \
 # to describe what was said. The separation is not a courtesy — it is
 # the only thing that makes the arithmetic mean anything.
 #
-# ONE GATE, at the one file both runs share. `$D/beliefs.json` is what
+# ONE GATE, at the files both runs share. `$D/beliefs.json` is what
 # the brief reads and what the manifest carries, so emptying it here
 # blinds both at once — a second gate at either would be a second place
 # for this rule to be forgotten. Slice 1 (waymark-2m2) let the computed
 # block ride a sitting's manifest, which was defensible while the house
 # stored no belief anywhere; it is not defensible now, and the rule the
 # spec wrote is the one this file keeps.
+#
+# GAPS AND EXPERIMENTS ARE BLINDED HERE TOO (waymark-4t9), at the same
+# gate and in the same breath. A sitting reads no hypotheses at all, so
+# both files come out empty on their own — this is the belt beside the
+# braces, and it is here rather than at the reads because THIS is the
+# line somebody editing the rule will find. An experiments section on a
+# clerk's manifest would be the worst version of the failure the
+# extraction-blind rule exists for: not merely a classifier that can
+# see the belief it feeds, but one handed a list of the beliefs whose
+# numbers are most easily moved.
 if [ "$RUN_MODE" = "sitting" ]; then
   echo '{"typed":0,"source":"withheld from a sitting on purpose","new_this_week":0,"movers":[],"all_movers":[],"bare_episodes":[],"lines":[]}' > "$D/beliefs.json"
+  echo '{"found":0,"band":0,"lines":[],"why":"withheld from a sitting on purpose"}' > "$D/gaps.json"
+  echo '{"found":0,"band":0,"thin":0,"lines":[],"why":"withheld from a sitting on purpose"}' > "$D/experiments.json"
 fi
 
 # ── THE HOUSE BRIEF (waymark-xnf, built here under waymark-nl0) ──────
@@ -4336,6 +4518,8 @@ jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full
       --slurpfile threads "$D/unanswered_threads.json" \
       --slurpfile tasks "$R/tasks.json" --slurpfile elocal "$D/event_local.json" \
       --slurpfile mv "$D/beliefs.json" \
+      --slurpfile gaps "$D/gaps.json" \
+      --slurpfile exps "$D/experiments.json" \
       --argjson nows "$NOW_S" --arg owner "$OWNER" --arg tz "$HOUSE_TZ" "$JQ_DATES"'
   ($ins[0] // []) as $in | ($people[0] // []) as $pp | ($values[0] // []) as $vv
   | ($lists[0] // []) as $ll | ($events[0] // []) as $ev | ($journals[0] // []) as $jj
@@ -4446,6 +4630,14 @@ jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full
               + (if ($n | length) > 0 then ($n | map("      · " + .[0:150])) else [ "      " + (($j.data.body // "") | gsub("\\s+"; " ") | .[0:150]) ] end))
       | add // ["  (no journal yet)"])
    + ($mv[0].lines // [])
+   # …and the two questions the beliefs raise, in the order a reading
+   # answers them (waymark-4t9): where the record CONTRADICTS ITSELF,
+   # then what a cheap trial would settle. Both sit inside the head, so
+   # the cap never trims them — the cap falls on the findings and
+   # nowhere else, and a belief section cut in half would be worse than
+   # one absent.
+   + ($gaps[0].lines // [])
+   + ($exps[0].lines // [])
    + [ "Standing facts — published findings, newest first, grouped by who or what they name. THIS IS THE ONLY SECTION THE CAP TRIMS:" ]
    + (if ($folded | length) > 0
       then [ "  (\($folded | length) finding(s) folded away — "
@@ -4661,6 +4853,8 @@ jq -n \
   --arg mode "$RUN_MODE" \
   --slurpfile brief "$D/brief.json" \
   --slurpfile movements "$D/beliefs.json" \
+  --slurpfile gaps "$D/gaps.json" \
+  --slurpfile experiments "$D/experiments.json" \
   --slurpfile review "$D/review.json" \
   --slurpfile review_ask "$D/review_ask.json" \
   --slurpfile house_says "$D/house_says.json" \
@@ -4719,6 +4913,13 @@ jq -n \
   # it here rather than trusting the sentence, and the updater of
   # slice 2 will read it too.
   movements: $movements[0],
+  # …and the two questions the beliefs raise (waymark-4t9), whole for
+  # the same reason: the LINES ride the brief, and this is the working
+  # — both sides of every gap with their atoms, and every experiment
+  # candidate with the three numbers that ranked it. A reading that
+  # wants to argue with the order reads it here.
+  gaps: $gaps[0],
+  experiments: $experiments[0],
   review: (if $sit then null else $review[0] end),
   review_ask: (if $sit then null else $review_ask[0] end),
   house_says: $house_says[0],
