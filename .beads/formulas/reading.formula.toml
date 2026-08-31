@@ -65,26 +65,53 @@ findings come from. The snapshot stays beside it: <kind>.json is the
 projection, <kind>.full.json each row at its own address; evidence
 and routing live only in the latter.
 
-WHAT MOVED THIS WEEK (waymark-2m2) is the one section of the brief
-that is ARITHMETIC rather than a list. Where a clerk typed a fact as
-it indexed it — how the fact arrived, in one of nine words, with what
-it cost and which evening it was — the reading turns those facts into
-log-odds and prints the ten biggest movers, as
-"CLAIM-LESS MOVER: <about-row> moved +2.13 this week (standing at
-+1.9) — atoms: ...". NOTHING IS STORED: it is recomputed every run
-from scripts/movements.jq over the household own numbers at
-recipe.evidence_lr, and written back nowhere. The three rules are
-docs/spec-hypotheses.md own — log-odds addition with a clamp, one
-count per occasion, decay by type — and "moved this week" is that
-fold run twice, today and with the clock set back seven days, so a
-row moves when a new fact lands AND when an old one fades.
-There is no hypothesis kind yet, so what moves is the
-ABOUT-ROW — the person, the value, the thread the fact cites — and
-THE CLAIM IS YOURS: the number says where to look, and saying what it
-MEANS, in a sentence, citing the atoms, is this run own work and the
-only place a claim may be made at all. The working is in the manifest
-at movements. If nothing is typed the section says so and stops, and
-that is the honest answer rather than a fault.
+WHAT MOVED THIS WEEK (waymark-2m2, slice 2 by waymark-bug) is the one
+section of the brief that is ARITHMETIC rather than a list. Where a
+clerk typed a fact as it indexed it — how the fact arrived, in one of
+nine words, with what it cost and which evening it was — those facts
+fold into log-odds and the ten biggest movers are printed.
+
+IT READS THE BELIEF STORE when there is one. A hypothesis is a ROW: a
+claim in the household own words, one of five shapes, the rows it is
+about, where the guess started, and a posterior the engine folds from
+every typed finding that cites it. Those lines read
+"OBSERVED - <claim> [<shape>] moved +2.13 this week, standing at 87%
+(+1.90 log-odds) off 3 fact(s)  /api/hypotheses/...".
+
+IT FALLS BACK TO COMPUTING when there is not — which is every house
+until a reading writes some beliefs — and then the mover is the
+ABOUT-ROW and the line says CLAIM-LESS MOVER, because the number
+points and the claim is still yours to make. THE SECTION FIRST LINE
+SAYS WHICH ANSWERED; never guess whether a number came from the record
+or from the driver.
+
+The three rules are docs/spec-hypotheses.md own: log-odds addition
+with a clamp; one count per WORD per occasion, half again where the
+same word was said twice (two DIFFERENT words in one evening are two
+observations and both count); decay by type, toward the prior. "Moved
+this week" is that fold run twice, today and with the clock set back
+seven days, so a belief moves when a new fact lands AND when an old
+one fades. The numbers are the household own, at recipe.evidence_lr.
+A DISMISSED finding is left out — and dismissing a wrong finding is
+your ONLY lawful way to take an atom back out of a fold. Never retype
+one to move a number. The working is in the manifest at movements.
+
+WRITING A BELIEF IS YOURS; ANSWERING ONE IS HIS. POST /api/hypotheses
+with claim (one sentence, the household words), shape
+(interest/intent/pattern/relationship/gap), about (one or more
+/api/<plural>/<id> addresses) and prior (0.02-0.5, where the guess
+honestly started). The posterior, the atoms and the movement have NO
+DOOR — they are the engine own, and the birth folds them, so a belief
+you write tonight carries an honest number tonight. `about` IS THE
+LINK: any typed finding citing one of those addresses feeds it, and so
+does one citing the hypothesis own address. Correct your own with
+restate. still_stands, revise, dismiss and retire are the owner own —
+and you may never reach them on a row you observed yourself, whatever
+your grant says, because the run that read the evidence is never the
+run that says what it means. So the way you ask is the petition path:
+a finding, the rows it read, and that row still_stands as the one next
+step. A second belief of the same shape about the same row is refused
+by name (not-a-second-belief) and the refusal names the row to reword.
 """
 
 [[steps]]

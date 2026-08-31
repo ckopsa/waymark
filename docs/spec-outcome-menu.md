@@ -1696,6 +1696,56 @@ accumulating for weeks it passed by accident. It retires eight now.
 
 ## Built — jfv.10, values learned in the open (2026-08-25, waymark-jfv.10)
 
+> **RULING NOTE, 2026-08-31 (waymark-bug, `docs/spec-hypotheses.md`
+> § *What merges*): `observed` LEFT THIS KIND.** Read this whole
+> section as history from here down, the way it reads jfv.2's own
+> first law. Nothing below is edited; what follows supersedes it
+> wherever the two disagree, and the ruling that moved it is not a
+> change of mind about anything jfv.10 argued.
+>
+> **What moved, and why.** `observed` was a one-bit belief — *somebody
+> thinks this house holds this value and nobody has answered* — with
+> no arithmetic under it, no atoms behind it, and no way to say how
+> strongly. The hypotheses epic built the row that holds a belief
+> properly: a claim, a shape, the rows it is about, a prior, and a
+> posterior folded from the typed findings that cite it. **Two belief
+> systems on one row is the outcome nobody wants**, so this kind gave
+> its bit up. Every argument below for why the affirmation had to be a
+> STATE rather than a stamp still stands — it is simply being made
+> about `hypothesis` now.
+>
+> **`value` is `[:declared :retired]`, `:initial :declared`.** Every
+> value is this house's law from the moment it lands.
+>
+> **The create wall came back, grantable.** With no unaffirmed landing
+> left, a create IS an affirmation — so `written-by-a-person` stands
+> at that door again, as `g/unless-granted` (waymark-sfe), refusing an
+> agent that presents no grant admitting `value.create`. The wall did
+> not change its mind; the states moved out from under it. The
+> composer's own door for *I think this house holds this value* is an
+> intent hypothesis, and the refusal names it.
+>
+> **`restate` and `dismiss` are gone**, both with the state they left
+> from. Their sentences are still sayable, one row over:
+> `hypothesis.restate` corrects a guess while it is a guess,
+> `hypothesis.dismiss` says *you read us wrong*, and
+> `hypothesis.retire` says *this was true and is not now*. `value`
+> keeps `retire`, which is what it always meant about a value the
+> house actually declared.
+>
+> **The wording door no longer splits by hand**: one landing, one
+> door.
+>
+> **The grant scope changes.** `value: ["create", "restate"]` becomes
+> `value: ["create"]` at most, and for most deployments nothing at all
+> — the thing a composer wants to say is a hypothesis.
+>
+> **Migration:** `:renames {:states {:observed :retired}}` on the
+> declaration, one `[DESTRUCTIVE]` UPDATE a person runs from the LAN,
+> and one reading that mints the intent hypotheses first.
+> `docs/spec-hypotheses.md` § *THE MIGRATION, AND EXACTLY WHAT THE
+> OWNER'S TAP IS* carries the whole plan.
+
 **The owner's ruling, verbatim, 2026-08-25:**
 
 > Discovering what you value and what you love to do is a process and there's
@@ -1828,6 +1878,19 @@ like every other landing in `declared`.
 
 ### The observed clause, where the person answering is looking
 
+> **RULING NOTE, 2026-08-31 (waymark-bug).** No value can reach this
+> clause any more: there are no observed values. **The clause itself
+> is left standing and unreached on purpose** — slice 3 of the
+> hypotheses epic (waymark-4t9) repoints `feed/value-standing`'s
+> `:observed` arm at the intent hypothesis's POSTERIOR, which is this
+> same sentence with a number in it (*a value observed in your record,
+> standing at 62% on four facts*), and deleting the arm now would
+> leave that slice nothing to repoint. The requirement this section
+> records — **a bundle asking for a Saturday on the strength of a
+> guess says so where the person answering it is looking** — has not
+> been abandoned; it moved a slice down the epic, and `value_test`'s
+> own docstring says where its coverage went.
+
 `feed/outcome-says` gained one clause, and `feed/value-still-held?`
 became `feed/value-standing` (`:declared` / `:observed` / nil) so the
 population reads the standing once and hands it to the sentence. A real
@@ -1877,6 +1940,23 @@ wall.
 11 warnings, both unchanged. `value` reports clean.
 
 ### Recorded here, for whoever comes next
+
+> **RULING NOTE, 2026-08-31 (waymark-bug).** Three of the bullets
+> below are superseded by the belief layer and are kept as history.
+> **The state census moved again**: `observed` left, so `value` is
+> `[:declared :retired]` and its fingerprint moves a second time. **The
+> production note's arithmetic reverses**: adding a state token needed
+> no DDL because `state` is plain text and an addition is not a
+> removal — REMOVING one is a removal, so `migrate/assert-known-states!`
+> would refuse the boot outright, and `:renames {:states {:observed
+> :retired}}` is what both keeps the engine serving and tells the
+> planner to emit the one `[DESTRUCTIVE]` UPDATE a person runs by
+> hand. **And the grant-scope bullet is wrong now**: `restate` no
+> longer exists on this kind and `create` is walled, so jfv.5's walk
+> step 1 (*the owner declares his values first, by hand*) is a
+> precondition again — for VALUES. A composer writes what it observes
+> as a `hypothesis` and the owner's tap is what makes it law.
+> `docs/spec-hypotheses.md` § *Built — slice 2* carries all three.
 
 - **Exactly one fingerprint moved.** `value`:
   `e6943e49…` → `39108e56…`, one legitimate law revision carrying the new
@@ -2367,6 +2447,13 @@ v1, for a mechanical reason worth keeping: a not-now is said again and
 again by design, and `one-reason-per-verdict` holds one row per
 `(subject, verdict)`, so only the first of four could ever carry a
 word. Filed (`waymark-jfv.18`) rather than smuggled.
+
+> **RULING NOTE, 2026-08-31 (waymark-bug).** `value.dismiss` no longer
+> exists: it left from `observed`, and `observed` left this kind for
+> the hypothesis. The sentence it said — *you read us wrong* — is
+> `hypothesis.dismiss` now, and it is ready and not wired for exactly
+> the reason below, since a hypothesis has no population either.
+> waymark-jfv.19 stands, with one more kind under it.
 
 `value.dismiss` and `person.dismiss` are **ready and not wired**, and
 the honest reason is that neither kind cards: they have no population,

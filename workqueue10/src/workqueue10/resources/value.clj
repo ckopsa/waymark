@@ -1,8 +1,58 @@
 (ns workqueue10.resources.value
-  "The value (waymark-jfv.2, reshaped by waymark-jfv.10): what this
-  house actually cares about — written down by the person who cares
-  about it, or OBSERVED by an agent that read the house and affirmed
-  by him afterwards.
+  "The value (waymark-jfv.2, reshaped by waymark-jfv.10, and narrowed
+  again by waymark-bug): what this house actually cares about, written
+  down by the person who cares about it.
+
+  ── 2026-08-31, waymark-bug: `observed` LEFT THIS KIND ───────────────
+
+  Read everything below as history from here down, the way jfv.10
+  reads jfv.2's own first law. It is not edited, because the arguments
+  in it are still the arguments; what changed is where the row they
+  are about lives.
+
+  THE ONE-BIT BELIEF WENT TO THE HYPOTHESIS KIND
+  (docs/spec-hypotheses.md § 'What merges'). `observed` was exactly a
+  belief — *somebody thinks this house holds this value and nobody has
+  answered* — with no arithmetic under it, no atoms behind it and no
+  way to say how strongly. Slice 2 of the hypotheses epic built the
+  kind that holds a belief properly: a claim, a shape, a prior, and a
+  posterior folded from the typed findings that cite what it is about.
+  Two belief systems on one row is the outcome nobody wants, so this
+  one gave its bit up.
+
+  WHAT IT COSTS, AND EVERY LINE OF IT IS PAID HERE RATHER THAN
+  DISCOVERED LATER:
+
+  - `:states` is `[:declared :retired]` again and `:initial` is
+    `:declared`, so every value is law from the moment it lands.
+  - THE CREATE WALL IS BACK, and grantable (waymark-sfe). With no
+    unaffirmed landing left, a create IS an affirmation — so an agent
+    at this door would be answering its own reading, which is the one
+    thing jfv.10 forbade while it was widening everything else. The
+    wall did not change its mind; the states moved out from under it.
+  - `restate` IS GONE. It existed to let an observer correct a guess
+    while it stayed a guess; there are no guesses on this kind now.
+    Its replacement is `hypothesis.restate`, one row over, on a row
+    that carries the number instead of the law.
+  - `dismiss` IS GONE. *You read us wrong* is `hypothesis.dismiss`
+    now; `retire` still says *this was true and is not now*, which is
+    what it always said about a value the house actually declared.
+  - The wording door NO LONGER SPLITS BY HAND: one landing, one door.
+  - THE COMPOSER'S GRANT SCOPE CHANGES. jfv.10 widened it to
+    `value: [\"create\", \"restate\"]`; `restate` no longer exists and
+    `create` is now a walled door rather than an open one, so a
+    composer that should still be able to write values needs a grant
+    admitting `value.create` — and the honest answer for most
+    deployments is that it should not have one, because the thing it
+    wants to say is a hypothesis.
+  - `:renames {:states {:observed :retired}}` is the migration and the
+    boot's own safety at once. See the declaration's own comment.
+
+  ── history: jfv.2 and jfv.10 ────────────────────────────────────────
+
+  What follows is the kind as those two beads left it.
+
+  The owner's own words are the whole reason this kind exists:
 
   The owner's own words are the whole reason this kind exists:
 
@@ -196,16 +246,6 @@
   [ctx]
   (= :agent (:type (:principal ctx))))
 
-(defn- a-persons-hand?
-  "Somebody in this house, as opposed to the composer or the engine.
-  `types/actor-types` is #{:human :agent :system} and a scenario may
-  spell a member `:person`, so both words for the same hand are named
-  here rather than in four places that could drift apart. Asked by the
-  affirmation — which is a person's word — and by the observer's own
-  wording door, which is not."
-  [ctx]
-  (contains? #{:human :person} (:type (:principal ctx))))
-
 ;; THE AFFIRMATION WALL, GRANTABLE (waymark-sfe, the owner's ruling of
 ;; 2026-08-28: "It doesn't make sense to disallow it, it just makes
 ;; sense to permission it"). It used to be a pure function of the
@@ -228,30 +268,22 @@
   "`written-by-a-person`, for one door. jfv.10 left this wall on every
   door that lands a row in `declared` — `still_stands`, `revise`,
   `restore` — and on the `retire`/`dismiss` that take a value out of
-  the house's holding. What it guards is the AFFIRMATION rather than
-  the writing, which is why `restate` and the create door carry it
-  not at all."
+  the house's holding, and left it OFF the create door because a
+  create landed `observed` and affirmed nothing.
+
+  IT IS ON THE CREATE DOOR AS OF waymark-bug (2026-08-31), and the
+  reason is arithmetic rather than a change of heart: `observed` went
+  to the hypothesis kind, so there is no unaffirmed landing left and
+  EVERY create is now an affirmation. The wall did not move; the
+  states moved out from under it. What an agent writes instead is an
+  INTENT HYPOTHESIS — the same sentence, with a prior, a posterior and
+  the atoms that moved it — and the refusal below says so by name."
   [action]
   (unless-granted
    :value action
    {:name :written-by-a-person
     :own-field :written_by
-    :explain "Affirming is a person's word. You may write down what you observed — that row is born observed and says so wherever this house cites it — but marking your own reading affirmed would be speaking in the owner's voice about the owner's own life. Leave it observed and say what you found: publish an insight, cite the rows you read, and offer this value's own \"yes, this one's ours\" as the one next step. The owner answers with a tap, or rewords it himself, and either way the row becomes his."}))
-
-(defguardfn only-the-observer-restates
-  {:reads [:principal]
-   :explain "This door is the observer's own — it corrects what an agent wrote down while the row is still a guess, and leaves it a guess. Rewording a value is a larger thing when a person does it: those words become this house's law and the row becomes yours in the same stroke. That door is \"Reword\"."}
-  [_row _inp ctx]
-  ;; the mirror of the wall above, and it exists for the household
-  ;; rather than for safety: a person who reached `restate` would be
-  ;; editing a value WITHOUT claiming it, which is not a thing anybody
-  ;; here wants to do — and because both walls are pure functions of
-  ;; the principal, each hand is offered exactly one wording door
-  ;; instead of two that look alike. :system passes, for the same
-  ;; reason it passes above: the engine's own actor is not the subject.
-  (if (a-persons-hand? ctx)
-    (t/deny)
-    (t/allow)))
+    :explain "Declaring a value is a person's word, and since the belief layer landed there is no half-way state for one: a value in this house is law, so writing one would be speaking in the owner's voice about the owner's own life. What you noticed goes in an INTENT HYPOTHESIS instead — POST /api/hypotheses with shape \"intent\", the claim in your words, this house's rows as what it is about, and where you honestly think the guess starts. That row is born observed, says so wherever it is cited, and carries a number that moves as the findings land. The owner answers it with a tap, and putting it in his own words on a value is his."}))
 
 (defguardfn a-private-value-is-a-persons-own
   {:judges [:scope]
@@ -320,12 +352,6 @@
   ;; owner's own ruling read literally.
   (-> row (rewritten inp) (affirmed ctx)))
 
-(defhandler apply-restatement [row inp _ctx]
-  ;; the observer's wording door. The same overwrite and NO stamp: the
-  ;; row is still a guess when this handler is done with it, which is
-  ;; the whole difference between the two doors.
-  (rewritten row inp))
-
 (defhandler stamp-the-affirmation [row _inp ctx]
   ;; the tap, and the restore. Nothing about the words changes; what
   ;; changes is whose they are.
@@ -359,20 +385,31 @@
               (:id (:principal ctx)))))
 
 (defn- born
-  "The birth state, and the birth stamps. A person declaring a value
-  has already decided, so his lands `declared` and is affirmed in the
-  same breath; anybody else's lands `observed` — the initial — and
-  says so wherever this house cites it until a person's hand moves it.
+  "The birth stamps, and the affirmation that now rides every one of
+  them (waymark-bug, 2026-08-31). While this kind had an `observed`
+  state the birth BRANCHED: a person's create landed `declared` and
+  was affirmed in the same breath, anybody else's landed `observed`
+  and said so until a hand moved it. There is no `observed` any more —
+  it went to the hypothesis kind, which is the same one bit of belief
+  with arithmetic and atoms under it — so there is no unaffirmed
+  landing left to branch INTO, and every value is born the house's
+  law.
 
-  The engine's own actors (a seed, a migration, the conformance
-  walker) land `observed` too, and that is the point of the default
-  rather than an oversight: a row nobody's hand can be found on is a
-  guess, and a guess is the safe direction for this to fail in."
+  Which is why the wall came back to the create door
+  (`(affirmation-wall :create)`): with nowhere unaffirmed to land, an
+  agent writing a value would be affirming its own reading, and that
+  is the one thing jfv.10 forbade while it was widening everything
+  else. It came back GRANTABLE rather than absolute, per waymark-sfe,
+  so the owner may still hand a delegate his own hand and read
+  afterwards which grant it acted under.
+
+  `:system` — a seed, a migration, the conformance walker — passes the
+  wall and is stamped like anybody else. That is a change of direction
+  from jfv.10, where the safe failure was `observed`; with the state
+  gone the safe failure is a REFUSAL, and the engine's own actor is
+  not who the wall is about."
   [row ctx]
-  (let [row (-> row (stamp-owner ctx) (stamp-the-writer ctx))]
-    (if (a-persons-hand? ctx)
-      (-> row (assoc :state :declared) (affirmed ctx))
-      row)))
+  (-> row (stamp-owner ctx) (stamp-the-writer ctx) (affirmed ctx)))
 
 ;; ── the household's own words ───────────────────────────────────────
 ;; Spelled once and worn by both doors — the row schema and the
@@ -440,11 +477,12 @@
           [:maybe [:vector {:max 12} [:string {:min 1 :max 40}]]])])
 
 ;; ── the law, written down as scenarios ──────────────────────────────
-;; All nine are CHECK-TIER, and the reason is the same one feed_recipe
+;; All eight are CHECK-TIER, and the reason is the same one feed_recipe
 ;; gave: every wall here reads only what a declaration-time world can
-;; honestly supply — the principal, the input, and the row the scenario
-;; hands them. `make check-queue` judges them with no database at all,
-;; in the same breath as the usability warnings.
+;; honestly supply — the principal, the presented grant (there is
+;; none), the input, and the row the scenario hands them.
+;; `make check-queue` judges them with no database at all, in the same
+;; breath as the usability warnings.
 
 (def ^:private a-declared-value
   {:name "making memories with the family"
@@ -452,7 +490,7 @@
    :loved ["the shop" "woodworking" "building with the boys"]
    :scope "household"})
 
-(def ^:private an-observed-value
+(def ^:private a-value-somebody-else-wrote
   {:name "time in the shop with the boys"
    :says "Six weeks of Saturdays have a shop hour in them, and none of them were planned."
    :loved ["the shop"]
@@ -466,14 +504,15 @@
    :scope "mine"
    :owner "colton"})
 
-(defscenario an-agent-writes-what-it-observes
-  "The owner's ruling, at the door it changed (waymark-jfv.10). An
-   agent that has read this house may write down what it noticed —
-   `written-by-a-person` no longer stands here — and the row it writes
-   is born `observed`, carrying the agent's own id as `written_by` and
-   saying \"observed, not yet affirmed\" on its summary line and on
-   every outcome card that cites it. Nothing about the house's law has
-   moved until a person taps."
+(defscenario an-agent-does-not-declare-a-value
+  "waymark-bug, and it is jfv.2's scenario coming back for a reason
+   jfv.2 never had. jfv.10 opened this door because a create landed
+   `observed` — nobody's law yet, just somebody's reading. The belief
+   layer took `observed` away, so every create now lands `declared`
+   and every create is therefore an affirmation. The wall did not
+   change its mind; the states moved out from under it. The refusal
+   names the door that IS the composer's: an intent hypothesis, with a
+   prior and a posterior and the atoms that move it."
   {:kind    :value
    :attempt :create
    :input   {:name "time in the shop with the boys"
@@ -481,70 +520,61 @@
              :loved ["the shop"]
              :scope "household"}
    :as      {:id "compiler" :type :agent}
+   :expect  {:refused :written-by-a-person
+             :because "INTENT HYPOTHESIS"}})
+
+(defscenario a-person-declares-a-value
+  "And the hand this kind is for. A member writes what this house
+   cares about and the row is law the moment it lands — born
+   `declared`, affirmed in the same breath, with his name and the date
+   on it. There is no other landing any more, which is the whole of
+   what waymark-bug did to this kind."
+  {:kind    :value
+   :attempt :create
+   :input   {:name "making memories with the family"
+             :says "The boys will remember what we made together, not what I shipped."
+             :loved ["the shop" "woodworking"]
+             :scope "household"}
+   :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
 (defscenario an-agent-does-not-affirm
-  "THE ONE REMAINING WALL. An agent may say what it observed; it may
-   not mark its own reading confirmed, because `still_stands` speaks
-   in the owner's voice about the owner's own life. The refusal names
-   the lawful path it has always named: publish an insight, cite the
-   rows, and offer this door — to the person whose word it is."
+  "THE WALL THIS KIND HAS ALWAYS HAD, at the door it has always stood
+   on. An agent may not mark a value confirmed, because
+   `still_stands` speaks in the owner's voice about the owner's own
+   life. Since waymark-sfe the refusal is `g/unless-granted` rather
+   than a flat no — an agent under a grant naming `value.still_stands`
+   passes, and the one that WROTE the row never does."
   {:kind    :value
    :attempt :still_stands
-   :row     {:state :observed :data an-observed-value}
+   :row     {:state :declared :data a-value-somebody-else-wrote}
    :as      {:id "compiler" :type :agent}
-   :expect  {:refused :written-by-a-person
-             :because "publish an insight"}})
+   :expect  {:refused :written-by-a-person}})
 
 (defscenario an-agent-does-not-reword-what-the-owner-affirmed
-  "The sharper half of the ruling. `revise` lands the row in
-   `declared`, so an agent reaching it would be affirming as well as
-   rewording — over words the owner chose. The observer's own door is
-   `restate`, and it only reaches a row that is still a guess."
+  "The sharper half of the ruling. `revise` overwrites the words this
+   house is judged against and stamps a person's name on them, so an
+   agent reaching it would be putting words in the owner's mouth and
+   signing them. Its own door is a hypothesis it may `restate` all it
+   likes; a value's wording is the owner's."
   {:kind    :value
    :attempt :revise
    :row     {:state :declared :data a-declared-value}
    :input   {:name "making memories with the family, when there is time"
              :says "Softened after six weeks of evenings that went elsewhere."}
    :as      {:id "compiler" :type :agent}
-   :expect  {:refused :written-by-a-person
-             :because "speaking in the owner's voice"}})
-
-(defscenario an-agent-corrects-what-it-observed
-  "And the door that IS the agent's: new evidence changed the reading,
-   so it rewrites what it wrote down. The row stays `observed` — the
-   record of what was noticed never promotes itself."
-  {:kind    :value
-   :attempt :restate
-   :row     {:state :observed :data an-observed-value}
-   :input   {:name "Saturday mornings in the shop with Jack"
-             :says "Narrowed: it is Jack, and it is mornings. Six of the last eight."
-             :loved ["the shop"]}
-   :as      {:id "compiler" :type :agent}
-   :expect  {:allowed true}})
-
-(defscenario a-person-rewords-rather-than-restates
-  "The mirror wall, and it is for the household rather than for
-   safety. A person who reached the observer's door would be editing a
-   value WITHOUT claiming it, which is not a thing anybody here wants
-   to do — and because both wording walls are pure functions of the
-   principal, each hand is offered exactly one wording door instead of
-   two that look alike."
-  {:kind    :value
-   :attempt :restate
-   :row     {:state :observed :data an-observed-value}
-   :input   {:name "Saturday mornings in the shop with Jack"
-             :says "Reworded by the owner, but through the observer's door."}
-   :as      {:id "colton" :type :person}
-   :expect  {:refused :only-the-observer-restates
-             :because "That door is \"Reword\""}})
+   :expect  {:refused :written-by-a-person}})
 
 (defscenario an-observed-value-is-the-houses
   "A value scoped \"mine\" carries the writer's own id as its owner, so
    an agent writing one would own a sentence about somebody else's
    life — and `this-is-yours-to-declare` would then refuse the person
-   it is actually about. The observer writes what the HOUSE holds; the
-   member says \"that one is mine\" when he claims it."
+   it is actually about. It stands FIRST at this door since
+   waymark-bug, because it judges a field the caller supplied and the
+   affirmation wall behind it judges the caller — and because the only
+   agent that now reaches past that wall is one holding a
+   `value.create` grant, and a grant that opens this door must not
+   also open *and about somebody else*."
   {:kind    :value
    :attempt :create
    :input   {:name "building"
@@ -571,7 +601,8 @@
   "A value scoped \"mine\" is one member's own sentence. Another adult
    may read it, may plan around it, and may not put different words in
    it — a household value is the shape for something the house holds
-   together. Untouched by jfv.10: this wall was never about agents."
+   together. Untouched by jfv.10 and by waymark-bug: this wall was
+   never about agents."
   {:kind    :value
    :attempt :revise
    :row     {:state :declared :data a-value-of-my-own}
@@ -586,15 +617,15 @@
    finding offers this action, it asks for nothing, and the answer is
    a thumb. On a declared value it means \"I read the evidence and it
    stands anyway\" — the fact that separates a wrong value from a wrong
-   plan. On an observed one it is the whole affirmation, and the same
-   tap does both."
+   plan, and since waymark-bug it is the ONLY thing this door means,
+   because there is no unaffirmed value left for it to affirm."
   {:kind    :value
    :attempt :still_stands
    :row     {:state :declared :data a-declared-value}
    :as      {:id "colton" :type :person}
    :expect  {:allowed true}})
 
-;; ── :value — observed in the open, affirmed by a person ──────────────
+;; ── :value — this house's law, declared by a person ─────────────────
 
 (defresource value
   {:kind :value
@@ -602,16 +633,33 @@
    ;; see the ns docstring: a :primary value would card in do-now
    ;; forever and a retired one would be celebrated as a deed
    :nav :secondary
-   ;; THE AFFIRMATION AXIS (waymark-jfv.10), and it is the state column
-   ;; rather than a stamp because only a state can SPEAK: the summary
-   ;; below renders `{state}`, so an unaffirmed value says "Observed"
-   ;; on its own line, in every list, on every envelope, and in every
-   ;; transition record — where a missing stamp would have rendered an
-   ;; em-dash. `observed` is the initial and a person's create promotes
-   ;; out of it (`born`), so the direction a bug fails in is the safe
-   ;; one.
-   :states [:observed :declared :retired]
-   :initial :observed
+   ;; THE AFFIRMATION AXIS WENT TO THE HYPOTHESIS KIND (waymark-bug,
+   ;; docs/spec-hypotheses.md § 'What merges'). jfv.10 put `observed`
+   ;; here as a state rather than a stamp because only a state can
+   ;; SPEAK — `summary/render` has no conditional — and every word of
+   ;; that argument still holds; what changed is that the thing it was
+   ;; speaking about now has arithmetic under it. `observed` WAS a
+   ;; one-bit belief with no atoms and no number, and two belief
+   ;; systems on one row is the outcome nobody wants. So it is
+   ;; `hypothesis`'s first state now, with a prior, a posterior and the
+   ;; findings that moved it, and a value is back to what it always
+   ;; was: this household's law, written by the household.
+   ;;
+   ;; :renames IS THE MIGRATION AND IT IS NOT COSMETIC. Live rows in
+   ;; `observed` would refuse the boot outright
+   ;; (`migrate/assert-known-states!`), so the map both keeps the
+   ;; engine serving and tells the planner what to do:
+   ;; `make migrate-queue-prod` prints one [DESTRUCTIVE] UPDATE moving
+   ;; them to `retired`, and `migrate/apply!` SKIPS destructive steps
+   ;; unless a person opts in. `retired` rather than `declared` because
+   ;; a guess is not law: the row leaves the house's holding, keeps its
+   ;; record, and comes back through `restore` — which lands in
+   ;; `declared` — if the owner says the reading was right. The belief
+   ;; itself lives on in the intent hypothesis the migration mints
+   ;; beside it, which cites the value's own address.
+   :renames {:states {:observed :retired}}
+   :states [:declared :retired]
+   :initial :declared
    :terminal #{}
    :summary "{data.name} · {data.scope} · {state}"
    :label-template "{data.name}"
@@ -652,30 +700,42 @@
    ;; scope, owner, written_by and affirmed_by carry their own :filter
    ;; on the schema entries above — one concern, one home — so only the
    ;; machine's own column is spelled here. :state is what jfv.3's
-   ;; names-a-value reads when it asks whether a value is held, and
-   ;; since jfv.10 it is also how a reader asks for the values that
-   ;; have been observed and not yet affirmed.
+   ;; names-a-value reads when it asks whether a value is held.
    :filterable {:state #{:eq :in}}
-   ;; NO agent wall at this door any more — the owner's ruling. The one
-   ;; wall left here is about the OWNER STAMP rather than about agents
-   ;; writing: see `a-private-value-is-a-persons-own`.
-   :create-guards [a-private-value-is-a-persons-own]
+   ;; THE WALL IS BACK AT THIS DOOR (waymark-bug) and it is grantable.
+   ;; With `observed` gone there is no unaffirmed landing, so a create
+   ;; IS an affirmation; the composer's own door for what it noticed is
+   ;; an intent hypothesis, and the refusal names it.
+   ;;
+   ;; SHAPE FIRST, HAND NEXT — `insight`'s ordering and its reason. The
+   ;; ownership wall judges a field the caller SUPPLIED and the
+   ;; affirmation wall judges the caller, so the form's own problem is
+   ;; answered before anything about whose hand it is. It also keeps
+   ;; that wall reachable: since waymark-bug the only agent that gets
+   ;; past the affirmation wall is one holding a `value.create` grant,
+   ;; and a grant that opens this door must not also open *and about
+   ;; somebody else*.
+   :create-guards [a-private-value-is-a-persons-own
+                   (affirmation-wall :create)]
    :on-create born
-   :scenarios [an-agent-writes-what-it-observes
+   :scenarios [an-agent-does-not-declare-a-value
+               a-person-declares-a-value
                an-agent-does-not-affirm
                an-agent-does-not-reword-what-the-owner-affirmed
-               an-agent-corrects-what-it-observed
-               a-person-rewords-rather-than-restates
                an-observed-value-is-the-houses
                a-person-amends-what-the-house-declared
                somebody-elses-value-is-not-yours-to-reword
                a-petition-is-answered-with-one-tap]
    :actions
-   ;; THE WORDING DOOR SPLITS BY HAND, and the ns docstring records
-   ;; why: `:to` is a static keyword, so one door cannot land in two
-   ;; states, and a shared door would have had an agent's own rewording
-   ;; land in `declared` — the observer affirming its own guess.
-   {:revise {:from #{:observed :declared} :to :declared
+   ;; THE WORDING DOOR NO LONGER SPLITS BY HAND (waymark-bug). jfv.10
+   ;; split it because `:to` is a static keyword and one door cannot
+   ;; land in two states: a shared door would have had an agent's own
+   ;; rewording land in `declared`. With `observed` gone there is one
+   ;; landing and therefore one door, and the observer's half went with
+   ;; the state — `hypothesis.restate` is where a reading corrects what
+   ;; it noticed now, and it corrects a row that carries the number
+   ;; instead of a row that carries the law.
+   {:revise {:from #{:declared} :to :declared
              :input revise-input
              :edit {:prefill [:name :says :loved]}
              ;; the overwrite writes the whole authored surface and is
@@ -693,67 +753,48 @@
              :waives #{:large-effort}
              :guards [(affirmation-wall :revise) this-is-yours-to-declare]
              :safety {:idempotent true :reversible false :confirm false
-                      :one-way "Rewording overwrites the declaration with what you write; the log keeps the prior words, who changed them and when, so the amendment is a record rather than a replacement. If this value was only observed, rewording it also makes it yours."}
+                      :one-way "Rewording overwrites the declaration with what you write; the log keeps the prior words, who changed them and when, so the amendment is a record rather than a replacement."}
              :handler apply-revision
              :display {:label "Reword" :order 1
-                       :description "Say it differently, or change the activities you love that serve it — and if this one was only observed in your record, saying it in your own words is what makes it the house's"}}
-    ;; THE OBSERVER'S OWN WORDING DOOR (waymark-jfv.10). The same
-    ;; overwrite, the same input, a self-loop, and no affirmation
-    ;; stamp: an agent that learns more rewrites what it wrote down and
-    ;; the row is still a guess afterwards. No ownership wall, because
-    ;; `a-private-value-is-a-persons-own` means every `observed` row in
-    ;; this engine is household-scoped by construction.
-    :restate {:from #{:observed} :to :observed
-              :input revise-input
-              :edit {:prefill [:name :says :loved]}
-              :record true
-              :waives #{:large-effort}
-              :guards [only-the-observer-restates]
-              :safety {:idempotent true :reversible false :confirm false
-                       :one-way "This overwrites what was observed with what you now think you see; the log keeps the earlier reading. The value stays observed either way — nothing here makes it the house's."}
-              :handler apply-restatement
-              :display {:label "Correct what was observed" :order 3
-                        :description "New evidence changed the reading — rewrite it. It stays observed: only a person's hand makes it this house's law"}}
-    ;; THE AFFIRMATION, AND THE PETITION'S OWN DOOR — one tap doing
-    ;; both. No :input, deliberately and structurally: an insight's
-    ;; offer must be no heavier than `selection`, and a door taking so
-    ;; much as one string renders `recall`. Asking for nothing is what
-    ;; makes this action a legal offer and a legal card chip. From
-    ;; `observed` it is the whole affirmation; from `declared` it is
-    ;; "I read what you brought me and it stands anyway", and the
-    ;; rewording is `revise`, two doors up, by the owner's own hand.
-    :still_stands {:from #{:observed :declared} :to :declared
+                       :description "Say it differently, or change the activities you love that serve it"}}
+    ;; THE PETITION'S OWN DOOR, and since waymark-bug that is the only
+    ;; thing it is. No :input, deliberately and structurally: an
+    ;; insight's offer must be no heavier than `selection`, and a door
+    ;; taking so much as one string renders `recall`. Asking for
+    ;; nothing is what makes this action a legal offer and a legal card
+    ;; chip. It used to do two jobs — affirm an observed value, and
+    ;; answer a petition on a declared one — and the first went with
+    ;; the state. What is left is the more useful of the two: THE OWNER
+    ;; READ THE EVIDENCE AND THE VALUE STANDS ANYWAY, which tells a
+    ;; composer the friction is in the plan and not in the declaration.
+    :still_stands {:from #{:declared} :to :declared
                    :guards [(affirmation-wall :still_stands)]
                    :handler stamp-the-affirmation
                    :safety {:idempotent true :reversible false :confirm false
-                            :one-way "This puts your name to these words: the value is one this house holds, and the date is stamped. From an observed value it is what makes it yours; from one you already declared it records that you read what was found and it stands anyway — the fact that tells a composer the friction is in the plan rather than in the declaration. The words themselves do not change."}
+                            :one-way "This puts your name to these words again and stamps the date: you read what was brought to you and the value stands anyway — the fact that tells a composer the friction is in the plan rather than in the declaration. The words themselves do not change."}
                    :display {:label "Yes — this one's ours" :order 2
-                             :description "This is a value this house holds. If it was only observed, this is the tap that makes it yours; if you already declared it, this says you read the evidence and it stands"}}
+                             :description "You read the evidence somebody brought and this value stands anyway. The words do not change; what is recorded is that you looked"}}
     :retire {:from #{:declared} :to :retired :undo :restore
              :guards [(affirmation-wall :retire) this-is-yours-to-declare]
              :safety {:idempotent true :confirm false}
              :display {:label "Retire" :style :danger :order 8
                        :description "This is not one of ours any more — the outcomes that serve it stop being offered, the row stays on record, and restore brings it back"}}
-    ;; THE OTHER ANSWER TO A GUESS, and it is a separate door rather
-    ;; than an arm of `retire` for two reasons, one mechanical and one
-    ;; the household's. The mechanical one: an `:undo` must return
-    ;; exactly where it departed from, and `restore` lands in
-    ;; `declared` — so an action that could leave from either state
-    ;; could not declare one. The household's is the better reason:
-    ;; retiring a value you held and telling an observer it read you
-    ;; wrong are different sentences, and the composer that reads this
-    ;; row's transitions should be able to tell them apart. Both land
-    ;; in `retired`, because a value this house is not holding is a
-    ;; value this house is not holding.
-    :dismiss {:from #{:observed} :to :retired
-              :guards [(affirmation-wall :dismiss)]
-              :safety {:idempotent true :reversible false :confirm false
-                       :one-way "This says the reading was wrong: no outcome may be staged against it, and what was observed stays on record with your answer beside it. Restore brings it back if you change your mind — and it comes back as yours."}
-              :display {:label "Not one of ours" :style :danger :order 7
-                        :description "Somebody read this house and got it wrong. Say so — it stops being something a week can be spent on, and the record keeps both the guess and your answer"}}
-    ;; a restored value comes back DECLARED rather than observed: a
-    ;; person reaching for this door has held it again with his own
-    ;; hand, so it stamps like every other landing in `declared`
+    ;; `dismiss` WENT WITH `observed` (waymark-bug). It left from
+    ;; `observed` and landed in `retired`, and it existed for the
+    ;; household's reason rather than the mechanical one: retiring a
+    ;; value you held and telling an observer it read you wrong are
+    ;; different sentences, and a composer reading the log must be able
+    ;; to tell them apart. Both sentences are still sayable and neither
+    ;; is said here any more — *you read us wrong* is
+    ;; `hypothesis.dismiss` and *this was true and is not now* is
+    ;; `hypothesis.retire`, on the row that carried the guess. What is
+    ;; left on this kind is `retire`, which has always meant the second
+    ;; one about a value the house actually declared.
+    ;; a restored value comes back DECLARED: a person reaching for this
+    ;; door has held it again with his own hand, so it stamps like
+    ;; every other landing in `declared`. It is also the way back for a
+    ;; value the belief migration retired — an observed row the owner
+    ;; reads and agrees with is one `restore` from being his law
     :restore {:from #{:retired} :to :declared :undo :retire
               :guards [(affirmation-wall :restore) this-is-yours-to-declare]
               :handler stamp-the-affirmation

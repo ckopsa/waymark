@@ -79,6 +79,7 @@
    ;; did not finish. The value beneath it is what keeps it there, and
    ;; a value is never terminal, so it outlives everything.
    "composition_requests" "outcome_pieces" "outcomes" "values" "people"
+   "hypotheses"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 
@@ -181,6 +182,22 @@
               :last_message_at "2026-08-28T03:54:19Z"
               :participant_names ["Wellesley Kopsa"]}
    :etag "conformance-etag-1"})
+
+;; THE ONE NUMBER GENERATION CANNOT GUESS (waymark-bug). A
+;; hypothesis's `prior` is bounded 0.02–0.5 by a guard rather than by
+;; the schema, because `waymark10.schema`'s `:decimal` derives its own
+;; generator from its `:min`/`:max` with `(long …)` — so a band
+;; entirely inside 0 and 1 would generate the single value 0 and the
+;; walker would refuse every row it wrote. That is exactly the case
+;; `example-input!`'s docstring names: a check-style guard with an
+;; acknowledged open judgment. The `about` address names this kind's
+;; own collection, so the citation wall is answering about something.
+(fac/example-input! :hypothesis :create
+  (fn [_] {:claim (str "Somebody here means to do the thing "
+                       (subs (str (random-uuid)) 0 8))
+           :shape "intent"
+           :about [(str "/api/hypotheses/walked-" (random-uuid))]
+           :prior 0.1M}))
 
 ;; ── the whole suite ─────────────────────────────────────────────────
 

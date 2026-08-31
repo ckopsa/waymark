@@ -79,34 +79,57 @@ prints:
   facts into log-odds and prints the ten biggest movers:
 
   ```
-  CLAIM-LESS MOVER: Iris  /api/people/iris moved +4.48 this week
-    (standing at +3.18) — atoms: thread/7fda11c6 2026-08-24 —
-    costly_action, unprompted_mention (2 facts, one occasion —
-    counted once and 50% again); thread/9c02af31 2026-05-02 —
-    declined_invite
+  CLAIM-LESS MOVER: Iris  /api/people/iris moved +6.04 this week
+    (standing at +4.74) — atoms: thread/7fda11c6 2026-08-24 —
+    costly_action, unprompted_mention, unprompted_mention (the same
+    word said more than once in one occasion — counted once and 50%
+    again); thread/9c02af31 2026-05-02 — declined_invite
   ```
 
-  **What it is for, and what it is not.** The house stores NO belief
-  anywhere: this is recomputed from scratch on every reading, off
-  `scripts/movements.jq`, and nothing it produces is written back.
-  There is no hypothesis kind yet, so the thing that moves is the
-  ABOUT-ROW — the person, the value, the thread a fact cites — which
-  is why it says CLAIM-LESS. **The claim is yours.** The number tells
-  you where to look; saying what it MEANS, in a sentence, with the
-  atoms cited, is the reading's own work and the only place a claim
-  may be made at all.
+  **What it is for.** Since waymark-bug the belief is a ROW — a
+  `hypothesis`, with a claim in the household's words, a shape, the
+  rows it is about, where the guess started and a posterior the engine
+  folds from the typed findings that cite it. So the section READS
+  THE STORE when the store has anything to say, and a line looks like
+  this instead:
+
+  ```
+  OBSERVED · Jack wants to build things with his hands [interest]
+    moved +2.13 this week, standing at 87% (+1.90 log-odds) off 3
+    fact(s)  /api/hypotheses/01H…
+  ```
+
+  **The claim is a row now, and answering it is a person's.** The
+  reading's work is to WRITE the claim (create a hypothesis), correct
+  it as it learns more (`restate`), and offer the owner the tap —
+  `still_stands` on that row, through a finding that cites what it
+  read. Affirming, dismissing and retiring are the owner's, and no
+  reading may reach them on a row it observed itself, whatever its
+  grant says: the run that read the evidence is never the run that
+  says what it means.
+
+  **The computed block is still there and is not a courtesy.** A house
+  with no hypotheses — which is every house until a reading writes
+  some — falls back to slice 1's fold over the ABOUT-ROWS, printed as
+  CLAIM-LESS MOVER, and so does a house whose kind is not deployed. A
+  belief is folded at birth and then nightly, so a fact indexed this
+  afternoon reaches the stored posterior tonight and the computed
+  block sees it now. **The section's own first line says which
+  answered**, and a reading must never have to guess whether the
+  number in front of it came from the record or from the driver.
 
   Three rules, and `docs/spec-hypotheses.md` is the design record for
   all of them. **One:** each fact contributes `ln(likelihood ratio)`,
   cost-graded where somebody spent something, discounted where the
   house ASKED, and the sum is clamped — no pile of facts becomes
-  certainty. **Two:** one occasion contributes its strongest fact,
-  half again if it carried more than one, because enthusiasm in a
-  single conversation is warmth and not four observations. **Three:**
+  certainty. **Two:** one WORD in one occasion contributes once, half
+  again if it was said more than once, because enthusiasm in a single
+  conversation is warmth and not four observations — two DIFFERENT
+  words in one evening are two observations and both count. **Three:**
   every contribution decays by `2^(−age ÷ half-life)`, per type, so a
-  row nothing has fed for two years does not reverse — it forgets.
+  belief nothing has fed for two years does not reverse — it forgets.
   *Moved this week* is that fold run twice, today and with the clock
-  set back seven days; so a row moves when a new fact lands **and**
+  set back seven days; so a belief moves when a new fact lands **and**
   when an old one fades, and both are real news.
 
   The numbers are the household's, on the feed document at
@@ -114,10 +137,33 @@ prints:
   editable in the recipe's own form or through a `recipe_proposal` a
   person taps. A finding the house DISMISSED is left out — the house
   said the claim was wrong, and an atom on a rejected claim is not
-  evidence. **If nothing is typed, the section says so and stops**,
-  which is where every house starts. The working — every atom, every
-  fold, and which document the table came from — is in the manifest at
-  `movements`.
+  evidence; dismissing a wrong finding is also the only lawful way a
+  reading takes an atom back OUT of a fold, because retyping one to
+  move a number is the thing the whole split exists to prevent. **If
+  nothing is typed and nothing is believed, the section says so and
+  stops.** The working — every atom, every fold, and which document
+  the table came from — is in the manifest at `movements`.
+- **A BELIEF IS A ROW, AND WRITING ONE IS THE READING'S** (waymark-bug,
+  `docs/spec-hypotheses.md`). `POST /api/hypotheses` takes `claim` (one
+  sentence, the household's words), `shape` (`interest` / `intent` /
+  `pattern` / `relationship` / `gap`), `about` (at least one
+  `/api/<plural>/<id>` address — the person, the value, the
+  conversation the claim is about) and `prior` (0.02–0.5: where the
+  guess honestly started). Nothing else: the posterior, the atoms and
+  the movement are the engine's and no door takes them.
+
+  **`about` IS THE LINK.** Any typed finding whose `evidence` cites one
+  of those addresses feeds the belief, and so does one that cites the
+  hypothesis's own address — which is how you hang an atom on a claim
+  rather than on its subject. So a belief written about rows a pile of
+  standing findings already cites is fed the moment it exists, with no
+  edit to any finding.
+
+  **One belief of one shape per thing.** A second hypothesis of the
+  same shape overlapping a standing one's `about` is refused by name
+  (`not-a-second-belief`) and the refusal names the row to reword: two
+  beliefs about one thing split their evidence and neither moves.
+  Reword the standing one with `restate` instead.
 - **Every order is labeled** `CLERK` or `EDITOR`, and a reading owns
   both. The rule: an order is *editor* when its expected write is an
   outcome, an unmarked rework, an answer to a person's question, an
