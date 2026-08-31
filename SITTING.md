@@ -463,10 +463,34 @@ holding your place in it.
    complete run. `sitting-run.sh verify` grades the previous
    manifest's work orders one line each — `ORDER <probe> <subject>:
    answered by <row>` or `UNANSWERED`, where answered means a row you
-   wrote this run CITES the subject's address — and otherwise only
-   faults a run that left a person's remark or a plainly-bare task
-   untouched. An UNANSWERED order is not automatically a failure; an
-   UNANSWERED order beside a journal that never mentions it is.
+   wrote this run CITES the subject's address (or, where the order
+   asked for a reply, a remark of yours whose `in_reply_to` names the
+   turn it named) — and otherwise only faults a run that left a
+   person's remark or a plainly-bare task untouched. An UNANSWERED
+   order is not automatically a failure; an UNANSWERED order beside a
+   journal that never mentions it is.
+
+   Then it prints ONE LINE PER ROW you wrote beyond the orders, each
+   naming which lawful thing that row was (waymark-kfm), in this
+   precedence — first match wins:
+
+   - `ORDER-ANSWER` — it answered an order or an owed list, so it is
+     graded on the order's own line above and never repeated here.
+   - `FORM-ANSWER` — it cites the subject a mailed form named, or it
+     IS the reply that form asked for.
+   - `FACT INDEXED` — an insight citing a turn the manifest listed
+     under *what people said that nothing has indexed*.
+   - `ARRIVAL ADVANCED` — it cites a row the manifest listed as
+     arrived. Advancing what arrived is the job, never an extra.
+   - `ENRICHED` — an insight citing a task the manifest listed as
+     bare.
+   - `EXTRA` — a reading's one freedom, and a sitting has none.
+   - `FILLER` — none of the above: the warning, and the only one of
+     these lines that is a fault.
+
+   A list your manifest is too old to carry is unknown, not empty:
+   `verify` says `CLASSES UNAVAILABLE` and grades those rows by the
+   older rule rather than calling your assignment filler.
 
 ## The walls (the doors enforce these — trust the refusal sentences)
 

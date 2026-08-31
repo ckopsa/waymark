@@ -177,14 +177,17 @@ pasting `scripts/sitting-run.sh verify`.
    probe reached. A wrapper is still a wrapper; twins are still
    refused at the door; an outcome the rows do not imply is a skip
    said out loud.
-5. **ONE extra, or none** (waymark-mqo). Beyond the orders, one row
-   the manifest did not order: cited to the rows you actually read,
-   distinct from everything standing, with one sentence in the journal
-   on why it was worth a row. `verify` grades it `EXTRA: cited,
-   distinct` or `FILLER`. If nothing deserves it, none — and the
-   journal says so. (Fable, 2026-08-28: read Grandpa-care facts and a
-   VA caretaker stipend in chats and wrote none of it, because the
-   sitting's ceiling forbade extras. That is what this line is for.)
+5. **ONE extra, or none** (waymark-mqo). Beyond everything the
+   manifest named, one row it did not: cited to the rows you actually
+   read, distinct from everything standing, with one sentence in the
+   journal on why it was worth a row. `verify` grades it `EXTRA:
+   cited, distinct` or `FILLER`. If nothing deserves it, none — and
+   the journal says so. (Fable, 2026-08-28: read Grandpa-care facts
+   and a VA caretaker stipend in chats and wrote none of it, because
+   the sitting's ceiling forbade extras. That is what this line is
+   for.) **The cap counts extras only** (waymark-kfm): a row that
+   advances an arrival, indexes a listed fact or enriches a bare task
+   is the assignment, not the freedom, and it never spends the extra.
 6. **Contradictions between rows** (waymark-63s). Two are mechanical
    orders on the manifest: `stale-relative-date` (a task overdue whose
    detail still says "Monday") and `far-event-names-a-task` (an event
@@ -278,7 +281,8 @@ Everything it says about a sitting, and: `EDITOR ORDER … answered by
 <row>` / `SKIPPED OUT LOUD` / `UNANSWERED AND UNSAID` (the fault —
 printed, never blocked); `EXTRA: cited, distinct` / `FILLER` — and an
 extra is judged against the write each order asked for, so a row that
-merely cites an order's subject is still your extra (waymark-alj);
+merely cites an order's subject is still your extra (waymark-alj), and
+only an `EXTRA`-class row spends the one extra (waymark-kfm);
 `QUESTION CORRECTED` / `QUESTION ANSWERED` / `UNCHECKED QUESTION`
 (waymark-3wh); `SAYS-SO`; `NOTES FOR SITTINGS: N form(s) left` —
 counted off the journal body read at its own address, where a body
@@ -287,6 +291,14 @@ actually lives; and `LETTER FOR THE SITTINGS: sent — <address>` or
 where the sittings cannot read them). A sitting is never
 faulted for a line under *Waiting for a reading*; a reading is faulted
 for leaving one unaddressed and unsaid.
+
+Both runs get the same one-line-per-row classification (waymark-kfm),
+in this precedence: `ORDER-ANSWER` (graded on the order's own line, so
+never repeated), `FORM-ANSWER`, `FACT INDEXED`, `ARRIVAL ADVANCED`,
+`ENRICHED`, `EXTRA`, `FILLER` — SITTING.md's priority 6, where verify
+is described, has the definitions. The four in the middle are the
+assignment, not the freedom: an insight that advances an arrival was
+never a second extra, whatever the grader used to print.
 
 ## What a reading never does
 
