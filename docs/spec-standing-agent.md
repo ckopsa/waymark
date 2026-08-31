@@ -292,6 +292,43 @@ The classification is `scripts/verify-classes.jq`, a pure function
 with a fixture of its own: `bash scripts/verify-classes-fixture.sh`,
 one synthetic row of each class, no house at all.
 
+**What the house already says, and where to look next** (waymark-frv,
+2026-08-30). The block `waymark-nl0` built printed the record under a
+thread whose subject was an OUTCOME, and nothing else. Two specimens
+say why that was not enough. On **2026-08-29** the owner asked on the
+placard bundle whether Rod could get it without a Utah ID; the bundle's
+own cited task carried the answer in its DETAIL — *"No state ID
+required — TC-842 accepts SSN as the ID type, and it mails in"* — and
+Gemini, handed the thread, answered from the question and published its
+answer as a finding. On **2026-08-31** a mailed form asked whether
+Clark's baptismal interview had happened; the cited finding named the
+Messages thread with Chris Archibald, and the clerk wrote *"still
+unknown"* without opening it. So the block now goes under **every**
+owed person turn, **every mailed FORM** and **every handed-back
+bundle**, whatever kind the subject is, and it prints two things: WHAT
+STANDS (the subject and each row it cites — a task's title *and*
+detail, an event's times, a person's relation — plus every published
+finding naming one of them, newest first, capped) and **WHERE TO LOOK
+NEXT** (the thread the record points at, by address and title, with
+`tgram__get_messages`; the thread a person on those rows is in; and a
+Gate search key derived by the same `wm_keys` a work order carries).
+Under each: *answer FROM these rows; cite the one that answers; quote
+the one that contradicts; if they point at a thread, READ it before
+answering "unknown"; never index a question — or your own answer — as
+a fact.* A thread row is an address with no words in it, which is the
+whole point: the manifest names the conversation and never carries the
+messages, so **nothing is unknown until somebody opens it**. `verify`
+adds two warnings, neither blocking: `SAYS-SO` against a finding this
+run published whose evidence is only a remark and an outcome, and
+`UNREAD SOURCE` against a reply under a person's question where the
+block cited a readable thread that no row of the run cites and the
+journal never names — cleared by citing it, or by saying out loud what
+you tried to read. The block is `scripts/house-says.jq` and the two
+warnings are `scripts/answer-checks.jq`, both pure functions over
+`scripts/wm-keys.jq` (lifted out of the driver so the manifest's search
+key and a work order's are one rule), with a fixture carrying both
+specimens: `bash scripts/house-says-fixture.sh`.
+
 **The notes cross as a LETTER** (waymark-bbb). A reading ends its
 journal with a `notes_for_sittings` block — one form per line, `- do:
 <write> at <door> citing </api/…> — <the sentence>` — and then MAILS

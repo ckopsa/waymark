@@ -272,8 +272,24 @@ honestly what you did with it. **A QUESTION waits for a reading**: its
 answer has to come from the record, and a sitting that answers from
 the question publishes a false fact with an address (2026-08-29: "Rod
 needs a state ID" while the TC-842 task detail said SSN suffices).
-Leave it exactly as it stands, and never index a question as a fact
-(`verify` prints `SAYS-SO`). When the turn changes the standing of the outcome
+Leave it exactly as it stands, and never index a question — or your own
+answer — as a fact (`verify` prints `SAYS-SO`).
+
+**The clerk answers from the record, and WHERE TO LOOK is part of the
+record** (waymark-frv). WHAT THE HOUSE ALREADY SAYS prints under every
+owed turn, every mailed FORM and every handed-back bundle: the subject
+and each row it cites — a task's title **and its detail**, an event's
+times, a person's relation — plus every published finding naming one of
+them, then **WHERE TO LOOK NEXT**, which names the Messages thread the
+record points at (`read /api/threads/<id> via tgram__get_messages`) and
+a Gate search key. A thread row is an address with no words in it, so
+**nothing is unknown until somebody opens it**: on 2026-08-31 a clerk
+answered a form about Clark's baptismal interview "still unknown" with
+the thread named two lines above. `verify` prints `UNREAD SOURCE`
+against that. It is a warning, and saying in the journal what you tried
+to read clears it.
+
+When the turn changes the standing of the outcome
 it sits on — a date slid, a plan on hold, someone sick — say so on
 that outcome in a reply: what changed, what you did about it (the
 insight indexed, the follow-up staged, by id), what you left alone.
