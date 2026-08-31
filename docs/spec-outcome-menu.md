@@ -1891,6 +1891,31 @@ like every other landing in `declared`.
 > been abandoned; it moved a slice down the epic, and `value_test`'s
 > own docstring says where its coverage went.
 
+> **RULING NOTE, 2026-08-31 (waymark-4t9), answering the one above.**
+> Slice 3 landed, and it repointed **the RANK rather than this
+> clause**. `crown-lift`'s first term now reads the posterior of the
+> value's intent hypothesis for every case that is not `:declared`
+> (`feed/value-lift`, `feed/value-beliefs`), and `crown-rank-says`
+> quotes the belief's own claim, its percentage, its atom count and
+> its address on the card's `why.crown` sentence — *It serves a value
+> nobody has affirmed, so what lifts it is what the record SAYS about
+> that value: "…" stands at 62% off 4 facts, which lifts it 6 of the
+> 10 a declared value would — a number can never reach a person's word
+> here.* **`outcome-says`'s clause is untouched and still unreached**,
+> because no value can reach it: the sentence a person reads on the
+> card body would need a value row in `observed`, and there are none.
+> The number went where the number was, which is the rank.
+>
+> **THE TIER IS ARITHMETIC NOW.** `log_odds_clamp` keeps every
+> posterior strictly under 1 and `value-lift` floors the product, so
+> an unaffirmed value can never reach the weight a declared one gets —
+> `crown-key`'s rule about *asked for*, read one input over, and held
+> by construction rather than by a special case somebody could edit
+> out. **And a belief with no atoms lifts nothing at all**
+> (waymark-dl1's ruling, `docs/spec-hypotheses.md` § *Built —
+> slice 3*): a posterior born of no evidence must not read as
+> evidence.
+
 `feed/outcome-says` gained one clause, and `feed/value-still-held?`
 became `feed/value-standing` (`:declared` / `:observed` / nil) so the
 population reads the standing once and hands it to the sentence. A real
@@ -3997,6 +4022,7 @@ Five inputs, and each is a number a person reads on the card:
 |---|---|---|
 | **asked for** | `outcome.request_id` names a `composition_request` (jfv.20) | `"asked": true` |
 | **the value's standing** | `feed/value-standing` — `declared` by a member, or `observed` by an agent and not yet affirmed (jfv.10) | `"value": "declared"` |
+| **what the record says about that value** (waymark-4t9) | `feed/value-beliefs` — the posterior of the value's `intent` hypothesis, and only where atoms feed it | `"believed": {"posterior": 0.62, "atoms": 4, "href": "/api/hypotheses/01H…", "claim": "…", "lift": 6}` — only when the house holds one |
 | **shown and passed over** | the same `feed_view` rows, the same window and the same `cooling-step` the contest reads (8um.3) | `"seen": 3, "cooled": 1` — only while the reader is recording |
 | **the house's word about this line of thinking** | the `verdict_reason` rows filed against each outcome up the `supersedes` chain (jfv.16), the heaviest word kept | `"declined": "never_this"` — only when a word was said |
 | **freshness** | whole days until `good_until` | `"days_left": 5` |

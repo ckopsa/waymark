@@ -743,7 +743,18 @@
                "What an evening that carried more than one fact counts, as a multiple of its strongest one alone — and no further, however many it carried. Enthusiasm in a single conversation is warmth, not four separate observations. At least 1: a busier evening must never count for less than a quieter one."]
               [:log_odds_clamp :ratio
                "Nothing may move further than"
-               "How far any pile of facts may move a belief, in log-odds. 6 is about a quarter of a percent either end. No finite pile becomes certainty, because a belief that reaches certainty stops reading evidence — this house proposes and never believes."])))
+               "How far any pile of facts may move a belief, in log-odds. 6 is about a quarter of a percent either end. No finite pile becomes certainty, because a belief that reaches certainty stops reading evidence — this house proposes and never believes."]
+              ;; …and the two the READING asks its questions with
+              ;; (waymark-4t9). Neither can move a card, hide a row or
+              ;; route anything: they decide what a reading is SHOWN
+              ;; and in what order, which is a rank on this house's own
+              ;; claims about itself.
+              [:test_band :ratio
+               "Worth testing when it stands within"
+               "How near even odds a belief has to stand, in log-odds, before a reading calls it worth testing — 1.1 is about a quarter to three quarters. A belief the record already puts at nine-to-one is not a question, it is an answer. The same number decides when two beliefs about the same rows DISAGREE far enough to be called a gap between what this house says and what it does."]
+              [:thin_evidence :ratio
+               "Too little evidence to mean much"
+               "How little evidence counts as none, measured as the weight of everything behind a belief added up with the sign taken off. Below it a belief is standing on the guess it started from and little else, and the reading says THIN rather than pretending the facts merely disagree. About one unprompted mention."])))
 
 (def ^:private prose
   "The household's own words for the authored fields, spelled ONCE and

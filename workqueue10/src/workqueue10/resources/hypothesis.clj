@@ -113,13 +113,35 @@
 
   ── NO DOOR SETS THE POSTERIOR ───────────────────────────────────────
 
-  `posterior`, `posterior_log_odds`, `movement_7d`, `atom_count`,
-  `atoms` and `last_moved` are absent from `:create-schema` and from
+  `posterior`, `posterior_log_odds`, `movement_7d`, `evidence_weight`,
+  `evidence_contested`, `atom_count`, `atoms` and `last_moved` are
+  absent from `:create-schema` and from
   every action's `:input`. There is no guard refusing them because
   there is no door to refuse at — the wall is STRUCTURAL, which is
   fork (g), and what it buys is the row's own promise: A HYPOTHESIS IS
   A CACHE OF AN ARITHMETIC ANYONE CAN REDO. Delete every posterior in
   the store and one pass rebuilds them identically.
+
+  ── WHAT THE POSTERIOR CANNOT SAY (waymark-4t9, slice 3) ─────────────
+
+  A belief at even odds because six facts pull against each other and
+  a belief at even odds because nothing has ever fed it are the same
+  percentage and are not the same belief. `evidence_weight` (the mass
+  of the fold, sign taken off) and `evidence_contested` (how much of
+  that mass cancels) are what tell them apart, and they are the two
+  numbers the reading's EXPERIMENTS section picks candidates by: a
+  claim the record argues with itself about is a claim one cheap trial
+  could settle. An outcome names the belief it is testing in its own
+  `tests` field — never in `evidence`, because a hypothesis a bundle
+  is TESTING is not a row it READ.
+
+  AND THE ASYMMETRY A BELIEF WITH NO ATOMS LIVES UNDER (the dl1
+  ruling, docs/spec-hypotheses.md § 'Built — slice 3'): it may
+  propose an experiment, because a claim with no evidence is the
+  purest question there is; it may never appear in a GAP and it may
+  never lift a crown card, because a posterior nobody has fed is a
+  prior somebody typed, and the crown reading it as evidence would be
+  the house arguing with its own guess.
 
   The arithmetic is `waymark10.belief` — three rules, forty lines, in
   Clojure rather than in a `:derived {:expr …}` tree because
@@ -582,6 +604,12 @@
    :movement_7d {:x-display
                  {:label "Moved this week"
                   :help "How far this belief moved in seven days, in log-odds — today's fold less the same fold with the clock set back a week. It moves when a new fact lands AND when an old one fades, and both are real news."}}
+   :evidence_weight {:x-display
+                     {:label "How much evidence"
+                      :help "How much evidence there is behind this belief, in log-odds, counting every occasion at its full size whichever way it points. It answers the question the percentage cannot: a claim at even odds because six facts are pulling against each other and a claim at even odds because nothing has ever fed it are the same number and are not the same belief. Written by the engine."}}
+   :evidence_contested {:x-display
+                        {:label "How much of it disagrees"
+                         :help "How much of that evidence cancels itself out — zero when every fact points the same way, and larger the heavier the losing side is. This is what makes a belief worth TESTING: a claim the record argues with itself about is one a single cheap trial could settle. Written by the engine."}}
    :atom_count {:x-display
                 {:label "Facts behind it"
                  :help "How many typed findings feed this belief right now. A dismissed finding is not one of them."}}
@@ -850,7 +878,7 @@
    :deviations
    ["prior is a NUMBER a guard bounds rather than a vocabulary the schema publishes, so the effort-honesty check warns and the guard's :open acknowledges it. The band 0.02–0.5 cannot be schema properties: waymark10.schema's :decimal derives its generator from its own :min/:max with (long …), so a band entirely inside 0 and 1 generates the single value 0 and the conformance walker would refuse every row it wrote. The schema holds the honest outer bound and the door holds the household's, with the sentence that names the fix."
     "about is judged at the wording doors by a-belief-stays-about-something, which is storage-free on purpose (waymark-ilf: a wall that read rows would drag every scenario about restate and revise into the conformance tier, where a row staged by the walker cannot be restated by the reading that a scenario names) — so it does not get the effort-honesty exemption the create door's own citation wall gets from :reads [:storage], and two warnings ride on that. There is no vocabulary to publish: about is a vector of addresses to ANY row this house serves, so the legal answers are the whole record and a picker over them is the collection GET a client already has."
-    "posterior, posterior_log_odds, movement_7d, atom_count, atoms and last_moved have no door and no guard — they are engine-written by waymark10.belief and absent from :create-schema and every :input, which is a structural wall rather than a judged one (docs/spec-hypotheses.md fork (g))."]
+    "posterior, posterior_log_odds, movement_7d, evidence_weight, evidence_contested, atom_count, atoms and last_moved have no door and no guard — they are engine-written by waymark10.belief and absent from :create-schema and every :input, which is a structural wall rather than a judged one (docs/spec-hypotheses.md fork (g))."]
    :schema
    [:map
     (entry :claim {:sort true} claim-schema)
@@ -877,6 +905,26 @@
            [:maybe [:decimal {:min -20 :max 20}]])
     (entry :movement_7d {:optional true :sort true}
            [:maybe [:decimal {:min -20 :max 20}]])
+    ;; …AND THE TWO SLICE 3 ADDED (waymark-4t9). The posterior says
+    ;; where a belief stands and cannot say what is holding it there.
+    ;; These two do: how much evidence there is, and how much of it
+    ;; cancels. They are cached for the same reason `posterior_log_odds`
+    ;; is — a reader that had to refold every atom to ask the question
+    ;; would be a second arithmetic beside the engine's — and they have
+    ;; no door for the same reason nothing else here does.
+    ;;
+    ;; NEITHER IS :sort, DELIBERATELY, and the reason is the deployed
+    ;; table. `filterable ∪ sortable` is what promotes a field to a
+    ;; generated COLUMN (`store/kind-projection`), so a `:sort true`
+    ;; here would be an ALTER on a table production already holds — a
+    ;; migration bought for an ordering nobody needs, since every
+    ;; reader of these two numbers (the reading's GAPS and EXPERIMENTS
+    ;; sections) already holds the whole row. They ride in the
+    ;; document, where the rest of the fold's working rides.
+    (entry :evidence_weight {:optional true}
+           [:maybe [:decimal {:min 0 :max 1000}]])
+    (entry :evidence_contested {:optional true}
+           [:maybe [:decimal {:min 0 :max 1000}]])
     (entry :atom_count {:optional true} [:maybe [:int {:min 0}]])
     (entry :atoms {:optional true}
            [:maybe [:vector [:map-of :keyword :any]]])

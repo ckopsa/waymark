@@ -715,8 +715,9 @@
       (let [doc (feed-as who)
             lr (get-in doc [:recipe :evidence_lr])
             says (str (get-in doc [:recipe :evidence_lr_says]))]
-        (is (= 22 (count lr))
-            "ten ratios, a discount, nine half-lives and two walls")
+        (is (= 24 (count lr))
+            "ten ratios, a discount, nine half-lives, two walls, and the two
+             the reading asks its questions with (waymark-4t9)")
         ;; the numbers the spec fixed by name, top and bottom
         (is (= 20 (long (:costly_action_high lr))))
         (is (= 5 (long (:costly_action_low lr)))

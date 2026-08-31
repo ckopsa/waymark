@@ -1509,6 +1509,38 @@
           "past the date nothing holds it, however long the chain")
       (is (= -8 (feed/crown-lift w pulled))
           "the lift can go negative and the asked tier does not care"))
+    (testing "THE CROWN READS A POSTERIOR (waymark-4t9): a value nobody
+              affirmed is no longer flat — it is lifted by what the record
+              SAYS about it, through the intent hypothesis's own number, and
+              a person's declared word still outranks every one of them"
+      (let [believed (fn [p n] {:asked false :value :observed :days-left 7
+                                :believed {:posterior p :atom_count n
+                                           :href "/api/hypotheses/H"
+                                           :claim "he means it"}})]
+        (is (= 16 (feed/crown-lift w (believed 0.92M 5)))
+            "⌊10 × 0.92⌋ = 9, plus 7 days left")
+        (is (= 8 (feed/crown-lift w (believed 0.12M 5)))
+            "a belief the record barely supports lifts 1")
+        (is (= 7 (feed/crown-lift w (believed 0.05M 5)))
+            "…and one it supports at 5% lifts nothing at all, which is where
+             every unaffirmed value stood before this slice")
+        (is (< (feed/crown-lift w (believed 0.9975M 40))
+               (feed/crown-lift w fresh))
+            "THE TIER HOLDS ARITHMETICALLY: log_odds_clamp keeps every
+             posterior under 1 and value-lift floors, so no pile of atoms
+             can reach what a person's own word gets — there is no `if`
+             here to edit out")
+        (is (= 17 (feed/crown-lift w (assoc (believed 0.92M 5)
+                                            :value :declared)))
+            "a DECLARED value is never graded by a number — the belief is
+             read past, not multiplied in")
+        (is (= 0 (feed/value-lift 10 nil))
+            "no belief lifts nothing — which is the dl1 ruling's own arm:
+             `value-beliefs` never hands over a belief with no atoms, so a
+             posterior born of nothing reads here exactly as silence")
+        (is (= 0 (feed/value-lift 0 {:posterior 1M}))
+            "and a household that turned the weight to zero turned this off
+             with it")))
     (testing "an agent's score is one more weighted number, centred on a half
               (waymark-1uv.6): 0.9 lifts one at the default weight, 0.1 holds
               one, a half is silence and so is no score at all"
@@ -1822,8 +1854,14 @@
   (testing "the table rides the wire as data and as a sentence"
     (let [recipe (:recipe (:doc (feed! (boot-house))))
           lr (:evidence_lr recipe)]
-      (is (= 22 (count lr))
-          "ten ratios, a discount, nine half-lives and two walls")
+      (is (= 24 (count lr))
+          "ten ratios, a discount, nine half-lives, two walls, and the two
+           the reading asks its questions with (waymark-4t9)")
+      (is (= 1.1 (double (:test_band lr)))
+          "how near even odds a belief has to stand before a reading calls
+           it worth testing — and how far apart two of them are a gap")
+      (is (= 1.5 (double (:thin_evidence lr)))
+          "…and how little evidence counts as none")
       (is (= 20 (long (:costly_action_high lr))))
       (is (= 5 (long (:costly_action_low lr)))
           "the one cost-graded type carries two numbers, not one")
@@ -1853,7 +1891,7 @@
                (feed/evidence-lr-of {:evidence-lr {:unprompted_mention 12}}))))
     (is (= 540 (:half_life_costly_action
                 (feed/evidence-lr-of {:evidence-lr {:unprompted_mention 12}})))
-        "naming one number does not clear the other twenty-one"))
+        "naming one number does not clear the other twenty-three"))
 
   (testing "the bounds are the arithmetic's, and each refuses by name"
     (let [says (fn [t] (str (try (feed/check-recipe!

@@ -6329,9 +6329,16 @@
         ;; and ignored — it is REFUSED at the schema, by name, before
         ;; any guard runs. That is what "there is no door to refuse
         ;; at" means when you knock on it (fork (g)).
+        ;; `evidence_weight` rides this body since waymark-4t9: slice 3
+        ;; added two more engine-written numbers, and the claim being
+        ;; proved is about the WHOLE derived set rather than about the
+        ;; posterior in particular — a field added to that set without
+        ;; being kept out of `:create-schema` is exactly the mistake
+        ;; this assertion exists to catch.
         strays (hypo! ctx hs {:claim claim :shape "intent"
                               :about [subject] :prior 0.1M
                               :posterior 0.99M
+                              :evidence_weight 9.0M
                               :observed_by "somebody-else"})
         stray-errors (set (keys (:errors (:doc strays))))
         born (hypo! ctx hs {:claim claim :shape "intent"
@@ -6346,10 +6353,12 @@
                        " schema is closed so that saying otherwise is a"
                        " refusal rather than a silent overwrite"))
 
-            (not= #{:posterior :observed_by} stray-errors)
+            (not= #{:posterior :evidence_weight :observed_by} stray-errors)
             (conj (str "feed: the refusal named " (pr-str stray-errors)
-                       " — it must name BOTH the posterior a door may not"
-                       " set and the four-eyes stamp a body may not claim"))
+                       " — it must name EVERY one of them: the posterior a"
+                       " door may not set, the weight of the evidence behind"
+                       " it (waymark-4t9), and the four-eyes stamp a body may"
+                       " not claim"))
 
             (not= 201 (:status born))
             (conj (str "feed: a reading could not write down what it noticed ("
