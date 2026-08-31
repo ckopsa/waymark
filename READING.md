@@ -108,6 +108,18 @@ prints:
   grant says: the run that read the evidence is never the run that
   says what it means.
 
+  **`restate` writes the fields you send and leaves the rest alone.**
+  Send the `claim` by itself to reword a belief and it goes on being
+  about the same rows — which matters more than it reads, because
+  `about` is the LINK: every fact behind the belief arrives through
+  those addresses, and `restate` refolds the number on the spot. So
+  send `about` only when you mean to change WHICH rows the claim is
+  about. Emptying it is refused by name, and narrowing it answers 409
+  first with how many addresses go and how many facts stand on them —
+  acknowledge by name if you meant it. (It also makes the claim-only
+  restate a safe manual refold: nothing is rewritten between the
+  nightly passes otherwise.)
+
   **The computed block is still there and is not a courtesy.** A house
   with no hypotheses — which is every house until a reading writes
   some — falls back to slice 1's fold over the ABOUT-ROWS, printed as

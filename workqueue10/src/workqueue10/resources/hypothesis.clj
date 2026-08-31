@@ -73,6 +73,44 @@
   them is linked the moment the row exists, with no edit to any
   finding and no new field on `insight`.
 
+  ── THE WORDING DOORS KEEP WHAT THEY ARE NOT TOLD (waymark-ilf) ──────
+
+  A field a wording door was not sent is a field it does not touch.
+  That is `waymark10.resource/apply-field-edits`'s law — *write
+  exactly the input fields the caller sent, nothing else; an absent
+  key is not an erase* — which is what every editor the framework
+  GENERATES already does, and this kind arrived spelling the other
+  answer by hand.
+
+  It was the wrong one here for a reason no whole-form editor has:
+  `about` is not a field, IT IS THE LINK. Nulling it orphans every
+  atom at once, and `restate` is the one door that re-folds on the
+  spot, so the damage is instant. It happened: a reading restated
+  c2b2d2fa with a corrected `claim` alone, the row's only atom was cut
+  loose, the posterior fell 0.5522 → 0.3000 — back to the prior — and
+  nothing in the answer said an atom had been lost (journal 3d37ddeb,
+  2026-08-31). The row was repaired by re-sending `about`.
+
+  Nothing lawful was lost with the wholesale overwrite, because
+  CLEARING `about` was never lawful: a claim about nothing is a mood,
+  and `a-belief-stays-about-something` now stands on both wording
+  doors to say so — `a-belief-cites-what-it-is-about`'s first arm,
+  storage-free so that every scenario about a wording door stays in
+  the check tier. Omit the field and it keeps; send it empty and the
+  door refuses by name. The two rules are one sentence — a belief
+  never stops being about something — said at the two places it can be
+  broken.
+
+  And a rewording that genuinely NARROWS `about` is a different act
+  from a slip: it is allowed, but not quietly.
+  `the-facts-behind-it-survive-a-rewording` is an E1 warning (the
+  `calendar-clear` shape, one household over): a rewording that takes
+  addresses OUT of `about` is answered, before it runs, with how many
+  go and how many stay — old → new — beside the number of facts
+  standing on the set it is cutting. Acknowledge by name and it
+  proceeds. It counts addresses and quotes the row's own
+  `atom_count`, so it costs a set difference and no query.
+
   ── NO DOOR SETS THE POSTERIOR ───────────────────────────────────────
 
   `posterior`, `posterior_log_odds`, `movement_7d`, `atom_count`,
@@ -160,6 +198,7 @@
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario unless-granted]]
             [waymark10.guards :as g]
+            [waymark10.resource :as resource]
             [waymark10.server.feed :as feed]
             [waymark10.types :as t]))
 
@@ -190,19 +229,39 @@
   [about]
   (into [] (comp (map #(str/trim (str %))) (remove str/blank?)) about))
 
+(defn- about-after
+  "What this write LEAVES the belief about — the field the caller
+  sent, else the one the row already carries.
+
+  The wording doors keep what they are not told (`rewritten`), so a
+  wall reading `inp` alone would judge a field the write is not
+  changing: it would refuse a lawful claim-only restate for omitting
+  `about`, which is the opposite mistake from the one waymark-ilf was.
+  A wall judges the ROW THIS WRITE WOULD LEAVE, and at create there is
+  no row, so this is just the body."
+  [row inp]
+  (if (contains? inp :about)
+    (:about inp)
+    (get-in row [:data :about])))
+
 ;; ── the walls ───────────────────────────────────────────────────────
 
 (defguardfn a-belief-cites-what-it-is-about
   {:judges [:about]
    :reads [:storage]
    :vars [:count :offenders]
-   :open "A belief names what it is about: at least one address, each of them /api/<collection>/<id> naming a collection this house serves — the person, the value, the conversation the claim is about."
+   :open "A belief names what it is about: at least one address, each of them /api/<collection>/<id> naming a collection this house serves — the person, the value, the conversation the claim is about. The half of this a wording door can break — leaving the set EMPTY — is `a-belief-stays-about-something`, which stands on `restate` and `revise`."
    :explain "A claim about nothing is a mood, not a hypothesis — name the rows it is about, as addresses like /api/people/01H… ({count} given{offenders}). A claim about this household as a whole has no address set this house can hold, and it is filed rather than smuggled."}
-  [_row inp ctx]
+  [row inp ctx]
   ;; `cites-what-it-claims`'s body, one kind over, and the same
   ;; storage-free posture: the render probe carries no registry, so it
   ;; advertises optimistically and the write path always consults.
-  (let [ab (addresses (:about inp))
+  ;;
+  ;; It reads `about-after` rather than the body so that it says the
+  ;; same thing its wording-door sibling says (waymark-ilf): a wall
+  ;; judges the ROW THIS WRITE WOULD LEAVE. At create there is no row
+  ;; and that is exactly the body, so nothing here changed.
+  (let [ab (addresses (about-after row inp))
         rdef-of (:rdef-of ctx)]
     (cond
       (nil? rdef-of) (t/allow)
@@ -220,6 +279,54 @@
                           :offenders (str "; this house has nothing at "
                                           (g/listed bad))}})
           (t/allow))))))
+
+(defguardfn a-belief-stays-about-something
+  {:judges [:about]
+   :vars [:standing]
+   :open "A belief is about something at every door, not only at birth. Rewording it may change WHICH rows it is about; it may not leave the set empty — and it does not have to say anything at all about the set, because a field a wording door was not sent is a field it does not touch."
+   :explain "This would leave the belief about nothing, and a claim about nothing is a mood rather than a hypothesis. The addresses are also THE LINK — every fact behind this belief arrives through them, and it stands on {standing} of them right now — so emptying the set would orphan all of them at once, in the same breath as the refold. Say the addresses this claim is about, or leave `about` out of the body entirely and the row keeps what it has."}
+  [row inp _ctx]
+  ;; `a-belief-cites-what-it-is-about`'s first arm, standing on the
+  ;; WORDING doors (waymark-ilf) — and storage-free on purpose, so
+  ;; every scenario about a wording door stays in the check tier
+  ;; where its verdict costs nothing. The registry half of that wall
+  ;; (does this house serve the collection you named?) stays at
+  ;; create, where it can be paid for once.
+  (if (empty? (addresses (about-after row inp)))
+    (t/deny {:vars {:standing (count (addresses
+                                      (get-in row [:data :about])))}})
+    (t/allow)))
+
+(defguardfn the-facts-behind-it-survive-a-rewording
+  {:severity :warning
+   :judges [:about]
+   :vars [:before :after :dropped :atoms]
+   :open "A rewording may change what a belief is about — but the address set IS the link every fact behind it arrives through, and the fold runs the moment the door closes. Narrowing the set is allowed; doing it without being told what goes with it is not."
+   :explain "This rewording takes {dropped} of the {before} address(es) this belief is about out of the set, leaving {after} — and the set is THE LINK: the {atoms} fact(s) behind this belief all arrive through it. The refold runs the moment this door closes, so every atom that reached the claim only through a dropped address leaves the fold with it and the number falls back toward the prior it started at. Acknowledge this if that is what you mean. If you only meant to change the WORDS, leave `about` out of the body — an omitted field keeps what the row already holds."}
+  [row inp _ctx]
+  ;; THE ANSWER SAYS SO (waymark-ilf). `calendar-clear`'s shape, one
+  ;; household over: the effect a write is about to have, in the
+  ;; numbers the caller controls, BEFORE it has it — E1, so a reading
+  ;; that means it acknowledges by name and proceeds, and one that
+  ;; slipped reads a sentence instead of a posterior that fell.
+  ;;
+  ;; It counts ADDRESSES and quotes the standing atom count rather
+  ;; than predicting the new one, which is the honest half: how many
+  ;; atoms survive is a question about every finding in the house, and
+  ;; a wall that read them all to answer it would drag every scenario
+  ;; on this door into the conformance tier for a number it can only
+  ;; say after the fold anyway. What the caller is doing to the LINK
+  ;; is knowable from the row and the body, and it is the thing the
+  ;; caller can actually take back.
+  (let [standing (set (addresses (get-in row [:data :about])))
+        proposed (set (addresses (about-after row inp)))
+        dropped (into #{} (remove proposed) standing)]
+    (if (empty? dropped)
+      (t/allow)
+      (t/deny {:vars {:before (count standing)
+                      :after (count proposed)
+                      :dropped (count dropped)
+                      :atoms (or (get-in row [:data :atom_count]) 0)}}))))
 
 (def ^:private prior-floor 0.02M)
 (def ^:private prior-ceiling 0.5M)
@@ -343,8 +450,9 @@
 ;; ── the stamps, and the birth's own fold ────────────────────────────
 
 (def ^:private authored-fields
-  "The surface both wording doors overwrite wholesale — the same
-  fields they take, so what is stored is exactly what was judged.
+  "The surface both wording doors may write — the same fields they
+  take, so what is stored is exactly what was judged. A field the
+  caller did not send is not one of them: see `rewritten`.
   `shape` stays OUT: a claim that changed shape is a different claim,
   and `not-a-second-belief` is keyed on the pair. `prior` stays out
   too, and that one matters: where a belief STARTED is a fact about
@@ -404,12 +512,22 @@
       (assoc-in [:data :affirmed_by] (get-in ctx [:principal :id]))))
 
 (defn- rewritten
-  "The authored surface, overwritten wholesale: an omitted optional
-  CLEARS. Both wording doors write through here; what separates them
-  is whether the landing is an answer."
+  "The authored surface, written FIELD BY FIELD — and a field the
+  caller did not send KEEPS its standing value. Both wording doors
+  write through here; what separates them is whether the landing is an
+  answer.
+
+  `waymark10.resource/apply-field-edits` IS the law, borrowed rather
+  than restated: *write exactly the input fields the caller sent,
+  nothing else — an absent key is not an erase.* It is what every
+  editor the framework generates does, and this file shipped hand-
+  spelling the opposite (an omitted optional CLEARED, `saved_view`'s
+  posture). That is fine for a whole-form editor whose fields are
+  words; it was wrong here because `about` is THE LINK, and clearing
+  it cut every atom loose while `restate`'s own refold ran in the same
+  breath — see the ns docstring, waymark-ilf."
   [row inp]
-  (update row :data
-          (fn [d] (into d (map (fn [k] [k (get inp k)])) authored-fields))))
+  (resource/apply-field-edits row inp authored-fields))
 
 (defhandler apply-revision [row inp ctx]
   ;; the person's wording door. `:record true` carries what was
@@ -497,8 +615,10 @@
   [:maybe [:vector {:max 12} [:string {:min 1 :max 200}]]])
 
 (def revise-input
-  "What `revise` and `restate` take: the claim and what it is about,
-  overwritten wholesale. `shape` and `prior` are not here — see
+  "What `revise` and `restate` take: the claim and what it is about.
+  `about` is OPTIONAL and omitting it keeps the standing set — a
+  wording door writes the fields it was sent and no others
+  (`rewritten`). `shape` and `prior` are not here at all — see
   `authored-fields`."
   [:map
    (entry :claim {} claim-schema)
@@ -637,6 +757,39 @@
    :as      {:id "reader" :type :agent}
    :expect  {:allowed true}})
 
+(defscenario a-rewording-keeps-what-it-was-not-told
+  "THE LIVE INCIDENT, AS AN OBLIGATION (waymark-ilf, journal
+   3d37ddeb). A reading that learned better words for a claim sends
+   the claim and nothing else — and the belief goes on being about the
+   rows it was about, because a wording door writes the fields it was
+   sent and no others. The wall that keeps a belief about something
+   stands on this door too and it judges the row this write would
+   LEAVE, so an omitted `about` is the standing one rather than an
+   empty one: the write is admitted, nothing warns, and every atom
+   arrives through the same addresses afterwards."
+  {:kind    :hypothesis
+   :attempt :restate
+   :row     {:state :observed :data a-noticed-belief}
+   :input   {:claim "Jack wants to build things with his hands — the shop, not the screen"}
+   :as      {:id "reader" :type :agent}
+   :expect  {:allowed true}})
+
+(defscenario a-belief-does-not-stop-being-about-something
+  "And the other half of the same sentence, which is why keeping is
+   not a loss: a wording door may not empty the set either. A belief
+   about nothing is a mood at birth and it is still a mood on a
+   Tuesday — and because `about` IS the link, a door that admitted an
+   empty one would orphan every fact behind the claim in a single
+   stroke and refold to the prior before anybody read the answer."
+  {:kind    :hypothesis
+   :attempt :restate
+   :row     {:state :observed :data a-noticed-belief}
+   :input   {:claim "Jack wants to build things with his hands"
+             :about []}
+   :as      {:id "reader" :type :agent}
+   :expect  {:refused :a-belief-stays-about-something
+             :because "a claim about nothing is a mood"}})
+
 (defscenario a-person-rewords-rather-than-restates
   "The mirror wall, and it is for the household rather than for
    safety. A person who reached the observer's door would be editing a
@@ -696,6 +849,7 @@
    :display {:title "{data.claim}"}
    :deviations
    ["prior is a NUMBER a guard bounds rather than a vocabulary the schema publishes, so the effort-honesty check warns and the guard's :open acknowledges it. The band 0.02–0.5 cannot be schema properties: waymark10.schema's :decimal derives its generator from its own :min/:max with (long …), so a band entirely inside 0 and 1 generates the single value 0 and the conformance walker would refuse every row it wrote. The schema holds the honest outer bound and the door holds the household's, with the sentence that names the fix."
+    "about is judged at the wording doors by a-belief-stays-about-something, which is storage-free on purpose (waymark-ilf: a wall that read rows would drag every scenario about restate and revise into the conformance tier, where a row staged by the walker cannot be restated by the reading that a scenario names) — so it does not get the effort-honesty exemption the create door's own citation wall gets from :reads [:storage], and two warnings ride on that. There is no vocabulary to publish: about is a vector of addresses to ANY row this house serves, so the legal answers are the whole record and a picker over them is the collection GET a client already has."
     "posterior, posterior_log_odds, movement_7d, atom_count, atoms and last_moved have no door and no guard — they are engine-written by waymark10.belief and absent from :create-schema and every :input, which is a structural wall rather than a judged one (docs/spec-hypotheses.md fork (g))."]
    :schema
    [:map
@@ -782,6 +936,8 @@
                an-ungranted-agent-does-not-answer
                a-person-answers-a-belief-with-one-tap
                a-reading-corrects-what-it-observed
+               a-rewording-keeps-what-it-was-not-told
+               a-belief-does-not-stop-being-about-something
                a-person-rewords-rather-than-restates
                a-dismissed-belief-is-over]
    :actions
@@ -795,10 +951,17 @@
              :edit {:prefill [:claim :about]}
              :record true
              :waives #{:large-effort}
-             :guards [(the-answer-is-a-persons :revise)]
+             ;; WHOSE HAND FIRST, THEN WHAT THE WRITE LEAVES BEHIND.
+             ;; The citation wall stands here as well as at birth
+             ;; (waymark-ilf): a belief never stops being about
+             ;; something, and a wording door is the only other place
+             ;; that sentence can be broken.
+             :guards [(the-answer-is-a-persons :revise)
+                      a-belief-stays-about-something
+                      the-facts-behind-it-survive-a-rewording]
              :handler apply-revision
              :safety {:idempotent true :reversible false :confirm false
-                      :one-way "Rewording puts the claim in your words and makes it one this house holds; the log keeps what it used to say, who changed it and when. The atoms behind it do not move — but if you change what it is ABOUT, you change which facts feed it, and the number under it is recomputed on the spot."}
+                      :one-way "Rewording puts the claim in your words and makes it one this house holds; the log keeps what it used to say, who changed it and when. Whatever you leave out of the form stays as it is. The atoms behind it do not move — but if you change what it is ABOUT, you change which facts feed it, and the number under it is recomputed on the spot."}
              :display {:label "Reword" :order 1
                        :description "Say the claim differently, or change which rows it is about — and if this one was only observed, saying it in your own words is what makes it the house's"}}
     ;; THE OBSERVER'S OWN WORDING DOOR. The same overwrite, the same
@@ -810,10 +973,12 @@
               :edit {:prefill [:claim :about]}
               :record true
               :waives #{:large-effort}
-              :guards [only-the-observer-restates]
+              :guards [only-the-observer-restates
+                       a-belief-stays-about-something
+                       the-facts-behind-it-survive-a-rewording]
               :handler apply-restatement
               :safety {:idempotent true :reversible false :confirm false
-                       :one-way "This overwrites what was noticed with what you now think you see; the log keeps the earlier reading. The belief stays observed either way — nothing here makes it the house's — and the number is refolded over whatever it is now about."}
+                       :one-way "This overwrites what was noticed with what you now think you see; the log keeps the earlier reading. What you leave out of the body is left alone — send the claim by itself and the belief goes on being about the same rows, which is where every fact behind it arrives from. The belief stays observed either way — nothing here makes it the house's — and the number is refolded over whatever it is now about."}
               :display {:label "Correct what was noticed" :order 3
                         :description "New evidence changed the reading — rewrite it. It stays observed: only a person's hand makes it something this house holds"}}
     ;; THE AFFIRMATION, AND THE PETITION'S OWN DOOR. No :input,

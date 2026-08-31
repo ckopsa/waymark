@@ -665,6 +665,66 @@ discovered later.
    the probability for reading and the log-odds for arithmetic*); the
    second is one integer that saves every reader a `count`.
 
+### The wording doors keep what they are not told (2026-08-31, waymark-ilf)
+
+**The first thing the kind did in the house was lose evidence.** On the
+morning after slice 2 landed, a fresh fold reading restated hypothesis
+`c2b2d2fa` with a corrected `claim` and nothing else. `restate` wrote the
+authored surface *wholesale* — the shape `saved_view` and `feed_recipe`
+use, where an omitted optional CLEARS — so `about` went to null; and
+because `about` **is** the link, the refold that runs on that same door
+found no atoms at all. The posterior fell 0.5522 → 0.3000, back to its
+prior, movement zeroed, in one request. Nothing in the answer said an
+atom had been lost. The reading repaired the row by re-sending `about`
+(journal `3d37ddeb`).
+
+The design above never chose the wholesale overwrite; the build reached
+for it. It is the wrong law here for a reason no whole-form editor has:
+every other kind that clears by omission is editing WORDS, and this one
+is editing the join.
+
+**What the doors do now.**
+
+1. **An omitted field keeps.** `rewritten` is
+   `waymark10.resource/apply-field-edits` — the framework's own law for
+   every editor it GENERATES: *write exactly the input fields the caller
+   sent, nothing else; an absent key is not an erase.* The fix is the
+   kind adopting the framework's answer, not the framework changing its
+   mind: the three kinds that deliberately clear by omission still do.
+2. **An empty `about` is refused, at a wording door as at birth.**
+   `a-belief-stays-about-something` (`restate`, `revise`) is
+   `a-belief-cites-what-it-is-about`'s first arm, judging **the row the
+   write would leave** rather than the body — so an omitted `about` is
+   the standing one. It is storage-free deliberately: a wall reading
+   rows would push every scenario about a wording door into the
+   conformance tier, where a row staged by the walker cannot be
+   restated by the reading a scenario names. It costs two acknowledged
+   `effort-honesty` warnings, recorded in the kind's `:deviations`.
+   The registry half of the wall (*does this house serve the collection
+   you named?*) stays at create.
+3. **A rewording that NARROWS `about` warns before it runs.**
+   `the-facts-behind-it-survive-a-rewording` is an E1 acknowledgeable
+   warning (`mealplan10`'s `calendar-clear` shape): it says how many
+   addresses go and how many stay, beside the number of facts standing
+   on the set being cut, and the caller acknowledges by name to
+   proceed. It counts ADDRESSES and quotes the row's own `atom_count`
+   rather than predicting the new one — how many atoms survive is a
+   question about every finding in the house, and a wall that read them
+   all to answer it would be the wall in (2) all over again.
+
+**Proved from the wire.** `:feed/hypotheses` now restates its folded
+belief with the claim alone and demands the answer come back still
+about the same row, still on one atom, still above its prior; then it
+empties `about` and demands the named refusal, narrows it and demands
+the warning. The narrowing is not acknowledged, so the obligation hands
+its row on exactly as it found it.
+
+**A consequence worth having.** Slice 2's *recorded* note says the
+updater does not run on insight publish, which left the no-op `restate`
+as the only manual refold lever in the house. It was a lever nobody
+could safely pull. It is now: a restate carrying the claim alone
+changes no address, warns nothing, and refolds the row on the spot.
+
 ### `value` loses `observed` — what changed, and the migration
 
 **The kind.** `:states [:declared :retired]`, `:initial :declared`.

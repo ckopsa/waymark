@@ -6290,8 +6290,20 @@
   "A belief is born a guess and says so, carries a number NO DOOR CAN
   SET, folds that number from the typed findings that cite what it is
   about, refuses a second belief of the same shape about the same
-  thing, and is answered by somebody other than whoever noticed it —
-  from the wire, in that order.
+  thing, KEEPS WHAT ITS WORDING DOOR WAS NOT TOLD, and is answered by
+  somebody other than whoever noticed it — from the wire, in that
+  order.
+
+  THE WORDING DOOR'S HALF IS AN INCIDENT WRITTEN DOWN (waymark-ilf,
+  journal 3d37ddeb): a reading restated a live belief with a corrected
+  `claim` alone, the door nulled the `about` it was not sent, and the
+  refold that runs on that door cut the row's only atom loose in the
+  same breath — 0.5522 back to the prior, and nothing in the answer
+  said an atom had gone. Three claims stand here now: a restate that
+  omits a field keeps it, a restate that EMPTIES `about` is refused by
+  name, and a restate that narrows it warns with the numbers before it
+  runs. The warning is deliberately not acknowledged, so this
+  obligation hands the row on exactly as it found it.
 
   THE ATOM CITES THE HYPOTHESIS ITSELF, which is the direct link a
   reading writes when it wants a finding on the belief rather than on
@@ -6464,6 +6476,98 @@
                 (nil? (get-in after [:data :last_moved]))
                 (conj (str "feed: the belief moved and says nothing about"
                            " when the fact behind it was said")))
+            ;; THE WORDING DOOR KEEPS WHAT IT WAS NOT TOLD
+            ;; (waymark-ilf, journal 3d37ddeb). The reading corrects
+            ;; its own words and sends the CLAIM ALONE — which is the
+            ;; ordinary shape of a restate, and the shape that used to
+            ;; null `about` and cut every atom loose in the same breath
+            ;; as the refold. Proved from the wire because the wire is
+            ;; where it happened: the answer must come back still about
+            ;; the same row, still standing on its atom, still holding
+            ;; the number the fold gave it.
+            reworded (invoke-http ctx :hypothesis id :restate
+                                  {:claim (str claim " — said plainly")}
+                                  {:headers hs})
+            rdoc (json ctx reworded)
+            p1' (posterior-of rdoc)
+            v (cond-> v
+                (not= 200 (:status reworded))
+                (conj (str "feed: a reading could not correct its own"
+                           " wording (" (:status reworded) " "
+                           (pr-str rdoc) ")"))
+
+                (not= [subject] (mapv str (get-in rdoc [:data :about])))
+                (conj (str "feed: restating with the claim alone left the"
+                           " belief about "
+                           (pr-str (get-in rdoc [:data :about]))
+                           " — a wording door writes the fields it was"
+                           " SENT; an omitted field is not an erase, and"
+                           " `about` is the link every fact arrives"
+                           " through"))
+
+                (not= 1 (get-in rdoc [:data :atom_count]))
+                (conj (str "feed: restating with the claim alone left "
+                           (pr-str (get-in rdoc [:data :atom_count]))
+                           " atom(s) where there was 1 — the refold runs"
+                           " on this door, so a dropped address orphans"
+                           " the evidence instantly and invisibly"))
+
+                ;; the number is compared against the PRIOR rather
+                ;; than against p1: the restate refolds by the
+                ;; deployment's table where the pass folded by the
+                ;; household's, and the two agree only where nobody
+                ;; edited the recipe row. What must not have happened
+                ;; is the incident — a belief falling back to where it
+                ;; started because its atom was cut loose.
+                (or (nil? p1') (nil? p0) (<= p1' p0))
+                (conj (str "feed: correcting the words dropped the belief"
+                           " to " (pr-str p1') " with its prior at "
+                           (pr-str p0)
+                           " — a rewording that changed no address may"
+                           " not lose the fact behind the claim")))
+            ;; …AND THE TWO WALLS THAT SAY WHY KEEPING IS NOT A LOSS.
+            ;; Emptying the set is refused by name: a claim about
+            ;; nothing is a mood, at a wording door as much as at
+            ;; birth. Narrowing it is allowed but never quiet — the E1
+            ;; warning says how many addresses go and how many facts
+            ;; stand on them, and it is NOT acknowledged here, so this
+            ;; obligation leaves the row exactly as it found it.
+            emptied (let [r (invoke-http ctx :hypothesis id :restate
+                                         {:claim claim :about []}
+                                         {:headers hs})]
+                      {:status (:status r) :doc (json ctx r)})
+            narrowed (invoke-http ctx :hypothesis id :restate
+                                  {:claim claim
+                                   :about [(str "/api/people/"
+                                                (subs (str (random-uuid)) 0 8))]}
+                                  {:headers hs})
+            ndoc (json ctx narrowed)
+            warned (set (map (comp str :name) (:warnings ndoc)))
+            v (cond-> v
+                (not= :a-belief-stays-about-something (refused-guard emptied))
+                (conj (str "feed: a restate that empties `about` was not"
+                           " refused by name (" (:status emptied) " "
+                           (pr-str (refused-guard emptied))
+                           ") — the belief would be about nothing and"
+                           " every fact behind it orphaned at once"))
+
+                (not= 409 (:status narrowed))
+                (conj (str "feed: a restate that drops the only address a"
+                           " belief's evidence arrives through was"
+                           " answered " (:status narrowed)
+                           " — narrowing is allowed, but not without the"
+                           " answer saying what goes with it"))
+
+                (not (contains? warned "the-facts-behind-it-survive-a-rewording"))
+                (conj (str "feed: the narrowing restate warned "
+                           (pr-str warned)
+                           " — the door that refolds owes the caller the"
+                           " effect in numbers before it has it"))
+
+                (not= 1 (get-in (json ctx (get-env ctx :hypothesis id))
+                                [:data :atom_count]))
+                (conj (str "feed: an unacknowledged warning changed the"
+                           " row — a refusal does not commit")))
             ;; FOUR EYES, AND THE LEASH IS WHAT MAKES IT A CLAIM. An
             ;; unleashed agent is already answered 404 by the router's
             ;; default deny, which proves nothing about any wall — so
@@ -6509,11 +6613,15 @@
                 (conj (str "feed: an affirmed belief rests in "
                            (pr-str (str (:state adoc)))))
 
-                ;; NOTHING ABOUT THE POSTERIOR CHANGES WITH THE STATE
-                (or (nil? p2) (> (Math/abs (- p2 (double (or p1 0.0))))
+                ;; NOTHING ABOUT THE POSTERIOR CHANGES WITH THE STATE.
+                ;; Against p1' — the number standing after the
+                ;; rewording above, which is the last fold this row
+                ;; took — because `still_stands` refolds nothing and
+                ;; must therefore leave whatever was there.
+                (or (nil? p2) (> (Math/abs (- p2 (double (or p1' p1 0.0))))
                                  0.001))
                 (conj (str "feed: affirming moved the number ("
-                           (pr-str p1) " to " (pr-str p2)
+                           (pr-str (or p1' p1)) " to " (pr-str p2)
                            ") — an affirmation says this house agrees the"
                            " claim is worth holding, never stop reading"
                            " evidence")))]
