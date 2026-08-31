@@ -62,6 +62,7 @@
             [workqueue10.confluence :as conf]
             [workqueue10.reconsent :as reconsent]
             [workqueue10.resources.dwelling :refer [self journal]]
+            [workqueue10.resources.hypothesis :refer [hypothesis]]
             [workqueue10.resources.insight :refer [insight]]
             [workqueue10.resources.letters :refer [letter]]
             [workqueue10.resources.permission-slip :refer [permission-slip]]
@@ -477,9 +478,29 @@
        ;; row on a primary kind would card in do-now forever. Mirror
        ;; the THREAD, never the messages — titles, times and names;
        ;; bodies stay behind Gate under a capability a person approved.
+       ;; :hypothesis rides last (waymark-bug, docs/spec-hypotheses.md):
+       ;; the belief layer, and the house's first row that carries a
+       ;; NUMBER about the people in it. A claim in the household's own
+       ;; words, one of five shapes, the rows it is about, where the
+       ;; guess started — and a posterior no door can set, folded from
+       ;; the typed findings whose citations overlap what the claim is
+       ;; about. It sits beside :value and :insight for the family
+       ;; reason those two do: what this house believes about itself is
+       ;; not a domain of logistics beside queue/chores/meals, it is
+       ;; what the logistics are ABOUT. Hand-written rather than a
+       ;; :decision — a belief is long-lived and keeps moving, not a
+       ;; one-shot verdict — and :nav :secondary for value's reason. Its
+       ;; machine is value's, on purpose: observed → affirmed, with
+       ;; `restate` for the reading that noticed it and `revise` for the
+       ;; person whose house it is about. A REALLY IMPORTANT WALL RIDES
+       ;; IT: the run that read the evidence can never answer what it
+       ;; means (four eyes on `observed_by`, and no grant opens that
+       ;; arm), because every likelihood ratio in the table assumes the
+       ;; evidence was typed by somebody who did not know what it would
+       ;; do.
        (into (into [saved-view capability connection self journal weather letter
                     permission-slip tickler insight value outcome outcome-piece
-                    person composition-request
+                    person composition-request hypothesis
                     (thread-resource (conf/thread-confluence thread-srcs
                                                              report-fn))]
                    dashboard/resources)))))

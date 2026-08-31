@@ -1194,7 +1194,26 @@ doc feed-own "/api/-/feed"
 # 3. the standing pulls
 states composition_requests "/api/composition_requests" offered answered expired
 # 5. the evidence the grant admits
-states values      "/api/values"  observed declared retired
+# `observed` LEFT THIS KIND on 2026-08-31 (waymark-bug): it was a
+# one-bit belief with no atoms under it, and it went to the hypothesis
+# kind, which holds a belief properly. A value is this house's law
+# again, in two states.
+states values      "/api/values"  declared retired
+# …and THE BELIEFS THEMSELVES (waymark-bug). Every state, because a
+# reading wants to see what the house AFFIRMED and what it said no to
+# as much as what is still standing — a dismissed claim the record went
+# on supporting is one of the more useful things a brief can show. A
+# house that has not deployed the kind yet answers the concealment 404,
+# this degrades to [], and WHAT MOVED THIS WEEK falls back to computing
+# the fold itself.
+if [ "$RUN_MODE" = "reading" ]; then
+  states hypotheses  "/api/hypotheses"  observed affirmed dismissed retired
+else
+  # …and a SITTING does not read them at all (the extraction-blind
+  # rule, enforced again below where the block is built). A clerk that
+  # could see the belief its typing feeds would start confirming it.
+  echo '[]' > "$RUN/rows/hypotheses.json"
+fi
 states people      "/api/people"  observed current past
 collection tasks       "/api/tasks"
 # the NAMED lists a task belongs to (waymark-dgh). A task carries its
@@ -1247,7 +1266,7 @@ collection letters "/api/letters?to=$PRINCIPAL&state=waiting"
 collection approval_requests "/api/approval_requests?grant_id=$GRANT"
 doc grant "/api/grants/$GRANT"
 
-for k in composition_requests values people outcomes outcome_pieces insights ranking_notes remarks verdict_reasons journals chat_threads letters; do
+for k in composition_requests values people outcomes outcome_pieces insights ranking_notes remarks verdict_reasons journals chat_threads letters hypotheses; do
   hydrate "$k"
 done
 
@@ -4153,6 +4172,100 @@ jq -n --slurpfile ins "$RUN/rows/insights.full.json" \
   > "$D/movements.json" 2>>"$PROBE_ERRS" \
   || echo '{"typed":0,"source":"unavailable","new_this_week":0,"movers":[],"all_movers":[],"bare_episodes":[],"lines":[]}' > "$D/movements.json"
 
+# ── …AND THE STORE ANSWERS IT WHEN THE STORE HAS ANYTHING TO SAY ─────
+# waymark-bug (slice 2). Since the hypothesis kind landed, the belief
+# is a ROW: a claim in the household's words, a prior, and a posterior
+# the engine folds from the typed findings that cite what the claim is
+# about. So the section reads the store instead of computing — and the
+# difference is not the arithmetic, which is the same three rules
+# (`waymark10.belief` in Clojure, `scripts/movements.jq` in jq, checked
+# against each other by two fixtures). The difference is that a stored
+# movement has a CLAIM on it, and a computed one has only an address.
+# CLAIM-LESS MOVER was slice 1 saying that out loud; this is the line
+# it was waiting for.
+#
+# THE FALLBACK STAYS AND IS NOT A COURTESY. The spec's landing order
+# gives three reasons, and each one happens:
+#
+#   1. a house that has not deployed the kind reads a 404 and has no
+#      hypotheses at all — every house, the day this lands;
+#   2. a house that has the kind but no beliefs yet is the same
+#      picture until a reading writes some;
+#   3. and a belief is folded AT BIRTH and then nightly, so a fact
+#      indexed this afternoon reaches the stored posterior tonight.
+#      The computed block sees it now.
+#
+# So the store answers when it can and the computed block answers when
+# it cannot, and the line SAYS WHICH — a reading must never have to
+# guess whether the number in front of it came from the record or from
+# the driver.
+jq -n --slurpfile hyp "$RUN/rows/hypotheses.full.json" \
+      --slurpfile mv "$D/movements.json" '
+  ($hyp[0] // []) as $H
+  | ($mv[0] // {}) as $M
+  # a belief only speaks when something has fed it: a row standing at
+  # its prior with no atoms is a question nobody has answered yet, and
+  # a brief that listed ten of those would be reading its own guesses
+  # back to itself
+  | [ $H[] | select(((.data.atom_count // 0) | tonumber) > 0) ] as $fed
+  | if ($fed | length) == 0
+    then $M
+    else
+      ([ $fed[] | {self, claim: (.data.claim // ""), shape: (.data.shape // ""),
+                   state: (.state // ""),
+                   posterior: ((.data.posterior // 0) | tonumber),
+                   logodds: ((.data.posterior_log_odds // 0) | tonumber),
+                   moved: ((.data.movement_7d // 0) | tonumber),
+                   n: ((.data.atom_count // 0) | tonumber),
+                   atoms: (.data.atoms // [])} ]) as $B
+      # ranked by how far the belief MOVED, which is what the section
+      # is called. Ten, because a reading handed thirty numbers reads
+      # none of them.
+      | ($B | sort_by(.moved | fabs) | reverse | .[0:10]) as $top
+      | $M + {
+          source: "the hypothesis store — posteriors folded by the engine",
+          beliefs: ($B | length),
+          lines:
+            ([ "WHAT MOVED THIS WEEK — read off the belief store: \($B | length) hypothesis(es) with evidence under them, ranked by how far each moved in seven days. These are log-odds, clamped, and the claim beside each one is a row somebody wrote — restate it if it is wrong, affirm it if it is right, dismiss it if the reading was wrong:" ]
+             + ($top
+                | map("  " + (.state | ascii_upcase) + " · \(.claim) [\(.shape)] moved "
+                      + ((.moved * 100 | round) / 100
+                         | (if . >= 0 then "+" else "" end) + tostring)
+                      + " this week, standing at "
+                      + ((.posterior * 100 | round) | tostring) + "% ("
+                      + ((.logodds * 100 | round) / 100
+                         | (if . >= 0 then "+" else "" end) + tostring)
+                      + " log-odds) off \(.n) fact(s)  \(.self)")
+                | if length == 0
+                  then [ "  (no belief moved this week — the record is steady)" ]
+                  else . end)
+             + [ "  (a belief nothing has fed yet is not listed: it stands at the prior somebody gave it, which is not news. The atoms behind each line are on the row itself, with what the table priced each one at.)" ])}
+    end
+' > "$D/beliefs.json" 2>>"$PROBE_ERRS" || cp "$D/movements.json" "$D/beliefs.json"
+
+# ── THE EXTRACTION-BLIND RULE, ENFORCED HERE AND NOWHERE ELSE ────────
+# docs/spec-hypotheses.md § 'The extraction-blind rule': THE CLERK
+# FILLS THE TYPES AND NEVER SEES A POSTERIOR. No belief on its
+# manifest, no hypothesis line in its leash, no movement block. The
+# reading reads those; the sitting does not.
+#
+# Why, in one sentence: a classifier that can see the belief it is
+# feeding starts confirming it, and every likelihood ratio in the table
+# is worthless the moment a word is chosen to move a number rather than
+# to describe what was said. The separation is not a courtesy — it is
+# the only thing that makes the arithmetic mean anything.
+#
+# ONE GATE, at the one file both runs share. `$D/beliefs.json` is what
+# the brief reads and what the manifest carries, so emptying it here
+# blinds both at once — a second gate at either would be a second place
+# for this rule to be forgotten. Slice 1 (waymark-2m2) let the computed
+# block ride a sitting's manifest, which was defensible while the house
+# stored no belief anywhere; it is not defensible now, and the rule the
+# spec wrote is the one this file keeps.
+if [ "$RUN_MODE" = "sitting" ]; then
+  echo '{"typed":0,"source":"withheld from a sitting on purpose","new_this_week":0,"movers":[],"all_movers":[],"bare_episodes":[],"lines":[]}' > "$D/beliefs.json"
+fi
+
 # ── THE HOUSE BRIEF (waymark-xnf, built here under waymark-nl0) ──────
 # A run starts cold with a manifest and the rows; the NARRATIVE — who
 # is one year old, who left this summer, which appointment the placard
@@ -4222,7 +4335,7 @@ jq -n --slurpfile ins "$R/insights.full.json" --slurpfile people "$R/people.full
       --slurpfile events "$R/events.json" --slurpfile journals "$R/journals.full.json" \
       --slurpfile threads "$D/unanswered_threads.json" \
       --slurpfile tasks "$R/tasks.json" --slurpfile elocal "$D/event_local.json" \
-      --slurpfile mv "$D/movements.json" \
+      --slurpfile mv "$D/beliefs.json" \
       --argjson nows "$NOW_S" --arg owner "$OWNER" --arg tz "$HOUSE_TZ" "$JQ_DATES"'
   ($ins[0] // []) as $in | ($people[0] // []) as $pp | ($values[0] // []) as $vv
   | ($lists[0] // []) as $ll | ($events[0] // []) as $ev | ($journals[0] // []) as $jj
@@ -4547,7 +4660,7 @@ jq -n \
   --slurpfile journals "$RUN/rows/journals.full.json" \
   --arg mode "$RUN_MODE" \
   --slurpfile brief "$D/brief.json" \
-  --slurpfile movements "$D/movements.json" \
+  --slurpfile movements "$D/beliefs.json" \
   --slurpfile review "$D/review.json" \
   --slurpfile review_ask "$D/review_ask.json" \
   --slurpfile house_says "$D/house_says.json" \

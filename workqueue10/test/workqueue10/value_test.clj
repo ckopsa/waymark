@@ -1,32 +1,45 @@
 (ns workqueue10.value-test
-  "Values learned in the open (waymark-jfv.10), lived in over the REAL
-  ring handler and the household's own registry.
+  "The value kind over the REAL ring handler and the household's own
+  registry — as waymark-jfv.10 opened it, waymark-sfe permissioned it,
+  and waymark-bug narrowed it again.
 
-  The owner overruled this kind's human-only wall in his own words:
-
-    Discovering what you value and what you love to do is a process
-    and there's nothing wrong with you learning what my values are
-    and writing them to waymark — just so long as I can adjust them
-    too.
+  WHAT waymark-bug DID, because it is what most of this file now
+  proves: `observed` LEFT THIS KIND. It was a one-bit belief with no
+  atoms and no arithmetic under it, and the hypotheses epic built the
+  row that holds a belief properly, so the bit went there
+  (docs/spec-hypotheses.md § 'What merges'). With no unaffirmed
+  landing left, EVERY create is an affirmation — so the wall jfv.10
+  took off this door came back, grantable, and the composer's own way
+  to say *I think this house holds this value* is an intent hypothesis
+  it may `restate` all it likes.
 
   What the scenarios already prove and this file does not repeat: who
   may reach which door, judged with no database at all in the same
   breath as `make check-queue`. What only a live engine can answer is
-  here, and it is most of the bead:
+  here:
 
-  - the BIRTH STATE, which is a hook rather than a wall — an agent's
-    row lands `observed` and a member's lands `declared`, and the
-    stamps that ride each;
-  - the AFFIRMATION as a transition, with BOTH HANDS in the record:
-    the agent on the create, the member on the tap;
-  - the two wording doors, and that neither hand can reach the
-    other's;
-  - the OBSERVED CLAUSE on an outcome's card, which is the whole
-    requirement that decided the affirmation machine — a bundle asking
-    for a Saturday on the strength of a guess says so where the person
-    answering it is looking;
-  - and a reading the house answered: `dismiss` retires it, and
-    `names-a-value` stops composing against it.
+  - the BIRTH, which is now one landing for every hand — `declared`,
+    affirmed in the same breath, with the writer stamped beside it;
+  - THE DELEGATION (waymark-sfe): an agent holding a scope that names
+    `value.create` writes the owner's law on his instruction, and the
+    audit says which grant it acted under;
+  - FOUR EYES, which no grant opens: the hand that wrote a row never
+    answers it;
+  - the ONE wording door, and that the observer's is gone with the
+    state it lived in;
+  - and `retire` / `restore` — the value the house stopped holding,
+    and the way back.
+
+  GONE WITH `observed`, AND RECORDED RATHER THAN QUIETLY DROPPED:
+  `an-outcome-on-an-observed-value-says-so-on-its-card` proved jfv.10's
+  own deciding requirement — a bundle asking for a Saturday on the
+  strength of a guess says so where the person answering it is
+  looking. There are no observed values to card, so the test has
+  nothing to stage. `feed/value-standing`'s `:observed` arm is left
+  standing and unreached on purpose: slice 3 of the hypotheses epic
+  (waymark-4t9) repoints it at the intent hypothesis's POSTERIOR,
+  which is the same sentence with a number in it, and deleting the arm
+  now would leave that slice nothing to repoint.
 
   EVERY AGENT HERE HOLDS A LEASH, and that is not decoration.
   `packs/leash!` says it in the same words one kind over: an UNLEASHED
@@ -34,7 +47,7 @@
   proves nothing about any wall. So each agent below mints a grant
   over the `value` doors it is about to knock on and presents it — the
   refusals are then the kind's own law rather than the absence of a
-  grant, and the allowances are the MCP door the owner's ruling was
+  grant, and the allowances are the MCP door the owner's rulings were
   actually about.
 
   Assertions are order-independent (kaocha randomizes, and the
@@ -59,6 +72,7 @@
   ;; main/check-resources declares, so a fixture that dropped only its
   ;; own would boot into whatever shape another suite left behind.
   ["composition_requests" "outcome_pieces" "outcomes" "values" "people"
+   "hypotheses"
    "tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
@@ -189,46 +203,53 @@
               extra)
        headers))
 
-;; ── 1. the birth state is a hook, not a wall ────────────────────────
+;; ── 1. one birth, and it is an affirmation ──────────────────────────
+;; jfv.10's birth BRANCHED — a person's create landed `declared`, an
+;; agent's landed `observed` — and waymark-bug took the second landing
+;; away with the state. So the hook no longer branches, and the wall
+;; that used to be unnecessary here is necessary again: with nowhere
+;; unaffirmed to land, writing a value IS declaring one. Grantable,
+;; per waymark-sfe, which is what the agent below is holding.
 
-(deftest an-agent-writes-what-it-observes-and-a-member-declares
+(deftest every-value-is-born-the-houses-law
   (let [sous (leash! "sous-birth" ["create"])
-        observed (write-value! sous "time in the shop with the boys")
+        delegated (write-value! sous "time in the shop with the boys")
         declared (write-value! (human "colton-birth")
                                "making memories with the family")]
-    (testing "an agent may write a value now — the wall came off this door"
-      (is (= 201 (:status observed)) (str "refused: " (json observed))))
-    (testing "and what it wrote is born OBSERVED, carrying its own hand"
-      (is (= "observed" (state-of observed)))
-      (is (= "sous-birth" (:written_by (fields observed))))
-      (testing "with nobody's name on it yet — the affirmation is a person's word"
-        (is (nil? (:affirmed_by (fields observed))))
-        (is (nil? (:affirmed_at (fields observed))))))
     (testing "a member's own declaration lands DECLARED and affirmed in the same breath, because a person declaring one has already decided"
-      (is (= 201 (:status declared)))
+      (is (= 201 (:status declared)) (str "refused: " (json declared)))
       (is (= "declared" (state-of declared)))
       (is (= "colton-birth" (:written_by (fields declared))))
       (is (= "colton-birth" (:affirmed_by (fields declared))))
       (is (some? (:affirmed_at (fields declared)))))
-    (testing "and the summary says the standing out loud, which is why it is a state and not a stamp"
-      (is (str/includes? (str (:summary (json observed))) "Observed"))
+    (testing "and so does a delegate's, under a scope that names value.create — the owner's hand, lent (waymark-sfe)"
+      (is (= 201 (:status delegated)) (str "refused: " (json delegated)))
+      (is (= "declared" (state-of delegated))
+          "there is no observed landing any more — that state went to the hypothesis kind")
+      (is (= "sous-birth" (:written_by (fields delegated))))
+      (is (= "sous-birth" (:affirmed_by (fields delegated)))
+          "a create is an affirmation now, so the writer is the affirmer — which is exactly why the door is walled")
+      (testing "and the history reads which grant it acted under"
+        (is (= (get sous "x-waymark-grant")
+               (under-grant :value (id-of delegated) :create)))))
+    (testing "the summary still says the standing out loud, which is why it is a state and not a stamp"
       (is (str/includes? (str (:summary (json declared))) "Declared")))))
 
 ;; ── 2. the affirmation, and both hands in the record ────────────────
 
-(deftest an-agent-does-not-affirm-its-own-reading-and-the-owner-does
+(deftest an-agent-does-not-answer-its-own-row-and-the-owner-does
   (let [sous (leash! "sous-affirm" ["create" "still_stands"])
         v (write-value! sous "Saturday mornings with Jack")
         id (id-of v)
         itself (invoke! "values" id :still_stands nil sous)]
-    (testing "THE ONE REMAINING WALL: an observer marking its own guess confirmed would speak in the owner's voice"
+    (testing "FOUR EYES, AND NO GRANT OPENS IT: the leash names still_stands and the wall refuses anyway, because this agent wrote the row"
       (is (= 409 (:status itself)) (str "allowed: " (json itself)))
       (is (= "written-by-a-person" (guard-of itself)))
-      (is (str/includes? (detail itself) "insight"))
-      (testing "and it is FOUR EYES since waymark-sfe — the leash names still_stands and the wall refuses anyway, because this agent wrote the row"
-        (is (str/includes? (detail itself) "four eyes"))))
+      (is (str/includes? (detail itself) "four eyes")))
+    (testing "and the refusal names the composer's own door, which since waymark-bug is the hypothesis"
+      (is (str/includes? (detail itself) "HYPOTHESIS")))
     (let [tap (invoke! "values" id :still_stands nil (human "colton-affirm"))]
-      (testing "the owner's tap is the whole affirmation — one state change, one stamp"
+      (testing "the owner's tap says he read what was brought him and it stands — one stamp, no state change"
         (is (= 200 (:status tap)) (str "refused: " (json tap)))
         (is (= "declared" (state-of tap)))
         (is (= "colton-affirm" (:affirmed_by (fields tap))))
@@ -290,50 +311,45 @@
         (is (= 200 (:status r)) (str "refused: " (json r)))
         (is (= "declared" (state-of r)))))))
 
-;; ── 3. one wording door per hand ────────────────────────────────────
+;; ── 3. one wording door, and the observer's is gone ─────────────────
+;; jfv.10 SPLIT the wording door by hand because `:to` is a static
+;; keyword and one door cannot land in two states: a shared `revise`
+;; would have had an agent's own rewording land in `declared`, which
+;; is the observer affirming its own guess. With `observed` gone there
+;; is one landing and therefore one door. What a reading corrects now
+;; is a `hypothesis`, on a row that carries a number instead of the
+;; law.
 
-(deftest neither-hand-reaches-the-others-wording-door
+(deftest the-wording-door-is-the-owners-and-the-observers-is-gone
   (let [sous (leash! "sous-word" ["create" "restate" "revise"])
         v (write-value! sous "the workbench, cleared")
-        id (id-of v)
-        restated (word! "values" id :restate
+        id (id-of v)]
+    (testing "there is no `restate` on this kind any more, however wide the leash"
+      (let [gone (word! "values" id :restate
                         {:name "the workbench, cleared on Fridays"
                          :says "Narrowed: it is Fridays. Six of the last eight."
                          :loved ["the shop"]}
                         sous)]
-    (testing "the observer corrects its own reading, and the row is still a guess afterwards"
-      (is (= 200 (:status restated)) (str "refused: " (json restated)))
-      (is (= "observed" (state-of restated)))
-      (is (= "the workbench, cleared on Fridays" (:name (fields restated))))
-      (is (nil? (:affirmed_by (fields restated)))))
-    (testing "it may not REWORD, because rewording lands in declared — that is affirming, over words it did not choose"
+        (is (contains? #{404 405} (:status gone))
+            (str "a door that should not exist answered: " (json gone)))))
+    (testing "and the agent may not REWORD either, because rewording is the owner putting his own words on his own law"
       (let [r (word! "values" id :revise
                      {:name "the workbench, cleared, and it matters more than the queue"
-                      :says "An agent's own promotion of its own guess."}
+                      :says "An agent's own rewriting of the owner's law."}
                      sous)]
-        (is (= 409 (:status r)))
+        (is (= 409 (:status r)) (str "allowed: " (json r)))
         (is (= "written-by-a-person" (guard-of r)))))
-    (testing "and a person does not go through the observer's door — one hand, one door"
-      (let [r (word! "values" id :restate
-                     {:name "the workbench" :says "Reworded through the wrong door."}
-                     (human "colton-word"))]
-        (is (= 409 (:status r)))
-        (is (= "only-the-observer-restates" (guard-of r)))
-        (is (str/includes? (detail r) "Reword"))))
-    (testing "the owner's own rewording CLAIMS it — the ruling read literally"
+    (testing "the owner's own rewording lands, and stamps him"
       (let [r (word! "values" id :revise
                      {:name "the workbench, cleared before Saturday"
-                      :says "In his own words, which is what makes it the house's."
+                      :says "In his own words, which is the only way these words are ever written."
                       :loved ["the shop"]}
                      (human "colton-word"))]
         (is (= 200 (:status r)) (str "refused: " (json r)))
         (is (= "declared" (state-of r)))
         (is (= "colton-word" (:affirmed_by (fields r))))
-        (testing "and the door the agent had is gone with the state it lived in"
-          (let [again (word! "values" id :restate
-                             {:name "back to a guess" :says "After the owner claimed it."}
-                             sous)]
-            (is (= 409 (:status again)))))))))
+        (is (= "sous-word" (:written_by (fields r)))
+            "the hand that first wrote it down is still on the row")))))
 
 ;; ── 4. the hole the ruling opened, closed at the create door ────────
 
@@ -347,7 +363,7 @@
     (testing "the same words as the household's are fine, which is the fix the refusal names"
       (let [ok (write-value! sous "building")]
         (is (= 201 (:status ok)))
-        (is (= "observed" (state-of ok)))))
+        (is (= "declared" (state-of ok)))))
     (testing "and a member's own private value is untouched by any of this"
       (let [mine (write-value! (human "colton-mine") "building, mine"
                                {:scope "mine"})]
@@ -355,84 +371,35 @@
         (is (= "declared" (state-of mine)))
         (is (= "colton-mine" (:owner (fields mine))))))))
 
-;; ── 5. the observed clause, where the person answering is looking ───
+;; ── 5. gone with the state — see the ns docstring ───────────────────
+;; `an-outcome-on-an-observed-value-says-so-on-its-card` and its two
+;; helpers (`stage-bundle!`, `card-for`) lived here and left with
+;; waymark-bug: there are no observed values to stage a bundle
+;; against. The requirement they proved has not been abandoned — it
+;; moved a slice down the epic, where the card sentence reads the
+;; intent hypothesis's POSTERIOR instead of a one-bit state
+;; (waymark-4t9, docs/spec-hypotheses.md § 'What merges', the crown
+;; row).
 
-(defn- stage-bundle!
-  "One offered outcome with two pieces — the floor the population
-  holds — against the value handed in."
-  [who value-id goal]
-  (let [o (id-of (req :post "/api/outcomes"
-                      {:goal goal
-                       :value_id value-id
-                       :routing "It runs through the shop, which this house wrote down as something it loves."
-                       :routes_through "the shop"
-                       ;; the bundle's own value is what it SERVES;
-                       ;; `composes-from-what-stands` (waymark-euj)
-                       ;; subtracts it and asks whether anything the
-                       ;; composer READ is still open. A fresh address
-                       ;; in a collection this house serves is a row
-                       ;; the wall cannot classify, and an
-                       ;; unclassifiable row stands — the wall never
-                       ;; guesses past what it can read.
-                       :evidence [(str "/api/values/" value-id)
-                                  (str "/api/tasks/01HZQ7VALREAD"
-                                       (subs (str (random-uuid)) 0 8))]}
-                      (human who)))]
-    (doseq [n [1 2]]
-      (req :post "/api/outcome_pieces"
-           {:outcome_id o
-            :says (str "Piece " n " — twenty minutes, already prepared")
-            :form "create"
-            :target_kind "task"
-            :prepared {:title (str goal " — piece " n)}}
-           (human who)))
-    o))
+;; ── 6. a value the house stopped holding ────────────────────────────
+;; `dismiss` left with `observed` — it was the door for *you read us
+;; wrong*, which is a sentence about a guess, and guesses live on the
+;; hypothesis kind now (`hypothesis.dismiss` says it there, and
+;; `hypothesis.retire` says the other one). What is left here is
+;; `retire`, which always meant the second sentence about a value the
+;; house actually declared, and `restore`, which is also the way back
+;; for a value the belief migration retired.
 
-(defn- card-for
-  "The outcome card for one bundle, off the reader's own feed."
-  [oid headers]
-  (let [doc (json (req :get "/api/-/feed" headers))]
-    (some #(when (str/ends-with? (str (:card_id %)) (str "/" oid)) %)
-          (:cards doc))))
-
-(deftest an-outcome-on-an-observed-value-says-so-on-its-card
-  (let [sous (leash! "sous-card" ["create"])
-        v (write-value! sous "unhurried Saturdays")
-        vid (id-of v)
-        goal "One Saturday afternoon in the shop, on a value nobody has affirmed"
-        oid (stage-bundle! "composer-card" vid goal)
-        card (card-for oid (human "reader-card"))]
-    (testing "a bundle may be composed against an observed value — refusing would have made the ruling a permission with nothing behind it"
-      (is (some? card) "the bundle did not card at all")
-      (is (= "outcomes" (str (:section card)))))
-    (testing "and the card SAYS the value is a reading rather than a law"
-      (is (str/includes? (str (:sentence card))
-                         "a value observed in your record, not yet affirmed"))
-      (testing "with the ask attached rather than left as a shrug"
-        (is (str/includes? (str (:sentence card))
-                           "say whether it is yours before a week goes to it"))))
-    (testing "the owner affirms, and the same bundle stops saying it — nothing about the outcome changed, only what is true about the value under it"
-      (is (= 200 (:status (invoke! "values" vid :still_stands nil
-                                   (human "colton-card")))))
-      (let [after (card-for oid (human "reader-card"))]
-        (is (some? after))
-        (is (not (str/includes? (str (:sentence after)) "not yet affirmed")))
-        (is (str/includes? (str (:sentence after)) "For unhurried Saturdays"))))))
-
-;; ── 6. a reading the house answered ─────────────────────────────────
-
-(deftest a-reading-the-house-answered-stops-being-composed-against
-  (let [sous (leash! "sous-wrong" ["create"])
-        v (write-value! sous "shipping more, on Sundays")
-        id (id-of v)
-        answered (invoke! "values" id :dismiss nil (human "colton-wrong"))]
-    (testing "\"not one of ours\" is its own door, so the log tells a wrong reading apart from a value the house stopped holding"
+(deftest a-value-the-house-retired-stops-being-composed-against
+  (let [id (id-of (write-value! (human "colton-wrong") "shipping more, on Sundays"))
+        answered (invoke! "values" id :retire nil (human "colton-wrong"))]
+    (testing "retiring is a person's own door and the log keeps whose hand it was"
       (is (= 200 (:status answered)) (str "refused: " (json answered)))
       (is (= "retired" (state-of answered)))
-      (is (contains? (hands :value id) [:dismiss "colton-wrong"])))
-    (testing "and no outcome may be staged against it — the same law names-a-value already held for a retired one"
+      (is (contains? (hands :value id) [:retire "colton-wrong"])))
+    (testing "and no outcome may be staged against it — names-a-value has always held this"
       (let [r (req :post "/api/outcomes"
-                   {:goal "A Sunday spent on a reading that was wrong"
+                   {:goal "A Sunday spent on a value this house let go"
                     :value_id id
                     :routing "It runs through nothing this house said it loves."
                     :evidence [(str "/api/values/" id)]}
@@ -440,7 +407,7 @@
         (is (= 409 (:status r)) (str "allowed: " (json r)))
         (is (= "names-a-value" (guard-of r)))
         (is (str/includes? (detail r) "retired"))))
-    (testing "restoring it brings it back as the house's own, not as a guess — a person reaching for that door has held it with his own hand"
+    (testing "restoring it holds it again, and holding it again is affirming it"
       (let [back (invoke! "values" id :restore nil (human "colton-wrong"))]
         (is (= 200 (:status back)))
         (is (= "declared" (state-of back)))

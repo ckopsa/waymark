@@ -76,6 +76,7 @@
   ;; dropped only its own would boot into whatever shape another
   ;; suite left behind.
   ["composition_requests" "outcome_pieces" "outcomes" "values" "people"
+   "hypotheses"
    "tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
@@ -197,8 +198,12 @@
         finder (leash! "finder-1uv8" who
                        [{:kind "insight" :actions ["create"]}
                         {:kind "value" :actions ["create"]}])
-        ;; a value the finder OBSERVED — born observed (jfv.10), so its
-        ;; own affirmation is the next step a diagnosis offers
+        ;; a value the finder wrote under a grant naming `value.create`
+        ;; — since waymark-bug every value is born `declared`, and the
+        ;; tap this diagnosis offers is the petition's rather than an
+        ;; affirmation's: *I read what you brought me and it stands
+        ;; anyway*, which is the fact that separates a wrong value from
+        ;; a wrong plan
         value (req :post "/api/values"
                    {:name "Evenings in the shop"
                     :says "Six weeks of evenings went to building things."

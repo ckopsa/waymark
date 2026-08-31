@@ -49,24 +49,54 @@ was cut; the whole thing is `derived/brief.json`. Read it before any
 order — the far appointment, the booked day, the person who left are
 here and nowhere else.
 
-**WHAT MOVED THIS WEEK** (waymark-2m2) is the one section of the
-brief that is arithmetic. Where a clerk typed a fact — how it
-arrived, in one of nine words, with what it cost and which evening it
-was — the reading turns those facts into log-odds and prints the ten
-biggest movers as `CLAIM-LESS MOVER: <about-row> moved +2.13 this
-week (standing at +1.9) — atoms: …`. **Nothing is stored**: it is
-recomputed every run from `scripts/movements.jq` (log-odds addition
-with a clamp, one count per occasion, decay by type — the three rules
-in `docs/spec-hypotheses.md`), over the household's own numbers at
-`recipe.evidence_lr`, and written back nowhere. *Moved this week* is
+**WHAT MOVED THIS WEEK** (waymark-2m2, slice 2 by waymark-bug) is the
+one section of the brief that is arithmetic. Where a clerk typed a
+fact — how it arrived, in one of nine words, with what it cost and
+which evening it was — those facts fold into log-odds, and the section
+prints the ten biggest movers.
+
+**It READS THE BELIEF STORE when there is one.** A `hypothesis` is a
+row: a claim in the household's words, one of five shapes, the rows it
+is about, where the guess started, and a posterior the engine folds
+from every typed finding that cites it. Those lines read
+`OBSERVED · <claim> [<shape>] moved +2.13 this week, standing at 87%
+(+1.90 log-odds) off 3 fact(s)  /api/hypotheses/…`.
+
+**It falls back to computing when there is not**, which is every house
+until a reading writes some beliefs — then the mover is the ABOUT-ROW
+and the line says `CLAIM-LESS MOVER`, because the number points and
+the claim is still yours to make. **The section's first line says
+which answered.** Never guess whether a number came from the record or
+from the driver.
+
+The three rules are `docs/spec-hypotheses.md`'s: log-odds addition
+with a clamp; one count per WORD per occasion, half again if the same
+word was said twice (two different words in one evening are two
+observations); decay by type, toward the prior. *Moved this week* is
 that fold run twice, today and with the clock set back seven days, so
-a row moves when a new fact lands AND when an old one fades. There is no
-hypothesis kind yet, so what moves is the ABOUT-ROW — the person, the
-value, the thread the fact cites — and the CLAIM IS YOURS: the
-number says where to look, and saying what it means, in a sentence,
-citing the atoms, is the reading's own work. The working is in the
-manifest at `movements`. If nothing is typed the section says so and
-stops, and that is the honest answer rather than a fault.
+a belief moves when a new fact lands AND when an old one fades. The
+numbers are the household's, at `recipe.evidence_lr`. A DISMISSED
+finding is left out, and dismissing a wrong finding is your ONLY
+lawful way to take an atom back out of a fold — never retype one to
+move a number. The working is in the manifest at `movements`.
+
+**WRITING A BELIEF IS YOURS. ANSWERING ONE IS HIS.**
+`POST /api/hypotheses` with `claim`, `shape`
+(interest/intent/pattern/relationship/gap), `about` (one or more
+`/api/<plural>/<id>` addresses) and `prior` (0.02–0.5). The posterior,
+the atoms and the movement have no door — they are the engine's, and
+folded at birth so a belief you write tonight carries an honest number
+tonight. `about` IS the link: any typed finding citing one of those
+addresses feeds it, and so does one citing the hypothesis's own
+address. Correct your own with `restate`. `still_stands`, `revise`,
+`dismiss` and `retire` are the owner's — you may never reach them on a
+row you observed yourself, whatever your grant says — so the way you
+ask is the petition path you already know: a finding, the rows it
+read, and that row's `still_stands` as the one next step.
+
+A second belief of the same shape about the same row is refused by
+name (`not-a-second-belief`), and the refusal names the row to reword.
+Two beliefs about one thing split their evidence and neither moves.
 
 ## 2. The orders, both labels
 

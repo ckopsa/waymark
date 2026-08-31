@@ -98,6 +98,7 @@
             [waymark10.scenario :as scenario]
             [waymark10.schema :as schema]
             [waymark10.server.attachments :as attachments]
+            [waymark10.server.belief :as belief-pass]
             [waymark10.server.capabilities :as cap]
             [waymark10.server.curtain :as curtain]
             [waymark10.server.feed :as feed]
@@ -4320,12 +4321,12 @@
         member (get as-member "x-waymark-principal")
         composer (get (composer-headers tag) "x-waymark-principal")
         loved (str "the shop " tag)
-        ;; 1. THE VALUE, and a MEMBER declares it — so it is born
-        ;; `declared` and the bundle's sentence carries no observed
-        ;; clause. Since waymark-jfv.10 an agent may write one too, but
-        ;; it would be born `observed`; this obligation wants the plain
-        ;; case, where the card is about a value the house has said out
-        ;; loud is its own.
+        ;; 1. THE VALUE, and a MEMBER declares it — so the card is
+        ;; about a value the house has said out loud is its own. It was
+        ;; a choice while jfv.10's `observed` existed and an agent could
+        ;; have written one; since waymark-bug it is the only shape
+        ;; there is, because `observed` left this kind for the
+        ;; hypothesis and every value is born `declared`.
         value (req ctx :post (str "/api/" (:plural (rdef ctx :value)))
                    {:name (str "Making things with the boys " tag)
                     :says (str "The evenings that are worth remembering are"
@@ -6250,6 +6251,215 @@
        (conj (str "feed: the member could not stop their own record ("
                   (:status stopped) ")")))}))
 
+;; ── the belief layer (waymark-bug, docs/spec-hypotheses.md) ─────────
+;;
+;; THE LAST OBLIGATION IN THE PACK, and the ordering rule that put
+;; every writer below the readers puts this one below all of them: it
+;; mints a hypothesis, a second hypothesis the door refuses, and a
+;; typed finding, and then it RUNS THE NIGHTLY FOLD — a pass over
+;; every hypothesis and every finding in the store. Run higher, its
+;; rows would be in the decks the counting obligations size and its
+;; fold would be rewriting rows the crown obligations are reading.
+;;
+;; It ends with its belief AFFIRMED rather than left standing, which
+;; is this pack's usual closing courtesy read one kind over: an
+;; affirmed hypothesis is answered, so `not-a-second-belief` stops
+;; counting it and the next run of this obligation asks a clean
+;; question.
+;;
+;; NO CARD CLAIM. A hypothesis is `:nav :secondary` (`value`'s own
+;; reason: a belief is permanently open, so a primary one would card
+;; in do-now forever), so nothing here reads the feed at all. What
+;; the reading does with a posterior is the driver's brief, which is
+;; a shell script and not a projection this suite can judge.
+
+(defn- hypo!
+  "One belief, through its own create door, as the reader handed in."
+  [ctx hs body]
+  (let [resp (req ctx :post (str "/api/" (:plural (rdef ctx :hypothesis)))
+                  body hs)]
+    {:status (:status resp) :doc (json ctx resp)}))
+
+(defn- posterior-of
+  "The number on a hypothesis document, as a double — the wire carries
+  an exact decimal and every comparison below is an inequality."
+  [doc]
+  (some-> (get-in doc [:data :posterior]) double))
+
+(defn- feed-hypothesis-violations
+  "A belief is born a guess and says so, carries a number NO DOOR CAN
+  SET, folds that number from the typed findings that cite what it is
+  about, refuses a second belief of the same shape about the same
+  thing, and is answered by somebody other than whoever noticed it —
+  from the wire, in that order.
+
+  THE ATOM CITES THE HYPOTHESIS ITSELF, which is the direct link a
+  reading writes when it wants a finding on the belief rather than on
+  its subject. It is used here rather than the subject-overlap arm for
+  one mechanical reason and one honest one: a fresh hypothesis's own
+  address is an offer triple nothing else in this pack has ever
+  written, so `one-live-finding-per-offer` cannot refuse it off
+  `:feed/insights`'s rows — and it is the arm the backfill re-pass
+  will lean on hardest, so it is the one worth watching work.
+
+  It reports `:covered`, because an engine with no hypothesis kind has
+  nothing to find and should say so rather than pass quietly."
+  [ctx]
+  (let [hs (finder-headers)
+        who (get hs "x-waymark-principal")
+        plural (:plural (rdef ctx :hypothesis))
+        subject (str "/api/hypotheses/" (subs (str (random-uuid)) 0 8))
+        claim (str "Somebody in this house means to do the thing "
+                   (subs (str (random-uuid)) 0 8))
+        born (hypo! ctx hs {:claim claim :shape "intent"
+                            :about [subject] :prior 0.1M
+                            :posterior 0.99M
+                            :observed_by "somebody-else"})
+        id (some-> (:doc born) :self id-of)
+        self (str "/api/" plural "/" id)
+        v (cond-> []
+            (not= 201 (:status born))
+            (conj (str "feed: a reading could not write down what it noticed ("
+                       (:status born) " " (pr-str (:doc born)) ")")))]
+    (if (nil? id)
+      {:covered 0 :violations v}
+      (let [d (:doc born)
+            p0 (posterior-of d)
+            v (cond-> v
+                (not= "observed" (str (:state d)))
+                (conj (str "feed: a belief nobody's hand is on was born "
+                           (pr-str (str (:state d)))
+                           " — a birth reads as a guess or the state cannot"
+                           " speak its own standing"))
+
+                (not (str/includes? (str (:summary d)) "Observed"))
+                (conj (str "feed: the hypothesis summary does not say its"
+                           " standing (" (pr-str (str (:summary d))) ")"))
+
+                (not= who (str (get-in d [:data :observed_by])))
+                (conj (str "feed: observed_by is "
+                           (pr-str (str (get-in d [:data :observed_by])))
+                           " and the reading was " (pr-str who)
+                           " — the four-eyes field is the engine's stamp,"
+                           " never a body's"))
+
+                ;; NO DOOR SETS THE POSTERIOR. The body above asked for
+                ;; 0.99 and the row must carry the fold instead: a
+                ;; belief with no atoms stands exactly at its prior.
+                (or (nil? p0) (> (Math/abs (- p0 0.1)) 0.001))
+                (conj (str "feed: a create body naming posterior 0.99 landed "
+                           (pr-str p0)
+                           " — the posterior is a cache of an arithmetic and"
+                           " no door may set it; a belief with no atoms"
+                           " stands at its prior"))
+
+                (not= 0 (get-in d [:data :atom_count]))
+                (conj (str "feed: a fresh belief reports "
+                           (pr-str (get-in d [:data :atom_count]))
+                           " atom(s) and nothing has been published about"
+                           " it yet")))
+            twin (hypo! ctx hs {:claim (str claim ", said again")
+                                :shape "intent" :about [subject] :prior 0.1M})
+            v (cond-> v
+                (not= :not-a-second-belief (refused-guard twin))
+                (conj (str "feed: a second intent belief about the same row"
+                           " was not refused by name ("
+                           (:status twin) " "
+                           (pr-str (refused-guard twin))
+                           ") — two beliefs about one thing split their"
+                           " evidence and neither moves"))
+
+                (not (str/includes? (str (:detail (:doc twin))) (str id)))
+                (conj (str "feed: not-a-second-belief did not name the"
+                           " standing row it refused for ("
+                           (pr-str (str (:detail (:doc twin)))) ")")))
+            atom' (make-insight!
+                   ctx hs {:finding (str "He brought up " claim
+                                         " with nobody asking")
+                           :evidence [self]
+                           :offer_kind "hypothesis"
+                           :offer_id id
+                           :offer_action "still_stands"
+                           :evidence_type "unprompted_mention"
+                           :solicited false})
+            v (cond-> v
+                (not= 201 (:status atom'))
+                (conj (str "feed: a typed finding could not cite a belief"
+                           " directly (" (:status atom') " "
+                           (pr-str (:doc atom')) ") — the address IS the"
+                           " link, and a reading has no other way to hang"
+                           " an atom on a claim")))
+            ;; THE NIGHTLY FOLD, DRIVEN BY NAME. The loop is only its
+            ;; clock — `sweep-dropped!`'s own posture one surface over,
+            ;; and the reason both passes are plain functions.
+            swept (try (belief-pass/sweep-beliefs! (:engine ctx))
+                       (catch Exception e {:failed 1 :why (ex-message e)}))
+            after (json ctx (get-env ctx :hypothesis id))
+            p1 (posterior-of after)
+            v (cond-> v
+                (pos? (long (:failed swept 0)))
+                (conj (str "feed: the belief fold failed ("
+                           (pr-str swept) ")"))
+
+                (or (nil? p1) (nil? p0) (<= p1 p0))
+                (conj (str "feed: an unprompted mention did not lift the"
+                           " belief it cites — " (pr-str p0) " to "
+                           (pr-str p1)
+                           ". An LR above 1 adds in log-odds; if this did"
+                           " not move, the atom never reached the fold"))
+
+                (not= 1 (get-in after [:data :atom_count]))
+                (conj (str "feed: the belief reports "
+                           (pr-str (get-in after [:data :atom_count]))
+                           " atom(s) after one typed finding cited it"))
+
+                (not= self (str (get-in after [:data :atoms 0
+                                               :insight_href])))
+                (conj (str "feed: the cached atom does not name the finding"
+                           " it came from ("
+                           (pr-str (get-in after [:data :atoms 0])) ")"
+                           " — the row's whole promise is that the"
+                           " arithmetic can be redone from what it shows"))
+
+                (nil? (get-in after [:data :last_moved]))
+                (conj (str "feed: the belief moved and says nothing about"
+                           " when the fact behind it was said")))
+            itself (invoke-http ctx :hypothesis id :still_stands nil
+                                {:headers hs})
+            v (cond-> v
+                (not= 409 (:status itself))
+                (conj (str "feed: the reading that noticed a belief"
+                           " answered it (" (:status itself)
+                           ") — the run that read the evidence is never"
+                           " the run that says what it means"))
+
+                (not= "the-answer-is-a-persons"
+                      (str (:guard (json ctx itself))))
+                (conj (str "feed: the four-eyes refusal named "
+                           (pr-str (str (:guard (json ctx itself))))
+                           " rather than the wall it is")))
+            answered (invoke-http ctx :hypothesis id :still_stands nil {})
+            adoc (json ctx answered)
+            p2 (posterior-of adoc)
+            v (cond-> v
+                (not= 200 (:status answered))
+                (conj (str "feed: a second hand could not affirm the belief ("
+                           (:status answered) " " (pr-str adoc) ")"))
+
+                (not= "affirmed" (str (:state adoc)))
+                (conj (str "feed: an affirmed belief rests in "
+                           (pr-str (str (:state adoc)))))
+
+                ;; NOTHING ABOUT THE POSTERIOR CHANGES WITH THE STATE
+                (or (nil? p2) (> (Math/abs (- p2 (double (or p1 0.0))))
+                                 0.001))
+                (conj (str "feed: affirming moved the number ("
+                           (pr-str p1) " to " (pr-str p2)
+                           ") — an affirmation says this house agrees the"
+                           " claim is worth holding, never stop reading"
+                           " evidence")))]
+        {:covered 1 :violations v}))))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -6391,7 +6601,16 @@
               [:kind :outcome_piece] [:kind :insight]
               [:kind :feed_view] [:kind :feed_view_consent]
               [:kind :verdict_reason]}
-     :run feed-diagnosis-violations}]
+     :run feed-diagnosis-violations}
+    ;; …and the belief layer LAST OF ALL (waymark-bug), for the reason
+    ;; every writer below every reader has, plus one nothing else here
+    ;; does: it mints rows AND it runs the nightly fold, which is a
+    ;; pass over every hypothesis and every finding this engine holds.
+    ;; Run anywhere higher, that pass would be rewriting rows the
+    ;; obligations above are reading.
+    {:name :feed/hypotheses
+     :needs #{[:route :feed] [:kind :hypothesis] [:kind :insight]}
+     :run feed-hypothesis-violations}]
    ;; Every obligation spec-feed § 'Where the law is proved' names is
    ;; here now, each having landed with the bead that landed the
    ;; mechanism it judges rather than ahead of it.

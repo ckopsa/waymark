@@ -140,6 +140,7 @@
   required namespaces already run, and nothing here touches storage —
   `waymark10.check` reads this table with no database at all."
   (:require [waymark10.server.attachments :as attachments]
+            [waymark10.server.belief :as server-belief]
             [waymark10.server.coherence :as coherence]
             [waymark10.server.curtain :as curtain]
             [waymark10.feed-recipe :as feed-recipe]
@@ -459,13 +460,34 @@
     ;; `:when`-gated on a tickler kind being served — the mirror
     ;; module's discovery precedent, the second surface to wear it —
     ;; so an engine with no tickler starts nothing and pays nothing.
+    ;; …and since waymark-bug it starts a SECOND one, on the same
+    ;; terms: the nightly fold that keeps every hypothesis's posterior
+    ;; equal to the arithmetic over its atoms. Elected for the sweep
+    ;; above's reason — two processes folding one store would write the
+    ;; same numbers twice — and `:when`-gated on a hypothesis kind
+    ;; being served, so an engine with no belief layer starts nothing.
+    ;; A DAY rather than an hour, because decay is a per-day
+    ;; arithmetic against half-lives measured in months: a belief
+    ;; refolded every minute reads exactly the same as one refolded
+    ;; every night, and this pass is cheap only because it is rare.
+    ;; What makes a fresh atom visible before the next night is not a
+    ;; faster clock — a hypothesis folds its own first posterior at
+    ;; birth, and the reading's brief falls back to computing the fold
+    ;; itself.
     :hooks [{:hook :tickler-sweeper
              :elected :tickler-sweeper
              :when feed/serves-ticklers?
              :start (fn [eng _]
                       (feed/start-tickler-sweeper!
                        eng {:interval-ms (:tickler-sweep-ms eng 3600000)}))
-             :stop feed/stop-tickler-sweeper!}]
+             :stop feed/stop-tickler-sweeper!}
+            {:hook :belief-sweeper
+             :elected :belief-sweeper
+             :when server-belief/serves-hypotheses?
+             :start (fn [eng _]
+                      (server-belief/start-belief-sweeper!
+                       eng {:interval-ms (:belief-sweep-ms eng 86400000)}))
+             :stop server-belief/stop-belief-sweeper!}]
     :routes feed-routes/routes :pack packs/feed}
 
    ;; the Gate hypermedia proxy (waymark-q95): two bespoke doors —

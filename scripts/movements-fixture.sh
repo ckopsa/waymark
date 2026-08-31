@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
-# The fixture for WHAT MOVED THIS WEEK (waymark-2m2) — six synthetic
-# typed atoms, two episodes, three about-rows, and the log-odds hand
-# computed below so a reader can CHECK the program rather than trust
-# it. No database, no network, no engine: `scripts/movements.jq` is a
-# pure function of six JSON inputs and this runs it over six literal
-# ones. CI runs this in the `quick` job, beside check-queue.
+# The fixture for WHAT MOVED THIS WEEK (waymark-2m2, corrected by
+# waymark-bug) — seven synthetic typed atoms, two episodes, three
+# about-rows, and the log-odds hand computed below so a reader can
+# CHECK the program rather than trust it. No database, no network, no
+# engine: `scripts/movements.jq` is a pure function of six JSON inputs
+# and this runs it over six literal ones. CI runs this in the `quick`
+# job, beside check-queue.
+#
+# The same three rules run in Clojure at `waymark10.belief`, which is
+# where a STORED posterior comes from — and `waymark10.belief-test` is
+# this file's twin over there, with its own hand arithmetic. The two
+# must agree, and rule 2's key is where they did not until
+# waymark-bug: see § RULE 2 below.
 #
 #   bash scripts/movements-fixture.sh            # green, or a diff
 #   bash scripts/movements-fixture.sh --show     # …and print the block
@@ -31,6 +38,7 @@
 #   A4  declined_invite           ep B   cites people/iris
 #   A5  minimal_response          ep B   cites values/shop, threads/7fda11c6
 #   A6  specific_detail, SOLICITED ep B  cites values/shop
+#   A7  unprompted_mention        ep A   cites people/iris   ← A2's twin
 #
 # ── RULE 1: ln(LR), discounted where the house asked ──────────────────
 #
@@ -40,6 +48,7 @@
 #   A4  ln 0.2 = -1.609438
 #   A5  ln 0.9 = -0.105361
 #   A6  ln 4 × 0.25 = 0.346574       ← the discount, because we asked
+#   A7  ln 8   =  2.079442
 #
 # ── RULE 3: × 2^(−age ÷ half-life), at two clocks ─────────────────────
 #
@@ -50,41 +59,56 @@
 #   A4      -1.281461                   -1.298610
 #   A5      -0.026340                   -0.028559
 #   A6       0.218328                    0.224293
+#   A7       2.031947                   not yet
 #
-# ── RULE 2: one count per occasion, ×1.5 where it carried more ────────
+# ── RULE 2: one count per (WORD, occasion), ×1.5 where repeated ───────
 #
-#   people/iris        now: epA {A1,A2} → A1 × 1.5 = 4.459124
-#                            epB {A4}             = -1.281461
-#                            standing =  3.177662
-#                      −7d: epB only              = -1.298610
-#                            moved    =  4.476272
-#   values/shop        now: epA {A3}              =  1.049001
-#                            epB {A5,A6} → A6×1.5 =  0.327491
-#                            standing =  1.376492
-#                      −7d: epB only              =  0.336439
-#                            moved    =  1.040053
-#   threads/7fda11c6   now: epA {A1}              =  2.972749
-#                            epB {A5}             = -0.026340
+# THE KEY IS THE WORD AND THE OCCASION TOGETHER, and it grew that half
+# on 2026-08-31 (waymark-bug) to agree with docs/spec-hypotheses.md
+# rule 2 and fork (m), which name `(type, episode)` twice. A1 and A2
+# share occasion A and are DIFFERENT WORDS, so they both count — *he
+# spent a Saturday on it* and *he brought it up* are two observations
+# however close together they were said. A2 and A7 are the SAME WORD in
+# the SAME evening, so they fold to one and take the intensity: that is
+# one person being warm, not two independent facts. A7 exists so the
+# intensity is exercised at all; before the key grew, every pair in
+# this fixture folded and the fold said less than it meant.
+#
+#   people/iris        now: (costly_action, A)      {A1}     =  2.972749
+#                           (unprompted_mention, A) {A2,A7}
+#                                        2.031947 × 1.5      =  3.047921
+#                           (declined_invite, B)    {A4}     = -1.281461
+#                            standing =  4.739209
+#                      −7d: (declined_invite, B) only        = -1.298610
+#                            moved    =  6.037819
+#   values/shop        now: (question_asked, A)     {A3}     =  1.049001
+#                           (minimal_response, B)   {A5}     = -0.026340
+#                           (specific_detail, B)    {A6}     =  0.218328
+#                            standing =  1.240989
+#                      −7d: the two B words                  =  0.195734
+#                            moved    =  1.045255
+#   threads/7fda11c6   now: (costly_action, A)      {A1}     =  2.972749
+#                           (minimal_response, B)   {A5}     = -0.026340
 #                            standing =  2.946409
-#                      −7d: epB only              = -0.028559
-#                            moved    =  2.974967
+#                      −7d: (minimal_response, B) only       = -0.028559
+#                            moved    =  2.974968
 #
 # Ranked by |moved|: people/iris, threads/7fda11c6, values/shop.
 #
 # ── WHAT A5 AND A6 PROVE, and they are the two lines worth reading ────
 #
-# A5 is the only atom on two about-rows AND the weaker of its own
-# occasion on one of them: on values/shop it is folded away behind A6,
-# on threads/7fda11c6 it stands alone and counts. One atom, two rows,
-# two different folds — that is the per-row-per-episode grouping doing
-# its job, and a program that folded globally would get the thread
-# wrong.
+# A5 is the only atom on two about-rows: on values/shop it stands
+# beside A6, on threads/7fda11c6 it stands alone, and BOTH times it
+# counts — one atom, two rows, two folds. Before the key grew it was
+# folded away behind A6 on values/shop, which was the bug: a minimal
+# response and a specific detail are two different observations of one
+# evening, and treating them as one lost the weaker of them entirely.
 #
 # A6 is the discount doing its job: a specific detail is worth ln 4,
-# but we ASKED, so it is worth a quarter of that — and it still beats
-# a minimal response in the same evening, which is why the fold picks
-# it. Take the discount out and the number changes; take it out
-# silently and nobody would ever know.
+# but we ASKED, so it is worth a quarter of that. Take the discount out
+# and the number changes; take it out silently and nobody would ever
+# know.
+#
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -145,6 +169,7 @@ EPB="thread/9c02af31 2026-05-02"
   atom A4 declined_invite      "$EPB" "2026-05-03T09:00:00Z" '["/api/people/iris"]' ''
   atom A5 minimal_response     "$EPB" "2026-05-03T09:00:00Z" '["/api/values/shop","/api/threads/7fda11c6"]' ''
   atom A6 specific_detail      "$EPB" "2026-05-03T09:00:00Z" '["/api/values/shop"]' ',"solicited":true'
+  atom A7 unprompted_mention   "$EPA" "2026-08-25T09:00:00Z" '["/api/people/iris"]' ''
 } | jq -s '.' > "$WORK/insights.json"
 
 run () { # run <insights-file>
@@ -166,7 +191,7 @@ check () { # check <label> <expected> <actual>
   fi
 }
 
-echo "movements fixture — six typed atoms, two episodes, three about-rows"
+echo "movements fixture — seven typed atoms, two episodes, three about-rows"
 OUT="$(run "$WORK/insights.json")"
 
 # `--show` prints the block exactly as a reading would read it in the
@@ -178,8 +203,8 @@ if [ "${1:-}" = "--show" ]; then
   echo
 fi
 
-check "six atoms typed" 6 "$(jq '.typed' <<<"$OUT")"
-check "three of them new this week" 3 "$(jq '.new_this_week' <<<"$OUT")"
+check "seven atoms typed" 7 "$(jq '.typed' <<<"$OUT")"
+check "four of them new this week" 4 "$(jq '.new_this_week' <<<"$OUT")"
 check "no atom is missing its episode" 0 "$(jq '.bare_episodes | length' <<<"$OUT")"
 check "three movers" 3 "$(jq '.movers | length' <<<"$OUT")"
 check "the clamp is read off the table" 6 "$(jq '.clamp' <<<"$OUT")"
@@ -193,17 +218,21 @@ r4 () { jq -r --arg row "$1" --arg k "$2" \
           '.movers[] | select(.row == $row) | (.[$k] * 10000 | round) / 10000' \
           <<<"$OUT"; }
 
-check "people/iris standing"      3.1777  "$(r4 /api/people/iris standing)"
-check "people/iris moved"         4.4763  "$(r4 /api/people/iris moved)"
-check "values/shop standing"      1.3765  "$(r4 /api/values/shop standing)"
-check "values/shop moved"         1.0401  "$(r4 /api/values/shop moved)"
+check "people/iris standing"      4.7392  "$(r4 /api/people/iris standing)"
+check "people/iris moved"         6.0378  "$(r4 /api/people/iris moved)"
+check "values/shop standing"      1.241   "$(r4 /api/values/shop standing)"
+check "values/shop moved"         1.0453  "$(r4 /api/values/shop moved)"
 check "threads/7fda11c6 standing" 2.9464  "$(r4 /api/threads/7fda11c6 standing)"
 check "threads/7fda11c6 moved"    2.975   "$(r4 /api/threads/7fda11c6 moved)"
 
-# rule 2: iris's fresh occasion carried two facts and says so
-check "iris — one occasion, two facts, counted once and a half" 1 \
+# rule 2, and the half it grew on 2026-08-31: iris's fresh occasion
+# carried THREE facts in TWO words, so exactly one of those words is
+# folded — and the label says which, in the household's own sentence.
+check "iris — three facts in one occasion, two words, one of them repeated" 1 \
   "$(jq '[.movers[] | select(.row == "/api/people/iris") | .eps[]
-          | select(.n == 2)] | length' <<<"$OUT")"
+          | select(.n == 3 and .repeated == 1)] | length' <<<"$OUT")"
+check "and the line says the same word was said twice" 1 \
+  "$(jq '[.lines[] | select(test("the same word said more than once in one occasion — counted once and 50% again"))] | length' <<<"$OUT")"
 
 # rule 1's discount, said out loud on the line so a reader can see it
 check "the solicited detail is marked as asked for" 1 \
@@ -215,7 +244,7 @@ check "the section names itself" 1 \
 check "three claim-less movers printed" 3 \
   "$(jq '[.lines[] | select(test("CLAIM-LESS MOVER"))] | length' <<<"$OUT")"
 check "iris's line quotes her name, her week and her standing total" 1 \
-  "$(jq '[.lines[] | select(test("CLAIM-LESS MOVER: Iris  /api/people/iris moved \\+4\\.48 this week \\(standing at \\+3\\.18\\)"))] | length' <<<"$OUT")"
+  "$(jq '[.lines[] | select(test("CLAIM-LESS MOVER: Iris  /api/people/iris moved \\+6\\.04 this week \\(standing at \\+4\\.74\\)"))] | length' <<<"$OUT")"
 check "the value line quotes its statement" 1 \
   "$(jq '[.lines[] | select(test("CLAIM-LESS MOVER: The shop gets opened  /api/values/shop"))] | length' <<<"$OUT")"
 check "the thread has no name and prints its address" 1 \
@@ -272,7 +301,7 @@ check "the brief says so out loud" 1 \
 echo
 echo "movements fixture — nothing new this week, only forgetting"
 jq '[ .[] | select(.self != "/api/insights/A1" and .self != "/api/insights/A2"
-                   and .self != "/api/insights/A3") ]' \
+                   and .self != "/api/insights/A3" and .self != "/api/insights/A7") ]' \
    "$WORK/insights.json" > "$WORK/old.json"
 OLD="$(run "$WORK/old.json")"
 check "nothing new" 0 "$(jq '.new_this_week' <<<"$OLD")"

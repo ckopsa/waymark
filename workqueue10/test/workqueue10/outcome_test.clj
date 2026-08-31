@@ -93,6 +93,7 @@
   ;; behind, and a promoted column added to a folded kind refuses at
   ;; boot with a storage-drift plan.
   ["composition_requests" "outcome_pieces" "outcomes" "values" "people"
+   "hypotheses"
    "tasks" "task_lists" "media" "chores" "chore_runs" "days"
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"

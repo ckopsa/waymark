@@ -557,3 +557,230 @@ The genuinely new thought in the whole epic is four sentences long: the
 episode key, the per-type half-life, the extraction-blind split, and the
 clamp. Everything else is `value`'s machine, `crown_rank`'s numbers,
 `not-a-twin`'s wall and `insight`'s citation, instantiated once more.
+
+## Built — slice 2, the hypothesis kind (2026-08-31, waymark-bug)
+
+**The gate was answered.** Slice 1's first movements block ran against
+the real house — six backfill passes, some fifty typed atoms, the
+output in reading journal `0e244b1c` — the owner read it, and his
+verdict was that slice 2 is what he wants. The `GATED:` line on
+waymark-bug is lifted by that sentence and by nothing else;
+§ *Landing order, and the gate* is satisfied as written.
+
+Everything above this section is the design as it was written on
+2026-08-30 and is not edited. What follows records what LANDED, where
+it differs from the design, and what a person still has to do by hand.
+
+### What landed
+
+- **`workqueue10/src/workqueue10/resources/hypothesis.clj`** — the
+  kind. `:states [:observed :affirmed :dismissed :retired]`,
+  `:initial :observed`, `:terminal #{:dismissed :retired}`,
+  `:nav :secondary`, summary `{data.claim} · {data.shape} · {state}`.
+  Fields: `claim`, `shape`, `about`, `prior`, and the derived six —
+  `posterior`, `posterior_log_odds`, `movement_7d`, `atom_count`,
+  `atoms`, `last_moved` — plus `observed_by` / `affirmed_by` /
+  `affirmed_at`. Doors: create, `restate` (the observer's), and
+  `still_stands`, `revise`, `dismiss`, `retire`, each behind
+  `the-answer-is-a-persons` — `g/unless-granted` with
+  `:own-field :observed_by`, so a person passes, the observer never
+  does whatever its grant says, and any other agent passes under a
+  grant naming `hypothesis.<door>`. Walls:
+  `a-belief-cites-what-it-is-about`,
+  `a-prior-is-a-guess-not-a-conviction`, `not-a-second-belief`,
+  `only-the-observer-restates`.
+- **`waymark10/src/waymark10/belief.clj`** — the three rules, pure, no
+  storage. `logit` / `probability`, `atom-log-odds`, `fold`, `clamp`,
+  `posterior-log-odds`, `movement`, `belief`, plus the row-shaped half
+  of the join: `atom-of`, `atoms-of`, `addresses-of`, `touched-by?`,
+  `fold-one`, `cached`.
+- **`waymark10/src/waymark10/server/belief.clj`** — the pass.
+  `sweep-beliefs!` reads every hypothesis and every finding, folds
+  each belief over the atoms that touch it, and writes through
+  `store/update-data!` (the maintenance write: document and clock
+  index only, version untouched, no transition).
+  `start-belief-sweeper!` is the clock; the feed module's `:hooks`
+  carries it, `:elected :belief-sweeper`,
+  `:when server-belief/serves-hypotheses?`, default interval a day
+  (`:belief-sweep-ms`).
+- **`workqueue10/src/workqueue10/resources/value.clj`** — `observed`
+  gone; see below.
+- **`scripts/movements.jq` and `scripts/movements-fixture.sh`** —
+  rule 2's key corrected, and the fixture regrown around it.
+- **`scripts/sitting-run.sh`** — the brief reads the store, with the
+  computed block as the fallback; and the extraction-blind rule
+  enforced at one gate.
+- **`waymark10/src/waymark10/test/packs.clj`** — `:feed/hypotheses`.
+- **`waymark10/test/waymark10/belief_test.clj`** — the arithmetic,
+  hand-computed in its docstring, no database.
+- `READING.md`, `.claude/skills/reading/SKILL.md`,
+  `.beads/formulas/reading.formula.toml` — the reading learns the
+  kind. **Nothing in the sitting's materials names it**, which is
+  § *The extraction-blind rule* kept rather than quoted.
+
+### Where the build departed from the design, and why
+
+Five departures, all of them small, all recorded here rather than
+discovered later.
+
+1. **Rule 2's key was already wrong in slice 1, and is corrected
+   here.** `scripts/movements.jq` shipped grouping on the OCCASION
+   alone, so a costly action and an unprompted mention in one evening
+   folded to one number. The spec says `(hypothesis, evidence_type,
+   episode)` in rule 2 and `(type, episode)` again in fork (m). The
+   engine reads the spec's key and the jq was changed to agree,
+   because a fallback that computes a different number from the store
+   is the second opinion nobody can see. `movements-fixture.sh` grew a
+   seventh atom so the 1.5× intensity is exercised at all — before the
+   correction, every pair in that fixture folded, and the fixture said
+   less than it meant.
+2. **`prior`'s band is a GUARD, not a schema property.**
+   `waymark10.schema`'s `:decimal` derives its generator from its own
+   `:min`/`:max` with `(long …)`, so `{:min 0.02 :max 0.5}` would
+   generate the single value `0` and the conformance walker would
+   refuse every row it wrote. The schema holds `0..1` and
+   `a-prior-is-a-guess-not-a-conviction` holds `0.02..0.5` with the
+   sentence that names the fix. One usability warning
+   (`effort-honesty`) rides it, acknowledged by the guard's `:open`
+   and recorded in the kind's `:deviations`.
+3. **The birth folds.** The design has the updater as a pass and says
+   nothing about create. A hypothesis a backfill mints would then
+   carry only its prior until the next night, which is the wrong
+   answer for the run that is about to write twenty of them — so
+   `born` runs the fold over the findings already in the store,
+   weighed by `feed/default-evidence-lr` (a create ctx holds the
+   write's transaction and no engine, so the recipe row is not
+   reachable from there). The nightly pass reweighs by the
+   HOUSEHOLD's table. The cost is one night of the deployment's
+   numbers on a fresh row, and it is stated rather than hidden.
+4. **`atoms` carries `episode` and `solicited` beyond the design's
+   four fields.** The row's whole promise is that it is *a cache of an
+   arithmetic anyone can redo*; without the occasion nobody can check
+   rule 2, and without the discount flag `lr_applied` does not
+   reconcile with the posterior. `lr_applied` is the table's
+   cost-graded number BEFORE the discount and before any decay — the
+   price, not the contribution.
+5. **`posterior_log_odds` and `atom_count` are stored beside
+   `posterior`.** Rule 1's own sentence asks for the first (*stored as
+   the probability for reading and the log-odds for arithmetic*); the
+   second is one integer that saves every reader a `count`.
+
+### `value` loses `observed` — what changed, and the migration
+
+**The kind.** `:states [:declared :retired]`, `:initial :declared`.
+`restate` and `dismiss` are gone with the state they left from;
+`revise` and `still_stands` leave from `declared` only; the wording
+door no longer splits by hand. **The create door regained
+`written-by-a-person`, grantable** — with no unaffirmed landing left,
+every create is an affirmation, so an agent at that door would be
+answering its own reading. The wall did not change its mind; the
+states moved out from under it. The refusal names the composer's own
+door by name: an intent hypothesis.
+
+**The composer's grant scope changes.** jfv.10 widened it to
+`value: ["create", "restate"]`. `restate` no longer exists, and
+`create` is a walled door rather than an open one — so a composer that
+should still write values needs a grant admitting `value.create`, and
+for most deployments the honest answer is that it should not have one,
+because the thing it wants to say is a hypothesis.
+
+**`feed/value-standing`'s `:observed` arm is left standing and
+unreached, deliberately.** Slice 3 (waymark-4t9) repoints it at the
+intent hypothesis's posterior — the same sentence with a number in it
+— and deleting the arm now would leave that slice nothing to repoint.
+The card sentence *a value observed in your record, not yet affirmed*
+therefore has no row that can reach it until then; `value_test`'s own
+docstring records the coverage that moved a slice down the epic rather
+than being abandoned.
+
+### THE MIGRATION, AND EXACTLY WHAT THE OWNER'S TAP IS
+
+**Nothing here has been applied. `make migrate-queue-prod` was not
+run, and could not have been: it needs the LAN.** What follows is the
+plan, in the order it must happen.
+
+**Step 0 — the new table needs no tap.** `hypotheses` is a kind this
+production database has never seen, and `store/ensure-kind!` runs
+`CREATE TABLE IF NOT EXISTS` at boot BEFORE `migrate-gate!` snapshots.
+A purely-new kind therefore creates its own table on the deploy that
+serves it. `.github/workflows/image.yml`'s `plan` job may still show
+the create step, in which case the `apply` job holds at the
+`production-migrate` environment and **the tap is a reviewer approving
+that environment** — the same tap every non-destructive schema move
+has needed since image.yml landed.
+
+**Step 1 — mint the hypotheses, BEFORE the state moves.** Every value
+standing in `observed` becomes an intent hypothesis whose claim is the
+value's `says`, citing the value's own address. This is a run, not
+code: a READING, through the ordinary create door, under a grant
+naming `hypothesis.create`. `scripts/value-observed-migration.sh`
+prints the exact request bodies from the live collection and posts
+nothing — read it, then feed it to the door. Do this first: after step
+2 the state column no longer says which values were guesses (though an
+empty `affirmed_by` still does, and the transition log always will).
+
+**Step 2 — move the rows, and THIS is the destructive tap.** `value`
+declares `:renames {:states {:observed :retired}}`, which does two
+things: it keeps `migrate/assert-known-states!` from refusing the boot
+outright, and it tells the planner to emit
+
+```
+[DESTRUCTIVE] rename-state values:
+  UPDATE values SET state = 'retired', updated_at = now()
+  WHERE state = 'observed'
+  -- live rows occupy retired state observed → retired
+```
+
+`migrate/apply!` **skips every destructive step unless a person opts
+in**, and `make migrate-queue-prod` is read-only by construction — it
+refuses `APPLY=1` and `DESTRUCTIVE=1` with a message telling you to
+run the statement by hand. So the owner's tap for step 2 is, in full:
+read the plan with `make migrate-queue-prod` (needs the LAN), then run
+that one UPDATE against the production database through
+`nomad alloc exec -task postgres <alloc> psql -U workqueue -d
+workqueue10 -c "…"`, exactly as the Makefile's own refusal spells it.
+
+**`retired` rather than `declared`, and the choice is not neutral.** A
+guess is not law. The row leaves the house's holding, keeps its whole
+record, and comes back through `restore` — which lands in `declared`
+and stamps the owner — if he reads the belief and agrees with it. The
+alternative would have promoted every unanswered reading to this
+household's law in one UPDATE, which is the exact thing jfv.10 built
+the state to prevent.
+
+**The order matters and the failure is survivable.** Step 2 before
+step 1 loses nothing permanently: the migrated rows are the `retired`
+values with no `affirmed_by`, and the transition log names every one.
+Step 1 without step 2 is a house whose boot refuses until the rename
+runs — which is `assert-known-states!` doing its job, and the refusal
+names the fix.
+
+**If production holds zero observed values, step 1 and step 2 are both
+no-ops** and the plan prints an empty rename set. jfv.10 recorded that
+the `values` table held zero rows in production at the time; nobody
+has checked since, and this plan is written so that either answer is
+safe.
+
+### Recorded, for whoever comes next
+
+- **The updater does not run on insight publish.** § *Effort* said
+  *atom links written on insight publish*; the normative sections say
+  the pass writes them and that *nothing is rewritten nightly except
+  the cached posterior*. The pass and the birth fold cover it, and a
+  cross-write from `insight`'s create handler would be the one
+  cross-write no `:touches` could advertise (that namespace's own
+  paragraph). Filed rather than built.
+- **A dismissed or retired belief has no door out.** `value` has a
+  `restore`; this kind does not, because asking again is asking again
+  — a NEW hypothesis, which `not-a-second-belief` admits precisely
+  because the old one no longer stands. A `restore` would be the house
+  un-answering itself.
+- **`insight` grew no field.** The link is the ADDRESS, both ways: a
+  finding that cites a row the belief is about feeds it, and so does
+  one that cites the belief's own address. That is what makes a
+  backfill re-pass possible with no edit to any standing finding.
+- **The sitting's manifest lost its movements block**, which slice 1
+  had let ride. Defensible while the house stored no belief anywhere;
+  not defensible now. § *The extraction-blind rule* is enforced at one
+  gate in `scripts/sitting-run.sh`, where both the brief and the
+  manifest read the same file.

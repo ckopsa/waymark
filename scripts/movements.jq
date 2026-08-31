@@ -37,13 +37,26 @@
 #    CLAMPED at ±`log_odds_clamp`, because a belief that reaches
 #    certainty stops reading evidence.
 #
-# 2. ONE COUNT PER EPISODE, ×`episode_intensity`. Atoms sharing an
-#    occasion collapse to ONE contribution — the strongest — and if
-#    there were two or more it is multiplied by the intensity and no
-#    further. Enthusiasm in a single conversation is warmth, not four
-#    independent observations. A missing `episode` is its own episode,
-#    which is the safe direction: fewer discounts, never a merge the
-#    record cannot justify.
+# 2. ONE COUNT PER (TYPE, EPISODE), ×`episode_intensity`. Atoms
+#    sharing an evidence word AND an occasion collapse to ONE
+#    contribution — the strongest — and if there were two or more it is
+#    multiplied by the intensity and no further. Enthusiasm in a single
+#    conversation is warmth, not four independent observations. A
+#    missing `episode` is its own episode, which is the safe direction:
+#    fewer discounts, never a merge the record cannot justify.
+#
+#    THE KEY GREW A HALF ON 2026-08-31 (waymark-bug), and it is a
+#    CORRECTION rather than a change of mind. This program shipped
+#    grouping on the occasion ALONE, which folded a costly action and
+#    an unprompted mention in one evening into a single number. The
+#    spec says `(hypothesis, evidence_type, episode)` in rule 2 and
+#    `(type, episode)` again in fork (m), and the reason is the honest
+#    one: *he spent a Saturday on it* and *he brought it up* are two
+#    observations however close together they were said, while two
+#    unprompted mentions in one evening are one person being warm. The
+#    engine's own fold (`waymark10.belief`) reads the key the spec
+#    wrote, and a fallback that computed a different number from the
+#    store would be the second opinion nobody can see.
 #
 # 3. DECAY BY TYPE, TOWARD SILENCE. Each contribution is multiplied by
 #    `2^(−age_days / half_life[type])`. As an atom decays it approaches
@@ -171,7 +184,10 @@ def sig: ((. * 100 | round) / 100)
 | def fold($as; $t):
     ([ $as[] | select(.at <= $t)
        | . + {w: (.w0 * pow(0.5; (($t - .at) / 86400) / .hl))} ]
-     | group_by(.ep)
+     # rule 2's key is the WORD and the OCCASION together — see the
+     # header. Grouping on the occasion alone would fold two different
+     # observations of one evening into one number.
+     | group_by([.ty, .ep])
      | map((sort_by(.w | fabs) | last) as $strong
            | $strong.w * (if length > 1 then $INTENSITY else 1 end))
      | add // 0)
@@ -195,12 +211,15 @@ def sig: ((. * 100 | round) / 100)
             eps: ([ $as[] ]
                   | group_by(.ep)
                   | map({ep: .[0].ep, n: length, at: .[0].at,
+                         # how many WORDS this occasion said twice — the
+                         # only thing rule 2 folds since waymark-bug
+                         repeated: (length - ([ .[] | .ty ] | unique | length)),
                          label: ("\(.[0].ep) — "
                                  + ([ .[] | .ty
                                       + (if .solicited then " (asked for)" else "" end) ]
                                     | join(", "))
-                                 + (if length > 1
-                                    then " (\(length) facts, one occasion — counted once and \(($INTENSITY - 1) * 100 | round)% again)"
+                                 + (if (length - ([ .[] | .ty ] | unique | length)) > 0
+                                    then " (the same word said more than once in one occasion — counted once and \(($INTENSITY - 1) * 100 | round)% again)"
                                     else "" end))})
                   | sort_by(.at) | reverse)})
   ) as $movers
