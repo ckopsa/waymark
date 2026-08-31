@@ -231,7 +231,9 @@
         act (light-action-on who t-plain)
         t-six (mapv #(task! (str "Sort the garage shelf (" % ")")) (range 1 7))]
     (is (= 201 (:status value)) (pr-str (json value)))
-    (is (= "observed" (str (:state (json value)))))
+    (is (= "declared" (str (:state (json value))))
+        "since waymark-bug every value is born the house's law — the
+         unaffirmed landing went to the hypothesis kind")
     (is (some? act) "the task's own card offers a verb light enough to tap")
     ;; the reader's own recipe: the insights line wide enough for every
     ;; finding below, with the deployment's six numbers left standing
@@ -273,11 +275,17 @@
           (is (< (index-of ids d) (index-of ids p)))
           (is (= "affirmation" (get-in cd [:why :insight :diagnosis])))
           (is (= "none" (get-in cp [:why :insight :diagnosis])))
-          (is (= "observed" (get-in cd [:why :insight :value]))
-              "the offered row IS the value, and it is still a guess")
+          (is (= "declared" (get-in cd [:why :insight :value]))
+              "the offered row IS the value, and since waymark-bug there
+               is no other standing a value can have")
           (is (nil? (get-in cp [:why :insight :value]))
               "a task serves no value, and the key says so by silence")
-          (is (= 24 (lift cd)) "10 for a diagnosis + 14 days of freshness")
+          (is (= 29 (lift cd))
+              "10 for a diagnosis + 5 for a declared value + 14 days of
+               freshness. It was 24 while an agent's value was born
+               `observed` and lifted nothing (waymark-jfv.10); waymark-bug
+               took that state away, so the declared lift is the only one
+               a value can now add.")
           (is (= 14 (lift cp)) "14 days of freshness and nothing else")
           (is (= 0 (get-in cd [:why :insight :dismissed])))
           (is (= 0 (get-in cd [:why :insight :days_old])))
@@ -285,6 +293,9 @@
           (is (says-of cd "Ranked 1st of 2 among findings"))
           (is (says-of cd "It is a diagnosis"))
           (is (says-of cd "lifts it 10"))
+          (is (says-of cd "serves a value this house declared")
+              "and since waymark-bug that is the only sentence the value
+               half of this line can say")
           (is (says-of cp "plain finding"))
           (is (says-of cp "Lift 14 in all"))
           (is (says-of cp "outside the contest because they must appear")

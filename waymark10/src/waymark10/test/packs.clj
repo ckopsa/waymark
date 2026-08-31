@@ -6311,13 +6311,34 @@
         subject (str "/api/hypotheses/" (subs (str (random-uuid)) 0 8))
         claim (str "Somebody in this house means to do the thing "
                    (subs (str (random-uuid)) 0 8))
+        ;; 0. THE STRUCTURAL WALL, AND IT IS NOT A GUARD. The derived
+        ;; fields and the four-eyes stamp are absent from
+        ;; `:create-schema`, so a body naming them does not get judged
+        ;; and ignored — it is REFUSED at the schema, by name, before
+        ;; any guard runs. That is what "there is no door to refuse
+        ;; at" means when you knock on it (fork (g)).
+        strays (hypo! ctx hs {:claim claim :shape "intent"
+                              :about [subject] :prior 0.1M
+                              :posterior 0.99M
+                              :observed_by "somebody-else"})
+        stray-errors (set (keys (:errors (:doc strays))))
         born (hypo! ctx hs {:claim claim :shape "intent"
-                            :about [subject] :prior 0.1M
-                            :posterior 0.99M
-                            :observed_by "somebody-else"})
+                            :about [subject] :prior 0.1M})
         id (some-> (:doc born) :self id-of)
         self (str "/api/" plural "/" id)
         v (cond-> []
+            (not= 422 (:status strays))
+            (conj (str "feed: a create body naming posterior and"
+                       " observed_by was answered " (:status strays)
+                       " — those fields are the engine's, and the create"
+                       " schema is closed so that saying otherwise is a"
+                       " refusal rather than a silent overwrite"))
+
+            (not= #{:posterior :observed_by} stray-errors)
+            (conj (str "feed: the refusal named " (pr-str stray-errors)
+                       " — it must name BOTH the posterior a door may not"
+                       " set and the four-eyes stamp a body may not claim"))
+
             (not= 201 (:status born))
             (conj (str "feed: a reading could not write down what it noticed ("
                        (:status born) " " (pr-str (:doc born)) ")")))]
@@ -6343,15 +6364,15 @@
                            " — the four-eyes field is the engine's stamp,"
                            " never a body's"))
 
-                ;; NO DOOR SETS THE POSTERIOR. The body above asked for
-                ;; 0.99 and the row must carry the fold instead: a
-                ;; belief with no atoms stands exactly at its prior.
+                ;; …AND THE ROW CARRIES THE FOLD INSTEAD. A belief with
+                ;; no atoms stands exactly at its prior, which is the
+                ;; whole of what the arithmetic can honestly say about
+                ;; a claim nothing has fed.
                 (or (nil? p0) (> (Math/abs (- p0 0.1)) 0.001))
-                (conj (str "feed: a create body naming posterior 0.99 landed "
+                (conj (str "feed: a fresh belief with a prior of 0.1 stands at "
                            (pr-str p0)
-                           " — the posterior is a cache of an arithmetic and"
-                           " no door may set it; a belief with no atoms"
-                           " stands at its prior"))
+                           " — the posterior is a cache of an arithmetic, and"
+                           " a belief with no atoms stands at its prior"))
 
                 (not= 0 (get-in d [:data :atom_count]))
                 (conj (str "feed: a fresh belief reports "

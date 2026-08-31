@@ -321,10 +321,22 @@
 ;; law.
 
 (deftest the-wording-door-is-the-owners-and-the-observers-is-gone
-  (let [sous (leash! "sous-word" ["create" "restate" "revise"])
+  (testing "a SCOPE cannot even name the observer's door any more, and that
+            is the strongest way the door's absence can be watched: the
+            grant machine validates a scope entry against the kind's own
+            declared actions, so jfv.10's own composer leash
+            (`value: [\"create\", \"restate\"]`) is refused at the mint"
+    (let [made (req :post "/api/grants"
+                    {:audience "sous-gone"
+                     :scope [{:kind "value" :actions ["restate"]}]}
+                    (human "colton-grants"))]
+      (is (not= 201 (:status made))
+          (str "a scope named a door this kind does not have and the grant"
+               " door minted it anyway: " (json made)))))
+  (let [sous (leash! "sous-word" ["create" "revise"])
         v (write-value! sous "the workbench, cleared")
         id (id-of v)]
-    (testing "there is no `restate` on this kind any more, however wide the leash"
+    (testing "and no door answers `restate` on the row either"
       (let [gone (word! "values" id :restate
                         {:name "the workbench, cleared on Fridays"
                          :says "Narrowed: it is Fridays. Six of the last eight."

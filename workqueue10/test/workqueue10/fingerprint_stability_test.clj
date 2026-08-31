@@ -90,7 +90,10 @@
       ;; :tickler). The count is a census, not a law: it moves when the
       ;; house gains a kind and never otherwise, which is exactly the
       ;; change it is here to notice.
-      (is (= 38 (count before)) "the whole household is under the lens")
+      ;; …and 39 since waymark-bug's :hypothesis, the house's first row
+      ;; that carries a NUMBER about the people in it: a claim, a shape,
+      ;; the rows it is about, and a posterior no door can set.
+      (is (= 39 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)
