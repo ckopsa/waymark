@@ -37,6 +37,14 @@
 # INDEXED, ARRIVAL ADVANCED, ENRICHED, EXTRA, FILLER, in that
 # precedence (waymark-kfm, scripts/verify-classes.jq).
 #
+# UNDER EVERYTHING A RUN MUST ANSWER — an owed person turn, a mailed
+# FORM, a handed-back bundle — the manifest prints WHAT THE HOUSE
+# ALREADY SAYS and WHERE TO LOOK NEXT (waymark-frv,
+# scripts/house-says.jq over scripts/wm-keys.jq), and `verify` prints
+# SAYS-SO and UNREAD SOURCE against an answer that came from the
+# question or from an unopened thread (scripts/answer-checks.jq).
+# Both are fixtured: `bash scripts/house-says-fixture.sh`.
+#
 # It writes NOTHING to the engine but one thing: when the leash is
 # nearly out it files the anchored extend-ask that
 # standing-agent-tick.sh files, in the same words. That ask decides
@@ -653,11 +661,27 @@ verify_run() {
         then "UNCHECKED QUESTION — SAID IN THE JOURNAL: \($subj) — \($q.said_by) asked “\($q.says[0:100])” (\($q.self)); no row of this run answers it, and the journal names it, so it is a skip said out loud"
         else "UNCHECKED QUESTION: \($subj) — \($q.said_by) asked “\($q.says[0:100])” (\($q.self)) and nothing this run wrote answers it\(if $q.replied_to_by_an_agent then ", while an agent reply stands under it unchecked" else "" end)"
         end' "$qans" 2>/dev/null || true)"
+    # ── UNREAD SOURCE (waymark-frv) ───────────────────────────────
+    # The other half of the same grade, and the one the Clark specimen
+    # asks for: this run REPLIED under a person's question while the
+    # manifest's WHAT THE HOUSE ALREADY SAYS pointed at a readable
+    # thread that no row of this run cites and the journal never names.
+    # The rule lives in `scripts/answer-checks.jq` so the fixture can
+    # run it over literal JSON with no house at all.
+    unread="$(jq -rs --slurpfile m "$prev" --slurpfile tw "$twins" \
+                     --arg s "$SINCE" --arg me "$PRINCIPAL" \
+                     --arg which unread-source --rawfile jt "$jtext" \
+                     -f "$HERE/answer-checks.jq" "$qans" 2>/dev/null || true)"
     rm -f "$qans"
     if [ -n "$questions" ]; then
       echo
       echo "$questions"
       echo "  A person's question is answered FROM the record — the rows the manifest printed under it — or it is skipped out loud in the journal. An agent's reply standing under it is not an answer to check off; it is the sentence a reading has to check, and correct where the rows say otherwise."
+    fi
+    if [ -n "$unread" ]; then
+      echo
+      echo "$unread"
+      echo "  A warning, not a block. Cite the thread in the row you write, or say in the journal that you opened it and it held nothing — either one clears this. What it will not accept is \"unknown\" with the conversation named two lines above the answer."
     fi
   fi
 
@@ -667,15 +691,14 @@ verify_run() {
   # exact shape of the false fact a weak model publishes when it
   # answers a question from the question. The contradiction itself
   # (a finding against a task's detail) cannot be checked mechanically;
-  # this half can.
-  jq -rs --arg s "$SINCE" --arg me "$PRINCIPAL" '
-    . as $rows
-    | [ $rows[] | select(.kind == "insight") | select(.at >= $s) | select(.by == $me) ][]
-    | . as $i
-    | ([ $i.evidence[] | select(test("^/api/(tasks|events|people|threads|values|chore_runs|media|task_lists)/")) ] | length) as $house
-    | select($house == 0 and (($i.evidence | length) > 0))
-    | "SAYS-SO: \($i.self) — cites \($i.evidence | join(", ")) and no task, event, person, thread or value row: a fact with nothing in the house behind it. Read the rows the thread is about before it stands as the record."' \
-    "$twins" 2>/dev/null || true
+  # this half can. The rule is `scripts/answer-checks.jq`, beside
+  # UNREAD SOURCE and for the same reason: `bash
+  # scripts/house-says-fixture.sh` runs both over literal JSON.
+  # jq binds every named argument at compile time, taken branch or not,
+  # so the unread-source half's inputs ride along empty.
+  jq -rs --arg s "$SINCE" --arg me "$PRINCIPAL" --arg which says-so \
+     --argjson m '[]' --argjson tw '[]' --arg jt '' \
+     -f "$HERE/answer-checks.jq" "$twins" 2>/dev/null || true
 
   # ── EVERY ROW, CLASSIFIED (waymark-kfm; the extra is waymark-mqo) ──
   # ONE LINE PER ROW BEYOND THE ORDERS, and each says WHICH LAWFUL
@@ -1061,7 +1084,7 @@ if [ "$MODE" = "verify" ]; then
   if [ -n "$prev" ]; then
     vdir="$(dirname "$prev")"
     verify_run | tee "$vdir/verify.txt"
-    grep -E '^(ORDER|EDITOR ORDER|FORM|LETTER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|FACT INDEXED|ARRIVAL ADVANCED|ENRICHED|CLASSES UNAVAILABLE|SAYS-SO|EPISODE|QUESTION|UNCHECKED QUESTION|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
+    grep -E '^(ORDER|EDITOR ORDER|FORM|LETTER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|FACT INDEXED|ARRIVAL ADVANCED|ENRICHED|CLASSES UNAVAILABLE|SAYS-SO|UNREAD SOURCE|EPISODE|QUESTION|UNCHECKED QUESTION|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
       "$vdir/verify.txt" | sed "s/^\(NOTHING written\.\).*/\1/" > "$vdir/grades.txt" 2>/dev/null || true
     printf '%s\n' "$(iso "$(now_s)")" > "$vdir/verified_at"
   else
@@ -1369,46 +1392,12 @@ jq '
 ' "$D/unanswered_threads.json" > "$D/unanswered_threads.tmp" \
   && mv "$D/unanswered_threads.tmp" "$D/unanswered_threads.json"
 
-jq -n --slurpfile out "$R/outcomes.full.json" --slurpfile tasks "$R/tasks.json" \
-      --slurpfile events "$R/events.json" --slurpfile people "$R/people.full.json" \
-      --slurpfile ins "$R/insights.full.json" --slurpfile th "$D/unanswered_threads.json" '
-  ($out[0] // []) as $o | ($tasks[0] // []) as $tk | ($events[0] // []) as $ev
-  | ($people[0] // []) as $pp | ($ins[0] // []) as $in
-  | ([ ($th[0] // [])[] | select(.subject_kind == "outcome") | .subject_id ]
-     + [ $o[] | select(.state == "iterating") | (.self | split("/") | last) ]
-     | unique) as $ids
-  | [ $ids[] | . as $id
-      | (([ $o[] | select((.self | split("/") | last) == $id) ] | first) // null) as $b
-      | select($b != null)
-      | ([$b.self] + ($b.data.evidence // [])) as $rows
-      | {outcome: $b.self,
-         goal: ($b.data.goal // ""),
-         rows: ([ $rows[] | . as $r
-                  | (if ($r | test("^/api/tasks/"))
-                     then (([ $tk[] | select(.self == $r) ] | first) // null) as $t
-                          | select($t != null)
-                          | {self:$r, kind:"task", says:(($t.fields.title // $t.display.title // "") | tostring)
-                                          + (if (($t.fields.status // "open") != "open") then " [" + $t.fields.status + "]" else "" end)
-                                          + (if ($t.fields.due_at // "") != "" then " · due " + ($t.fields.due_at | .[0:10]) else "" end),
-                             detail:(($t.fields.detail // "") | tostring | gsub("\\s+"; " ") | .[0:400])}
-                     elif ($r | test("^/api/events/"))
-                     then (([ $ev[] | select(.self == $r) ] | first) // null) as $e
-                          | select($e != null)
-                          | {self:$r, kind:"event", says:(($e.fields.title // $e.display.title // "") | tostring)
-                                          + " · " + (($e.fields.starts_at // $e.fields.date // "?") | tostring)
-                                          + (if ($e.fields.ends_at // "") != "" then " to " + ($e.fields.ends_at | tostring) else "" end)
-                                          + (if ($e.fields.location // "") != "" then " · " + $e.fields.location else "" end),
-                             detail:""}
-                     elif ($r | test("^/api/people/"))
-                     then (([ $pp[] | select(.self == $r) ] | first) // null) as $p
-                          | select($p != null)
-                          | {self:$r, kind:"person", says:(($p.data.name // "") + " — " + ($p.data.relation // "?") + " [" + $p.state + "]"), detail:""}
-                     else empty end) ]),
-         findings: ([ $in[] | select(.state == "published")
-                     | . as $i | select(([ ($i.data.evidence // [])[] | . as $e | select(($rows | index($e)) != null) ] | length) > 0)
-                     | {self, at:(.meta.updated_at // ""), finding:(.data.finding // "" | .[0:300])} ]
-                    | sort_by(.at) | reverse | .[0:8])} ]
-' > "$D/house_says.json" 2>/dev/null || echo '[]' > "$D/house_says.json"
+# THE BLOCK ITSELF IS BUILT FURTHER DOWN (waymark-frv), because one of
+# the things it must speak for is the FORM a reading MAILED, and the
+# forms are not read out of the letters until the work orders are
+# assembled. The function is `scripts/house-says.jq`, prepended with
+# `scripts/wm-keys.jq`; the subjects it is asked for are the owed
+# threads, the mailed forms and the handed-back bundles, together.
 
 # a turn nobody has indexed: a remark not ours that no insight cites
 jq --arg me "$PRINCIPAL" --slurpfile cited "$D/insight_cited.json" '
@@ -2140,95 +2129,11 @@ fi
 # second of two adjacent capitalized tokens — then the rest
 # longest-first, and when a line carries no name at all, the line minus
 # stopwords. Two keys at most, tried in that order.
-JQ_KEYS='
-  def wm_stop: ["a","an","and","are","as","at","be","but","by","did","do",
-                "does","for","from","get","got","had","has","have","he",
-                "her","him","his","how","i","if","in","into","is","it",
-                "its","me","my","no","not","of","off","on","or","our",
-                "out","over","per","she","so","that","the","their","them",
-                "then","they","this","to","up","us","via","was","we",
-                "were","what","when","where","which","who","why","will",
-                "with","would","you","your"];
-  def wm_generic: ["breakfast","brunch","lunch","dinner","supper","coffee",
-                   "tea","drinks","meeting","meet","call","zoom",
-                   "appointment","appt","party","birthday","anniversary",
-                   "visit","trip","event","reminder","pickup","pick","drop",
-                   "dropoff","task","todo","time","date","day","days","week",
-                   "weekend","today","tomorrow","tonight","morning","evening",
-                   "afternoon","night","game","practice","class","session",
-                   "review","check","schedule","plan","planning","sync",
-                   "standup","catchup","catch","followup","follow","update",
-                   "note","notes"];
-  def wm_tokens: (tostring | [ splits("[^A-Za-z0-9]+") ] | map(select(length > 0)));
-  def wm_norm: (ascii_downcase | gsub("[^a-z0-9]"; ""));
-  def wm_dedupe: reduce .[] as $x
-    ([]; . as $acc | ($x | wm_norm) as $n
-         | if ([ $acc[] | wm_norm ] | index($n)) then $acc else $acc + [$x] end);
-  def wm_keys:
-    wm_tokens as $t
-    | (wm_stop + wm_generic) as $drop
-    | ([ range(0; ($t | length))
-         | {i:., w:$t[.], lc:($t[.] | wm_norm)}
-         | select(.w | test("^[A-Z][A-Za-z]{2,}$"))
-         | . as $c | select(($drop | index($c.lc)) == null) ]) as $caps
-    | ([ $caps[] | .i ]) as $ci
-    | ([ $caps[] | . as $c | select(($ci | index($c.i - 1)) != null) | .w ]) as $surnames
-    | (([ $caps[] | .w ] - $surnames) | sort_by(-(length))) as $rest
-    | ($surnames + $rest) as $all
-    # a key of three letters or fewer is a SUBSTRING, and IMAP TEXT
-    # search is substring search: "Kev" answered 248 messages — the
-    # whole mailbox, dressed as material. Short keys are used only when
-    # the line offers nothing longer.
-    | ([ $all[] | select(length >= 4) ]) as $long
-    | (if ($long | length) > 0 then $long else $all end) as $names
-    | (if ($names | length) > 0 then $names
-       else ([ $t[] | . as $w | select(($drop | index($w | wm_norm)) == null) ]
-             | join(" ") | if (length > 0) then [.] else [] end)
-       end)
-    | map(select(length > 0)) | wm_dedupe | .[0:2];
-  # the words a value and a subject can be compared on: normalized, four
-  # letters or longer, stopwords out — "the" is not a match
-  def wm_words: wm_tokens | map(wm_norm) | map(select(length >= 4))
-                | [ .[] as $w | select((wm_stop | index($w)) == null) | $w ]
-                | unique;
-  # A value OWNS the words of its name, of every activity it loves, and
-  # the LONG words of what it says. Six letters or more from `says` is
-  # not fussiness: a value whose prose reads "a long healthy life … the
-  # God of War game" otherwise owns "long" and "game", and matched a
-  # woodworking task on "long" — prose filler is short, and the words
-  # that actually name a value (woodworking, appointments, caregivers,
-  # grandchildren) are long.
-  def wm_value_words($v):
-    (([ ($v.name // ""), (($v.loved // []) | join(" ")) ] | join(" ") | wm_words)
-     + (($v.says // "") | wm_words | map(select(length >= 6))))
-    | unique;
-  # VALUE-FIT (waymark-jux): does any live value own a word this subject
-  # says? Nothing fits is a legitimate answer, and the caller turns it
-  # into a journal-only order rather than demanding an outcome that
-  # would have to invent the value it serves.
-  def wm_value_fit($subject; $values):
-    ($subject | wm_words) as $sw
-    | [ $values[] | . as $v
-        | (wm_value_words($v)) as $vw
-        | ([ $vw[] as $w | select(($sw | index($w)) != null) | $w ]) as $shared
-        | select(($shared | length) > 0)
-        | {self:$v.self, id:$v.id, name:$v.name,
-           state:($v.state // "declared"),
-           matched:($shared | sort_by(-(length)) | .[0])} ]
-    | .[0:1];
-  # A value the house has only been OBSERVED to hold is a lawful thing
-  # to compose against: `outcome/names-a-value` holds observed and
-  # declared alike and refuses only retired, and the crown ranks an
-  # observed value LOWER rather than turning the bundle away. What it
-  # must not do is pass silently as something the household said in so
-  # many words — so every order that lands on one says which it is, in
-  # the same sentence that names it.
-  def wm_value_note($f):
-    "value: " + $f.self + " (" + $f.name + ") — matched on \"" + $f.matched + "\"."
-    + (if (($f.state // "declared") == "observed")
-       then " That value is OBSERVED, not affirmed: the house has not said it in so many words, only its record has. Name it anyway — `names-a-value` holds an observed value, and the crown ranks it lower rather than refusing it — and say in the goal that it serves a reading of this household rather than a word the household gave."
-       else "" end);
-'
+# The definitions themselves live in `scripts/wm-keys.jq`, read in
+# here (waymark-frv): `scripts/house-says.jq` is concatenated after
+# this same text, so the search key a manifest prints under WHAT THE
+# HOUSE ALREADY SAYS and the key a work order carries are one rule.
+JQ_KEYS="$(cat "$HERE/wm-keys.jq")"
 
 # ── THE HOUSEHOLD CLOCK A REWORK ORDER CARRIES (waymark-thn) ─────────
 # Jules answered the order "add Howie's 11AM birthday party" with an
@@ -4100,6 +4005,73 @@ if [ "$RUN_MODE" = "sitting" ]; then
     && mv "$D/work_orders.tmp" "$D/work_orders.json" || true
 fi
 
+# ── WHAT THE HOUSE ALREADY SAYS (waymark-frv) ────────────────────────
+# Everything a composer is handed to ANSWER gets the record under it,
+# and by one function: an owed person turn (FACT or QUESTION), a form a
+# reading MAILED, a bundle handed back for a rework. The subjects are
+# gathered here because the forms are only known now — a letter's
+# `- do:` line names its own address, and that address is exactly the
+# thing the clerk must not answer from the sentence alone.
+#
+# The two specimens this list is built from:
+#   2026-08-29  the owner asked whether Rod can get the placard with no
+#               Utah ID; the TC-842 task's own detail says SSN suffices;
+#               Gemini answered from the question and indexed its answer.
+#   2026-08-31  a form asked whether Clark's baptismal interview
+#               happened; the cited row named the Messages thread with
+#               Chris Archibald; the clerk answered "still unknown"
+#               without opening it. Hence WHERE TO LOOK NEXT.
+HS_SUBJECTS="$(jq -sc '
+  ((.[0] // []) | map("/api/" + (.subject_kind | tostring) + "s/" + (.subject_id | tostring)))
+  + ((.[1] // []) | map(.self))
+  + ((.[2] // []) | map(.subject // empty))
+  | map(select(type == "string") | select(test("^/api/[A-Za-z0-9_]+/[A-Za-z0-9-]+$")))
+  | unique' \
+  "$D/unanswered_threads.json" "$D/rework_orders.json" "$D/letter_forms.json" \
+  2>/dev/null || echo '[]')"
+[ -n "$HS_SUBJECTS" ] || HS_SUBJECTS='[]'
+cat "$HERE/wm-keys.jq" "$HERE/house-says.jq" > "$D/house-says.prog.jq"
+jq -n --argjson subjects "$HS_SUBJECTS" \
+      --slurpfile tasks  "$R/tasks.json" \
+      --slurpfile events "$R/events.json" \
+      --slurpfile people "$R/people.full.json" \
+      --slurpfile ins    "$R/insights.full.json" \
+      --slurpfile out    "$R/outcomes.full.json" \
+      --slurpfile chats  "$R/chat_threads.full.json" \
+      -f "$D/house-says.prog.jq" > "$D/house_says.json" 2>>"$PROBE_ERRS" \
+  || echo '[]' > "$D/house_says.json"
+
+# THE BLOCK, RENDERED — one definition, interpolated into every printer
+# that needs it (waymark-frv). Wherever the manifest hands a composer
+# something to ANSWER, the same lines go under it: what stands, then
+# where to look next. `$pad` is the indent of the list it hangs from.
+JQ_HS_PRINT='
+  def hs_block($root; $addr; $pad):
+    (([ ($root.house_says // [])[] | select(.subject == $addr) ] | first) // null) as $h
+    | if $h == null
+      then [ $pad + "WHAT THE HOUSE ALREADY SAYS: nothing in this snapshot answers to "
+             + ($addr | tostring)
+             + " — READ THE ROW AT ITS OWN ADDRESS before you answer. An empty block is not a silent house." ]
+      else
+        [ $pad + "WHAT THE HOUSE ALREADY SAYS about " + $h.subject + " — " + $h.label ]
+        + [ $h.rows[]
+            | $pad + "  · " + .kind + " " + .self + ": " + .says
+              + (if (.detail // "") != "" then "\n" + $pad + "      detail: " + .detail else "" end) ]
+        + (if (($h.findings // []) | length) > 0
+           then [ $h.findings[] | $pad + "  · finding " + (.at[0:10]) + " " + .self + ": " + .finding ]
+           else [ $pad + "  · (no published finding names these rows, beyond anything standing above)" ] end)
+        + (if (($h.where // []) | length) > 0
+           then [ $pad + "  WHERE TO LOOK NEXT — the record points at these, and they are READABLE:" ]
+                + [ $h.where[] | $pad + "    → " + .say ]
+           else [ $pad + "  WHERE TO LOOK NEXT: nothing readable is pointed at — say the record is silent, and say what would settle it." ] end)
+      end;
+'
+# The instruction, in the house's voice, printed ONCE under each
+# section that carries the block. It is one sentence long per clause on
+# purpose: it is read by the weakest model in the house, at the end of
+# a long manifest.
+HS_INSTRUCTION="  Answer FROM these rows. If they answer the question, cite them and say so. If they contradict the person, say which row and quote it. If they point at a thread, READ it before answering \"unknown\". Never index a question — or your own answer — as a fact."
+
 # ── WHAT MOVED THIS WEEK (waymark-2m2) ───────────────────────────────
 # The hypotheses epic's first slice, built to docs/spec-hypotheses.md.
 # The house holds no belief anywhere, so this is COMPUTED ON THE FLY,
@@ -4738,7 +4710,14 @@ jq -n \
   # shelf: each waiting letter, its open door, and the `- do:` lines
   # read out of its body as clerk orders with their own door and
   # cites. It prints on both runs — a reading has a shelf too.
-  jq -r '
+  # AND WHAT THE HOUSE ALREADY SAYS ABOUT EACH FORM'"'"'S SUBJECT
+  # (waymark-frv). A form is a SENTENCE a reading wrote days ago, and a
+  # clerk that answers the sentence rather than the row is the same
+  # failure as answering a question from the question: on 2026-08-31 a
+  # form asked whether Clark'"'"'s interview had happened and the clerk
+  # wrote "still unknown" without opening the Messages thread the cited
+  # row named.
+  jq -r "$JQ_HS_PRINT"'
     if ((.letters // []) | length) == 0
     then "## FORMS FROM THE LAST READING — none (no letter is waiting on your shelf)"
     else
@@ -4759,11 +4738,14 @@ jq -n \
                     "      subject: \(.value.subject // "(the line names no address — the sentence is the whole of it)")",
                     "      write:   \(.value.write.kind) at \(.value.write.door)",
                     "      cite:    \(if ((.value.write.cite // []) | length) == 0 then "(the line names none — cite what you read)" else (.value.write.cite | join(", ")) end)",
-                    "      says:    \(.value.write.finding)")
+                    "      says:    \(.value.write.finding)",
+                    (if .value.subject == null then empty
+                     else (hs_block($root; .value.subject; "      ") | .[]) end))
             end)),
         "",
         "  A form is done when a row YOU write cites the addresses the line names — that is exactly how verify grades it. A form whose row is gone or whose door is shut is skipped in the journal, out loud, by name."
     end' "$RUN/manifest.json"
+  echo "$HS_INSTRUCTION"
   echo
   if [ "$RUN_MODE" = "reading" ]; then
     echo "## YOUR ORDERS — the clerk's forms AND the editor's orders, labeled (waymark-48a, waymark-nl0)"
@@ -4873,7 +4855,11 @@ jq -n \
   else
     echo "## Threads with a person turn still owed an answer — the FACTS are yours; a QUESTION waits for a reading, even one an agent has already replied to (waymark-3wh)"
   fi
-  jq -r --arg mode "$RUN_MODE" '
+  # THE BLOCK GOES UNDER THE TURNS, ONCE PER THREAD (waymark-frv): every
+  # owed turn on a thread is about the SAME subject, so the same rows
+  # answer all of them, and repeating them per turn buries the turns.
+  # The heading says so out loud.
+  jq -r --arg mode "$RUN_MODE" "$JQ_HS_PRINT"'
     . as $root
     | [ .unanswered_threads[] | select($mode == "reading" or .label == "clerk") ] as $mine
     | if ($mine|length)==0 then "  (none)" else
@@ -4888,14 +4874,11 @@ jq -n \
              elif .shape == "question"
              then "        a question: the answer comes FROM the rows below — cite the row that answers it; if the rows contradict the person, say which and quote it; never index a question as a fact"
              else "        a fact: index it as an insight citing the remark and the rows it is about, then reply in words (in_reply_to naming their turn)" end)),
-         (([ ($root.house_says // [])[] | select(.outcome == ("/api/outcomes/" + $t.subject_id)) ] | first) as $h
-          | if $h == null then "    WHAT THE HOUSE ALREADY SAYS: (the subject is not an outcome in the snapshot — read the row at its own address)"
-            else "    WHAT THE HOUSE ALREADY SAYS about \($h.outcome) — \($h.goal[0:80]):",
-                 ($h.rows[] | "      · \(.kind) \(.self): \(.says)" + (if .detail != "" then "\n          detail: \(.detail)" else "" end)),
-                 (if ($h.findings|length) > 0 then ($h.findings[] | "      · finding \(.at[0:10]) \(.self): \(.finding)") else "      · (no published finding names these rows)" end)
-            end))
+         "    — and for EVERY owed turn above, the same subject and so the same record:",
+         (hs_block($root; ("/api/" + $t.subject_kind + "s/" + $t.subject_id); "    ") | .[]))
       end' "$RUN/manifest.json"
-  echo "  (a turn by another AGENT is not a work order — only a person's is; judge who said it. Answer FROM the rows printed: if they answer the question, cite them and say so; if they contradict the person, say which row and quote it. Never index a person's question as a fact — verify prints SAYS-SO against a finding with no house row behind it.)"
+  echo "$HS_INSTRUCTION"
+  echo "  (a turn by another AGENT is not a work order — only a person's is; judge who said it. verify prints SAYS-SO against a finding with no house row behind it, and UNREAD SOURCE against an answer that called a question unknown while the record pointed at a thread it never opened.)"
   echo
   echo "## Turns no insight cites yet — index the FACTS among them"
   jq -r 'if (.candidate_facts|length)==0 then "  (none)" else (.candidate_facts[] | "- \(.self) on \(.subject_kind)/\(.subject_id): \"\(.says[0:120])\"") end' "$RUN/manifest.json"
@@ -4972,7 +4955,7 @@ jq -n \
             | join("  "))),
       "  A clock time a person says is LOCAL. Write the UTC beside it from the rows above and NEVER write the local hour with a Z: an 11 AM party posted as 11:00:00Z is five in the morning, Mountain, which is how waymark-thn was found. A day this table does not carry is a day you convert from the nearest row on it, and say so.")
     end' "$RUN/manifest.json"
-  jq -r --arg mode "$RUN_MODE" '
+  jq -r --arg mode "$RUN_MODE" "$JQ_HS_PRINT"'
     . as $root
     | [ (.rework_orders // [])[] | select($mode == "reading" or .label == "clerk") ] as $mine
     | if ($mine | length) == 0 then empty else
@@ -4981,12 +4964,8 @@ jq -n \
      | "",
        "  \u2500 \(.self) \u2014 \(.goal[0:90])  [\(.label | ascii_upcase)]",
        "    THE NOTE: " + (if .note then "\(.note.said_by) said \u201c\(.note.says)\u201d  (\(.note.self))" else "(no turn on the thread \u2014 read \(.thread))" end),
-       (([ ($root.house_says // [])[] | select(.outcome == $o.self) ] | first) as $h
-        | if $h == null then empty
-          else "    WHAT THE HOUSE ALREADY SAYS (read the note against these before you touch a piece):",
-               ($h.rows[] | "      \u00b7 \(.kind) \(.self): \(.says)" + (if .detail != "" then "\n          detail: \(.detail)" else "" end)),
-               (if ($h.findings|length) > 0 then ($h.findings[] | "      \u00b7 finding \(.at[0:10]) \(.self): \(.finding)") else empty end)
-          end),
+       "    READ THE NOTE AGAINST THESE BEFORE YOU TOUCH A PIECE:",
+       (hs_block($root; $o.self; "    ") | .[]),
        "    KEEP \u2014 write nothing, and withdrawing one of these is REFUSED:",
        (if (.keep|length)==0 then "      (none still standing)"
         else (.keep[] | "      \u00b7 \(.self) \u2014 \(.says[0:100])") end),
@@ -5015,6 +4994,7 @@ jq -n \
                             else "that piece is already TAKEN and its row exists — \(.materialized // "the row it made"). That row exposes no light door to you, so THE EVENT EXISTS AND A PERSON MOVES IT: say so in `says`, and do NOT stage a second event at the new hour." end)
                       else "POST /api/outcome_pieces — a NEW piece at that hour, citing this bundle. No piece in the plan shares a word with this sentence." end)) end ))
     end' "$RUN/manifest.json"
+  echo "$HS_INSTRUCTION"
   echo "  THE MARKS ARE THE ORDER (waymark-wxk). A piece the household declined is a work order and its quick word says which: WRONG TIME is a RE-TIME (the same step at a new hour), WRONG PIECE or NOT THIS WAY is a REPLACE (a different step toward the same goal), NEVER THIS \u2014 or a decline carrying no word at all \u2014 is a DROP that needs nothing more, and a piece still standing is a KEEP you may not withdraw. A RE-TIME and a REPLACE are each a NEW piece staged under the same bundle; you never withdraw the marked piece itself, because a declined piece is already out. POST /api/outcomes/<id>/-/rework is REFUSED by name while a mark is unanswered or a KEEP has been withdrawn, and the refusal lists the offenders with their lists. Where the household marked NOTHING, none of that applies and the note is the whole order."
   echo "  YOU CANNOT PROMISE THIS ONE, YOU CAN ONLY DO IT (waymark-vf8). The REPLY DOOR IS CLOSED on a bundle you could rework: POST /api/remarks on it is refused by name (words-do-not-answer) and the refusal names this door. Your words ride the rework itself — says, required, at most 240 characters, posted as your turn on the thread. And a rework that changes NO piece is a LAWFUL answer: if you read the note and the plan still stands, or you cannot stage what was asked for, commit anyway and say that — it counts the round, puts the bundle back on their feed, and they may then decline it. Leaving it in iterating is the one wrong answer, and next run verify prints HANDED BACK, NOT REWORKED against your name."
   jq -r '

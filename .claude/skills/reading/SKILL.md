@@ -85,9 +85,14 @@ UNSAID` against one that got neither.
 
 Under every thread the manifest prints EVERY PERSON TURN still owed an
 answer — with the agent turns that followed it quoted beneath — and
-WHAT THE HOUSE ALREADY SAYS: the rows the bundle cites (title and
-detail, starts and ends, name and relation) and every published
-finding naming one of them, with addresses. A FACT the person stated
+WHAT THE HOUSE ALREADY SAYS: the rows the subject cites (title and
+detail, starts and ends, name and relation), every published finding
+naming one of them, and **WHERE TO LOOK NEXT** — the Messages thread
+the record points at (`read /api/threads/<id> via tgram__get_messages`)
+and a Gate search key. A thread row is an address with no words in it,
+so **nothing is unknown until somebody opens it**: `verify` prints
+`UNREAD SOURCE` against a reply that called a question unknown while
+the record pointed at a thread it never opened. A FACT the person stated
 is a clerk's form (index it, reply). A QUESTION is answered FROM those
 rows with a reply remark (`in_reply_to` naming their turn): cite the
 row that answers it; if the rows contradict the person, say which and

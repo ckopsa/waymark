@@ -133,9 +133,14 @@ prints:
   you answered where an agent had already replied `QUESTION
   CORRECTED`, one you left `UNCHECKED QUESTION`.
 - **WHAT THE HOUSE ALREADY SAYS** is printed under every unanswered
-  thread and every handed-back bundle (waymark-frv): the rows the
-  bundle cites with their title and detail, and every published
-  finding that names one of them, each with its address.
+  thread, every mailed FORM and every handed-back bundle (waymark-frv):
+  the rows the subject cites with their title and detail, every
+  published finding that names one of them, and **WHERE TO LOOK
+  NEXT** — the Messages thread the record points at, and a Gate search
+  key — because a thread row is an address with no words in it and
+  nothing is unknown until somebody opens it (`verify` prints `UNREAD
+  SOURCE` against an answer that never did, and `SAYS-SO` against a
+  finding with no house row behind it).
 - **REVIEW** lists the sittings since the last reading with their
   `verify` grade lines, the forms the last reading left and whether a
   row now speaks for each, the doors a review needs and whether the
