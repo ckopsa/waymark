@@ -6434,13 +6434,32 @@
                            (pr-str (get-in after [:data :atom_count]))
                            " atom(s) after one typed finding cited it"))
 
-                (not= self (str (get-in after [:data :atoms 0
-                                               :insight_href])))
+                ;; the cached atom names the FINDING it came from, not
+                ;; the belief it feeds — `self` above is the
+                ;; hypothesis's own address, which is what the finding
+                ;; cited to reach it
+                (not= (str (:self (:doc atom')))
+                      (str (get-in after [:data :atoms 0 :insight_href])))
                 (conj (str "feed: the cached atom does not name the finding"
                            " it came from ("
                            (pr-str (get-in after [:data :atoms 0])) ")"
                            " — the row's whole promise is that the"
                            " arithmetic can be redone from what it shows"))
+
+                (not= "unprompted_mention"
+                      (str (get-in after [:data :atoms 0 :evidence_type])))
+                (conj (str "feed: the cached atom does not say which of the"
+                           " nine words it was ("
+                           (pr-str (get-in after [:data :atoms 0])) ")"))
+
+                (not= 8.0M
+                      (some-> (get-in after [:data :atoms 0 :lr_applied])
+                              bigdec (.setScale 1)))
+                (conj (str "feed: the cached atom is priced at "
+                           (pr-str (get-in after [:data :atoms 0 :lr_applied]))
+                           " — an unprompted mention is 8 in the table, and"
+                           " lr_applied is the price the table put on the"
+                           " word, before the discount and before any decay"))
 
                 (nil? (get-in after [:data :last_moved]))
                 (conj (str "feed: the belief moved and says nothing about"
