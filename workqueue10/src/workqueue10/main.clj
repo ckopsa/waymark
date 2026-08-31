@@ -601,6 +601,10 @@
              {:token "messages.read"
               :description "Read text-message threads through Gate."
               :enforced_by gate}
+             {:token "notes.read"
+              :description (str "Read Google Keep notes through Gate — "
+                                "list, search, and single-note reads.")
+              :enforced_by gate}
              {:token "email.read"
               :description (str "Read email through Gate — folders, inbox, "
                                 "search, messages, attachments.")
