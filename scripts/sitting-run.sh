@@ -32,7 +32,10 @@
 # run's own formula: a sitting is never faulted for an editor order; a
 # reading is faulted (printed, never blocked) for an editor order it
 # neither answered nor skipped out loud, and for an extra that is
-# uncited or a twin.
+# uncited or a twin. Both runs get one line per row beyond the orders,
+# naming which lawful thing it was — ORDER-ANSWER, FORM-ANSWER, FACT
+# INDEXED, ARRIVAL ADVANCED, ENRICHED, EXTRA, FILLER, in that
+# precedence (waymark-kfm, scripts/verify-classes.jq).
 #
 # It writes NOTHING to the engine but one thing: when the leash is
 # nearly out it files the anchored extend-ask that
@@ -465,6 +468,41 @@ verify_run() {
     echo "  A twin is a FAILED run: the rank cannot tell two rows saying the same thing apart, so the second one is pure noise on the household's fridge. Read the standing row named above, and retire (or leave unstaged) the duplicate."
   fi
 
+  # ── THE REMARKS THIS RUN SAID (waymark-kfm) ───────────────────────
+  # A REPLY IS A WRITE, and until now nothing here could see one. The
+  # rows above are read for evidence lists, and a remark has none: it
+  # carries `in_reply_to` (the turn it answers) and a subject
+  # (kind + id, the row the conversation is on). So a form whose
+  # expected write was "reply with a REMARK … in_reply_to
+  # /api/remarks/<turn>" graded UNANSWERED however exactly the clerk
+  # answered it — 2026-08-31, remark 0a134a13 replying to f511bd44 on
+  # outcome 217f5678, read as silence. Hydrated like every other row
+  # (the collection carries the stamp; only the row's own address
+  # carries in_reply_to), and read by the order, the form and the
+  # class lines below.
+  rmks="$(mktemp)"; : > "$rmks"
+  rout="$(mktemp)"
+  if [ "$(api "$rout" "/api/remarks?said_by=$PRINCIPAL&state=noted&page%5Bsize%5D=100")" = "200" ]; then
+    while IFS="$(printf '\t')" read -r rhref rat; do
+      [ -n "$rhref" ] || continue
+      rfull="$(mktemp)"
+      if [ "$(api "$rfull" "$rhref")" = "200" ]; then
+        jq -c --arg at "$rat" '
+          {self, kind:"remark", at:$at,
+           by:((.data.said_by // "") | tostring),
+           in_reply_to:((.data.in_reply_to // "") | tostring),
+           subject:(if ((.data.subject_kind // "") | tostring) == "" then ""
+                    else "/api/" + (.data.subject_kind | tostring) + "s/"
+                         + (.data.subject_id | tostring) end)}' "$rfull" >> "$rmks"
+      fi
+      rm -f "$rfull"
+    done < <(jq -r --arg s "$SINCE" '.data.items[]?
+                | select((.meta.updated_at // "") >= $s)
+                | "\(.self)\t\(.meta.updated_at // "")"' "$rout" | head -n "$MAXHYDRATE")
+  fi
+  rm -f "$rout"
+  rmkj="$(mktemp)"; jq -s '.' "$rmks" > "$rmkj" 2>/dev/null || echo '[]' > "$rmkj"
+
   # ── THE WORK ORDERS, GRADED (waymark-48a) ─────────────────────────
   # The row listing above says WHAT was written; this says whether the
   # run did WHAT IT WAS ASKED. An order is ANSWERED when a row this
@@ -505,13 +543,27 @@ verify_run() {
   done
   if [ -n "$prev" ] && [ "$(jq '(.work_orders // []) | length' "$prev" 2>/dev/null || echo 0)" -gt 0 ]; then
     echo
-    jq -rs --slurpfile m "$prev" --arg s "$SINCE" --arg me "$PRINCIPAL" \
+    jq -rs --slurpfile m "$prev" --slurpfile rk "$rmkj" --arg s "$SINCE" --arg me "$PRINCIPAL" \
            --arg mode "$PREV_MODE" --rawfile jt "$jtext" '
+      # A REPLY ANSWERS TOO (waymark-kfm): an order whose expected
+      # write is a remark is answered by a remark of ours that replies
+      # to the turn the line names, or that sits on the order own
+      # subject row. Narrow on purpose — an unrelated remark on some
+      # other thread names neither.
+      def replies($subject; $cite):
+        (([$subject] + ($cite // [])) | map(select(. != null))) as $addrs
+        | ([ $addrs[] | select(startswith("/api/remarks/")) | split("/") | last ]) as $turns
+        | [ ($rk[0] // [])[] | . as $r
+            | select(($r.at >= $s) and ($r.by == $me))
+            | select((($turns | index($r.in_reply_to)) != null)
+                     or (($r.subject != "") and ($subject != null) and ($r.subject == $subject)))
+            | $r.self ];
       . as $rows
       | [ $rows[] | select(.at >= $s) | select(.by == $me) ] as $mine
       | (($m[0].work_orders) // [])[]
       | . as $o
-      | [ $mine[] | select((.cites | index($o.subject)) != null) | .self ] as $hits
+      | ([ $mine[] | select((.cites | index($o.subject)) != null) | .self ]
+         + replies($o.subject; ($o.write.cite // [])) | unique) as $hits
       | (($o.label // "clerk") == "editor") as $ed
       | (($jt | contains($o.subject)) or ($jt | contains($o.subject | split("/") | last))) as $said
       | (if $ed then "EDITOR ORDER" else "ORDER" end) as $word
@@ -625,68 +677,33 @@ verify_run() {
     | "SAYS-SO: \($i.self) — cites \($i.evidence | join(", ")) and no task, event, person, thread or value row: a fact with nothing in the house behind it. Read the rows the thread is about before it stands as the record."' \
     "$twins" 2>/dev/null || true
 
-  # ── THE EXTRA (waymark-mqo), a reading's freedom, graded ──────────
-  # A reading may write ONE row the manifest did not order: cited to
-  # the rows it read, distinct from what stands, with a sentence in the
-  # journal on why it was worth a row. A row that answers nothing in
-  # the manifest is an extra by definition — it cites no order subject,
-  # no thread subject, no handed-back bundle, no offered request, no
-  # owed decline. One and cited and not a twin is EXTRA; anything else
-  # is FILLER, and a sitting has no extra at all, so on a sitting every
-  # such row is filler by the ceiling.
+  # ── EVERY ROW, CLASSIFIED (waymark-kfm; the extra is waymark-mqo) ──
+  # ONE LINE PER ROW BEYOND THE ORDERS, and each says WHICH LAWFUL
+  # THING it was: ORDER-ANSWER (graded above, one line per order, so
+  # never repeated here), FORM-ANSWER, FACT INDEXED, ARRIVAL ADVANCED,
+  # ENRICHED, EXTRA, FILLER — in that precedence, first match wins. The
+  # grader used to know two shapes, a row that cited an order's subject
+  # and a row that did not, so every other kind of work the manifest
+  # itself asked for came out as FILLER: on 2026-08-31 a sitting owed
+  # advance_arrivals:7, enrich_a_bare_task:3, index_facts:3, did
+  # exactly that in nine typed insights, and read back seven FILLER
+  # lines. The lists were right there in the manifest the grade is read
+  # from.
   #
-  # AN ORDER ABSORBS ONLY ITS OWN EXPECTED WRITE (waymark-alj). This
-  # subtracted any row that CITED an order's subject, and the first
-  # reading's one extra — a chat fact, which must cite its thread row —
-  # cited the very thread ORDER 2 was about. The order's expected write
-  # was a journal sentence; an insight is not that, and the reading was
-  # graded "EXTRA: none" for the row it had written on purpose. So an
-  # order's subject is matched WITH the kind the order asked for: a row
-  # answers an order when it is the write the order named, and a row
-  # that merely shares a subject with one is still an extra. The owed
-  # LISTS keep the old, kindless rule — a thread, a decline or a bundle
-  # is owed whatever shape the answer takes.
+  # The classification itself is `scripts/verify-classes.jq` and not a
+  # heredoc, for the reason movements.jq is not one: it is a program
+  # with a rule in it, and a rule that runs over literal JSON can be
+  # CHECKED — `bash scripts/verify-classes-fixture.sh` does that, one
+  # row of each class and no house at all. A manifest too old to carry
+  # one of the lists says so in a line rather than letting the absence
+  # read as nothing arrived.
   if [ -n "$prev" ]; then
-    extras="$(jq -rs --slurpfile m "$prev" --arg s "$SINCE" --arg me "$PRINCIPAL" \
-                     --arg mode "$PREV_MODE" --rawfile jt "$jtext" --arg faults "$faults" '
-      . as $rows
-      | ($m[0]) as $mf
-      | ([ ($mf.work_orders // [])[]
-           | . as $o | (($o.write.kind) // "") as $wk
-           | ([$o.subject] + (($o.write.cite // []))) | map(select(. != null))
-           | .[] | {addr:., kind:$wk} ]) as $order_writes
-      | ([ ($mf.unanswered_threads // [])[] | "/api/" + .subject_kind + "s/" + .subject_id ]
-         + [ ($mf.unanswered_threads // [])[] | .last.self ]
-         + [ ($mf.unanswered_threads // [])[] | (.person_turns // [])[] | .self ]
-         + [ ($mf.rework_orders // [])[] | .self ]
-         + [ ($mf.offered_requests // [])[] | .self ]
-         + [ ($mf.declines // [])[] | select(.owed_a_diagnosis) | .cite[] ]
-         + [ ($mf.candidate_facts // [])[] | .self ]
-         | map(select(. != null)) | unique) as $owed
-      | [ $rows[] | select(.kind == "outcome" or .kind == "insight")
-                  | select(.at >= $s) | select(.by == $me)
-                  | . as $r
-                  | select(([ $r.cites[] | . as $c | select(($owed | index($c)) != null) ] | length) == 0)
-                  # the entry is bound BEFORE index() is asked: inside
-                  # index(f), `.` is the ARRAY being searched, so
-                  # index(.addr) reads .addr off $r.cites and jq dies
-                  | select(([ $order_writes[] | . as $ow
-                              | select($ow.kind == $r.kind)
-                              | select(($r.cites | index($ow.addr)) != null) ] | length) == 0) ] as $ex
-      | if ($ex | length) == 0
-        then (if $mode == "reading" then "EXTRA: none — lawful, and the journal says why or it says nothing" else empty end)
-        elif $mode != "reading"
-        then ($ex[] | "FILLER: \(.self) answers nothing the manifest ordered or owed — a sitting has no extra; the orders are the ceiling")
-        elif ($ex | length) > 1
-        then ("FILLER: \($ex | length) rows beyond the orders — \([ $ex[] | .self ] | join(", ")) — and a reading gets ONE extra, or none")
-        else ($ex[0] | . as $x
-              | if (($x.evidence | length) == 0) then "FILLER: \($x.self) — the extra cites nothing"
-                elif ($faults | contains($x.self)) then "FILLER: \($x.self) — the extra is a twin (see TWIN above)"
-                elif (($jt | contains($x.self)) or ($jt | contains($x.self | split("/") | last)) | not)
-                then "EXTRA: cited, distinct — \($x.self) — but the journal never says why it was worth a row"
-                else "EXTRA: cited, distinct — \($x.self)" end)
-        end' "$twins" 2>/dev/null || true)"
-    if [ -n "$extras" ]; then echo; echo "$extras"; fi
+    classes="$(jq -rs --slurpfile m "$prev" --slurpfile rk "$rmkj" \
+                     --arg s "$SINCE" --arg me "$PRINCIPAL" \
+                     --arg mode "$PREV_MODE" --rawfile jt "$jtext" \
+                     --arg faults "$faults" \
+                     -f "$ROOT/scripts/verify-classes.jq" "$twins" 2>/dev/null || true)"
+    if [ -n "$classes" ]; then echo; echo "$classes"; fi
   fi
 
   # ── NOTES FOR THE NEXT SITTINGS (waymark-nl0), a reading's last duty ─
@@ -741,7 +758,19 @@ verify_run() {
       rm -f "$lrow"
     done < <(jq -r '(.letters // [])[].self' "$prev" 2>/dev/null)
     jq -rs --slurpfile m "$prev" --slurpfile ls <(jq -s '.' "$lstates") \
+           --slurpfile rk "$rmkj" \
            --arg s "$SINCE" --arg me "$PRINCIPAL" --rawfile jt "$jtext" '
+      # the same reply rule the orders wear (waymark-kfm): a form
+      # asking for a REMARK is answered by the remark, which carries no
+      # evidence list for the citation test to read
+      def replies($subject; $cite):
+        (([$subject] + ($cite // [])) | map(select(. != null))) as $addrs
+        | ([ $addrs[] | select(startswith("/api/remarks/")) | split("/") | last ]) as $turns
+        | [ ($rk[0] // [])[] | . as $r
+            | select(($r.at >= $s) and ($r.by == $me))
+            | select((($turns | index($r.in_reply_to)) != null)
+                     or (($r.subject != "") and ($subject != null) and ($r.subject == $subject)))
+            | $r.self ];
       . as $rows
       | ($ls[0] // []) as $states
       | [ $rows[] | select(.at >= $s) | select(.by == $me) ] as $mine
@@ -756,7 +785,8 @@ verify_run() {
            end),
         ((($m[0].letter_forms) // [])[]
          | . as $f
-         | [ $mine[] | select($f.subject != null) | select((.cites | index($f.subject)) != null) | .self ] as $hits
+         | ([ $mine[] | select($f.subject != null) | select((.cites | index($f.subject)) != null) | .self ]
+            + replies($f.subject; ($f.write.cite // [])) | unique) as $hits
          | (($f.subject != null)
             and (($jt | contains($f.subject))
                  or ($jt | contains($f.subject | split("/") | last)))) as $said
@@ -773,7 +803,7 @@ verify_run() {
     rm -f "$lstates"
     echo "  A mailed form is answered the same way every order is: by a row this principal wrote citing the addresses the line names. UNANSWERED is a failure only where the form could honestly have been answered — a row that is gone, a door that is shut and a line already answered by a standing row are lawful skips, said out loud in the journal."
   fi
-  rm -f "$twins" "$jtext"
+  rm -f "$twins" "$jtext" "$rmks" "$rmkj"
 
   # ── HANDED BACK, NOT REWORKED (waymark-vf8) ───────────────────────
   # The one work order a run can no longer answer in words, graded the
@@ -1022,15 +1052,16 @@ if [ "$MODE" = "verify" ]; then
   [ -n "$SINCE" ] || SINCE="$(iso "$(( $(now_s) - 7200 ))")"
   # THE GRADE LINES ARE KEPT (waymark-nl0): verify's whole report goes
   # into the run dir it graded, and the lines that grade — ORDER, THIN,
-  # TWIN, HANDED BACK, CLAIMED, NOTE TIME, ODD HOUR, MARKS, EXTRA,
-  # FILLER, SAYS-SO, EPISODE — are filed beside it as grades.txt, which is what
+  # TWIN, HANDED BACK, CLAIMED, NOTE TIME, ODD HOUR, MARKS, the class
+  # lines (FORM-ANSWER, FACT INDEXED, ARRIVAL ADVANCED, ENRICHED,
+  # EXTRA, FILLER), SAYS-SO, EPISODE — are filed beside it as grades.txt, which is what
   # the next READING reads under REVIEW. On an ephemeral runner the dir
   # does not survive, and the reading's manifest says so rather than
   # pretending the sittings went ungraded.
   if [ -n "$prev" ]; then
     vdir="$(dirname "$prev")"
     verify_run | tee "$vdir/verify.txt"
-    grep -E '^(ORDER|EDITOR ORDER|FORM|LETTER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|SAYS-SO|EPISODE|QUESTION|UNCHECKED QUESTION|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
+    grep -E '^(ORDER|EDITOR ORDER|FORM|LETTER|THIN|TWIN|DIAGNOSIS FLOOD|HANDED BACK|CLAIMED|NOTE TIME|ODD HOUR|MARKS|EXTRA|FILLER|FACT INDEXED|ARRIVAL ADVANCED|ENRICHED|CLASSES UNAVAILABLE|SAYS-SO|EPISODE|QUESTION|UNCHECKED QUESTION|NOTES FOR SITTINGS|NOTHING written|[0-9]+ row)|^  (ADDRESSED|NOT ADDRESSED|WITHDREW)' \
       "$vdir/verify.txt" | sed "s/^\(NOTHING written\.\).*/\1/" > "$vdir/grades.txt" 2>/dev/null || true
     printf '%s\n' "$(iso "$(now_s)")" > "$vdir/verified_at"
   else
@@ -4810,7 +4841,8 @@ jq -n \
   if [ "$RUN_MODE" = "reading" ]; then
     echo "  These orders are the assignment. Do what is owed first (a person's pull and a person's turn outrank any probe), then the clerk forms as written, then the EDITOR orders — each of those asks for a reading of the rows, and the lawful answers are the write it names, or a skip said out loud in the journal; next run verify prints UNANSWERED AND UNSAID against an editor order that got neither. A goal larger than any row is composed only when the rows imply one."
     echo
-    echo "  ONE EXTRA, OR NONE (waymark-mqo). Beyond the orders, a reading may write ONE finding of its own: a row this manifest did not order, cited to the rows you actually read, distinct from everything standing, with one sentence in the journal on why it was worth a row. Not two. A sitting has none. verify grades it EXTRA (cited, distinct) or FILLER (uncited, a twin, or a second one) — so the freedom stays observable. If nothing you read deserves it, write none and say so; that is the usual answer."
+    echo "  ONE EXTRA, OR NONE (waymark-mqo). Beyond everything this manifest names, a reading may write ONE finding of its own: a row it did not order, cited to the rows you actually read, distinct from everything standing, with one sentence in the journal on why it was worth a row. Not two. A sitting has none. verify grades it EXTRA (cited, distinct) or FILLER (uncited, a twin, or a second one) — so the freedom stays observable. If nothing you read deserves it, write none and say so; that is the usual answer."
+    echo "  THE CAP COUNTS EXTRAS ONLY (waymark-kfm). A row that advances an arrival above, indexes one of the uncited turns, or enriches a bare task is the ASSIGNMENT, not the freedom: verify names it ARRIVAL ADVANCED / FACT INDEXED / ENRICHED on its own line and it never spends your extra. FILLER is what is left over — a row answering nothing this manifest ordered, owed, listed as arrived, listed as bare or listed as an uncited fact."
   else
     echo "  These orders ARE the assignment, and they are its ceiling. Do what is owed above first (a person's pull and a person's turn outrank any probe), then execute these in the order given — each is one row at one door, and the material to write it is already here. Everything else in this manifest is OPTIONAL material: read it if an order needs it, and stage nothing extra to look busy. An order you cannot answer honestly is skipped and said so in the journal. A run with no work orders and nothing owed writes NOTHING AT ALL, and that is a lawful, complete run (waymark-mho). A sitting fills forms; it has no extra."
     echo

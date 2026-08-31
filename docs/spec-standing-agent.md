@@ -194,9 +194,11 @@ editor half under **"Waiting for a reading"** (one line each, with why
 it is the editor's), and does not count that half as owed. The queued Jules prompt says so in its own words. `verify`
 grades a sitting against the sitting's formula: an editor order prints
 `WAITING FOR A READING — never a fault against one`; an unmarked,
-unclocked rework prints `HANDED BACK, WAITING FOR A READING`; and any
-outcome or insight beyond the orders is `FILLER`, because a sitting
-has no extra.
+unclocked rework prints `HANDED BACK, WAITING FOR A READING`; and an
+outcome or insight beyond everything the manifest named — its orders,
+its owed lists, its arrivals, its bare tasks, its uncited facts — is
+`FILLER`, because a sitting has no extra (waymark-kfm: what the
+manifest itself asked for is named for what it is, never filler).
 
 **The reading's manifest** opens with **THE HOUSE BRIEF** (waymark-xnf,
 built here): mechanical, from rows the house holds, in an order that is
@@ -263,6 +265,32 @@ subject: an order absorbs only its own **expected write**, so a chat
 fact citing the thread an order was about is still the reading's one
 extra, while the owed lists (threads, reworks, pulls, declines) keep
 matching by citation whatever shape the answer takes.
+
+**Every row, classified** (waymark-kfm, 2026-08-31). The grader knew
+two shapes — a row that cited an order's subject, and a row that did
+not — so every other kind of work the manifest itself asked for came
+out as `FILLER`. That evening the sitting's manifest owed
+`advance_arrivals: 7`, `enrich_a_bare_task: 3`, `index_facts: 3`; the
+clerk published nine typed insights doing exactly that and read back
+seven FILLER lines, and the reading beside it was told its one lawful
+extra was a second one because the row it wrote first had enriched the
+bare task the manifest named. Both lists were sitting in the manifest
+the grade is read from. So `verify` now prints ONE LINE PER ROW beyond
+the orders, naming which lawful thing it was, in precedence:
+`ORDER-ANSWER` (graded on the order's own line, never repeated),
+`FORM-ANSWER`, `FACT INDEXED`, `ARRIVAL ADVANCED`, `ENRICHED`,
+`EXTRA`, `FILLER`. The middle four are the assignment and never spend
+the reading's one extra; `FILLER` keeps its warning tone and is now
+the fault it always claimed to be. Two smaller holes closed with it: a
+form whose expected write is a REMARK is answered by the remark —
+remarks carry no evidence list, so they are read by `in_reply_to` and
+by the row the conversation sits on (2026-08-31, remark `0a134a13`
+replying to `f511bd44` on outcome `217f5678`, graded UNANSWERED) — and
+a manifest too old to carry one of the owed lists says `CLASSES
+UNAVAILABLE` rather than letting the absence read as nothing arrived.
+The classification is `scripts/verify-classes.jq`, a pure function
+with a fixture of its own: `bash scripts/verify-classes-fixture.sh`,
+one synthetic row of each class, no house at all.
 
 **The notes cross as a LETTER** (waymark-bbb). A reading ends its
 journal with a `notes_for_sittings` block — one form per line, `- do:
