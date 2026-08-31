@@ -544,6 +544,106 @@
                                           (g/listed bad))}})
           (t/allow))))))
 
+;; ── THE BELIEF A BUNDLE IS TESTING (waymark-4t9, slice 3) ───────────
+;;
+;; docs/spec-hypotheses.md § 'What is deliberately lost', 4: *a
+;; hypothesis is a PROPOSAL FOR AN EXPERIMENT, and slice 3 makes that
+;; literal — a near-50% belief gets a cheap-test outcome.* `tests` is
+;; the link, and it is A FIELD OF ITS OWN AND NEVER `evidence`.
+;;
+;; The distinction is not fussiness, it is the whole meaning of both
+;; fields. `evidence` is what this bundle WAS BUILT FROM — the rows the
+;; composer actually read, which `an-open-book` requires at least one
+;; of to still be standing and which `not-a-twin` uses to decide
+;; whether somebody already composed this. `tests` is what the bundle
+;; would FIND OUT: a claim about this household that nobody can settle
+;; by reading, only by doing the thing and watching what happens.
+;;
+;; Three consequences the walls below make structural:
+;;
+;;   1. AN ADDRESS MAY NOT BE IN BOTH. A hypothesis in `evidence`
+;;      would let a bundle count the belief it is testing as a reason
+;;      for itself, and `not-a-twin` would then refuse the second
+;;      experiment on one belief as a twin of the first — which is
+;;      exactly backwards, since two trials of one question are how a
+;;      household finds out.
+;;   2. `tests` NAMES HYPOTHESES AND NOTHING ELSE. Every other kind of
+;;      row is something to read, and reading is what `evidence` is
+;;      for.
+;;   3. IT IS NOT A SECOND CITATION. `an-open-book` and `not-a-twin`
+;;      read `evidence` and go on reading only `evidence`; a bundle
+;;      whose entire justification was a belief would be an outcome
+;;      composed out of the machine's own opinion, which is the thing
+;;      the epic's wall exists to forbid.
+;;
+;; AND THE SMALLEST REAL TRIAL is the piece's job rather than this
+;; field's. Nothing here can check that a bundle is cheap; what the
+;; field buys is that when the household declines it, the decline is
+;; readable AS EVIDENCE about the belief — the diagnosis insight cites
+;; the hypothesis and carries `declined_invite`, and the fold takes it
+;; from there (§ 'What merges', the diagnosis row).
+
+(defguardfn a-test-names-a-belief
+  {:judges [:tests :evidence]
+   :reads [:storage]
+   :vars [:offenders]
+   :open "A bundle may name the BELIEFS it would test — /api/hypotheses/<id> addresses, in `tests` and never in `evidence`. A hypothesis a bundle is testing is not a row it read: `evidence` is what the outcome was built from, `tests` is what it would find out."
+   :explain "That is not a belief this bundle can test: {offenders}"}
+  [_row inp ctx]
+  ;; SHAPE ONLY, plus the registry consult `cites-what-it-read` makes
+  ;; one wall up — and the same optimistic advertisement where the
+  ;; probe carries no registry. Whether the named belief STANDS is not
+  ;; asked here: `not-a-second-belief` already keeps one live belief
+  ;; per subject, and a bundle testing a hypothesis the house answered
+  ;; while the bundle was on the fridge is a fact about the week, not a
+  ;; malformed write.
+  (let [tests (into [] (remove str/blank?) (map str (:tests inp)))
+        ev (into #{} (comp (map #(str/trim (str %))) (remove str/blank?))
+                 (:evidence inp))
+        rdef-of (:rdef-of ctx)]
+    (cond
+      (empty? tests) (t/allow)
+
+      :else
+      (let [not-a-belief (into []
+                               (remove (fn [href]
+                                         (= "hypotheses"
+                                            (:plural (row-address href)))))
+                               tests)
+            in-both (into [] (filter #(contains? ev (str/trim (str %)))) tests)
+            unserved (when rdef-of
+                       (into [] (remove (fn [href]
+                                          (when-some [{:keys [plural]}
+                                                      (row-address href)]
+                                            (some? (rdef-of plural)))))
+                             tests))]
+        (cond
+          (seq not-a-belief)
+          (t/deny {:vars {:offenders
+                          (str (g/listed not-a-belief) " — `tests` names"
+                               " BELIEFS, as /api/hypotheses/<id>. Every"
+                               " other kind of row is something to read, and"
+                               " reading is what `evidence` is for.")}})
+
+          (seq unserved)
+          (t/deny {:vars {:offenders
+                          (str "this house has nothing at "
+                               (g/listed unserved) " — it serves no"
+                               " hypothesis kind, so there is no belief here"
+                               " to test yet.")}})
+
+          (seq in-both)
+          (t/deny {:vars {:offenders
+                          (str (g/listed in-both) " is in BOTH `tests` and"
+                               " `evidence`. Pick one: `evidence` is what"
+                               " this bundle was built from, `tests` is what"
+                               " it would find out, and a belief counted as"
+                               " its own reason would make the second trial"
+                               " of one question read as a twin of the"
+                               " first.")}})
+
+          :else (t/allow))))))
+
 (defn- value-row
   "The value an outcome names, read through the write's own
   transaction. nil when the probe carries no read hook, which every
@@ -824,7 +924,47 @@
                      " A recomposition built on a diagnosis the house said"
                      " was not useful is the old ask in a new hat."))
 
-          :else (t/allow))))))
+          ;; THE DIAGNOSIS ATOM (waymark-4t9, docs/spec-hypotheses.md
+          ;; § 'What merges', the diagnosis row): *a decline of a plan
+          ;; that was staged to test a belief is evidence about the
+          ;; belief, priced at `declined_invite`. Today that signal ends
+          ;; in prose the rank cannot read.*
+          ;;
+          ;; The prior said, in its own `tests` field, what it was
+          ;; going to find out. The house declined it. That decline is
+          ;; the answer to the question the bundle asked — the single
+          ;; most informative thing an experiment can produce — and the
+          ;; only way it reaches the fold is a finding that CITES the
+          ;; belief and carries the word. So this door asks for it, at
+          ;; the one moment somebody is already writing the diagnosis,
+          ;; and names the two fields rather than hoping.
+          ;;
+          ;; NO CROSS-WRITE, deliberately. This wall does not publish
+          ;; the atom and could not: `insight`'s create handler writing
+          ;; onto a hypothesis is the one cross-write no `:touches`
+          ;; could advertise (slice 2's own recorded note). What it
+          ;; does is refuse a recomposition whose diagnosis forgot the
+          ;; question — a refusal that names the fix, which is the half
+          ;; a refusal is for.
+          :else
+          (let [tested (into [] (comp (map #(str/trim (str %)))
+                                      (remove str/blank?))
+                             (get-in prior [:data :tests]))
+                ev (into #{} (comp (map #(str/trim (str %)))
+                                   (remove str/blank?))
+                         (get-in insight [:data :evidence]))
+                missed (into [] (remove ev) tested)]
+            (if (seq missed)
+              (deny (str "/api/outcomes/" sid " was staged to test "
+                         (g/listed missed) ", and the house declined it —"
+                         " which is the answer to the question it asked."
+                         " The diagnosis /api/insights/" did " does not cite"
+                         " the belief, so nothing about it moved: a decline"
+                         " that ends in prose is a fact the rank cannot"
+                         " read. Publish the diagnosis citing the belief's"
+                         " own address in its evidence, with evidence_type"
+                         " declined_invite, and name that finding here."))
+              (t/allow))))))))
 
 (defguardfn a-recomposition-waits-its-turn
   {:judges [:supersedes]
@@ -2378,6 +2518,41 @@
              :routing "It uses the shop."}
    :expect  {:refused :cites-what-it-read}})
 
+(defscenario a-tested-belief-is-not-a-cited-row
+  "THE EXPERIMENT'S OWN WALL (waymark-4t9). `tests` names the belief a
+   bundle would settle and `evidence` names the rows it was built
+   from, and the one thing that can go wrong between them is putting
+   an address in both — which would let the bundle count the question
+   as its own answer, and would make the second trial of one belief
+   read as a twin of the first. A shape-only refusal, so the check
+   tier proves it with no store at all."
+  {:kind    :outcome
+   :attempt :create
+   :as      {:id "colton" :type :person}
+   :input   {:goal "One evening in the shop, and nothing else on it"
+             :value_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :routing "It uses the shop."
+             :evidence ["/api/hypotheses/01HZQ7Y7F2R3W4V5X6Y7Z8A9C1"]
+             :tests ["/api/hypotheses/01HZQ7Y7F2R3W4V5X6Y7Z8A9C1"]}
+   :expect  {:refused :a-test-names-a-belief
+             :because "is in BOTH"}})
+
+(defscenario a-test-names-a-belief-and-not-a-task
+  "`tests` is for beliefs and nothing else, and the refusal says why in
+   one line: every other kind of row is something to READ, and reading
+   is what `evidence` is for. A bundle that named a task here would be
+   claiming a task is a claim about this household."
+  {:kind    :outcome
+   :attempt :create
+   :as      {:id "colton" :type :person}
+   :input   {:goal "One evening in the shop, and nothing else on it"
+             :value_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+             :routing "It uses the shop."
+             :evidence ["/api/tasks/01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]
+             :tests ["/api/tasks/01HZQ7Y7F2R3W4V5X6Y7Z8A9B1"]}
+   :expect  {:refused :a-test-names-a-belief
+             :because "names BELIEFS"}})
+
 (defscenario an-outcome-names-a-value-this-house-holds
   "No outcome without the value it serves. The citation is checked
    against the house's own declarations rather than taken on trust,
@@ -2690,6 +2865,10 @@
    {:x-display
     {:label "What you read"
      :help "The rows this outcome was built from, as addresses — /api/tasks/01H… — one per row you actually looked at. At least one, always: an outcome sits on top of the household's own ledger, and the house can follow the citations down into it."}}
+   :tests
+   {:x-display
+    {:label "The belief it would test"
+     :help "When this bundle exists to FIND SOMETHING OUT, name the belief it would settle — /api/hypotheses/01H…, one per belief. Not the same thing as what you read: `evidence` is the rows this outcome was built from, and a hypothesis is a claim about this household that no amount of reading can settle, only doing the thing and watching what happens. Use it for the beliefs the reading calls near even odds, and keep the bundle SMALL: the point of an experiment is that it is the cheapest real trial, not the most convincing plan. If the household declines it, that decline is evidence about the belief, and the diagnosis says so."}}
    :companion_id
    {:x-display
     {:label "Who it is with"
@@ -2904,6 +3083,19 @@
     (oe :companion_name {:optional true} [:maybe [:string {:max 80}]])
     (oe :evidence {:optional true}
         [:maybe [:vector [:string {:min 1 :max 200}]]])
+    ;; THE BELIEF THIS BUNDLE WOULD TEST (waymark-4t9). A vector of
+    ;; hypothesis ADDRESSES, capped at three because a bundle that
+    ;; claims to settle four questions at once settles none of them.
+    ;;
+    ;; NO :filter, and it is `request_id`'s reasoning once more: the
+    ;; join runs from the belief's side (a reading holds the
+    ;; hypothesis and pages the outcomes), so nothing queries outcomes
+    ;; by the belief they test, and a generated column here would move
+    ;; this kind's storage facet and mint a law revision on a deployed
+    ;; table for a question nobody asks. It lands in `data`, and the
+    ;; migrate plan stays empty.
+    (oe :tests {:optional true}
+        [:maybe [:vector {:max 3} [:string {:min 1 :max 200}]]])
     (oe :supersedes {:optional true :kind :outcome :filter #{:eq}}
         [:maybe :waymark/ref])
     ;; THE DIAGNOSIS IT RECOMPOSES AGAINST (waymark-8um.4) — an
@@ -2952,6 +3144,8 @@
     (oe :companion_id {:optional true :kind :person} [:maybe :waymark/ref])
     (oe :evidence {:optional true}
         [:maybe [:vector [:string {:min 1 :max 200}]]])
+    (oe :tests {:optional true}
+        [:maybe [:vector {:max 3} [:string {:min 1 :max 200}]]])
     (oe :supersedes {:optional true :kind :outcome} [:maybe :waymark/ref])
     (oe :diagnosis_id {:optional true :kind :insight} [:maybe :waymark/ref])
     (oe :request_id {:optional true :kind :composition_request}
@@ -3000,7 +3194,13 @@
    ;; `not-a-twin` judges whether somebody already composed it. Shape
    ;; first, then the world — so a composer citing a malformed address
    ;; hears about the address before it hears about the archive.
+   ;; …and THE BELIEF IT TESTS (waymark-4t9) beside the citation wall
+   ;; it is deliberately not part of: `tests` is judged in the same
+   ;; breath as `evidence` because the one thing that can go wrong
+   ;; between them is putting an address in both, and a refusal that
+   ;; could not see the other field could not say so.
    :create-guards [cites-what-it-read
+                   a-test-names-a-belief
                    names-a-value
                    names-a-person
                    routes-through-something-loved
@@ -3168,6 +3368,8 @@
                an-answered-outcome-does-not-come-back
                a-live-outcome-is-not-expired-out-of-the-way
                an-outcome-with-nothing-behind-it-is-refused
+               a-tested-belief-is-not-a-cited-row
+               a-test-names-a-belief-and-not-a-task
                an-outcome-names-a-value-this-house-holds
                an-agent-does-not-iterate-an-outcome
                a-decline-is-allowed-from-under-a-rework]})

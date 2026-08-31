@@ -784,3 +784,213 @@ safe.
   not defensible now. § *The extraction-blind rule* is enforced at one
   gate in `scripts/sitting-run.sh`, where both the brief and the
   manifest read the same file.
+
+## Built — slice 3, gaps, experiments, and the crown reads posteriors (2026-08-31, waymark-4t9)
+
+Slice 2 deployed the same night it landed: `/api/hypotheses` served,
+fourteen beliefs born from backfill pass #7. Slice 3 is built against
+those fourteen, and the first thing they taught was that **saturation
+is the norm and near-50% is the exception** — seven of the fourteen
+were born AT the clamp (±6 log-odds). That fact shaped the experiments
+machinery more than any paragraph above it did, and it is recorded
+below rather than discovered later.
+
+Everything above § *Built — slice 2* is the design as written on
+2026-08-30 and is not edited. This section records what LANDED.
+
+### THE RULING ON waymark-dl1 — is an offer evidence?
+
+**Filed 2026-08-31, decided the same day, and it is decided against
+the join reading `offer_href`.**
+
+The question. `belief/atom-of` joins a hypothesis to a finding by the
+finding's `evidence` vector alone. In the live store only 3 of 55
+typed atoms cited a value ADDRESS in `evidence` — offering ON a value
+had become the sitting's habit and citing it had not — so the six
+declared values were nearly invisible to the belief layer, and H13
+(*the house moves toward family and pays*) was born with zero atoms
+while four standing findings pointed at the same value through their
+offers. Slice 3 points the crown at exactly those posteriors, so the
+cost lands here.
+
+**The spec already answers it, in § *What merges* and in fork (i).**
+An atom is *a published insight that says what kind of evidence it
+read*; the citation is what a finding READ. `offer_kind` /
+`offer_id` / `offer_action` is not a citation — it is the door the
+finding points a person at, the one next step it proposes. Those are
+two different acts and the fields are two different fields.
+
+**And the extraction-blind rule decides it a second time, from the
+other end.** § *The extraction-blind rule* holds because the clerk
+that assigns a type does not know what the type will do. If an OFFER
+fed a belief, a run could move a posterior by choosing which row to
+point the offer at — a decision the sitting makes constantly, in
+front of no belief, with no idea that it was voting. That is precisely
+the coupling every likelihood ratio in the table assumes is absent.
+The join stays on `evidence`.
+
+**So the ruling is (a) plus a wall, and not (b) or (c):**
+
+1. **The join is unchanged.** `evidence` only. `offer_href` does not
+   feed, and no future slice may make it feed without reversing this
+   note.
+2. **The habit changes, in both runs' law.** `SITTING.md` § 1 and
+   `READING.md` / the reading skill / the reading formula now say:
+   *cite the row you offered on, in `evidence` too, whenever you
+   actually read it.* Offering is not citing, and a row nobody cited
+   is a row the house cannot count. This is the half of the fix that
+   costs nothing and is the only half that fixes the coverage.
+3. **AND THE CROWN MAY NOT READ A POSTERIOR BORN FROM ZERO ATOMS.**
+   This is the wall, and it is the part the ruling exists for. The
+   coverage problem is real, the habit change fixes it slowly, and in
+   the meantime a house full of unfed intent hypotheses must not have
+   its Saturdays ranked by numbers nobody's evidence produced.
+   `feed/value-beliefs` admits only beliefs with `atom_count > 0`, so
+   a bundle serving a value whose belief stands at the prior somebody
+   typed is lifted by nothing at all — exactly as it was before this
+   slice. **A number born of no evidence must not read as evidence.**
+
+**The asymmetry that falls out of it, spelled once.** A belief with no
+atoms:
+
+| may | may not |
+|---|---|
+| **propose an experiment** — a claim with no evidence is the purest question there is, and any fact at all would be news | **appear in a GAP** — a house arguing with its own untested guess is reading itself, not a disagreement between two things the record says |
+| | **lift a crown card** — the ranking would be reading a prior somebody typed as though the household had done something |
+
+`belief/fed?` is that predicate, spelled once so the three readers
+cannot drift.
+
+**No backfill amendment (option c).** Editing 55 standing findings'
+`evidence` to add addresses their authors did not write would be the
+house manufacturing citations after the fact — and `insight.dismiss`
+is the only lawful way a standing finding's contribution changes
+(§ *The extraction-blind rule*). The unfed beliefs stay unfed and say
+so on every line that prints them; the next passes fill them honestly
+or they stay questions.
+
+### What landed
+
+- **`waymark10/src/waymark10/belief.clj`** — `fold` split into
+  `contributions` (rules 3 and 2's working, one entry per occasion)
+  and the sum; `evidence-weight` (`Σ|w|`, the mass of the fold with
+  the sign taken off) and `contested` (`Σ|w| − |Σw|`, how much of it
+  cancels); `test-band` and `thin-evidence` off the table;
+  `row-belief` / `standing?` / `fed?`; `experiment` / `experiments`;
+  `gap` / `gaps`.
+- **`hypothesis`** grew `evidence_weight` and `evidence_contested` —
+  derived, engine-written, no door, and deliberately NOT `:sort`, so
+  no generated column and no migration (see below).
+- **`outcome`** grew **`tests`**: up to three `/api/hypotheses/<id>`
+  addresses, with `a-test-names-a-belief` refusing anything that is
+  not a hypothesis address, anything this house does not serve, and —
+  the one that matters — **an address in both `tests` and
+  `evidence`**.
+- **`no-burial-without-a-diagnosis`** grew its diagnosis-atom arm: a
+  recomposition of a declined bundle that carried `tests` is refused
+  unless its diagnosis insight cites the belief, and the refusal names
+  the belief and the word (`declined_invite`).
+- **`feed/value-lift`, `crown-lift`, `crown-inputs`, `value-beliefs`,
+  `crown-as-cited`, `crown-rank-says`** — the crown reads the
+  posterior.
+- **`feed/default-evidence-lr`** grew `test_band` (1.1) and
+  `thin_evidence` (1.5), with their `evidence-lr-words` sentences and
+  their `check-recipe!` bounds — fork (d)'s home, unchanged.
+- **`scripts/sitting-run.sh`** — the GAPS and EXPERIMENTS blocks, read
+  off the store and folding nothing, both blinded at the same
+  extraction-blind gate the movements block already passes through.
+- `READING.md`, `SITTING.md`, `.claude/skills/reading/SKILL.md`,
+  `.beads/formulas/reading.formula.toml`.
+
+### How an experiment candidate is picked, given the clamp
+
+**The gate is one line: the belief stands within `test_band` of even
+odds.** Under the clamp that is a real filter rather than a formality
+— seven of fourteen live beliefs sat AT ±6, which is the atoms having
+already answered the question, and not one of them is a candidate. The
+three that sat between 40% and 61% are the whole population the
+section is for today, and that is the honest answer: **a house whose
+beliefs are saturated has few experiments to run, and the section says
+so rather than manufacturing five.**
+
+**What RANKS them is not the posterior**, because the posterior cannot
+tell the two interesting cases apart. A belief at even odds because
+six facts pull against each other and a belief at even odds because
+nothing has ever fed it are the same percentage and are not the same
+question — the first is settled by one trial, the second by any fact
+at all. So:
+
+```
+score = (test_band − |log-odds|)  +  contested  +  max(0, thin_evidence − weight)
+```
+
+three terms, all in log-odds, all readable, and the section prints
+WHICH of them put each candidate on the list: **CONTESTED** (the facts
+argue), **THIN** (there are none), **BALANCED** (there are, and they
+agree on the middle), or **UNMEASURED** — a row folded before this
+slice deployed, where the field is ABSENT rather than zero, and saying
+*nothing has fed it* about a belief with four atoms because a field
+had not shipped would be the driver inventing a fact.
+
+**A zero-atom belief is a candidate here** — the dl1 ruling's own
+asymmetry — and its line says `off 0 fact(s)` so nobody mistakes it.
+
+### The migration, and exactly what the owner's tap is
+
+**There is none, and that is deliberate rather than lucky.** Only
+`filterable ∪ sortable` fields become generated columns
+(`store/kind-projection`), so every field slice 3 adds —
+`evidence_weight`, `evidence_contested`, `tests` — is declared with
+neither, lands in the `data` document, and the migrate plan stays
+empty. `hypothesis`'s two carry a comment saying so; `outcome`'s
+`tests` inherits `request_id`'s recorded reasoning one field over.
+
+The one thing that changes at the boot is the **law revision** for
+`outcome` and `hypothesis`, which every schema edit mints and which
+needs no tap. `.github/workflows/image.yml`'s `plan` job should print
+an empty plan for both kinds; if it prints anything else, that is news
+and the `apply` job holds at the `production-migrate` environment as
+it does for every schema move.
+
+**What the owner does have to do, once, by hand:** nothing until the
+deploy, and after it, read one reading's brief. The `evidence_weight`
+and `evidence_contested` fields are absent on all fourteen live rows
+until the belief sweeper's next pass (24h) or until a belief is reborn
+— so the first reading after the deploy will print every candidate as
+**UNMEASURED**, which is the honest word for it, and the second will
+not.
+
+### Recorded, for whoever comes next
+
+- **The crown's tier is arithmetic now, not an `if`.** `log_odds_clamp`
+  keeps every posterior strictly under 1 and `value-lift` FLOORS
+  `weight × posterior`, so an unaffirmed value can never reach the
+  number a declared value gets. That is § *What merges*' *`declared`
+  stays a TIER* made structural: there is no special case here for
+  somebody to edit out, and no number a household can write on its
+  recipe row that inverts it. The clamp, which exists for a completely
+  different reason, is what holds it.
+- **`value-standing` still has its `:observed` arm and it is still
+  unreached**, because `value` has no `observed` state since slice 2.
+  What slice 3 repointed is not that arm but the WEIGHT it fed:
+  `crown-lift`'s first term now reads the belief for every case that
+  is not `:declared`. A production row still sitting in `observed`
+  before the owner runs slice 2's step-2 UPDATE reads through the
+  same arm and gets the same graded lift, which is the answer either
+  way.
+- **The experiments section is a list of questions, not orders.** No
+  probe emits a work order for one, and that is a choice: the driver's
+  probes run before the belief blocks are built, and an experiment is
+  a compose — the reading's own step — rather than a form. If a later
+  bead wants the order, the belief blocks have to move above the probe
+  section, and the fixture that proves the two agree has to move with
+  them.
+- **`gaps` compares ADDRESSES and never sentences**, § *What is
+  deliberately lost*, 2, unamended. An `intent` and a `pattern` about
+  the same person disagree; an `intent` and an `interest` are two
+  claims, not a distance between saying and doing.
+- **`tests` does not feed `an-open-book` or `not-a-twin`.** Both go on
+  reading `evidence` only, so a bundle whose entire justification was
+  a belief would still be refused for citing nothing — an outcome
+  composed out of the machine's own opinion is what the epic's wall
+  exists to forbid.

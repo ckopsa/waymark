@@ -40,7 +40,7 @@ people with relation and age, the values with the words they love, the
 next thirty days as one list — local hours, with any start before
 06:00 or after 22:00 flagged **ODD HOUR** — the open threads with a
 person turn still owed an answer, the last five journals' notes,
-WHAT MOVED THIS WEEK, and
+WHAT MOVED THIS WEEK, GAPS, EXPERIMENTS, and
 last every published finding, newest first, grouped by who or what it
 names. It is mechanical, and the cap (`WAYMARK_BRIEF_LINES`) trims
 the findings and nothing else; findings that only say a row back are
@@ -97,6 +97,46 @@ read, and that row's `still_stands` as the one next step.
 A second belief of the same shape about the same row is refused by
 name (`not-a-second-belief`), and the refusal names the row to reword.
 Two beliefs about one thing split their evidence and neither moves.
+
+**CITE THE ROW YOU OFFERED ON** (waymark-dl1, 2026-08-31). The join
+reads a finding's `evidence` and nothing else — an offer is what a
+finding PROPOSES, evidence is what it READ, and only evidence feeds a
+belief. Put the value's or the person's address in `evidence` whenever
+you actually read it, even where you also offer on it.
+
+**GAPS** (waymark-4t9) sit under the movements: an `intent` belief
+against a `pattern` belief about the same rows, more than `test_band`
+apart in log-odds, **each side naming its atoms**, widest first —
+`SAYS (intent…)` over `DOES (pattern…)`, and `STRADDLE` where one is
+above even odds and the other below. That is the distance between what
+this house says and what it does. If it is real, write it down as a
+`gap` hypothesis citing the same rows; if one side is simply wrong,
+`restate` it where it is yours or offer the owner the tap. Both sides
+always have atoms: a belief nothing has fed has not disagreed with
+anything. **This is where waymark-63s's last two contradiction shapes
+went** — write the two claims down as beliefs and one query finds the
+distance.
+
+**EXPERIMENTS** (waymark-4t9) sit under the gaps, and this is what a
+belief is FOR: a hypothesis is a proposal for an experiment, never a
+verdict. Every standing belief within `test_band` of even odds, ranked
+by how much one trial would tell you, each with the word that put it
+there — **CONTESTED** (the facts argue; one trial decides),
+**THIN** (almost nothing has fed it, so any fact is news; a belief
+with NO atoms belongs here and nowhere else), **BALANCED** (real
+evidence, agreeing on the middle) or **UNMEASURED** (the row was
+folded before the engine kept the weight — not a judgment).
+
+Answering one is composing the **smallest real trial**:
+`POST /api/outcomes` naming the belief in **`tests`** and NEVER in
+`evidence` — the door refuses an address in both, because `evidence`
+is what the bundle was built from and `tests` is what it would find
+out. Keep it small; the point is to find out, not to convince. And
+when the household DECLINES a bundle that carried `tests`, that
+decline is the answer: the diagnosis you write before recomposing must
+cite the belief's address in `evidence` with
+`evidence_type: "declined_invite"`, and the recompose door refuses
+without it.
 
 ## 2. The orders, both labels
 

@@ -231,6 +231,19 @@ holding your place in it.
    `verify` will name a typed fact with no `episode`, gently, once:
    without an occasion the reading dates it by when YOU indexed it and
    counts it as an evening of its own.
+
+   **CITE THE ROW YOU OFFERED ON, IN `evidence` TOO** (waymark-dl1,
+   the ruling of 2026-08-31). `evidence` is what a finding READ;
+   `offer_kind`/`offer_id` is the door it points a person at. They are
+   two different fields saying two different things, and nothing joins
+   them: **only `evidence` carries a fact forward.** On 2026-08-31
+   three of this house's fifty-five typed facts cited a value's
+   address, because offering on a value had become the habit and
+   citing it had not — so six declared values were nearly invisible to
+   everything downstream. If you read a value row, or a person row, or
+   a thread, to write the finding, **put its address in `evidence`**,
+   whether or not you also offer on it. Offering is not citing, and a
+   row nobody cited is a row the house cannot count.
 2. **Answer every standing composition request** — a person's pull is
    never capped. The manifest's `offered_requests` is the list, and
    `offered` means unanswered by definition.
