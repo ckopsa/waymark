@@ -810,12 +810,21 @@
 ;; the finding `an-offer-needs-no-address` leaves standing on the
 ;; shared row.
 
+;; AND NO `authored_by`, which is the other half of the same lesson. A
+;; scenario's `:row :data` is POSTED at the create door when the
+;; conformance tier stages it, and `authored_by` is not on
+;; `:create-schema` — the sugar keeps every stamped field off it, so
+;; that nobody may name somebody else as the author. The fixtures the
+;; CHECK tier uses carry it because a check-tier row is a literal
+;; document that never goes near a door; a fixture that will be staged
+;; must be a body a client could actually send.
 (def ^:private a-withdrawable-finding
-  (assoc a-published-finding
-         :finding "The gutter guards were never ordered, and the reminder has lapsed"
-         :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"]
-         :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"
-         :offer_href "/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"))
+  (-> a-published-finding
+      (dissoc :authored_by)
+      (assoc :finding "The gutter guards were never ordered, and the reminder has lapsed"
+             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"]
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"
+             :offer_href "/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1")))
 
 (defscenario a-withdrawn-finding-is-not-a-verdict
   "A tombstone is a tomb. `withdrawn` says the author took a finding

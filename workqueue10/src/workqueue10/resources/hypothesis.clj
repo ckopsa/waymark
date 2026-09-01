@@ -984,10 +984,18 @@
 ;; pays the create door in full and `not-a-second-belief` would refuse
 ;; it off the belief `a-reading-notices-something` leaves standing.
 
+;; AND NO `observed_by`. A scenario's `:row :data` is POSTED at the
+;; create door when this tier stages it, and `observed_by` is not on
+;; `:create-schema` — `born` stamps it, and a caller who could write it
+;; could hand the answer to itself. The check-tier fixture above carries
+;; it because a check-tier row is a literal document that never goes
+;; near a door; a fixture that will be STAGED has to be a body a client
+;; could actually send.
 (def ^:private a-withdrawable-belief
-  (assoc a-noticed-belief
-         :claim "Jack would rather be in the shop than anywhere else on a Saturday"
-         :about ["/api/people/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"]))
+  (-> a-noticed-belief
+      (dissoc :observed_by)
+      (assoc :claim "Jack would rather be in the shop than anywhere else on a Saturday"
+             :about ["/api/people/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"])))
 
 (defscenario a-withdrawn-belief-is-not-an-answer
   "A tombstone is a tomb. `withdrawn` says the reading took its own
