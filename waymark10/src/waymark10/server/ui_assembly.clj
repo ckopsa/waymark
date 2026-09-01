@@ -27,6 +27,7 @@
    "waymark10/ui/160-resource-surface.js"
    "waymark10/ui/170-forms.js"
    "waymark10/ui/180-action-dialog.js"
+   "waymark10/ui/185-undo-stack.js"    ; recordUndoable (called from 180)
    "waymark10/ui/190-worksheet-attachments.js"
    "waymark10/ui/200-events-follow.js"
    "waymark10/ui/210-ledger.js"

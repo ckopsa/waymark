@@ -275,3 +275,41 @@
         "no literal hex outside the palette")
     (is (empty? (re-seq #"\b(rgba?|hsla?)\(" outside))
         "no literal rgb()/hsl() outside the palette")))
+
+(deftest the-undo-stack-rides-the-page-and-names-no-kind
+  ;; waymark-qmo6, docs/spec-undo.md. The stack holds the last few taps
+  ;; this page made and offers each row's own way-back door — and the
+  ;; whole of its design is that it holds NO OPINION about the law: no
+  ;; window, no door name, no kind. It reads the inverse edge off the
+  ;; envelope (`effect.to` equal to the state we just left) and asks
+  ;; the engine, entry by entry, whether that door is still among the
+  ;; row's `actions`. A number here would be a second copy of the
+  ;; window, wrong the first time the household changed it.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "function recordUndoable"))
+    (is (str/includes? page "function undoDoorFor"))
+    (is (str/includes? page "a.effect?.to === backTo")
+        "the inverse door is read off the envelope, never declared here")
+    (is (str/includes? page "#undostack {") "its own CSS survives assembly")
+    (is (str/includes? page "id=\"undostack\"") "and its slot in the shell")
+    (is (str/includes? page "html[data-ui=\"mobile\"] #undostack")
+        "a fixed panel clears the tab bar on a phone")
+    ;; the three call sites still funnel through the one function, so
+    ;; the card surface, the deck's swipe and the feed's chips all get
+    ;; the stack without any of them knowing it exists
+    (is (= 4 (count (re-seq #"maybeUndoToast\(" page)))
+        "one definition and the three taps that reach it")
+    ;; A REFUSAL IS NEWS AND AN EXPIRY IS NOT: an entry the person
+    ;; never touched leaves when its door does; one they tapped and the
+    ;; house refused keeps its place and shows the wall's own sentence
+    (is (str/includes? page "item.problem = res.body || {};"))
+    (is (str/includes? page "if (item.problem) node.append(problemBox(item.problem));"))
+    ;; …and the page learns neither the kind this was built for nor the
+    ;; doors it declares nor the number the window is. ("insight" and
+    ;; "withdraw" are NOT on this list and could not be: the feed screen
+    ;; has read a finding's own numbers since waymark-1uv.8, and
+    ;; "withdraw" is an ordinary English word in one of its sentences.
+    ;; These three are the ones only an undo could have dragged in.)
+    (doseq [word ["hypothes" "unretire" "fifteen"]]
+      (is (not (str/includes? page word))
+          (str "the generic page must not learn " word)))))

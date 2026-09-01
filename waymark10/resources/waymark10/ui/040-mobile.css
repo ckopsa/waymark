@@ -59,6 +59,14 @@
   html[data-ui="mobile"] #toast {
     bottom: calc(var(--tabbar-h) + 52px); }
   html[data-ui="mobile"] #ledger { bottom: var(--tabbar-h); }
+  /* the undo stack clears the tab bar and the ticker, and goes full
+     width — a phone has no bottom-left corner to spare, and this is
+     the surface the stack was built for */
+  html[data-ui="mobile"] #undostack {
+    left: 8px; right: 8px; width: auto;
+    bottom: calc(var(--tabbar-h) + 26px); }
+  html[data-ui="mobile"] .undoitem button[data-undo] {
+    min-height: 40px; padding: 8px 14px; font-size: 14px; }
   /* collection rows become cards: State + Summary lead, the fields
      stack as label:value lines, actions close the card. Cards are
      OPT-IN (table.items.cards — itemTable and the parts tables set

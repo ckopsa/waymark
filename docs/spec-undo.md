@@ -455,29 +455,43 @@ undo.
 
 ## The UI half
 
-**Shipped separately** (waymark-qmo6, second PR), because the engine half is
-already a reviewable diff on its own and a UI fragment is read by a different
-pair of eyes. What follows is what it is for.
+**Shipped as a second PR**, because the engine half is already a reviewable
+diff on its own and a UI fragment is read by a different pair of eyes.
 
-An **undo stack panel**, in page memory only, at the bottom of the screen.
+`185-undo-stack.js`, a panel bottom-left — sharing no corner with `#intents`,
+because a person mid-triage may have both and chrome that overlaps chrome is a
+wall over the work. It holds the last four taps THIS page made, newest first:
+the verb in the machine's face, the row's own summary in the server's, and one
+button.
 
-- Every action tap the UI performs on an `insight` or a `hypothesis` that the
-  server answered 2xx pushes an entry: the row's kind, id and label, the door
-  that was walked, the door that takes it back, and the moment.
-- The panel shows the last few, newest first, each with the row's own sentence
-  and one **Undo** button.
-- An entry ages out of the panel when its window expires — a ticking count of
-  the minutes left, and then the entry is gone. Nothing persists: a reload
-  clears the stack, which is honest, because the stack is a memory of what this
-  hand just did and not a record of anything.
-- Tapping **Undo** invokes the door. On 2xx the entry leaves and the surface
-  behind it re-renders. On a refusal **the wall's own sentence is shown in
-  place, on the entry**, and the entry stays until dismissed — because a refused
-  undo is the most important thing on the screen: it is the house saying another
-  row now stands in the way, and naming it.
+**It holds no opinion about the law, and that is the whole design.** The window,
+whose hand may undo, whether another row now stands in the way — every one of
+those is the engine's, and the page learns them the way it learns everything
+else. It finds the way-back door by reading the envelope (*an action whose
+landing IS the state we just left*) rather than by knowing any door's name, and
+it polls the rows it is holding: an entry whose door is no longer among the
+row's `actions` is dropped. **A number in this file would be a second copy of
+the window, wrong the first time the household changed it.**
 
-Deliberately not built: session persistence, a keyboard chord, a redo, and any
-undo of an action the server did not confirm.
+**An expiry is not news; a refusal is.** An entry the person never touched
+simply leaves when its door does. An entry they tapped and the house refused
+keeps its place and shows the wall's own sentence through `problemBox` — because
+a refused undo is the most important thing on the screen: it is the house saying
+another row now stands in the way, and naming it. That is the feed card's own
+rule one surface over (*never a toast that scrolls away from the thing it is
+about*).
+
+**One function changed, and three call sites did not.** `maybeUndoToast` was
+already a single-entry, six-second, non-stacking undo that hid itself whether
+the undo succeeded or was refused — two faults which are the same fault, a page
+holding an opinion: six seconds is not the window the engine keeps, and a
+refusal that vanishes is a sentence nobody read. It is now a receipt plus a
+hand-off, so the card surface, the deck's swipe and the feed's chips all get the
+stack without any of them knowing it exists.
+
+Deliberately not built: persistence of any kind (a reload clears the stack,
+which is honest — it is a memory of what this hand just did, not a record), a
+keyboard chord, a redo, and any undo of an action the server did not confirm.
 
 ## Conformance
 

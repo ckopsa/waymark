@@ -144,6 +144,34 @@
   .intent-more { font-size: 11.5px; color: var(--muted);
                  text-align: right; }
 
+  /* the undo stack (waymark-qmo6): the last few taps this page made,
+     bottom-LEFT so it shares no corner with the intents — a person
+     mid-triage may have both, and chrome that overlaps chrome is a
+     wall over the work. Same slab as an intent card, because it is the
+     same kind of thing: a small standing offer beside the work rather
+     than a demand on top of it. */
+  #undostack { position: fixed; left: 12px; bottom: 34px; z-index: 16;
+               display: none; flex-direction: column; gap: 6px;
+               width: 264px; max-width: 90vw; }
+  .undohead { font-size: 11px; color: var(--muted);
+              text-transform: uppercase; letter-spacing: .06em; }
+  .undoitem { background: var(--panel); border: 1px solid var(--line);
+              border-radius: var(--radius); box-shadow: var(--shadow);
+              padding: 8px 10px; font-size: 12.5px; }
+  /* the verb in the machine's own face, the row's line in the
+     server's: provenance is the aesthetic (020-base.css) */
+  .undodid { display: flex; justify-content: space-between;
+             align-items: baseline; font-family: var(--mono);
+             font-size: 11.5px; color: var(--muted); }
+  .undodid b { color: var(--ink); font-weight: 600; }
+  .undodrop { background: none; border: none; color: var(--muted);
+              font-size: 12px; padding: 0 2px; line-height: 1; }
+  .undowhat { font-family: var(--serif); font-size: 13.5px;
+              margin: 4px 0 6px; }
+  .undowhat a { color: var(--ink); }
+  .undoitem button[data-undo] { font-size: 12px; padding: 3px 10px; }
+  .undoitem .problem { margin: 0; font-size: 12px; }
+
   /* refusals and problems speak in the server's voice: serif */
   .problem { background: var(--refusal-wash); border: 1px solid var(--line);
              border-left: 3px solid var(--refusal); color: var(--ink);
