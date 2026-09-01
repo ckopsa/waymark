@@ -47,6 +47,33 @@
   What the state buys is the crown's tier: a person's yes outranks a
   number, always.
 
+  ── AND EVERY ANSWER IS TAKEABLE BACK FOR FIFTEEN MINUTES ────────────
+
+  waymark-qmo6, docs/spec-undo.md. `undo` returns an affirmed or
+  dismissed belief to `observed` and takes the stamp back with the
+  state; `unretire` returns a retired one to `affirmed`, keeping the
+  yes it always carried, because a retirement is what is being taken
+  back and never the affirmation underneath it; `withdraw` is the
+  observer's own door on its own unanswered guess, landing in
+  `withdrawn` — a tombstone, and a third sentence beside *you read me
+  wrong* and *that was true and is not now*.
+
+  IT IS NOT THE `restore` THIS FILE REFUSED TO GROW, and the paragraph
+  below that refuses it still stands. A restore is available forever,
+  to anyone who holds the door, and says the house has changed its
+  mind. These three are narrowed by three walls — the same hand, within
+  the window, nothing written since — and what they say is that a chip
+  was a slip rather than a judgment, on the record, in a transition of
+  their own. Asking again is still a NEW hypothesis, and it is still
+  the only way back from an answer a quarter of an hour old.
+
+  Each carries `the-answer-is-a-persons` under its OWN door name, so a
+  scope naming `hypothesis.dismiss` does not admit `hypothesis.undo`:
+  delegating the answer and delegating the power to take an answer back
+  are two delegations. `withdraw` carries it not at all — that wall's
+  own-field arm refuses the observer, who is the one hand it exists
+  for.
+
   ── `shape`, NOT `kind` ──────────────────────────────────────────────
 
   `kind` is the row envelope's own word and a data field wearing it
@@ -392,6 +419,43 @@
   be wrong."
   200)
 
+(defn- overlapping-belief
+  "The standing belief of this shape that already covers one of these
+  addresses, with the shared ones hung on it as `::shared` — or nil
+  when none does. `exclude` is an id this search must not answer with,
+  which is how the undo door asks the question without finding itself
+  (docs/spec-undo.md).
+
+  Spelled apart from the guard because TWO doors ask it: the create
+  door, of a body a reading is sending, and `undo`, of the document a
+  dismissed belief already carries. Nil `find'` answers nil, which is
+  the storage-free probe's optimistic advertisement — the write path
+  always consults."
+  [find' shape about exclude]
+  (when find'
+    (let [shape (some-> shape str str/trim not-empty)
+          mine (set (addresses about))]
+      (when-not (or (nil? shape) (empty? mine))
+        (let [shared-with (fn [r]
+                            (into [] (filter mine)
+                                  (addresses (get-in r [:data :about]))))]
+          (->> (find' :hypothesis {:shape shape} {:limit standing-page})
+               (into []
+                     (comp (remove #(= exclude (str (:id %))))
+                           (filter #(contains? standing-states (:state %)))
+                           (map #(assoc % ::shared (shared-with %)))
+                           (filter (comp seq ::shared))))
+               (sort-by #(str (:id %)))
+               first))))))
+
+(defn- overlap-vars
+  "The refusal's four words, off the belief that stands in the way."
+  [hit shape]
+  {:vars {:standing (str (:id hit))
+          :claim (str (get-in hit [:data :claim]))
+          :shape (str shape)
+          :shared (g/listed (::shared hit))}})
+
 (defguardfn not-a-second-belief
   {:judges [:about :shape]
    :reads [:hypothesis]
@@ -402,32 +466,36 @@
   ;; `not-a-twin`'s shape (waymark-8gc) and `one-live-finding-per-offer`'s
   ;; posture: exact address overlap, nothing cleverer, and the storage-free
   ;; probe advertises optimistically because the write path always consults.
-  (let [find' (:find ctx)]
-    (if (nil? find')
-      (t/allow)
-      (let [shape (some-> (:shape inp) str str/trim not-empty)
-            mine (set (addresses (:about inp)))]
-        (if (or (nil? shape) (empty? mine))
-          ;; the two walls above own those refusals
-          (t/allow)
-          (let [shared-with (fn [r]
-                              (into [] (filter mine)
-                                    (addresses (get-in r [:data :about]))))
-                hit (->> (find' :hypothesis {:shape shape}
-                                {:limit standing-page})
-                         (into []
-                               (comp (filter #(contains? standing-states
-                                                         (:state %)))
-                                     (map #(assoc % ::shared (shared-with %)))
-                                     (filter (comp seq ::shared))))
-                         (sort-by #(str (:id %)))
-                         first)]
-            (if (nil? hit)
-              (t/allow)
-              (t/deny {:vars {:standing (str (:id hit))
-                              :claim (str (get-in hit [:data :claim]))
-                              :shape shape
-                              :shared (g/listed (::shared hit))}}))))))))
+  (if-some [hit (overlapping-belief (:find ctx) (:shape inp) (:about inp) nil)]
+    (t/deny (overlap-vars hit (:shape inp)))
+    (t/allow)))
+
+;; ── the same wall, facing the other way (docs/spec-undo.md) ─────────
+;;
+;; BRINGING A BELIEF BACK MAKES IT STAND AGAIN, and standing is exactly
+;; what `not-a-second-belief` counts. A dismissed or retired belief
+;; blocks nothing — that is precisely how a reading is allowed to mint a
+;; fresh claim about the same rows — so between the answer and the undo
+;; there may lawfully be a second belief of the same shape about the
+;; same subject. Restoring the old one would leave two, splitting their
+;; atoms so that neither says anything, off a door rather than off a
+;; create: the one way that wall could be walked around.
+;;
+;; It judges the ROW (an undo takes no input) and EXCLUDES the row's own
+;; id, which the create door had no need to do and this one does:
+;; `undo` departs `affirmed`, which is a STANDING state, so without the
+;; exclusion every restored belief would be refused for being itself.
+
+(defguardfn still-the-only-belief
+  {:reads [:hypothesis]
+   :vars [:standing :claim :shape :shared]
+   :explain "Bringing this belief back would make two: /api/hypotheses/{standing} — “{claim}” — is a standing {shape} hypothesis about {shared}, minted while this one was answered. Two beliefs about one thing split their evidence and neither moves, so reword that one (restate) and leave this one answered — the record keeps the guess and the answer both."}
+  [row _inp ctx]
+  (let [d (:data row)]
+    (if-some [hit (overlapping-belief (:find ctx) (:shape d) (:about d)
+                                      (str (:id row)))]
+      (t/deny (overlap-vars hit (:shape d)))
+      (t/allow))))
 
 ;; ── the answer is a person's, and it is grantable ───────────────────
 ;;
@@ -578,6 +646,36 @@
   ;; it is. The posterior does not move either — an affirmed belief
   ;; goes on reading its evidence.
   (affirmed row ctx))
+
+(defhandler unstamp-the-answer [row _inp ctx]
+  ;; THE UNDO (docs/spec-undo.md), and it takes the STAMP back with the
+  ;; state. A row reading `observed` while still carrying "affirmed by
+  ;; colton" would be the summary line and the document disagreeing
+  ;; about the one thing this kind exists to keep straight — whose the
+  ;; belief is — and `summary/render` has no conditional, so the state
+  ;; would say one thing where the fields said another.
+  ;;
+  ;; Unconditional, and safely so: `dismiss` departs only `observed`,
+  ;; so a dismissed belief never carried these; `still_stands` is the
+  ;; only other edge this door takes back, and its stamp is exactly the
+  ;; one being taken back.
+  ;;
+  ;; The refold runs for the reason every other door here runs it: the
+  ;; number is a cache of an arithmetic anyone can redo, and a cache
+  ;; whose freshness depends on which door was walked is the bug
+  ;; waymark-2ozr found.
+  (-> row
+      (update :data dissoc :affirmed_at :affirmed_by)
+      (fold-now ctx)))
+
+(defhandler restore-the-answer [row _inp ctx]
+  ;; UN-RETIRING, which is a different act from un-affirming and lands
+  ;; in a different state. A retired belief was affirmed by a person
+  ;; BEFORE it was retired; a door that took it back to `observed`
+  ;; would erase that person's yes in the name of correcting a slip,
+  ;; which is the opposite of an undo. So the stamps stand — they were
+  ;; always true — and only the fold is refreshed.
+  (fold-now row ctx))
 
 ;; ── the household's own words ───────────────────────────────────────
 ;; Spelled once and worn by both doors — the row schema and the
@@ -855,6 +953,63 @@
    :expect  {:refused :out-of-state
              :because "Observed"}})
 
+;; ── the undo scenarios (docs/spec-undo.md) ──────────────────────────
+;;
+;; All three are CONFORMANCE tier, decided by the tier rule rather than
+;; by the author: `only-your-own-last-tap` declares `:reads
+;; [:transitions …]`, which the check tier's offline world cannot
+;; answer. The walker STAGES as itself and a scenario's principal only
+;; ever ATTEMPTS, so this tier proves exactly the half worth proving
+;; from the wire — somebody reaching for a tap that was not theirs. The
+;; allow half is one hand answering and then taking the answer back,
+;; which is a story rather than a literal row: `workqueue10.undo-test`.
+
+(defscenario only-the-hand-that-answered-takes-it-back
+  "The undo is not a `restore` and this is the sentence that separates
+   them. A restore is available forever to anybody who holds the door
+   and says *the house has changed its mind*; this says *that tap was
+   a slip* — and only the hand that made it can say so. A second person
+   reversing somebody else's answer would be the house un-answering
+   itself, which is exactly what this kind's terminal states exist to
+   forbid, and the refusal names whose tap it actually was."
+  {:kind    :hypothesis
+   :attempt :undo
+   :row     {:state :affirmed :data a-noticed-belief}
+   :as      {:id "iris" :type :person}
+   :expect  {:refused :only-your-own-last-tap
+             :because "not yours"}})
+
+(defscenario an-observer-does-not-undo-an-answer-either
+  "FOUR EYES, IN THE OTHER DIRECTION, and no grant opens it. The
+   extraction-blind rule is that the run which read the evidence is not
+   the run that says what it means — and a wall that let the observer
+   take the household's answer BACK would be that rule holding in one
+   direction only, which is not a wall, it is a speed bump. The undo
+   door carries `the-answer-is-a-persons` under its own name for the
+   same reason every answering door does, and a scope naming
+   `hypothesis.dismiss` does not admit `hypothesis.undo`."
+  {:kind    :hypothesis
+   :attempt :undo
+   :row     {:state :affirmed :data a-noticed-belief}
+   :as      {:id "reader" :type :agent}
+   :expect  {:refused :the-answer-is-a-persons
+             :because "names you as its observed by"}})
+
+(defscenario a-withdrawn-belief-is-not-an-answer
+  "A tombstone is a tomb. `withdrawn` says the reading took its own
+   guess back before anybody answered it — neither yes nor no — and
+   there is no door out: noticing it again is noticing it again, which
+   `not-a-second-belief` admits precisely because this row no longer
+   stands. It is a separate state from `dismissed` so that a composer
+   reading this log can tell the household's no from an observer's
+   second thoughts, which is the same reason `dismiss` and `retire` are
+   two doors."
+  {:kind    :hypothesis
+   :attempt :undo
+   :row     {:state :withdrawn :data a-noticed-belief}
+   :as      {:id "colton" :type :person}
+   :expect  {:refused :out-of-state}})
+
 ;; ── :hypothesis — a belief, with its working shown ──────────────────
 
 (defresource hypothesis
@@ -869,17 +1024,31 @@
    ;; renders an em-dash and can never speak its own absence, while
    ;; `{state}` speaks on every envelope, every list line and every
    ;; transition record.
-   :states [:observed :affirmed :dismissed :retired]
+   ;; `withdrawn` is where a belief goes when the reading that wrote it
+   ;; takes it back before anybody answered (docs/spec-undo.md) — a
+   ;; TOMBSTONE, and deliberately not `dismissed`. This kind already
+   ;; split `dismiss` from `retire` because *"you read me wrong"* and
+   ;; *"that was true and is not now"* are different sentences a
+   ;; composer must be able to tell apart; *"nobody ever answered this
+   ;; and its observer withdrew it"* is a third, and it is not a
+   ;; household answer at all.
+   :states [:observed :affirmed :dismissed :retired :withdrawn]
    :initial :observed
-   ;; BOTH ANSWERS ARE TERMINAL, and that is the difference from
-   ;; `value`, which has a `restore`. There is no way back from
-   ;; either, because there does not need to be one: a belief the
-   ;; house answered is answered, and asking again is asking again —
-   ;; a NEW hypothesis, which `not-a-second-belief` admits precisely
-   ;; because the old one no longer stands. A `restore` would be the
-   ;; house un-answering itself, which is not a thing the record
-   ;; should be able to say.
-   :terminal #{:dismissed :retired}
+   ;; ALL THREE ANSWERS STAY TERMINAL, and that is still the difference
+   ;; from `value`, which has a `restore`. A `restore` is available
+   ;; forever, to anyone who holds the door, and says *the house has
+   ;; changed its mind*. What `undo` and `unretire` say is narrower by
+   ;; three walls — same hand, within fifteen minutes, nothing written
+   ;; since — and it is not the house un-answering itself: it is one
+   ;; hand asserting that a chip it touched was a slip rather than a
+   ;; judgment, on the record, in a transition of its own. The standing
+   ;; ruling that asking again is a NEW hypothesis is untouched, and it
+   ;; is still the only way back from an answer a quarter of an hour
+   ;; old.
+   :terminal #{:dismissed :retired :withdrawn}
+   ;; the two doors licensed to leave a tomb; `check-allow-undo` holds
+   ;; each to landing somewhere still open
+   :allow-undo #{:undo :unretire}
    :summary "{data.claim} · {data.shape} · {state}"
    :label-template "{data.claim}"
    :display {:title "{data.claim}"}
@@ -977,7 +1146,22 @@
    ;; on — the guards judge every invoke regardless. Leaving them off
    ;; means an ungranted agent meets a mute 404 rather than a narrated
    ;; refusal at a door it was never going to pass.
-   :own-surface {:by :observed_by :actions #{:create :restate}}
+   ;;
+   ;; `withdraw` JOINS THEM (docs/spec-undo.md), and it is the same
+   ;; sentence one act further: writing down what you noticed is a
+   ;; reading's own work, and so is taking back something you wrote
+   ;; minutes ago that nobody has answered. It widens nothing — the
+   ;; wall refuses unless the create is still the NEWEST transition on
+   ;; the row and the hand is the one that made it — and it deliberately
+   ;; carries NO `the-answer-is-a-persons`, because that wall's
+   ;; `:own-field` arm refuses the observer, who is the one hand this
+   ;; door exists for.
+   ;;
+   ;; `undo` and `unretire` stay OFF the list with the other answers,
+   ;; for the same reason they do: taking back an answer is answering,
+   ;; and an ungranted agent meets a mute 404 rather than a narrated
+   ;; refusal at a door it was never going to pass.
+   :own-surface {:by :observed_by :actions #{:create :restate :withdraw}}
    ;; SHAPE FIRST, WORLD NEXT — `insight`'s ordering and its reason. A
    ;; malformed belief hears what is wrong with it before it hears
    ;; anything about the house it is landing in, and only the last
@@ -996,7 +1180,10 @@
                a-rewording-keeps-what-it-was-not-told
                a-belief-does-not-stop-being-about-something
                a-person-rewords-rather-than-restates
-               a-dismissed-belief-is-over]
+               a-dismissed-belief-is-over
+               only-the-hand-that-answered-takes-it-back
+               an-observer-does-not-undo-an-answer-either
+               a-withdrawn-belief-is-not-an-answer]
    :actions
    ;; THE WORDING DOOR SPLITS BY HAND, and jfv.10 already paid for
    ;; this: `:to` is a static keyword, so one door cannot land in two
@@ -1044,26 +1231,90 @@
     ;; string renders `recall`. Asking for nothing is what makes this
     ;; action a legal offer and a legal card chip.
     :still_stands {:from #{:observed} :to :affirmed
+                   ;; THE WAY BACK, NAMED (docs/spec-undo.md).
+                   ;; `verify-undo-pointers` checks the inversion
+                   ;; against the graph: `undo` departs `affirmed`,
+                   ;; where this lands, and lands `observed`, which is
+                   ;; exactly and only where this departs. The
+                   ;; `:one-way` sentence had to go rather than be
+                   ;; reworded — `t/safety` refuses `:one-way` beside
+                   ;; `:reversible`, and it is right to — so what it
+                   ;; said that is still true reads in `:description`.
+                   :undo :undo
                    :guards [(the-answer-is-a-persons :still_stands)]
                    :handler stamp-the-answer
-                   :safety {:idempotent true :reversible false :confirm false
-                            :one-way "This says the claim is true of this house, and stamps your name and the date on it. The evidence goes on being read either way — affirming a belief does not stop it moving, it only says the house agrees it is worth holding."}
+                   :safety {:idempotent true :reversible true :confirm false}
                    :display {:label "Yes — that's true of us" :order 2
-                             :description "Somebody read this house and thinks this is so. Say whether they are right — it stays on the record either way, and the number under it keeps moving"}}
+                             :description "Somebody read this house and thinks this is so. Say whether they are right — your name and the date go on it, the evidence goes on being read either way, and for fifteen minutes you may take the tap back"}}
     ;; THE OTHER ANSWER TO A GUESS, and it is a separate door from
     ;; `retire` for the household's reason rather than a mechanical
     ;; one: *you read me wrong* and *that was true and is not now* are
     ;; different sentences, and the composer reading this log must be
     ;; able to tell them apart.
     :dismiss {:from #{:observed} :to :dismissed
+              :undo :undo
               :guards [(the-answer-is-a-persons :dismiss)]
-              :safety {:idempotent true :reversible false :confirm false
-                       :one-way "This says the reading was wrong. The belief stays on the record with your answer beside it and stops being something this house holds. There is no way back: if you change your mind, the honest thing is a fresh claim, which the house will admit because this one no longer stands."}
+              :safety {:idempotent true :reversible true :confirm false}
               :display {:label "No — you read us wrong" :style :danger :order 7
-                        :description "Somebody read this house and got it wrong. Say so — the guess and your answer both stay on record"}}
+                        :description "Somebody read this house and got it wrong. Say so — the guess and your answer both stay on record. Fifteen minutes to take the tap back; after that the way to change your mind is a fresh claim, which the house admits because this one no longer stands"}}
     :retire {:from #{:affirmed} :to :retired
+             ;; A DIFFERENT WAY BACK, because a retirement began
+             ;; somewhere else. `unretire` lands in `affirmed` and not
+             ;; in `observed`: this belief was affirmed by a person
+             ;; before it was retired, and a door that took it back to
+             ;; a guess would erase that person's yes in the name of
+             ;; correcting a slip. `verify-undo-pointers` insists on
+             ;; exactly that — an undo returns where its edge began —
+             ;; which is why this is a second door rather than a second
+             ;; origin of the first.
+             :undo :unretire
              :guards [(the-answer-is-a-persons :retire)]
-             :safety {:idempotent true :reversible false :confirm false
-                      :one-way "This says it WAS true and is not now — a different sentence from \"you read us wrong\", and the log keeps which one you said. The row stays on record and stops being something this house holds."}
+             :safety {:idempotent true :reversible true :confirm false}
              :display {:label "This was true and is not now" :style :danger :order 8
-                       :description "People change. Retiring says so, and says it differently from dismissing a bad guess"}}}})
+                       :description "People change. Retiring says so, and says it differently from dismissing a bad guess — and for fifteen minutes you may put it back"}}
+    ;; ── THE THREE WAYS BACK (docs/spec-undo.md) ───────────────────
+    :undo {:from #{:affirmed :dismissed} :to :observed
+           ;; WHOSE AUTHORITY FIRST, THEN WHOSE HAND, THEN THE WORLD.
+           ;; `the-answer-is-a-persons` is spelled here under this
+           ;; door's OWN name, which is the ruling rather than an
+           ;; accident: a grant admitting `hypothesis.dismiss` does not
+           ;; admit `hypothesis.undo`. Delegating the answer and
+           ;; delegating the power to take an answer back are two
+           ;; delegations, and the owner makes them separately or not
+           ;; at all. The `:own-field :observed_by` arm rides too, so
+           ;; four eyes hold in this direction as well as the other.
+           :guards [(the-answer-is-a-persons :undo)
+                    (g/only-your-own-last-tap {:undoes #{:still_stands :dismiss}
+                                               :restores :observed})
+                    still-the-only-belief]
+           :handler unstamp-the-answer
+           :safety {:idempotent true :reversible false :confirm false
+                    :one-way "This puts the belief back to a guess nobody has answered, takes your name off it, and refolds the number. Both taps stay in the log — the answer and the taking of it back — so nothing is erased. There is no redo: if you meant the answer, give it again."}
+           :display {:label "Undo that" :order 4
+                     :description "Wrong chip? For fifteen minutes the hand that answered may take the answer back. The belief returns to observed, unclaimed, and the record keeps both taps"}}
+    :unretire {:from #{:retired} :to :affirmed
+               :guards [(the-answer-is-a-persons :unretire)
+                        (g/only-your-own-last-tap {:undoes #{:retire}
+                                                   :restores :affirmed})
+                        still-the-only-belief]
+               :handler restore-the-answer
+               :safety {:idempotent true :reversible false :confirm false
+                        :one-way "This puts the belief back to one this house holds, with the affirmation it always carried — retiring is what is taken back, never the yes underneath it. Both taps stay in the log."}
+               :display {:label "Undo that" :order 5
+                         :description "Retired by mistake? For fifteen minutes the hand that retired it may put it back — affirmed, as it was, with the name and date it already carried"}}
+    :withdraw {:from #{:observed} :to :withdrawn
+               ;; NO `the-answer-is-a-persons` HERE, deliberately: its
+               ;; `:own-field` arm refuses the observer, and the
+               ;; observer is the one hand this door exists for. What
+               ;; walls it is that the create must still be the newest
+               ;; transition on the row — so nobody has answered, and
+               ;; there is no answer to take away from anybody.
+               ;;
+               ;; And NO `still-the-only-belief`: a withdrawal takes a
+               ;; belief OUT of standing rather than putting one back,
+               ;; so that wall has nothing to say about it.
+               :guards [(g/only-your-own-last-tap {:undoes #{:create}})]
+               :safety {:idempotent true :reversible false :confirm false
+                        :one-way "The belief leaves the record as WITHDRAWN, which is not the house saying you read it wrong — nobody answered this one, and its observer took it back. If you still think you see it, notice it again."}
+               :display {:label "Take it back" :style :danger :order 6
+                         :description "You wrote this down and nobody has answered it yet. Withdraw it — it stops standing, stays on the record as your own withdrawal, and never reads as a household verdict"}}}})

@@ -42,6 +42,15 @@
    :schema :create-schema :fields :shape :upcasts
    ;; behavior
    :flow :actions :create-guards :create-action-names :allow-dead :renames
+   ;; the doors licensed to depart a TERMINAL state (docs/spec-undo.md).
+   ;; check-terminal-no-exit's flat rule — no action leaves a tomb — is
+   ;; right about every door that CONTINUES a story and wrong about the
+   ;; one that says the last sentence was never spoken. Named per
+   ;; action, so the waiver is a list a reviewer can read rather than a
+   ;; flag on the kind; :allow-dead's precedent, and like it a
+   ;; declaration-time waiver rather than fingerprinted law — the DOOR
+   ;; it licenses is in :actions and hashes there
+   :allow-undo
    ;; the standalone verdict (spec-decision-kind): one key desugaring
    ;; into states, verdict actions, decider walls, the leash and the
    ;; pacing — a spelling, never a mechanism, resolved before the

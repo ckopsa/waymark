@@ -253,7 +253,21 @@
                        (store/with-tx
                         st (fn [tx] (store/query-rows
                                      st tx target-kind (or where {})
-                                     (merge {:limit 100} opts))))))))}))
+                                     (merge {:limit 100} opts))))))))
+     ;; the log's read-path twin (docs/spec-undo.md). An undo door is
+     ;; the one affordance whose availability is a fact about the CLOCK
+     ;; and about whose hand is asking, so a card that advertised it
+     ;; optimistically would offer a way back that is already gone. The
+     ;; memo matters here more than anywhere: a feed page renders many
+     ;; rows and each would otherwise cost its own query.
+     :last-transition
+     (fn [row]
+       (through
+        [:last-transition (:kind row) (str (:id row))]
+        #(first (store/with-tx
+                 st (fn [tx] (store/transitions
+                              st tx {:kind (:kind row) :resource-id (:id row)}
+                              {:newest-first true :limit 1}))))))}))
 
 (declare invoke-in-tx! create-in-tx!)
 
@@ -432,7 +446,19 @@
                                (store/transitions
                                 (:storage engine) tx
                                 {:kind (:kind row) :resource-id (:id row)}
-                                {:newest-first true})))}))))
+                                {:newest-first true})))
+             ;; …and its sibling, which asks the log the OTHER question
+             ;; (docs/spec-undo.md): not "who did X" but "what was the
+             ;; last thing done here, by whom, and when". A guard
+             ;; reading it declares :reads [:transitions]. One record,
+             ;; not a page: an undo pops the stack, so nothing below
+             ;; the top is any door's business.
+             :last-transition
+             (fn [row]
+               (first (store/transitions
+                       (:storage engine) tx
+                       {:kind (:kind row) :resource-id (:id row)}
+                       {:newest-first true :limit 1})))}))))
 
 (defn- encode-row [rdef row]
   (update row :data #(schema/encode (:schema rdef) %)))
