@@ -154,6 +154,14 @@
   HOUSEHOLD's table on its next turn, and the difference between the
   two tables is exactly what a household edited on its recipe row.
 
+  AND THE ATOM'S OWN WRITE RUNS IT (waymark-2ozr): a committed
+  `insight` refolds the beliefs its citations feed, on the engine's
+  `:maintain` seam. The nightly pass answers for DECAY; a new atom is
+  not a clock, and until that pass landed a belief nobody restated
+  after a finding landed went on reporting the atom count it had
+  before — which read, from outside, as the same address feeding one
+  belief and not another.
+
   ── `prior` IS A GUESS AND THE SCHEMA CANNOT SAY SO ──────────────────
 
   The spec bounds it 0.02–0.5: a belief nobody has evidence for starts
@@ -897,8 +905,9 @@
     ;; Absent from :create-schema and from every :input below, so the
     ;; wall is structural: there is no door to refuse at. The engine
     ;; writes them — `waymark10.belief` computes, `born` folds at
-    ;; birth, `waymark10.server.belief` refolds nightly — and every
-    ;; one of them is reproducible from the atoms alone.
+    ;; birth, `waymark10.server.belief` refolds when an atom lands and
+    ;; again nightly — and every one of them is reproducible from the
+    ;; atoms alone.
     (entry :posterior {:optional true :sort true}
            [:maybe [:decimal {:min 0 :max 1}]])
     (entry :posterior_log_odds {:optional true}

@@ -53,6 +53,27 @@
   because the extraction-blind rule forbids the quiet retype that
   would do it invisibly.
 
+  ── TWO PASSES, AND WHICH ONE ANSWERS FOR WHAT ───────────────────────
+
+  A belief's cached fold is a projection of two moving things: the
+  atoms that touch it, and how old they are.
+
+  THE CLOCK's pass (`sweep-beliefs!`, nightly) answers for the second.
+  Decay is a per-day arithmetic against half-lives measured in months,
+  so a night is the honest interval and the pass is cheap because it
+  is rare.
+
+  THE EVIDENCE's pass (`after-write`, waymark-2ozr) answers for the
+  first, on the engine's `:maintain` seam: a committed write on a
+  finding refolds the beliefs that finding's citations feed, in the
+  same call, each row in its own transaction. It exists because a new
+  atom is not a clock — a reading that publishes a finding and reads
+  the belief back one second later must see it, and until this pass
+  landed it did not: a hypothesis was refreshed only by its own doors
+  and by a nightly sweep whose first pass is one whole interval after
+  the process starts, so a deployment that redeploys daily never swept
+  and every belief stood at whatever its last door write computed.
+
   ── THE CLOCK ────────────────────────────────────────────────────────
 
   A daemon on an interval, elected per storage, `:when`-gated on a
@@ -145,6 +166,34 @@
   [row folded]
   (= (select-keys (:data row) (keys folded)) folded))
 
+(defn- refold-row!
+  "Fold ONE hypothesis row and cache the answer where it moved. The
+  maintenance write both passes below share — the sweep's and the
+  atom's — spelled once, because two spellings of *what the fold
+  writes* is exactly the second opinion nobody can see.
+
+  Returns `:rewritten`, `:unchanged` or `:failed`, which is the key
+  each caller's tally increments."
+  [eng table atoms now-ms row]
+  (let [folded (belief/cached
+                (belief/fold-one table row atoms (long now-ms)))]
+    (if (unchanged? row folded)
+      :unchanged
+      (try
+        (let [st (:storage eng)]
+          (store/with-tx
+            st (fn [tx]
+                 (store/update-data!
+                  st tx hypothesis-kind (:id row)
+                  (merge (:data row) folded)
+                  (:next-flip-at row)))))
+        :rewritten
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "waymark10 belief: could not fold hypothesis"
+                     (str (:id row)) "—" (ex-message e)))
+          :failed)))))
+
 (defn sweep-beliefs!
   "ONE PASS: read every hypothesis and every typed finding, fold each
   belief over the atoms that touch it, and cache the answer on rows
@@ -168,30 +217,105 @@
      {:hypotheses 0 :atoms 0 :rewritten 0 :unchanged 0 :failed 0}
      (let [table (evidence-table eng)
            atoms (belief/atoms-of (rows-of eng atom-kind {} atom-scan-cap))
-           rows (rows-of eng hypothesis-kind {} hypothesis-scan-cap)
-           st (:storage eng)]
+           rows (rows-of eng hypothesis-kind {} hypothesis-scan-cap)]
        (reduce
         (fn [acc row]
-          (let [folded (belief/cached
-                        (belief/fold-one table row atoms now-ms))]
-            (if (unchanged? row folded)
-              (update acc :unchanged inc)
-              (try
-                (store/with-tx
-                  st (fn [tx]
-                       (store/update-data!
-                        st tx hypothesis-kind (:id row)
-                        (merge (:data row) folded)
-                        (:next-flip-at row))))
-                (update acc :rewritten inc)
-                (catch Exception e
-                  (binding [*out* *err*]
-                    (println "waymark10 belief: could not fold hypothesis"
-                             (str (:id row)) "—" (ex-message e)))
-                  (update acc :failed inc))))))
+          (update acc (refold-row! eng table atoms now-ms row) inc))
         {:hypotheses (count rows) :atoms (count atoms)
          :rewritten 0 :unchanged 0 :failed 0}
         rows)))))
+
+;; ── the fold, when an atom lands (waymark-2ozr) ──────────────────────
+;;
+;; THE NIGHTLY PASS IS THE CLOCK'S AND THIS ONE IS THE EVIDENCE'S.
+;; A belief's cached fold is a projection of two things: the atoms
+;; that touch it, and how old they are. The clock moves the second and
+;; a night is the honest interval for it — decay is a per-day
+;; arithmetic against half-lives measured in months. But the FIRST
+;; moves the moment a finding lands, and until waymark-2ozr nothing
+;; refreshed it: a hypothesis was refolded by its own doors (birth,
+;; `restate`, `revise`) and by a nightly sweep whose first pass is one
+;; whole interval after the process starts. A deployment that
+;; redeploys more often than daily therefore never swept at all, and
+;; every belief stood at whatever its last door write computed.
+;;
+;; What that looked like from outside is the bug's own shape and worth
+;; keeping: the SAME address fed one belief and not another. Backfill
+;; #9's `16e01a3b` cited `/api/insights/8d6a0338…`, which sits in the
+;; `about` of two beliefs; `95816939` was restated a minute after the
+;; finding landed and took the atom, and `0cc6d78f` had last been
+;; written seven hours before it and did not. Nothing was wrong with
+;; either row and nothing was wrong with the join — the two rows had
+;; simply been folded at different moments, and a cache whose
+;; freshness depends on when somebody last touched the row is not a
+;; cache of an arithmetic anyone can redo.
+;;
+;; So the atom's own write refreshes the beliefs it feeds, on the
+;; engine's `:maintain` seam — the derivation maintainer's own posture
+;; one kind over (*the maintainer computes what the in-commit pass
+;; cannot: cross-row facts*), post-commit, each row in its own
+;; transaction, and a maintenance write throughout: no version, no
+;; transition. Only the beliefs the finding actually touches are
+;; refolded, which is the join read backwards and is usually none.
+
+(defn refold-touched!
+  "Refold every belief one `insight` row's citations reach. →
+  `{:hypotheses n :atoms n :rewritten n :unchanged n :failed n}` over
+  the TOUCHED rows, zero everything where the finding names nothing
+  this house holds a belief about — which is the ordinary case and
+  costs one capped read.
+
+  A dismissal is refolded exactly like a publication and for the same
+  reason: the house saying no takes the atom back OUT of the fold, and
+  a belief that kept counting a rejected claim until the next night
+  would be evidence the record has already refused. So the citations
+  are read off the row rather than off `atom-of`, which answers nil
+  for a finding that is not an atom — an untyped finding never was
+  one and moves nothing, but a typed one that just left the fold moves
+  everything it fed."
+  ([eng row] (refold-touched! eng row (System/currentTimeMillis)))
+  ([eng row ^long now-ms]
+   (let [cites (belief/cites-of row)
+         touched (when (seq cites)
+                   (belief/fed-by cites (rows-of eng hypothesis-kind {}
+                                                 hypothesis-scan-cap)))]
+     (if (empty? touched)
+       {:hypotheses 0 :atoms 0 :rewritten 0 :unchanged 0 :failed 0}
+       (let [table (evidence-table eng)
+             atoms (belief/atoms-of (rows-of eng atom-kind {} atom-scan-cap))]
+         (reduce
+          (fn [acc r]
+            (update acc (refold-row! eng table atoms now-ms r) inc))
+          {:hypotheses (count touched) :atoms (count atoms)
+           :rewritten 0 :unchanged 0 :failed 0}
+          touched))))))
+
+(defn after-write
+  "The engine's `:maintain` hook, this module's arm: a committed write
+  on a finding refolds the beliefs that finding feeds. Returns nil,
+  which the seam reads as *nothing to say about the response's row* —
+  the write's own row is a finding and this pass never touches it.
+
+  Every other kind passes through untouched, and an engine that serves
+  no hypothesis pays one map lookup. The hypothesis kind is
+  deliberately NOT refolded here: its own doors fold it in their own
+  transaction (`hypothesis/fold-now`), and a maintenance write
+  chaining off a maintenance write is the loop this seam has no
+  visited set for."
+  [eng kind _action res]
+  (when (and (= atom-kind kind)
+             (some? (:row res))
+             (serves-hypotheses? eng))
+    (try
+      (let [now ^java.time.Instant (if-some [f (:now-fn eng)]
+                                     (f)
+                                     (java.time.Instant/now))]
+        (refold-touched! eng (:row res) (.toEpochMilli now)))
+      (catch Exception e
+        (binding [*out* *err*]
+          (println "waymark10 belief: could not refold what a finding fed —"
+                   (ex-message e))))))
+  nil)
 
 ;; ── the clock ───────────────────────────────────────────────────────
 

@@ -6431,9 +6431,36 @@
                            (pr-str (:doc atom')) ") — the address IS the"
                            " link, and a reading has no other way to hang"
                            " an atom on a claim")))
+            ;; …AND THE BELIEF ALREADY KNOWS, BEFORE ANY CLOCK RUNS
+            ;; (waymark-2ozr). The nightly pass answers for DECAY; a
+            ;; new atom is not a clock. A reading publishes a finding
+            ;; and reads the belief back in the same breath, and the
+            ;; miss this assertion exists for was invisible precisely
+            ;; because a belief somebody had restated a minute later
+            ;; showed the atom while one folded an hour earlier did
+            ;; not — same finding, same address, two rows, and the
+            ;; difference was WHEN each was last written.
+            landed (json ctx (get-env ctx :hypothesis id))
+            v (cond-> v
+                (not= 1 (get-in landed [:data :atom_count]))
+                (conj (str "feed: a belief reports "
+                           (pr-str (get-in landed [:data :atom_count]))
+                           " atom(s) immediately after a typed finding cited"
+                           " it — the finding's own write must refold the"
+                           " beliefs it feeds, or the cached fold answers for"
+                           " the last time somebody happened to touch the row"
+                           " instead of for the evidence"))
+
+                (and (some? (posterior-of landed)) (some? p0)
+                     (<= (posterior-of landed) p0))
+                (conj (str "feed: the posterior did not move when the atom"
+                           " landed (" (pr-str p0) " to "
+                           (pr-str (posterior-of landed)) ")")))
             ;; THE NIGHTLY FOLD, DRIVEN BY NAME. The loop is only its
             ;; clock — `sweep-dropped!`'s own posture one surface over,
-            ;; and the reason both passes are plain functions.
+            ;; and the reason both passes are plain functions. It is
+            ;; also the IDEMPOTENCE check now: the pass that already
+            ;; ran when the atom landed must find nothing to say.
             swept (try (belief-pass/sweep-beliefs! (:engine ctx))
                        (catch Exception e {:failed 1 :why (ex-message e)}))
             after (json ctx (get-env ctx :hypothesis id))
