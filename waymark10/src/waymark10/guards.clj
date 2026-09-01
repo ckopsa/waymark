@@ -551,6 +551,142 @@
               :hide hide
               :name (keyword (str "four-eyes:" (clojure.core/name of)))}))
 
+;; ── the undo wall (docs/spec-undo.md) ───────────────────────────────
+;;
+;; `unless` and `four-eyes` above ask the log WHO did some earlier
+;; edge. This one asks it four questions about ONE record — the newest
+;; transition on this row — because an undo is not a new act, it is a
+;; claim about the last one: *that was mine, it was a moment ago, it
+;; was the kind of thing this door takes back, and it began where this
+;; door lands.* Four halves of one sentence, so one guard with four
+;; refusals rather than four guards with one each — `insight`'s
+;; `offers-something-light` precedent, and for its reason: a caller who
+;; has to learn which of four names to look up has learned nothing.
+;;
+;; WHY IT IS FRAMEWORK RATHER THAN APPLICATION. The `:undo` pointer has
+;; been a declared facet since batch H (resource/verify-undo-pointers)
+;; and two checks already lean on it — `check-reversible` and
+;; `deck-gesture-problems` (*a swipe is a snap judgment; every gesture
+;; must have an honest undo*). What the framework had was the EDGE and
+;; not the NARROWING, so every existing undo is open to anyone who
+;; holds the door, forever. A kind whose forward doors are four-eyed
+;; cannot afford that reverse, and the narrowing is the same three
+;; sentences whatever the kind — so it is spelled once.
+
+(def undo-window-ms
+  "How long a tap stays takeable-back: fifteen minutes.
+
+  The spec argues the number (docs/spec-undo.md § *The window is
+  fifteen minutes*) and the short of it is that the stack is a WORKING
+  SET. Below five minutes it would expire the first card of a triage
+  run while the last is still being read; above a quarter of an hour a
+  person is not correcting a slip, they are changing their mind — and
+  changing your mind has its own doors. One place, so a household that
+  wants a different quarter-hour changes one long and every refusal
+  sentence follows."
+  (* 15 60 1000))
+
+(defn- minutes [ms] (quot (long ms) 60000))
+
+(defn undo-problem
+  "What is wrong with taking back the last thing done to this row, in
+  one sentence, or nil when nothing is.
+
+  Public and top-level so the guard's `:waymark10/form` can NAME it
+  rather than carry it: the three parameters ride inside the stored
+  form (the doors as a sorted vector, the window as a long, the state
+  as a keyword), which is what makes two doors minted from this factory
+  hash differently — the rule the field-wall factories below set.
+
+  Answers nil when `(:last-transition ctx)` is absent — the render
+  probe and the check tier's offline world have no log to read, so the
+  door ADVERTISES OPTIMISTICALLY and the write path always consults.
+  Every world-reading wall in this house takes that posture."
+  [doors within-ms restores row ctx]
+  (clojure.core/when-some [f (:last-transition ctx)]
+    (clojure.core/when-some [last' (f row)]
+      (let [action (:action last')
+            actor (:id (:actor last'))
+            mine (:id (:principal ctx))
+            ^java.time.Instant at (:at last')
+            ^java.time.Instant now (:now ctx)
+            ago (clojure.core/when (clojure.core/and at now)
+                  (- (.toEpochMilli now) (.toEpochMilli at)))
+            from (:from-state last')]
+        (cond
+          (not (some #{action} doors))
+          (str "the last thing done here was "
+               (str/replace (clojure.core/name (clojure.core/or action "its birth"))
+                            "_" " ")
+               ", and this door does not take that back. An undo pops the "
+               "stack; it never reaches into the middle of it.")
+
+          (not= actor mine)
+          (str "that was " (pr-str actor) "'s doing, not yours. An undo "
+               "belongs to the hand that made the tap — anybody else "
+               "reversing it would be this house un-answering itself, which "
+               "is a different sentence and has no door.")
+
+          (clojure.core/and ago (> (long ago) (long within-ms)))
+          (str "that was " (minutes ago) " minutes ago, and a tap stays "
+               "takeable-back for " (minutes within-ms)
+               ". Past the window it is an answer rather than a slip, and "
+               "the way to change an answer is to say the new one plainly.")
+
+          (clojure.core/and restores from (not= restores from))
+          (str "that change came from " (clojure.core/name from)
+               " and this door lands in " (clojure.core/name restores)
+               " — so taking it back here would put the row somewhere it "
+               "has never been. An undo returns exactly where its edge "
+               "began.")
+
+          :else nil)))))
+
+(defn only-your-own-last-tap
+  "The undo wall: this door reverses the NEWEST transition on the row,
+  and only when it was yours, recent, of a kind this door takes back,
+  and departing from the state this door lands in.
+
+    (only-your-own-last-tap {:undoes #{:take :dismiss}
+                             :restores :published})
+
+  `:undoes` is the set of action names this door takes back — the
+  create door's own name included, for a withdrawal. `:restores` is
+  the state this door lands in, checked against the undone edge's
+  `from-state`; a create has no from-state, so a withdrawal is never
+  refused by that arm. `:within-ms` defaults to `undo-window-ms`.
+
+  Declares `:reads [:transitions :principal :now]`, so every scenario
+  on a door carrying it is judged where its reads can be answered —
+  the conformance tier, through the real HTTP door."
+  [{:keys [undoes restores within-ms]} & [{:keys [name explain hide]}]]
+  (clojure.core/when (empty? undoes)
+    (throw (t/definition-error
+            "only-your-own-last-tap names the actions it takes back (:undoes)")))
+  (let [doors (vec (sort undoes))
+        within (long (clojure.core/or within-ms undo-window-ms))]
+    (guard
+     (cond-> {:name (clojure.core/or name :only-your-own-last-tap)
+              :reads [:transitions :principal :now]
+              :vars [:problem]
+              :explain (clojure.core/or
+                        explain
+                        "That cannot be taken back: {problem}")
+              :check (with-meta
+                       (fn [row _inp ctx]
+                         (if-some [p (undo-problem doors within restores
+                                                   row ctx)]
+                           (t/deny {:vars {:problem p}})
+                           (t/allow)))
+                       {:waymark10/form
+                        (list 'fn '[row _inp ctx]
+                              (list 'if-some
+                                    ['p (list 'undo-problem doors within
+                                              restores 'row 'ctx)]
+                                    '(t/deny {:vars {:problem p}})
+                                    '(t/allow)))})}
+       hide (assoc :hide true)))))
+
 ;; ── field-named principals (the decider's walls) ────────────────────
 ;; four-eyes above is a TRANSITION-HISTORY wall: it asks (:actor-of
 ;; ctx) who performed some earlier edge. A standalone decision has no

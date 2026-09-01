@@ -871,8 +871,14 @@
     :own-surface})
 
 (def ^:private verdict-keys
+  ;; :undo joins the list for docs/spec-undo.md: a verdict may name the
+  ;; door that takes it back, exactly as any hand-written action may.
+  ;; It is a POINTER, not a mechanism — verify-undo-pointers checks it
+  ;; against the graph and strips it, leaving the :reversible true it
+  ;; stamped — so nothing about the sugar's projection changes for a
+  ;; verdict that does not spell it.
   #{:name :to :label :style :order :note :guards :handler :safety
-    :display :edit :input})
+    :display :edit :input :undo})
 
 (defn- map-form-keys
   "The field keywords a [:map …] form already spells — the sugar adds
@@ -1156,7 +1162,7 @@
   wins whole; the sugar only fills blanks."
   [kind offered decider-gs stamps v]
   (let [{:keys [name to note guards handler safety display edit input
-                label style order]} v
+                label style order undo]} v
         note-field (when note (if (map? note) (:field note) note))
         note-max (if (map? note) (:max note 240) 240)]
     (when-not (keyword? name)
@@ -1183,6 +1189,11 @@
                                                      (clojure.core/name name)))}
                             style (assoc :style style)
                             order (assoc :order order)))}
+      ;; the pointer rides through untouched; normalize-action stamps
+      ;; :reversible from it and verify-undo-pointers checks it against
+      ;; the graph, exactly as for a hand-written action
+      undo (assoc :undo undo)
+
       note-field
       ;; the generated note carries its own prose. A sugar that emits
       ;; a bare field emits a usability warning (waymark-0ee's display
@@ -1873,6 +1884,7 @@
         (update :nav #(or % :primary))
         (update :shape #(or % 1))
         (update :allow-dead set)
+        (update :allow-undo set)
         (update :deviations #(vec (or % [])))
         normalize-default-filters
         normalize-views

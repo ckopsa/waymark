@@ -85,11 +85,57 @@
              (str "state " s " is a dead end: non-terminal with no outgoing "
                   "transitions — annotate :allow-dead if intentional"))))))
 
-(defn- check-terminal-no-exit [r]
-  (doseq [a (machine/actions-seq r)]
-    (when-some [dead (seq (sort (set/intersection (:from a) (:terminal r))))]
-      (err r :terminal-no-exit
-           (str "action " (:name a) " exits terminal state(s) " (vec dead))))))
+(defn- check-terminal-no-exit
+  "No action departs a terminal state — because a terminal state is
+  where a row's story ended, and a door out of it is a story that did
+  not end.
+
+  `:allow-undo` names the doors that may (docs/spec-undo.md). The
+  exception is narrow and it is about what the door SAYS rather than
+  what it does: an undo does not continue a story, it asserts that the
+  last sentence was never spoken — same hand, within minutes, nobody
+  else having written since. `check-allow-undo` below holds it to
+  that shape; this check only stops asking those doors the question."
+  [r]
+  (let [licensed (set (:allow-undo r))]
+    (doseq [a (machine/actions-seq r)
+            :when (not (contains? licensed (:name a)))]
+      (when-some [dead (seq (sort (set/intersection (:from a) (:terminal r))))]
+        (err r :terminal-no-exit
+             (str "action " (:name a) " exits terminal state(s) " (vec dead)
+                  (when (seq licensed)
+                    (str " and is not one of this kind's :allow-undo doors "
+                         (vec (sort licensed))))))))))
+
+(defn- check-allow-undo
+  "The waiver, held to its own sentence. A door licensed to leave a
+  tomb must be a real door, must LAND somewhere still open (an undo
+  returns a row to life; a door from one terminal state to another is
+  not an undo, it is a reclassification), and must actually need the
+  licence — a waiver nobody uses is a waiver nobody can audit, and it
+  would go on standing after the door it was written for moved."
+  [r]
+  (doseq [aname (sort (:allow-undo r))]
+    (let [a (get (:actions r) aname)]
+      (cond
+        (nil? a)
+        (err r :allow-undo
+             (str ":allow-undo names " aname ", which is not an action of "
+                  "this kind"))
+
+        (contains? (set (:terminal r)) (:to a))
+        (err r :allow-undo
+             (str ":allow-undo " aname " lands in " (:to a)
+                  ", which is terminal — an undo puts a row back where it "
+                  "can be acted on, and a door between two tombs is a "
+                  "reclassification wearing an undo's name"))
+
+        (empty? (set/intersection (set (:from a)) (set (:terminal r))))
+        (err r :allow-undo
+             (str ":allow-undo " aname " departs no terminal state "
+                  (vec (sort (:from a)))
+                  ", so it needs no licence — remove it, or the waiver "
+                  "outlives the door it was written for"))))))
 
 (defn- usable-reverse?
   "Unconditional-or-time-based, approximated: no leaf hidden, none
@@ -1167,6 +1213,7 @@
    (into []
          (mapcat #(% rmap))
          [check-tokens check-reachability check-terminal-no-exit
+          check-allow-undo
           check-reversible check-one-way check-guard-declarations
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue

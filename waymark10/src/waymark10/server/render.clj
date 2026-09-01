@@ -819,7 +819,13 @@
                     ;; not make — advertisement equals enforcement is
                     ;; this file's whole posture
                     :grant (:grant visibility)
-                    :read (:read ctx-opts) :find (:find ctx-opts)})
+                    :read (:read ctx-opts) :find (:find ctx-opts)
+                    ;; …and the log's own hook (docs/spec-undo.md): an
+                    ;; undo door's availability is a fact about the
+                    ;; clock and about whose hand is asking, so a probe
+                    ;; that could not read the last transition would
+                    ;; advertise a way back that had already expired
+                    :last-transition (:last-transition ctx-opts)})
         self (str "/api/" (:plural rdef) "/" (:id row))
         state (:state row)
         ;; the field/argument projection closures (batch B) — guards

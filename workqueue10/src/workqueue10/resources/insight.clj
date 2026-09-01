@@ -110,6 +110,28 @@
   it. waymark-iqa.18 is the seam that would change this answer: a
   handler ctx that carries the caller's visibility.
 
+  AND BOTH ANSWERS ARE TAKEABLE BACK FOR FIFTEEN MINUTES
+  (waymark-qmo6, docs/spec-undo.md). This is the one card in the feed
+  a household triages in RUNS — thumb, thumb, thumb, on a phone — and
+  the failure mode of a run is a chip touched by mistake. Slowing the
+  tap down with a confirm would be the feed's own law broken (*a card
+  offers a decision, never a form*) and would make the honest taps cost
+  what the wrong one costs. So the tap stays instant and `undo` stands
+  behind it: the same hand, within the window, only the newest
+  transition on the row, and the restore RE-FACES
+  `one-live-finding-per-offer` — because answering a finding is what
+  frees its question, and somebody may have published a fresh one on
+  the same next step since. It is NOT a `restore`, and the difference
+  is the whole ruling: a restore says *the house has changed its mind*,
+  an undo says *that hand did not mean to speak*.
+
+  `withdraw` is the same sentence at the create door, and it partially
+  heals waymark-br7v: an author looking at its own finding saw an EMPTY
+  actions map, because the four-eyes wall correctly refuses it both
+  verdicts. Now it has exactly one door — take back what you just
+  wrote, while nobody has answered it — and the row lands in
+  `withdrawn`, which is a tombstone rather than the household's no.
+
   NO NOTES ON EITHER VERDICT, DELIBERATELY. waymark-iqa.4 found it
   first: the sugar's note input is `[:maybe [:string {:max 240}]]`,
   which `demand/field-class` reads as `recall` — heavier than the
@@ -338,6 +360,48 @@
   [evidence]
   (into #{} (comp (map #(str/trim (str %))) (remove str/blank?)) evidence))
 
+(defn- standing-question
+  "The published finding already asking this one's question, with the
+  rows they share hung on it as `::shared` — or nil when nobody is.
+
+  Spelled apart from the guard because TWO doors ask it now: the create
+  door, of the body a composer is sending, and the `undo` door, of the
+  document a dismissed finding already carries (docs/spec-undo.md § *4 ·
+  Restoring re-faces the walls*). One question, one answer, one
+  sentence; a second copy of this read would be a second opinion about
+  what counts as the same question."
+  [find' kind id action evidence]
+  (when-some [k (offer-key kind id action)]
+    (let [mine (read-rows evidence)
+          ;; a VECTOR out of the intersection, because `g/listed`
+          ;; renders it and a sorted list is the sentence
+          shared-with (fn [r]
+                        (into [] (filter mine)
+                              (read-rows (get-in r [:data :evidence]))))]
+      (->> (find' :insight {:state live-state} {:limit live-page})
+           (into []
+                 (comp (filter #(= k (offer-key
+                                      (get-in % [:data :offer_kind])
+                                      (get-in % [:data :offer_id])
+                                      (get-in % [:data :offer_action]))))
+                       (map #(assoc % ::shared (shared-with %)))
+                       (filter (comp seq ::shared))))
+           (sort-by #(str (:id %)))
+           first))))
+
+(defn- standing-vars
+  "The refusal's four words, off the finding that stands in the way."
+  [hit kind id action]
+  {:standing (str (:id hit))
+   :offer (str action)
+   ;; the offered row's own address, which the standing finding
+   ;; carries because `derive-the-offer-address` wrote it at birth;
+   ;; the kind and the id are the honest fallback for a row written
+   ;; before that hook landed
+   :address (or (some-> (get-in hit [:data :offer_href]) str str/trim not-empty)
+                (str kind " " id))
+   :shared (g/listed (::shared hit))})
+
 (defguardfn one-live-finding-per-offer
   {:judges [:offer_kind :offer_id :offer_action :evidence]
    :reads [:insight]
@@ -351,39 +415,41 @@
     ;; path always carries the consult
     (if (nil? find')
       (t/allow)
-      (if-some [k (offer-key (:offer_kind inp) (:offer_id inp)
-                             (:offer_action inp))]
-        (let [mine (read-rows (:evidence inp))
-              ;; a VECTOR out of the intersection, because `g/listed`
-              ;; renders it and a sorted list is the sentence
-              shared-with (fn [r]
-                            (into [] (filter mine)
-                                  (read-rows (get-in r [:data :evidence]))))
-              hit (->> (find' :insight {:state live-state} {:limit live-page})
-                       (into []
-                             (comp (filter #(= k (offer-key
-                                                  (get-in % [:data :offer_kind])
-                                                  (get-in % [:data :offer_id])
-                                                  (get-in % [:data :offer_action]))))
-                                   (map #(assoc % ::shared (shared-with %)))
-                                   (filter (comp seq ::shared))))
-                       (sort-by #(str (:id %)))
-                       first)]
-          (if (nil? hit)
-            (t/allow)
-            (t/deny {:vars {:standing (str (:id hit))
-                            :offer (nth k 2)
-                            ;; the offered row's own address, which the
-                            ;; standing finding carries because
-                            ;; `derive-the-offer-address` wrote it at
-                            ;; birth; the kind and the id are the
-                            ;; honest fallback for a row written before
-                            ;; that hook landed
-                            :address (or (some-> (get-in hit [:data :offer_href])
-                                                 str str/trim not-empty)
-                                         (str (nth k 0) " " (nth k 1)))
-                            :shared (g/listed (::shared hit))}})))
-        ;; no offer at all — `offers-something-light` owns that refusal
+      (if-some [hit (standing-question find' (:offer_kind inp) (:offer_id inp)
+                                       (:offer_action inp) (:evidence inp))]
+        (t/deny {:vars (standing-vars hit (:offer_kind inp) (:offer_id inp)
+                                      (:offer_action inp))})
+        (t/allow)))))
+
+;; ── the same wall, facing the other way (docs/spec-undo.md) ─────────
+;;
+;; UN-ANSWERING A FINDING PUTS ITS QUESTION BACK. That is the whole of
+;; why `undo` is not a state flip: `one-live-finding-per-offer`'s law
+;; is that the house asks one question at a time, and answering the
+;; standing one is exactly what frees the next. So between the
+;; dismissal and the undo a compiler may lawfully have published a
+;; fresh finding on the same next step off the same reading — and
+;; restoring the old one would put the house back to asking twice, off
+;; a door rather than off a create, which is the one way that wall
+;; could be walked around.
+;;
+;; It judges the ROW rather than the input, because an undo takes no
+;; input; the standing finding it finds can never be this row, since
+;; this row is `taken` or `dismissed` and the search reads `published`.
+
+(defguardfn the-question-is-open-again
+  {:reads [:insight]
+   :vars [:standing :offer :address :shared]
+   :explain "Bringing this finding back would ask a question the house is already asking: /api/insights/{standing} offers {offer} on {address}, reads {shared} the way this one does, and nobody has answered it. Answering a finding is what frees its question, and somebody published a fresh one on the same next step while this was answered — read that one instead. This finding stays exactly as it is, with your answer on it."}
+  [row _inp ctx]
+  (let [find' (:find ctx)
+        d (:data row)]
+    (if (nil? find')
+      (t/allow)
+      (if-some [hit (standing-question find' (:offer_kind d) (:offer_id d)
+                                       (:offer_action d) (:evidence d))]
+        (t/deny {:vars (standing-vars hit (:offer_kind d) (:offer_id d)
+                                      (:offer_action d))})
         (t/allow)))))
 
 ;; ── the typing agrees with itself (waymark-2m2) ─────────────────────
@@ -708,6 +774,72 @@
    :expect  {:refused :the-typing-agrees-with-itself
              :because "cost nothing is not a costly action"}})
 
+;; ── the undo scenarios, and what this tier cannot say ───────────────
+;;
+;; `only-your-own-last-tap` declares `:reads [:transitions :principal
+;; :now]`, so every scenario on an undo door is CONFORMANCE tier —
+;; staged for real and attempted through the HTTP door.
+;;
+;; AND EXACTLY ONE OF THE UNDO CLAIMS IS STAGEABLE THERE, which cost a
+;; red gate to learn and is worth writing down. `desugar-decision`'s
+;; birth stamp writes `authored_by` from the ACTING PRINCIPAL,
+;; unconditionally — *an ask that could name someone else as its asker
+;; is an ask that can frame them* — and the walker stages every row as
+;; ITSELF. So a walker-staged finding is the walker's own finding, and
+;; `the-finder-does-not-decide` refuses the walker at both verdict
+;; doors: `taken` and `dismissed` are states the conformance tier
+;; CANNOT REACH, whatever the scenario's own principal would then have
+;; attempted. (The two verdict scenarios above never noticed, because
+;; their own guards are pure functions of the principal and the check
+;; tier judges them offline, staging nothing.)
+;;
+;; So the same-hand rule, the window and the pop-the-stack rule are
+;; proved where a row can actually be answered and then un-answered by
+;; one hand: `workqueue10.undo-test`, over the real ring handler. That
+;; is this file's own precedent, not a concession —
+;; `one-live-finding-per-offer` carries no scenario at all for the
+;; matching structural reason, and its claims are proved by
+;; `workqueue10.insight-rank-test`.
+;;
+;; What IS stageable is the tombstone, because `withdraw` is walled on
+;; the hand that CREATED the row and the walker is that hand.
+;;
+;; ITS OWN TICKLER, and the reason is the one `a-typed-fact-may-be-
+;; left-untyped` records: a scenario that STAGES a finding pays the
+;; create door in full, and `one-live-finding-per-offer` refuses it off
+;; the finding `an-offer-needs-no-address` leaves standing on the
+;; shared row.
+
+;; AND NO `authored_by`, which is the other half of the same lesson. A
+;; scenario's `:row :data` is POSTED at the create door when the
+;; conformance tier stages it, and `authored_by` is not on
+;; `:create-schema` — the sugar keeps every stamped field off it, so
+;; that nobody may name somebody else as the author. The fixtures the
+;; CHECK tier uses carry it because a check-tier row is a literal
+;; document that never goes near a door; a fixture that will be staged
+;; must be a body a client could actually send.
+(def ^:private a-withdrawable-finding
+  (-> a-published-finding
+      (dissoc :authored_by)
+      (assoc :finding "The gutter guards were never ordered, and the reminder has lapsed"
+             :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"]
+             :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"
+             :offer_href "/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1")))
+
+(defscenario a-withdrawn-finding-is-not-a-verdict
+  "A tombstone is a tomb. `withdrawn` says the author took a finding
+   back before anybody read it — which is neither yes nor no — and
+   there is no door out of it: publishing again is publishing again.
+   It is a separate state from `dismissed` precisely so a reading can
+   tell the household's no from an author's second thoughts, and the
+   feed's rank, which weighs a dismissed prior against a fresh finding
+   on the same next step, must never mistake one for the other."
+  {:kind    :insight
+   :attempt :undo
+   :row     {:state :withdrawn :data a-withdrawable-finding}
+   :as      {:id "iris" :type :person}
+   :expect  {:refused :out-of-state}})
+
 ;; ── :insight — the finding, with a next step attached ───────────────
 
 (defresource insight
@@ -719,6 +851,38 @@
    ;; finding IS the heading — "Insight" above the sentence was a form
    ;; label, and the task card ("Call the dentist") had it right
    :display {:title "{data.finding}"}
+   ;; ── THE MACHINE, SPELLED (docs/spec-undo.md) ──────────────────────
+   ;; The `:decision` sugar would project exactly the first three of
+   ;; these and exactly the terminal pair; it is spelled by hand only
+   ;; because of the fourth. `withdrawn` is where a finding goes when
+   ;; its own author takes it back before anybody answered it — a
+   ;; TOMBSTONE, not an answer, and deliberately not `dismissed`:
+   ;; "not useful" is this household's verdict and "nobody ever read
+   ;; this and I withdrew it" is not a verdict at all. Folding the two
+   ;; would corrupt three readers at once — the feed's rank (which
+   ;; holds a fresh finding DOWN under a dismissed prior on the same
+   ;; offer, waymark-1uv.8), `verdict_reason`'s four quick words, and
+   ;; any reading counting what this house turns down.
+   ;;
+   ;; And it costs no edit anywhere, because every state predicate in
+   ;; the tree is an ALLOW-LIST: `belief/live-atom-states` is
+   ;; #{:published :taken}, `live-state` above is "published", the
+   ;; feed reads `state=published`. A withdrawn finding falls out of
+   ;; all of them by construction rather than by a fourth edit.
+   :states [:published :taken :dismissed :withdrawn]
+   :initial :published
+   ;; ALL THREE STAY TERMINAL, and that is the point of the waiver
+   ;; below rather than a shortcut around it. A taken finding IS closed
+   ;; history — the feed's `open?`, the archive's gate, the seasons
+   ;; bar's "which action finishes something" and the envelope's own
+   ;; `terminal: true` all read this set, and every one of them still
+   ;; says the true thing. What `undo` claims is not that the story
+   ;; goes on; it is that the last sentence was never spoken.
+   :terminal #{:taken :dismissed :withdrawn}
+   ;; THE ONE DOOR LICENSED TO LEAVE A TOMB. `check-allow-undo` holds
+   ;; it to the shape: it must land somewhere still open, and it must
+   ;; actually depart a terminal state or the waiver outlives it.
+   :allow-undo #{:undo}
    ;; THE OFFER IS AN ADDRESS. The card sends whoever taps it to the
    ;; row's own screen, where the row's own doors are and where the
    ;; reader's own grant gates them — the tickler's `subject` link
@@ -765,7 +929,30 @@
     ;; finding from a dismissed one, and would publish it again
     ;; tomorrow. The verdict doors ride the courtesy too and meet the
     ;; wall's honest 409 rather than a mute 404.
-    :own-surface true
+    ;;
+    ;; SPELLED WHOLE RATHER THAN `true` SINCE docs/spec-undo.md, and
+    ;; the two additions are the whole reason: `true` would project
+    ;; exactly `#{"create" "take" "dismiss"}` and the two undo doors
+    ;; would 404 mute for the very principal they exist for.
+    ;;
+    ;; `withdraw` is the important one, and it PARTIALLY HEALS
+    ;; waymark-br7v: an author looking at its own finding saw an EMPTY
+    ;; actions map, because the four-eyes wall correctly refuses it both
+    ;; verdicts and there was nothing else on the row to do. Now there
+    ;; is exactly one thing — take back what you just wrote, while it is
+    ;; still yours to take back. It widens nothing: the row is one this
+    ;; agent wrote, the wall refuses unless the create is still the
+    ;; NEWEST transition on it, and the landing is a tombstone rather
+    ;; than a deletion. waymark-enx (whether an ungranted agent should
+    ;; create at all) is untouched in either direction — this door is
+    ;; reachable only by a principal that already created the row, so
+    ;; on the day the create door narrows, this one narrows with it.
+    ;;
+    ;; `undo` rides for the reason the verdicts ride: an author that
+    ;; knocks meets the wall's honest 409 naming whose tap it was,
+    ;; rather than a mute 404 at a door it was never going to pass.
+    :own-surface {:by :authored_by
+                  :actions #{"create" "take" "dismiss" "undo" "withdraw"}}
     ;; :pacing is deliberately unspelled, and since waymark-1uv.8 the
     ;; reason is the ns docstring's rather than a sugar bug: findings
     ;; are ranked, not capped.
@@ -774,9 +961,20 @@
     ;; verdict a `recall` demand and `feed/split-verbs` would move it
     ;; off the card into `heavier` (waymark-iqa.4's second finding).
     [{:name :take :to :taken
-      :label "Do it" :style :primary :order 1
-      :safety {:idempotent true :reversible false :confirm false
-               :one-way "Taking a finding is the house saying yes to it — the record keeps who said so and when. The work itself is on its own screen, through this card's offer link, where its own doors are."}}
+      ;; THE WAY BACK, NAMED (docs/spec-undo.md). `:undo` is the
+      ;; framework's own word for reversibility and it is checked
+      ;; against the graph: the undo must depart where this action
+      ;; lands and land exactly where this action began, which
+      ;; `published` → `taken` → `published` is. The `:one-way`
+      ;; sentence that stood here is gone rather than reworded —
+      ;; `t/safety` refuses `:one-way` beside `:reversible`, and it is
+      ;; right to: a door with a way back is not a one-way door. What
+      ;; the sentence said that is still true moved into `:description`,
+      ;; where the card reads it anyway.
+      :undo :undo
+      :safety {:idempotent true :reversible true :confirm false}
+      :display {:label "Do it" :style :primary :order 1
+                :description "The house saying yes to this finding — the record keeps who said so and when. The work itself is on its own screen, through this card's offer link, where its own doors are. Tapped by mistake? Undo is yours for fifteen minutes."}}
      {:name :dismiss :to :dismissed
       ;; …and it may say WHY (waymark-jfv.16): the four quick words on
       ;; the settled card, one more optional tap, a sentence one screen
@@ -793,9 +991,10 @@
       ;; `:take` carries none, and the asymmetry is the point: a
       ;; composer learns from what the house turned down. Why somebody
       ;; said yes is the work itself, on its own rows.
-      :display {:label "Not useful" :order 2 :reasons true}
-      :safety {:idempotent true :reversible false :confirm false
-               :one-way "The finding leaves the feed and stays on record. Nothing is deleted and nothing is hidden; the house has simply answered it."}}]}
+      :undo :undo
+      :display {:label "Not useful" :order 2 :reasons true
+                :description "The finding leaves the feed and stays on record. Nothing is deleted and nothing is hidden; the house has simply answered it — and for fifteen minutes the hand that answered may take the answer back."}
+      :safety {:idempotent true :reversible true :confirm false}}]}
    :schema
    [:map
     ;; WHAT IT READ. A vector of addresses, and the guard is what makes
@@ -904,6 +1103,36 @@
       {:label "Which occasion"
        :help "Where and when this happened, as a source and a day — \"thread/7fda11c6 2026-08-24\". The same evening counts once, however excited it was: five messages in one conversation are one occasion, and the reading folds them together rather than counting the excitement five times. Two different days are two occasions even if the words were identical."}}
      [:maybe [:string {:max 120}]]]]
+   ;; ── THE TWO WAYS BACK (docs/spec-undo.md) ─────────────────────────
+   ;;
+   ;; Declared beside the `:decision` sugar rather than inside it,
+   ;; which the sugar allows and refuses to let drift: it merges the
+   ;; verdicts it projects with the actions spelled here and errs on
+   ;; any name declared twice ("one home per action").
+   :actions
+   {:undo
+    {:from #{:taken :dismissed} :to :published
+     ;; HAND FIRST, WORLD NEXT — the create door's ordering inverted
+     ;; for the reason that ordering exists: the person hears whose tap
+     ;; it was and how long ago before they hear anything about the
+     ;; house, and a refused hand never pays for the query.
+     :guards [(g/only-your-own-last-tap {:undoes #{:take :dismiss}
+                                         :restores :published})
+              the-question-is-open-again]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "This puts the finding back in the feed, unanswered, and the record keeps both your answer and the taking of it back — nothing is erased. There is no redo: if you meant the answer after all, give it again, at the door you just came back from."}
+     :display {:label "Undo that" :order 3
+               :description "Wrong chip? For fifteen minutes the hand that answered may take the answer back. The finding returns to the feed unanswered, and both taps stay on the record."}}
+    :withdraw
+    {:from #{:published} :to :withdrawn
+     ;; NO SECOND WALL. There is no question to re-face: a withdrawal
+     ;; takes a question OUT of the house rather than putting one back,
+     ;; so `one-live-finding-per-offer` has nothing to say about it.
+     :guards [(g/only-your-own-last-tap {:undoes #{:create}})]
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "The finding leaves the feed and stays on record as withdrawn — which is NOT the household saying no to it. Nobody answered this one; its author took it back. If you find the same thing again, publish it again."}
+     :display {:label "Take it back" :style :danger :order 4
+               :description "You published this and nobody has answered it yet. Withdraw it — it stops being a card, stays on the record as your own withdrawal, and never reads as a household verdict"}}}
    :on-create derive-the-offer-address
    ;; SHAPE FIRST, WORLD NEXT — outcome's ordering and its reason. A
    ;; malformed finding hears what is wrong with it before it hears
@@ -928,4 +1157,5 @@
                nobody-asked-for-an-unprompted-mention
                a-costly-action-cost-something
                the-finder-does-not-decide
-               a-dismissed-finding-does-not-come-back]})
+               a-dismissed-finding-does-not-come-back
+               a-withdrawn-finding-is-not-a-verdict]})
