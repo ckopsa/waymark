@@ -1,3 +1,75 @@
+/* ── addresses written into a field (waymark-tx8n) ──────────────────
+   Some fields hold a row's own address spelled longhand — what a claim
+   is about, what a finding read, where an offer lives. They are
+   references that never learned to be `x-ref`s, and a reference a
+   person cannot click is a dead string on the screen.
+
+   Two rules keep this honest. The plural must be one this ENGINE
+   serves — the set comes off well-known's resources through
+   `kindAtHref`, never a list this page keeps — so an address into
+   another system stays text. And the match is ANCHORED: the value must
+   BE the address, whole. A sentence that mentions a row is prose and
+   is left alone; linkifying inside prose would be this page inventing
+   an affordance out of a substring. */
+const WM_ADDRESS = /^\/api\/([a-z][a-z0-9_-]*)\/([^\/?#\s]+)$/;
+function isAddress(v) { return typeof v === "string" && WM_ADDRESS.test(v); }
+/* {kind, id} when `v` is an address this engine serves, else null */
+function addressTarget(idx, v) {
+  const m = typeof v === "string" && WM_ADDRESS.exec(v);
+  if (!m) return null;
+  const kind = kindAtHref(idx, "/api/" + m[1]);
+  return kind ? {kind, id: m[2]} : null;
+}
+/* the address as the row it names: resourceRef, so an address link
+   looks and routes exactly like every other reference on the page —
+   live-labeled by the target's own summary, the raw token in the
+   title. Cold (discovery not yet in hand) it renders as today's plain
+   text and swaps itself for the link when well-known lands; a plural
+   this engine does not serve never swaps and stays text forever. */
+function addressCell(v) {
+  const warm = addressTarget(wellKnownNow, v);
+  if (warm) return resourceRef(warm.kind, warm.id);
+  const span = el("span", {}, String(v));
+  wellKnown().then(w => {
+    const t = addressTarget(w, v);
+    if (t) span.replaceWith(resourceRef(t.kind, t.id));
+  }).catch(() => {});
+  return span;
+}
+
+/* ── whose hand it was (waymark-tx8n) ───────────────────────────────
+   A field named for a hand — `member`, and anything ending `_by` —
+   holds a PRINCIPAL id, not a row address. A member's id IS the
+   principal id (server/members.clj), so that person or agent already
+   has a row on the roster; the id only needs asking about.
+
+   The name pattern picks who to ASK about and is never what makes the
+   link. The ENGINE answers, or it does not: a `_by` field holding a
+   word, a sentence, or an id nobody enrolled gets no member row back
+   and stays exactly the text it is. One read per distinct principal
+   per page — a grid of forty rows written by three hands asks three
+   times, not forty.
+
+   The feed SCREEN's byline is deliberately not this (spec-feed.md:
+   "the byline is a principal id and must stay one") — its card draws
+   its own chip and never comes through this seam. */
+function principalField(f) { return f === "member" || /_by$/.test(String(f)); }
+const PRINCIPAL_TOKEN = /^[^\s\/?#]{1,128}$/;
+const memberSeen = {};
+function memberSummary(id) {
+  return memberSeen[id] || (memberSeen[id] = rowSummary("member", id));
+}
+function memberRef(id) {
+  const span = el("span", {class:"mono", title: String(id)}, String(id));
+  memberSummary(id).then(s => {
+    if (!s) return;
+    const a = resourceRef("member", id, s);
+    a.className = "";           // a name is not machine truth
+    span.replaceWith(a);
+  }).catch(() => {});
+  return span;
+}
+
 /* ── values: honest rendering of the data document ─────────────────── */
 function valueCell(v, xd) {
   if (v === null || v === undefined) return el("span", {class:"muted"}, "—");
@@ -6,13 +78,20 @@ function valueCell(v, xd) {
     if (!v.length) return el("span", {class:"muted"}, "—");
     if (v.every(x => x && typeof x === "object" && !Array.isArray(x)))
       return nestedTable(v);
+    /* a list whose ELEMENTS are addresses keeps its chips and gains a
+       link inside each one */
     return el("span", {}, v.map(x =>
-      el("span", {class:"chip", style:"margin-right:4px"}, String(x))));
+      el("span", {class:"chip", style:"margin-right:4px"},
+         isAddress(x) ? addressCell(x) : String(x))));
   }
   if (typeof v === "object") return kvTable(v);
   if ((xd || {}).widget === "prose" || (typeof v === "string" && v.includes("\n")))
     return el("div", {class:"prose", style:"white-space:pre-wrap;max-width:640px;" +
       "max-height:320px;overflow-y:auto"}, String(v));
+  /* the address rule sits AFTER prose on purpose: a field declared
+     prose is a person's words and stays their words, whatever shape
+     they happen to take */
+  if (isAddress(v)) return addressCell(v);
   return el("span", {}, String(v));
 }
 function nestedTable(rows) {
@@ -37,8 +116,13 @@ function fieldCell(schema, field, value) {
     return el("span", {},
       ...value.flatMap((id, i) =>
         i ? [", ", resourceRef(ref.kind, id)] : [resourceRef(ref.kind, id)]));
-  return ref && value && !Array.isArray(value)
-    ? resourceRef(ref.kind, value) : valueCell(value, xd);
+  if (ref && value && !Array.isArray(value)) return resourceRef(ref.kind, value);
+  /* a DECLARED ref always wins; only an undeclared "whose hand" token
+     asks the roster whether it names somebody */
+  if (principalField(field) && typeof value === "string" && value &&
+      xd.widget !== "prose" && PRINCIPAL_TOKEN.test(value))
+    return memberRef(value);
+  return valueCell(value, xd);
 }
 function kvTable(obj, schema) {
   const t = el("table", {class:"kv"});

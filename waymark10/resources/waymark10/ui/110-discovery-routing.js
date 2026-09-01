@@ -1,10 +1,16 @@
 /* ── discovery: well-known drives everything ───────────────────────── */
 let wellKnownCache = null;   // caches the PROMISE: concurrent callers share
+/* the RESOLVED document, kept synchronously beside the promise. A field
+   cell renders in one pass and cannot await, so the address rule (150)
+   reads this when discovery is warm — which it is for every render
+   after the first — and upgrades its cells in place when it is not. */
+let wellKnownNow = null;
 function wellKnown() {
   if (!wellKnownCache)
     wellKnownCache = api("/api/.well-known/waymark").then(
       r => { if (!r.ok) throw new Error("no discovery");
              reflectIdentity(r.body.principal);
+             wellKnownNow = r.body;
              return r.body; },
       err => { wellKnownCache = null; throw err; });
   return wellKnownCache;
@@ -31,6 +37,16 @@ function domainHome(w, d) {
 }
 function collectionHref(idx, kind) {
   return (((idx || {}).resources || {})[kind] || {}).href || null;
+}
+/* collectionHref read backwards: which kind does "/api/<plural>" name?
+   The legal plurals are the ENGINE's own registry, straight off
+   well-known's resources — this page keeps no list of its own, so a
+   deployable that serves a plural and one that does not are told apart
+   by the wire and never by a name kept here. */
+function kindAtHref(idx, href) {
+  for (const [kind, r] of Object.entries(((idx || {}).resources) || {}))
+    if (r && r.href === href) return kind;
+  return null;
 }
 
 /* published data schemas: x-display hints per kind */

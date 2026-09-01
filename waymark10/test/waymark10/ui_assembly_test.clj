@@ -112,6 +112,92 @@
     (is (str/includes? page ".slot-grid"))
     (is (str/includes? page "html[data-ui=\"mobile\"] .slot-grid"))))
 
+;; ── addresses and hands in a field cell (waymark-tx8n) ────────────
+;; Fields that hold a row's address rendered as dead strings: "What is
+;; it about" on a hypothesis screen listed /api/people/01H… and left
+;; the reader to retype it. The rule lands in the GENERIC field
+;; renderer, so it is asserted the way this page's other generic
+;; affordances are — the seam, the source of its vocabulary, and the
+;; one line no application name may cross.
+
+(defn- js-regex
+  "A regex LITERAL out of the assembled page, compiled as a Java
+  pattern. The two dialects agree on everything these literals use,
+  so the rule the browser applies is the rule this test exercises —
+  string assertions alone would prove the code is present and nothing
+  about what it matches."
+  [page nm]
+  (let [src (second (re-find (re-pattern (str "const " nm " = /(.*)/;")) page))]
+    (is (some? src) (str nm " is a regex literal"))
+    (re-pattern src)))
+
+(deftest an-address-is-the-whole-value-or-it-is-not-an-address
+  ;; the anchoring IS the design: a field value that IS an address is a
+  ;; reference spelled longhand and becomes a link; an address sitting
+  ;; inside a sentence is prose, and a page that linkified substrings
+  ;; would be inventing an affordance out of somebody's words.
+  (let [re (js-regex (sut/assemble) "WM_ADDRESS")]
+    (doseq [addr ["/api/people/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+                  "/api/insights/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+                  "/api/approval_requests/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0"
+                  "/api/members/sous"]]      ; an id need not be a uuid
+      (is (re-find re addr) addr))
+    (doseq [not-an-address
+            ["the row at /api/people/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0 is the one"
+             "/api/people"                    ; a collection, not a row
+             "/api/people/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0/atoms"
+             "/api/people/01HZQ7Y7F2R3W4V5X6Y7Z8A9B0?depth=summary"
+             "/API/People/01HZQ"
+             "https://elsewhere.example/api/people/01HZQ"
+             ""]]
+      (is (not (re-find re not-an-address)) not-an-address))))
+
+(deftest the-plural-set-is-the-engines-own-registry
+  ;; which plurals are linkable is a question only the running engine
+  ;; can answer, and it already answers it: well-known's resources. A
+  ;; list kept on this page would be a second registry to drift.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "function kindAtHref"))
+    (is (str/includes? page "(idx || {}).resources")
+        "the plurals come off the discovery document")
+    (is (str/includes? page "kindAtHref(idx, \"/api/\" + m[1])")
+        "an address resolves through that registry, never a literal")
+    (is (str/includes? page "resourceRef(warm.kind, warm.id)")
+        "…and renders through the same ref cell every other link uses")
+    (doseq [word ["people" "hypothes" "observed_by" "offer_href"]]
+      (is (not (str/includes? page word))
+          (str "the generic page never learns an application's plural or"
+               " field — found " word)))))
+
+(deftest prose-keeps-its-words
+  ;; the address branch sits AFTER the prose branch in valueCell: a
+  ;; field declared prose is a person's words and stays their words,
+  ;; whatever shape they happen to take.
+  (let [page (sut/assemble)]
+    (is (< (str/index-of page "(xd || {}).widget === \"prose\"")
+           (str/index-of page "if (isAddress(v)) return addressCell(v);"))
+        "prose is answered first")
+    (is (str/includes? page "xd.widget !== \"prose\"")
+        "…and a prose field is never mistaken for a principal token either")))
+
+(deftest a-hand-is-asked-about-never-assumed
+  ;; `observed_by` and kin hold a principal id, and a member's id IS
+  ;; the principal id — so the roster can be asked. The name pattern
+  ;; only picks WHO to ask about; the engine's answer is what makes the
+  ;; link, so a `_by` field holding a word nobody enrolled stays text.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "function principalField"))
+    (is (str/includes? page "/_by$/.test(String(f))"))
+    (is (str/includes? page "rowSummary(\"member\", id)")
+        "the roster is read through the ordinary summary ride — no new route")
+    (is (str/includes? page "memberSeen[id] || (memberSeen[id] = ")
+        "one fetch per distinct principal, not one per row")
+    (is (str/includes? page "if (!s) return;")
+        "no member row, no link — the text stands")
+    (is (< (str/index-of page "if (ref && value && !Array.isArray(value))")
+           (str/index-of page "if (principalField(field)"))
+        "a DECLARED x-ref always wins over the name pattern")))
+
 ;; ── the theme (waymark-88k) ───────────────────────────────────────
 ;; One palette, restated: the light tokens on :root, the dark ones
 ;; under prefers-color-scheme AND under an explicit data-theme, and a
