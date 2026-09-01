@@ -57,6 +57,7 @@
             [org.httpkit.server :as http]
             [waymark10.modules :as modules]
             [waymark10.registry :as registry]
+            [waymark10.server.belief :as server-belief]
             [waymark10.server.definitions :as defs]
             [waymark10.server.maintainer :as maintainer]
             [waymark10.server.oidc :as oidc]
@@ -211,12 +212,25 @@
                     ;; the worksheet pass composes over the derivation
                     ;; maintainer — the engine's own kind, so the boot
                     ;; wires it (an app-level with-push wraps outside)
+                    ;;
+                    ;; …and the belief refold rides the same seam
+                    ;; (waymark-2ozr): a committed finding refreshes
+                    ;; the beliefs its citations feed, because the
+                    ;; nightly sweep is the CLOCK's pass and a new
+                    ;; atom is not a clock. It answers nil for every
+                    ;; kind but the finding and for every engine that
+                    ;; serves no hypothesis, so the composition below
+                    ;; keeps whatever the two passes above decided
+                    ;; about the response's row.
                     :maintain (fn [engine kind action-name res]
-                                (worksheet/after-write!
-                                 engine kind action-name
-                                 (or (maintainer/after-write
-                                      engine kind action-name res)
-                                     res)))
+                                (let [res' (worksheet/after-write!
+                                            engine kind action-name
+                                            (or (maintainer/after-write
+                                                 engine kind action-name res)
+                                                res))]
+                                  (server-belief/after-write
+                                   engine kind action-name res')
+                                  res'))
                     ;; the declared surfaces, validated where every
                     ;; kind is known (phase 9b)
                     :surfaces (surface/assemble reg (:surfaces opts))

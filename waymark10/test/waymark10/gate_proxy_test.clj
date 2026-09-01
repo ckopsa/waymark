@@ -201,6 +201,10 @@
           "messa__threads" "messages.read"
           "messa__read_messages" "messages.read"
           "messa__reset" "messages.read"
+          ;; keep — the household's notes (read-only rig)
+          "keep__list_notes" "notes.read"
+          "keep__search" "notes.read"
+          "keep__read" "notes.read"
           ;; ynab — the budget
           "ynab__accounts" "ynab.read"
           "ynab__transactions" "ynab.read"
