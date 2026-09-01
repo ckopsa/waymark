@@ -457,6 +457,19 @@
         .toEpochMilli)
     (catch Exception _ nil)))
 
+(defn cites-of
+  "The addresses one `insight` row NAMES, trimmed and blank-free. One
+  spelling, because both directions of the join read it: `atom-of`
+  puts it on the atom, and `fed-by` asks it which beliefs a finding
+  reaches the moment it lands. An entry is an ADDRESS and nothing
+  else — `evidence` is a list of `:waymark/href`, so a reader that
+  had to cope with an object here would be coping with a row the
+  create door would not have taken."
+  [row]
+  (into #{}
+        (comp (map #(str/trim (str %))) (remove str/blank?))
+        (get-in row [:data :evidence])))
+
 (defn atom-of
   "One `insight` row as an atom, or nil when it is not one — an
   untyped finding is not an atom, which is the compatibility story:
@@ -490,9 +503,7 @@
        :solicited (true? (:solicited d))
        :episode ep
        :at at
-       :cites (into #{}
-                    (comp (map #(str/trim (str %))) (remove str/blank?))
-                    (:evidence d))})))
+       :cites (cites-of row)})))
 
 (defn atoms-of
   "Every atom in a pile of `insight` rows, dismissals dropped."
@@ -517,6 +528,28 @@
   cites the hypothesis itself."
   [a addresses]
   (boolean (some addresses (:cites a))))
+
+(defn fed-by
+  "THE JOIN READ BACKWARDS: which of these hypothesis rows a finding's
+  citations reach. Exactly `touched-by?`'s question with the two sides
+  swapped — one address set against many beliefs instead of many atoms
+  against one — and it is spelled here, beside its twin, because a
+  second sentence for *touches* is the drift that would let a finding
+  feed a belief on the nightly pass and not on the pass that runs when
+  it lands.
+
+  This is what makes the cached fold answer for the row rather than
+  for the last time somebody happened to write it: an atom's own
+  landing knows the beliefs it changed, so they are refolded in the
+  same breath (waymark-2ozr — three atoms of backfill #9 were correct,
+  cited correctly, and joined correctly, and still did not show on
+  three beliefs, because nothing refolded those beliefs between the
+  finding landing and the reading reading them back)."
+  [cites hypothesis-rows]
+  (into []
+        (filter (fn [row]
+                  (boolean (some (addresses-of row) cites))))
+        hypothesis-rows))
 
 (defn fold-one
   "What the record now says about ONE hypothesis row, given every atom

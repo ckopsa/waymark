@@ -823,13 +823,15 @@ safe.
 
 ### Recorded, for whoever comes next
 
-- **The updater does not run on insight publish.** § *Effort* said
+- ~~**The updater does not run on insight publish.**~~ § *Effort* said
   *atom links written on insight publish*; the normative sections say
   the pass writes them and that *nothing is rewritten nightly except
   the cached posterior*. The pass and the birth fold cover it, and a
   cross-write from `insight`'s create handler would be the one
   cross-write no `:touches` could advertise (that namespace's own
-  paragraph). Filed rather than built.
+  paragraph). Filed rather than built. **REVERSED 2026-08-31 by
+  waymark-2ozr — see § *Built — the atom's own fold* below. The punt
+  was the bug: the pass and the birth fold did NOT cover it.**
 - **A dismissed or retired belief has no door out.** `value` has a
   `restore`; this kind does not, because asking again is asking again
   — a NEW hypothesis, which `not-a-second-belief` admits precisely
@@ -1054,3 +1056,61 @@ not.
   a belief would still be refused for citing nothing — an outcome
   composed out of the machine's own opinion is what the epic's wall
   exists to forbid.
+
+## Built — the atom's own fold (2026-08-31, waymark-2ozr)
+
+Backfill reading #9 (journal `c7ba7922`) reported that three of its
+eleven atoms "missed the join": two findings citing a person who is in
+belief `419801be`'s `about` left it at 17 atoms, and a third citing a
+finding that is in the `about` of BOTH `0cc6d78f` and `95816939` was
+taken by the second and not the first. The reading could not explain
+it and said so: *do not assume a citation feeds; read the row back and
+count.*
+
+**The join was never wrong.** Recomputing it over all 113 live
+findings and all 40 beliefs reproduces every cached atom list exactly
+— zero atoms taken that should not have been, on any row — and every
+atom "missing" from a belief was written AFTER the newest atom that
+belief's cache already held. Ten of the forty rows were stale; the
+three the reading noticed were the three it happened to look at.
+
+The cause is the punt recorded above. A belief's cached fold moves for
+two reasons — a new atom, and the clock — and only the clock had a
+pass. `sweep-beliefs!` runs one full interval (a day) after the
+process starts, so a deployment that redeploys more often than daily
+never sweeps at all; every refold in this store's history was a door
+write. `95816939` was restated a minute after the finding landed and
+took it. `0cc6d78f` had last been written seven hours earlier and did
+not. Same address, same finding, two beliefs, one join — and the whole
+of the difference was WHEN each row was last written.
+
+So the evidence gets its own pass beside the clock's:
+`server.belief/after-write`, on the engine's `:maintain` seam. A
+committed write on an `insight` — publish, take or dismiss —
+refolds exactly the beliefs that finding's citations reach
+(`belief/fed-by`, the join read backwards), post-commit, each row in
+its own transaction, a maintenance write throughout: no version, no
+transition, nothing a door could have set. A finding this house holds
+no belief about costs one capped read and writes nothing, which is the
+ordinary case.
+
+Recorded with it:
+
+- **The `:touches` objection stands and is answered by the seam rather
+  than by the handler.** The punt's reason was that a cross-write from
+  `insight`'s create handler advertises nothing. This is not in the
+  handler: it is the derivation maintainer's own posture one kind over
+  — *the maintainer computes what the in-commit pass cannot: cross-row
+  facts* — and it runs after the write's transaction, so the finding's
+  own answer is never held open by somebody else's arithmetic.
+- **The nightly pass is unchanged and still owes decay.** It is now
+  also the idempotence check: a store where every atom refolded what
+  it fed has nothing left for the sweep to say.
+- **The hypothesis kind is deliberately not refolded by this seam.**
+  Its own doors fold it in their own transaction, and a maintenance
+  write chaining off a maintenance write is a loop this seam has no
+  visited set for.
+- **The stale rows repair themselves on the next write or the next
+  sweep** — the fold is a pure function of (table, prior, atoms, now)
+  and always was, which is why the ten stale rows are a freshness bug
+  and not a determinism one.

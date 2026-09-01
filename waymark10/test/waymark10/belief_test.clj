@@ -377,6 +377,102 @@
         (is (close? (+ (belief/logit 0.1M) 2.079442 1.098612)
                     (:posterior_log_odds b) 1e-4))))))
 
+;; ── waymark-2ozr: THE SAME ADDRESS FEEDS EVERY BELIEF THAT NAMES IT ─
+;;
+;; Backfill #9 (journal c7ba7922) recorded three atoms that "missed":
+;; `0c14f255` and `ed3ff773` cite `/api/people/8c728402…`, which is in
+;; belief `419801be`'s `about`, and that belief stayed at 17 atoms;
+;; `16e01a3b` cites `/api/insights/8d6a0338…`, which is in the `about`
+;; of BOTH `0cc6d78f` and `95816939`, and only the second took it.
+;;
+;; The rows are reproduced below in their real shapes (values
+;; anonymized, structure byte-for-byte: `evidence` is a list of plain
+;; address strings, `about` likewise, and one of the three citations
+;; is an `/api/insights/…` address — a finding citing a finding). The
+;; join takes all of them, from both beliefs, every time. It always
+;; did: the live miss was a STALE CACHE, not a bad join, and these
+;; assertions are what pins the join while `server.belief/after-write`
+;; fixes the staleness. A regression here would mean the arithmetic
+;; itself learned to drop an atom, which is the thing this file exists
+;; to refuse.
+
+(deftest an-address-in-two-abouts-feeds-both-beliefs
+  (let [subject "/api/people/8c728402"
+        cited-finding "/api/insights/8d6a0338"
+        rod {:id "419801be"
+             :data {:prior 0.1M
+                    :about ["/api/values/1bb308f3" subject
+                            "/api/people/290d6e89"]}}
+        pattern {:id "0cc6d78f"
+                 :data {:prior 0.1M
+                        :about [cited-finding "/api/insights/c581c305"]}}
+        gap {:id "95816939" :data {:prior 0.1M :about [cited-finding]}}
+        ;; the three findings, as the store holds them
+        run-book (belief/atom-of
+                  {:id "ed3ff773" :state :published
+                   :updated-at "2026-09-01T00:14:15.944513Z"
+                   :data {:evidence_type "specific_detail"
+                          :episode "keep 2026-06-14"
+                          :evidence ["/api/values/1bb308f3" subject]}})
+        retro (belief/atom-of
+               {:id "0c14f255" :state :published
+                :updated-at "2026-09-01T00:14:14.723493Z"
+                :data {:evidence_type "costly_action" :cost "low"
+                       :episode "keep 2019-01-21"
+                       :evidence ["/api/tasks/811da3b1" subject
+                                  "/api/hypotheses/fe7b2376"]}})
+        checklist (belief/atom-of
+                   {:id "16e01a3b" :state :published
+                    :updated-at "2026-09-01T00:14:15.501761Z"
+                    :data {:evidence_type "specific_detail"
+                           :episode "keep 2024-07-01"
+                           :evidence [cited-finding]}})
+        all [run-book retro checklist]]
+
+    (testing "an evidence entry is a plain address, and that is the whole of the shape"
+      (is (= #{"/api/values/1bb308f3" subject} (:cites run-book)))
+      (is (= #{cited-finding} (:cites checklist))))
+
+    (testing "both findings that name the person feed the belief the person is in"
+      (is (belief/touched-by? run-book (belief/addresses-of rod)))
+      (is (belief/touched-by? retro (belief/addresses-of rod)))
+      (is (= 2 (:atom_count (belief/fold-one table rod all now)))))
+
+    (testing "a finding may cite a FINDING, and it feeds every belief whose about names it"
+      (is (belief/touched-by? checklist (belief/addresses-of pattern)))
+      (is (belief/touched-by? checklist (belief/addresses-of gap)))
+      (is (= 1 (:atom_count (belief/fold-one table pattern all now))))
+      (is (= 1 (:atom_count (belief/fold-one table gap all now))))
+      (is (= (:posterior (belief/fold-one table pattern all now))
+             (:posterior (belief/fold-one table gap all now)))
+          "one address, two beliefs, one number — a fold that could tell them
+           apart would be per-belief state, and there is none"))
+
+    (testing "THE JOIN READ BACKWARDS names the same beliefs, which is what lets
+              an atom's own landing refresh exactly what it changed"
+      (is (= ["419801be"]
+             (mapv :id (belief/fed-by (:cites run-book) [rod pattern gap]))))
+      (is (= ["0cc6d78f" "95816939"]
+             (mapv :id (belief/fed-by (:cites checklist) [rod pattern gap])))
+          "the same address feeds BOTH — the anomaly of backfill #9 was that
+           one of them had been folded before the finding landed and the other
+           after")
+      (is (= ["419801be"]
+             (mapv :id (belief/fed-by (:cites retro) [rod pattern gap])))))
+
+    (testing "…and the direct arm too: a finding citing the belief itself"
+      (let [direct (belief/atom-of
+                    {:id "da5b7b59" :state :published
+                     :updated-at "2026-08-31T11:05:20.142683Z"
+                     :data {:evidence_type "unprompted_mention"
+                            :evidence ["/api/threads/0a739a97"
+                                       "/api/hypotheses/95816939"]}})]
+        (is (= ["95816939"]
+               (mapv :id (belief/fed-by (:cites direct) [rod pattern gap]))))))
+
+    (testing "a finding this house holds no belief about refolds nothing"
+      (is (= [] (belief/fed-by #{"/api/tasks/nothing"} [rod pattern gap]))))))
+
 ;; ── SLICE 3: WHAT THE POSTERIOR CANNOT SAY (waymark-4t9) ────────────
 
 (deftest the-mass-of-the-evidence-and-how-much-of-it-cancels
