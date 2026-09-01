@@ -196,7 +196,9 @@
         "no member row, no link — the text stands")
     (is (< (str/index-of page "if (ref && value && !Array.isArray(value))")
            (str/index-of page "if (principalField(field)"))
-        "a DECLARED x-ref always wins over the name pattern")))
+        "a DECLARED x-ref always wins over the name pattern")
+    (is (str/includes? page "!isAddress(value) && PRINCIPAL_TOKEN.test(value)")
+        "…and so does an address: a field named for a hand may still hold a row")))
 
 ;; ── the theme (waymark-88k) ───────────────────────────────────────
 ;; One palette, restated: the light tokens on :root, the dark ones

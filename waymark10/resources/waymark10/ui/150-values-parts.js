@@ -117,10 +117,12 @@ function fieldCell(schema, field, value) {
       ...value.flatMap((id, i) =>
         i ? [", ", resourceRef(ref.kind, id)] : [resourceRef(ref.kind, id)]));
   if (ref && value && !Array.isArray(value)) return resourceRef(ref.kind, value);
-  /* a DECLARED ref always wins; only an undeclared "whose hand" token
-     asks the roster whether it names somebody */
+  /* a DECLARED ref always wins, and so does a value that IS an address
+     (a field named for a hand may still hold a row, and a row is not a
+     principal). Only an undeclared bare token asks the roster whether
+     it names somebody. */
   if (principalField(field) && typeof value === "string" && value &&
-      xd.widget !== "prose" && PRINCIPAL_TOKEN.test(value))
+      xd.widget !== "prose" && !isAddress(value) && PRINCIPAL_TOKEN.test(value))
     return memberRef(value);
   return valueCell(value, xd);
 }
