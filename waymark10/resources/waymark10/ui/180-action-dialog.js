@@ -464,23 +464,24 @@ async function invokeBare(entry, doc) {
   return api(entry.href, {method: entry.method || "POST",
                           body: JSON.stringify({}), headers: h});
 }
+/* The acknowledgement, and the hand-off to the stack (waymark-qmo6).
+
+   This function used to BE the undo: one entry, six seconds, and it
+   hid itself whether the undo succeeded or was refused. Two things
+   were wrong with that and both are the same thing — it was a page
+   holding an opinion. Six seconds is not the window the engine keeps,
+   and a refusal that vanishes is a sentence the house said and nobody
+   read.
+
+   So the toast goes back to being a receipt, and the way back moves to
+   `185-undo-stack.js`, which holds the last few taps THIS page made
+   and asks the engine, entry by entry, whether each is still takeable
+   back. Every call site is unchanged: the card surface, the deck's
+   swipe and the feed's chips all funnel through here, so all three get
+   the stack without knowing it exists. */
 function maybeUndoToast(name, before, after) {
-  const t = $("#toast");
-  t.textContent = "";
-  t.append(`${pretty(name)} ✓`);
-  const backTo = before.state;
-  const inverse = Object.entries(after.actions || {})
-    .find(([, a]) => a.effect?.to === backTo);
-  if (inverse && backTo && after.state !== backTo) {
-    const [invName, invEntry] = inverse;
-    t.append(el("button", {"data-undo": invName, onclick: async () => {
-      await invokeBare(invEntry, after);
-      t.style.display = "none";
-      render();
-    }}, `undo (${label(invName, invEntry)})`));
-  }
-  t.style.display = "block";
-  setTimeout(() => t.style.display = "none", 6000);
+  toast(`${pretty(name)} ✓`);
+  recordUndoable(name, before, after || {});
 }
 
 function problemBox(p) {
