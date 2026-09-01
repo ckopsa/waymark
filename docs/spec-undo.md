@@ -489,21 +489,48 @@ undo of an action the server did not confirm.
 - **`checks/check-reversible`** now has something to check on these kinds: an
   action declaring `:reversible true` owes an unconditional transition back, and
   `:undo :undo` stamps that flag on both insight verdicts.
-- **Scenarios.** The undo doors' walls read the transition log, so every
-  scenario on them is CONFORMANCE tier by the tier rule (`:reads ⊆
-  offline-reads` fails on `:transitions`) and is proved through the real HTTP
-  door by `:core/law-scenarios`. What that tier can prove cleanly is the
-  REFUSAL half — the conformance walker stages the row as itself, so a scenario
-  attempting an undo as anybody else is refused by `only-your-own-last-tap`,
-  naming the walker as the hand that tapped. That is the law's most important
-  sentence and it is proved from the wire.
-- **The allow half is proved over the ring handler**, in
-  `workqueue10.undo-test`, where one principal can take a finding and then take
-  the take back within the window — the same posture `insight`'s own file
-  records for `one-live-finding-per-offer`: *proved by `workqueue10.
-  insight-rank-test` over the real ring handler, where a first finding can
-  actually stand*. A scenario holds one literal row over a store it did not
-  build; these claims need a story.
+- **Scenarios, and what that tier structurally cannot say.** The undo doors'
+  walls read the transition log, so every scenario on them is CONFORMANCE tier
+  by the tier rule (`:reads ⊆ offline-reads` fails on `:transitions`) — staged
+  for real and attempted through the HTTP door.
+
+  **And exactly one undo claim per kind is stageable there**, which cost a red
+  gate to learn and is the kind of thing worth writing down rather than
+  rediscovering. The conformance walker stages every row as ITSELF, and both
+  kinds stamp their four-eyes field from the acting principal at birth —
+  `desugar-decision`'s `authored_by`, `hypothesis/born`'s `observed_by`, both
+  unconditional, because *a caller who could write it could hand the answer to
+  itself*. So a walker-staged row is the walker's own, and the walker is refused
+  at every answering door: `taken`, `dismissed`, `affirmed` and `retired` are
+  states this tier **cannot reach**. The verdict scenarios that already existed
+  never noticed, because their own guards are pure functions of the principal
+  and the check tier judges them offline, staging nothing at all.
+
+  What IS stageable is the tombstone, because `withdraw` is walled on the hand
+  that CREATED the row and the walker is that hand — so each kind carries one
+  conformance scenario proving `withdrawn` is a tomb with no door out. Each
+  gets its own subject row, for the reason `a-typed-fact-may-be-left-untyped`
+  already records: a scenario that stages a row pays the create door in full,
+  and the dedupe walls refuse it off whatever the allow-create scenarios left
+  standing.
+- **Everything else is proved over the ring handler**, in
+  `workqueue10.undo-test` — the same posture `insight`'s own file records for
+  `one-live-finding-per-offer` (*proved by `workqueue10.insight-rank-test`,
+  where a first finding can actually stand*). A scenario holds one literal row
+  over a store it did not build; these claims need a story: one hand answering
+  and then taking the answer back, the log keeping both taps, the wall naming
+  the row now in the way, the ungranted author's withdrawal, and the belief
+  following the finding back.
+- **Two behaviours the suite pinned that are worth naming here**, because both
+  are the engine being right rather than the test being clever. Re-invoking
+  `undo` on a row already back in the open state is a **natural replay** — 200,
+  no second transition — so *there is no redo* is proved by what the envelope
+  refuses rather than by a status code: the `unavailable` entry for the other
+  way-back door reads *the last thing done here was undo, and this door does not
+  take that back*. And an agent whose leash names one door and reaches for
+  another meets **404 concealment, not a narrated refusal** — which is the
+  grant-scope ruling made mechanical: a scope naming `hypothesis.dismiss`
+  admits `hypothesis.undo` so little that the door is not even there.
 
 ## Recorded punts
 

@@ -953,47 +953,41 @@
    :expect  {:refused :out-of-state
              :because "Observed"}})
 
-;; ── the undo scenarios (docs/spec-undo.md) ──────────────────────────
+;; ── the undo scenarios, and what this tier cannot say ───────────────
 ;;
-;; All three are CONFORMANCE tier, decided by the tier rule rather than
-;; by the author: `only-your-own-last-tap` declares `:reads
-;; [:transitions …]`, which the check tier's offline world cannot
-;; answer. The walker STAGES as itself and a scenario's principal only
-;; ever ATTEMPTS, so this tier proves exactly the half worth proving
-;; from the wire — somebody reaching for a tap that was not theirs. The
-;; allow half is one hand answering and then taking the answer back,
-;; which is a story rather than a literal row: `workqueue10.undo-test`.
+;; `only-your-own-last-tap` declares `:reads [:transitions :principal
+;; :now]`, so every scenario on an undo door is CONFORMANCE tier —
+;; staged for real and attempted through the HTTP door.
+;;
+;; AND EXACTLY ONE OF THE UNDO CLAIMS IS STAGEABLE THERE, which cost a
+;; red gate to learn. `born` stamps `observed_by` from the acting
+;; principal — it is the four-eyes field, and a caller who could write
+;; it could hand the answer to itself — and the walker stages every row
+;; as ITSELF. So a walker-staged belief is the WALKER's own reading,
+;; and `the-answer-is-a-persons`'s `:own-field` arm refuses the walker
+;; at every answering door: `affirmed`, `dismissed` and `retired` are
+;; states the conformance tier CANNOT REACH. (The scenarios above never
+;; noticed, because their guards are pure functions of the principal
+;; and the presented grant, so the check tier judges them offline and
+;; stages nothing.)
+;;
+;; So the same-hand rule, the window, the four-eyes arm on the undo
+;; door and the pop-the-stack rule are proved where a belief can
+;; actually be answered and then un-answered by one hand:
+;; `workqueue10.undo-test`, over the real ring handler. That is this
+;; file's own precedent — `not-a-second-belief` carries no scenario at
+;; all for the matching structural reason.
+;;
+;; What IS stageable is the tombstone, because `withdraw` is walled on
+;; the hand that CREATED the row and the walker is that hand. It gets
+;; its OWN subject address, because a scenario that stages a belief
+;; pays the create door in full and `not-a-second-belief` would refuse
+;; it off the belief `a-reading-notices-something` leaves standing.
 
-(defscenario only-the-hand-that-answered-takes-it-back
-  "The undo is not a `restore` and this is the sentence that separates
-   them. A restore is available forever to anybody who holds the door
-   and says *the house has changed its mind*; this says *that tap was
-   a slip* — and only the hand that made it can say so. A second person
-   reversing somebody else's answer would be the house un-answering
-   itself, which is exactly what this kind's terminal states exist to
-   forbid, and the refusal names whose tap it actually was."
-  {:kind    :hypothesis
-   :attempt :undo
-   :row     {:state :affirmed :data a-noticed-belief}
-   :as      {:id "iris" :type :person}
-   :expect  {:refused :only-your-own-last-tap
-             :because "not yours"}})
-
-(defscenario an-observer-does-not-undo-an-answer-either
-  "FOUR EYES, IN THE OTHER DIRECTION, and no grant opens it. The
-   extraction-blind rule is that the run which read the evidence is not
-   the run that says what it means — and a wall that let the observer
-   take the household's answer BACK would be that rule holding in one
-   direction only, which is not a wall, it is a speed bump. The undo
-   door carries `the-answer-is-a-persons` under its own name for the
-   same reason every answering door does, and a scope naming
-   `hypothesis.dismiss` does not admit `hypothesis.undo`."
-  {:kind    :hypothesis
-   :attempt :undo
-   :row     {:state :affirmed :data a-noticed-belief}
-   :as      {:id "reader" :type :agent}
-   :expect  {:refused :the-answer-is-a-persons
-             :because "names you as its observed by"}})
+(def ^:private a-withdrawable-belief
+  (assoc a-noticed-belief
+         :claim "Jack would rather be in the shop than anywhere else on a Saturday"
+         :about ["/api/people/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"]))
 
 (defscenario a-withdrawn-belief-is-not-an-answer
   "A tombstone is a tomb. `withdrawn` says the reading took its own
@@ -1006,7 +1000,7 @@
    two doors."
   {:kind    :hypothesis
    :attempt :undo
-   :row     {:state :withdrawn :data a-noticed-belief}
+   :row     {:state :withdrawn :data a-withdrawable-belief}
    :as      {:id "colton" :type :person}
    :expect  {:refused :out-of-state}})
 
@@ -1181,8 +1175,6 @@
                a-belief-does-not-stop-being-about-something
                a-person-rewords-rather-than-restates
                a-dismissed-belief-is-over
-               only-the-hand-that-answered-takes-it-back
-               an-observer-does-not-undo-an-answer-either
                a-withdrawn-belief-is-not-an-answer]
    :actions
    ;; THE WORDING DOOR SPLITS BY HAND, and jfv.10 already paid for

@@ -216,12 +216,18 @@
             "create, take, undo — three writes, three versions")
         (is (= ["undo" "take" "create"] actions))))
 
-    (testing "and there is no redo: the newest transition is now the
-              undo, and no door takes an undo back — the stack is one
-              deep per row, and a person manages it across rows"
-      (let [again (invoke! "insights" iid :undo nil (human who))]
-        (is (= 409 (:status again)) (pr-str (json again)))
-        (is (= :out-of-state (or (refused again) :out-of-state)))))))
+    (testing "AND THERE IS NO REDO. The stack is one deep per row: the
+              newest transition is now the undo itself, and no door
+              takes an undo back. `withdraw` is the only other way-back
+              door a published finding has, and it says so in the
+              wall's own words rather than by going quiet — while
+              `undo` is simply out of state, because a published
+              finding has no answer to take back."
+      (let [doc (row "insights" iid (human who))]
+        (is (str/includes? (str (get-in doc [:unavailable :withdraw :reason]))
+                           "the last thing done here was undo")
+            (pr-str (:unavailable doc)))
+        (is (contains? (:unavailable doc) :undo))))))
 
 ;; ── the walls re-judge ──────────────────────────────────────────────
 
@@ -379,12 +385,20 @@
         (is (= "affirmed" (state-of "hypotheses" hid (human who))))
         (is (= who (str (:affirmed_by d))))))
 
-    (testing "the observer cannot take the household's answer back —
-              four eyes hold in this direction too, and no grant opens
-              the `:own-field` arm"
+    (testing "THE OBSERVER CANNOT TAKE THE HOUSEHOLD'S ANSWER BACK, and
+              the shape of the no is the ruling: this reading's leash
+              names `hypothesis.create` and nothing else, so the door is
+              CONCEALED rather than narrated — 404, not a refusal. That
+              is the spec's own sentence made mechanical: delegating an
+              answer and delegating the power to take an answer back are
+              two delegations, and a scope naming one admits neither of
+              the others. Behind the concealment stands
+              `the-answer-is-a-persons`'s `:own-field` arm, which no
+              grant opens at all, and the check-tier scenarios prove
+              that half with no database."
       (let [nope (invoke! "hypotheses" hid :undo nil reader)]
-        (is (= 409 (:status nope)) (pr-str (json nope)))
-        (is (= :the-answer-is-a-persons (refused nope)))))
+        (is (= 404 (:status nope)) (pr-str (json nope)))
+        (is (= "affirmed" (state-of "hypotheses" hid (human who))))))
 
     (testing "…and neither can a second person"
       (let [nope (invoke! "hypotheses" hid :undo nil (human other))]

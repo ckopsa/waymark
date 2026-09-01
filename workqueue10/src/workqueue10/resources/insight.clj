@@ -774,38 +774,48 @@
    :expect  {:refused :the-typing-agrees-with-itself
              :because "cost nothing is not a costly action"}})
 
-;; ── the undo scenarios (docs/spec-undo.md) ──────────────────────────
+;; ── the undo scenarios, and what this tier cannot say ───────────────
 ;;
-;; BOTH ARE CONFORMANCE TIER, and the tier rule decides it rather than
-;; the author: `only-your-own-last-tap` declares `:reads [:transitions
-;; :principal :now]`, and `:transitions` is not something the check
-;; tier's offline world can answer.
+;; `only-your-own-last-tap` declares `:reads [:transitions :principal
+;; :now]`, so every scenario on an undo door is CONFORMANCE tier —
+;; staged for real and attempted through the HTTP door.
 ;;
-;; WHICH HALF THIS TIER CAN PROVE IS THE INTERESTING PART. The
-;; conformance walker STAGES a row as ITSELF and the scenario's own
-;; principal only ever ATTEMPTS — so every scenario here is, by
-;; construction, somebody else reaching for a tap that was not theirs.
-;; That is the law's most important sentence and this is the cheapest
-;; honest place to prove it. The ALLOW half needs one hand to take a
-;; finding and then take the take back, which is a story rather than a
-;; literal row: `workqueue10.undo-test` over the real ring handler,
-;; exactly as `one-live-finding-per-offer`'s claims are proved by
+;; AND EXACTLY ONE OF THE UNDO CLAIMS IS STAGEABLE THERE, which cost a
+;; red gate to learn and is worth writing down. `desugar-decision`'s
+;; birth stamp writes `authored_by` from the ACTING PRINCIPAL,
+;; unconditionally — *an ask that could name someone else as its asker
+;; is an ask that can frame them* — and the walker stages every row as
+;; ITSELF. So a walker-staged finding is the walker's own finding, and
+;; `the-finder-does-not-decide` refuses the walker at both verdict
+;; doors: `taken` and `dismissed` are states the conformance tier
+;; CANNOT REACH, whatever the scenario's own principal would then have
+;; attempted. (The two verdict scenarios above never noticed, because
+;; their own guards are pure functions of the principal and the check
+;; tier judges them offline, staging nothing.)
+;;
+;; So the same-hand rule, the window and the pop-the-stack rule are
+;; proved where a row can actually be answered and then un-answered by
+;; one hand: `workqueue10.undo-test`, over the real ring handler. That
+;; is this file's own precedent, not a concession —
+;; `one-live-finding-per-offer` carries no scenario at all for the
+;; matching structural reason, and its claims are proved by
 ;; `workqueue10.insight-rank-test`.
+;;
+;; What IS stageable is the tombstone, because `withdraw` is walled on
+;; the hand that CREATED the row and the walker is that hand.
+;;
+;; ITS OWN TICKLER, and the reason is the one `a-typed-fact-may-be-
+;; left-untyped` records: a scenario that STAGES a finding pays the
+;; create door in full, and `one-live-finding-per-offer` refuses it off
+;; the finding `an-offer-needs-no-address` leaves standing on the
+;; shared row.
 
-(defscenario an-undo-belongs-to-the-hand-that-tapped
-  "Four eyes, in the other direction. The wall that stops a finder
-   deciding its own finding would be worth nothing if anybody who
-   happened along could reverse the decision — so an undo is the tap's
-   own hand or it is nobody's, and the refusal names whose tap it was.
-   A second person disagreeing with the answer is not undoing a slip,
-   it is the house un-answering itself, which is a different sentence
-   and has no door."
-  {:kind    :insight
-   :attempt :undo
-   :row     {:state :taken :data a-published-finding}
-   :as      {:id "iris" :type :person}
-   :expect  {:refused :only-your-own-last-tap
-             :because "not yours"}})
+(def ^:private a-withdrawable-finding
+  (assoc a-published-finding
+         :finding "The gutter guards were never ordered, and the reminder has lapsed"
+         :evidence ["/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"]
+         :offer_id "01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"
+         :offer_href "/api/ticklers/01HZQ7Y7F2R3W4V5X6Y7Z8A9D1"))
 
 (defscenario a-withdrawn-finding-is-not-a-verdict
   "A tombstone is a tomb. `withdrawn` says the author took a finding
@@ -817,7 +827,7 @@
    on the same next step, must never mistake one for the other."
   {:kind    :insight
    :attempt :undo
-   :row     {:state :withdrawn :data a-published-finding}
+   :row     {:state :withdrawn :data a-withdrawable-finding}
    :as      {:id "iris" :type :person}
    :expect  {:refused :out-of-state}})
 
@@ -1139,5 +1149,4 @@
                a-costly-action-cost-something
                the-finder-does-not-decide
                a-dismissed-finding-does-not-come-back
-               an-undo-belongs-to-the-hand-that-tapped
                a-withdrawn-finding-is-not-a-verdict]})
