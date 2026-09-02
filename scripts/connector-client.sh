@@ -6,9 +6,17 @@
 # azp, resolves the token to a delegate — an agent acting for that
 # person, wearing the grant off its own member row.
 #
-#   scripts/connector-client.sh new claude     # client waymark10-connector-claude
-#   scripts/connector-client.sh show claude    # id + secret, for the claude.ai form
+#   scripts/connector-client.sh new claude                      # client waymark10-connector-claude
+#   scripts/connector-client.sh new gemini <redirect-uri> Gemini # a second tool, its own client
+#   scripts/connector-client.sh show claude                     # id + secret, for the tool's form
 #   scripts/connector-client.sh list
+#
+# ONE CLIENT PER TOOL, never shared: the delegate's id is
+# <client>:<sub>, so two tools on one client would be one agent
+# wearing one grant, and the roster could not say which tool acted.
+# The redirect URI is the tool's own callback, exactly — claude.ai's
+# is the default; Gemini's is the oauth-redirect.googleusercontent.com
+# address its connector form shows in the failed login's URL.
 #
 # Shape of each client, and why it differs from agent-client.sh's:
 # standard (authorization-code) flow ON and client-credentials OFF —
@@ -28,7 +36,7 @@ INFRA_SECRETS="${INFRA_SECRETS:-$HOME/dev/home-infrastructure/terraform/secrets.
 KC="https://keycloak.kopsa.info"
 REALM="domestic-realm"
 SCOPE="waymark-workqueue10"
-CALLBACK="https://claude.ai/api/mcp/auth_callback"
+CLAUDE_CALLBACK="https://claude.ai/api/mcp/auth_callback"
 WEEK=604800
 
 admin_token() {
@@ -45,14 +53,17 @@ client_uuid() {  # $1 token, $2 clientId
 
 case "${1:-}" in
   new)
-    NAME="${2:?usage: connector-client.sh new <name>}"
+    NAME="${2:?usage: connector-client.sh new <name> [redirect-uri] [display]}"
     [[ "$NAME" =~ ^[a-z][a-z0-9-]*$ ]] || { echo "name must be kebab-case" >&2; exit 2; }
+    CALLBACK="${3:-$CLAUDE_CALLBACK}"
+    DISPLAY_NAME="${4:-Claude}"
+    [[ "$CALLBACK" =~ ^https:// ]] || { echo "redirect uri must be https" >&2; exit 2; }
     CID="waymark10-connector-$NAME"
     TOK=$(admin_token)
     curl -sS -o /dev/null -w "client $CID: %{http_code}\n" -X POST "$KC/admin/realms/$REALM/clients" \
       -H "Authorization: Bearer $TOK" -H "Content-Type: application/json" -d "{
       \"clientId\": \"$CID\", \"protocol\": \"openid-connect\",
-      \"name\": \"Claude (claude.ai connector)\",
+      \"name\": \"$DISPLAY_NAME (connector)\",
       \"description\": \"connector door (spec-connector-door): $NAME logs the person in; the engine resolves the token to a delegate\",
       \"publicClient\": false, \"standardFlowEnabled\": true,
       \"implicitFlowEnabled\": false, \"directAccessGrantsEnabled\": false,
@@ -76,7 +87,7 @@ case "${1:-}" in
     chmod --reference="$INFRA_SECRETS" "$TMP"
     mv "$TMP" "$INFRA_SECRETS"
     echo "secret stored: .waymark10_connector_clients.$NAME"
-    echo "engine env:    WAYMARK10_OIDC_DELEGATE_CLIENTS=$CID=<Display>"
+    echo "engine env:    WAYMARK10_OIDC_DELEGATE_CLIENTS=…,$CID=$DISPLAY_NAME"
     echo "show with:     scripts/connector-client.sh show $NAME"
     ;;
   show)
