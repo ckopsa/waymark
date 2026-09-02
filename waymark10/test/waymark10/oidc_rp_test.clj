@@ -361,3 +361,38 @@
                           "WAYMARK10_OIDC_CLIENT_ID" "x"
                           "WAYMARK10_OIDC_LOGIN_REDIRECT" "0"})
                         [:rp :login-redirect?])))))
+
+;; ── the connector door's three variables (docs/spec-connector-door.md) ──
+
+(deftest from-env-reads-the-connector-door
+  (testing "the external name is read at the top level, client id or not"
+    (is (= "https://work.test"
+           (:app-url (oidc/from-env {"WAYMARK10_OIDC_ISSUER" "https://idp/realms/home"
+                                     "WAYMARK10_OIDC_AUDIENCE" "work"
+                                     "WAYMARK10_OIDC_APP_URL" "https://work.test"})))))
+  (testing "delegate clients: id=Display pairs, a bare id displays as itself"
+    (is (= {"waymark10-connector-claude" "Claude" "other-tool" "other-tool"}
+           (:delegate-clients
+            (oidc/from-env {"WAYMARK10_OIDC_ISSUER" "https://idp/realms/home"
+                            "WAYMARK10_OIDC_AUDIENCE" "work"
+                            "WAYMARK10_OIDC_DELEGATE_CLIENTS"
+                            " waymark10-connector-claude=Claude, other-tool ,"})))))
+  (testing "resource scopes, a comma list"
+    (is (= ["waymark-workqueue10" "openid"]
+           (:resource-scopes
+            (oidc/from-env {"WAYMARK10_OIDC_ISSUER" "https://idp/realms/home"
+                            "WAYMARK10_OIDC_AUDIENCE" "work"
+                            "WAYMARK10_OIDC_RESOURCE_SCOPES" "waymark-workqueue10,openid"})))))
+  (testing "unset, none of the three keys appears"
+    (let [o (oidc/from-env {"WAYMARK10_OIDC_ISSUER" "https://idp/realms/home"
+                            "WAYMARK10_OIDC_AUDIENCE" "work"})]
+      (is (not (contains? o :app-url)))
+      (is (not (contains? o :delegate-clients)))
+      (is (not (contains? o :resource-scopes)))))
+  (testing "and the whole shape survives config's validation"
+    (is (map? (oidc/config
+               (assoc (oidc/from-env {"WAYMARK10_OIDC_ISSUER" "https://idp/realms/home"
+                                      "WAYMARK10_OIDC_AUDIENCE" "work"
+                                      "WAYMARK10_OIDC_APP_URL" "https://work.test"
+                                      "WAYMARK10_OIDC_DELEGATE_CLIENTS" "c=Claude"})
+                      :jwks jwks))))))

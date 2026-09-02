@@ -592,8 +592,10 @@
 
 (defn- refuse-anonymous
   "The require-auth gate's no: browsers (an HTML GET) go to login,
-  everything else gets the honest 401."
-  [req]
+  everything else gets the honest 401 — carrying the engine's one
+  challenge (oidc/challenge), so an OAuth-capable client learns where
+  to log in from the refusal itself."
+  [oidc req]
   (if (and (= :get (:request-method req))
            (some-> (get-in req [:headers "accept"])
                    (str/includes? "text/html")))
@@ -601,7 +603,7 @@
     (assoc-in (problem 401 "Unauthenticated"
                        "This engine requires a credential — Authorization: Bearer, or the session cookie /auth/login mints.")
               [:headers "WWW-Authenticate"]
-              "Bearer realm=\"waymark\"")))
+              (oidc/challenge oidc))))
 
 (defn wrap
   "The ring wrap engine/start! composes: the three /auth doors in
@@ -652,8 +654,16 @@
                          (:uri req))
               (handler req)
 
+              ;; OAuth discovery (routes/mcp.clj, RFC 9728): the
+              ;; document that tells an anonymous client where to stop
+              ;; being anonymous. Closing it behind the gate would make
+              ;; the 401's own resource_metadata pointer a dead end.
+              (and get? (str/starts-with? (:uri req)
+                                          "/.well-known/oauth-protected-resource"))
+              (handler req)
+
               (and (:require-auth? rp) (not (credentialed? oidc req)))
-              (refuse-anonymous req)
+              (refuse-anonymous oidc req)
 
               (and get? (ui-redirect? oidc req)) (login-bounce req)
 

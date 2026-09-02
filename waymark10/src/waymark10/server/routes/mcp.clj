@@ -23,9 +23,21 @@
   anonymous — the same 401 `/api/-/grant-check` answers, for the same
   reason: an unnamed caller has no grant to project a surface from,
   and a tool list assembled for nobody is the one thing this surface
-  must never serve."
+  must never serve.
+
+  THE DOOR SAYS WHERE TO LOG IN (docs/spec-connector-door.md). That
+  anonymous 401 carries the engine's one WWW-Authenticate challenge
+  (oidc/challenge), whose resource_metadata parameter points at the
+  RFC 9728 protected-resource document this module also serves — at
+  the root well-known address and at the path-inserted spelling for
+  this door — naming the authorization server a client should log in
+  at. The document is the MCP door's own metadata, which is why it
+  lives in this module's static routes: a deployment assembled
+  without :mcp has no resource to advertise. Without an external base
+  URL (:app-url) there is nothing to name, and the address 404s."
   (:require [waymark10.server.gate-proxy :as gate]
             [waymark10.server.mcp :as mcp]
+            [waymark10.server.oidc :as oidc]
             [waymark10.server.problems :as p]
             [waymark10.server.router :as router]
             [waymark10.types :as t]))
@@ -33,19 +45,33 @@
 (set! *warn-on-reflection* true)
 
 (defn- named-principal!
-  [req]
+  [eng req]
   (let [principal (router/principal-of req)]
     (when (or (nil? principal) (= (:id principal) (:id t/anonymous)))
       (throw (p/problem :unauthenticated 401 "Unauthenticated"
                         {:detail (str "The MCP surface is for named principals "
                                       "— present a credential. An agent with "
                                       "none knocks at /agentInvite and reads "
-                                      "/api/-/welcome.")})))
+                                      "/api/-/welcome.")
+                         ;; the challenge, so an OAuth-capable client
+                         ;; starts discovery from the refusal itself
+                         :waymark10/headers
+                         {"WWW-Authenticate" (oidc/challenge (:oidc eng))}})))
     principal))
+
+(defn- protected-resource [eng]
+  (fn [_req]
+    (if-some [doc (oidc/protected-resource (:oidc eng))]
+      (router/json-response 200 doc)
+      (throw (p/problem :not-found 404 "Not found"
+                        {:detail (str "This engine advertises no OAuth "
+                                      "protected resource: it runs without an "
+                                      "identity provider, or knows no external "
+                                      "base URL (WAYMARK10_OIDC_APP_URL).")})))))
 
 (defn- rpc-post [eng call gate-rpc]
   (fn [req]
-    (let [principal (named-principal! req)
+    (let [principal (named-principal! eng req)
           session {:principal principal
                    :visibility (router/visibility-of req)}
           body (router/read-body req)]
@@ -74,9 +100,9 @@
           ;; with a status rather than an empty body pretending to be one
           {:status 202 :headers {} :body ""})))))
 
-(defn- no-stream [_eng]
+(defn- no-stream [eng]
   (fn [req]
-    (named-principal! req)
+    (named-principal! eng req)
     {:status 405
      :headers {"Content-Type" "application/problem+json" "Allow" "POST"}
      :body (:body (p/->response
@@ -107,4 +133,11 @@
         gate-rpc (gate/rpc-of eng)]
     {:module :mcp
      :static [["/api/-/mcp" {:post (rpc-post eng call gate-rpc)
-                             :get (no-stream eng)}]]}))
+                             :get (no-stream eng)}]
+              ;; RFC 9728, both spellings a client may derive: the root
+              ;; document, and the path-inserted one for this door. Root
+              ;; addresses are core-static's precedent (/agentInvite)
+              ["/.well-known/oauth-protected-resource"
+               {:get (protected-resource eng)}]
+              ["/.well-known/oauth-protected-resource/api/-/mcp"
+               {:get (protected-resource eng)}]]}))

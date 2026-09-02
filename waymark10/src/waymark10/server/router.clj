@@ -1622,7 +1622,10 @@
                 ;; and system actors are unchanged. The expression is
                 ;; grants/unscoped-visibility since waymark-iqa.23,
                 ;; because the feed's preview must build exactly this
-                ;; for the PREVIEWED member and a copy would rot.
+                ;; for the PREVIEWED member and a copy would rot —
+                ;; which is also why the delegate's worn grant
+                ;; (spec-connector-door § 3) is read INSIDE it and
+                ;; not here.
                 (grants/unscoped-visibility eng principal))]
       (handler (cond-> (assoc req :waymark10/principal principal)
                  vis (assoc :waymark10/visibility vis))))))

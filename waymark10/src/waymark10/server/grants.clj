@@ -1502,6 +1502,21 @@
                    (when-some [os (own-of k)]
                      (own-ids eng (keyword k) os pid)))))}))
 
+(defn worn-visibility
+  "The visibility a principal that can present NO grant header arrives
+  with — the connector door's delegate (docs/spec-connector-door.md
+  § 3): the standing grant for its own id, accepted as the audience on
+  arrival when it still stands :offered (the guest door's courtesy,
+  the same two calls /auth/agent makes once per session — paid here
+  per request, because the transport is stateless; the recorded
+  cost). nil when nothing stands, and the caller falls to the agent
+  default: the bootstrap surface, never full sight."
+  [eng principal]
+  (when-some [row (standing-grant-for eng (:id principal))]
+    (when-some [row (accept-as-audience! eng row principal)]
+      (when (= :accepted (:state row))
+        (visibility eng (:id row) principal)))))
+
 (defn bootstrap-visibility
   "The agent default (waymark-rci): a named agent that presents NO
   grant runs scoped to the own-grant surface — the asking door and
@@ -1528,10 +1543,22 @@
   do that is to call the same expression the gate calls. A preview
   that re-derived 'what a member can see' would be a second definition
   of sight, correct on the day it was written and wrong on the day the
-  agent default changes."
+  agent default changes.
+
+  The DELEGATE (docs/spec-connector-door.md § 3) is the one agent that
+  arrives with no grant because it CANNOT present one — a person's
+  tool at the MCP door carries a bearer and nothing else. For a
+  principal the resolver marked :acts-for, the engine looks for the
+  worn grant itself (worn-visibility, on the delegate's own id) and
+  falls to the bootstrap surface when nothing stands. Any other agent
+  can present the header, so it must; waymark-rci's meaning for them
+  is untouched. The rule lives here, in the one expression, for the
+  reason the paragraph above gives."
   [eng principal]
   (when (= :agent (:type principal))
-    (bootstrap-visibility eng principal)))
+    (or (when (:acts-for principal)
+          (worn-visibility eng principal))
+        (bootstrap-visibility eng principal))))
 
 (defn capability-entry
   "The live surface entry a PRESENTED grant confers for one dotted
