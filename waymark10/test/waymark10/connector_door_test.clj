@@ -15,6 +15,7 @@
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
+            [waymark10.server.mcp :as mcp]
             [waymark10.server.oidc-rp :as rp]
             [waymark10.server.store :as store]
             [waymark10.server.store.memory :as memory]
@@ -206,3 +207,66 @@
                                          :acts_for "colton"})})]
     (is (= 409 (:status resp)))
     (is (str/includes? (str (:body resp)) "acts_for"))))
+
+;; ── 4. the experiment this door exists for ───────────────────────────
+
+(defn- rpc [h headers method params]
+  (h {:request-method :post :uri "/api/-/mcp" :headers headers
+      :body (wire/write-json {:jsonrpc "2.0" :id 1 :method method
+                              :params params})}))
+
+(deftest an-invoke-from-the-door-signs-the-transition-with-its-origin
+  (let [eng (fresh-engine)
+        h (engine/handler eng)]
+    (inv/create! eng :meal {:name "Soup" :themes []}
+                 {:principal grants/approvals-actor :id "soup"})
+    (inv/create! eng :grant
+                 {:audience "connector:colton"
+                  :scope [{:kind "meal" :actions ["accept" "update_recipe"]}]}
+                 {:principal grants/approvals-actor
+                  :id "grant-connector-2"
+                  :mint? true})
+    (testing "an idempotent action is stamped too — the door signs every write"
+      (let [resp (rpc h (bearer colton) "tools/call"
+                      {:name "waymark_invoke"
+                       :arguments {:kind "meal" :id "soup" :action "accept"}})]
+        (is (= 200 (:status resp)))
+        (is (false? (get-in (json resp) [:result :isError])) (:body resp))))
+    (testing "and a non-idempotent one, which the client rule already required"
+      (let [resp (rpc h (bearer colton) "tools/call"
+                      {:name "waymark_invoke"
+                       :arguments {:kind "meal" :id "soup" :action "update_recipe"
+                                   :input {:recipe "boil"}}})]
+        (is (= 200 (:status resp)))
+        (is (false? (get-in (json resp) [:result :isError])) (:body resp))))
+    (let [log (store/with-tx (:storage eng)
+                (fn [tx] (store/transitions (:storage eng) tx
+                                            {:kind :meal :resource-id "soup"}
+                                            {:limit 10 :newest-first true})))
+          keys (map :idempotency-key log)]
+      (testing "both transitions carry mcp/<principal>/<nonce>"
+        (is (= 2 (count (filter mcp/origin-of keys))) (pr-str keys))
+        (is (= #{"connector:colton"}
+               (into #{} (map (comp :principal mcp/origin-of)) (filter mcp/origin-of keys))))
+        (is (apply distinct? (map (comp :nonce mcp/origin-of) (filter mcp/origin-of keys)))
+            "the nonce keeps two verbs on one row apart"))
+      (testing "the birth, minted by hand, is nobody's origin"
+        (is (nil? (mcp/origin-of (:idempotency-key (last log)))))))
+    (testing "the count reads the delegate's actions off the log by prefix"
+      (let [all (mcp/actions-from-mcp eng)
+            mine (mcp/actions-from-mcp eng {:principal-prefix "connector:"})
+            nobody (mcp/actions-from-mcp eng {:principal-prefix "the-ui:"})]
+        (is (= 2 (:total all)))
+        (is (= {"connector:colton" 2} (:by-principal mine)))
+        (is (= {"meal.accept" 1 "meal.update_recipe" 1} (:by-action mine)))
+        (is (= {"meal" 2} (:by-kind mine)))
+        (is (zero? (:total nobody)))
+        (is (false? (:reached-cap all)))))
+    (testing "the reader refuses every other shape"
+      (is (nil? (mcp/origin-of "feed/2026-08-24/do_now%2Ftask%2F1/9f")))
+      (is (nil? (mcp/origin-of "mcp//x")))
+      (is (nil? (mcp/origin-of "mcp/only-two")))
+      (is (nil? (mcp/origin-of nil)))
+      (is (= {:principal "a:b/c" :nonce "n"}
+             (mcp/origin-of (mcp/origin-key "a:b/c" "n")))
+          "a principal id carrying the separator round-trips"))))

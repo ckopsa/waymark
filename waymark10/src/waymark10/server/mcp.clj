@@ -106,8 +106,9 @@
             [waymark10.server.problems :as p]
             [waymark10.server.render :as render]
             [waymark10.server.router :as router]
+            [waymark10.server.store :as store]
             [waymark10.wire :as wire])
-  (:import (java.net URLEncoder)
+  (:import (java.net URLDecoder URLEncoder)
            (java.nio.charset StandardCharsets)))
 
 (set! *warn-on-reflection* true)
@@ -544,16 +545,114 @@
     :remedies [(str "Call waymark_invoke again with acknowledge: "
                     (pr-str sentence))]}))
 
+(def origin-prefix
+  "The `Idempotency-Key` prefix an invoke from this door rides under —
+  the MCP sibling of `feed/origin-prefix`. One string, named once,
+  because `origin-of` reads exactly what `origin-key` writes."
+  "mcp")
+
+(defn origin-key
+  "The `Idempotency-Key` this door stamps on every invoke it forwards:
+
+      mcp/waymark10-connector-claude%3Acolton/9f3c1a
+
+  Three slash-separated segments — the prefix, the principal's id
+  percent-encoded (a delegate's id is `<client>:<sub>`, and a member
+  id is whatever the registrar minted, so the encoding is what keeps
+  the key's own separators honest), and a nonce.
+
+  NO NEW COLUMN, and the same reason as the feed's: `invoke/finish!`
+  and `create-in-tx!` stamp a present key into the transition row
+  whether or not the action is idempotent, so actions-from-this-door
+  is one prefix away, per principal, retroactive to the day the
+  convention landed. This is the experiment docs/spec-connector-door.md
+  exists for — actions taken FROM THE CONVERSATION, counted off the
+  transition log — and the principal segment is what tells the
+  connector's delegates (`waymark10-connector-claude:<sub>`) from
+  every other caller at the same door, which the spec's bare `claude/`
+  spelling could not.
+
+  THE NONCE IS LOAD-BEARING, exactly as `feed/origin-key` says: the
+  idempotency store is scoped (key, kind) and a key returning with a
+  different digest is a 409, so two invokes of one verb on one row by
+  one principal must not collide — and a retry that SHOULD replay is
+  the client's own job, done with the header it already has."
+  ^String [principal-id nonce]
+  (str origin-prefix "/"
+       (URLEncoder/encode (str principal-id) "UTF-8") "/" nonce))
+
+(defn origin-of
+  "The MCP origin a key names, or nil for every key that is not one —
+  `{:principal :nonce}`. A key of any other shape (the feed's, a
+  client's own) is somebody else's and this reader says so by
+  answering nil rather than by guessing."
+  [k]
+  (when (string? k)
+    (let [segs (str/split k #"/")]
+      (when (and (= 3 (count segs)) (= origin-prefix (first segs))
+                 (not-empty (nth segs 1)) (not-empty (nth segs 2)))
+        {:principal (URLDecoder/decode ^String (nth segs 1) "UTF-8")
+         :nonce (nth segs 2)}))))
+
+(def log-scan-cap
+  "Transitions `actions-from-mcp` folds for one read — the feed's own
+  bound, at the feed's own number, for the feed's own reason:
+  truncation announced beats totality implied."
+  500)
+
+(defn actions-from-mcp
+  "The connector experiment's number, made queryable: how many writes
+  arrived through this door, by principal, kind and action.
+
+  It folds the newest `:limit` transitions (`log-scan-cap` by default)
+  and keeps the ones whose `idempotency_key` `origin-of` recognizes,
+  optionally narrowed to principals whose id starts with
+  `:principal-prefix` — `\"waymark10-connector-claude:\"` is every
+  delegate the claude.ai connector minted, which is the count
+  spec-connector-door § The experiment asks for. → `{:total
+  :by-principal :by-kind :by-action :scanned :reached-cap}`.
+
+  Same trade as `feed/actions-from-feed`, recorded there: a bounded
+  newest-first window scanned in memory rather than a LIKE pushed into
+  four stores, with `:since` for a caller walking further back and
+  `:reached-cap` saying when the window filled."
+  ([eng] (actions-from-mcp eng {}))
+  ([eng {:keys [principal-prefix limit since]}]
+   (let [st (:storage eng)
+         n (long (or limit log-scan-cap))
+         log (store/with-tx st
+               (fn [tx] (store/transitions st tx (cond-> {} since (assoc :since since))
+                                           {:limit n :newest-first true})))
+         hits (into []
+                    (keep (fn [tr]
+                            (when-some [o (origin-of (:idempotency-key tr))]
+                              (when (or (nil? principal-prefix)
+                                        (str/starts-with? (:principal o) principal-prefix))
+                                (assoc o :action (name (:action tr))
+                                       :kind (name (:kind tr)))))))
+                    log)]
+     {:principal-prefix principal-prefix
+      :total (count hits)
+      :by-principal (frequencies (map :principal hits))
+      :by-kind (frequencies (map :kind hits))
+      :by-action (frequencies (map (fn [h] (str (:kind h) "." (:action h)))
+                                   hits))
+      :scanned (count log)
+      :reached-cap (= (count log) n)})))
+
 (defn- invoke-headers
   "Rules 3 and 4 of the affordance-following client (waymark10.client),
-  which this tool is one of: a non-idempotent action carries an
-  Idempotency-Key so an ambiguous retry replays instead of doubling,
-  and a fenced action carries the If-Match of the row we READ, so the
-  write lands on the row the agent saw or not at all."
-  [entry etag warnings]
-  (cond-> {}
-    (not (get-in entry [:safety :idempotent]))
-    (assoc "idempotency-key" (str (random-uuid)))
+  which this tool is one of — with one thing the generic client does
+  not do: EVERY invoke carries an Idempotency-Key, `origin-key`'s,
+  idempotent or not. For a non-idempotent action it is the client
+  rule (an ambiguous retry replays instead of doubling); for every
+  action it is the door signing its work, so `actions-from-mcp` can
+  count what came through here. A fenced action carries the If-Match
+  of the row we READ, so the write lands on the row the agent saw or
+  not at all."
+  [session entry etag warnings]
+  (cond-> {"idempotency-key" (origin-key (get-in session [:principal :id])
+                                         (random-uuid))}
     (and (get-in entry [:safety :fence]) etag)
     (assoc "if-match" etag)
     (seq warnings)
@@ -577,7 +676,9 @@
        (call (request session :post (str "/api/" (:plural rdef))
                       {:body (or input {})
                        :query (when dry-run "dry_run=1")
-                       :headers (cond-> {"idempotency-key" (str (random-uuid))}
+                       :headers (cond-> {"idempotency-key"
+                                         (origin-key (get-in session [:principal :id])
+                                                     (random-uuid))}
                                   (seq warnings)
                                   (assoc "waymark-acknowledge"
                                          (str/join "," (map name warnings))))}))))))
@@ -620,7 +721,8 @@
                               {:body (or input {})
                                :query (when dry_run "dry_run=1")
                                :headers (invoke-headers
-                                         entry (get-in env-resp [:headers "ETag"])
+                                         session entry
+                                         (get-in env-resp [:headers "ETag"])
                                          acknowledge_warnings)}))))))))))
 
 (defn- history
