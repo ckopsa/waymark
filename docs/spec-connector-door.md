@@ -199,9 +199,15 @@ by the time a tool runs; `mcp.clj` never learns the word.
 
 ## The ceremony (Keycloak and claude.ai — the owner's half)
 
-1. **One confidential client**, e.g. `waymark10-connector-claude`
+1. **One confidential client per tool**, e.g. `waymark10-connector-claude`
    (`scripts/connector-client.sh new claude` mints exactly this shape
-   and files the secret beside the agent clients'):
+   and files the secret beside the agent clients'). A second tool is a
+   second client with its own callback — Gemini's is the
+   `oauth-redirect.googleusercontent.com/r/…` address its connector
+   shows in the failed login's URL — and a second entry in
+   `WAYMARK10_OIDC_DELEGATE_CLIENTS`; sharing one client would make
+   two tools one delegate wearing one grant (2026-09-02, when Gemini
+   was pointed at Claude's client and Keycloak refused the redirect):
    standard flow on, client credentials off, PKCE S256, refresh tokens
    on, consent required (the login page then states what Claude is being
    given, which is the house's own posture), redirect URI exactly
