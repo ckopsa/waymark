@@ -199,7 +199,9 @@ by the time a tool runs; `mcp.clj` never learns the word.
 
 ## The ceremony (Keycloak and claude.ai — the owner's half)
 
-1. **One confidential client**, e.g. `waymark10-connector-claude`:
+1. **One confidential client**, e.g. `waymark10-connector-claude`
+   (`scripts/connector-client.sh new claude` mints exactly this shape
+   and files the secret beside the agent clients'):
    standard flow on, client credentials off, PKCE S256, refresh tokens
    on, consent required (the login page then states what Claude is being
    given, which is the house's own posture), redirect URI exactly
@@ -252,3 +254,24 @@ that experiment. Every invoke Claude makes from the conversation carries
 a `claude/` prefix. A nonzero count says build the surface further; zero
 says the problem is upstream, in what the composer stages, and no door
 fixes that.
+
+**Planted (waymark-kkx.5, 2026-09-02), with one respelling.** The
+prefix is the *door's*, not the tool's: `mcp.clj` stamps
+`mcp/<principal-id>/<nonce>` on every invoke and create it forwards,
+idempotent or not (`mcp/origin-key`; the feed's `feed/<day>/<card>/
+<nonce>` is the precedent, and `invoke/finish!` already stamps a
+present key on the transition whatever the action's safety says). A
+bare `claude/` could not tell the connector's delegates from Claude
+Code presenting a bearer at the same door, and the count must; the
+principal segment does — every delegate the connector minted is
+`waymark10-connector-claude:<sub>`. The read is `mcp/actions-from-mcp`,
+`actions-from-feed`'s sibling with the same bounded window and the
+same `:reached-cap` honesty:
+
+```clojure
+(mcp/actions-from-mcp eng {:principal-prefix "waymark10-connector-claude:"})
+;; → {:total … :by-principal … :by-kind … :by-action … :scanned … :reached-cap …}
+```
+
+Two weeks from the day the connector goes live, that number is the
+verdict.
