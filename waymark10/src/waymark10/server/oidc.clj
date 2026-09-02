@@ -12,10 +12,25 @@
             :jwks-uri \"https://idp/…/certs\"   ; fetched + cached
             :jwks {…}                            ; static map (tests)
             :roles-claim :roles                  ; keyword or path vector
-            :type-claim :actor_type}}            ; default :human
+            :type-claim :actor_type              ; default :human
+            :app-url \"https://work.example\"    ; the external base URL
+            :delegate-clients {\"waymark10-connector-claude\" \"Claude\"}
+            :resource-scopes [\"waymark-workqueue10\"]}}
 
   A claim option given as a vector walks nested claims — Keycloak's
   realm roles live at [:realm_access :roles].
+
+  THE DELEGATE (docs/spec-connector-door.md). A token whose `azp`
+  names a client in :delegate-clients was minted by a PERSON signing
+  in through a tool — the claude.ai connector — and the tool can
+  present a bearer and nothing else: no X-Waymark-Grant, ever. Such a
+  token resolves to an AGENT principal, `<client>:<sub>`, acting for
+  the person the token names (:acts-for) and holding none of the
+  person's roles — a named agent never runs unscoped (waymark-rci),
+  and the router reads the grant it wears off its member row instead
+  of a header. :app-url is what the 401 challenge and the
+  protected-resource document name themselves by; without it neither
+  says anything about OAuth, and the document's route answers 404.
 
   Absent config = the dev-header resolver unchanged; WITH config the
   dev headers remain the no-Bearer fallback — waymark9's line: the
@@ -53,12 +68,19 @@
   request-time surprises. An :rp sub-map (the browser flow,
   waymark10.server.oidc-rp) validates here too: the same boot is the
   same gate."
-  [{:keys [issuer audience jwks-uri jwks rp] :as opts}]
+  [{:keys [issuer audience jwks-uri jwks rp delegate-clients] :as opts}]
   (doseq [[k v] {:issuer issuer :audience audience}]
     (when (or (nil? v) (str/blank? (str v)))
       (throw (t/definition-error (str ":oidc config declares no " k)))))
   (when (and (nil? jwks-uri) (nil? jwks))
     (throw (t/definition-error ":oidc config needs :jwks-uri (fetched) or :jwks (static)")))
+  (when (and (some? delegate-clients)
+             (not (and (map? delegate-clients)
+                       (every? #(and (string? %) (not (str/blank? %)))
+                               (keys delegate-clients))
+                       (every? string? (vals delegate-clients)))))
+    (throw (t/definition-error
+            ":oidc :delegate-clients must map client ids to display names")))
   (when rp
     (doseq [k [:client-id :client-secret :app-url :session-secret]]
       (when (str/blank? (str (get rp k)))
@@ -69,6 +91,27 @@
     rp (assoc :rp (merge {:cookie-name "waymark_session"
                           :session-ttl-s 28800}
                          rp))))
+
+(defn- parse-list
+  "A comma-separated environment value → its trimmed, non-empty
+  members, in order. nil in, empty out."
+  [s]
+  (into []
+        (comp (map str/trim) (remove str/blank?))
+        (str/split (str s) #",")))
+
+(defn- parse-delegates
+  "WAYMARK10_OIDC_DELEGATE_CLIENTS → {client-id display}: each entry
+  is `client-id=Display`, and a bare `client-id` displays as itself.
+  Empty map when the variable is unset."
+  [s]
+  (into {}
+        (map (fn [entry]
+               (let [[id display] (str/split entry #"=" 2)
+                     id (str/trim id)
+                     display (some-> display str/trim not-empty)]
+                 [id (or display id)])))
+        (parse-list s)))
 
 (defn from-env
   "The :oidc engine opts off the process environment — nil when no
@@ -90,6 +133,16 @@
     WAYMARK10_OIDC_SESSION_TTL_S    default 28800
     WAYMARK10_OIDC_REQUIRE_AUTH     \"1\" closes the surface to anonymous
     WAYMARK10_OIDC_LOGIN_REDIRECT   default on; \"0\" keeps honest 401s
+    WAYMARK10_OIDC_DELEGATE_CLIENTS \"client-id=Display,…\" — connector
+                                    clients whose tokens arrive as a
+                                    delegate (spec-connector-door.md)
+    WAYMARK10_OIDC_RESOURCE_SCOPES  comma-separated scopes the
+                                    protected-resource document advertises
+
+  WAYMARK10_OIDC_APP_URL is read at the top level too (:app-url), with
+  or without a client id: the challenge and the protected-resource
+  document need the engine's external name even on a bearer-only
+  deployment.
 
   Reading stops here; validation stays config's — a missing
   client-secret is the same boot-time definition error either way.
@@ -97,12 +150,20 @@
   ([] (from-env #(System/getenv ^String %)))
   ([env]
    (when-some [issuer (env "WAYMARK10_OIDC_ISSUER")]
-     (let [client-id (env "WAYMARK10_OIDC_CLIENT_ID")]
+     (let [client-id (env "WAYMARK10_OIDC_CLIENT_ID")
+           delegates (parse-delegates (env "WAYMARK10_OIDC_DELEGATE_CLIENTS"))
+           scopes (parse-list (env "WAYMARK10_OIDC_RESOURCE_SCOPES"))]
        (cond-> {:issuer issuer
                 :audience (or (env "WAYMARK10_OIDC_AUDIENCE") client-id)
                 :jwks-uri (or (env "WAYMARK10_OIDC_JWKS_URI")
                               (str issuer "/protocol/openid-connect/certs"))
                 :roles-claim [:realm_access :roles]}
+         (env "WAYMARK10_OIDC_APP_URL")
+         (assoc :app-url (env "WAYMARK10_OIDC_APP_URL"))
+         (seq delegates)
+         (assoc :delegate-clients delegates)
+         (seq scopes)
+         (assoc :resource-scopes scopes)
          client-id
          (assoc :rp
                 (cond-> {:client-id client-id
@@ -175,14 +236,75 @@
                                ;; RP's code exchange honors
                                :token-endpoint (:token-endpoint rp)})))))
 
+(defn- external-base
+  "The engine's external base URL with no trailing slash, or nil when
+  the deployment never named one."
+  [oidc]
+  (some-> (:app-url oidc) str str/trim not-empty (str/replace #"/+$" "")))
+
+(defn resource-metadata-url
+  "Where this engine's protected-resource metadata lives (RFC 9728,
+  the path-inserted spelling for the MCP door): the address the 401
+  challenge hands a client so discovery can start from the refusal
+  itself. nil when the engine knows no external base URL — then the
+  challenge says nothing about OAuth, which is honest: there is
+  nothing to find."
+  [oidc]
+  (when-some [base (external-base oidc)]
+    (str base "/.well-known/oauth-protected-resource/api/-/mcp")))
+
+(defn challenge
+  "The WWW-Authenticate value every 401 of this engine carries — the
+  one spelling, so the bearer resolver's refusal, the MCP door's
+  anonymous refusal and require-auth's cannot disagree. The realm
+  names the engine; `error` (invalid_token) says a credential was
+  presented and refused rather than merely absent; and
+  resource_metadata, when the engine knows where it lives, is the one
+  parameter the MCP authorization flow reads: a client that gets it
+  fetches the document, finds the authorization server, and never
+  needs the address configured by hand (docs/spec-connector-door.md)."
+  ([oidc] (challenge oidc nil))
+  ([oidc error]
+   (str "Bearer realm=\"waymark\""
+        (when error (str ", error=\"" error "\""))
+        (when-some [url (resource-metadata-url oidc)]
+          (str ", resource_metadata=\"" url "\"")))))
+
+(defn protected-resource
+  "The RFC 9728 protected-resource document for the MCP door: the
+  resource is the door's own URL, the authorization server is the
+  issuer (the browser-facing one when the deployment splits them —
+  the client that reads this lives outside), bearer tokens ride the
+  header, and the scopes are whatever the deployment says a client
+  should ask for (:resource-scopes; omitted when unset, the RFC's own
+  allowance). nil without an external base URL: an engine that cannot
+  name itself advertises nothing, and the route answers 404."
+  [oidc]
+  (when-some [base (external-base oidc)]
+    (cond-> {:resource (str base "/api/-/mcp")
+             :authorization_servers [(or (get-in oidc [:rp :frontend-issuer])
+                                         (:issuer oidc))]
+             :bearer_methods_supported ["header"]
+             :resource_name "waymark"}
+      (seq (:resource-scopes oidc))
+      (assoc :scopes_supported (vec (:resource-scopes oidc))))))
+
+(defn delegate-id
+  "The member id a delegate answers to: the connector client's id and
+  the signer's subject, joined — one row per (tool, person), so two
+  people using the same connector are two agents, and one person
+  using two tools is two agents too. Stable across sessions, because
+  both halves are the identity provider's own."
+  [client sub]
+  (str client ":" sub))
+
 (defn- refuse
   "One 401 problem, WWW-Authenticate riding the response headers."
-  [detail]
+  [oidc detail]
   (p/problem :unauthenticated 401 "Unauthenticated"
              {:detail detail
               :waymark10/headers
-              {"WWW-Authenticate"
-               "Bearer realm=\"waymark\", error=\"invalid_token\""}}))
+              {"WWW-Authenticate" (challenge oidc "invalid_token")}}))
 
 (defn- key-map
   "A parsed JWKS document → {kid → PublicKey}. Keys that refuse to
@@ -204,8 +326,8 @@
   (let [{:keys [status body error]} @(http/get (:jwks-uri oidc)
                                                {:timeout 5000})]
     (when (or error (not= 200 status))
-      (throw (refuse (str "The issuer's JWKS is unreachable ("
-                          (or (some-> error ex-message) status) ")."))))
+      (throw (refuse oidc (str "The issuer's JWKS is unreachable ("
+                               (or (some-> error ex-message) status) ")."))))
     (let [m (key-map (wire/read-json (if (string? body) body (slurp body))))]
       (reset! (:cache oidc) m)
       m)))
@@ -222,17 +344,18 @@
 (defn- claims-of [oidc token]
   (let [kid (try (:kid (jwt/decode-header token))
                  (catch Exception _
-                   (throw (refuse "The bearer token is not a JWT."))))
+                   (throw (refuse oidc "The bearer token is not a JWT."))))
         pkey (or (key-for oidc kid)
-                 (throw (refuse (str "No JWKS key matches kid "
-                                     (pr-str kid) "."))))]
+                 (throw (refuse oidc (str "No JWKS key matches kid "
+                                          (pr-str kid) "."))))]
     (try
       (jwt/unsign token pkey {:alg :rs256
                               :iss (:issuer oidc)
                               :aud (:audience oidc)})
       (catch Exception e
         (let [{:keys [type cause]} (ex-data e)]
-          (throw (refuse (if (= :validation type)
+          (throw (refuse oidc
+                         (if (= :validation type)
                            (case cause
                              :exp "The token has expired."
                              :aud "The token's audience is not this engine."
@@ -250,14 +373,34 @@
 (defn- principal-of [oidc claims]
   (let [sub (:sub claims)
         _ (when (str/blank? (str sub))
-            (throw (refuse "The token carries no sub claim.")))
+            (throw (refuse oidc "The token carries no sub claim.")))
         roles (claim-at claims (:roles-claim oidc))
-        at (some-> (claim-at claims (:type-claim oidc)) str str/lower-case keyword)]
-    (t/principal {:id (str sub)
-                  ;; system stays engine-internal: an IdP cannot mint it
-                  :type (if (contains? #{:human :agent} at) at :human)
-                  :roles (set (when (sequential? roles) (map str roles)))
-                  :display (or (:name claims) (:email claims) (str sub))})))
+        at (some-> (claim-at claims (:type-claim oidc)) str str/lower-case keyword)
+        display (or (:name claims) (:email claims) (str sub))
+        client (some-> (:azp claims) str)
+        tool (get (:delegate-clients oidc) client)]
+    (if tool
+      ;; the delegate (docs/spec-connector-door.md § 3): a person's
+      ;; token, minted through a tool that can present no grant
+      ;; header. It resolves to an AGENT — the leash-by-default type,
+      ;; so the router's agent default (waymark-rci) holds: no worn
+      ;; grant means the bootstrap surface, never the person's sight.
+      ;; The person's roles stay with the person: an agent holding
+      ;; recovery-admin is the one thing members.clj says must never
+      ;; be minted, and a credential is not how a leash widens.
+      ;; :acts-for rides OUTSIDE t/principal's closed shape, the way
+      ;; oidc-rp's :session-grant does — the gate reads it at first
+      ;; sight and the router reads it to look for the worn grant.
+      (assoc (t/principal {:id (delegate-id client (str sub))
+                           :type :agent
+                           :roles #{}
+                           :display (str tool " for " display)})
+             :acts-for (str sub))
+      (t/principal {:id (str sub)
+                    ;; system stays engine-internal: an IdP cannot mint it
+                    :type (if (contains? #{:human :agent} at) at :human)
+                    :roles (set (when (sequential? roles) (map str roles)))
+                    :display display}))))
 
 (defn verify
   "A raw token → its verified claims and the Principal they name —

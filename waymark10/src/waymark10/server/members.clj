@@ -296,6 +296,25 @@
     (t/deny)
     (t/allow)))
 
+;; the same fence for acts_for (docs/spec-connector-door.md § 3): who a
+;; delegate acts for is a fact the identity gate read off a verified
+;; token's azp and sub, and the router reads it to look for the grant
+;; the delegate wears. Hand-set, it would let any authenticated human
+;; mint an agent row that CLAIMS to act for somebody and then file
+;; asks in that name. Unlike provenance the birth path stamps it
+;; through the create INPUT (provision! has no :on-create hook of its
+;; own), so the registrar — a system actor, the way registrar-binds
+;; reads it — is the one writer allowed through.
+(g/defguard acts-for-not-written-by-hand
+  {:judges [:acts_for]
+   :reads [:principal]
+   :explain "Who an agent acts for is written by the identity gate at first sight, never by hand — a create may not carry acts_for."}
+  [_row inp ctx]
+  (if (and (contains? inp :acts_for)
+           (not= :system (get-in ctx [:principal :type])))
+    (t/deny)
+    (t/allow)))
+
 ;; the homecoming durable guard (waymark-4zj.8.3, closed): offer_reentry
 ;; had no durable-self guard, so a recovery-admin could mint a way home
 ;; onto a HOLLOW namesake — a knock-born guest row that owns no self, no
@@ -622,6 +641,18 @@
                                    :label "Bound principal"
                                    :help "The identity this row is welded to, written by the identity gate at first sight and never by hand."}}
              [:maybe [:string {:max 256}]]]
+            ;; the delegate's person (docs/spec-connector-door.md § 3):
+            ;; the subject of the human whose token, minted through a
+            ;; connector client, this agent row answers to. Written by
+            ;; the identity gate at first sight (provision!, through
+            ;; the registrar) and fenced by acts-for-not-written-by-
+            ;; hand. Empty for every person and for every agent that
+            ;; holds its own key. Raw: it is a principal id.
+            [:acts_for {:optional true
+                        :x-display {:raw true
+                                    :label "Acts for"
+                                    :help "The person this agent acts for — the identity a connector's token named when the gate first saw it. Written by the identity gate, never by hand; empty for people and for agents holding their own key."}}
+             [:maybe [:string {:max 256}]]]
             [:invited_by {:optional true
                           :x-display {:raw true
                                       :label "Invited by"
@@ -630,12 +661,18 @@
    :filterable {:state #{:eq :in}
                 :actor_type #{:eq}
                 :subject #{:eq}
+                ;; acts_for is deliberately NOT filterable: a filterable
+                ;; field is a generated, indexed column (store/postgres),
+                ;; so promoting it would be a schema migration on every
+                ;; deployment for a question nothing asks yet
+                ;; (spec-connector-door § recorded costs)
                 ;; promoted because refs resolve against it — one
                 ;; indexed read per distinct assignee, per sync pass
                 :handle #{:eq}}
    :sortable {:fields [:display] :default "display"}
    :create-guards [roles-registered reentry-not-written-by-hand
-                   provenance-not-written-by-hand]
+                   provenance-not-written-by-hand
+                   acts-for-not-written-by-hand]
    ;; a token-bearing create is an INVITE: born :invited, the inviter
    ;; recorded (the definitions born-:proposed precedent — the create
    ;; transition logs the landing state honestly). :on-create is also
@@ -1126,13 +1163,18 @@
   [eng principal]
   (try
     (:row (inv/create! eng :member
-                       {:display (let [d (:display principal)
-                                       d (if (str/blank? d) (:id principal) d)]
-                                   ;; the declared budget, not a 422 on
-                                   ;; every request an IdP's long name makes
-                                   (subs d 0 (min (count d) 80)))
-                        :actor_type (name (:type principal))
-                        :subject (:id principal)}
+                       (cond-> {:display (let [d (:display principal)
+                                               d (if (str/blank? d) (:id principal) d)]
+                                           ;; the declared budget, not a 422 on
+                                           ;; every request an IdP's long name makes
+                                           (subs d 0 (min (count d) 80)))
+                                :actor_type (name (:type principal))
+                                :subject (:id principal)}
+                         ;; the delegate's person (spec-connector-door
+                         ;; § 3): the gate is the one writer the fence
+                         ;; admits, and this is the write
+                         (:acts-for principal)
+                         (assoc :acts_for (str (:acts-for principal))))
                        {:principal registrar :id (:id principal)}))
     (catch Exception e
       (or (load-member eng (:id principal)) (throw e)))))
@@ -1357,6 +1399,19 @@
               (long (get-in eng [:services :invite-door-hourly] 600))
               now))
 
+(defn- delegate-of-a-member?
+  "Does the person a delegate acts for hold an ACTIVE membership here?
+  The invited-only gate's one exception (spec-connector-door § 3): a
+  connector's token cannot carry an invite header, and the person's
+  own standing IS the invitation — nobody is admitted whom the house
+  had not already admitted in person. Resolved the way gate! resolves
+  anybody: by row id, then by bound subject."
+  [eng principal]
+  (when-some [who (some-> (:acts-for principal) str not-empty)]
+    (some-> (or (load-member eng who) (member-by-subject eng who))
+            :state
+            (= :active))))
+
 (defn gate!
   "The principal-resolution consult: anonymous and system principals
   pass untouched (system actors are the engine's own, not members);
@@ -1365,6 +1420,10 @@
   auto-provision — is refused 403 while suspended or (invited-only
   mode) unknown, and carries the member's held roles unioned onto the
   credential's. Engines without the member kind gate nothing.
+
+  A DELEGATE (spec-connector-door § 3) is provisioned in invited-only
+  mode too, exactly when the person it acts for is an active member:
+  delegate-of-a-member? is the whole of that rule.
 
   The gate also HEALS what it finds (waymark-tti.10): an :active row
   resolved BY ID with no :subject gains one — its own id — so a row
@@ -1387,7 +1446,9 @@
                             (heal-subject! eng))
                    (member-by-subject eng (:id principal))
                    (bind! eng principal invite-token)
-                   (when-not invited-only? (provision! eng principal)))]
+                   (when (or (not invited-only?)
+                             (delegate-of-a-member? eng principal))
+                     (provision! eng principal)))]
        (when (nil? row)
          (throw (not-invited (:id principal))))
        (when (= :suspended (:state row))
@@ -1431,12 +1492,20 @@
     (when-some [row (or (load-member eng (str who))
                         (member-by-subject eng (str who)))]
       (when (contains? #{:active :suspended} (:state row))
-        (gate! eng (t/principal
-                    {:id (let [s (str (get-in row [:data :subject]))]
-                           (if (str/blank? s) (str (:id row)) s))
-                     :type (if (= "agent" (get-in row [:data :actor_type]))
-                             :agent :human)
-                     :display (str (get-in row [:data :display]))}))))))
+        (gate! eng (cond-> (t/principal
+                            {:id (let [s (str (get-in row [:data :subject]))]
+                                   (if (str/blank? s) (str (:id row)) s))
+                             :type (if (= "agent" (get-in row [:data :actor_type]))
+                                     :agent :human)
+                             :display (str (get-in row [:data :display]))})
+                     ;; a delegate arrives marked :acts-for (oidc.clj),
+                     ;; and unscoped-visibility reads the mark to look
+                     ;; for its worn grant — so the preview carries it
+                     ;; too, or it would preview a smaller world than
+                     ;; the delegate lives in (this function's own
+                     ;; failure mode, one field over)
+                     (some-> (get-in row [:data :acts_for]) str not-empty)
+                     (assoc :acts-for (str (get-in row [:data :acts_for])))))))))
 
 ;; ── the provenance backfill (waymark-4zj.9.1, READ-ONLY) ─────────────
 ;;

@@ -182,6 +182,10 @@
                "/api/-/presence" "/api/-/intents" "/api/-/intents/abandon"
                "/api/-/intents/answer" "/api/-/collab-ticket"
                "/api/-/mirrors/:plural/:action" "/api/-/welcome" "/api/-/mcp"
+               ;; the MCP door's OAuth discovery (waymark-kkx): RFC
+               ;; 9728's root document and the path-inserted spelling
+               "/.well-known/oauth-protected-resource"
+               "/.well-known/oauth-protected-resource/api/-/mcp"
                "/api/-/feed"
                ;; the composer's diagnosis (waymark-8um.4): the feed's
                ;; second door, the feed's own three-segment shape
