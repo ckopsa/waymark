@@ -1178,7 +1178,10 @@
 
 (def ^:private mcp-tool-names
   #{"waymark_discover" "waymark_schema" "waymark_query"
-    "waymark_get" "waymark_invoke" "waymark_history"})
+    "waymark_get" "waymark_invoke" "waymark_history"
+    ;; the seventh fixed tool (waymark-pywy.3): generic, still no
+    ;; route of its own
+    "waymark_resolve"})
 
 (defn- mcp-rpc
   "One JSON-RPC message at the MCP door, as whichever principal the

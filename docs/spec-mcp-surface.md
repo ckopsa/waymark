@@ -263,3 +263,40 @@ A seventh tool (`waymark_bulk`) was the other way to spell this and the
 wrong trade for the same reason create was folded into `invoke`: the
 six are a promise, and an agent that can read the collection's bulk
 entry needs no bespoke tool to drive it.
+## The seventh tool (2026-09-03, waymark-pywy.3)
+
+`waymark_resolve(kind, by, values, filter?, fields?)` → `{matched: {value:
+row}, unmatched: [values], ambiguous?: {value: [rows]}}` — the batch lookup
+the connector's first real session asked for (fourteen receipt lines joined
+to products by hand). It is the first addition to the fixed list, and it
+kept the list's promise the only way that holds: **it is a generic tool
+over a route that already exists**. The collection door's own in-filter
+grammar (`field=a,b`, collections.clj's `:in` op) is called through `door`
+as many times as the page limits ask — fifty values per call on an `:in`
+field, one per call where only `:eq` was declared, every page walked — and
+the answer is the set difference. No new route, no new query grammar, no
+per-kind code.
+
+- **`by` is the declaration's vocabulary, never a scan.** A field is
+  resolvable exactly when the kind declared it `:filter #{:eq}` or
+  `#{:eq :in}` and a summary item carries it (`render/grid-fields`' rule —
+  the match is read back off `fields`). Any other field is a 422
+  `not-resolvable` naming the fields that are; this is the second refusal
+  MCP issues in its own voice, beside the confirm gate.
+- **Unmatched is not absent.** The tool inherits the grant's projection
+  like the other six, so a row outside the caller's grant is simply
+  unmatched — the description says so plainly, because the tool cannot tell
+  absent from concealed and must not pretend to.
+- **A matched row is a compact summary** — `row-summary`'s own shape (id,
+  kind, state, summary line, `fields`), the one `return: summary` answers
+  — never the envelope with its actions block. `fields` rides the route's
+  `fields=` (waymark-pywy.2) with the key field added so the match can be
+  read back, and stripped again when the caller did not name it; the
+  subset-of-grant law stays the route's.
+- **A key nobody promised unique** answers under `ambiguous`, not
+  `matched`: resolving means one row.
+- **`product.upc` is now `:filter #{:eq :in}`.** The `:eq` alone had
+  already promoted `f_upc` to a generated column, so widening the grammar
+  moves no DDL — the deploy gate's plan stays empty.
+
+The conformance pack's fixed-tool set (`:mcp/six-tools`) now names seven.

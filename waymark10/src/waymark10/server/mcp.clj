@@ -128,6 +128,7 @@
             [reitit.ring :as ring]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
+            [waymark10.server.collections :as coll]
             [waymark10.server.gate-proxy :as gate]
             [waymark10.server.invoke :as inv]
             [waymark10.server.problems :as p]
@@ -680,9 +681,63 @@
                   :required ["kind" "id"]
                   :additionalProperties false}})
 
+;; ── waymark_resolve (waymark-pywy.3): the batch lookup ──────────────
+;;
+;; The seventh tool, and still no new route: it is the collection
+;; route's own in-filter grammar (`field=a,b`, collections.clj's :in
+;; op) called through the door as many times as the page limits ask,
+;; plus set difference. A field is resolvable exactly when the
+;; declaration already made it filterable by :eq or :in, so the
+;; refusal for any other field names that vocabulary — read off the
+;; declaration, never found by a scan.
+
+(def ^:private resolve-tool
+  {:name "waymark_resolve"
+   :title "Resolve many keys to rows"
+   :description
+   (str "Batch lookup: which rows of a kind carry these values in a key "
+        "field — a list of barcodes to products, of names to ingredients "
+        "— answered as {matched: {value: row}, unmatched: [values]} in "
+        "one call instead of one waymark_query per value. `by` must be a "
+        "field the kind declares filterable by equality (a refusal lists "
+        "the fields that are); `filter` narrows the candidates with "
+        "waymark_query's grammar. A matched row is a compact summary — "
+        "id, state, summary line, fields — not the envelope with its "
+        "actions block; `fields` keeps only the named ones (waymark_query's "
+        "fields, judged by the route). Values cross "
+        "as strings and match the field's wire spelling. A value several "
+        "rows share comes back under `ambiguous`, not `matched`: "
+        "resolving means ONE row.\n\n"
+        "UNMATCHED IS NOT ABSENT. You see exactly what your grant admits, "
+        "so a row outside it is simply unmatched here — this tool cannot "
+        "tell a value nobody has from one you may not see, and does not "
+        "try.")
+   :input-schema
+   {:type "object"
+    :properties
+    {:kind {:type "string" :description "A kind name from waymark_discover."}
+     :by {:type "string"
+          :description (str "The key field: one the kind declares filterable "
+                            "by :eq or :in (waymark_schema's query input "
+                            "names them).")}
+     :values {:type "array" :items {:type "string"} :minItems 1
+              :description "The values to look up, as strings."}
+     :filter {:type "object"
+              :description (str "Extra field → value filters, ANDed with the "
+                                "lookup — waymark_query's grammar.")
+              :additionalProperties {:type "string"}}
+     :fields {:type "array" :items {:type "string"}
+              :description "Keep only these of each matched row's fields."}}
+    :required ["kind" "by" "values"]
+    :additionalProperties false}})
+
 (def tools
-  "The six, in the order an agent meets them."
-  [discover-tool schema-tool query-tool get-tool invoke-tool history-tool])
+  "The fixed tools, in the order an agent meets them: the spec's six
+  and waymark_resolve (waymark-pywy.3), the batch lookup — a seventh
+  generic tool rather than a per-kind one, still a call onto a route
+  that already exists."
+  [discover-tool schema-tool query-tool get-tool invoke-tool history-tool
+   resolve-tool])
 
 (defn listing
   "The `tools/list` payload — the MCP spelling of the six, camelCase
@@ -1167,13 +1222,175 @@
                     (str "/api/" (:plural rdef) "/" id "/-/history")
                     (when limit {:query (str "limit=" (long limit))}))))))
 
+;; ── waymark_resolve: the body ───────────────────────────────────────
+
+(def resolve-chunk
+  "Values per collection call. The route splits the comma list into
+  one IN cond, so the chunk bounds the query string and the IN list;
+  the rows come back paged at the route's own maximum regardless,
+  and `resolve-pages` walks every page."
+  50)
+
+(defn resolvable-fields
+  "The fields an agent may resolve BY, as wire param names: the
+  declaration's :filterable entries carrying :eq or :in — the ones
+  the collection grammar answers `field=a,b` for — minus :state (a
+  state is not a key) and minus any field a summary item does not
+  carry in `fields` (a vector, or prose: `render/grid-fields`' rule),
+  because the match is read back off those fields. This is the
+  vocabulary the refusal names, read off the declaration."
+  [rdef]
+  (let [carried (render/grid-fields rdef)]
+    (->> (:filterable rdef)
+         (filter (fn [[f ops]]
+                   (and (not= :state f)
+                        (contains? carried f)
+                        (some #{:eq :in} ops))))
+         (map (comp name key))
+         sort
+         vec)))
+
+(defn- not-resolvable
+  "The refusal in this namespace's own voice, beside the confirm gate:
+  a field the declaration did not make a key. It names the fields
+  that ARE — the whole vocabulary, so the next call needs no guess."
+  [rdef by]
+  (let [names (resolvable-fields rdef)]
+    (p/problem
+     :not-resolvable 422 "Not a resolvable field"
+     {:detail (str (name (:kind rdef)) " cannot be resolved by " (pr-str by)
+                   " — it is not declared filterable by :eq or :in. "
+                   (if (seq names)
+                     (str "Resolvable fields: " (pr-str names) ".")
+                     "This kind declares no resolvable field."))
+      :kind (name (:kind rdef))
+      :by by
+      :resolvable names
+      :remedies (if (seq names)
+                  [(str "Call waymark_resolve again with by: one of "
+                        (pr-str names) ".")]
+                  ["Ask the kind's author to declare the key field :filter #{:eq :in}."])})))
+
+(defn- resolved-row
+  "One collection item through `row-summary` — the same projection
+  `return: summary` answers everywhere else, so a resolved row and a
+  summarized row are one shape. The caller's `fields` pick was the
+  ROUTE's (fields=, waymark-pywy.2), so the item already carries
+  exactly what was asked plus the key field this tool added in
+  order to read the match back; `strip` is that key, dropped again
+  when the caller did not name it."
+  [item strip]
+  (let [row (row-summary item)]
+    (if (and strip (contains? row "fields"))
+      (update row "fields" dissoc strip)
+      row)))
+
+(defn- resolve-pages
+  "Every item the collection route answers for one chunk of values:
+  `by=a,b,…` plus the caller's filter and, when the caller picked
+  fields, the route's own fields= (the key field always among them),
+  paged at the route's maximum and walked to the end — a key nobody promised unique may answer
+  more rows than values. → {:items […]} (string-keyed, the route's
+  own spelling) or {:refusal resp}, the route's own refusal (an
+  unknown filter, a field the grant does not admit) standing as the
+  whole answer."
+  [call session rdef by values filter picked]
+  (let [params (cond-> (into {} (map (fn [[k v]] [(name k) (str v)])) filter)
+                 true (assoc by (str/join "," values)
+                             "page[size]" (str coll/page-size-max))
+                 (seq picked) (assoc "fields" (str/join "," picked)))]
+    (loop [n 1 acc []]
+      (let [resp (call (request session :get (str "/api/" (:plural rdef))
+                                {:query (query-string
+                                         (assoc params "page[number]" (str n)))}))]
+        (if-not (<= 200 (:status resp 500) 299)
+          {:refusal resp}
+          (let [env (verbatim-json resp)
+                items (get-in env ["data" "items"])
+                total (long (or (get-in env ["data" "total"]) 0))
+                acc (into acc items)]
+            (if (or (empty? items) (>= (* n coll/page-size-max) total))
+              {:items acc}
+              (recur (inc n) acc))))))))
+
+(defn- resolve-rows
+  "The batch lookup. Values are trimmed, de-duplicated and chunked —
+  `resolve-chunk` per call on an :in field, ONE per call on a field
+  declared :eq alone, because the grammar splits a comma list only
+  where :in was declared and would otherwise read `a,b` as one value.
+  A value carrying a comma can never be asked through that grammar
+  and lands in unmatched without a call. Each chunk is one or more
+  collection reads through the door — the grant's projection
+  inherited like every other tool's — and the answer is the set
+  difference: a value one row carries is matched to that row's
+  summary, a value several carry is ambiguous, the rest unmatched.
+  Concealed rows are unmatched rows; the description says so."
+  [eng call session {:keys [kind by values filter fields]}]
+  (let [rdef (rdef-of eng kind)
+        by (str by)]
+    (if-not (contains? (set (resolvable-fields rdef)) by)
+      (refusal (not-resolvable rdef by))
+      (let [wanted (into [] (comp (map str) (map str/trim)
+                                  (remove str/blank?) (distinct))
+                         (if (sequential? values) values [values]))
+            in? (contains? (set (get (:filterable rdef) (keyword by))) :in)
+            askable (if in? (remove #(str/includes? % ",") wanted) wanted)
+            filter (dissoc (or filter {}) (keyword by) by)
+            wire-by (p/wire-key by)
+            ;; the caller's pick rides the route's fields= (pywy.2) —
+            ;; the route judges it against the grant's vocabulary and
+            ;; its refusal is the whole answer. The key field goes
+            ;; along whether or not it was named, because the match
+            ;; is read back off it; `strip` drops it again after
+            named (when (seq fields)
+                    (into [] (comp (map str) (map str/trim) (remove str/blank?)
+                                   (map p/wire-key) (distinct))
+                          (if (sequential? fields) fields [fields])))
+            picked (when (seq named) (distinct (cons wire-by named)))
+            strip (when (and (seq named) (not (some #{wire-by} named)))
+                    wire-by)
+            fetched (reduce (fn [acc chunk]
+                              (let [r (resolve-pages call session rdef by
+                                                     chunk filter picked)]
+                                (if (:refusal r)
+                                  (reduced r)
+                                  (into acc (:items r)))))
+                            []
+                            (partition-all (if in? resolve-chunk 1) askable))]
+        (if (map? fetched)
+          (pass-through (:refusal fetched))
+          (let [index (group-by #(str (get-in % ["fields" wire-by])) fetched)
+                matched (into {}
+                              (keep (fn [v]
+                                      (let [rows (get index v)]
+                                        (when (= 1 (count rows))
+                                          [v (resolved-row (first rows) strip)]))))
+                              wanted)
+                ambiguous (into {}
+                                (keep (fn [v]
+                                        (let [rows (get index v)]
+                                          (when (< 1 (count rows))
+                                            [v (mapv #(resolved-row % strip) rows)]))))
+                                wanted)
+                unmatched (into [] (remove #(or (contains? matched %)
+                                                (contains? ambiguous %)))
+                                wanted)]
+            (result
+             (wire/write-json
+              (cond-> {"kind" (name (:kind rdef))
+                       "by" by
+                       "matched" matched
+                       "unmatched" unmatched}
+                (seq ambiguous) (assoc "ambiguous" ambiguous))))))))))
+
 (def ^:private bodies
   {"waymark_discover" discover
    "waymark_schema" kind-schema
    "waymark_query" query
    "waymark_get" get-row
    "waymark_invoke" invoke
-   "waymark_history" history})
+   "waymark_history" history
+   "waymark_resolve" resolve-rows})
 
 (defn- attempt
   "One tool body, run behind the refusal boundary: a tagged problem —
