@@ -159,6 +159,15 @@ person, and an agent holding `recovery-admin` — the one thing
 `members.clj` says must never be minted — cannot arrive through a
 credential.
 
+The worn grant narrows the rows, never the names (waymark-kkx.6).
+A presented grant narrows well-known to its own kinds, on the
+argument that the agent wanting the vocabulary back drops its header
+for one read; a delegate never presented one and cannot drop it, so
+`worn-visibility` keeps the bootstrap flag that leaves the full
+kind/action vocabulary at well-known. Without it the asking loop
+closed after the first grant: Claude could not name a kind it had
+not been granted.
+
 Why the lookup is limited to delegates and not every grantless agent: an
 agent that *can* present a header must. The engine looks for a grant only
 on behalf of a caller that has no way to say which one it holds, so

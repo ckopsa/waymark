@@ -70,6 +70,11 @@
   (h {:request-method :post :uri "/api/-/mcp" :headers headers
       :body (wire/write-json {:jsonrpc "2.0" :id 1 :method "tools/list"})}))
 
+(defn- rpc [h headers method params]
+  (h {:request-method :post :uri "/api/-/mcp" :headers headers
+      :body (wire/write-json {:jsonrpc "2.0" :id 1 :method method
+                              :params params})}))
+
 (def ^:private discovery
   "https://app.test/.well-known/oauth-protected-resource/api/-/mcp")
 
@@ -186,6 +191,37 @@
       (is (= 200 (:status (GET h "/api/meals" (bearer (assoc colton :azp "the-ui"))))))
       (is (= 1 (count (delegates-of eng "colton"))) "no second delegate row"))))
 
+(deftest a-delegate-wearing-a-grant-keeps-the-vocabulary-to-ask-for-more
+  ;; waymark-kkx.6: a presented grant narrows well-known and the agent
+  ;; drops its header to see the whole vocabulary again; a delegate has
+  ;; no header to drop, so its worn grant must not narrow the NAMES —
+  ;; only the rows
+  (let [eng (fresh-engine {:resources [fx/meal fx/plan]})
+        h (engine/handler eng)
+        kinds (fn [] (set (:kinds (json (GET h "/api/.well-known/waymark" (bearer colton))))))]
+    (testing "before any grant: the bootstrap surface names every kind"
+      (is (contains? (kinds) "plan"))
+      (is (contains? (kinds) "meal")))
+    (inv/create! eng :grant
+                 {:audience "connector:colton"
+                  :scope [{:kind "meal" :actions []}]}
+                 {:principal grants/approvals-actor
+                  :id "grant-connector-3"
+                  :mint? true})
+    (testing "wearing a meal-only grant: the rows narrow, the names do not"
+      (is (= 200 (:status (GET h "/api/meals" (bearer colton)))))
+      (is (= 404 (:status (GET h "/api/plans" (bearer colton))))
+          "an ungranted kind's rows stay concealed")
+      (is (contains? (kinds) "plan")
+          "and its NAME is still there to ask for")
+      (is (contains? (kinds) "meal")))
+    (testing "and the MCP discover tool says the same"
+      (let [resp (rpc h (bearer colton) "tools/call"
+                      {:name "waymark_discover" :arguments {}})
+            text (get-in (json resp) [:result :content 0 :text])]
+        (is (= 200 (:status resp)))
+        (is (str/includes? (str text) "plan") text)))))
+
 (deftest invited-only-admits-a-delegate-exactly-when-its-person-is-a-member
   (let [eng (fresh-engine {:members :invited-only})
         h (engine/handler eng)]
@@ -209,11 +245,6 @@
     (is (str/includes? (str (:body resp)) "acts_for"))))
 
 ;; ── 4. the experiment this door exists for ───────────────────────────
-
-(defn- rpc [h headers method params]
-  (h {:request-method :post :uri "/api/-/mcp" :headers headers
-      :body (wire/write-json {:jsonrpc "2.0" :id 1 :method method
-                              :params params})}))
 
 (deftest an-invoke-from-the-door-signs-the-transition-with-its-origin
   (let [eng (fresh-engine)
