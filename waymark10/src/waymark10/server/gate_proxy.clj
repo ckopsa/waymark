@@ -134,6 +134,13 @@
    "amzn__view_cart"            "amazon.read"
    "amzn__reset"                "amazon.read"
    "amzn__add_to_cart"          "amazon.cart"
+   ;; costco — warehouse receipts (read-only rig; login/reset steer its
+   ;; own browser, never the account)
+   "costco__receipts"           "costco.read"
+   "costco__receipt"            "costco.read"
+   "costco__captured"           "costco.read"
+   "costco__login"              "costco.read"
+   "costco__reset"              "costco.read"
    ;; gsd__* — deliberately no rows: waymark owns tasks/calendar
    ;; natively (workqueue10/calendar10), per the bead's decision.
    })
