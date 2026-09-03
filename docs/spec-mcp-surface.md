@@ -188,3 +188,78 @@ Two new punts, both filed:
   rather than solved: a fifth column to publish one href is a worse trade than
   an agent finding `/api/-/mcp` in its client config, which is where MCP
   clients look anyway.
+
+## Many rows through `waymark_invoke` (2026-09-03, waymark-pywy.4)
+
+The connector's first real session invoked one verb fourteen times, one
+row at a time, because the six tools said "one action on one row" and
+the bulk door said "one input over many ids". Two additions, engine
+law first and the tool a thin call onto it, and the count stays six.
+
+**The bulk door's third shape.** `POST /api/{plural}/-/{action}` took
+`{ids, …input}` (one input, N rows) and `…/{id}/-/{action}/batch` took
+`{inputs}` (N inputs, one row). It now also takes `{items: [{id,
+input?, acknowledge?}]}` — N rows, each with its own input. Everything
+the phase-7 report promised holds per item: one transaction per item,
+the guard's own sentence on a refusal, the counts adding up, the
+`max-items` cap, `dry_run=1` answering per-item verdicts, an
+over-threshold call deferring to a job (which now carries `inputs`,
+index-aligned with `ids`). Three things are new:
+
+- **Acknowledgement is per item.** In the items shape, `acknowledge`
+  on an item names the warned guards that item accepts, and the
+  call-level `Waymark-Acknowledge` header is *refused* (422
+  `acknowledge-per-item`) rather than spread over the rows. A blanket
+  acknowledgement over rows whose warnings nobody read one by one is a
+  guard-override device; the door will not be one. The ids shape keeps
+  its header — one input, one reading, one acknowledgement.
+- **`on_error`** — `continue` (the partial-success report, the default),
+  `stop` (halt at the first item that did not land; the report carries
+  `skipped` and `not_run`), `atomic` (one transaction, any refusal
+  rolls all back, the phase-7 409). The body may only *tighten* the
+  declaration: a `:bulk {:atomic true}` action answers 422 to
+  `continue` or `stop`. Stop and atomic do not defer — a job runs
+  continue by nature, and a caller over the threshold asking for
+  either is told so rather than handed a job that would quietly run as
+  continue.
+- **A rehearsal says what would move.** Each ok verdict carries
+  `would: {from, to, fields?}` — the states either side and the fields
+  the input names. It does *not* claim what a handler would write: the
+  iron rule of §23 is that a rehearsal never fires one.
+
+The collection envelope's bulk entry still advertises the ids shape and
+nothing else — its `input` is the form the generic UI renders, and a
+form with an `items` array in it would be a worse form. The items shape
+is published where a program reads: the OpenAPI document's bulk body
+(`oneOf` the two shapes) and `waymark_invoke`'s own argument schema.
+
+Whole-call idempotency is the convention both shapes keep: the call's
+key stores the report, the items ride the call's correlation id, and
+no item transition carries the key itself (a key stamped per item
+would be stored per item, and a replay is the call's promise, not the
+row's). Recorded consequence: a bulk call from this door is one
+`origin-key` on the report, not N on the transitions, so
+`actions-from-mcp` counts it as zero writes — the same blind spot every
+bulk call had before, now named.
+
+**`waymark_invoke` takes `ids` and `items`.** `ids` goes to the bulk
+door with the one shared `input`; `items` goes with each row's own.
+Both read the *collection* envelope first, as the single door reads the
+row — the bulk entry's href and consequence sentence come from there,
+and an ungranted kind 404s there before any verb is composed. The
+confirm gate stays the one refusal issued in MCP's own voice, and it is
+**per item**: a confirm action refuses `ids` outright (one
+acknowledgement over many rows would be the blanket the gate exists to
+refuse — send `items`), and over `items` every item must carry its own
+`acknowledge` matching the sentence exactly, or the call is refused
+before anything runs, naming each item that owes one and the sentence
+it owes. A per-origin consequence map — a sentence that depends on the
+row's state — is resolved by reading that row through the real route,
+one read per item, only in that case. `on_error` and `dry_run` pass
+straight through, and the report the model reads is the engine's,
+byte for byte.
+
+A seventh tool (`waymark_bulk`) was the other way to spell this and the
+wrong trade for the same reason create was folded into `invoke`: the
+six are a promise, and an agent that can read the collection's bulk
+entry needs no bespoke tool to drive it.

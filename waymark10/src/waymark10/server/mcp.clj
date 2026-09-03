@@ -75,6 +75,14 @@
   the one refusal MCP issues in its own voice; every other refusal in
   this namespace is the engine's, verbatim.
 
+  The gate is PER ITEM at the bulk door (waymark-pywy.4). `waymark_invoke`
+  reaches the collection's bulk door with `ids` (one shared input, the
+  phase-7 shape) or `items` (each row its own input) rather than
+  through a seventh tool; a confirm action refuses `ids` outright —
+  one acknowledgement over many rows is a guard-override device — and
+  over `items` every item must carry its own sentence, or the call is
+  refused before anything runs, naming each item that owes one.
+
   ── refusals ──
 
   A refusal is TOOL OUTPUT — the RFC 9457 body, reasons and remedies
@@ -165,7 +173,10 @@
        "consequence sentence back as the `acknowledge` argument, "
        "character for character — read it from the row first. Use "
        "dry_run to rehearse anything you are unsure of; a rehearsal "
-       "writes nothing. "
+       "writes nothing. For an action the collection advertises as "
+       "bulk, waymark_invoke takes ids (one input for every row) or "
+       "items (each row its own input); a confirm action wants items, "
+       "each carrying its own acknowledge. "
        "\n\n"
        "Refusals are answers. When this engine refuses you it says why, "
        "what would make the action available, and what to do instead — "
@@ -247,8 +258,9 @@
   (result (body-text resp) (not (<= 200 (:status resp 500) 299))))
 
 (defn- refusal
-  "A problem this namespace raises in its own voice — the confirm gate,
-  the unknown-kind lookup and a `return` outside its enum, and nothing
+  "A problem this namespace raises in its own voice — the confirm gate
+  (single and per item), the unknown-kind lookup, a `return` outside
+  its enum, and an invoke that names one row and many at once; nothing
   else."
   [e]
   (let [resp (p/->response e)]
@@ -574,7 +586,14 @@
         "available. Set dry_run to rehearse without writing. An action "
         "whose safety.confirm is true will not run until acknowledge "
         "carries its consequence sentence exactly as the row states "
-        "it.\n\n"
+        "it. Many rows at once, for an action the collection advertises "
+        "as bulk: `ids` runs one shared input over every row; `items` "
+        "gives each row its own input (and, for a confirm action, its "
+        "OWN acknowledge — a call-level acknowledge never stands in for "
+        "the items, and a confirm action refuses `ids` for that reason). "
+        "Either answers the engine's per-item report; on_error picks "
+        "continue (default), stop or atomic, and dry_run answers "
+        "per-item verdicts with what each row would become.\n\n"
         "return: \"envelope\" (default) answers the moved row's whole "
         "document — its data and every action it now affords, with "
         "their input schemas. \"summary\" answers the row's id, kind, "
@@ -583,19 +602,47 @@
         "differ from before) — without the actions block you already "
         "read in waymark_schema. Use summary for a run of invokes "
         "whose doors you know; use envelope when the next step "
-        "depends on what the row affords after the move. A refusal "
-        "and a dry_run verdict come back the same under both.")
+        "depends on what the row affords after the move. A refusal, "
+        "a dry_run verdict and a bulk report come back the same under "
+        "both.")
    :input-schema {:type "object"
                   :properties
                   {:kind {:type "string"}
                    :id {:type "string"
                         :description (str "The row to move. Omit to create: "
-                                          "action must then be the kind's create verb.")}
+                                          "action must then be the kind's create verb "
+                                          "— or give ids/items for a bulk action.")}
                    :return {:type "string" :enum ["envelope" "summary"]
                             :description (str "envelope (default): the moved row's "
                                               "document, byte for byte. summary: id/kind/"
                                               "state/summary/data plus transition and "
                                               "changed, without the actions block.")}
+                   :ids {:type "array" :items {:type "string"} :minItems 1
+                         :description (str "Many rows, one shared input: the bulk door. "
+                                           "Not for a confirm action — use items.")}
+                   :items {:type "array" :minItems 1
+                           :description (str "Many rows, each with its own input and, "
+                                             "for a confirm action, its own acknowledge.")
+                           :items {:type "object"
+                                   :properties
+                                   {:id {:type "string"}
+                                    :input {:type "object"
+                                            :description "This row's input, per the action's declared input schema."}
+                                    :acknowledge {:type "string"
+                                                  :description (str "This row's consequence sentence, echoed "
+                                                                    "exactly — required per item when "
+                                                                    "safety.confirm is true.")}
+                                    :acknowledge_warnings
+                                    {:type "array" :items {:type "string"}
+                                     :description "Guard names this row's previous advisory refusal named."}}
+                                   :required ["id"]
+                                   :additionalProperties false}}
+                   :on_error {:type "string" :enum ["continue" "stop" "atomic"]
+                              :description (str "Bulk only. continue: every row is tried and the "
+                                                "report says which refused (default); stop: halt "
+                                                "at the first refusal and report what ran and what "
+                                                "did not; atomic: one transaction, any refusal rolls "
+                                                "all back. May only tighten the declaration.")}
                    :action {:type "string"
                             :description "An action name this row advertises."}
                    :input {:type "object"
@@ -920,6 +967,121 @@
        return
        #(when (row-doc? %) (invoke-summary aname nil %))))))
 
+(defn- bulk-confirm-refusal
+  "The confirm gate at the bulk door, in the same voice as the single
+  one. `ids` shares one input and would share one acknowledgement,
+  which is exactly the blanket the gate exists to refuse: a confirm
+  action over ids is told to send items. Over items, every item that
+  did not echo its own sentence is named with the sentence it owes,
+  and nothing ran — one retry fixes all of them."
+  [aname sentence missing]
+  (p/problem
+   :confirm-required 409 "Confirmation required"
+   (if (nil? missing)
+     {:detail (str "safety.confirm is true for " (name aname)
+                   " — acknowledge is per item, and ids would share one. "
+                   "Send items: [{id, acknowledge}] with each row's "
+                   "consequence sentence echoed exactly as written.")
+      :action (name aname)
+      :consequence sentence
+      :acknowledge {:argument "items[].acknowledge" :value sentence}
+      :remedies [(str "Call waymark_invoke again with items, each carrying "
+                      "acknowledge: " (pr-str sentence))]}
+     {:detail (str "safety.confirm is true for " (name aname) " — "
+                   (count missing) " item(s) did not echo their consequence "
+                   "sentence back as their own `acknowledge`, exactly as "
+                   "written. Nothing ran.")
+      :action (name aname)
+      :consequence sentence
+      :acknowledge {:argument "items[].acknowledge" :value sentence}
+      :items (mapv (fn [{:keys [id given consequence]}]
+                     (cond-> {:id id :consequence consequence}
+                       given (assoc :given given)))
+                   missing)
+      :remedies [(str "Call waymark_invoke again with every item carrying "
+                      "acknowledge: " (pr-str sentence))]})))
+
+(defn- bulk-item-sentence
+  "The sentence one item owes. A string consequence rides the
+  collection entry's own display.description and is every row's; a
+  per-origin map resolves by the row's state, which only the row can
+  say — so that one case reads the row through the real route (its
+  404 is the engine's concealment, and the item will draw it again
+  at the door)."
+  [call session rdef aname col-sentence id]
+  (or col-sentence
+      (let [consequence (get-in rdef [:actions aname :safety :consequence])]
+        (when (map? consequence)
+          (let [resp (call (request session :get
+                                    (str "/api/" (:plural rdef) "/" id) {}))]
+            (when (<= 200 (:status resp 500) 299)
+              (get consequence (keyword (:state (body-json resp))))))))
+      "This action requires confirmation."))
+
+(defn- bulk-rows
+  "Many rows through the bulk door (waymark-pywy.4): `ids` is the
+  phase-7 shape — one shared input, one acknowledged-warnings set —
+  and `items` gives each row its own input, its own acknowledge and
+  its own acknowledge_warnings. Both read the COLLECTION envelope
+  first, as the single door reads the row: it is where the bulk
+  entry's href and consequence sentence come from, and an ungranted
+  kind 404s there before any verb is composed. The engine's report —
+  per-item ok/refusal in the guard's own words, on_error honored,
+  dry_run's per-item verdicts — passes through byte for byte; the
+  confirm gate is the one refusal issued here, and it is per item."
+  [call session rdef aname {:keys [ids items input dry_run on_error
+                                   acknowledge_warnings]}]
+  (let [col-self (str "/api/" (:plural rdef))
+        col-resp (call (request session :get col-self {}))]
+    (if-not (<= 200 (:status col-resp 500) 299)
+      (pass-through col-resp)
+      (let [col (body-json col-resp)
+            entry (get-in col [:actions (wire-action aname)])
+            confirm? (boolean (get-in rdef [:actions aname :safety :confirm]))
+            col-sentence (get-in entry [:display :description])
+            missing (when (and confirm? items)
+                      (into []
+                            (keep (fn [it]
+                                    (let [s (bulk-item-sentence call session rdef aname
+                                                                col-sentence (:id it))]
+                                      (when (not= (:acknowledge it) s)
+                                        {:id (:id it) :consequence s
+                                         :given (:acknowledge it)}))))
+                            items))]
+        (cond
+          (and confirm? ids)
+          (refusal (bulk-confirm-refusal aname (or col-sentence
+                                                    "This action requires confirmation.")
+                                         nil))
+
+          (seq missing)
+          (refusal (bulk-confirm-refusal aname (or col-sentence
+                                                    (:consequence (first missing)))
+                                         missing))
+
+          :else
+          (pass-through
+           (call (request session :post
+                          (or (:href entry) (str col-self "/-/" (name aname)))
+                          {:body (cond-> (if items
+                                           {:items (mapv (fn [it]
+                                                           (cond-> {:id (:id it)}
+                                                             (:input it)
+                                                             (assoc :input (:input it))
+                                                             (seq (:acknowledge_warnings it))
+                                                             (assoc :acknowledge
+                                                                    (vec (:acknowledge_warnings it)))))
+                                                         items)}
+                                           (assoc (or input {}) :ids ids))
+                                   on_error (assoc :on_error on_error))
+                           :query (when dry_run "dry_run=1")
+                           ;; the call's key stores the report, as any
+                           ;; bulk call's does; the items ride the
+                           ;; call's correlation id and carry no key of
+                           ;; their own (invoke.clj bulk!, recorded)
+                           :headers (invoke-headers session nil nil
+                                                    acknowledge_warnings)}))))))))
+
 (defn- invoke
   "Read the row, then move it.
 
@@ -935,13 +1097,31 @@
   refusal (404 for a concealed door, 409 with the guard's own sentence
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
-  [eng call session {:keys [kind id action input dry_run acknowledge
+  [eng call session {:keys [kind id ids items action input dry_run acknowledge
                             acknowledge_warnings] :as args}]
   (let [return (return-of args)
         rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))]
-    (if (nil? id)
+    (cond
+      (and (or ids items) id)
+      (refusal (p/problem :invalid-arguments 422 "One target, please"
+                          {:detail (str "id names one row; ids and items name many. "
+                                        "Give one of the three.")}))
+
+      (and ids items)
+      (refusal (p/problem :invalid-arguments 422 "One target, please"
+                          {:detail "Give ids (one shared input) or items (each row its own), not both."}))
+
+      ;; the bulk door answers a report, not a row: `return` has
+      ;; nothing to project there and the report passes through as
+      ;; it is under both spellings
+      (or ids items)
+      (bulk-rows call session rdef aname args)
+
+      (nil? id)
       (create-row call session rdef aname input dry_run acknowledge_warnings return)
+
+      :else
       (let [self (str "/api/" (:plural rdef) "/" id)
             env-resp (call (request session :get self {}))]
         (if-not (<= 200 (:status env-resp 500) 299)
