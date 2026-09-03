@@ -84,6 +84,24 @@
   engine's refusal vocabulary is that it says what a competent person
   would do next.
 
+  ── return: summary (waymark-pywy.1) ──
+
+  `waymark_query`, `waymark_get` and `waymark_invoke` take `return`,
+  \"envelope\" (the default: the route's own bytes, unchanged) or
+  \"summary\". The connector's first real session received the
+  identical action-schema block — every action's input schema, prose
+  and safety — fourteen times in a row, once per invoke, from a
+  caller that had already read waymark_schema. A summary is a
+  PROJECTION of the envelope the route already answered: the row's
+  id, kind, state, summary line and data (a collection item's
+  `fields`), for an invoke the transition and the fields that
+  changed, for a collection its paging and facets — and nothing the
+  envelope did not carry. It is computed AFTER the route answered,
+  over the route's own document, so concealment is inherited exactly
+  as it is for the envelope: a field the grant redacts is not in the
+  envelope, so it cannot be in the summary. No route changes, and
+  nothing here reads wider than the envelope did.
+
   ── the message layer ──
 
   The bottom section is MCP's JSON-RPC exchange as a function of one
@@ -98,6 +116,7 @@
   from prose written for humans, which will read badly for some kinds
   and is a useful forcing function on those declarations."
   (:require [clojure.string :as str]
+            [jsonista.core :as j]
             [reitit.ring :as ring]
             [waymark10.machine :as machine]
             [waymark10.schema :as schema]
@@ -228,8 +247,9 @@
   (result (body-text resp) (not (<= 200 (:status resp 500) 299))))
 
 (defn- refusal
-  "A problem this namespace raises in its own voice — the confirm gate
-  and the unknown-kind lookup, and nothing else."
+  "A problem this namespace raises in its own voice — the confirm gate,
+  the unknown-kind lookup and a `return` outside its enum, and nothing
+  else."
   [e]
   (let [resp (p/->response e)]
     (result (body-text resp) true)))
@@ -259,6 +279,157 @@
   "The action keyword as it comes back out of a parsed envelope."
   [aname]
   (keyword (p/wire-key aname)))
+
+;; ── return: summary — the envelope, projected ───────────────────────
+;;
+;; Everything in this section reads a route's answer AS THE WIRE
+;; CARRIES IT — string keys, never keywordized — and writes the
+;; projection back out the same way. That is not fussiness: the
+;; kebab→snake boundary (`p/wire-value`) rewrites a hyphen in any map
+;; key, and a facet count keyed by a date, or a free-form data map a
+;; person keyed by hand, would come back altered. A projection that
+;; changed a value the envelope carried would be a second, quietly
+;; divergent wire, which is the one thing this namespace exists not
+;; to be.
+
+(def ^:private verbatim-mapper
+  "Jackson as the wire boundary configured it, minus keywordizing:
+  decimals stay exact, keys stay the strings the route wrote."
+  (j/object-mapper {:bigdecimals true}))
+
+(defn- verbatim-json
+  "A route's JSON body with its keys untouched, or nil when the body is
+  empty or not JSON — the summary projection then falls back to the
+  bytes themselves."
+  [resp]
+  (let [s (body-text resp)]
+    (when-not (str/blank? s)
+      (try (j/read-value s verbatim-mapper) (catch Exception _ nil)))))
+
+(defn- return-of
+  "The `return` argument, validated: nil/\"envelope\" → :envelope,
+  \"summary\" → :summary, anything else a 422 in this namespace's own
+  voice — the enum is on the tool's input schema, but a client that
+  skipped the schema deserves the sentence rather than a silent
+  envelope it did not ask for."
+  [args]
+  (let [r (:return args)]
+    (case (some-> r str)
+      (nil "envelope") :envelope
+      "summary" :summary
+      (throw (p/problem :invalid-argument 422 "Invalid argument"
+                        {:detail (str "return must be \"envelope\" or \"summary\", not "
+                                      (pr-str r) ".")
+                         :argument "return"
+                         :given r
+                         :enum ["envelope" "summary"]})))))
+
+(defn- id-of-self
+  "A row's id, read off its own `self` — the envelope carries the
+  address, not the id, and the last segment of `/api/{plural}/{id}` is
+  the id the tools take."
+  [self]
+  (when (string? self)
+    (URLDecoder/decode ^String (last (str/split self #"/")) "UTF-8")))
+
+(defn- collection-doc?
+  "A collection envelope: data.items is the page."
+  [doc]
+  (and (map? doc) (sequential? (get-in doc ["data" "items"]))))
+
+(defn- row-doc?
+  "A row envelope at any depth — full, ?depth=summary, or the
+  rows=none stub — as against a dry-run verdict, a report, a job."
+  [doc]
+  (and (map? doc)
+       (= "10" (get doc "waymark"))
+       (string? (get doc "self"))
+       (contains? doc "state")
+       (contains? doc "summary")
+       (not (collection-doc? doc))))
+
+(defn- row-summary
+  "One row, projected: id, kind, state, the summary line, and its
+  values — `data` where the envelope carried data (a full read, an
+  invoke's answer), else `fields` (a collection item's grid columns,
+  which is all a depth=summary item ever carries), else neither (the
+  rows=none stub). Absent stays absent: a field the projection hid
+  is not here because it was not there."
+  [env]
+  (cond-> {"id" (id-of-self (get env "self"))
+           "kind" (get env "kind")
+           "state" (get env "state")
+           "summary" (get env "summary")}
+    (contains? env "data") (assoc "data" (get env "data"))
+    (and (not (contains? env "data")) (contains? env "fields"))
+    (assoc "fields" (get env "fields"))))
+
+(defn- facets-of
+  "The collection's facet counts, lifted out of the query action's
+  input schema where `collections/splice-facets` put them — the one
+  thing from the actions block a scanning reader still wants."
+  [doc]
+  (not-empty
+   (into {}
+         (keep (fn [[f prop]]
+                 (when-some [counts (get prop "x-facets")] [f counts])))
+         (get-in doc ["actions" "query" "input" "properties"]))))
+
+(defn- collection-summary
+  "The page, projected: each item through `row-summary`, then total,
+  page, the next/prev hrefs and the facets. The query action's input
+  schema — the filter grammar an agent learns once — is what this
+  leaves behind."
+  [doc]
+  (let [data (get doc "data")
+        links (get doc "links")]
+    (cond-> {"kind" (get doc "kind")
+             "summary" (get doc "summary")
+             "items" (mapv row-summary (get data "items"))
+             "total" (get data "total")
+             "page" (get data "page")}
+      (get-in links ["next" "href"]) (assoc "next" (get-in links ["next" "href"]))
+      (get-in links ["prev" "href"]) (assoc "prev" (get-in links ["prev" "href"]))
+      (facets-of doc) (assoc "facets" (facets-of doc)))))
+
+(defn- changed-fields
+  "The data keys whose value differs between the row as read and the
+  row as answered — both the wire's encoding, so equal is equal. A
+  create has no before: every present, non-null field changed."
+  [before after]
+  (let [bd (get before "data") ad (get after "data")]
+    (->> (concat (keys bd) (keys ad))
+         distinct
+         (filter (fn [k] (not= (get bd k) (get ad k))))
+         sort
+         vec)))
+
+(defn- invoke-summary
+  "The moved row through `row-summary`, plus what the move was:
+  `transition` {action from to} — `from` read off the row BEFORE the
+  invoke (the same read the confirm gate and the ETag come from), so
+  it is the state the agent saw, not a reconstruction — and `changed`,
+  the data fields whose values differ. A create carries no from."
+  [aname before after]
+  (assoc (row-summary after)
+         "transition" (cond-> {"action" (p/wire-key aname)
+                               "to" (get after "state")}
+                        (get before "state") (assoc "from" (get before "state")))
+         "changed" (changed-fields before after)))
+
+(defn- answer
+  "A route's answer under the caller's `return`: the envelope's own
+  bytes (:envelope, and every non-2xx — a refusal is never
+  summarized), or `project` over a verbatim reading of a 2xx body.
+  `project` answers nil for a document it does not recognize — a
+  dry-run verdict, a stored replay of something else, a job — and
+  the bytes pass through unchanged rather than half-projected."
+  [resp return project]
+  (if (and (= :summary return) (<= 200 (:status resp 500) 299))
+    (if-some [s (some-> (verbatim-json resp) project)]
+      (result (j/write-value-as-string s verbatim-mapper))
+      (pass-through resp))
+    (pass-through resp)))
 
 ;; ── the six tools ───────────────────────────────────────────────────
 ;;
@@ -323,10 +494,25 @@
         "— the answer's own actions.query.input names exactly which, "
         "so read one page before guessing. A filter or sort naming a "
         "field your grant does not admit is refused the same way an "
-        "unknown one is, deliberately.")
+        "unknown one is, deliberately.\n\n"
+        "return: \"envelope\" (default) is the collection document "
+        "whole — every item with its actions, the query action's "
+        "input schema with the filter vocabulary and facets. "
+        "\"summary\" is the same page projected to what a reader "
+        "usually wants once it knows the kind: per item its id, "
+        "kind, state, summary line and grid fields, plus total, page, "
+        "next/prev and facets — no actions, no schemas. Use summary "
+        "when you already read waymark_schema and are scanning rows; "
+        "use envelope when you need each row's affordances or the "
+        "filter grammar.")
    :input-schema {:type "object"
                   :properties
                   {:kind {:type "string" :description "A kind name from waymark_discover."}
+                   :return {:type "string" :enum ["envelope" "summary"]
+                            :description (str "envelope (default): the route's document, "
+                                              "byte for byte. summary: items as id/kind/"
+                                              "state/summary/fields plus paging and facets, "
+                                              "without the actions block.")}
                    :filter {:type "object"
                             :description (str "Field → value, ANDed. Values cross as "
                                               "strings; a comma-separated value means "
@@ -350,12 +536,24 @@
         "schema, its prose and its safety — plus the ones it does not, "
         "with the reason and what would make them available. This is "
         "the document to read before acting: the action hrefs and the "
-        "consequence sentence waymark_invoke needs both live here.")
+        "consequence sentence waymark_invoke needs both live here.\n\n"
+        "return: \"envelope\" (default) is that whole document. "
+        "\"summary\" is the row alone — id, kind, state, summary line "
+        "and data — without the actions, unavailable, links, parts and "
+        "meta blocks. Use summary to read a row's values when you "
+        "already know the kind's doors from waymark_schema; use "
+        "envelope before acting, since the consequence sentence and "
+        "each action's availability on THIS row live only there.")
    :input-schema {:type "object"
                   :properties {:kind {:type "string"}
                                :id {:type "string"}
                                :depth {:type "string" :enum ["full" "summary"]
-                                       :description "summary drops data and parts."}}
+                                       :description "summary drops data and parts."}
+                               :return {:type "string" :enum ["envelope" "summary"]
+                                        :description (str "envelope (default): the row's "
+                                                          "document, byte for byte. summary: "
+                                                          "id/kind/state/summary/data only, "
+                                                          "without the actions block.")}}
                   :required ["kind" "id"]
                   :additionalProperties false}})
 
@@ -370,13 +568,28 @@
         "available. Set dry_run to rehearse without writing. An action "
         "whose safety.confirm is true will not run until acknowledge "
         "carries its consequence sentence exactly as the row states "
-        "it.")
+        "it.\n\n"
+        "return: \"envelope\" (default) answers the moved row's whole "
+        "document — its data and every action it now affords, with "
+        "their input schemas. \"summary\" answers the row's id, kind, "
+        "state, summary line and data, plus `transition` (action, "
+        "from, to) and `changed` (the data fields whose values "
+        "differ from before) — without the actions block you already "
+        "read in waymark_schema. Use summary for a run of invokes "
+        "whose doors you know; use envelope when the next step "
+        "depends on what the row affords after the move. A refusal "
+        "and a dry_run verdict come back the same under both.")
    :input-schema {:type "object"
                   :properties
                   {:kind {:type "string"}
                    :id {:type "string"
                         :description (str "The row to move. Omit to create: "
                                           "action must then be the kind's create verb.")}
+                   :return {:type "string" :enum ["envelope" "summary"]
+                            :description (str "envelope (default): the moved row's "
+                                              "document, byte for byte. summary: id/kind/"
+                                              "state/summary/data plus transition and "
+                                              "changed, without the actions block.")}
                    :action {:type "string"
                             :description "An action name this row advertises."}
                    :input {:type "object"
@@ -500,21 +713,27 @@
 
 (defn- query [eng call session args]
   (let [{:keys [kind page_size page_number rows]} args
+        return (return-of args)
         rdef (rdef-of eng kind)
         params (cond-> (into {} (map (fn [[k v]] [(name k) (str v)])) (:filter args))
                  (:sort args) (assoc "sort" (str (:sort args)))
                  page_size (assoc "page[size]" (str page_size))
                  page_number (assoc "page[number]" (str page_number))
                  rows (assoc "rows" (str rows)))]
-    (pass-through
+    (answer
      (call (request session :get (str "/api/" (:plural rdef))
-                    {:query (query-string params)})))))
+                    {:query (query-string params)}))
+     return
+     #(when (collection-doc? %) (collection-summary %)))))
 
-(defn- get-row [eng call session {:keys [kind id depth]}]
-  (let [rdef (rdef-of eng kind)]
-    (pass-through
+(defn- get-row [eng call session {:keys [kind id depth] :as args}]
+  (let [return (return-of args)
+        rdef (rdef-of eng kind)]
+    (answer
      (call (request session :get (str "/api/" (:plural rdef) "/" id)
-                    {:query (when depth (query-string {"depth" (str depth)}))})))))
+                    {:query (when depth (query-string {"depth" (str depth)}))}))
+     return
+     #(when (row-doc? %) (row-summary %)))))
 
 ;; the confirm gate — the one refusal this namespace issues in its own
 ;; voice, and the reason the spec calls MCP a safety surface rather
@@ -664,7 +883,7 @@
   everything else — so the create verb had to be reachable, and
   `waymark_invoke` with no id is where it went rather than a seventh
   tool."
-  [call session rdef aname input dry-run warnings]
+  [call session rdef aname input dry-run warnings return]
   (let [names (set (map p/wire-key (:create-action-names rdef)))]
     (if-not (contains? names (p/wire-key aname))
       (refusal (p/problem :no-such-action 404 "Not found"
@@ -672,7 +891,7 @@
                                         "but " (name (:kind rdef)) " creates with "
                                         (pr-str (mapv name (:create-action-names rdef)))
                                         ", not " (pr-str (name aname)) ".")}))
-      (pass-through
+      (answer
        (call (request session :post (str "/api/" (:plural rdef))
                       {:body (or input {})
                        :query (when dry-run "dry_run=1")
@@ -681,7 +900,9 @@
                                                      (random-uuid))}
                                   (seq warnings)
                                   (assoc "waymark-acknowledge"
-                                         (str/join "," (map name warnings))))}))))))
+                                         (str/join "," (map name warnings))))}))
+       return
+       #(when (row-doc? %) (invoke-summary aname nil %))))))
 
 (defn- invoke
   "Read the row, then move it.
@@ -699,11 +920,12 @@
   for an unavailable one) is more honest than this namespace
   re-narrating what render already said."
   [eng call session {:keys [kind id action input dry_run acknowledge
-                            acknowledge_warnings]}]
-  (let [rdef (rdef-of eng kind)
+                            acknowledge_warnings] :as args}]
+  (let [return (return-of args)
+        rdef (rdef-of eng kind)
         aname (or (declared-action rdef action) (keyword action))]
     (if (nil? id)
-      (create-row call session rdef aname input dry_run acknowledge_warnings)
+      (create-row call session rdef aname input dry_run acknowledge_warnings return)
       (let [self (str "/api/" (:plural rdef) "/" id)
             env-resp (call (request session :get self {}))]
         (if-not (<= 200 (:status env-resp 500) 299)
@@ -715,7 +937,7 @@
             (if (and (get-in entry [:safety :confirm])
                      (not= acknowledge sentence))
               (refusal (confirm-refusal aname sentence acknowledge))
-              (pass-through
+              (answer
                (call (request session :post
                               (or (:href entry) (str self "/-/" (name aname)))
                               {:body (or input {})
@@ -723,7 +945,12 @@
                                :headers (invoke-headers
                                          session entry
                                          (get-in env-resp [:headers "ETag"])
-                                         acknowledge_warnings)}))))))))))
+                                         acknowledge_warnings)}))
+               return
+               ;; `from` and the changed set come off the row as READ —
+               ;; the same read the gate and the ETag came from
+               #(when (row-doc? %)
+                  (invoke-summary aname (verbatim-json env-resp) %))))))))))
 
 (defn- history
   "The row's transitions, newest first — now a call onto the route,
