@@ -128,6 +128,8 @@
                         :content problem-content}
     "schema_invalid" {:description "Input failed validation, field-keyed errors"
                       :content problem-content}
+    "unknown_field" {:description "fields= named a field outside this caller's published vocabulary (never declared, redacted by the grant, or secret — one answer for all three); the problem's fields member lists the vocabulary"
+                     :content problem-content}
     "idempotency_key_required" {:description "The action is not idempotent; send an Idempotency-Key header"
                                 :content problem-content}}})
 
@@ -202,12 +204,27 @@
         {col
          {:get {:tags [kname]
                 :summary (str "Query " (:plural rdef))
-                :parameters (mapv (fn [[pname pschema]]
-                                    {:name pname :in "query" :required false
-                                     :schema pschema})
-                                  (sort-by key (:properties qs)))
+                :parameters (conj
+                             (mapv (fn [[pname pschema]]
+                                     {:name pname :in "query" :required false
+                                      :schema pschema})
+                                   (sort-by key (:properties qs)))
+                             ;; the caller's projection (waymark-pywy.2)
+                             ;; lives beside the grammar, not in it: the
+                             ;; query input schema is the FILTER/SORT
+                             ;; vocabulary an embed reuses as its columns,
+                             ;; and an embed carries no fields=
+                             {:name "fields" :in "query" :required false
+                              :schema {:type "string"}
+                              :description (str "Comma-separated field names: each item's "
+                                                "fields narrows to exactly these — always a "
+                                                "subset of what your grant projects, never "
+                                                "more. A name outside your published schema "
+                                                "(/api/schemas/" kname ") is a 400 naming "
+                                                "the vocabulary.")})
                 :responses {"200" {:description (str kname " collection envelope")
                                    :content collection-content}
+                            "400" (resp-ref "unknown_field")
                             "422" (resp-ref "schema_invalid")}}
           :post {:tags [kname]
                  :summary (str "Create a " kname " (initial-state transition)")

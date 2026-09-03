@@ -15,6 +15,21 @@
   a pick from the target's rows, not an id typed from memory), and
   next/prev links (omitted at the edges).
 
+  fields=a,b (waymark-pywy.2) is the caller's own projection: each
+  item's \"fields\" becomes exactly the named fields, picked out of
+  the envelope's ALREADY projected data — after the grant's field
+  modes, the secret disposition and the hashed tokens have done their
+  work in render/envelope — so what a caller names can only narrow
+  what the grant shows, never widen it (the subset law holds by
+  construction, not by a second check). The vocabulary a name is
+  judged against is the published schema view's own properties
+  (grants/project-json-schema, what /api/schemas/{kind} serves this
+  caller): a never-declared, a grant-redacted and a secret field draw
+  ONE 400 naming that vocabulary, so a probe learns nothing. The pick
+  rides the self/next/prev hrefs (the page a person copies is the
+  view they saw) and stays off the worksheet href, whose grammar does
+  not carry it. rows=none stubs stay field-free either way.
+
   Recorded choices and punts:
   - unknown or malformed query parameters are one 422 naming every
     bad parameter (waymark9 parse_query).
@@ -592,6 +607,63 @@
   ;; inv/decode-row: coercion AND the shape fold (phase 8 upcasts)
   (inv/decode-row rdef row))
 
+;; ── the caller's field projection (waymark-pywy.2) ──────────────────
+
+(defn field-vocabulary
+  "The wire names of the fields THIS caller may read on rdef: the
+  published schema view's own properties — grants/project-json-schema
+  over the secret-concealed json schema, exactly the document
+  /api/schemas/{kind} serves — so a grant-redacted field and a secret
+  one are not in the vocabulary at all. nil vis is the unscoped
+  reader's whole declaration. Sorted, because it is what the 400
+  prints."
+  [vis rdef]
+  (->> (grants/project-json-schema
+        vis (:kind rdef)
+        (schema/conceal (schema/json-schema (:schema rdef))
+                        (schema/secret-fields (:schema rdef))))
+       :properties
+       keys
+       (map p/wire-key)
+       sort
+       vec))
+
+(defn parse-fields
+  "fields=a,b → the vector of distinct wire names, in the caller's
+  order, or the one 400 problem naming the caller's vocabulary
+  (p/unknown-fields). A name outside the published vocabulary refuses
+  whether it was never declared, redacted by the grant or secret —
+  the same answer check-query! gives a filter on a hidden field, and
+  for the same reason. A blank value refuses too: a projection that
+  names nothing hides nothing, so there is nothing to clear."
+  [vis rdef raw]
+  (let [vocab (field-vocabulary vis rdef)
+        names (into [] (comp (map str/trim) (remove str/blank?) (distinct))
+                    (str/split (str raw) #","))
+        unknown (remove (set vocab) names)]
+    (when (or (empty? names) (seq unknown))
+      (throw (p/unknown-fields unknown vocab)))
+    names))
+
+(defn- item-of
+  "One collection item. Without a pick: the envelope-minus-data
+  summary, whose \"fields\" is render's bounded grid projection. With
+  one: the same summary, its \"fields\" REPLACED by the pick out of
+  the full envelope's data — data render/envelope has already put
+  through the grant's field modes, the secret disposition and the
+  hashed tokens, so select-keys over it is what makes the subset law
+  hold: a concealed field is not there to select. A picked prose or
+  vector field rides whole (the grid rule bounds what nobody asked
+  for; an explicit ask is bounded by the asker). rows=none stubs stay
+  field-free — they cost nothing on purpose."
+  [rdef row ctx-opts picked]
+  (if (or (nil? picked) (= :none (:rows ctx-opts)))
+    (render/envelope-summary rdef row ctx-opts)
+    (let [env (render/envelope rdef row ctx-opts)]
+      (-> env
+          (assoc "fields" (select-keys (get env "data") picked))
+          (dissoc "data" "parts")))))
+
 (defn envelope
   "The collection envelope for one parsed GET: parse the params (422
   on unknowns), page the rows, count the filtered total, fold the
@@ -599,12 +671,24 @@
   :visibility in ctx-opts (phase 9a, the per-request grant projection)
   narrows an id-scoped grant's page to its granted rows (a real cond,
   so the total stays honest) and drops non-granted create/bulk
-  affordances; items project through render's own visibility filter."
+  affordances; items project through render's own visibility filter.
+  fields= (ns docstring) is split off BEFORE the grammar parses —
+  the grammar refuses what it does not declare — judged against the
+  caller's published vocabulary (400), and applied per item AFTER
+  render's projection."
   [eng rdef params ctx-opts]
   (let [plural (:plural rdef)
         kname (name (:kind rdef))
-        {:keys [conds sort page filters applied]} (parse-query rdef params)
         vis (:visibility ctx-opts)
+        {:keys [conds sort page filters applied]}
+        (parse-query rdef (dissoc params "fields"))
+        picked (when (contains? params "fields")
+                 (parse-fields vis rdef (get params "fields")))
+        ;; the pick rides the page hrefs: the self a person copies and
+        ;; the next/prev a pager follows are THIS view, projection
+        ;; included (rows=none stays off them — the recorded choice)
+        applied (cond-> applied
+                  picked (assoc "fields" (str/join "," picked)))
         ;; the collection oracle, closed (waymark-rci): REQUESTED
         ;; filters and sorts naming non-plain fields answer the
         ;; unknown-param 422; the kind's own default sort softly
@@ -644,7 +728,7 @@
                                                   (dec (:number page)))})
              :total (store/count-matching st tx (:kind rdef) conds)}))
         facets (facet-map eng rdef conds)
-        items (mapv #(render/envelope-summary rdef (decode-row rdef %) ctx-opts)
+        items (mapv #(item-of rdef (decode-row rdef %) ctx-opts picked)
                     rows)
         {size :size number :number} page
         last-page (max 1 (long (Math/ceil (/ (double total) (double size)))))
@@ -673,7 +757,10 @@
                 ;; the download
                 (:worksheet rdef)
                 (assoc :worksheet
-                       (let [q (dissoc applied "page[size]" "page[number]")]
+                       ;; the worksheet grammar carries no fields= —
+                       ;; a workbook's columns are the declared ones
+                       (let [q (dissoc applied "page[size]" "page[number]"
+                                       "fields")]
                          {:href (str "/api/" plural "/-/worksheet"
                                      (when (seq q)
                                        (str "?" (str/join "&"
