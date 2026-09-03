@@ -1510,12 +1510,23 @@
   the same two calls /auth/agent makes once per session — paid here
   per request, because the transport is stateless; the recorded
   cost). nil when nothing stands, and the caller falls to the agent
-  default: the bootstrap surface, never full sight."
+  default: the bootstrap surface, never full sight.
+
+  THE VOCABULARY STAYS OPEN on a worn grant (waymark-kkx.6). A
+  presented grant narrows well-known to its own kinds, and that
+  posture's justification is that the agent wanting the vocabulary
+  back drops its header for one read. A delegate never presented a
+  header and cannot drop one: narrowed, it could not NAME a kind it
+  was not granted, and the asking loop would close after its first
+  grant. So the flag bootstrap-visibility sets rides here too — names
+  are schema, not data; rows outside the grant stay concealed exactly
+  as before, because every other check reads the grant, not the flag."
   [eng principal]
   (when-some [row (standing-grant-for eng (:id principal))]
     (when-some [row (accept-as-audience! eng row principal)]
       (when (= :accepted (:state row))
-        (visibility eng (:id row) principal)))))
+        (assoc (visibility eng (:id row) principal)
+               :vocabulary-open? true)))))
 
 (defn bootstrap-visibility
   "The agent default (waymark-rci): a named agent that presents NO
