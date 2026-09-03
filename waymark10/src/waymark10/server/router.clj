@@ -43,6 +43,13 @@
     unavailable null — explicitly unknown). rows is stripped BEFORE
     the collection grammar parses, so page hrefs do not carry it
     (recorded: a pager that wants to stay cheap re-appends it).
+  - GET {plural}?fields=a,b (waymark-pywy.2) narrows each item's
+    \"fields\" to the caller's pick — always a subset of the grant's
+    projection (collections/item-of selects out of render's already
+    projected data); a name outside the caller's published vocabulary
+    is one 400 naming it. Unlike rows, the pick DOES ride the page
+    hrefs. The as-of branch keeps refusing it like any parameter it
+    does not declare.
   - a declared :embed link gains \"embedded\" on the full envelope
     only: the target collection, filtered by the link's own compiled
     href (the href and the inline items can never disagree) — the

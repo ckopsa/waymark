@@ -523,7 +523,13 @@
                    :page_size {:type "integer" :minimum 1}
                    :page_number {:type "integer" :minimum 1}
                    :rows {:type "string" :enum ["none"]
-                          :description "\"none\" returns totals and facets without the rows."}}
+                          :description "\"none\" returns totals and facets without the rows."}
+                   :fields {:type "array" :items {:type "string"} :minItems 1
+                            :description (str "Field names from waymark_schema: each item's "
+                                              "fields narrows to exactly these — always a "
+                                              "subset of what your grant projects, never "
+                                              "more. A name outside your published schema "
+                                              "is refused with the vocabulary you may use.")}}
                   :required ["kind"]
                   :additionalProperties false}})
 
@@ -719,7 +725,17 @@
                  (:sort args) (assoc "sort" (str (:sort args)))
                  page_size (assoc "page[size]" (str page_size))
                  page_number (assoc "page[number]" (str page_number))
-                 rows (assoc "rows" (str rows)))]
+                 rows (assoc "rows" (str rows))
+                 ;; the caller's projection (waymark-pywy.2), passed
+                 ;; through as the route's own comma list — the route
+                 ;; judges it, and the subset-of-grant law is the
+                 ;; route's, not this layer's. A comma string arriving
+                 ;; where the schema asks an array is taken as spelled.
+                 (some? (:fields args))
+                 (assoc "fields" (let [f (:fields args)]
+                                   (if (string? f)
+                                     f
+                                     (str/join "," (map str f))))))]
     (answer
      (call (request session :get (str "/api/" (:plural rdef))
                     {:query (query-string params)}))

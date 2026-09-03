@@ -108,6 +108,27 @@
   (problem :malformed-body 400 "Malformed body"
            {:detail detail}))
 
+(defn unknown-fields
+  "A collection's fields= projection named what the caller's field
+  vocabulary does not hold — never declared, redacted by the grant,
+  or secret, ONE answer for all three (a probe learns nothing from
+  which). 400, and the vocabulary rides along as :fields so the next
+  call is right; `unknown` empty means the parameter named no field
+  at all (waymark-pywy.2)."
+  [unknown vocabulary]
+  (problem :unknown-field 400 "Unknown field"
+           {:detail (if (seq unknown)
+                      (str "fields= names no such field: "
+                           (str/join ", " unknown)
+                           ". This kind's fields: "
+                           (str/join ", " vocabulary) ".")
+                      (str "fields= names no field. This kind's fields: "
+                           (str/join ", " vocabulary) "."))
+            :errors {"fields" (if (seq unknown)
+                                (mapv #(str "unknown field " (pr-str %)) unknown)
+                                ["must name at least one field"])}
+            :fields (vec vocabulary)}))
+
 ;; ── the wire projection ─────────────────────────────────────────────
 
 (defn wire-key
