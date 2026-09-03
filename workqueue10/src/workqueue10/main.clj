@@ -627,6 +627,9 @@
              {:token "amazon.cart"
               :description "Change the Amazon cart through Gate — add items, reset. Never places orders."
               :enforced_by gate}
+             {:token "costco.read"
+              :description "Read Costco warehouse receipts through Gate — the list by date, one receipt's lines and tenders by barcode."
+              :enforced_by gate}
              ;; the one row here Gate does not stand in front of
              ;; (waymark-iqa.23): the power granted is THIS engine's
              ;; feed route, so waymark holds the data and the law

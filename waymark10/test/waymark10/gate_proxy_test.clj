@@ -220,7 +220,13 @@
           "amzn__product_details" "amazon.read"
           "amzn__view_cart" "amazon.read"
           "amzn__reset" "amazon.read"
-          "amzn__add_to_cart" "amazon.cart"}
+          "amzn__add_to_cart" "amazon.cart"
+          ;; costco — warehouse receipts (read-only rig)
+          "costco__receipts" "costco.read"
+          "costco__receipt" "costco.read"
+          "costco__captured" "costco.read"
+          "costco__login" "costco.read"
+          "costco__reset" "costco.read"}
          gate/tool-capability)
       "this map IS the security policy — a changed row is a changed
        law, and this test is the diff a reviewer reads")
