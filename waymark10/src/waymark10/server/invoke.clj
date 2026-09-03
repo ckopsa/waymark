@@ -54,10 +54,14 @@
     bulk/batch call itself owns the key).
   - a :bulk action's row form does not exist: single-invoking it is
     404 (waymark9's allow_bulk gate).
-  - bulk! (one input, N resources): non-atomic runs one transaction
+  - bulk! (N resources — one input over ids, or each row its own
+    input via items, waymark-pywy.4): non-atomic runs one transaction
     PER item so a refusal never poisons neighbors; :atomic runs ONE
     transaction and any refusal rolls everything back, answering a
-    409 that carries the report; :defer-over hands over-threshold
+    409 that carries the report; on_error in the body picks
+    continue/stop/atomic and may only tighten the declaration;
+    acknowledgement is per item in the items shape and the header
+    is refused there; :defer-over hands over-threshold
     calls to the job resource (phase 9b closed the phase-7 punt) —
     bulk! returns {:deferred {…}} and the router mints the job and
     answers 202, so this namespace stays free of a jobs require.
@@ -1104,7 +1108,13 @@
                         ;; rehearsal RECORDS nothing either (§23): the
                         ;; basis dies with the transaction that never
                         ;; wrote a transition
-                        dry-run {:valid? true :warnings (not-empty warned)}
+                        ;; the rehearsal's exit also says what would
+                        ;; move — the states either side and the
+                        ;; fields the input names — for the bulk
+                        ;; door's per-item `would` (waymark-pywy.4)
+                        dry-run {:valid? true :warnings (not-empty warned)
+                                 :from (:state row) :to (:to defn)
+                                 :fields (vec (sort (map p/wire-key (keys inp))))}
                         (seq warned) (throw (p/warning-refused action-name warned))
                         :else (finish! engine tx rdef row defn inp ctx
                                        {:digest digest
@@ -1187,14 +1197,168 @@
                                  marker digest 200 (wire/write-json doc)
                                  "application/waymark+json"))))
 
+(def ^:private on-error-modes
+  "The bulk door's `on_error` vocabulary: continue is the partial-
+  success report, atomic is one transaction that any refusal rolls
+  back, stop halts at the first refusal and reports what ran and
+  what did not."
+  #{"continue" "stop" "atomic"})
+
+(defn- on-error-mode
+  "The mode a bulk call runs under: the declaration's (atomic when
+  `:bulk {:atomic true}`, else continue) unless the body asks — and
+  the body may only TIGHTEN. A declared-atomic action is a promise
+  the collection made; a caller asking it to continue past a refusal
+  is asking the declaration to be somebody else's."
+  [action-name spec body]
+  (let [given (:on_error body)
+        declared (if (:atomic spec) "atomic" "continue")]
+    (cond
+      (nil? given) declared
+      (not (contains? on-error-modes given))
+      (throw (p/schema-invalid action-name
+                               {:on_error ["one of continue, stop, atomic"]}))
+      (and (:atomic spec) (not= "atomic" given))
+      (throw (p/schema-invalid
+              action-name
+              {:on_error [(str (name action-name)
+                               " is declared atomic; on_error can only be atomic")]}))
+      :else given)))
+
+(defn- item-errors
+  "One `items` entry's contract violations, sentences prefixed with
+  its index — id a non-blank string, input a map when present,
+  acknowledge an array of guard names when present, nothing else."
+  [i it]
+  (let [at (str "item " i ": ")]
+    (cond-> []
+      (not (and (string? (:id it)) (not (str/blank? (:id it)))))
+      (conj (str at "id must be a non-blank string"))
+      (and (contains? it :input) (some? (:input it)) (not (map? (:input it))))
+      (conj (str at "input must be an object"))
+      (and (contains? it :acknowledge) (some? (:acknowledge it))
+           (not (and (vector? (:acknowledge it))
+                     (every? string? (:acknowledge it)))))
+      (conj (str at "acknowledge must be an array of guard names"))
+      (seq (dissoc it :id :input :acknowledge))
+      (conj (str at "unexpected field "
+                 (str/join ", " (map name (keys (dissoc it :id :input :acknowledge)))))))))
+
+(defn- bulk-items
+  "Both bulk body shapes as ONE item list — {:id :input :acknowledged}
+  per row, validated (every violation is the 422 an input field
+  draws, keyed on the shape's own field).
+
+  `{:ids […] …input}` is one input over N rows, the phase-7 shape:
+  every item carries the same input and the call-level acknowledged
+  set (the Waymark-Acknowledge header — one input, one reading, one
+  acknowledgement).
+
+  `{:items [{:id :input? :acknowledge?}]}` is N rows each with its
+  own input (waymark-pywy.4). Acknowledgement is PER ITEM here, and
+  the header is refused rather than spread: a blanket acknowledgement
+  over rows whose warnings the caller has not read one by one is a
+  guard-override device, and the door will not be one."
+  [action-name body acknowledged]
+  (let [body (or body {})
+        ids (:ids body)
+        items (:items body)]
+    (cond
+      (and (contains? body :ids) (contains? body :items))
+      (throw (p/schema-invalid action-name
+                               {:items ["one of ids or items, not both"]}))
+
+      (contains? body :items)
+      (do
+        (when-not (and (vector? items) (seq items) (every? map? items))
+          (throw (p/schema-invalid
+                  action-name
+                  {:items ["required, non-empty array of {id, input?, acknowledge?} objects"]})))
+        (when-some [extras (seq (dissoc body :items :on_error))]
+          (throw (p/schema-invalid
+                  action-name
+                  (into {} (map (fn [[k _]] [k ["unexpected field — each item carries its own input"]]))
+                        extras))))
+        (when-some [errors (seq (into [] (comp (map-indexed item-errors) cat) items))]
+          (throw (p/schema-invalid action-name {:items (vec errors)})))
+        (when (seq acknowledged)
+          (throw (p/problem
+                  :acknowledge-per-item 422 "Acknowledge is per item"
+                  {:detail (str "The items shape acknowledges per item: name "
+                                "each item's warned guards in its own "
+                                "`acknowledge` array. A Waymark-Acknowledge "
+                                "header would spread one reading over every "
+                                "row, and no row was read that way.")
+                   :action-attempted action-name
+                   :acknowledge {:field "items[].acknowledge"
+                                 :names (mapv name acknowledged)}})))
+        (mapv (fn [it]
+                {:id (:id it)
+                 :input (not-empty (:input it))
+                 :acknowledged (into #{} (map keyword) (:acknowledge it))})
+              items))
+
+      :else
+      (do
+        (when-not (and (vector? ids) (seq ids) (every? string? ids))
+          (throw (p/schema-invalid action-name
+                                   {:ids ["required, non-empty array of ids"]})))
+        (let [input (not-empty (dissoc body :ids :on_error))]
+          (mapv (fn [id] {:id id :input input :acknowledged acknowledged})
+                ids))))))
+
+(defn- item-verdict
+  "One bulk item's rehearsal verdict — self-keyed, the guard's own
+  sentence on a refusal, and on an ok the `would`: the state the row
+  would leave and reach and the fields the input names. The
+  rehearsal never fires the handler (§23's iron rule), so what a
+  handler would write is exactly what it does not claim to know."
+  [href id res]
+  (cond-> {:self (href id) :verdict "ok"}
+    (:warnings res) (assoc :warnings (:warnings res))
+    (:to res) (assoc :would (cond-> {:from (name (:from res))
+                                     :to (name (:to res))}
+                              (seq (:fields res)) (assoc :fields (:fields res))))))
+
+(defn- deferred-marker
+  "What an over-threshold call hands the job resource: the phase-9b
+  marker ({:kind :action :ids :input}) — and, for the items shape,
+  each row's own input and acknowledged names, index-aligned with
+  `:ids`, so the worker's `bulk-item!` runs exactly the call that was
+  deferred."
+  [kind action-name body items]
+  (if (contains? body :items)
+    {:kind kind
+     :action action-name
+     :ids (mapv :id items)
+     :inputs (mapv #(or (:input %) {}) items)
+     :acknowledged (mapv #(mapv name (:acknowledged %)) items)}
+    {:kind kind
+     :action action-name
+     :ids (mapv :id items)
+     :input (:input (first items))}))
+
 (defn bulk!
-  "One input, N resources: POST /api/{plural}/-/{action} with body
-  {:ids [...] …action input…}. Guards run per row through the same
-  per-item algorithm as a single invoke. Returns {:report wire-doc}
-  or an idempotency replay; atomic refusals throw (see the ns
-  docstring); a dry-run answers {:valid? … :verdicts […]}. opts:
-  :principal, :idempotency-key, :acknowledged, :correlation-id,
-  :dry-run."
+  "N resources, one call: POST /api/{plural}/-/{action} with either
+  body shape `bulk-items` reads — `{:ids [...] …input}` (one input
+  over many rows) or `{:items [{:id :input? :acknowledge?}]}` (each
+  row its own input, acknowledged per item). Guards run per row
+  through the same per-item algorithm as a single invoke. Returns
+  {:report wire-doc} or an idempotency replay; atomic refusals throw
+  (see the ns docstring); a dry-run answers {:valid? … :verdicts […]}.
+
+  `on_error` in the body picks the mode — continue (the partial-
+  success report, one transaction per item), stop (halt at the first
+  refusal; the report says what ran and what did not), atomic (one
+  transaction, any refusal rolls all back) — and may only tighten
+  the declaration's own. opts: :principal, :idempotency-key,
+  :acknowledged, :correlation-id, :dry-run, :grant.
+
+  Whole-call idempotency is the convention both shapes keep: the
+  call's key stores the report (`fan-out-store!`), the items ride
+  the call's correlation id, and no item transition carries the key
+  itself — a key stamped per item would be stored per item, and a
+  replay is the CALL's promise, not the row's."
   [engine kind action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
            dry-run grant]
@@ -1206,32 +1370,47 @@
             (throw (p/no-such-action kind action-name)))
         spec (fan-out-spec (:bulk defn))
         max-items (:max-items spec 100)
-        ids (:ids body)]
-    (when-not (and (vector? ids) (seq ids) (every? string? ids))
-      (throw (p/schema-invalid action-name
-                               {:ids ["required, non-empty array of ids"]})))
+        body (or body {})
+        items (bulk-items action-name body acknowledged)
+        mode (on-error-mode action-name spec body)
+        href #(str "/api/" (:plural rdef) "/" %)]
     (if (and (not dry-run)
              (when-some [threshold (:defer-over spec)]
-               (< threshold (count ids))))
+               (< threshold (count items))))
       ;; phase 9b closes the phase-7 punt: an over-threshold call
       ;; defers to the job resource — bulk! answers the marker, the
       ;; router mints the job and 202s (which keeps this namespace
-      ;; free of a jobs require)
-      {:deferred {:kind kind
-                  :action action-name
-                  :ids ids
-                  :input (not-empty (dissoc body :ids))}}
+      ;; free of a jobs require). A job runs continue-mode by its
+      ;; nature (refusals recorded per row, never stopping the rest),
+      ;; so a caller who asked for stop or atomic over the threshold
+      ;; is told the two do not fit rather than handed a job that
+      ;; would quietly run as continue.
+      (if (and (some? (:on_error body)) (not= "continue" (:on_error body))
+               (not (:atomic spec)))
+        (throw (p/schema-invalid
+                action-name
+                {:on_error [(str "over " (:defer-over spec) " items this call "
+                                 "defers to a job, which runs continue; send "
+                                 "at most " (:defer-over spec) " items for "
+                                 (:on_error body))]}))
+        {:deferred (deferred-marker kind action-name body items)})
       (do
-        (when (< max-items (count ids))
-          (throw (p/schema-invalid action-name
-                                   {:ids [(str "at most " max-items " ids per call")]})))
-        (let [item-body (not-empty (dissoc body :ids))
-              item-digest (body-digest item-body)
-              digest (body-digest body)
+        (when (< max-items (count items))
+          (throw (p/schema-invalid
+                  action-name
+                  {(if (contains? body :items) :items :ids)
+                   [(str "at most " max-items " "
+                         (if (contains? body :items) "items" "ids")
+                         " per call")]})))
+        (let [digest (body-digest body)
               marker (keyword (str "bulk:" (name action-name)))
-              href #(str "/api/" (:plural rdef) "/" %)]
+              item-opts (fn [it]
+                          {:principal principal
+                           :acknowledged (:acknowledged it)
+                           :grant grant
+                           :require-key? false})]
           (if dry-run
-            ;; the rehearsal fans out too (design §23): every id
+            ;; the rehearsal fans out too (design §23): every item
             ;; judged through the same per-item algorithm with
             ;; :dry-run riding along — no lock, no key demanded or
             ;; recorded, nothing committed, never a deferral (a job
@@ -1239,22 +1418,17 @@
             ;; read never taints its neighbors; verdicts are
             ;; self-keyed (waymark9's batch dry-run vocabulary —
             ;; 9 never grew a bulk one, recorded).
-            (let [item-opts {:principal principal
-                             :acknowledged acknowledged
-                             :grant grant
-                             :dry-run dry-run
-                             :require-key? false}
-                  verdicts
+            (let [verdicts
                   (mapv
-                   (fn [id]
+                   (fn [{:keys [id input] :as it}]
                      (try
                        (let [res (store/with-tx (:storage engine)
                                    (fn [tx]
                                      (invoke-in-tx! engine tx rdef kind id
-                                                    defn item-digest item-body
-                                                    item-opts)))]
-                         (cond-> {:self (href id) :verdict "ok"}
-                           (:warnings res) (assoc :warnings (:warnings res))))
+                                                    defn (body-digest input) input
+                                                    (assoc (item-opts it)
+                                                           :dry-run dry-run))))]
+                         (item-verdict href id res))
                        (catch Exception e
                          (if (refusal? e)
                            {:self (href id) :verdict "refused"
@@ -1264,22 +1438,19 @@
                                           (name kind) id "-" (ex-message e)))
                                {:self (href id) :verdict "failed"
                                 :reason "Internal error while judging this item."})))))
-                   ids)]
+                   items)]
               {:valid? (every? #(= "ok" (:verdict %)) verdicts)
                :verdicts verdicts})
             (or (fan-out-replay engine kind action-name marker digest
                                 idempotency-key (get-in defn [:safety :idempotent]))
               (let [cid (or correlation-id (str (random-uuid)))
-                    item-opts {:principal principal
-                               :acknowledged acknowledged
-                               :grant grant
-                               :correlation-id cid
-                               :require-key? false}
-                    run-item (fn [tx id]
+                    run-item (fn [tx {:keys [id input] :as it}]
                                (invoke-in-tx! engine tx rdef kind id defn
-                                              item-digest item-body item-opts))
+                                              (body-digest input) input
+                                              (assoc (item-opts it)
+                                                     :correlation-id cid)))
                     data
-                    (if (:atomic spec)
+                    (if (= "atomic" mode)
                       ;; all-or-nothing: one transaction, any refusal
                       ;; rolls the whole call back — the 409 carries
                       ;; the report
@@ -1288,8 +1459,8 @@
                             (try
                               (store/with-tx (:storage engine)
                                 (fn [tx]
-                                  (mapv (fn [id] (vreset! at id) (run-item tx id))
-                                        ids)))
+                                  (mapv (fn [it] (vreset! at (:id it)) (run-item tx it))
+                                        items)))
                               (catch Exception e
                                 (if (refusal? e)
                                   (throw (p/problem
@@ -1306,33 +1477,50 @@
                                   (throw e))))]
                         (doseq [res results]
                           (after-write! engine kind action-name res))
-                        {:succeeded (count ids) :refused 0 :failed 0 :refusals []})
+                        {:succeeded (count items) :refused 0 :failed 0 :refusals []})
                       ;; partial success: one transaction PER item — a
-                      ;; refusal never poisons its neighbors
-                      (reduce
-                       (fn [rep id]
-                         (try
-                           (let [res (store/with-tx (:storage engine)
-                                       #(run-item % id))]
-                             (after-write! engine kind action-name res)
-                             (update rep :succeeded inc))
-                           (catch Exception e
-                             (if (refusal? e)
-                               (-> rep
-                                   (update :refused inc)
-                                   (update :refusals conj
-                                           {:self (href id)
-                                            :reason (problem-reason e)}))
-                               (do (binding [*out* *err*]
-                                     (println "waymark10 bulk item error:"
-                                              (name kind) id "-" (ex-message e)))
-                                   (-> rep
-                                       (update :failed inc)
-                                       (update :refusals conj
-                                               {:self (href id)
-                                                :reason "Internal error while processing this item."})))))))
-                       {:succeeded 0 :refused 0 :failed 0 :refusals []}
-                       ids))
+                      ;; refusal never poisons its neighbors. Stop mode
+                      ;; is the same loop cut at the first item that
+                      ;; did not land, with the rest reported unrun.
+                      (let [stop? (= "stop" mode)
+                            rep
+                            (reduce
+                             (fn [rep {:keys [id] :as it}]
+                               (let [rep
+                                     (try
+                                       (let [res (store/with-tx (:storage engine)
+                                                   #(run-item % it))]
+                                         (after-write! engine kind action-name res)
+                                         (update rep :succeeded inc))
+                                       (catch Exception e
+                                         (if (refusal? e)
+                                           (-> rep
+                                               (update :refused inc)
+                                               (update :refusals conj
+                                                       {:self (href id)
+                                                        :reason (problem-reason e)}))
+                                           (do (binding [*out* *err*]
+                                                 (println "waymark10 bulk item error:"
+                                                          (name kind) id "-" (ex-message e)))
+                                               (-> rep
+                                                   (update :failed inc)
+                                                   (update :refusals conj
+                                                           {:self (href id)
+                                                            :reason "Internal error while processing this item."}))))))
+                                     ran (+ (:succeeded rep) (:refused rep) (:failed rep))]
+                                 (if (and stop? (< (:succeeded rep) ran))
+                                   (reduced (assoc rep :ran ran))
+                                   rep)))
+                             {:succeeded 0 :refused 0 :failed 0 :refusals []}
+                             items)]
+                        (if stop?
+                          (let [ran (or (:ran rep) (count items))
+                                rest (subvec items ran)]
+                            (-> (dissoc rep :ran)
+                                (assoc :skipped (count rest)
+                                       :not-run (mapv #(hash-map :self (href (:id %)))
+                                                      rest))))
+                          rep)))
                     doc (report-doc action-name data nil)]
                 (fan-out-store! engine kind marker digest idempotency-key doc)
                 {:report doc}))))))))

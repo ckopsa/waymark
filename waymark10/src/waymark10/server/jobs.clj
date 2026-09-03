@@ -165,6 +165,19 @@
                      :x-display
                      {:label "The input every row gets"}}
              :any]
+            ;; the items shape deferred (waymark-pywy.4): each row's
+            ;; own input and acknowledged guard names, index-aligned
+            ;; with ids — absent for a one-input call
+            [:inputs {:optional true
+                      :x-display
+                      {:label "Each row's own input"
+                       :help "Index-aligned with the ids: the input each row gets when the call gave every row its own."}}
+             [:maybe [:vector :any]]]
+            [:acknowledged {:optional true
+                            :x-display
+                            {:label "Each row's acknowledged warnings"
+                             :help "Index-aligned with the ids: the guard names each item acknowledged when it was queued."}}
+             [:maybe [:vector [:vector :string]]]]
             [:requested_by {:x-display {:label "Who asked for it"}}
              :any]
             [:progress {:x-display
@@ -216,7 +229,7 @@
   the document shape and the worker actor are this module's, and a
   copy of either in the router would be exactly the drift this
   framework exists to make impossible."
-  [eng {:keys [kind action ids input]} principal]
+  [eng {:keys [kind action ids input inputs acknowledged]} principal]
   (inv/create! eng :job
                (cond-> {:action (name action)
                         :kind (name kind)
@@ -225,7 +238,9 @@
                                        :type (name (:type principal :human))
                                        :display (:display principal)}
                         :progress {:done 0 :total (count ids) :refusals []}}
-                 input (assoc :input input))
+                 input (assoc :input input)
+                 inputs (assoc :inputs inputs)
+                 acknowledged (assoc :acknowledged acknowledged))
                {:principal worker-actor}))
 
 ;; ── execution ───────────────────────────────────────────────────────
@@ -308,13 +323,20 @@
                                      {:principal worker-actor
                                       :correlation-id job-id}))
                   job)
-            {:keys [action kind ids input progress]} (:data job)
+            {:keys [action kind ids input inputs acknowledged progress]} (:data job)
             {:keys [done total]} progress
             target-kind (keyword kind)
             action-name (keyword action)
             plural (:plural (get (inv/resources eng) target-kind))
             principal (requesting-principal job)
-            batch (subvec (vec ids) done (min total (+ done batch-size)))]
+            ;; the items shape (waymark-pywy.4): each row's own
+            ;; input and acknowledged names ride index-aligned with
+            ;; the ids; a one-input call has neither
+            input-at (fn [i] (if inputs (not-empty (nth inputs i nil)) input))
+            acknowledged-at (fn [i] (into #{} (map keyword)
+                                          (when acknowledged (nth acknowledged i nil))))
+            end (min total (+ done batch-size))
+            batch (map vector (range done end) (subvec (vec ids) done end))]
         (if (empty? batch)
           (do ;; the artifact: the final per-item report on the row's
               ;; data, in the same document the completed envelope reads
@@ -326,10 +348,11 @@
               :completed)
           (let [refusals
                 (reduce
-                 (fn [refusals id]
+                 (fn [refusals [i id]]
                    (try
-                     (inv/bulk-item! eng target-kind action-name id input
+                     (inv/bulk-item! eng target-kind action-name id (input-at i)
                                      {:principal principal
+                                      :acknowledged (acknowledged-at i)
                                       :correlation-id job-id})
                      refusals
                      (catch Exception e

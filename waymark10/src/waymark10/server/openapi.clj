@@ -177,17 +177,44 @@
 (def ^:private id-param
   {:name "id" :in "path" :required true :schema {:type "string"}})
 
-(defn- bulk-body [defn']
+(def ^:private on-error-schema
+  {:type "string" :enum ["continue" "stop" "atomic"]
+   :description (str "continue: the partial-success report (default); stop: "
+                     "halt at the first refusal and report what ran and what "
+                     "did not; atomic: one transaction, any refusal rolls all "
+                     "back. May only tighten the declaration's own mode.")})
+
+(defn- bulk-body
+  "The bulk door's body, either shape (waymark-pywy.4): the declared
+  input plus `ids` — one input over many rows — or `items`, each row
+  with its own input and its own acknowledged guard names."
+  [defn']
   (let [spec (if (map? (:bulk defn')) (:bulk defn') {})
+        max-items (:max-items spec 100)
         base (if (:input defn')
                (schema/json-schema (:input defn'))
-               {:type "object" :properties {}})]
+               {:type "object" :properties {}})
+        item {:type "object"
+              :properties (cond-> {:id {:type "string"}
+                                   :acknowledge {:type "array"
+                                                 :items {:type "string"}
+                                                 :description "Guard names this item acknowledges — per item, never for the call."}}
+                            (:input defn') (assoc :input base))
+              :required ["id"]
+              :additionalProperties false}]
     (body-of
-     (-> base
-         (update :properties assoc
-                 :ids {:type "array" :items {:type "string"}
-                       :minItems 1 :maxItems (:max-items spec 100)})
-         (update :required (fnil conj []) "ids")))))
+     {:oneOf [(-> base
+                  (update :properties assoc
+                          :ids {:type "array" :items {:type "string"}
+                                :minItems 1 :maxItems max-items}
+                          :on_error on-error-schema)
+                  (update :required (fnil conj []) "ids"))
+              {:type "object"
+               :properties {:items {:type "array" :items item
+                                    :minItems 1 :maxItems max-items}
+                            :on_error on-error-schema}
+               :required ["items"]
+               :additionalProperties false}]})))
 
 (defn- kind-paths [rdef]
   (let [kname (name (:kind rdef))

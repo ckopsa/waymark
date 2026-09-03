@@ -552,7 +552,10 @@
   [doc {:keys [action items]}]
   (let [where (str "bulk_report " (:action doc))
         data (:data doc)
-        {:keys [succeeded refused failed refusals]} data]
+        {:keys [succeeded refused failed refusals]} data
+        ;; stop mode (waymark-pywy.4): the items the call did not
+        ;; reach are counted as skipped and listed as not_run
+        skipped (or (:skipped data) 0)]
     (cond-> []
       (not= "bulk_report" (:kind doc))
       (conj (str where ": kind is " (pr-str (:kind doc)) ", not bulk_report"))
@@ -568,9 +571,13 @@
                  " are not non-negative integers"))
 
       (and items (every? nat-int? [succeeded refused failed])
-           (not= items (+ succeeded refused failed)))
-      (conj (str where ": counts sum to " (+ succeeded refused failed)
+           (not= items (+ succeeded refused failed skipped)))
+      (conj (str where ": counts sum to " (+ succeeded refused failed skipped)
                  ", not the " items " items sent"))
+
+      (not= skipped (count (:not_run data)))
+      (conj (str where ": " (count (:not_run data)) " not_run entries for "
+                 skipped " skipped items"))
 
       (and (every? nat-int? [refused failed])
            (not= (+ refused failed) (count refusals)))

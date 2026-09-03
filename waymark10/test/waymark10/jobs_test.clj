@@ -24,6 +24,9 @@
            :when '(= (data :ready) true)
            :explain "This errand is not ready."}))
 
+(r/defhandler label-handler [row inp _ctx]
+  (assoc-in row [:data :label] (:label inp)))
+
 (def ^:private errand
   (r/resource
    {:kind :errand
@@ -33,13 +36,21 @@
     :summary "{data.title} · {state}"
     :schema [:map
              [:title [:string {:min 1 :max 60}]]
-             [:ready {:optional true} [:maybe :boolean]]]
+             [:ready {:optional true} [:maybe :boolean]]
+             [:label {:optional true} [:maybe [:string {:max 20}]]]]
     :actions
     {:finish {:from #{:open} :to :done
               :bulk {:defer-over 2 :max-items 100}
               :guards [ready-gate]
               :safety {:idempotent true :reversible false :confirm false
-                       :one-way "Done is done."}}}}))
+                       :one-way "Done is done."}}
+     ;; the items shape deferred (waymark-pywy.4): each row's own
+     ;; input rides the job
+     :label {:from #{:open} :to :open
+             :bulk {:defer-over 2 :max-items 100}
+             :input [:map [:label [:string {:min 1 :max 20}]]]
+             :safety {:idempotent true :reversible true :confirm false}
+             :handler label-handler}}}))
 
 (def ^:dynamic *eng* nil)
 (def ^:dynamic *h* nil)
@@ -192,3 +203,26 @@
         (is (not (contains? (:unavailable env) :complete)))
         (is (contains? (:actions env) :cancel))))
     (jobs/run-once! *eng* {:batch-size 10})))
+
+;; ── 5. the items shape defers with each row's own input ─────────────
+
+(deftest deferred-items-carry-their-own-inputs
+  (let [ids (errands! [true true true])
+        resp (req :post "/api/errands/-/label"
+                  {:items (map-indexed (fn [i id] {:id id :input {:label (str "L" i)}})
+                                       ids)})
+        job (json resp)]
+    (is (= 202 (:status resp)) (str "wanted a 202: " (:body resp)))
+    (testing "the job carries the ids and, index-aligned, each input"
+      (is (= ids (get-in job [:data :ids])))
+      (is (= [{:label "L0"} {:label "L1"} {:label "L2"}]
+             (get-in job [:data :inputs])))
+      (is (nil? (get-in job [:data :input])) "no shared input on this call"))
+    (testing "the worker runs each row through its own input"
+      (is (= 1 (jobs/run-once! *eng* {:batch-size 2})))
+      (is (= "completed" (:state (job-doc job))))
+      (is (= ["L0" "L1" "L2"]
+             (mapv #(get-in (json (req :get (str "/api/errands/" %)))
+                            [:data :label])
+                   ids))))))
+

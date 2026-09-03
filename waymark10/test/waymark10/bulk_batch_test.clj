@@ -6,7 +6,13 @@
   back, batch lands one transition per input in order, and the named
   an over-threshold call defers to the job resource with a 202 (the
   phase-9b closure of the phase-7 punt; the worker's own story lives
-  in waymark10.jobs-test)."
+  in waymark10.jobs-test).
+
+  The items shape (waymark-pywy.4, §9): many ids each with its own
+  input at the same door, acknowledged PER ITEM (the call-level
+  header is refused there), on_error continue|stop|atomic, per-item
+  rehearsal verdicts that say what would move, and the same
+  whole-call idempotency convention."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
@@ -26,6 +32,15 @@
            :when '(= (data :ready) true)
            :explain "This chore is not ready."}))
 
+(def risky-warning
+  (g/expr {:name :risky
+           :severity :warning
+           :when '(not (data :risky))
+           :explain "This chore is marked risky."}))
+
+(r/defhandler tag-handler [row inp _ctx]
+  (assoc-in row [:data :label] (:label inp)))
+
 (def chore
   (r/resource
    {:kind :chore
@@ -35,9 +50,20 @@
     :summary "{data.title} · {state}"
     :schema [:map
              [:title [:string {:min 1 :max 60}]]
-             [:ready {:optional true} [:maybe :boolean]]]
+             [:ready {:optional true} [:maybe :boolean]]
+             [:risky {:optional true} [:maybe :boolean]]
+             [:label {:optional true} [:maybe [:string {:max 20}]]]]
     :actions
-    {:complete {:from #{:open} :to :done
+    {;; the items shape's own door: an input per row, a warning to
+     ;; acknowledge per row, non-idempotent so the call owes a key
+     :tag {:from #{:open} :to :open
+           :bulk {:max-items 5}
+           :input [:map [:label [:string {:min 1 :max 20}]]]
+           :guards [risky-warning]
+           :record true
+           :safety {:idempotent false :reversible true :confirm false}
+           :handler tag-handler}
+     :complete {:from #{:open} :to :done
                 :bulk {:max-items 5}
                 :guards [ready-gate]
                 :safety {:idempotent true :reversible false :confirm false
@@ -117,6 +143,13 @@
           (id-of (req :post "/api/chores"
                       {:title (str "chore " i) :ready ready?})))
         (range (count ready-mask)) ready-mask))
+
+(defn- chore! [data]
+  (id-of (req :post "/api/chores" (merge {:title "chore" :ready true} data))))
+
+(defn- transitions-of [id]
+  (store/with-tx *st*
+    #(store/transitions *st* % {:kind :chore :resource-id id} {})))
 
 ;; ── 1. the partial-success report ───────────────────────────────────
 
@@ -370,3 +403,212 @@
     (testing "no key demanded for the rehearsal — the real batch still
               demands one"
       (is (= 428 (:status (req :post uri {:inputs [{:text "one"}]})))))))
+
+;; ── 9. the items shape: many ids, each with its own input ───────────
+;; (waymark-pywy.4) The same door, the third body: {items: [{id,
+;; input?, acknowledge?}]}. Every obligation above holds per item;
+;; what is new is that the input and the acknowledgement are the
+;; item's own.
+
+(deftest bulk-items-each-with-its-own-input
+  (let [[a b c] (chores! [true true true])
+        k {"idempotency-key" "items-key-1"}
+        body {:items [{:id a :input {:label "one"}}
+                      {:id b :input {:label "two"}}
+                      {:id c :input {:label "three"}}]}
+        resp (req :post "/api/chores/-/tag" body k)
+        doc (json resp)]
+    (is (= 200 (:status resp)) (:body resp))
+    (let [vs (conf/bulk-report-violations doc {:action :tag :items 3})]
+      (is (empty? vs) (str/join "\n" vs)))
+    (is (= {:succeeded 3 :refused 0 :failed 0}
+           (select-keys (:data doc) [:succeeded :refused :failed])))
+    (testing "each row got its own input"
+      (is (= ["one" "two" "three"]
+             (mapv #(get-in (get-row (str "/api/chores/" %)) [:data :label])
+                   [a b c]))))
+    (testing "the log records each item's input; the items share the
+              call's correlation id and carry no key of their own —
+              the call's key stores the report (today's convention)"
+      (let [ts (mapv #(last (transitions-of %)) [a b c])]
+        (is (= [:tag :tag :tag] (mapv :action ts)))
+        (is (= ["one" "two" "three"] (mapv #(get-in % [:inputs :label]) ts)))
+        (is (= 1 (count (distinct (map :correlation-id ts)))))
+        (is (every? nil? (map :idempotency-key ts)))))
+    (testing "a non-idempotent items call demands the call-level key"
+      (is (= 428 (:status (req :post "/api/chores/-/tag" body)))))
+    (testing "the key replays the report byte-identically"
+      (let [again (req :post "/api/chores/-/tag" body k)]
+        (is (= (:body resp) (:body again)))
+        (is (= 2 (get-in (get-row (str "/api/chores/" a)) [:meta :version]))
+            "the replay wrote nothing")))))
+
+(deftest bulk-items-acknowledge-is-per-item
+  (let [a (chore! {})
+        b (chore! {:risky true})
+        items (fn [ack] [{:id a :input {:label "x"}}
+                         (cond-> {:id b :input {:label "y"}}
+                           ack (assoc :acknowledge ack))])]
+    (testing "an unacknowledged warning refuses ITS item and no other"
+      (let [doc (json (req :post "/api/chores/-/tag" {:items (items nil)}
+                          {"idempotency-key" "items-ack-1"}))]
+        (is (= {:succeeded 1 :refused 1 :failed 0}
+               (select-keys (:data doc) [:succeeded :refused :failed])))
+        (let [[refusal] (get-in doc [:data :refusals])]
+          (is (= (str "/api/chores/" b) (:self refusal)))
+          (is (str/includes? (:reason refusal) "cknowledge")))
+        (is (= "x" (get-in (get-row (str "/api/chores/" a)) [:data :label])))
+        (is (nil? (get-in (get-row (str "/api/chores/" b)) [:data :label])))))
+    (testing "a blanket call-level acknowledgement is refused, and
+              nothing moves — the header would spread one reading
+              over rows nobody read that way"
+      (let [resp (req :post "/api/chores/-/tag" {:items (items nil)}
+                      {"idempotency-key" "items-ack-2"
+                       "waymark-acknowledge" "risky"})
+            p (json resp)]
+        (is (= 422 (:status resp)))
+        (is (= "https://waymark.dev/problems/acknowledge-per-item" (:type p)))
+        (is (= "items[].acknowledge" (get-in p [:acknowledge :field])))
+        (is (= ["risky"] (get-in p [:acknowledge :names])))
+        (is (= 1 (get-in (get-row (str "/api/chores/" b)) [:meta :version])))
+        (is (= 2 (get-in (get-row (str "/api/chores/" a)) [:meta :version]))
+            "a did not run twice either — the whole call was refused")))
+    (testing "the item's own acknowledgement lets it through"
+      (let [doc (json (req :post "/api/chores/-/tag" {:items (items ["risky"])}
+                          {"idempotency-key" "items-ack-3"}))]
+        (is (= {:succeeded 2 :refused 0 :failed 0}
+               (select-keys (:data doc) [:succeeded :refused :failed])))
+        (is (= "y" (get-in (get-row (str "/api/chores/" b)) [:data :label])))
+        (is (= ["risky"] (mapv name (:acknowledged (last (transitions-of b)))))
+            "recorded as overridden on that row's own transition")))
+    (testing "the ids shape keeps its call-level header — one input,
+              one reading, one acknowledgement"
+      (let [c (chore! {:risky true})
+            doc (json (req :post "/api/chores/-/tag" {:ids [c] :label "z"}
+                          {"idempotency-key" "items-ack-4"
+                           "waymark-acknowledge" "risky"}))]
+        (is (= 1 (get-in doc [:data :succeeded])))))))
+
+(deftest bulk-on-error-modes
+  (testing "stop halts at the first refusal and says what did not run"
+    (let [[a b c] (chores! [true false true])
+          resp (req :post "/api/chores/-/complete" {:ids [a b c] :on_error "stop"})
+          doc (json resp)]
+      (is (= 200 (:status resp)))
+      (let [vs (conf/bulk-report-violations doc {:action :complete :items 3})]
+        (is (empty? vs) (str/join "\n" vs)))
+      (is (= {:succeeded 1 :refused 1 :failed 0 :skipped 1}
+             (select-keys (:data doc) [:succeeded :refused :failed :skipped])))
+      (is (= "This chore is not ready."
+             (-> doc :data :refusals first :reason)))
+      (is (= [{:self (str "/api/chores/" c)}] (get-in doc [:data :not_run])))
+      (is (= ["done" "open" "open"]
+             (mapv #(:state (get-row (str "/api/chores/" %))) [a b c])))))
+  (testing "stop with nothing refusing runs everything and skips none"
+    (let [ids (chores! [true true])
+          doc (json (req :post "/api/chores/-/complete"
+                        {:items (mapv #(hash-map :id %) ids) :on_error "stop"}))]
+      (is (= {:succeeded 2 :refused 0 :failed 0 :skipped 0}
+             (select-keys (:data doc) [:succeeded :refused :failed :skipped])))
+      (is (= [] (get-in doc [:data :not_run])))))
+  (testing "atomic tightens a non-atomic declaration: one refusal
+            rolls the items that had passed back too"
+    (let [[a b c] (chores! [true false true])
+          resp (req :post "/api/chores/-/complete"
+                    {:items [{:id a} {:id b} {:id c}] :on_error "atomic"})
+          p (json resp)]
+      (is (= 409 (:status resp)))
+      (is (= "https://waymark.dev/problems/bulk-refused" (:type p)))
+      (is (= (str "/api/chores/" b) (-> p :report :refusals first :self)))
+      (doseq [id [a b c]]
+        (is (= "open" (:state (get-row (str "/api/chores/" id))))))))
+  (testing "continue, spelled out, is the report as ever"
+    (let [[a b] (chores! [true false])
+          doc (json (req :post "/api/chores/-/complete"
+                        {:items [{:id a} {:id b}] :on_error "continue"}))]
+      (is (= {:succeeded 1 :refused 1 :failed 0}
+             (select-keys (:data doc) [:succeeded :refused :failed])))
+      (is (not (contains? (:data doc) :skipped)))))
+  (testing "the vocabulary is closed"
+    (let [[a] (chores! [true])
+          b (json (req :post "/api/chores/-/complete" {:ids [a] :on_error "retry"}))]
+      (is (= ["one of continue, stop, atomic"] (get-in b [:errors :on_error])))))
+  (testing "a declared-atomic action can only be atomic — the body
+            may tighten the declaration, never loosen it"
+    (let [[a] (chores! [true])]
+      (is (= 422 (:status (req :post "/api/chores/-/complete_all"
+                               {:ids [a] :on_error "continue"}))))
+      (is (= 200 (:status (req :post "/api/chores/-/complete_all"
+                               {:ids [a] :on_error "atomic"}))))))
+  (testing "stop and atomic do not defer — a job runs continue"
+    (let [ids (chores! [true true true])   ;; sweep defers over 2
+          resp (req :post "/api/chores/-/sweep" {:ids ids :on_error "stop"})]
+      (is (= 422 (:status resp)))
+      (is (contains? (:errors (json resp)) :on_error))
+      (doseq [id ids]
+        (is (= "open" (:state (get-row (str "/api/chores/" id)))))))))
+
+(deftest bulk-items-dry-run-says-what-would-move
+  (let [[a b] (chores! [true false])
+        resp (dry-req "/api/chores/-/complete" {:items [{:id a} {:id b}]})
+        doc (json resp)]
+    (is (= 200 (:status resp)))
+    (is (false? (:valid doc)))
+    (is (= ["ok" "refused"] (mapv :verdict (:verdicts doc))))
+    (testing "an ok verdict says what would move; a refusal speaks the
+              guard's own sentence"
+      (is (= {:from "open" :to "done"} (:would (first (:verdicts doc)))))
+      (is (= "This chore is not ready." (:reason (second (:verdicts doc)))))
+      (is (nil? (:would (second (:verdicts doc))))))
+    (testing "the fields an input names ride the would"
+      (let [doc (json (dry-req "/api/chores/-/tag"
+                               {:items [{:id a :input {:label "one"}}
+                                        {:id b :input {:label ""}}]}))]
+        (is (= ["ok" "refused"] (mapv :verdict (:verdicts doc))))
+        (is (= {:from "open" :to "open" :fields ["label"]}
+               (:would (first (:verdicts doc)))))))
+    (testing "nothing moved, and the rehearsal demanded no key for a
+              non-idempotent action"
+      (doseq [id [a b]]
+        (let [row (get-row (str "/api/chores/" id))]
+          (is (= "open" (:state row)))
+          (is (= 1 (get-in row [:meta :version])))
+          (is (nil? (get-in row [:data :label]))))))))
+
+(deftest bulk-items-contract
+  (let [[a] (chores! [true])
+        errors (fn [body] (:errors (json (req :post "/api/chores/-/tag" body
+                                              {"idempotency-key" (str (random-uuid))}))))]
+    (is (= ["one of ids or items, not both"]
+           (:items (errors {:ids [a] :items [{:id a}]}))))
+    (is (contains? (errors {:items []}) :items))
+    (is (contains? (errors {:items "a"}) :items))
+    (is (= ["item 0: id must be a non-blank string"]
+           (:items (errors {:items [{:input {:label "x"}}]}))))
+    (is (= ["item 1: unexpected field foo"]
+           (:items (errors {:items [{:id a} {:id a :foo 1}]}))))
+    (is (= ["item 0: acknowledge must be an array of guard names"]
+           (:items (errors {:items [{:id a :acknowledge "risky"}]}))))
+    (testing "the items shape carries no top-level input — each item does"
+      (is (= ["unexpected field — each item carries its own input"]
+             (:label (errors {:items [{:id a}] :label "x"})))))
+    (testing "the cap counts items"
+      (is (= ["at most 5 items per call"]
+             (:items (errors {:items (vec (repeat 6 {:id a :input {:label "x"}}))})))))
+    (testing "an item's own input is validated as any input is"
+      (let [doc (json (req :post "/api/chores/-/tag"
+                          {:items [{:id a :input {:label ""}}]}
+                          {"idempotency-key" "items-contract-1"}))]
+        (is (= 1 (get-in doc [:data :refused])))))
+    (testing "over the threshold the items defer, each row's input
+              riding the job"
+      (let [ids (chores! [true true true])
+            resp (req :post "/api/chores/-/sweep"
+                      {:items (mapv #(hash-map :id %) ids)})
+            job (json resp)]
+        (is (= 202 (:status resp)))
+        (is (= "job" (:kind job)))
+        (is (= ids (get-in job [:data :ids])))
+        (is (= [{} {} {}] (get-in job [:data :inputs])))
+        (is (= [[] [] []] (get-in job [:data :acknowledged])))))))
+

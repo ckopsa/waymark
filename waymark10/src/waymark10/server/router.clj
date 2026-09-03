@@ -879,9 +879,15 @@
           _ (check-action! req rdef (keyword action))
           body (read-body req)
           ;; batch B (flagged): grant-denied args 422 here too — the
-          ;; bulk body minus its ids is the per-item input
-          _ (grants/check-args! (visibility-of req) rdef (keyword action)
-                                (dissoc body :ids))
+          ;; bulk body minus its ids (and its on_error) is the
+          ;; per-item input; in the items shape each item's own
+          ;; input answers the same 422 (waymark-pywy.4)
+          _ (if (contains? body :items)
+              (doseq [it (:items body) :when (map? it)]
+                (grants/check-args! (visibility-of req) rdef (keyword action)
+                                    (:input it)))
+              (grants/check-args! (visibility-of req) rdef (keyword action)
+                                  (dissoc body :ids :on_error)))
           opts (invoke-opts req)
           result (inv/bulk! eng (:kind rdef) (keyword action) body opts)]
       (cond

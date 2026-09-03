@@ -3072,6 +3072,15 @@ recorded. Three recorded choices:
 - **A dry-run never defers.** Deferral is an execution strategy and
   a job row is an effect; an over-threshold bulk rehearsal judges
   inline, still capped by `:max-items`.
+- **The items shape (waymark-pywy.4, 2026-09-03).** The bulk door's
+  third body, `{items: [{id, input?, acknowledge?}]}` — many ids each
+  with its own input — runs the same per-item algorithm; acknowledge
+  is per item there (the call-level header is refused, 422
+  `acknowledge-per-item`), `on_error` picks continue|stop|atomic and
+  may only tighten the declaration, and every ok verdict carries
+  `would: {from, to, fields?}`. The MCP surface reaches it as
+  `waymark_invoke` with `ids`/`items` — docs/spec-mcp-surface.md
+  § Many rows.
 
 ## The partial rehearsal — judged when answerable
 
