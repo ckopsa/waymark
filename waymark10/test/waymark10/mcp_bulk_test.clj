@@ -1,7 +1,7 @@
 (ns waymark10.mcp-bulk-test
   "waymark_invoke over many rows (waymark-pywy.4): `ids` reaches the
   bulk door with one shared input, `items` with each row's own — the
-  same six tools, no seventh. The confirm gate is per item: a confirm
+  same fixed tools, none added for bulk. The confirm gate is per item: a confirm
   action refuses `ids` outright, and over `items` every row must
   carry its own consequence sentence or nothing runs. Everything
   else the model reads is the engine's own report, byte for byte —
@@ -95,10 +95,12 @@
 
 ;; ── 1. the tool count did not grow ──────────────────────────────────
 
-(deftest still-six-tools
+(deftest bulk-adds-no-tool
   (let [h (fresh)
         names (mapv :name (get-in (json (rpc h "tools/list" {})) [:result :tools]))]
-    (is (= 6 (count names)))
+    (is (= (count mcp/tools) (count names))
+        "the fixed list as it stands (seven since waymark-pywy.3) — bulk added nothing to it")
+    (is (not-any? #(str/includes? % "bulk") names) "no seventh tool for bulk")
     (is (some #{"waymark_invoke"} names))
     (testing "and waymark_invoke's own schema names the two bulk arguments"
       (let [props (get-in (first (filter #(= "waymark_invoke" (:name %)) mcp/tools))

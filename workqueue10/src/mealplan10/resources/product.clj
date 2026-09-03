@@ -290,7 +290,12 @@
              [:maybe [:int {:min 1 :max 10000}]]]
             [:package_count {:optional true :x-display package-count-display}
              [:maybe [:int {:min 1}]]]
-            [:upc {:optional true :filter #{:eq} :x-display upc-display}
+            ;; :in beside :eq (waymark-pywy.3): a receipt's barcodes
+            ;; resolve in ONE waymark_resolve call. The :eq alone had
+            ;; already promoted f_upc to a generated column, so the
+            ;; wider grammar moves no DDL — the deploy gate's plan
+            ;; stays empty
+            [:upc {:optional true :filter #{:eq :in} :x-display upc-display}
              [:maybe [:string {:max 20}]]]
             [:url {:optional true :x-display url-display}
              [:maybe [:string {:max 280}]]]
