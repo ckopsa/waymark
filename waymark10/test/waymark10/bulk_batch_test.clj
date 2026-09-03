@@ -12,13 +12,20 @@
   input at the same door, acknowledged PER ITEM (the call-level
   header is refused there), on_error continue|stop|atomic, per-item
   rehearsal verdicts that say what would move, and the same
-  whole-call idempotency convention."
+  whole-call idempotency convention.
+
+  The call's key on every item (waymark-pywy.5, §10): each item
+  transition — bulk in every mode, batch, and a deferred call's
+  items run by the worker — is STAMPED with the call's key while the
+  idempotency store holds exactly the one whole-call record, so a
+  replay still answers the stored report and lands nothing."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [next.jdbc :as jdbc]
             [waymark10.guards :as g]
             [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
+            [waymark10.server.jobs :as jobs]
             [waymark10.server.store :as store]
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.conformance :as conf]
@@ -104,6 +111,7 @@
 
 (def ^:dynamic *h* nil)
 (def ^:dynamic *st* nil)
+(def ^:dynamic *eng* nil)
 
 (use-fixtures :once
   (fn [f]
@@ -115,11 +123,12 @@
                            "waymark10_transitions" "waymark10_idempotency"
                            "waymark10_drafts" "waymark10_job_leases"]]
               (jdbc/execute! tx [(str "DROP TABLE IF EXISTS " table " CASCADE")]))))
-        (binding [*st* st
-                  *h* (engine/handler
-                       (engine/engine {:storage st
-                                       :resources [chore ledger]}))]
-          (f))
+        (let [eng (engine/engine {:storage st
+                                  :resources [chore ledger]})]
+          (binding [*st* st
+                    *eng* eng
+                    *h* (engine/handler eng)]
+            (f)))
         (finally (pg/close! st))))))
 
 ;; ── request sugar ───────────────────────────────────────────────────
@@ -428,13 +437,14 @@
              (mapv #(get-in (get-row (str "/api/chores/" %)) [:data :label])
                    [a b c]))))
     (testing "the log records each item's input; the items share the
-              call's correlation id and carry no key of their own —
-              the call's key stores the report (today's convention)"
+              call's correlation id and carry the call's key as a
+              stamp — the report is the one record under it (§10)"
       (let [ts (mapv #(last (transitions-of %)) [a b c])]
         (is (= [:tag :tag :tag] (mapv :action ts)))
         (is (= ["one" "two" "three"] (mapv #(get-in % [:inputs :label]) ts)))
         (is (= 1 (count (distinct (map :correlation-id ts)))))
-        (is (every? nil? (map :idempotency-key ts)))))
+        (is (= ["items-key-1" "items-key-1" "items-key-1"]
+               (mapv :idempotency-key ts)))))
     (testing "a non-idempotent items call demands the call-level key"
       (is (= 428 (:status (req :post "/api/chores/-/tag" body)))))
     (testing "the key replays the report byte-identically"
@@ -612,3 +622,115 @@
         (is (= [{} {} {}] (get-in job [:data :inputs])))
         (is (= [[] [] []] (get-in job [:data :acknowledged])))))))
 
+
+;; ── 10. the call's key on every item, recorded once ─────────────────
+
+(defn- key-of [id] (:idempotency-key (last (transitions-of id))))
+
+(defn- records-under
+  "How many idempotency records the store holds under a key — the
+  whole-call convention says exactly one for a call that ran, and
+  none for one that deferred."
+  [key]
+  (store/with-tx *st*
+    (fn [tx]
+      (-> (jdbc/execute-one!
+           tx ["SELECT count(*) AS n FROM waymark10_idempotency WHERE key = ?" key])
+          vals first long))))
+
+(defn- record-under [key kind]
+  (store/with-tx *st* #(store/idempotency-lookup *st* % key kind)))
+
+(deftest bulk-stamps-the-calls-key-on-every-item-and-records-it-once
+  (testing "items: each item's transition carries the call's key"
+    (let [[a b c] (chores! [true true true])
+          key "items-origin-1"
+          body {:items [{:id a :input {:label "one"}}
+                        {:id b :input {:label "two"}}
+                        {:id c :input {:label "three"}}]}
+          resp (req :post "/api/chores/-/tag" body {"idempotency-key" key})]
+      (is (= 200 (:status resp)) (:body resp))
+      (is (= 3 (get-in (json resp) [:data :succeeded])))
+      (is (= [key key key] (mapv key-of [a b c])))
+      (testing "and the store holds exactly one record under it — the report's"
+        (is (= 1 (records-under key)))
+        (is (= (keyword "bulk:tag") (:action (record-under key :chore)))))
+      (testing "a replay answers the stored report and lands no transition"
+        (let [before (mapv (comp count transitions-of) [a b c])
+              again (req :post "/api/chores/-/tag" body {"idempotency-key" key})]
+          (is (= 200 (:status again)))
+          (is (= (:body resp) (:body again)) "byte-identical")
+          (is (= before (mapv (comp count transitions-of) [a b c])))
+          (is (= 1 (records-under key)))))))
+  (testing "ids: the shared-input shape stamps the same way"
+    (let [[a b c] (chores! [true false true])
+          key "ids-origin-1"
+          body {:ids [a b c]}
+          resp (req :post "/api/chores/-/complete" body {"idempotency-key" key})]
+      (is (= 200 (:status resp)) (:body resp))
+      (is (= {:succeeded 2 :refused 1}
+             (select-keys (get-in (json resp) [:data]) [:succeeded :refused])))
+      (is (= [key key] (mapv key-of [a c])))
+      (is (= :create (:action (last (transitions-of b))))
+          "the refused row's last transition is still its birth")
+      (is (= 1 (records-under key)))
+      (is (= (keyword "bulk:complete") (:action (record-under key :chore))))
+      (testing "a replay of the ids call lands nothing either"
+        (let [before (mapv (comp count transitions-of) [a b c])
+              again (req :post "/api/chores/-/complete" body {"idempotency-key" key})]
+          (is (= (:body resp) (:body again)))
+          (is (= before (mapv (comp count transitions-of) [a b c])))
+          (is (= 1 (records-under key)))))))
+  (testing "atomic: one transaction, every item stamped, one record"
+    (let [[a b] (chores! [true true])
+          key "atomic-origin-1"
+          resp (req :post "/api/chores/-/complete_all" {:ids [a b]}
+                    {"idempotency-key" key})]
+      (is (= 200 (:status resp)) (:body resp))
+      (is (= [key key] (mapv key-of [a b])))
+      (is (= 1 (records-under key)))))
+  (testing "batch: every input's transition on the one row carries the key"
+    (let [id (id-of (req :post "/api/ledgers" {:name "stamped"}))
+          key "batch-origin-1"
+          body {:inputs [{:text "a"} {:text "b"}]}
+          resp (req :post (str "/api/ledgers/" id "/-/note/batch") body
+                    {"idempotency-key" key})]
+      (is (= 200 (:status resp)) (:body resp))
+      (let [ts (store/with-tx *st*
+                 #(store/transitions *st* % {:kind :ledger :resource-id id} {}))]
+        (is (= [:create :note :note] (mapv :action ts)))
+        (is (= [nil key key] (mapv :idempotency-key ts))))
+      (is (= 1 (records-under key)))
+      (is (= (keyword "batch:note") (:action (record-under key :ledger))))
+      (testing "and the batch replays without a third note"
+        (let [again (req :post (str "/api/ledgers/" id "/-/note/batch") body
+                         {"idempotency-key" key})]
+          (is (= (:body resp) (:body again)))
+          (is (= 2 (count (get-in (get-row (str "/api/ledgers/" id))
+                                  [:data :notes])))))))))
+
+(deftest a-deferred-call-stamps-its-key-on-every-item
+  (let [ids (chores! [true true true])
+        key "sweep-origin-1"
+        resp (req :post "/api/chores/-/sweep" {:ids ids} {"idempotency-key" key})
+        job (json resp)]
+    (is (= 202 (:status resp)) (:body resp))
+    (is (= "job" (:kind job)))
+    (is (= key (get-in job [:data :idempotency_key]))
+        "the deferring call's key rides the job's data")
+    (is (zero? (records-under key))
+        "a deferred call keeps no whole-call record — the job row is its record")
+    (testing "the worker stamps each item exactly as a synchronous item is"
+      (is (pos? (jobs/run-once! *eng* {:batch-size 2})))
+      (is (= ["done" "done" "done"]
+             (mapv #(:state (get-row (str "/api/chores/" %))) ids)))
+      (is (= [key key key] (mapv key-of ids)))
+      (is (zero? (records-under key))
+          "and still records nothing under it"))
+    (testing "a call that sent no key queues a job without one"
+      (let [more (chores! [true true true])
+            job (json (req :post "/api/chores/-/sweep" {:ids more}))]
+        (is (= "job" (:kind job)))
+        (is (not (contains? (:data job) :idempotency_key)))
+        (jobs/run-once! *eng* {:batch-size 10})
+        (is (every? nil? (map key-of more)))))))

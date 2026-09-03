@@ -234,13 +234,26 @@ is published where a program reads: the OpenAPI document's bulk body
 (`oneOf` the two shapes) and `waymark_invoke`'s own argument schema.
 
 Whole-call idempotency is the convention both shapes keep: the call's
-key stores the report, the items ride the call's correlation id, and
-no item transition carries the key itself (a key stamped per item
-would be stored per item, and a replay is the call's promise, not the
-row's). Recorded consequence: a bulk call from this door is one
-`origin-key` on the report, not N on the transitions, so
-`actions-from-mcp` counts it as zero writes — the same blind spot every
-bulk call had before, now named.
+key stores the report, the items ride the call's correlation id, and a
+replay is the call's promise, not the row's. **Every item transition
+carries the call's key all the same** (waymark-pywy.5). When this
+section was first written the items carried no key — a key stamped per
+item would have been *stored* per item, because `finish!` recorded
+under any key it saw — so a fourteen-row bulk invoke from this door was
+one `origin-key` on the report and none on the transitions, and
+`actions-from-mcp` counted it as zero writes: the same blind spot every
+bulk call had, and a batch of sightings is exactly the action the
+connector experiment exists to count. The fix is a seam, not a second
+record: items run with `:record-key? false`, so the key is written into
+the transition row and never looked up or stored per item. The
+idempotency store holds exactly the one whole-call record, a replayed
+call still answers the stored report and lands nothing, and the
+origin-key folds (`actions-from-mcp`, `actions-from-feed`) count one
+action per item with no change to their readers. An over-threshold
+call carries the key on its job (`idempotency_key`) and the worker
+stamps it on each item the same way, so the count reads the same
+whichever side of the threshold a call fell; `batch` inputs carry it
+too.
 
 **`waymark_invoke` takes `ids` and `items`.** `ids` goes to the bulk
 door with the one shared `input`; `items` goes with each row's own.

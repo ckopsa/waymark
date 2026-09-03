@@ -41,7 +41,11 @@
     a role-reading guard judges the reconstruction, not the original
     credential (waymark9 had the same property).
   - A deferred call skips whole-call idempotency (the job row is its
-    record); each item still natural-replays like any invoke.
+    record); each item still natural-replays like any invoke. The
+    call's key still rides the job's data (:idempotency_key) and is
+    STAMPED on every item's transition, never recorded — the same
+    stamp a synchronous bulk item carries (waymark-pywy.5), so the
+    origin-key folds count a deferred call's items too.
 
   MIRROR SYNC JOBS (the manual trigger): a job whose :action is one
   of sync-actions (\"resync\"/\"discover\") carries a KIND-level
@@ -178,6 +182,16 @@
                             {:label "Each row's acknowledged warnings"
                              :help "Index-aligned with the ids: the guard names each item acknowledged when it was queued."}}
              [:maybe [:vector [:vector :string]]]]
+            ;; the deferring call's own Idempotency-Key (waymark-pywy.5):
+            ;; not a record — a deferred call keeps none — but the
+            ;; stamp every item's transition carries, so the log reads
+            ;; the same whichever side of the threshold the call fell
+            [:idempotency_key {:optional true
+                               :x-display
+                               {:raw true
+                                :label "The deferring call's idempotency key"
+                                :help "Stamped on every item's transition as the call that queued it; the job row, not this key, is the deferred call's record."}}
+             [:maybe :string]]
             [:requested_by {:x-display {:label "Who asked for it"}}
              :any]
             [:progress {:x-display
@@ -229,7 +243,8 @@
   the document shape and the worker actor are this module's, and a
   copy of either in the router would be exactly the drift this
   framework exists to make impossible."
-  [eng {:keys [kind action ids input inputs acknowledged]} principal]
+  [eng {:keys [kind action ids input inputs acknowledged idempotency-key]}
+   principal]
   (inv/create! eng :job
                (cond-> {:action (name action)
                         :kind (name kind)
@@ -240,7 +255,8 @@
                         :progress {:done 0 :total (count ids) :refusals []}}
                  input (assoc :input input)
                  inputs (assoc :inputs inputs)
-                 acknowledged (assoc :acknowledged acknowledged))
+                 acknowledged (assoc :acknowledged acknowledged)
+                 idempotency-key (assoc :idempotency_key idempotency-key))
                {:principal worker-actor}))
 
 ;; ── execution ───────────────────────────────────────────────────────
@@ -323,7 +339,8 @@
                                      {:principal worker-actor
                                       :correlation-id job-id}))
                   job)
-            {:keys [action kind ids input inputs acknowledged progress]} (:data job)
+            {:keys [action kind ids input inputs acknowledged progress
+                    idempotency_key]} (:data job)
             {:keys [done total]} progress
             target-kind (keyword kind)
             action-name (keyword action)
@@ -353,7 +370,10 @@
                      (inv/bulk-item! eng target-kind action-name id (input-at i)
                                      {:principal principal
                                       :acknowledged (acknowledged-at i)
-                                      :correlation-id job-id})
+                                      :correlation-id job-id
+                                      ;; the deferring call's key, stamped
+                                      ;; on the item as a sync item's is
+                                      :idempotency-key idempotency_key})
                      refusals
                      (catch Exception e
                        (if (inv/refusal? e)
