@@ -288,5 +288,11 @@ same `:reached-cap` honesty:
 ;; → {:total … :by-principal … :by-kind … :by-action … :scanned … :reached-cap …}
 ```
 
+A bulk `waymark_invoke` (`ids` or `items`) counts one action per row:
+every item transition carries the call's key as a stamp while the
+idempotency store keeps the one whole-call record (waymark-pywy.5;
+docs/spec-mcp-surface.md § Many rows). A batch of fourteen sightings is
+fourteen, not zero.
+
 Two weeks from the day the connector goes live, that number is the
 verdict.

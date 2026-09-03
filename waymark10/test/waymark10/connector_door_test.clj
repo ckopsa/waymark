@@ -12,6 +12,7 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [waymark10.fixtures :as fx]
+            [waymark10.resource :as r]
             [waymark10.server.engine :as engine]
             [waymark10.server.grants :as grants]
             [waymark10.server.invoke :as inv]
@@ -301,3 +302,104 @@
       (is (= {:principal "a:b/c" :nonce "n"}
              (mcp/origin-of (mcp/origin-key "a:b/c" "n")))
           "a principal id carrying the separator round-trips"))))
+
+;; ── 5. a batch from the door counts per row ──────────────────────────
+
+;; a suite-local kind with a bulk door: the fixtures' meal has none,
+;; and the sighting batch the connector's first session wanted is a
+;; non-idempotent verb with an input per row
+(r/defhandler tag-handler [row inp _ctx]
+  (assoc-in row [:data :label] (:label inp)))
+
+(def ^:private chore
+  (r/resource
+   {:kind :chore
+    :states [:open :done]
+    :initial :open
+    :terminal #{:done}
+    :summary "{data.title} · {state}"
+    :schema [:map
+             [:title [:string {:min 1 :max 60}]]
+             [:label {:optional true} [:maybe [:string {:max 20}]]]]
+    :actions
+    {:tag {:from #{:open} :to :open
+           :bulk {:max-items 10}
+           :input [:map [:label [:string {:min 1 :max 20}]]]
+           :safety {:idempotent false :reversible true :confirm false}
+           :handler tag-handler}
+     :complete {:from #{:open} :to :done
+                :bulk {:max-items 10}
+                :safety {:idempotent true :reversible false :confirm false
+                         :one-way "Done is done."}}}}))
+
+(deftest a-bulk-invoke-from-the-door-counts-one-action-per-row
+  ;; waymark-pywy.5: whole-call idempotency used to leave the items
+  ;; unsigned, so a fourteen-row batch from the connector counted as
+  ;; zero writes — the one action the experiment most wanted to see.
+  ;; Every item now carries the call's origin-key as a stamp, and the
+  ;; store still holds one record per call.
+  (let [eng (fresh-engine {:resources [fx/meal chore]})
+        h (engine/handler eng)
+        st (:storage eng)
+        ids (mapv (fn [i]
+                    (let [id (str "chore-" i)]
+                      (inv/create! eng :chore {:title (str "chore " i)}
+                                   {:principal grants/approvals-actor :id id})
+                      id))
+                  (range 5))
+        [a b c d e] ids
+        log-of (fn [id]
+                 (store/with-tx st
+                   (fn [tx] (store/transitions st tx {:kind :chore :resource-id id}
+                                               {:limit 10 :newest-first true}))))
+        invoke (fn [args]
+                 (let [resp (rpc h (bearer colton) "tools/call"
+                                 {:name "waymark_invoke" :arguments args})
+                       result (:result (json resp))]
+                   (is (= 200 (:status resp)) (:body resp))
+                   (is (false? (:isError result)) (:body resp))
+                   (wire/read-json (get-in result [:content 0 :text]))))]
+    (inv/create! eng :grant
+                 {:audience "connector:colton"
+                  :scope [{:kind "chore" :actions ["tag" "complete"]}]}
+                 {:principal grants/approvals-actor
+                  :id "grant-connector-4"
+                  :mint? true})
+    (testing "items: three rows, three signed transitions, one record"
+      (let [report (invoke {:kind "chore" :action "tag"
+                            :items [{:id a :input {:label "one"}}
+                                    {:id b :input {:label "two"}}
+                                    {:id c :input {:label "three"}}]})
+            keys (mapv #(:idempotency-key (first (log-of %))) [a b c])]
+        (is (= 3 (get-in report [:data :succeeded])))
+        (is (every? mcp/origin-of keys) (pr-str keys))
+        (is (= 1 (count (distinct keys))) "one call, one key, stamped thrice")
+        (is (= #{"connector:colton"}
+               (into #{} (map (comp :principal mcp/origin-of)) keys)))
+        (let [rec (store/with-tx st #(store/idempotency-lookup st % (first keys) :chore))]
+          (is (= (keyword "bulk:tag") (:action rec))
+              "the one record under the key is the call's report, not an item's"))
+        (is (= {:total 3 :by-action {"chore.tag" 3} :by-kind {"chore" 3}}
+               (select-keys (mcp/actions-from-mcp eng {:principal-prefix "connector:"})
+                            [:total :by-action :by-kind])))))
+    (testing "ids: the shared-input shape signs each row the same way"
+      (let [report (invoke {:kind "chore" :action "complete" :ids [d e]})
+            keys (mapv #(:idempotency-key (first (log-of %))) [d e])]
+        (is (= 2 (get-in report [:data :succeeded])))
+        (is (every? mcp/origin-of keys) (pr-str keys))
+        (is (= 1 (count (distinct keys))))
+        (is (not= (first keys) (:idempotency-key (first (log-of a))))
+            "a different call, a different nonce")
+        (is (= (keyword "bulk:complete")
+               (:action (store/with-tx
+                          st #(store/idempotency-lookup st % (first keys) :chore)))))))
+    (testing "the experiment's number reads five actions, per row, per verb"
+      (let [mine (mcp/actions-from-mcp eng {:principal-prefix "connector:"})]
+        (is (= 5 (:total mine)))
+        (is (= {"connector:colton" 5} (:by-principal mine)))
+        (is (= {"chore.tag" 3 "chore.complete" 2} (:by-action mine)))
+        (is (= {"chore" 5} (:by-kind mine)))
+        (is (zero? (:total (mcp/actions-from-mcp eng {:principal-prefix "the-ui:"}))))))
+    (testing "the births, minted by hand, are nobody's"
+      (is (every? nil? (map #(mcp/origin-of (:idempotency-key (last (log-of %))))
+                            ids))))))

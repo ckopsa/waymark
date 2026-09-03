@@ -1131,9 +1131,10 @@
                                    on_error (assoc :on_error on_error))
                            :query (when dry_run "dry_run=1")
                            ;; the call's key stores the report, as any
-                           ;; bulk call's does; the items ride the
-                           ;; call's correlation id and carry no key of
-                           ;; their own (invoke.clj bulk!, recorded)
+                           ;; bulk call's does, and every item's
+                           ;; transition carries it as a stamp
+                           ;; (invoke.clj bulk!, waymark-pywy.5) — so
+                           ;; `actions-from-mcp` counts N for N rows
                            :headers (invoke-headers session nil nil
                                                     acknowledge_warnings)}))))))))
 

@@ -68,7 +68,15 @@
     Whole-call idempotency: the stored report replays byte-identical
     under the bulk:<action> marker; a DEFERRED call does not
     participate (recorded: the job row is its record — replaying a
-    deferred call mints a second job). A dry-run (design §23) judges
+    deferred call mints a second job). The call's key is STAMPED on
+    every item transition but RECORDED once (waymark-pywy.5): items
+    run with :record-key? false, so finish! writes the key into the
+    row's transition and never into the idempotency store — the log
+    says which call each item came from (the origin-key folds in
+    feed/ and mcp/ count one action per item) while a replayed call
+    still answers the stored report and never doubles. A deferred
+    call's items carry the same key through the job's data. A
+    dry-run (design §23) judges
     every id through the same per-item algorithm — self-keyed
     verdicts, nothing committed, no key demanded or recorded, and
     never a deferral (a job is an effect; over-threshold rehearsals
@@ -735,7 +743,9 @@
   "Steps 11–15: handler, tamper refusal, materialize, advance,
   append, save, idempotency store."
   [engine tx rdef row defn inp ctx
-   {:keys [digest overridden basis idempotency-key principal correlation-id]}]
+   {:keys [digest overridden basis idempotency-key principal correlation-id
+           record-key?]
+    :or {record-key? true}}]
   (let [now (:now ctx)
         handled (if-some [h (:handler defn)]
                   (let [out (h row inp ctx)]
@@ -797,7 +807,12 @@
     (when (get-in defn [:edit :draft])
       (store/delete-draft! (:storage engine) tx (:kind rdef) (:id row)
                            (:name defn) (drafts/audience-of defn principal)))
-    (when idempotency-key
+    ;; the record is the CALL's: a fan-out item (bulk!/batch!/the job
+    ;; worker) rides its call's key with :record-key? false — stamped
+    ;; on the transition above, so the log says which call it came
+    ;; from, and never stored here, so the whole-call report stays
+    ;; the one record under that key (waymark-pywy.5)
+    (when (and idempotency-key record-key?)
       (store/idempotency-store!
        (:storage engine) tx idempotency-key (:kind rdef) (:name defn) digest
        200 (if-some [render-fn (:render-fn engine)]
@@ -1006,11 +1021,15 @@
   "Steps 2–15 inside the caller's transaction — the single-write body
   invoke-declared! wraps in its own with-tx; bulk items and batch
   inputs (phase 7) run it inside the fan-out's transaction.
-  :require-key? false waives step 2's 428 for fan-out items."
+  :require-key? false waives step 2's 428 for fan-out items;
+  :record-key? false makes a present key a STAMP rather than a
+  record (waymark-pywy.5) — written on the transition, neither
+  looked up nor stored, because the call that fanned out owns the
+  one record under it."
   [engine tx rdef kind id defn digest body
    {:keys [principal if-match idempotency-key dry-run acknowledged
-           correlation-id require-key? within grant]
-    :or {acknowledged #{} require-key? true}}]
+           correlation-id require-key? record-key? within grant]
+    :or {acknowledged #{} require-key? true record-key? true}}]
   (let [action-name (:name defn)]
     ;; 2. idempotency: requirement, then stored replay
     (when (and require-key?
@@ -1018,7 +1037,7 @@
                (not (get-in defn [:safety :idempotent]))
                (nil? idempotency-key))
       (throw (p/idempotency-key-required action-name)))
-    (if-some [hit (when (and (not dry-run) idempotency-key)
+    (if-some [hit (when (and (not dry-run) idempotency-key record-key?)
                     (store/idempotency-lookup (:storage engine) tx
                                               idempotency-key kind))]
       ;; a key replays only its own action + body; anything else
@@ -1121,6 +1140,7 @@
                                         :overridden overridden
                                         :basis basis
                                         :idempotency-key idempotency-key
+                                        :record-key? record-key?
                                         :principal principal
                                         :correlation-id correlation-id}))))))))))))
 
@@ -1325,18 +1345,22 @@
   marker ({:kind :action :ids :input}) — and, for the items shape,
   each row's own input and acknowledged names, index-aligned with
   `:ids`, so the worker's `bulk-item!` runs exactly the call that was
-  deferred."
-  [kind action-name body items]
-  (if (contains? body :items)
-    {:kind kind
-     :action action-name
-     :ids (mapv :id items)
-     :inputs (mapv #(or (:input %) {}) items)
-     :acknowledged (mapv #(mapv name (:acknowledged %)) items)}
-    {:kind kind
-     :action action-name
-     :ids (mapv :id items)
-     :input (:input (first items))}))
+  deferred. The call's idempotency key rides too (waymark-pywy.5): a
+  deferred call keeps no whole-call record, but its items are stamped
+  with the key exactly as a synchronous call's are, so the log reads
+  the same whichever side of the threshold a call fell."
+  [kind action-name body items idempotency-key]
+  (cond-> (if (contains? body :items)
+            {:kind kind
+             :action action-name
+             :ids (mapv :id items)
+             :inputs (mapv #(or (:input %) {}) items)
+             :acknowledged (mapv #(mapv name (:acknowledged %)) items)}
+            {:kind kind
+             :action action-name
+             :ids (mapv :id items)
+             :input (:input (first items))})
+    idempotency-key (assoc :idempotency-key idempotency-key)))
 
 (defn bulk!
   "N resources, one call: POST /api/{plural}/-/{action} with either
@@ -1355,10 +1379,13 @@
   :acknowledged, :correlation-id, :dry-run, :grant.
 
   Whole-call idempotency is the convention both shapes keep: the
-  call's key stores the report (`fan-out-store!`), the items ride
-  the call's correlation id, and no item transition carries the key
-  itself — a key stamped per item would be stored per item, and a
-  replay is the CALL's promise, not the row's."
+  call's key stores the report (`fan-out-store!`), and a replay is
+  the CALL's promise, not the row's. Every item transition carries
+  the call's key all the same (waymark-pywy.5) — stamped, not
+  recorded: items run with :record-key? false, so the key lands in
+  the log (one action per item for `feed/actions-from-feed` and
+  `mcp/actions-from-mcp`, which fold by the key's prefix) while the
+  idempotency store holds exactly the one whole-call record."
   [engine kind action-name body
    {:keys [principal idempotency-key acknowledged correlation-id
            dry-run grant]
@@ -1393,7 +1420,8 @@
                                  "defers to a job, which runs continue; send "
                                  "at most " (:defer-over spec) " items for "
                                  (:on_error body))]}))
-        {:deferred (deferred-marker kind action-name body items)})
+        {:deferred (deferred-marker kind action-name body items
+                                    idempotency-key)})
       (do
         (when (< max-items (count items))
           (throw (p/schema-invalid
@@ -1448,7 +1476,12 @@
                                (invoke-in-tx! engine tx rdef kind id defn
                                               (body-digest input) input
                                               (assoc (item-opts it)
-                                                     :correlation-id cid)))
+                                                     :correlation-id cid
+                                                     ;; the call's key: stamped
+                                                     ;; on the item's transition,
+                                                     ;; recorded once below
+                                                     :idempotency-key idempotency-key
+                                                     :record-key? false)))
                     data
                     (if (= "atomic" mode)
                       ;; all-or-nothing: one transaction, any refusal
@@ -1528,11 +1561,13 @@
 (defn bulk-item!
   "One id through the SAME per-item algorithm bulk!'s partial-success
   path runs — its own transaction, after-write! included, step 2's
-  428 waived (the caller owns the call-level record). Exposed for the
-  deferred-jobs worker (phase 9b): a job item and a bulk item are one
-  code path. Refusals throw exactly as a single invoke's would."
+  428 waived (the caller owns the call-level record), and the call's
+  :idempotency-key stamped on the item's transition without being
+  recorded (waymark-pywy.5). Exposed for the deferred-jobs worker
+  (phase 9b): a job item and a bulk item are one code path. Refusals
+  throw exactly as a single invoke's would."
   [engine kind action-name id body
-   {:keys [principal acknowledged correlation-id grant]
+   {:keys [principal acknowledged correlation-id grant idempotency-key]
     :or {acknowledged #{}}}]
   (let [rdef (rdef-of engine kind)
         defn (or (some-> (get-in rdef [:actions action-name])
@@ -1548,7 +1583,9 @@
                          :acknowledged acknowledged
                          :correlation-id correlation-id
                          :grant grant
-                         :require-key? false}))))))
+                         :idempotency-key idempotency-key
+                         :require-key? false
+                         :record-key? false}))))))
 
 (defn batch!
   "N inputs, one resource: POST /api/{plural}/{id}/-/{action}/batch
@@ -1629,7 +1666,12 @@
                            :acknowledged acknowledged
                            :grant grant
                            :correlation-id cid
-                           :require-key? false}
+                           ;; each input's transition carries the
+                           ;; call's key; the report stays the one
+                           ;; record under it (waymark-pywy.5)
+                           :idempotency-key idempotency-key
+                           :require-key? false
+                           :record-key? false}
                 at (volatile! 0)
                 results
                 (try
