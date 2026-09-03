@@ -407,9 +407,11 @@
 
 ;; ── acceptance 4: the MCP surface is the SAME core, projected ───────
 
-(def ^:private the-six
+(def ^:private the-fixed
   ["waymark_discover" "waymark_schema" "waymark_query"
-   "waymark_get" "waymark_invoke" "waymark_history"])
+   "waymark_get" "waymark_invoke" "waymark_history"
+   ;; the seventh fixed tool (waymark-pywy.3)
+   "waymark_resolve"])
 
 (defn- mcp!
   "One JSON-RPC message at /api/-/mcp through the real handler —
@@ -433,7 +435,7 @@
       (let [r (mcp! eng as-claude "tools/list" nil)
             names (mapv :name (:tools (:result r)))]
         (is (= 200 (:status r)) (pr-str (:doc r)))
-        (is (= the-six names)
+        (is (= the-fixed names)
             "the projection appends only what a grant admits — none
              worn, none appended")
         (is (= [] @log) "no admitted token, no wire")))
@@ -444,10 +446,10 @@
                              {:kind "ynab.read" :actions []}])
             tools (:tools (:result (mcp! eng worn "tools/list" nil)))
             names (mapv :name tools)]
-        (is (= the-six (vec (take 6 names)))
+        (is (= the-fixed (vec (take (count the-fixed) names)))
             "the six fixed tools come first, in their order")
         (is (= #{"emila__inbox" "emila__search" "ynab__transactions"}
-               (set (drop 6 names)))
+               (set (drop (count the-fixed) names)))
             "Gate's live tools ∩ the grant — no email.send means no
              emila__send, no ynab.write means no ynab__update_transaction,
              and gsd__agenda (outside the map) does not exist here")
@@ -537,8 +539,8 @@
       (testing "the MCP surface: the same tool, appended after the six"
         (let [names (mapv :name (:tools (:result (mcp! eng worn
                                                        "tools/list" nil))))]
-          (is (= the-six (vec (take 6 names))))
-          (is (= ["ynab__transactions"] (vec (drop 6 names))))))
+          (is (= the-fixed (vec (take (count the-fixed) names))))
+          (is (= ["ynab__transactions"] (vec (drop (count the-fixed) names))))))
 
       (testing "a granted read forwards through the hypermedia door"
         (let [r (call! eng :post "/api/-/gate/ynab__transactions"

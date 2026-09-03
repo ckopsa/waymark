@@ -95,7 +95,7 @@
         (is (= "a1" (:id row)))
         (is (= "sku" (:kind row)) "the same shape return: summary answers")
         (is (= "draft" (:state row)))
-        (is (= "Apple · draft" (:summary row)))
+        (is (= "Apple · Draft" (:summary row)))
         (is (= "A1" (get-in row [:fields :code])))
         (is (= "crisp" (get-in row [:fields :notes])))
         (is (not (contains? row :actions)) "no actions block")
