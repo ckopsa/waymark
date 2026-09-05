@@ -3826,7 +3826,7 @@
   (let [rdef (get (resources ctx) :span)]
     (->> (rows-of ctx :span {:plan_id (str pid)} 500)
          (map #(inv/decode-row rdef %))
-         (sort-by (fn [s] [(str (get-in s [:data :starts_at])) (str (:id s))]))
+         (sort-by (fn [s] [(get-in s [:data :starts_at]) (str (:id s))]))
          vec)))
 
 (defn- current-span

@@ -324,7 +324,33 @@
       (is (= 1 (count (filter #(= "seam" (str (:card_id %))) (:cards doc)))))
       (is (= ["do_now" "decide" "fuel" "seam" "archive"]
              (into [] (distinct) (map #(str (:section %)) (:cards doc))))
-          "the census is law, and this house exercises all of it"))))
+          "the census is law, and this house exercises all of it — and a
+           reader with no plan for today has NO now section above it
+           (waymark-i89n.5): the document below :now is what it was before
+           the day plan existed, and nothing invents a placeholder card"))
+
+    (testing "the day key reads 'plan today' for a reader with no plan
+              (waymark-i89n.5, for .8)"
+      (let [day (:day doc)]
+        (is (map? day) "on this engine `day` is the object, not the bare string")
+        (is (= "plan" (str (:mode day))))
+        (is (= "2026-08-24" (str (:date day)))
+            "the date the bare key used to carry rides as day.date")
+        (is (= (:zone main/feed-recipe) (str (:zone day)))
+            "the recipe's own zone — set at the build site (waymark-rptq)")
+        (is (nil? (:plan day)))
+        (is (nil? (:current_block_id day)))
+        (is (= [] (:blocks day)))
+        (is (vector? (:defaults day))
+            "plan mode carries the shape's defaults, empty for a house with
+             no contexts yet")
+        (is (= "/api/day_plans" (str (get-in day [:create :href])))
+            "and the plan's create door, projected — colton may plan")
+        (is (= "POST" (str (get-in day [:create :method]))))
+        (is (contains? (set (keys (get-in day [:create :input :properties])))
+                       :member)
+            "the create form asks whose day — the screen prefills the
+             principal")))))
 
 (deftest every-card-says-why-it-is-here
   ;; The read that started waymark-iqa.29: a movie in do-now, and no
@@ -343,6 +369,10 @@
       (let [lines (get-in plain [:recipe :lines])]
         (is (= (count (:order main/feed-recipe)) (count lines)))
         (is (every? #(seq (str (:says %))) lines))
+        (is (= "current_block" (str (:population (first lines))))
+            "the top line is the day (waymark-i89n.5) — and it offered
+             nothing on a morning nobody planned")
+        (is (= 0 (:offered (first lines))))
         (is (some #(str/includes? (str (:says %)) "the work queue") lines)
             "the queue line is the household's own sentence, not the
              framework's fallback")

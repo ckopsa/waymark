@@ -21,7 +21,10 @@
   _HA_UI_URL / _HA_LISTS / _HA_ZONE (the home assistant boundary:
   long-lived token, the browser-facing base for origin links, the
   comma-separated todo entity ids, the zone naive due datetimes
-  parse in), WORKQUEUE10_GTASKS_CLIENT_ID / _CLIENT_SECRET /
+  parse in), WORKQUEUE10_ZONE (the household's one clock —
+  dayplan10.zone reads it once, WORKQUEUE10_HA_ZONE is its fallback
+  and UTC the last resort; the feed's day rolls at midnight there and
+  a day plan's windows are minted there), WORKQUEUE10_GTASKS_CLIENT_ID / _CLIENT_SECRET /
   _REFRESH_TOKEN / _LISTS / _CAPTURE (the google tasks boundary: an
   OAuth refresh token carrying the tasks scope — the calendar's token
   does NOT — the comma-separated task list ids to mirror, EVERY list
@@ -58,6 +61,7 @@
             [dayplan10.resources.day-plan :refer [day-plan]]
             [dayplan10.resources.decision :refer [decision]]
             [dayplan10.resources.span :refer [span]]
+            [dayplan10.zone :as zone]
             [eveningplan10.consumers :as evening-consumers]
             [eveningplan10.resources.activity :refer [activity]]
             [eveningplan10.resources.evening-plan :refer [evening-plan]]
@@ -571,7 +575,31 @@
 
 (def feed-recipe
   "This household's feed order (waymark-iqa.24). The default recipe
-  with ONE line added, and the line is the whole point.
+  with one line split in two and one line added on top, and the two
+  edits are the whole point.
+
+  THE TOP LINE IS THE DAY (waymark-i89n.5, docs/spec-dayplan.md § 'The
+  feed: one population, one line'): `{:section :now :population
+  :current_block :take 6}` above even the crown — the block this reader
+  is in right now, its decisions in the order they wrote them, Go as
+  the verdict. Nothing from laws v3 applies inside it (the population
+  sorts by `order` and `:now` is outside `contested-sections`), and a
+  day nobody planned contributes nothing here: the document's `day`
+  key is where an unplanned morning reads *plan today*.
+
+  THE ZONE IS THE HOUSE'S (waymark-rptq). `feed/today` reads the
+  recipe's `:zone` and defaults it to UTC, and this recipe never set
+  it — so the household's day rolled at 18:00 Mountain: every evening
+  the order reshuffled, the seam re-formed and afternoon cursors 409'd
+  at dinner. It is set HERE, at the app's build site, from
+  `dayplan10.zone/id` — the ONE read of WORKQUEUE10_ZONE →
+  WORKQUEUE10_HA_ZONE → UTC — because the day plan's materialisation
+  turns *nine to noon* into instants with the same clock, and a
+  current-block population that read *today* six hours early would
+  answer tomorrow's plan at dinner. One household, one clock. It stays
+  out of the stored `feed_recipe` kind on purpose (feed_recipe.clj: a
+  zone is where the house IS, not a taste), so a household that edits
+  its order keeps this deployment's zone.
 
   The first read of the real feed found do-now holding three movies
   and a chore run somebody skipped a fortnight ago, and not one of
@@ -595,8 +623,13 @@
   because *the queue comes first* is a decision this house made and
   not a shape the framework would have inferred."
   (assoc feed/default-recipe
+         :zone (str (zone/id))
          :order
-         (into []
+         (into [{:section :now :population :current_block :take 6
+                 :says (str "Now: the block you are in, its decisions in the"
+                            " order you set them. Go is the verdict. Nothing"
+                            " here is ranked, cooled or drawn — a day you"
+                            " planned is not a contest.")}]
                (mapcat (fn [e]
                          (if (= :next_actions (:population e))
                            [(assoc e :take 2 :kinds [:task]

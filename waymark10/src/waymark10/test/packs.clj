@@ -1662,6 +1662,17 @@
 
 (defn- feed-cards [doc] (vec (:cards doc)))
 
+(defn- feed-day-of
+  "The feed document's DATE, as the string the origin key and the view
+  door spell. Since waymark-i89n.5 an engine that holds the day plan
+  answers `day` as an object — {mode date zone plan blocks …} — with
+  the date under `date`; every other engine still answers the bare
+  string. One reader for both, so the obligations below judge the
+  same convention whichever shape the engine under test speaks."
+  ^String [doc]
+  (let [d (:day doc)]
+    (if (map? d) (str (:date d)) (str d))))
+
 (defn- feed-recipe-order-violations
   "The census is law, and both halves of it are checked: what the DOOR
   answered (sections top to bottom, one seam, every card naming its
@@ -1779,7 +1790,7 @@
                  " cards, in this order:\n  " (pr-str (mapv :card_id (feed-cards a)))
                  "\n  " (pr-str (mapv :card_id (feed-cards b)))))
 
-      (not= (:day a) (:day b))
+      (not= (feed-day-of a) (feed-day-of b))
       (conj "feed: two reads straddled a day boundary — rerun"))))
 
 (defn- feed-projection-violations
@@ -2460,7 +2471,7 @@
   [ctx]
   (let [{:keys [doc]} (feed-doc ctx nil)
         cards (feed-row-cards doc)
-        origin (feed-origin-violations ctx cards (str (:day doc)))]
+        origin (feed-origin-violations ctx cards (feed-day-of doc))]
     {:covered (:covered origin)
      :violations (into (feed-light-violations cards)
                        (concat (feed-concealed-violations ctx)
@@ -2531,7 +2542,7 @@
                                (feed-row-cards doc)))]
     (if-not subject
       {:covered 0 :violations []}
-      (let [day (str (:day doc))
+      (let [day (feed-day-of doc)
             skind (keyword (str (:kind subject)))
             sid (id-of (:self subject))
             made (make-tickler! ctx "The porch railing, one of these days"
@@ -2786,7 +2797,7 @@
         subject (first subjects)]
     (if-not subject
       {:covered 0 :violations []}
-      (let [day (str (:day doc))
+      (let [day (feed-day-of doc)
             hs (finder-headers)
             skind (str (:kind subject))
             self (str (:self subject))
@@ -4070,7 +4081,7 @@
         other (str "view-door-other-" tag)
         as-other {"x-waymark-principal" other "x-waymark-actor-type" "human"}
         before (when member (:doc (feed-doc ctx as-member)))
-        day (str (:day before))
+        day (feed-day-of before)
         card (first (remove #(= "seam" (str (:card_id %)))
                             (feed-cards before)))
         card-id (str (:card_id card))
@@ -4410,7 +4421,7 @@
                      [{:kind "outcome" :actions []}])
         halfdoc (when half (:doc (feed-doc ctx half)))
         card (when oid (outcome-card mine oid))
-        day (str (:day mine))
+        day (feed-day-of mine)
         verbs (when card (set (map (comp name key) (:actions card))))
         pverbs (fn [i] (when-some [p (piece-of card (nth pids i nil))]
                          (set (map (comp name key) (:actions p)))))
@@ -5369,7 +5380,7 @@
         mine (:doc (feed-doc ctx as-member))
         door (reason-door mine)
         card (when oid (outcome-card mine oid))
-        day (str (:day mine))
+        day (feed-day-of mine)
         not-this (declared-name ctx :outcome_piece :not_this)
         take' (declared-name ctx :outcome_piece :take)
         not-this-week (declared-name ctx :outcome :not_this_week)
@@ -5731,7 +5742,7 @@
         off (when member (:doc (feed-doc ctx as-member)))
         formula (get-in off [:recipe :formula])
         says (str (get-in off [:recipe :formula_says]))
-        day (str (:day off))
+        day (feed-day-of off)
         cools (long (get formula :cools_after 0))
         window (long (get formula :window_days 0))
         switch (when member (post-row! ctx :feed_view_consent {} as-member))
@@ -6006,7 +6017,7 @@
         switch-id (some-> (:doc switch) :self id-of)
         mine (when (= 201 (:status switch)) (:doc (feed-doc ctx as-member)))
         card (when oid (outcome-card mine oid))
-        day (str (:day mine))
+        day (feed-day-of mine)
         viewed (when card
                  (post-row! ctx :feed_view
                             {:card_id (str (:card_id card))
@@ -6666,6 +6677,263 @@
                            " evidence")))]
         {:covered 1 :violations v}))))
 
+;; ── the day (waymark-i89n.5) ────────────────────────────────────────
+
+(defn- now-cards [doc]
+  (filterv #(= "now" (str (:section %))) (feed-cards doc)))
+
+(defn- items-of [ctx resp]
+  (vec (get-in (json ctx resp) [:data :items])))
+
+(defn- feed-current-block-violations
+  "The feed reads the current block, and the document carries the day
+  (docs/spec-dayplan.md § 'The feed: one population, one line';
+  waymark-i89n.5, for .8). From the wire, as a member of this house:
+
+  1. WITH NO PLAN, the top of the page is not invented: no `now`
+     section, and `day.mode` is `plan` with the shape's active
+     contexts under `defaults` and the plan's create door under
+     `create` — the form, not a placeholder card wearing a verb.
+  2. WITH A SET PLAN and a block whose window holds the clock, the
+     first section is `now` and it is exactly that block's planned
+     decisions, in the ORDER the person wrote and not the seed's, each
+     offering `start` under the thumb; `day.mode` is `execute`,
+     `day.current_block_id` names the block, and the skeleton's
+     decisions line up with the cards by id.
+  3. THE DAY IS THE READER'S: another principal reading the same
+     engine at the same moment has no `now` section and `day.mode`
+     `plan` — a plan is a member's, never the house's.
+
+  The fixture is a fresh member, a fresh context, and a plan for the
+  engine's own today in the recipe's own zone (`feed/today`, the same
+  arithmetic the population reads); the block's window is minted
+  around the engine's own now, so this obligation pins no clock and
+  runs at any hour. Every span the plan materialised from other
+  contexts is skipped first, so the window is clear of the no-overlap
+  guard whatever templates the engine already holds. It ends with the
+  plan closed and the context retired, so the engine it hands on is
+  the engine it found — a closed day has no current block, and a
+  retired context is in nobody's defaults."
+  [ctx]
+  (let [eng (:engine ctx)
+        recipe (:feed eng feed/default-recipe)
+        today (feed/today eng recipe)
+        zone (:zone recipe "UTC")
+        ^java.time.Instant now ((:now-fn eng))
+        ;; the same weekday rule the create door's default reads
+        shape (if (contains? #{java.time.DayOfWeek/SATURDAY java.time.DayOfWeek/SUNDAY}
+                             (.getDayOfWeek (java.time.LocalDate/parse today)))
+                "off" "workday")
+        tag (subs (str (random-uuid)) 0 8)
+        made (req ctx :post (str "/api/" (:plural (rdef ctx :member)))
+                  {:display (str "now-probe-" tag) :actor_type "human"})
+        member (some-> (:self (json ctx made)) id-of)
+        as-member {"x-waymark-principal" member}
+        cname (str "Now probe " tag)
+        ctx-made (when member
+                   (req ctx :post "/api/contexts"
+                        {:name cname :default_shapes [shape]
+                         :default_spans [{:from "00:00" :to "00:01"}]
+                         :default_order 999}
+                        as-member))
+        context-id (some-> (:self (json ctx ctx-made)) id-of)
+        ;; (1) the unplanned morning
+        before (when context-id (:doc (feed-doc ctx as-member)))
+        day0 (:day before)
+        ;; the plan, its materialised spans skipped clear
+        plan-made (when context-id
+                    (req ctx :post "/api/day_plans"
+                         {:date today :member member} as-member))
+        plan-id (some-> (:self (json ctx plan-made)) id-of)
+        planned (when plan-id
+                  (items-of ctx (req ctx :get (str "/api/spans?plan_id=" plan-id
+                                                  "&state=planned")
+                                    nil as-member)))
+        skips (mapv #(:status (req ctx :post (str (:self %) "/-/skip") {} as-member))
+                    planned)
+        block (when plan-id
+                (first (items-of ctx (req ctx :get (str "/api/blocks?plan_id=" plan-id
+                                                       "&context_id=" context-id)
+                                         nil as-member))))
+        block-id (some-> (:self block) id-of)
+        ;; the window opens AT now, not before it: every planned span
+        ;; that could overlap it then ends after now, so none has
+        ;; passed and every one of them was skippable above (a span
+        ;; whose window has passed is history and no door moves it)
+        span-made (when block-id
+                    (req ctx :post "/api/spans"
+                         {:block_id block-id :plan_id plan-id
+                          :starts_at (str now)
+                          :ends_at (str (.plusSeconds now 3600))}
+                         as-member))
+        decide! (fn [text order]
+                  (when (= 201 (:status span-made))
+                    (let [r (req ctx :post "/api/decisions"
+                                 {:block_id block-id :kind "work" :text text
+                                  :order order}
+                                 as-member)]
+                      (when (= 201 (:status r)) (some-> (:self (json ctx r)) id-of)))))
+        ;; written second, ordered first — so the page's order is the
+        ;; row's `order` and not the write order or the seed
+        second-id (decide! (str "Second: the porch railing " tag) 2)
+        first-id (decide! (str "First: the deck estimate " tag) 1)
+        set-resp (when (and first-id second-id)
+                   (req ctx :post (str "/api/day_plans/" plan-id "/-/set") {} as-member))
+        ;; (2) the planned morning
+        after (when (= 200 (:status set-resp)) (:doc (feed-doc ctx as-member)))
+        day1 (:day after)
+        cards (when after (now-cards after))
+        card-ids (mapv #(str (:card_id %)) cards)
+        wanted [(str "now/decision/" first-id) (str "now/decision/" second-id)]
+        start (when after (declared-name ctx :decision :start))
+        verbs (fn [c] (set (map (comp name key) (:actions c))))
+        my-block (when day1
+                   (first (filter #(= block-id (str (:id %))) (:blocks day1))))
+        ;; (3) somebody else's read
+        walker (when after (:doc (feed-doc ctx nil)))
+        ;; leave the engine as it was found
+        closed (when plan-id
+                 (req ctx :post (str "/api/day_plans/" plan-id "/-/close") {} as-member))
+        retired (when context-id
+                  (req ctx :post (str "/api/contexts/" context-id "/-/retire") {} as-member))]
+    {:covered (if after 1 0)
+     :violations
+     (cond-> []
+       (nil? member)
+       (conj (str "feed: minting a member for the day answered " (:status made)
+                  ": " (pr-str (json ctx made))))
+
+       (and member (nil? context-id))
+       (conj (str "feed: creating a context answered " (:status ctx-made)
+                  ": " (pr-str (json ctx ctx-made))))
+
+       ;; (1)
+       (and before (not (map? day0)))
+       (conj (str "feed: on an engine that holds the day plan, `day` is an"
+                  " object {mode date zone …}; read " (pr-str day0)))
+
+       (and (map? day0) (not= "plan" (str (:mode day0))))
+       (conj (str "feed: with no plan for today day.mode is \"plan\"; read "
+                  (pr-str (:mode day0))))
+
+       (and (map? day0) (not= today (str (:date day0))))
+       (conj (str "feed: day.date is the recipe's own today (" today
+                  ") — read " (pr-str (:date day0))))
+
+       (and (map? day0) (not= zone (str (:zone day0))))
+       (conj (str "feed: day.zone is the recipe's zone (" zone ") — read "
+                  (pr-str (:zone day0))))
+
+       (and before (seq (now-cards before)))
+       (conj (str "feed: a morning nobody planned carded a `now` section — an"
+                  " unplanned day contributes nothing there, and the day key"
+                  " is where it reads 'plan today': "
+                  (pr-str (mapv :card_id (now-cards before)))))
+
+       (and (map? day0)
+            (not (some #(= cname (str (:context_name %))) (:defaults day0))))
+       (conj (str "feed: day.defaults in plan mode lists the shape's active"
+                  " contexts and " (pr-str cname) " (shape " shape ") is not"
+                  " among " (pr-str (mapv :context_name (:defaults day0)))))
+
+       (and (map? day0) (not= "/api/day_plans" (str (get-in day0 [:create :href]))))
+       (conj (str "feed: day.create is the plan's create door for a reader who"
+                  " may plan; read " (pr-str (:create day0))))
+
+       ;; the fixture
+       (and context-id (nil? plan-id))
+       (conj (str "feed: creating today's plan answered " (:status plan-made)
+                  ": " (pr-str (json ctx plan-made))))
+
+       (some #(not= 200 %) skips)
+       (conj (str "feed: skipping the plan's materialised spans answered "
+                  (pr-str skips)))
+
+       (and plan-id (nil? block-id))
+       (conj (str "feed: the plan materialised no block for " (pr-str cname)
+                  " — the context's shape is today's (" shape ")"))
+
+       (and block-id (not= 201 (:status span-made)))
+       (conj (str "feed: a span around now on the probe's block answered "
+                  (:status span-made) ": " (pr-str (json ctx span-made))))
+
+       (and (= 201 (:status span-made)) (not (and first-id second-id)))
+       (conj "feed: the two decisions did not both land on the block")
+
+       (and first-id second-id (not= 200 (:status set-resp)))
+       (conj (str "feed: setting the plan answered " (:status set-resp) ": "
+                  (pr-str (json ctx set-resp))))
+
+       ;; (2)
+       (and after (not= "now" (str (:section (first (feed-cards after))))))
+       (conj (str "feed: with a set plan and a block under the clock the FIRST"
+                  " section is now, above the crown; read "
+                  (pr-str (mapv :section (take 3 (feed-cards after))))))
+
+       (and after (not= wanted card-ids))
+       (conj (str "feed: the now section is the current block's planned"
+                  " decisions in the ORDER the person wrote — expected "
+                  (pr-str wanted) ", read " (pr-str card-ids)))
+
+       (and after (not-every? #(contains? (verbs %) (name (or start :start))) cards))
+       (conj (str "feed: every now card offers start under the thumb — Go is"
+                  " the verdict; read " (pr-str (mapv verbs cards))))
+
+       (and after (not-every? #(= (str "your " cname " block") (str (:sentence %)))
+                              cards))
+       (conj (str "feed: every now card says which block it belongs to;"
+                  " read " (pr-str (mapv :sentence cards))))
+
+       (and after (not-every? #(= "current_block" (str (:population %))) cards))
+       (conj "feed: a now card cites the current_block population")
+
+       (and (map? day1) (not= "execute" (str (:mode day1))))
+       (conj (str "feed: with a set plan day.mode is \"execute\"; read "
+                  (pr-str (:mode day1))))
+
+       (and (map? day1) (not= block-id (str (:current_block_id day1))))
+       (conj (str "feed: day.current_block_id names the block under the clock ("
+                  block-id "); read " (pr-str (:current_block_id day1))))
+
+       (and (map? day1) (not= "set" (str (get-in day1 [:plan :state]))))
+       (conj (str "feed: day.plan carries the plan's state; read "
+                  (pr-str (:plan day1))))
+
+       (and (map? day1) (nil? my-block))
+       (conj (str "feed: day.blocks does not carry the current block "
+                  block-id ": " (pr-str (mapv :id (:blocks day1)))))
+
+       (and my-block (not (true? (:current my-block))))
+       (conj "feed: the block under the clock is not marked current in day.blocks")
+
+       (and my-block (not= wanted (mapv #(str (:card_id %)) (:decisions my-block))))
+       (conj (str "feed: the skeleton's decisions line up with the now cards by"
+                  " card_id, in order — expected " (pr-str wanted) ", read "
+                  (pr-str (mapv :card_id (:decisions my-block)))))
+
+       (and my-block
+            (not-every? #(contains? (verbs %) (name (or start :start)))
+                        (:decisions my-block)))
+       (conj "feed: every skeleton decision carries its projected start door")
+
+       (and my-block (not (some #(true? (:current %)) (:spans my-block))))
+       (conj "feed: the current block's span under the clock reads current true")
+
+       ;; (3)
+       (and walker (seq (now-cards walker)))
+       (conj (str "feed: another principal's feed carded the member's block —"
+                  " a plan is a member's, never the house's: "
+                  (pr-str (mapv :card_id (now-cards walker)))))
+
+       (and walker (map? (:day walker)) (not= "plan" (str (get-in walker [:day :mode]))))
+       (conj "feed: another principal's day.mode reads the member's plan")
+
+       (and plan-id (not= 200 (:status closed)))
+       (conj (str "feed: closing the probe's plan answered " (:status closed)))
+
+       (and context-id (not= 200 (:status retired)))
+       (conj (str "feed: retiring the probe's context answered " (:status retired))))}))
+
 (defn- feed-obligation [name' run]
   {:name name' :needs #{[:route :feed]} :run run})
 
@@ -6816,7 +7084,20 @@
     ;; obligations above are reading.
     {:name :feed/hypotheses
      :needs #{[:route :feed] [:kind :hypothesis] [:kind :insight]}
-     :run feed-hypothesis-violations}]
+     :run feed-hypothesis-violations}
+    ;; …and the day after even the fold (waymark-i89n.5), for the
+    ;; writers' shared reason and one of its own: it mints a MEMBER, a
+    ;; context, a plan, a block, a span and two decisions, and a
+    ;; day_plan is a front-door kind — a plan left open is a do-now
+    ;; card on every unscoped reader's page above. It ends with the
+    ;; plan closed (terminal; the population and do-now both retire it)
+    ;; and the context retired (in nobody's defaults), so the engine it
+    ;; hands on is the engine it found.
+    {:name :feed/current-block
+     :needs #{[:route :feed] [:kind :member] [:kind :context]
+              [:kind :day_plan] [:kind :block] [:kind :span]
+              [:kind :decision]}
+     :run feed-current-block-violations}]
    ;; Every obligation spec-feed § 'Where the law is proved' names is
    ;; here now, each having landed with the bead that landed the
    ;; mechanism it judges rather than ahead of it.

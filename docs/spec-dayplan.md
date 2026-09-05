@@ -576,6 +576,16 @@ surface that lies once on every unplanned morning. Nothing is written: the
 fallback is a read over `context` rows, and the card's verb is the ordinary
 create door of an ordinary kind.
 
+**As built (waymark-i89n.5, 2026-09-05):** the fallback moved off the card
+census and onto the document. With no plan the `current_block` population
+answers nothing — no `now` section — and the feed document's `day` key
+carries `mode "plan"`, the shape's `defaults` (context name, order, clock
+windows) and `create`, the `day_plan` create door projected for the reader.
+The landing page renders that as *plan today*; a placeholder card would have
+been a card with no row behind it, which the census refuses elsewhere. The
+`day` key is the date string on a deployment without dayplan10 and the
+object on one with it — `date` inside the object is the same string.
+
 ### (h) Nothing from laws v3 applies inside a block
 
 The current block's decisions are a handful of candidates with an `order`
