@@ -777,7 +777,7 @@ async function batchAStory() {
 /* the census, named once here as the server names it once in
    feed/census — waymark-jfv.4 put a section on top and two copies of
    the order in one function is one copy too many */
-const CENSUS = ["outcomes", "do_now", "decide", "fuel", "seam", "archive"];
+const CENSUS = ["now", "outcomes", "do_now", "decide", "fuel", "seam", "archive"];
 
 async function feedStory() {
   const tag = String(Date.now()).slice(-6);
@@ -877,9 +877,13 @@ async function feedStory() {
                 .find(a => a.textContent === "Feed").click(); true`);
   await waitFor(`document.querySelectorAll(".feedcards .fcard").length > 3`,
                 "the feed's cards");
-  ok("the feed screen renders from the document's own kind",
-     await evaljs(`location.hash === "#/api/-/feed" &&
-                   !!document.querySelector(".feed-head")`));
+  /* HOME IS THE DAY (waymark-i89n.8): the nav's door points at the
+     empty hash, and the landing renders the feed document there —
+     the dashboard it displaced keeps #dashboard, behind ⋯ */
+  ok("the feed screen renders from the document's own kind, at home",
+     await evaljs(`(location.hash === "" || location.hash === "#") &&
+                   !!document.querySelector(".feed-head") &&
+                   !document.querySelector(".dash-grid")`));
 
   /* ── the census, top to bottom, and the seam in the middle ─────── */
   const order = await evaljs(`[...document.querySelectorAll(
@@ -895,8 +899,9 @@ async function feedStory() {
          .map(b => b.textContent);
        const secs = new Set([...document.querySelectorAll(".fcard")]
          .map(c => c.dataset.section));
-       const want = {outcomes: "This week could hold", do_now: "Do now",
-                     decide: "Decide", fuel: "Fuel", archive: "Archive"};
+       const want = {now: "Now", outcomes: "This week could hold",
+                     do_now: "Do now", decide: "Decide", fuel: "Fuel",
+                     archive: "Archive"};
        return [...secs].every(s => heads.includes(want[s]));
      })()`));
   ok("the seam is one quiet element, not a card, and says the sentence",
@@ -1591,6 +1596,188 @@ async function feedStory() {
      carding it would be offering three doors that all answer 409 */
   ok("nor a composed week to whoever composed it",
      await evaljs(`!document.querySelector('.fcard[data-section="outcomes"]')`));
+
+  await dayStory({H, post, tag});
+}
+
+/* ════ the day: home is the day, planned or executed (waymark-i89n.8) ═
+   The feed document grows `day`, and the landing (the empty hash)
+   leads with it: PLAN mode — the shape's default blocks and the plan's
+   create door — when nobody has planned the day, EXECUTE mode — the
+   current block, its decisions with one Go chip each, the timeline —
+   once somebody has. This walk does both in order, then starts a
+   decision from the card. It is GUARDED: a deployment whose document
+   carries no day plan (the key absent, or still the bare date string)
+   gets the landing and dashboard checks and skips the rest, so the
+   feed walk stays green on either side of the server slice. */
+async function dayStory({H, post, tag}) {
+  console.log("· the day: home, and the dashboard behind ⋯");
+  await evaljs(`localStorage.setItem("wm10.principal", "colton");
+                location.hash = ""; location.reload(); true`);
+  await sleep(1500);
+  await waitFor(`!!document.querySelector(".feed-head")`, "home, which is the feed");
+  ok("home is the feed document when its door answers",
+     await evaljs(`!document.querySelector(".dash-grid") &&
+                   !!document.querySelector(".feed-head")`));
+  await evaljs(`document.querySelector(".nav-more").click(); true`);
+  await waitFor(`!!document.querySelector('.nav-menu a[data-nav="dashboard"]')`,
+                "the Dashboard item in ⋯");
+  await evaljs(`document.querySelector('.nav-menu a[data-nav="dashboard"]').click(); true`);
+  await waitFor(`location.hash === "#dashboard" &&
+                 !!document.querySelector(".dash-grid")`, "the dashboard at #dashboard");
+  ok("the dashboard is one tap away behind ⋯, and keeps an address", true);
+  await evaljs(`location.hash = ""; true`);
+  await waitFor(`!!document.querySelector(".feed-head")`, "home again");
+
+  const doc = await (await fetch(BASE + "/api/-/feed", {headers: H("colton")})).json();
+  const dp = doc && doc.day;
+  if (!dp || typeof dp !== "object" || !dp.mode) {
+    console.log("    (this deployment's feed carries no day plan —"
+                + " the plan/execute walk is skipped)");
+    ok("a document without a day plan renders the feed as it was",
+       await evaljs(`!document.querySelector(".day-head")`));
+    return;
+  }
+  console.log(`    the day reads ${dp.mode} for ${dp.date} (${dp.zone || "no zone"})`);
+
+  /* ── PLAN ────────────────────────────────────────────────────────── */
+  if (dp.mode === "plan") {
+    console.log("· plan mode: the defaults, the shape, the one verb");
+    await waitFor(`!!document.querySelector('.day-head[data-day-mode="plan"]')`,
+                  "the plan header");
+    ok("home leads with Plan today and the shape's defaults",
+       await evaljs(`(() => {
+         const h = document.querySelector('.day-head[data-day-mode="plan"]');
+         return /^Plan (today|tomorrow)$/.test(h.querySelector(".day-name").textContent)
+           && h.querySelectorAll(".day-default").length === ${(dp.defaults || []).length};
+       })()`));
+    ok("the header's rows are not feed cards (nothing there carries a card id)",
+       await evaljs(`!document.querySelector(".day-head [data-card-id]")`));
+    ok("or ask Claude — the connector's instructions, one link",
+       await evaljs(`!!document.querySelector('.day-or a[href="/api/-/welcome"]')`));
+    if (!dp.create) {
+      ok("no create door projected for this reader, so no create chip",
+         await evaljs(`!document.querySelector('.day-head button[data-action="create"]')`));
+      return;
+    }
+    const shapeProp = (((dp.create.input || {}).properties || {}).shape) || {};
+    const alts = shapeProp.oneOf || shapeProp.anyOf;
+    const shapeEnum = (alts ? (alts.find(o => o && o.type !== "null") || {}) : shapeProp).enum || [];
+    ok("the shape toggle is the create form's own enum, worn as chips",
+       await evaljs(`document.querySelectorAll(".day-shape [data-shape]").length`)
+         === shapeEnum.length);
+    if (shapeEnum.length) {
+      await evaljs(`document.querySelector(".day-shape [data-shape]").click(); true`);
+      ok("pressing a shape presses exactly one chip and opens no dialog",
+         await evaljs(`document.querySelectorAll(
+            '.day-shape [data-shape][aria-pressed="true"]').length === 1 &&
+            !document.querySelector("dialog[open]")`));
+    }
+    const forDate = await evaljs(
+      `document.querySelector(".day-head").dataset.dayDate`);
+    await evaljs(`document.querySelector(
+       '.day-head button[data-action="create"]').click(); true`);
+    await waitFor(`!!document.querySelector("dialog[open]")`, "the create dialog");
+    ok("the create door opens through the ordinary dialog, the date prefilled",
+       await evaljs(`(document.querySelector('dialog[open] [name="date"]') || {}).value`)
+         === forDate);
+    if (shapeEnum.length)
+      ok("…and the shape the toggle chose",
+         await evaljs(`(document.querySelector('dialog[open] [name="shape"]') || {}).value`)
+           === String(shapeEnum[0]));
+    /* a ref field fills late (refOptions): give the member select a beat */
+    await sleep(600);
+    await evaljs(`(() => {
+      const foot = document.querySelector("dialog[open] .dlgfoot");
+      [...foot.querySelectorAll("button")].find(b => b.classList.contains("primary")).click();
+      return true; })()`);
+    if (forDate !== dp.date) {
+      /* the evening: the plan made is TOMORROW's, so today's landing
+         stays in plan mode — the dialog closing is the claim */
+      await waitFor(`!document.querySelector("dialog[open]")`,
+                    "tomorrow's plan to land", 15000);
+      ok("after the evening hour the door plans tomorrow, and lands", true);
+      console.log("    planned tomorrow (" + forDate + "); the execute walk waits for a morning");
+      return;
+    }
+    try {
+      await waitFor(`!!document.querySelector('.day-head[data-day-mode="execute"]')`,
+                    "the day landing in execute mode without a reload", 15000);
+    } catch (e) {
+      const said = await evaljs(`(document.querySelector("dialog[open] .problem, dialog[open] .err.srv")
+                                  || {}).textContent || ""`);
+      throw new Error(e.message + (said ? " — the dialog says: " + said.trim() : ""));
+    }
+    ok("creating lands in execute mode without a reload", true);
+  }
+
+  /* ── EXECUTE ─────────────────────────────────────────────────────── */
+  console.log("· execute mode: the block, the chip, the line");
+  const doc2 = await (await fetch(BASE + "/api/-/feed", {headers: H("colton")})).json();
+  const d2 = doc2.day || {};
+  ok("the document now reads execute", d2.mode === "execute");
+  await waitFor(`!!document.querySelector('.day-head[data-day-mode="execute"]')`,
+                "the execute header");
+  ok("the timeline lists every block, and marks the current one when there is one",
+     await evaljs(`document.querySelectorAll(".day-tl-block").length`) === (d2.blocks || []).length
+     && (!d2.current_block_id ||
+         await evaljs(`!!document.querySelector(".day-tl-block.current")`)));
+  const blocks = d2.blocks || [];
+  const blk = blocks.find(b => b.id === d2.current_block_id) || blocks[0];
+  if (!blk) {
+    console.log("    (a day with no blocks — nothing to decide on; the start walk is skipped)");
+    return;
+  }
+  const inHeader = blk.id === d2.current_block_id;
+  ok(inHeader ? "the heading is the current block's context, its stance beneath"
+              : "between blocks the heading says so, and the line still stands",
+     await evaljs(`(() => {
+       const h = document.querySelector('.day-head[data-day-mode="execute"] .day-name');
+       return ${inHeader
+         ? `h.textContent === ${JSON.stringify(blk.context_name || "Now")}`
+         : `/Between blocks|The day is spent/.test(h.textContent)`};
+     })()`));
+  const text = `Answer the roofer ${tag}`;
+  const dec = await post("/api/decisions",
+    {block_id: blk.id, kind: "work", text, order: 1,
+     launch: {type: "text", text: "Two lines, no more."}});
+  ok("a decision on the block is born through its ordinary door", !!(dec && dec.self));
+  await evaljs(`window.__keys = [];
+    const f = window.fetch;
+    window.fetch = (u, o) => { const k = (o && o.headers || {})["Idempotency-Key"];
+      if (k) window.__keys.push([String(u), k]); return f(u, o); };
+    render(); true`);
+  await waitFor(`!!document.querySelector('.day-head[data-day-mode="execute"]') &&
+                 document.querySelectorAll(".day-tl-block").length > 0`,
+                "the fresh read");
+  if (!inHeader) {
+    await evaljs(`document.querySelector(
+       '.day-tl-block[data-block=${JSON.stringify(blk.id)}]').click(); true`);
+    await waitFor(`!!document.querySelector(".day-tl-detail")`, "the block, opened inline");
+  }
+  const rowSel = `[...document.querySelectorAll(".day-decision")]
+    .find(li => li.querySelector(".day-decision-text").textContent.includes(${JSON.stringify(text)}))`;
+  await waitFor(`!!(${rowSel})`, "the decision on the card");
+  ok("a text launch is the sentence itself, the text a link to the row's own screen",
+     await evaljs(`(() => { const li = ${rowSel};
+       return li.querySelector(".day-decision-launch").textContent === "Two lines, no more."
+         && li.querySelector(".day-decision-text").getAttribute("href") === "#" + ${JSON.stringify(dec.self)};
+     })()`));
+  const hasGo = await evaljs(`!!(${rowSel}).querySelector('button.chip[data-launch="text"]')`);
+  const projected = Object.entries(dec.actions || {})
+    .some(([, a]) => (a.display || {}).style === "primary");
+  ok("the did-it chip stands exactly when the row projects a primary verb (the UI invents none)",
+     hasGo === projected);
+  if (!hasGo) return;
+  await evaljs(`(${rowSel}).querySelector('button.chip[data-launch="text"]').click(); true`);
+  await waitFor(`(() => { const li = ${rowSel};
+                   return !li || li.dataset.state !== "planned"; })()`,
+                "the verdict landing and the document re-read", 15000);
+  ok("the tap is the verdict: the document is re-read and the row is no longer planned", true);
+  const goKey = (await evaljs(`window.__keys`)).find(([u]) => u.includes(dec.self + "/-/"));
+  ok("the tap rode the feed's own origin key, under the day",
+     !!goKey && goKey[1].startsWith("feed/" + (typeof doc2.day === "string" ? doc2.day : d2.date) + "/"));
+  console.log("    key sent: " + (goKey || [])[1]);
 }
 
 

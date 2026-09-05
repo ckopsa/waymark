@@ -4747,6 +4747,52 @@ jq -n --slurpfile grant "$R/grant.json" --slurpfile ins "$R/insights.full.json" 
 ' > "$D/review_ask.json" 2>>"$PROBE_ERRS" \
   || echo '{"doors":[],"thin_findings":[],"scope_add":[],"body":null}' > "$D/review_ask.json"
 
+# ── WHAT THE PLANNING CHAT NEEDS FROM THE LEASH (waymark-i89n.6) ─────
+# The day plan's kinds (dayplan10, docs/spec-dayplan.md) are ordinary
+# kinds behind ordinary doors, and the composer reaches them through
+# the one grant it wears for everything else. No seed in code writes
+# that grant — a person's tap on an anchored ask does — so THIS is the
+# one list of what the planning chat needs, in the grant grammar
+# (grants.clj): the doors on day_plan, block, span and decision, and
+# READ (an empty actions list) on context, media, task, plan_day,
+# thread and event. start, finish and skip on a decision are NOT here
+# and never will be: the verdict is the person's. The driver reads
+# which entries the grant already admits — a kind fenced to ids counts
+# as held; merge_scope lets the kind-whole entry absorb the fence — and
+# builds the ask body. A SITTING's extend-ask carries the missing
+# entries the way a reading's carries the review doors: one ask at a
+# time, the task naming exactly what widens.
+jq -n --slurpfile grant "$R/grant.json" --arg gid "$GRANT" "$SCOPE_MERGE_JQ"'
+  ((($grant[0].data.scope // $grant[0].scope) // []) | merge_scope) as $scope
+  | [ {kind:"context",  actions:[]},
+      {kind:"day_plan", actions:["create","set","replan","reshape"]},
+      {kind:"block",    actions:["create","skip","restate"]},
+      {kind:"span",     actions:["move","swap","extend","split"]},
+      {kind:"decision", actions:["create","change"]},
+      {kind:"media",    actions:[]},
+      {kind:"task",     actions:[]},
+      {kind:"plan_day", actions:[]},
+      {kind:"thread",   actions:[]},
+      {kind:"event",    actions:[]} ] as $needs
+  | [ $needs[] | . as $n
+      | ([ $scope[] | select(.kind == $n.kind) ]) as $held
+      | (($held | length) > 0) as $seen
+      | ([ $held[] | (.actions // [])[] ]) as $has
+      | ([ $n.actions[] | . as $a | select(($has | index($a)) == null) ]) as $missing
+      | $n + {admitted: ($seen and ($missing | length) == 0),
+              missing: (if $seen then $missing else $n.actions end)} ] as $checked
+  | ([ $checked[] | select(.admitted | not) | {kind:.kind, actions:.missing} ]) as $add
+  | {doors:$checked,
+     scope_add:$add,
+     body: (if ($add | length) == 0 then null
+            else {grant_id:$gid,
+                  task:("Let the planning chat build tomorrow'"'"'s plan: "
+                        + ([ $add[] | .kind + (if (.actions | length) > 0 then "." + (.actions | join("/")) else " (read)" end) ] | join(", "))
+                        + ". Never start, finish or skip on a decision — that verdict stays the person'"'"'s. The same leash otherwise."),
+                  scope: (($scope + $add) | merge_scope)} end)}
+' > "$D/planning_ask.json" 2>>"$PROBE_ERRS" \
+  || echo '{"doors":[],"scope_add":[],"body":null}' > "$D/planning_ask.json"
+
 # ── the leash: file the anchored extend-ask before it runs out ───────
 #
 # THE ASK MUST NEVER BE QUIET (waymark-ycp). Every field the manifest
@@ -4786,6 +4832,16 @@ if [ -n "$GRANT_EXP" ] && [ "$LEFT" -lt "$ASK_WINDOW" ]; then
                         + ([ $ra[0].scope_add[] | .kind + "." + (.actions | join("/")) + (if .ids then " on " + ((.ids|length)|tostring) + " named rows" else "" end) ] | join(", "))
                         + ". Everything else the same."),
                   scope:$ra[0].body.scope, expires_at:$e}')"
+      # a SITTING's extend-ask carries the planning chat's doors the
+      # same way (waymark-i89n.6): the one list above, only what is
+      # missing, the task naming it, never a verdict door
+      elif [ "$RUN_MODE" = "sitting" ] && [ "$(jq '(.scope_add // []) | length' "$D/planning_ask.json" 2>/dev/null || echo 0)" -gt 0 ]; then
+        body="$(jq -nc --arg g "$GRANT" --argjson hours "$hours" \
+                       --slurpfile pa "$D/planning_ask.json" \
+                       --arg e "$(iso "$(( $(now_s) + EXTEND ))")" '
+                 {grant_id:$g,
+                  task:("Keep my standing leash another " + ($hours|tostring) + " hours, and l" + ($pa[0].body.task | .[1:])),
+                  scope:$pa[0].body.scope, expires_at:$e}')"
       else
         body="$(jq -nc --arg g "$GRANT" --arg t "Keep my standing leash: the same scope, another $hours hours." \
                        --argjson s "$(jq -c "$SCOPE_MERGE_JQ"' (.data.scope // .scope) | merge_scope' "$R/grant.json")" \
@@ -4857,6 +4913,7 @@ jq -n \
   --slurpfile experiments "$D/experiments.json" \
   --slurpfile review "$D/review.json" \
   --slurpfile review_ask "$D/review_ask.json" \
+  --slurpfile planning_ask "$D/planning_ask.json" \
   --slurpfile house_says "$D/house_says.json" \
   --slurpfile notes "$D/notes_for_sittings.json" \
   --slurpfile lforms "$D/letter_forms.json" \
@@ -4922,6 +4979,7 @@ jq -n \
   experiments: $experiments[0],
   review: (if $sit then null else $review[0] end),
   review_ask: (if $sit then null else $review_ask[0] end),
+  planning_ask: (if $sit then $planning_ask[0] else null end),
   house_says: $house_says[0],
   notes_for_sittings: $notes[0],
   # THE FORMS THAT CROSSED PRINCIPALS (waymark-bbb): the letters
@@ -5070,6 +5128,20 @@ jq -n \
     end' "$RUN/manifest.json"
   hs_say '(.letters // []) | length'
   echo
+  if [ "$RUN_MODE" = "sitting" ]; then
+    # the planning chat's doors (waymark-i89n.6): mechanically read off
+    # the one list above, so the sitting knows before a person asks for
+    # tomorrow whether the leash admits the plan — and what to ask for
+    echo "## THE PLANNING CHAT'S DOORS — whether the leash admits them (waymark-i89n.6)"
+    jq -r '.planning_ask.doors[] | "    · \(.kind)\(if (.actions|length) > 0 then "." + (.actions|join("/")) else " (read)" end): \(if .admitted then "admitted" else "ABSENT from the grant" end)"' "$RUN/manifest.json"
+    jq -r '.planning_ask as $a
+      | if ($a.scope_add | length) > 0
+        then "  THE ASK that opens them — anchored to this grant, the kind whole. Inside the ask window the driver files it as the one extend-ask (grant_watch above says whether it did); otherwise, when a person asks for tomorrow'"'"'s plan and no ask of yours stands, POST /api/approval_requests with this body (add expires_at, AT MOST 24 HOURS OUT) and REPORT THE ASK ID:",
+             "    \($a.body | tojson)"
+        else "  (every planning door is already in the leash)" end' "$RUN/manifest.json"
+    echo "  start, finish and skip on a decision are the person's verdict: never asked for, never invoked."
+    echo
+  fi
   if [ "$RUN_MODE" = "reading" ]; then
     echo "## YOUR ORDERS — the clerk's forms AND the editor's orders, labeled (waymark-48a, waymark-nl0)"
     jq -r '"  (\(.work_orders|length) presented of \(.work_orders_found) the probes found — a CEILING per label: WAYMARK_WORK_ORDERS clerk, WAYMARK_EDITOR_ORDERS editor)"' "$RUN/manifest.json"

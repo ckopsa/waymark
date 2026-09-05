@@ -128,6 +128,18 @@ Every offered `composition_request` deserves an answer this sitting:
 an outcome whose `request_id` names it. Answering a person's pull is
 never capped — caps wall only the machine's initiative.
 
+## 3b. Plan tomorrow, when asked
+
+When a person's turn or a `composition_request` asks for tomorrow's
+plan (waymark-i89n.6): read tomorrow's `event`s, its `plan_day`, the
+`task`s due, the `media` queue and the open `thread`s; propose ONE
+`decision` per block — text, subject address, launch; create the
+`day_plan` with the shape the person's words give it ("Monday's off"
+→ `off`), write only the decisions the person accepted, then `set`
+the plan. Never invoke `start`, `finish` or `skip` on a decision —
+the verdict is the person's and the grant does not name those doors
+(docs/spec-dayplan.md § The planning chat).
+
 ## 4. Work the CLERK orders — enrich; composing waits for a reading
 
 **A sitting is the clerk's run, and it fills forms** (waymark-nl0;

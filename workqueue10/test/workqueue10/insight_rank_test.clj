@@ -81,6 +81,7 @@
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "activities" "evening_plans" "evening_sessions"
+   "contexts" "day_plans" "blocks" "spans" "decisions"
    "letters" "weathers" "selves" "journals" "ticklers" "insights"
    "permission_slips" "saved_views" "dashboards" "dashboard_slots"
    "connections" "capabilities"
@@ -135,7 +136,11 @@
        (or body {}) headers))
 
 (defn- feed-as [who & [query]]
-  (json (req :get (str "/api/-/feed" (when query (str "?" query))) (human who))))
+  (let [resp (req :get (str "/api/-/feed" (when query (str "?" query))) (human who))]
+    ;; a problem document has no :cards, and a test that read them off
+    ;; one would fail three claims down from the cause (waymark-vwwy)
+    (is (= 200 (:status resp)) (pr-str (json resp)))
+    (json resp)))
 
 (defn- leash!
   "An agent HOLDING a scope, minted through the real grant door and
@@ -187,11 +192,14 @@
   opens by promising there are none."
   [who tid]
   (let [card (some #(when (= (str "do_now/task/" tid) (str (:card_id %))) %)
-                   (:cards (feed-as who)))]
+                   (:cards (feed-as who)))
+        own (req :get (str "/api/tasks/" tid) (human who))]
+    (is (= 200 (:status own)) (pr-str (json own)))
+    ;; an envelope's `actions` is a map keyed by the verb, the same
+    ;; shape the card wears — read by its keys, or the fallback names
+    ;; no verb at all and the offer is refused as naming none
     (or (some-> (first (sort (keys (:actions card)))) name)
-        (first (sort (map (comp str :name)
-                          (:actions (json (req :get (str "/api/tasks/" tid)
-                                               (human who))))))))))
+        (some-> (first (sort (keys (:actions (json own))))) name))))
 
 (deftest the-findings-are-ranked-not-capped-and-every-card-says-why
   (let [who "colton-insight"

@@ -178,8 +178,10 @@
                [:maybe [:string {:max 200}]]]
               ;; the confluence's routing tag — which authority this
               ;; row drinks from; the enum is the tag set main wires
+              ;; ("day_plan" is the day plan's prep, mirrored in from
+              ;; decisions the way "meal" is the thaw task — waymark-i89n.4)
               [:source {:optional true :filter #{:eq :in}}
-               [:maybe [:enum "chore" "meal" "todo" "gtasks"]]]
+               [:maybe [:enum "chore" "meal" "todo" "gtasks" "day_plan"]]]
               ;; WHO, as a person and not a string. The sources speak
               ;; names ("colton", "housekeeper") — that text lands in
               ;; :assignee_name, and :assignee is its resolvable

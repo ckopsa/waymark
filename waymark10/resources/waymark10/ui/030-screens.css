@@ -599,6 +599,84 @@
   .feed-endbox { margin: 16px 0 8px; text-align: center; }
   .feed-endbox button { font-size: 13px; }
 
+  /* ── the day (137-day.js): the block you are in, above the census —
+     the same furniture as the posts (hairlines, chips for thumbs, the
+     serif for what a person wrote) with one loud thing: the block's
+     name is the biggest type on the page, because it is the answer */
+  .day-head { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); }
+  .day-head .day-name { margin: 0; font-size: 22px; letter-spacing: -.015em;
+                        line-height: 1.2; }
+  .day-stance { font-size: 14.5px; line-height: 1.4; margin: 3px 0 0; }
+  .day-none { font-size: 13px; margin: 8px 0 4px; }
+  .day-decisions, .day-defaults { list-style: none; margin: 8px 0 0; padding: 0; }
+  .day-decision { display: flex; flex-wrap: wrap; align-items: center;
+                  gap: 4px 10px; padding: 7px 0;
+                  border-top: 1px solid var(--line); }
+  .day-decision-text { flex: 1 1 14rem; font-size: 15.5px; line-height: 1.4;
+                       color: var(--ink); }
+  .day-decision-launch { flex: 1 1 100%; font-size: 14px; line-height: 1.4;
+                         color: var(--muted); margin: -2px 0 0; }
+  .day-verbs { margin: 0; flex: 0 0 auto; }
+  .day-verbs a.chip.verb { font-family: var(--sans); font-size: 13.5px;
+    min-height: 34px; padding: 5px 12px; border-radius: 999px;
+    display: inline-flex; align-items: center; text-decoration: none;
+    border: 1px solid var(--verdigris); background: var(--verdigris);
+    color: var(--on-accent); font-weight: 600; }
+  .day-verbs a.chip.verb:hover { background: var(--verdigris-deep);
+                                  border-color: var(--verdigris-deep); }
+  .day-verbs a.chip.verb[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+  .day-verbs button.chip.verb.primary { background: var(--verdigris);
+    border-color: var(--verdigris); color: var(--on-accent); font-weight: 600; }
+  .day-verbs button.chip.verb.primary:hover { background: var(--verdigris-deep);
+    color: var(--on-accent); }
+  .day-verbs button.chip.verb.small { font-size: 12.5px; min-height: 30px;
+                                      padding: 3px 10px; }
+  .day-head [data-day-problem]:empty { display: none; }
+  /* the timeline: one line, every block; past dim, current bold,
+     ahead plain — and the plan's own verbs on the right edge */
+  .day-timeline { display: flex; flex-wrap: wrap; align-items: center;
+                  gap: 4px 6px; margin: 12px 0 0; padding-top: 8px;
+                  border-top: 1px dashed var(--line); }
+  .day-tl-block { font-family: var(--sans); font-size: 12.5px; padding: 4px 10px;
+                  min-height: 30px; border-radius: 999px; background: transparent;
+                  border: 1px solid var(--line); color: var(--ink);
+                  display: inline-flex; align-items: center; gap: 6px;
+                  cursor: pointer; }
+  .day-tl-block:hover { background: var(--verdigris-wash);
+                        border-color: var(--verdigris); }
+  .day-tl-block.past { color: var(--muted); opacity: .7; }
+  .day-tl-block.current { font-weight: 700; border-color: var(--verdigris);
+                          background: var(--verdigris-wash);
+                          color: var(--verdigris-deep); }
+  .day-tl-block[aria-expanded="true"] { border-style: dashed; }
+  .day-tl-when { font-size: 11px; color: var(--muted); }
+  .day-tl-block.current .day-tl-when { color: var(--verdigris-deep); }
+  .day-tl-verbs { margin: 0 0 0 auto; }
+  .day-tl-verbs button.chip.verb { font-size: 12.5px; min-height: 30px;
+                                   padding: 3px 10px; }
+  .day-tl-open:empty { display: none; }
+  .day-tl-detail { margin: 8px 0 0; padding: 8px 10px 4px;
+                   background: var(--chipbg); border-radius: var(--radius);
+                   font-size: 13.5px; }
+  .day-tl-spans { display: block; font-size: 11.5px; margin-top: 2px; }
+  /* plan mode: the defaults as quiet rows, the shape as chips */
+  .day-default { display: flex; flex-wrap: wrap; align-items: baseline;
+                 gap: 4px 10px; padding: 6px 0;
+                 border-top: 1px solid var(--line); font-size: 14.5px; }
+  .day-default-name { flex: 1 1 10rem; }
+  .day-default-when { font-size: 12px; }
+  .day-shape { margin: 10px 0 4px; }
+  .day-shape button.chip { font-family: var(--sans); font-size: 12.5px;
+    min-height: 30px; padding: 3px 12px; border-radius: 999px;
+    background: transparent; border: 1px solid var(--line); color: var(--ink);
+    cursor: pointer; }
+  .day-shape button.chip:hover { background: var(--verdigris-wash);
+                                 border-color: var(--verdigris); }
+  .day-shape button.chip[aria-pressed="true"] { background: var(--verdigris);
+    border-color: var(--verdigris); color: var(--on-accent); }
+  .day-head > .day-verbs { margin-top: 10px; }
+  .day-or { font-size: 12.5px; margin: 8px 0 0; }
+
   /* ── the dashboard screen (waymark-ggw): the user-composed grid ─── */
   .slot-grid { display: grid; gap: 12px; margin: 12px 0 16px;
                grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }

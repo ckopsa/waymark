@@ -80,9 +80,11 @@
    heading painted from the census would announce a section that never
    arrives. */
 const FEED_SECTION_LABEL = {
+  now: "Now",
   outcomes: "This week could hold", do_now: "Do now", decide: "Decide",
   fuel: "Fuel", archive: "Archive"};
 const FEED_SECTION_HINT = {
+  now: "the block you are in — its decisions, in the order you set them",
   outcomes: "composed, with the friction already paid — a thumb each way",
   do_now: "one physical next step, under the thumb",
   decide: "things waiting on somebody's answer",
@@ -128,7 +130,9 @@ function feedDoor() {
 }
 
 async function renderFeedScreen(view, doc) {
-  const day = doc.day || "";
+  /* the date, whichever spelling `day` arrived in (137-day.js): the
+     origin keys and the head's data-day want the string alone */
+  const day = feedDayDate(doc);
   const seen = new Set();          // card_id — one card per id, ever
   let nextHref = (doc.links || {}).next?.href || null;
   let lastSection = null;
@@ -278,6 +282,17 @@ async function renderFeedScreen(view, doc) {
   }
   col.append(head);
 
+  /* ── THE DAY, above the census (waymark-i89n.8) ─────────────────────
+     doc.day, when it is the plan and not the bare date, is the page's
+     skeleton around the feed: the current block and its decisions, or
+     the shape's defaults and the plan's create door. 137-day.js paints
+     it; the seam below reads the block's own sentence when one rides.
+     Nothing else on this screen moves. */
+  const dayPlan = feedDayPlan(doc);
+  const daySeam = dayPlanSeam(dayPlan);
+  const dayNode = dayPlan ? dayHeader(dayPlan, {day, reread: () => render()}) : null;
+  if (dayNode) col.append(dayNode);
+
   /* ── COMPOSE ME ANOTHER (waymark-jfv.20) ─────────────────────────────
      The person pulls, and the rank puts the answer first (since
      waymark-1uv.3 the chip rides whether or not a bundle is on offer;
@@ -419,7 +434,7 @@ async function renderFeedScreen(view, doc) {
     return el("div", {class: "feed-seam", "data-card-id": "seam"},
       el("div", {class: "feed-seam-rule"}),
       el("div", {class: "feed-seam-say prose"},
-        card.sentence || "That's the house, caught up."),
+        card.sentence || daySeam || "That's the house, caught up."),
       el("div", {class: "muted feed-seam-sub"},
         (card.above ?? 0) + " above · everything below is history"));
   }

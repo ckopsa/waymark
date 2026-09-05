@@ -440,6 +440,18 @@
               :input (query-input-schema rdef)}}
      bulk-entries)))
 
+(defn create-affordance
+  "One kind's create door as its collection advertises it —
+  `{:method :href :input :effect :safety}` — projected through the
+  caller's visibility: nil for a scoped reader whose grant does not
+  confer the create, exactly as the collection document drops it. The
+  feed's `day` key hands it to the screen that offers 'plan today'
+  (waymark-i89n.5), read from here so the one place a collection
+  spells its create stays the one place."
+  [rdef vis]
+  (when (and rdef (or (nil? vis) ((:action? vis) (:kind rdef) :create)))
+    (:create (collection-actions rdef))))
+
 (defn- action-label
   "The human label a gesture wears: the bound action's declared
   display label, else the name humanized (the render layer's own

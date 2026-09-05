@@ -100,6 +100,41 @@
     (is (str/includes? page "(own && own.length) ? own : (door.choices || [])")
         "…and a kind the door does not name gets the house's default four")))
 
+(deftest home-is-the-day
+  ;; waymark-i89n.8: the empty hash lands on the feed document when the
+  ;; feed's door answers and on the dashboard when it does not; the
+  ;; dashboard keeps #dashboard behind ⋯. The header above the census
+  ;; forks on the document's own day.mode, reads `day` in both its
+  ;; spellings (the bare date the document carried before this slice,
+  ;; the plan it carries now), and names no application kind, state or
+  ;; door: the one chip is whichever verb the declaration styled
+  ;; primary, and the shape toggle is the create form's own enum.
+  (let [page (sut/assemble)]
+    (is (str/includes? page "return renderLanding(view, seq);")
+        "the empty hash goes through the landing")
+    (is (str/includes? page "if (href === \"dashboard\")")
+        "…and the dashboard keeps an address")
+    (is (str/includes? page "href: \"#dashboard\""))
+    (is (str/includes? page "async function renderLanding"))
+    (is (str/includes? page "function dayHeader"))
+    (is (str/includes? page "typeof d === \"string\" ? d : ((d || {}).date || \"\")")
+        "the date is read in both spellings")
+    (is (str/includes? page "d && typeof d === \"object\" && d.mode ? d : null")
+        "a document without a day plan renders the feed as it was")
+    (is (str/includes? page "dayGoChip(d, primaryVerb(d.actions), row, ctx)")
+        "the one chip is the projected primary verb, never a named door")
+    (is (str/includes? page "props.shape ? schemaProp(props.shape) : null")
+        "the shape toggle is the form's own enum")
+    (is (str/includes? page ".day-head {") "its CSS survives assembly")
+    (is (str/includes? page "html[data-ui=\"mobile\"] .day-head"))
+    (is (< (str/index-of page "async function renderFeedScreen")
+           (str/index-of page "async function renderLanding"))
+        "137 lands after 135 in the one flat script")
+    (doseq [word ["day_plan" "workday" "\"start\""]]
+      (is (not (str/includes? page word))
+          (str "the generic page never learns the module's words — found "
+               word)))))
+
 (deftest the-dashboard-renderer-rides-the-page
   ;; the dashboard screen (waymark-ggw): render() forks by kind to
   ;; renderDashboard (function declarations hoist across the one flat
@@ -294,11 +329,12 @@
     (is (str/includes? page "id=\"undostack\"") "and its slot in the shell")
     (is (str/includes? page "html[data-ui=\"mobile\"] #undostack")
         "a fixed panel clears the tab bar on a phone")
-    ;; the three call sites still funnel through the one function, so
-    ;; the card surface, the deck's swipe and the feed's chips all get
-    ;; the stack without any of them knowing it exists
-    (is (= 4 (count (re-seq #"maybeUndoToast\(" page)))
-        "one definition and the three taps that reach it")
+    ;; the four call sites still funnel through the one function, so
+    ;; the card surface, the deck's swipe, the feed's chips and the
+    ;; day's Go (137-day.js, waymark-i89n.8) all get the stack without
+    ;; any of them knowing it exists
+    (is (= 5 (count (re-seq #"maybeUndoToast\(" page)))
+        "one definition and the four taps that reach it")
     ;; A REFUSAL IS NEWS AND AN EXPIRY IS NOT: an entry the person
     ;; never touched leaves when its door does; one they tapped and the
     ;; house refused keeps its place and shows the wall's own sentence

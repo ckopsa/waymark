@@ -2093,3 +2093,32 @@
           (is (= 200 (:status revised)) (pr-str (:doc revised)))
           (is (str/includes? (get-in off [:recipe :tickler_rank_says])
                              "The fridge's rank is off")))))))
+
+;; ── the day key never fails the read (waymark-i89n.5, hardened) ─────
+
+(deftest a-span-whose-instant-did-not-decode-holds-nothing-and-fails-no-page
+  ;; `:waymark/instant`'s decoder hands back the STRING it could not
+  ;; parse rather than throwing, so a span row written badly reaches
+  ;; the clock comparison as text; before the guard that was a
+  ;; ClassCastException inside the feed read — a 500 for the whole
+  ;; landing page over one row of the skeleton
+  (let [holds? @#'feed/window-holds?
+        guarded @#'feed/day-read
+        now (java.time.Instant/parse "2026-01-06T10:30:00Z")
+        good {:data {:starts_at (java.time.Instant/parse "2026-01-06T10:00:00Z")
+                     :ends_at (java.time.Instant/parse "2026-01-06T11:00:00Z")}}
+        bad {:data {:starts_at "yesterday-ish"
+                    :ends_at (java.time.Instant/parse "2026-01-06T11:00:00Z")}}]
+    (is (true? (holds? now good)))
+    (is (false? (holds? now bad))
+        "a window the store handed back as text holds nothing — no throw")
+    (is (false? (holds? now {:data {}})))
+    (testing "and a row the day cannot read falls back, with the reason on stderr"
+      (let [err (java.io.StringWriter.)
+            out (binding [*err* err]
+                  (guarded "block 01H" [] (fn [] (throw (ex-info "no such shape" {})))))]
+        (is (= [] out))
+        (is (str/includes? (str err) "the day key could not read block 01H"))
+        (is (str/includes? (str err) "no such shape"))))
+    (is (= :fine (guarded "nothing" nil (fn [] :fine))))))
+

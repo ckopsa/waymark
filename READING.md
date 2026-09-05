@@ -347,6 +347,9 @@ pasting `scripts/sitting-run.sh verify`.
 9. **REVIEW the sittings since the last reading.** Read their grade
    lines under REVIEW: an `UNANSWERED` order beside a silent journal, a
    `THIN` finding, a `TWIN`, a `CLAIMED, NOT STAGED`, an `ODD HOUR`.
+   A reading may review yesterday's plan the same way — its
+   `decision` rows started or done against those skipped or missed —
+   reading the verdicts, never giving one.
    Then: **score** every standing bundle you did not write
    (`ranking_note`, the unscored list, the whole cite pack); **dismiss**
    a thin or false row where your grant admits the door — the formula

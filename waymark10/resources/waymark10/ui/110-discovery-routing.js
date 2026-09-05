@@ -116,7 +116,11 @@ async function render() {
   const {href, viewName} = splitViewParam(raw);
   const view = $("#view");               // superseded render never blanks
   renderNav(href ? href.split("?")[0].split("/").slice(0, 3).join("/") : null);
-  if (!href) { lawStamp(null); return renderHome(view, seq); }
+  /* home is the day (waymark-i89n.8): the feed document when its door
+     answers, the dashboard when it does not — 137-day.js decides. The
+     dashboard keeps an address of its own, behind ⋯. */
+  if (!href) { lawStamp(null); return renderLanding(view, seq); }
+  if (href === "dashboard") { lawStamp(null); return renderHome(view, seq); }
   if (href === "access") {
     lawStamp(null);
     return renderAccess(view, seq);

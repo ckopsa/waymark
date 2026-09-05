@@ -5,13 +5,16 @@
   needed."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [dayplan10.zone :as zone]
             [workqueue10.confluence :as conf]
             [workqueue10.sources.choreplan :as chores]
+            [workqueue10.sources.dayplan :as dayplan]
             [workqueue10.sources.gtasks :as gt]
             [workqueue10.sources.homeassistant :as ha]
             [workqueue10.sources.mealplan :as meals]
             [workqueue10.sources.waymark :as wm]
-            [waymark10.server.mirror :as mirror]))
+            [waymark10.server.mirror :as mirror])
+  (:import (java.time LocalDate LocalTime)))
 
 ;; ── the translations ────────────────────────────────────────────────
 
@@ -154,6 +157,43 @@
       (is (= (conf/list-pull src "todo.woodworking")
              (get (conf/list-pull-many src ["todo.woodworking"])
                   "todo.woodworking"))))))
+
+(deftest decision-prep-translation
+  (let [env {:self "/api/decisions/d-bag"
+             :state "planned"
+             :data {:kind "prepare" :text "Bag by the door"
+                    :prep "Pack the bag" :date "2026-01-06"
+                    :block_name "Workday · 2026-01-06"
+                    :member_handle "colton"}}]
+    (testing "the prep sentence IS the title; the decision it readies is
+              the detail, so the task reads standalone in a mixed queue"
+      (let [t (dayplan/decision->task env)]
+        (is (= "Pack the bag" (:title t)))
+        (is (= "For: Bag by the door — Workday · 2026-01-06" (:detail t)))
+        (is (= "colton" (:assignee_name t))
+            "the plan's member by handle — the ref's :carry on the decision")))
+
+    (testing "due the evening before the block's date: six o'clock in the
+              household zone, a real instant"
+      (is (= (str (zone/at (LocalDate/parse "2026-01-05") (LocalTime/of 18 0)))
+             (:due_at (dayplan/decision->task env))))
+      (is (nil? (:due_at (dayplan/decision->task (assoc-in env [:data :date] nil))))
+          "no date, no due — the belt under the block guard"))
+
+    (testing "state → status: planned and started stand as open work,
+              done is done"
+      (is (= "open" (:status (dayplan/decision->task env))))
+      (is (= "open" (:status (dayplan/decision->task (assoc env :state "started")))))
+      (is (= "done" (:status (dayplan/decision->task (assoc env :state "done"))))))
+
+    (testing "a decision skipped or changed reads as GONE — the 404
+              sentinel the confluence turns into :gone, never a status"
+      (doseq [state ["skipped" "changed"]]
+        (let [e (try (dayplan/decision->task (assoc env :state state)) nil
+                     (catch clojure.lang.ExceptionInfo e e))]
+          (is (some? e) (str state " throws"))
+          (is (= 404 (:status (ex-data e))))
+          (is (re-find #"nothing to do now" (ex-message e))))))))
 
 (deftest origin-hrefs
   (testing "the source client stamps the way back: the API row and

@@ -219,7 +219,10 @@ twice, the finding saying what changes because of the decline.
 The REVIEW section lists the sittings since the last reading with
 their `verify` grade lines (or says there are none on this machine —
 an ephemeral runner keeps nothing). Read them for what the clerk got
-wrong; say it in the journal. Then **score** every standing bundle you
+wrong; say it in the journal. Yesterday's plan reads the same way —
+its `decision` rows started or done against those skipped or missed
+— and a reading only reads those verdicts, never gives one. Then
+**score** every standing bundle you
 did not write (`ranking_note`: score 0–1, one sentence ≤240 chars on
 what the bundle stands on, evidence = the whole cite list). Then
 **dismiss** thin or false rows where your grant admits the door: the
