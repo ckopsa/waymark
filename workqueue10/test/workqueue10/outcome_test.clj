@@ -566,7 +566,20 @@
                                "Put the afternoon on the calendar"
                                "task" {:title "Book the shop afternoon"}))
         d (fields (req :get (str "/api/outcome_pieces/" p)
-                       (human "colton-impact")))]
+                       (human "colton-impact")))
+        ;; the reader's own recipe, the crown wide enough for this
+        ;; bundle whatever else the namespace's other deftests left
+        ;; offered: the crown scans every offered bundle in the house
+        ;; and breaks equal lifts by hash, so under the deployment's
+        ;; :take 2 this card's slot was a lottery over kaocha's order
+        ;; (waymark-vwwy) — the rank tests' own move (§ 16, § 17)
+        order (:order (:recipe (json (req :get "/api/-/feed" (human "colton-impact")))))
+        wide (mapv #(if (= "outcomes" (str (:section %))) (assoc % :take 10) %)
+                   order)
+        recipe (req :post "/api/feed_recipes"
+                    {:label "A wide crown" :scope "mine" :order wide}
+                    (human "colton-impact"))]
+    (is (= 201 (:status recipe)) (pr-str (json recipe)))
     (testing "the line is on the ROW, written at staging"
       (is (not (str/blank? (str (:impact d))))))
     (testing "and it is the ENGINE's sentence: it names the row the tap would create"
@@ -593,7 +606,9 @@
       (clear-impact! q)
       (let [bare (fields (req :get (str "/api/outcome_pieces/" q)
                               (human "colton-impact")))
-            feed' (json (req :get "/api/-/feed" (human "colton-impact")))
+            page (req :get "/api/-/feed" (human "colton-impact"))
+            _ (is (= 200 (:status page)) (pr-str (json page)))
+            feed' (json page)
             card (some #(when (and (= "outcome" (str (:kind %)))
                                    (str/ends-with? (str (:self %)) o)) %)
                        (:cards feed'))
@@ -605,7 +620,9 @@
         (is (str/includes? (str (:impact piece)) "Book the shop afternoon")
             "and the card carries the same sentence, derived at the read")))
     (testing "the bundle states the union its own verb would take"
-      (let [feed' (json (req :get "/api/-/feed" (human "colton-impact")))
+      (let [page (req :get "/api/-/feed" (human "colton-impact"))
+            _ (is (= 200 (:status page)) (pr-str (json page)))
+            feed' (json page)
             card (some #(when (and (= "outcome" (str (:kind %)))
                                    (str/ends-with? (str (:self %)) o)) %)
                        (:cards feed'))]

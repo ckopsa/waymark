@@ -3794,6 +3794,24 @@
   [row]
   (some-> (:state row) keyword))
 
+(defn- day-read
+  "One read of the day, over a thunk, and never a failed page. The
+  landing page is the day's skeleton AROUND the cards, and a row the
+  day computation cannot read — an instant the store handed back as
+  the string it was written as, a field that is not the shape its
+  schema promised — must not take the cards down with it: the reason
+  goes to stderr (the tickler sweeper's own seam) and the caller's
+  fallback stands in — nil for one row, which drops it; [] for the
+  population; nil for the whole key, which leaves `day` the bare date
+  string it always was."
+  [^String what fallback thunk]
+  (try (thunk)
+       (catch Exception e
+         (binding [*out* *err*]
+           (println "waymark10 feed: the day key could not read" what "-"
+                    (ex-message e)))
+         fallback)))
+
 (defn- reader-plan
   "The reader's day_plan for the recipe's own today, in a state the
   day is still lived in — drafting or set; a closed day has no current
@@ -3814,7 +3832,10 @@
   from the two instants rather than read off the swept fact."
   [^Instant now decoded]
   (let [{:keys [^Instant starts_at ^Instant ends_at]} (:data decoded)]
-    (boolean (and starts_at ends_at
+    ;; instance checks, not nil checks: a stored string the decoder
+    ;; could not parse comes back as that string, and a window that
+    ;; cannot be read holds nothing
+    (boolean (and (instance? Instant starts_at) (instance? Instant ends_at)
                   (not (.isBefore now starts_at))
                   (.isBefore now ends_at)))))
 
@@ -3874,21 +3895,23 @@
   the document is where an unplanned morning reads 'plan today'."
   [ctx]
   (or (when (dayplan-kinds? ctx)
-        (when-some [plan (reader-plan ctx)]
-          (when-some [span (current-span ctx (plan-spans ctx (:id plan)))]
-            (let [bid (str (get-in span [:data :block_id]))
-                  block (load-raw ctx :block bid)]
-              (when (and block (= :planned (state-of block)))
-                (let [cname (or (some-> (get-in block [:data :context_name])
-                                        str not-empty)
-                                "current")]
-                  (into []
-                        (comp (filter #(contains? #{:planned :started} (state-of %)))
-                              (map-indexed (fn [i r]
-                                             {:kind :decision :id (:id r) :row r
-                                              :lane i
-                                              :sentence (str "your " cname " block")})))
-                        (block-decisions ctx bid))))))))
+        (day-read "the current block" nil
+          (fn []
+            (when-some [plan (reader-plan ctx)]
+              (when-some [span (current-span ctx (plan-spans ctx (:id plan)))]
+                (let [bid (str (get-in span [:data :block_id]))
+                      block (load-raw ctx :block bid)]
+                  (when (and block (= :planned (state-of block)))
+                    (let [cname (or (some-> (get-in block [:data :context_name])
+                                            str not-empty)
+                                    "current")]
+                      (into []
+                            (comp (filter #(contains? #{:planned :started} (state-of %)))
+                                  (map-indexed (fn [i r]
+                                                 {:kind :decision :id (:id r) :row r
+                                                  :lane i
+                                                  :sentence (str "your " cname " block")})))
+                            (block-decisions ctx bid))))))))))
       []))
 
 ;; ── the day key (waymark-i89n.5, for waymark-i89n.8) ────────────────
@@ -4007,7 +4030,8 @@
        "ends_at" (some-> ends_at str)
        "state" (name (state-of decoded))
        "current" (window-holds? now decoded)
-       "missed" (boolean (and ends_at (not (.isAfter ends_at now))))})))
+       "missed" (boolean (and (instance? Instant ends_at)
+                              (not (.isAfter ends_at now))))})))
 
 (defn- block-doc
   "One block of the plan, projected, with its spans and its decisions
@@ -4025,8 +4049,14 @@
        "seam" (some-> (:context_seam d) str not-empty)
        "state" (name (state-of raw))
        "current" (= bid current-bid)
-       "spans" (into [] (keep #(span-doc ctx %)) (get spans-by-block bid))
-       "decisions" (into [] (keep #(decision-doc ctx %)) (block-decisions ctx bid))})))
+       "spans" (into []
+                     (keep #(day-read (str "span " (:id %)) nil
+                                      (fn [] (span-doc ctx %))))
+                     (get spans-by-block bid))
+       "decisions" (into []
+                         (keep #(day-read (str "decision " (:id %)) nil
+                                          (fn [] (decision-doc ctx %))))
+                         (block-decisions ctx bid))})))
 
 (defn- defaults-doc
   "What the plan WOULD materialise for this shape: the active contexts
@@ -4066,44 +4096,47 @@
   plan tomorrow too."
   [ctx recipe]
   (when (dayplan-kinds? ctx)
-    (let [day (:day ctx)
-          plan-raw (reader-plan ctx)
-          plan (when plan-raw (projected ctx :day_plan plan-raw))
-          pid (when plan (str (:id plan-raw)))
-          spans (if pid (plan-spans ctx pid) [])
-          spans-by-block (group-by #(str (get-in % [:data :block_id])) spans)
-          cur-bid (when pid
-                    (some-> (current-span ctx spans) (get-in [:data :block_id]) str))
-          first-start (fn [b]
-                        (or (some-> (get spans-by-block (str (:id b)))
-                                    first (get-in [:data :starts_at]) str)
-                            "~"))
-          blocks (when pid
-                   (into []
-                         (keep #(block-doc ctx cur-bid spans-by-block %))
-                         (sort-by (juxt first-start #(str (:id %)))
-                                  (rows-of ctx :block {:plan_id pid} 500))))
-          mode (if (and plan (or (= :set (state-of plan-raw)) (seq blocks)))
-                 "execute"
-                 "plan")
-          create (coll/create-affordance (get (resources ctx) :day_plan)
-                                         (:visibility ctx))]
-      (cond-> {"mode" mode
-               "date" day
-               "zone" (:zone recipe "UTC")
-               "plan" (when plan
-                        (let [{:keys [decoded body]} plan]
-                          {"self" (get body "self")
-                           "state" (name (state-of plan-raw))
-                           "shape" (some-> (get-in decoded [:data :shape]) str)
-                           "actions" (get body "actions")
-                           "meta" (get body "meta")}))
-               "current_block_id" cur-bid
-               "blocks" (or blocks [])
-               "create" (when create
-                          (assoc (p/wire-value create)
-                                 "display" {"label" "Plan today"}))}
-        (= "plan" mode) (assoc "defaults" (defaults-doc ctx (weekday-shape day)))))))
+    (day-read "the day" nil
+      (fn []
+        (let [day (:day ctx)
+              plan-raw (reader-plan ctx)
+              plan (when plan-raw (projected ctx :day_plan plan-raw))
+              pid (when plan (str (:id plan-raw)))
+              spans (if pid (plan-spans ctx pid) [])
+              spans-by-block (group-by #(str (get-in % [:data :block_id])) spans)
+              cur-bid (when pid
+                        (some-> (current-span ctx spans) (get-in [:data :block_id]) str))
+              first-start (fn [b]
+                            (or (some-> (get spans-by-block (str (:id b)))
+                                        first (get-in [:data :starts_at]) str)
+                                "~"))
+              blocks (when pid
+                       (into []
+                             (keep #(day-read (str "block " (:id %)) nil
+                                              (fn [] (block-doc ctx cur-bid spans-by-block %))))
+                             (sort-by (juxt first-start #(str (:id %)))
+                                      (rows-of ctx :block {:plan_id pid} 500))))
+              mode (if (and plan (or (= :set (state-of plan-raw)) (seq blocks)))
+                     "execute"
+                     "plan")
+              create (coll/create-affordance (get (resources ctx) :day_plan)
+                                             (:visibility ctx))]
+          (cond-> {"mode" mode
+                   "date" day
+                   "zone" (:zone recipe "UTC")
+                   "plan" (when plan
+                            (let [{:keys [decoded body]} plan]
+                              {"self" (get body "self")
+                               "state" (name (state-of plan-raw))
+                               "shape" (some-> (get-in decoded [:data :shape]) str)
+                               "actions" (get body "actions")
+                               "meta" (get body "meta")}))
+                   "current_block_id" cur-bid
+                   "blocks" (or blocks [])
+                   "create" (when create
+                              (assoc (p/wire-value create)
+                                     "display" {"label" "Plan today"}))}
+            (= "plan" mode) (assoc "defaults" (defaults-doc ctx (weekday-shape day)))))))))
 
 (def populations
   "Every population this engine can name, and the whole of what a
