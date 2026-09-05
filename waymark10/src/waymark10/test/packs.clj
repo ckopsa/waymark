@@ -6745,17 +6745,35 @@
                     (req ctx :post "/api/day_plans"
                          {:date today :member member} as-member))
         plan-id (some-> (:self (json ctx plan-made)) id-of)
-        planned (when plan-id
-                  (items-of ctx (req ctx :get (str "/api/spans?plan_id=" plan-id
-                                                  "&state=planned")
-                                    nil as-member)))
+        ;; A COLLECTION READ CARRIES ITS FILTER AS THE QUERY STRING.
+        ;; `req` has no query half (get-with-query's note), and a `?`
+        ;; left inside the uri reaches reitit as part of the plural —
+        ;; "spans?plan_id=…" — which no kind answers to: the 404 that
+        ;; comes back reads as an empty list through items-of, and the
+        ;; obligation then blames materialisation for a block it never
+        ;; asked for properly. Every list here goes through the handler
+        ;; with the halves apart, as the member.
+        listed (fn [uri query]
+                 ((:handler ctx) {:request-method :get :uri uri
+                                  :query-string query :headers as-member}))
+        spans-resp (when plan-id
+                     (listed "/api/spans" (str "plan_id=" plan-id "&state=planned")))
+        planned (when spans-resp (items-of ctx spans-resp))
         skips (mapv #(:status (req ctx :post (str (:self %) "/-/skip") {} as-member))
                     planned)
-        block (when plan-id
-                (first (items-of ctx (req ctx :get (str "/api/blocks?plan_id=" plan-id
-                                                       "&context_id=" context-id)
-                                         nil as-member))))
+        blocks-resp (when plan-id
+                      (listed "/api/blocks" (str "plan_id=" plan-id
+                                                 "&context_id=" context-id)))
+        block (when blocks-resp (first (items-of ctx blocks-resp)))
         block-id (some-> (:self block) id-of)
+        ;; the bodies WHOLE when something is missing: the envelope
+        ;; nests a row's fields under data, so a select-keys over the
+        ;; top level names nothing, and the next failure should name
+        ;; itself rather than its symptom
+        shown (fn [resp]
+                (let [s (pr-str (json ctx resp))]
+                  (str (:status resp) " "
+                       (if (> (count s) 600) (str (subs s 0 600) "…") s))))
         ;; the window opens AT now, not before it: every planned span
         ;; that could overlap it then ends after now, so none has
         ;; passed and every one of them was skippable above (a span
@@ -6852,17 +6870,13 @@
        (and plan-id (nil? block-id))
        (conj (str "feed: the plan materialised no block for " (pr-str cname)
                   " — the context's shape is today's (" shape "); the plan as"
-                  " made " (pr-str (select-keys (json ctx plan-made)
-                                                [:state :shape :date :self]))
-                  ", the context as made "
-                  (pr-str (select-keys (json ctx ctx-made)
-                                       [:state :default_shapes :default_spans :self]))
-                  ", every block of the plan "
-                  (pr-str (mapv #(select-keys % [:self :context_name :context_id :state])
-                                (items-of ctx (req ctx :get (str "/api/blocks?plan_id="
-                                                                 plan-id)
-                                                   nil as-member))))
-                  ", planned spans skipped " (pr-str skips)))
+                  " made " (shown plan-made)
+                  "; the context as made " (shown ctx-made)
+                  "; the plan's blocks for it " (shown blocks-resp)
+                  "; every block of the plan "
+                  (shown (listed "/api/blocks" (str "plan_id=" plan-id)))
+                  "; its planned spans " (shown spans-resp)
+                  "; planned spans skipped " (pr-str skips)))
 
        (and block-id (not= 201 (:status span-made)))
        (conj (str "feed: a span around now on the probe's block answered "
