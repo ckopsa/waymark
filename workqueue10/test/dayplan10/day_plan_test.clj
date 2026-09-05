@@ -61,8 +61,19 @@
 (defn- create! [kind body]
   (:row (inv/create! *eng* kind body {:principal colton})))
 
-(defn- act! [kind id action body]
-  (inv/invoke! *eng* kind id action body {:principal colton}))
+(defn- act!
+  "One write through the full invoke algorithm. A fenced door (an
+  :edit implies If-Match — reshape, move, extend) gets the live row's
+  own etag, the way an honest client that just read the row would
+  supply it; invoke-in-tx! asks the fence BEFORE the guards, so a
+  refusal these tests read as a guard's must first get past it
+  (dev/act!'s spelling)."
+  [kind id action body]
+  (let [adef (get-in (inv/resources *eng*) [kind :actions action])
+        opts (cond-> {:principal colton}
+               (get-in adef [:safety :fence])
+               (assoc :if-match (inv/etag kind id (:version (dev/row *eng* kind id)))))]
+    (inv/invoke! *eng* kind id action body opts)))
 
 (defn- refusal
   "What a refused write says: {:problem … :guard …}, nil when it went

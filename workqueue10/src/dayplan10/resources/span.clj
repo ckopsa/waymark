@@ -33,6 +33,7 @@
   (:require [dayplan10.zone :as zone]
             [waymark10.dsl :refer [defguardfn defhandler defresource
                                    defscenario described ref-to]]
+            [waymark10.server.invoke :as inv]
             [waymark10.types :as t])
   (:import (java.time Instant)))
 
@@ -195,16 +196,29 @@
 (defhandler move-window [row inp _ctx]
   (update row :data assoc :starts_at (:starts_at inp) :ends_at (:ends_at inp)))
 
+(defn- etag-of
+  "The fence a cross-write hands the span it read: move is an :edit
+  door, and an :edit implies the fence (resource.clj normalize-action),
+  so invoke-in-tx! step 6 asks the inner move for If-Match before any
+  guard judges it. The ctx :invoke door passes only what the caller
+  supplies (waymark-0k4: a cross-write SUPPLIES the fence rather than
+  waiving it, because only the caller knows which version it meant to
+  write over) — outcome.clj's materialize spelling, one kind over."
+  [span]
+  {:if-match (inv/etag :span (:id span) (:version span))})
+
 (defhandler swap-windows [row inp ctx]
   ;; THE EXCHANGE. The partner takes this row's window through its own
   ;; move door — still-ahead judged again, no-overlap yielding to the
-  ;; swap by name — and this row takes the partner's. Same transaction:
-  ;; a refusal on either side rolls both back, so no swap ever moves
-  ;; one window and not the other.
+  ;; swap by name, its fence met with the version this handler just
+  ;; read — and this row takes the partner's. Same transaction: a
+  ;; refusal on either side rolls both back, so no swap ever moves one
+  ;; window and not the other.
   (let [other ((:read ctx) :span (:with_span_id inp))
         theirs (select-keys (:data other) [:starts_at :ends_at])]
     ((:invoke ctx) :span (:id other) :move
-     (wire-window (get-in row [:data :starts_at]) (get-in row [:data :ends_at])))
+     (wire-window (get-in row [:data :starts_at]) (get-in row [:data :ends_at]))
+     (etag-of other))
     (update row :data merge theirs)))
 
 (defhandler extend-window [row inp ctx]
@@ -216,7 +230,8 @@
         nb (next-span ctx row)]
     (when (and nb (.isBefore ^Instant (get-in nb [:data :starts_at]) e))
       ((:invoke ctx) :span (:id nb) :move
-       (wire-window e (get-in nb [:data :ends_at]))))
+       (wire-window e (get-in nb [:data :ends_at]))
+       (etag-of nb)))
     (assoc-in row [:data :ends_at] e)))
 
 (defhandler split-window [row inp ctx]

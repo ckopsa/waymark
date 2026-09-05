@@ -3739,6 +3739,151 @@
                        (dedupe-by (juxt :kind :id))
                        (concat (:candidates ann) (:candidates ev)))}))
 
+;; ── now: the block you are in (waymark-i89n.5) ──────────────────────
+;;
+;; docs/spec-dayplan.md § 'The feed: one population, one line'. The
+;; feed is context-blind by construction — its seed is (member, day),
+;; its populations are per-kind row queries, and the only domain
+;; question it asks is *is this row's work over?* — and laws v3's
+;; fairness machinery exists to make THAT contest fair. A day plan is
+;; a different kind of fact: a person wrote down, for this date and
+;; this stretch of it, what they mean to do. There is nothing to be
+;; fair about. So this population reads the reader's plan for today,
+;; the block whose window holds the clock, and hands the mixer that
+;; block's decisions in the ORDER the person wrote, each carrying its
+;; index as its `:lane` — the mixer sorts lane-first, so the hash
+;; inside a lane has one candidate to place and the order on the page
+;; is the order on the row. Nothing from laws v3 applies inside it:
+;; `:now` is not in `contested-sections`, so no cooling step is ever
+;; computed for it; no floor, no rank, no diagnosis duty. What DOES
+;; carry over, verbatim: the pool is declared (a decision is a row a
+;; person or their delegate wrote), the order is data a person can
+;; read (`order`), the GET writes nothing, every card is
+;; grant-projected (through `card`, like every other), every card
+;; cites why (`sentence`: *your Workday block*), and the person spins
+;; — there is no auto-refresh at the block boundary; the next read
+;; answers the next block.
+;;
+;; WITH NO PLAN, NOTHING. The spec's fork (g) sketched a single card
+;; offering the plan's create door; the owner's later decision
+;; (waymark-i89n.8: the landing page IS the day) moved that
+;; affordance into the document's `day` key, where a screen can fork
+;; on `mode` and offer the create door as a form rather than as a card
+;; wearing a verb's clothes. So an unplanned day contributes nothing
+;; here and the census below moves up — the same rule every empty
+;; population follows, and no placeholder card is invented.
+;;
+;; THE CLOCK IS THE READ'S OWN. A span carries a maintainer-swept
+;; `current` fact, and this population does not read it: it compares
+;; `starts_at`/`ends_at` against `(:now ctx)`, so a test with a fixed
+;; now-fn and a house whose sweep is a minute behind both answer the
+;; same block, and `today` and *now* come from one clock. The plan's
+;; no-overlap guard makes the current span unique, so 'the' block is
+;; well-defined.
+
+(defn- state-of
+  "A raw store row's state as a keyword, whichever spelling the store
+  handed back."
+  [row]
+  (some-> (:state row) keyword))
+
+(defn- reader-plan
+  "The reader's day_plan for the recipe's own today, in a state the
+  day is still lived in — drafting or set; a closed day has no current
+  block — or nil. It asks for every spelling the reader answers to
+  (`members/spellings-of`, the letters population's own move), because
+  `member` is a ref a person or their planning chat spelled, and a
+  plan filed under the roster id must reach the principal it names."
+  [ctx]
+  (let [day (:day ctx)]
+    (->> (members/spellings-of (:eng ctx) (:id (:principal ctx)))
+         (mapcat #(rows-of ctx :day_plan {:member % :date day} 5))
+         (remove #(= :closed (state-of %)))
+         first)))
+
+(defn- window-holds?
+  "Does this DECODED span's window hold the instant? Closed at the
+  start, open at the end — the span's own `current` law, computed here
+  from the two instants rather than read off the swept fact."
+  [^Instant now decoded]
+  (let [{:keys [^Instant starts_at ^Instant ends_at]} (:data decoded)]
+    (boolean (and starts_at ends_at
+                  (not (.isBefore now starts_at))
+                  (.isBefore now ends_at)))))
+
+(defn- plan-spans
+  "Every span of one plan, decoded (the instants become instants),
+  oldest first — one query, read once per document and shared by the
+  population and the day key."
+  [ctx pid]
+  (let [rdef (get (resources ctx) :span)]
+    (->> (rows-of ctx :span {:plan_id (str pid)} 500)
+         (map #(inv/decode-row rdef %))
+         (sort-by (fn [s] [(str (get-in s [:data :starts_at])) (str (:id s))]))
+         vec)))
+
+(defn- current-span
+  "The plan's PLANNED span whose window holds now, or nil. Unique by
+  the plan's own no-overlap guard."
+  [ctx spans]
+  (let [now (:now ctx)]
+    (first (filter #(and (= :planned (state-of %)) (window-holds? now %))
+                   spans))))
+
+(defn- block-decisions
+  "One block's decisions, raw, in the order the person wrote them
+  (`order`, then id so two decisions at one order still read one way).
+  All states; the caller keeps what it needs."
+  [ctx bid]
+  (->> (rows-of ctx :decision {:block_id (str bid)} 500)
+       (sort-by (fn [r] [(long (or (get-in r [:data :order]) 0)) (str (:id r))]))
+       vec))
+
+(defn- dayplan-kinds?
+  "Does this engine hold the day plan's four kinds? A deployment that
+  did not enrol dayplan10 answers no, and everything under this
+  heading is then absent from its document — byte-identical to before
+  the module existed."
+  [ctx]
+  (let [rs (resources ctx)]
+    (boolean (and (get rs :day_plan) (get rs :block)
+                  (get rs :span) (get rs :decision)))))
+
+(defn current-block
+  "now: the decisions of the block the reader is in, in the order
+  they wrote them — today's `day_plan` (member = the reader, date =
+  the recipe's own today), the block whose span holds the clock, its
+  `planned` and `started` decisions. Each candidate carries its row,
+  its place as `:lane` (so the mixer's lane-first sort IS the person's
+  order and the seed places nothing), and a `:sentence` naming the
+  block it belongs to: *your Workday block*. `start` takes no input,
+  so it renders `assent` and rides the card under the ≤-selection
+  rule with no special case; a decision whose start the grant conceals
+  cards without it, and a decision the grant conceals is absent.
+
+  Nothing from laws v3 applies here — see the heading above. No plan
+  for today, a plan with no block under the clock, a block that is
+  skipped or done: nothing, and the census moves up. The `day` key on
+  the document is where an unplanned morning reads 'plan today'."
+  [ctx]
+  (or (when (dayplan-kinds? ctx)
+        (when-some [plan (reader-plan ctx)]
+          (when-some [span (current-span ctx (plan-spans ctx (:id plan)))]
+            (let [bid (str (get-in span [:data :block_id]))
+                  block (load-raw ctx :block bid)]
+              (when (and block (= :planned (state-of block)))
+                (let [cname (or (some-> (get-in block [:data :context_name])
+                                        str not-empty)
+                                "current")]
+                  (into []
+                        (comp (filter #(contains? #{:planned :started} (state-of %)))
+                              (map-indexed (fn [i r]
+                                             {:kind :decision :id (:id r) :row r
+                                              :lane i
+                                              :sentence (str "your " cname " block")})))
+                        (block-decisions ctx bid))))))))
+      []))
+
 (def populations
   "Every population this engine can name, and the whole of what a
   recipe may ask for. A closed map, never a classpath scan, for the
@@ -3769,10 +3914,13 @@
   (waymark-iqa.4), the fuel populations and `:memories`
   (waymark-iqa.5), `:insights` (waymark-iqa.6), `:proposals`
   (waymark-0k4), `:outcomes` (waymark-jfv.4, and the first entry whose
-  section was new too). A later population arrives the same way, and swapping
+  section was new too), `:current_block` (waymark-i89n.5, the second —
+  `:now`, above the crown, and the first population outside every law
+  of the contest). A later population arrives the same way, and swapping
   one entry for a materializing read is fork (a)'s recorded punt
   working exactly as promised."
-  {:outcomes outcomes
+  {:current_block current-block
+   :outcomes outcomes
    :next_actions next-actions
    :asks asks
    :letters letters
@@ -4490,7 +4638,8 @@
   sentence a parent reads on a phone. A recipe line may override the
   whole narration with `:says`; this is what a line that says nothing
   falls back to."
-  {:outcomes "what this week could hold — composed bundles, with the friction already paid, waiting on a thumb"
+  {:current_block "the block you are in now — today's plan, the block whose window holds the clock, and its decisions in the order you set them; Go is the verdict"
+   :outcomes "what this week could hold — composed bundles, with the friction already paid, waiting on a thumb"
    :next_actions "rows nobody has finished yet, from the kinds this house goes to"
    :asks "access somebody has asked for and somebody else must answer"
    :letters "mail on your shelf you have not opened"
@@ -4518,7 +4667,11 @@
   a count of its own children, and declares nothing here for exactly
   that reason — none of the three is a TRAIT, and a citation that
   quoted `:nav :system` at the crown would be quoting the one trait
-  that says the opposite of what the section is for."
+  that says the opposite of what the section is for. `current_block`
+  reads a plan's date and member, a span's two instants against the
+  clock and a decision's `order` and state — fields and a machine
+  state, not traits — and its card's `sentence` names the block; it
+  declares nothing here either."
   {:next_actions [:nav :machine :over]
    :cleared [:nav :over]
    :streaks [:nav :over]
@@ -6338,8 +6491,15 @@
   TRAITS that population reads (in the kind's own words, quoted back
   against this row), the section's own extra bargain where it has one,
   what the CONTEST did to it (waymark-8um.3 — the recipe's own two
-  numbers, read back), and the SEED's draw."
-  [entry rdef row {:keys [section] :as draw}]
+  numbers, read back), and the SEED's draw.
+
+  The `:now` section is the one exception, and it is the whole of the
+  exception (waymark-i89n.5): its cards were placed by the ORDER a
+  person wrote on the row, not by the seed and not by the contest, so
+  the seed's sentence and the contest's are not said of them — saying
+  *drawn 1st of 3 by the seed* about a decision the person numbered
+  first would be the citation lying about which layer admitted it."
+  [entry rdef row {:keys [section lane] :as draw}]
   (into []
         (remove nil?)
         (concat
@@ -6348,16 +6508,23 @@
          [(str "Recipe line " (inc (long (:line entry 0))) " — "
                (line-says entry))]
          (trait-says rdef row (population-reads (:population entry)))
-         [(when (= :outcomes section) crown-and-floor)
-          (when (= :do_now section)
-            (str "It kept its place in do now because it still has a verb"
-                 " light enough to tap — a next action with nothing under"
-                 " the thumb is a row on a list, and drops out."))
-          (when (= :archive section)
-            (str "It is below the seam because its work is over as the row"
-                 " stands now, not merely because it moved a while ago."))
-          (cooling-says section draw)
-          (drawn-says draw)])))
+         (if (= :now section)
+           [(str "It is in now because it is a decision of the block you"
+                 " are in: today's plan is yours, this block's window holds"
+                 " the clock, and the block's decisions come in the order"
+                 " you wrote them — this one is " (ordinal (inc (long (or lane 0))))
+                 ". No seed placed it, nothing cooled it and nothing ranked"
+                 " it; nothing from the contest applies inside a block.")]
+           [(when (= :outcomes section) crown-and-floor)
+            (when (= :do_now section)
+              (str "It kept its place in do now because it still has a verb"
+                   " light enough to tap — a next action with nothing under"
+                   " the thumb is a row on a list, and drops out."))
+            (when (= :archive section)
+              (str "It is below the seam because its work is over as the row"
+                   " stands now, not merely because it moved a while ago."))
+            (cooling-says section draw)
+            (drawn-says draw)]))))
 
 ;; ── the mixer ───────────────────────────────────────────────────────
 
