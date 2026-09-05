@@ -414,16 +414,21 @@
               :one-way "Done is the record; a finished decision stays finished."}
      :display {:label "Done" :order 2}}
 
+    ;; skip departs from two states and an :undo must land exactly
+    ;; where it began (checks.clj § undo), so the pair is not declared
+    ;; as one: reopen is an ordinary door back to planned — a started
+    ;; decision skipped and reopened reads as planned again, which is
+    ;; the honest word for it (the launch is a fresh tap)
     :skip
     {:from #{:planned :started} :to :skipped
-     :undo :reopen
-     :safety {:idempotent true :reversible true :confirm false}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Skipping sets this decision aside for the day; Reopen puts it back as planned."}
      :display {:label "Skip" :order 3}}
 
     :reopen
     {:from #{:skipped} :to :planned
-     :undo :skip
-     :safety {:idempotent true :reversible true :confirm false}
+     :safety {:idempotent true :reversible false :confirm false
+              :one-way "Reopening puts a skipped decision back as planned; Skip sets it aside again."}
      :display {:label "Reopen" :order 4}}
 
     :change
