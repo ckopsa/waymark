@@ -69,7 +69,7 @@
    "composition_requests" "outcome_pieces" "outcomes" "values" "people"
    "hypotheses"
    "activities" "evening_plans" "evening_sessions"
-   "contexts" "day_plans" "blocks" "spans"
+   "contexts" "day_plans" "blocks" "spans" "decisions"
    "members" "roles" "grants" "approval_requests"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])

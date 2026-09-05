@@ -140,6 +140,21 @@
                       {:status status :body (.body resp)})))
     (some-> ^String (.body resp) not-empty wire/read-json)))
 
+(defn call-service!
+  "Fire ONE Home Assistant service — \"light/turn_on\" with its data
+  map — through the same client and the same POST /api/services/
+  route todo.update_item and todo.add_item already ride. The public
+  entry (waymark-i89n.4): a day-plan decision whose launch is a
+  service fires it from its start door, and that door lives in
+  another module, so the record's private helper is reached through
+  this one name rather than a second client. Non-2xx throws with the
+  status; a connection failure throws raw — both refuse the start
+  that asked, which is the point: a start that recorded *went* while
+  the room stayed dark would be a record lying about the room.
+  → the parsed body when HA answered one, else nil."
+  [src service data]
+  (service-call! src (str service) (or data {}) false))
+
 (defn- items-by-entity
   "entity → items, for the lists home assistant answered about — an
   unavailable list is simply absent (keys are keywordized on the

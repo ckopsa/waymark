@@ -206,6 +206,7 @@
                                            :help "A feed recipe for this block's own section; nothing consults it yet."}}
               [:maybe :waymark/ref]]]
      :guards [windows-read-as-clock-times]
+     :edit {:prefill [:name :default_shapes :default_spans :default_order :with :seam :feed_recipe_id]}
      :handler revise-template
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Revise" :order 1}}

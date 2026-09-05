@@ -259,6 +259,7 @@
                                                  "off" "A day off"}}}
                    [:enum "workday" "off"]]]
      :guards [a-different-shape]
+     :edit {:prefill [:shape]}
      :handler rematerialise-ahead
      ;; the reshape's whole blast radius, advertised: windows ahead
      ;; are skipped and re-minted, blocks arrive or are let go — each

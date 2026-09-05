@@ -95,8 +95,9 @@
       ;; the rows it is about, and a posterior no door can set.
       ;; …and 43 since waymark-i89n.2/.3's day plan: context, day_plan,
       ;; block and span — the day as rows, so the feed can read the
-      ;; block a person is in (decision, slice .4, makes it 44).
-      (is (= 43 (count before)) "the whole household is under the lens")
+      ;; block a person is in; 44 since .4's decision — the unit of
+      ;; intention on a block, whose start is the verdict.
+      (is (= 44 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)

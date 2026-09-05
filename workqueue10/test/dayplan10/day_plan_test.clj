@@ -36,7 +36,7 @@
 ;; ── the world ───────────────────────────────────────────────────────
 
 (def ^:private tables
-  ["contexts" "day_plans" "blocks" "spans"
+  ["contexts" "day_plans" "blocks" "spans" "decisions"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 
@@ -173,9 +173,13 @@
   (reset! clock (at 8 0))
   (let [member (fresh-member)]
     (create! :day_plan {:date (str today) :member member})
-    (is (= :unique-conflict
-           (:problem (refusal #(create! :day_plan {:date (str today) :member member}))))
-        "the second plan for the same member and date is the index's 409")))
+    ;; the store tags the index's refusal :waymark10/unique-violation and
+    ;; the ROUTER turns that into the 409 :unique-conflict problem
+    ;; (router.clj § unique) — invoke!'s caller sees the store's tag
+    (is (:waymark10/unique-violation
+         (try (create! :day_plan {:date (str today) :member member}) nil
+              (catch clojure.lang.ExceptionInfo e (ex-data e))))
+        "the second plan for the same member and date is the index's refusal")))
 
 ;; ── § 2 reshape ─────────────────────────────────────────────────────
 

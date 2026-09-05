@@ -429,7 +429,8 @@
      :input [:map
              [:starts_at {:x-display {:label "Starts"}} :waymark/instant]
              [:ends_at {:x-display {:label "Ends"}} :waymark/instant]]
-     :guards [ends-after-starts still-ahead no-overlap-in-plan]
+     :guards [still-ahead ends-after-starts no-overlap-in-plan]
+     :edit {:prefill [:starts_at :ends_at]}
      :handler move-window
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Move" :order 1}}
@@ -456,6 +457,7 @@
                                     :help "The new end; the next span's start slides to meet it, never its end."}}
               :waymark/instant]]
      :guards [still-ahead extends-later neighbour-keeps-some-width]
+     :edit {:prefill [:ends_at]}
      :handler extend-window
      :touches [{:kind :span :action :move :may true}]
      :safety {:idempotent true :reversible false :confirm false}

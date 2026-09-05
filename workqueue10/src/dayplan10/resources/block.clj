@@ -4,8 +4,10 @@
   each a row on the plan, carrying a stance (free text: *heads down,
   phone off* — no launch, no verdict) and owning the SPANS it occupies,
   because the workday continues after lunch and one context can hold
-  several windows. Decisions belong to the block, never to a span
-  (slice .4); a span door never moves a decision.
+  several windows — and owning the DECISIONS made into it
+  (dayplan10.resources.decision). Decisions belong to the block, never
+  to a span; a span door never moves a decision, and skipping the
+  block lets its planned and started decisions go with its spans.
 
   BORN WITH ITS WINDOWS. The birth door hands a hook no id back while
   a create is still deferred, so a plan cannot mint a block and then
@@ -159,10 +161,14 @@
                     [:maybe [:vector window-form]]]]
    :create-guards [on-an-open-days-plan]
    :on-create stamp-and-mint
-   ;; skipping the block lets its planned spans go with it
-   :owns {:spans {:kind :span :via :block_id :on {:skip :skip}}}
+   ;; skipping the block lets its planned spans — and its planned or
+   ;; started decisions — go with it
+   :owns {:spans {:kind :span :via :block_id :on {:skip :skip}}
+          :decisions {:kind :decision :via :block_id :on {:skip :skip}}}
    :links [{:rel "spans" :owns :span :embed true
-            :summary "The windows this block occupies on the day"}]
+            :summary "The windows this block occupies on the day"}
+           {:rel "decisions" :owns :decision :embed true
+            :summary "What the person meant to do in this block, in order"}]
    :actions
    {:restate
     {:from #{:planned} :to :planned
@@ -170,6 +176,7 @@
                                         :label "Stance"
                                         :help "How you mean to be in this block — one line."}}
                    [:string {:min 1 :max 500}]]]
+     :edit {:prefill [:stance]}
      :handler set-stance
      :safety {:idempotent true :reversible false :confirm false}
      :display {:label "Restate" :order 3}}
@@ -184,8 +191,10 @@
     {:from #{:planned} :to :skipped
      :undo :unskip
      ;; the cascade IS a touch — advertised; :may because a block
-     ;; whose spans are all done has none left to skip
-     :touches [{:kind :span :action :skip :may true}]
+     ;; whose spans are all done has none left to skip, and one with
+     ;; no decisions yet has nothing to let go
+     :touches [{:kind :span :action :skip :may true}
+               {:kind :decision :action :skip :may true}]
      :safety {:idempotent true :reversible true :confirm false}
      :display {:label "Skip" :order 2}}
 

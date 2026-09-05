@@ -56,6 +56,7 @@
             [dayplan10.resources.block :refer [block]]
             [dayplan10.resources.context :refer [context]]
             [dayplan10.resources.day-plan :refer [day-plan]]
+            [dayplan10.resources.decision :refer [decision]]
             [dayplan10.resources.span :refer [span]]
             [eveningplan10.consumers :as evening-consumers]
             [eveningplan10.resources.activity :refer [activity]]
@@ -82,6 +83,7 @@
             [workqueue10.resources.value :refer [value]]
             [workqueue10.resources.weather :refer [weather]]
             [workqueue10.sources.choreplan :as chores]
+            [workqueue10.sources.dayplan :as dayplan]
             [workqueue10.sources.flickr :as flickr]
             [workqueue10.sources.gate-chat :as gate-chat]
             [workqueue10.sources.gtasks :as gtasks]
@@ -116,6 +118,13 @@
   (conf/fake-source))
 
 (defonce fake-todos
+  (conf/fake-source))
+
+(defonce fake-dayplan
+  ;; the day plan's prep mirror, as the declaration gate and the
+  ;; whole-registry suites see it: the real source drinks THIS engine
+  ;; through engine-ref (dayplan/engine-source) and needs a booted
+  ;; engine to say anything, so the gate is handed the scriptable twin
   (conf/fake-source))
 
 (defonce fake-gtasks
@@ -177,14 +186,55 @@
   [env-var]
   (connections/google-refresh-token-fn engine-ref (System/getenv env-var)))
 
+(defn home-assistant
+  "The ONE Home Assistant boundary, or nil when WORKQUEUE10_HA_URL is
+  unset. Built once at boot and handed to two consumers: the \"todo\"
+  TaskSource (the queue's personal-capture half) and the engine's
+  :services, where a day-plan decision's start door reaches it to fire
+  a service launch (dayplan10.resources.decision) — one client, one
+  token, two doors."
+  []
+  (when-some [url (System/getenv "WORKQUEUE10_HA_URL")]
+    (ha/http-source
+     {:url url
+      :ui-url (System/getenv "WORKQUEUE10_HA_UI_URL")
+      :token (System/getenv "WORKQUEUE10_HA_TOKEN")
+      :lists (System/getenv "WORKQUEUE10_HA_LISTS")
+      :zone (System/getenv "WORKQUEUE10_HA_ZONE")
+      :capture-list (System/getenv "WORKQUEUE10_HA_CAPTURE")})))
+
+(defn services
+  "The engine's :services — what a handler or a guard may read of the
+  household's wiring through (:services ctx). Home Assistant rides it
+  twice, on purpose: the FEATURE TOKEN \"home_assistant\" is the
+  declared fact a guard judges (decision's home-assistant-is-wired
+  reads :services.features, so a scenario can prove the unwired
+  refusal with no database), and :home-assistant is the caller the
+  start handler fires — (fn [service data]) over
+  sources.homeassistant/call-service!. Both absent when no HA is
+  configured, so a service launch refuses at the door rather than
+  no-oping."
+  [ha-src]
+  (cond-> {:features []}
+    ha-src (-> (update :features conj "home_assistant")
+               (assoc :home-assistant
+                      (fn fire-home-assistant! [service data]
+                        (ha/call-service! ha-src service data))))))
+
 (defn sources
   "The confluence's tag → TaskSource map. The chore kinds live in
   THIS engine since the stage-1 fold (waymark-bwu.1) — their source
   is in-process unless WORKQUEUE10_CHOREPLAN_URL points at a separate
   engine (the pre-fold posture, kept for the transition). The rest go
-  real when their URL is set, fake otherwise."
-  []
-  (let [principal (System/getenv "WORKQUEUE10_PRINCIPAL")]
+  real when their URL is set, fake otherwise. \"day_plan\" — the day
+  plan's prep, mirrored from decisions (waymark-i89n.4) — is
+  in-process always: decision lives nowhere else.
+
+  ha-src: the Home Assistant boundary (home-assistant), shared with
+  the engine's :services; the zero-arg arity builds it here."
+  ([] (sources (home-assistant)))
+  ([ha-src]
+   (let [principal (System/getenv "WORKQUEUE10_PRINCIPAL")]
     {"chore" (if-some [url (System/getenv "WORKQUEUE10_CHOREPLAN_URL")]
                (chores/http-source
                 {:url url :principal principal
@@ -204,15 +254,7 @@
               (meals/engine-source
                {:engine-ref engine-ref :ui-base (ui-base)
                 :principal principal}))
-     "todo" (if-some [url (System/getenv "WORKQUEUE10_HA_URL")]
-              (ha/http-source
-               {:url url
-                :ui-url (System/getenv "WORKQUEUE10_HA_UI_URL")
-                :token (System/getenv "WORKQUEUE10_HA_TOKEN")
-                :lists (System/getenv "WORKQUEUE10_HA_LISTS")
-                :zone (System/getenv "WORKQUEUE10_HA_ZONE")
-                :capture-list (System/getenv "WORKQUEUE10_HA_CAPTURE")})
-              fake-todos)
+     "todo" (or ha-src fake-todos)
      ;; the google half of pocket capture — real when the mint CLIENT
      ;; PAIR is configured; the refresh token arrives row-first from
      ;; the reconsent door (env backstops it), and it must carry the
@@ -221,7 +263,12 @@
                    #(System/getenv ^String %)
                    {:refresh-token-fn (google-token-source
                                        "WORKQUEUE10_GTASKS_REFRESH_TOKEN")})
-                  fake-gtasks)}))
+                  fake-gtasks)
+     ;; the day plan's prep: decisions with a prep sentence, drunk from
+     ;; this engine the way the thaw tasks are (spec-dayplan, fork e)
+     "day_plan" (dayplan/engine-source
+                 {:engine-ref engine-ref :ui-base (ui-base)
+                  :principal principal})})))
 
 (defn media-sources
   "The MEDIA confluence's tag → source map — a second confluence over
@@ -284,8 +331,8 @@
   chore_run, day — bwu.1), the folded meal registry (bwu.2), the
   calendar (waymark-6k5.2), and the folded evening registry
   (activity, evening_plan, evening_session — waymark-26j, the last
-  standalone app), and the day plan's four (context, day_plan, block,
-  span — waymark-i89n, the :day domain).
+  standalone app), and the day plan's five (context, day_plan, block,
+  span, decision — waymark-i89n, the :day domain).
 
   The calendar's event kind comes from calendar10, NOT from
   mealplan/resources: it stopped being a meals concern when it became
@@ -344,11 +391,12 @@
        ;; in start!, against the running dispatcher
        (into (in-domain :evenings [activity evening-plan evening-session]))
        ;; the day plan (waymark-i89n, docs/spec-dayplan.md): the
-       ;; template, the day, its blocks and their windows — the spine
-       ;; the feed's current block reads (slice .5); decision joins the
-       ;; vector with slice .4. Materialisation is day_plan's own
-       ;; :on-create, so no consumer registers in start!
-       (into (in-domain :day [context day-plan block span]))
+       ;; template, the day, its blocks, their windows, and the
+       ;; decisions made into the blocks — the spine the feed's current
+       ;; block reads (slice .5). Materialisation is day_plan's own
+       ;; :on-create, so no consumer registers in start!; a decision's
+       ;; prep reaches the queue through the "day_plan" source above
+       (into (in-domain :day [context day-plan block span decision]))
        ;; the kind self-declares :domain :calendar; in-domain would
        ;; stamp the same token, and saying it here keeps the domains
        ;; legible in one place
@@ -573,7 +621,7 @@
   the offline fakes."
   []
   (resources {"chore" fake-chores "meal" fake-meals "todo" fake-todos
-              "gtasks" fake-gtasks}
+              "gtasks" fake-gtasks "day_plan" fake-dayplan}
              {"flickr" fake-flickr "hub" (hub/source)}
              {"tgram" fake-tgram "messa" fake-messa}
              fake-calendar
@@ -667,6 +715,9 @@
   []
   {"chore" {:mode "real"}
    "meal" {:mode "real"}
+   ;; the day plan's prep mirror: in-process like chore and meal, so
+   ;; real either way
+   "day_plan" {:mode "real"}
    "todo" {:mode (if (System/getenv "WORKQUEUE10_HA_URL") "real" "fake")}
    ;; the google pair: real when the mint CLIENT PAIR is set — the
    ;; same judgment gtasks/from-env and gcal-oauth/from-env make now
@@ -725,17 +776,25 @@
   []
   (assert-reconsent-client-pairing!)
   (let [storage (pg/storage (dsn))
+        ;; the one Home Assistant, shared by the todo source and the
+        ;; engine's :services (a decision's service launch fires
+        ;; through it) — built once, or nil when unconfigured
+        ha-src (home-assistant)
         ;; with-push: task declares :push-on-write, and engine boot
         ;; does not auto-wire the post-commit push pass (the recorded
         ;; seam in mirror/with-push) — the embedding wraps
         eng (mirror/with-push
              (engine/engine {:storage storage
                              :resources (resources
-                                         (sources)
+                                         (sources ha-src)
                                          (media-sources)
                                          (thread-sources)
                                          (calendar-adapter)
                                          (connections/fan-reporter engine-ref))
+                             ;; what handlers and guards may read of the
+                             ;; wiring: the home_assistant feature token
+                             ;; and the caller behind it (waymark-i89n.4)
+                             :services (services ha-src)
                              ;; the calendar's adapter is no confluence,
                              ;; so its health arrives kind-level through
                              ;; the mirror's own pass hook

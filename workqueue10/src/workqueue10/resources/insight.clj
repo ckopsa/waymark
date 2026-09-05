@@ -168,6 +168,42 @@
                (not (str/includes? (str s) "?")))
       {:plural (nth parts 2) :id (nth parts 3)})))
 
+(defn unresolved-addresses
+  "Every href in `hrefs` this house cannot vouch for, in the order
+  given: not an address at all, an address naming a collection this
+  engine does not serve, or — when the ctx carries a :read — an
+  address whose row does not exist. nil when the ctx carries no
+  registry (the storage-free render probe advertises optimistically,
+  exactly as saved_view/composes-declared-primitives does; the write
+  path always carries the consult).
+
+  THE ONE CHECKER (waymark-79f). Two doors read addresses a writer
+  typed — an insight's `evidence` here and the day plan's
+  `decision.subject` (dayplan10.resources.decision) — and they judge
+  them through this one function, so the sentence *an address is a
+  row that stands* is written once. How far the check reaches is the
+  CALLER's ctx: hand it a ctx with :read and each row is read in the
+  write's own transaction; hand it {:rdef-of …} alone and only the
+  shape and the plural are judged.
+
+  Recorded, not hidden: `cites-what-it-claims` still hands it the
+  shape-only ctx. Its two `:allowed` scenarios cite literal addresses
+  (/api/ticklers/01HZ…B0) and the conformance tier stages a `:given`
+  row under a FRESH id, so no declared scenario can cite a row that
+  will exist — the resolving read there waits on a scenario grammar
+  that can name a staged row (the bug stays open until it can)."
+  [hrefs ctx]
+  (let [rdef-of (:rdef-of ctx)
+        read' (:read ctx)]
+    (when rdef-of
+      (into []
+            (remove (fn [href]
+                      (when-some [{:keys [plural id]} (row-address href)]
+                        (when-some [rd (rdef-of plural)]
+                          (or (nil? read')
+                              (some? (read' (:kind rd) id)))))))
+            hrefs))))
+
 ;; ── the create walls ────────────────────────────────────────────────
 ;;
 ;; Both refuse AT THE DOOR and both carry :vars, so the refusal
@@ -199,11 +235,10 @@
       (t/deny {:vars {:count 0 :offenders ""}})
 
       :else
-      (let [bad (into []
-                      (remove (fn [href]
-                                (when-some [{:keys [plural]} (row-address href)]
-                                  (some? (rdef-of plural)))))
-                      ev)]
+      ;; shape and plural, through the one checker — the row read
+      ;; (waymark-79f) waits on a scenario grammar that can name a
+      ;; staged row; see unresolved-addresses' docstring
+      (let [bad (unresolved-addresses ev {:rdef-of rdef-of})]
         (if (seq bad)
           (t/deny {:vars {:count (count ev)
                           :offenders (str "; this house has nothing at "

@@ -1,5 +1,5 @@
 (ns dayplan10.conformance-test
-  "All four kinds handed to the waymark10 conformance DRIVER: the
+  "All five kinds handed to the waymark10 conformance DRIVER: the
   machine walks itself, and every obligation core owes — plus every
   obligation each enrolled module owes — is proved over the real ring
   handler. Mirrors eveningplan10.conformance-test's shape; the
@@ -17,11 +17,15 @@
   - span's :create wants a block and its plan (labels ride the refs),
     and a window clear of anything the plan already holds — the
     example stages both and opens late in the evening.
+  - decision's :create wants a block that stands and is planned
+    (on-a-planned-block reads :block), so the example stages a plan,
+    a context and a block; no subject and no launch, so the walk
+    asks nothing of the wiring.
 
-  The conformance-tier scenarios span.clj, day_plan.clj and block.clj
-  declare (every span door reads the plan's other spans) are proved
-  here too, through the HTTP door, by the :core/law-scenarios
-  obligation.
+  The conformance-tier scenarios span.clj, day_plan.clj, block.clj
+  and decision.clj declare (every span door reads the plan's other
+  spans; a decision's subject reads the row it names) are proved here
+  too, through the HTTP door, by the :core/law-scenarios obligation.
 
   Needs the waymark10_test database; WAYMARK10_TEST_DSN overrides."
   (:require [clojure.test :refer [deftest use-fixtures]]
@@ -41,7 +45,7 @@
 (def ^:dynamic *h* nil)
 
 (def ^:private tables
-  ["contexts" "day_plans" "blocks" "spans"
+  ["contexts" "day_plans" "blocks" "spans" "decisions"
    "definitions" "waymark10_transitions" "waymark10_idempotency"
    "waymark10_drafts" "waymark10_cursors"])
 
@@ -61,7 +65,7 @@
             (f)))
         (finally (pg/close! st))))))
 
-(def kinds [:context :day_plan :block :span])
+(def kinds [:context :day_plan :block :span :decision])
 
 ;; ── the enrollment ──────────────────────────────────────────────────
 
@@ -106,6 +110,18 @@
       {:block_id (:id block) :plan_id (:id plan)
        :starts_at (str plan-date "T22:00:00Z")
        :ends_at (str plan-date "T23:00:00Z")})))
+
+;; a decision by hand: its block on a plan of its own, planned, with
+;; no windows — the decision belongs to the block, never to a span
+(fac/example-input! :decision :create
+  (fn [eng]
+    (let [plan (mk! eng :day_plan {:date plan-date :member (str (random-uuid))})
+          context (mk! eng :context {:name (str "Walked decision context " (random-uuid))
+                                     :default_shapes ["off"]
+                                     :default_spans [{:from "19:00" :to "21:00"}]
+                                     :default_order 5})
+          block (mk! eng :block {:plan_id (:id plan) :context_id (:id context)})]
+      {:block_id (:id block) :kind "work" :text "Walked decision" :order 1})))
 
 ;; ── the whole suite ─────────────────────────────────────────────────
 

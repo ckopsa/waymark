@@ -28,7 +28,7 @@
   ^ZoneId []
   @household)
 
-(def ^:private hh-mm (DateTimeFormatter/ofPattern "HH:mm"))
+(def ^:private ^DateTimeFormatter hh-mm (DateTimeFormatter/ofPattern "HH:mm"))
 
 (defn clock-time
   "\"09:00\" → a LocalTime, nil when the string is not a 24-hour HH:MM
