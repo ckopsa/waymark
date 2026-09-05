@@ -242,7 +242,10 @@ by the time a tool runs; `mcp.clj` never learns the word.
    the light doors it would offer (start and done on a task, the
    tickler's three answers, accept and decline on an outcome piece). The
    owner approves it in the feed. Read-only first is the recommended
-   posture.
+   posture. The planning chat's doors (`spec-dayplan.md` § *The
+   planning chat*: `day_plan`, `block`, `span`, `decision` and their
+   reads) are a second, anchored ask once the day-plan module stands —
+   never `start`, `finish` or `skip` on a decision.
 
 ## Verification
 

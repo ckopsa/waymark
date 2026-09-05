@@ -1,5 +1,5 @@
 (ns waymark10.server.mcp
-  "The MCP surface: six fixed tools over the grant's projection of the
+  "The MCP surface: seven fixed tools over the grant's projection of the
   declaration (docs/spec-mcp-surface.md).
 
   Every fact an agent needs to drive a waymark engine is already on

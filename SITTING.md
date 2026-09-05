@@ -247,6 +247,18 @@ holding your place in it.
 2. **Answer every standing composition request** — a person's pull is
    never capped. The manifest's `offered_requests` is the list, and
    `offered` means unanswered by definition.
+2b. **Plan tomorrow when asked** (waymark-i89n.6). When a person's turn
+   or a `composition_request` asks for tomorrow's plan, read tomorrow
+   first — its calendar `event`s, its `plan_day`, the `task`s due, the
+   `media` queue and the open `thread`s — and propose ONE `decision`
+   per block: the text, the subject's address (`/api/media/…`,
+   `/api/task/…`) and its launch. Create the `day_plan` with the shape
+   the person's words give it ("Monday's off" → `off`), write only the
+   decisions the person accepted (a declined proposal is not written —
+   the chat is the draft), and `set` the plan. Never invoke `start`,
+   `finish` or `skip` on a decision: the verdict is the person's, and
+   the grant does not name those doors (docs/spec-dayplan.md § The
+   planning chat).
 3. **Rework every bundle the house handed back** — an outcome in
    `iterating` is one a person kept and sent back: the goal is right,
    the plan is wrong, and **it has left their feed** until you answer

@@ -203,14 +203,26 @@
   A recipe that puts fuel above do-now is a typo, and `check-recipe!`
   says so rather than serving it.
 
-  `:outcomes` is the newest member and the only one above do-now
+  `:outcomes` was the first member to arrive above do-now
   (waymark-jfv.4). It is the crown: the one place in this feed where a
   card is AUTHORED rather than projected, and everything beneath it
   stays the ledger it is audited against. Adding a member here widens
   `feed_recipe`'s `:section` enum for free — the enum is generated
   from this vector — and moves no fingerprint, because `:schema` is
-  not one of `fingerprint-of`'s facets."
-  [:outcomes :do_now :decide :fuel :seam :archive])
+  not one of `fingerprint-of`'s facets.
+
+  `:now` is the newest member and sits above even the crown
+  (waymark-i89n.5, docs/spec-dayplan.md § 'The feed: one population,
+  one line'). It is the block the reader is IN — today's plan, the
+  block whose window holds the clock, its decisions in the order the
+  person wrote them — and it is not a contest at all: no seed, no
+  cooling, no rank, no floor (`contested-sections` does not name it
+  and `current-block` sorts by `order`). A feed that knows it is ten
+  in the morning on a plan day has no fairness question to answer;
+  the answer is the card. The generic UI's own census
+  (`ui/135-feed-screen.js`) carries the same list and gains `now`
+  beside this."
+  [:now :outcomes :do_now :decide :fuel :seam :archive])
 
 (def ^:private census-rank
   (into {} (map-indexed (fn [i s] [s i])) census))
