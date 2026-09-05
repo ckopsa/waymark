@@ -60,6 +60,7 @@
    "meals" "meal_lines" "rotations" "plans" "plan_days" "grocery_lists"
    "prep_tasks" "ingredients" "products" "substitutions" "events"
    "activities" "evening_plans" "evening_sessions"
+   "contexts" "day_plans" "blocks" "spans"
    "letters" "weathers" "selves" "journals" "ticklers" "insights"
    "permission_slips" "saved_views" "dashboards" "dashboard_slots"
    "connections" "capabilities"

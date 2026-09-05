@@ -53,6 +53,10 @@
             [choreplan10.resources.chore :refer [chore]]
             [choreplan10.resources.chore-run :refer [chore-run]]
             [choreplan10.resources.day :refer [day day-board]]
+            [dayplan10.resources.block :refer [block]]
+            [dayplan10.resources.context :refer [context]]
+            [dayplan10.resources.day-plan :refer [day-plan]]
+            [dayplan10.resources.span :refer [span]]
             [eveningplan10.consumers :as evening-consumers]
             [eveningplan10.resources.activity :refer [activity]]
             [eveningplan10.resources.evening-plan :refer [evening-plan]]
@@ -280,7 +284,8 @@
   chore_run, day — bwu.1), the folded meal registry (bwu.2), the
   calendar (waymark-6k5.2), and the folded evening registry
   (activity, evening_plan, evening_session — waymark-26j, the last
-  standalone app).
+  standalone app), and the day plan's four (context, day_plan, block,
+  span — waymark-i89n, the :day domain).
 
   The calendar's event kind comes from calendar10, NOT from
   mealplan/resources: it stopped being a meals concern when it became
@@ -338,6 +343,12 @@
        ;; plan, and its sessions; the plan-sessions consumer registers
        ;; in start!, against the running dispatcher
        (into (in-domain :evenings [activity evening-plan evening-session]))
+       ;; the day plan (waymark-i89n, docs/spec-dayplan.md): the
+       ;; template, the day, its blocks and their windows — the spine
+       ;; the feed's current block reads (slice .5); decision joins the
+       ;; vector with slice .4. Materialisation is day_plan's own
+       ;; :on-create, so no consumer registers in start!
+       (into (in-domain :day [context day-plan block span]))
        ;; the kind self-declares :domain :calendar; in-domain would
        ;; stamp the same token, and saying it here keeps the domains
        ;; legible in one place

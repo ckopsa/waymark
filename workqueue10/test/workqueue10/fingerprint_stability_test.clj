@@ -93,7 +93,10 @@
       ;; …and 39 since waymark-bug's :hypothesis, the house's first row
       ;; that carries a NUMBER about the people in it: a claim, a shape,
       ;; the rows it is about, and a posterior no door can set.
-      (is (= 39 (count before)) "the whole household is under the lens")
+      ;; …and 43 since waymark-i89n.2/.3's day plan: context, day_plan,
+      ;; block and span — the day as rows, so the feed can read the
+      ;; block a person is in (decision, slice .4, makes it 44).
+      (is (= 43 (count before)) "the whole household is under the lens")
       (is (seq nses) "…and the declarations are re-evaluable in place")
       (reboot! nses)
       (let [after (hashes)
