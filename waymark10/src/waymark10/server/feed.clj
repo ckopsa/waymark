@@ -29,6 +29,13 @@
   wire's envelope. A module may mint a document; it may not widen the
   envelope, and this one does not.
 
+  Since waymark-i89n.5 the document carries one more key of its own,
+  `day`: the reader's day plan as a skeleton — mode, plan, blocks,
+  windows, decisions, the shape's defaults and the create door — for
+  the landing page that is the day (waymark-i89n.8). See § 'the day
+  key' below; on an engine without the day plan's kinds it stays the
+  date string it always was.
+
   `history/row-as-of` refuses an envelope for a reason that does NOT
   apply here, and the difference is worth stating: an as-of read's
   verbs would be *today's doors probed against a historical document*,
@@ -185,7 +192,7 @@
             [waymark10.wire :as wire])
   (:import (java.net URLDecoder URLEncoder)
            (java.nio.charset StandardCharsets)
-           (java.time Duration Instant LocalDate ZoneId ZoneOffset)
+           (java.time DayOfWeek Duration Instant LocalDate ZoneId ZoneOffset)
            (java.time.temporal ChronoUnit)
            (java.time.zone ZoneRulesException)
            (java.util.concurrent CountDownLatch TimeUnit)
@@ -3840,13 +3847,13 @@
        vec))
 
 (defn- dayplan-kinds?
-  "Does this engine hold the day plan's four kinds? A deployment that
+  "Does this engine hold the day plan's five kinds? A deployment that
   did not enrol dayplan10 answers no, and everything under this
   heading is then absent from its document — byte-identical to before
   the module existed."
   [ctx]
   (let [rs (resources ctx)]
-    (boolean (and (get rs :day_plan) (get rs :block)
+    (boolean (and (get rs :context) (get rs :day_plan) (get rs :block)
                   (get rs :span) (get rs :decision)))))
 
 (defn current-block
@@ -3883,6 +3890,220 @@
                                               :sentence (str "your " cname " block")})))
                         (block-decisions ctx bid))))))))
       []))
+
+;; ── the day key (waymark-i89n.5, for waymark-i89n.8) ────────────────
+;;
+;; The landing page is the day: plan it or execute it. The screen that
+;; renders that needs a SKELETON around the current block's cards —
+;; which plan, which blocks, which windows, which decisions in each,
+;; and, on an unplanned morning, what the shape's defaults would be
+;; and where the create door is — and it needs it in one read, so the
+;; feed document carries it under `day`. It is a key of the DOCUMENT,
+;; never of the envelope (§ 'the document is a feed' above): a module
+;; may mint a document and may not widen the wire's envelope, and this
+;; widens the feed's own.
+;;
+;; `day` was already this document's key for the date string, so the
+;; object carries that string as `date` and a client reads either
+;; shape (`ui/137-day.js`'s `feedDayDate`); on an engine that does not
+;; hold the day plan's kinds the key stays the bare string it always
+;; was, so every other deployment's document is byte-identical.
+;;
+;; EVERY ROW IN IT IS GRANT-PROJECTED, the fourth law read again: a
+;; plan, a block, a span or a decision this reader's leash does not
+;; confer is ABSENT — never narrowed — and the doors on the plan and on
+;; each decision are `envelope-summary`'s own projected `actions`, the
+;; same body a card carries, rendered through the same ctx-opts and the
+;; same visibility. Nothing here reaches past the projection: `projected`
+;; is `card`'s first two gates over a row, and the third (the
+;; partition) is left off because a form is a screen and may offer a
+;; heavier door.
+
+(declare ctx-opts)
+
+(defn- projected
+  "One row through `card`'s first two gates: nil when this grant does
+  not confer the row (absent, never narrowed), else the decoded row
+  beside its projected envelope summary — `actions` and `unavailable`
+  already pruned of everything the reader does not hold."
+  [ctx kind raw]
+  (let [rdef (get (resources ctx) kind)
+        vis (:visibility ctx)]
+    (when (and rdef raw (or (nil? vis) ((:row? vis) kind (str (:id raw)))))
+      (let [decoded (inv/decode-row rdef raw)]
+        {:decoded decoded
+         :body (render/envelope-summary rdef decoded (ctx-opts ctx))}))))
+
+(defn- weekday-shape
+  "The shape the clock picks for a date — the weekend off, every other
+  day a workday. `dayplan10.resources.day-plan/shape-of` is the seam
+  the create door reads, and a framework namespace cannot require an
+  application module, so this is that one sentence said a second
+  time, recorded as such: an inferred context (the spec's parked punt)
+  would have to move both."
+  ^String [^String day]
+  (if (contains? #{DayOfWeek/SATURDAY DayOfWeek/SUNDAY}
+                 (.getDayOfWeek (LocalDate/parse day)))
+    "off"
+    "workday"))
+
+(defn- subject-launch-href
+  "Where a decision's subject would OPEN, when the subject is the
+  address of a media or task row this reader may see: the row's
+  `source_ui_href`, else its `source_href` — the authority's own screen
+  for a mirrored row — and nil for every other subject. The address is
+  parsed against this engine's own plurals, so a kind it does not
+  serve answers nil rather than a guess."
+  [ctx subject]
+  (when-some [[_ plural id] (re-matches #"/api/([A-Za-z0-9_]+)/([A-Za-z0-9_.:-]+)"
+                                        (str subject))]
+    (when-some [kind (some (fn [[k rdef]] (when (= plural (:plural rdef)) k))
+                           (resources ctx))]
+      (when (contains? #{:media :task} kind)
+        (let [vis (:visibility ctx)]
+          (when (or (nil? vis) ((:row? vis) kind id))
+            (when-some [raw (load-raw ctx kind id)]
+              (or (some-> (get-in raw [:data :source_ui_href]) str not-empty)
+                  (some-> (get-in raw [:data :source_href]) str not-empty)))))))))
+
+(defn- decision-doc
+  "One decision of a block, projected — or nil when the grant conceals
+  it. `launch_href` is the projection a screen taps: the launch's own
+  href, else the subject's screen when the subject is a media or task
+  row. `card_id` is the id the same row wears in the `:now` section,
+  so a screen can line the skeleton up with the cards."
+  [ctx raw]
+  (when-some [{:keys [decoded body]} (projected ctx :decision raw)]
+    (let [d (:data decoded)
+          launch (:launch d)
+          subject (some-> (:subject d) str not-empty)]
+      {"id" (str (:id raw))
+       "self" (get body "self")
+       "card_id" (card-id :now :decision (:id raw))
+       "text" (str (:text d))
+       "kind" (some-> (:kind d) str)
+       "state" (name (state-of raw))
+       "order" (:order d)
+       "launch" (when (map? launch) (p/wire-value launch))
+       "subject" subject
+       "launch_href" (or (some-> (:href launch) str not-empty)
+                         (when subject (subject-launch-href ctx subject)))
+       "actions" (get body "actions")
+       "meta" (get body "meta")})))
+
+(defn- span-doc
+  "One window of a block, from the decoded span: the two instants, the
+  state, and the two clock facts computed against the read's own now
+  (the span's own `current` and `missed` laws) — or nil when the grant
+  conceals the span."
+  [ctx decoded]
+  (let [vis (:visibility ctx)
+        ^Instant now (:now ctx)
+        {:keys [^Instant starts_at ^Instant ends_at]} (:data decoded)]
+    (when (or (nil? vis) ((:row? vis) :span (str (:id decoded))))
+      {"id" (str (:id decoded))
+       "self" (str (collection-of ctx :span) "/" (:id decoded))
+       "starts_at" (some-> starts_at str)
+       "ends_at" (some-> ends_at str)
+       "state" (name (state-of decoded))
+       "current" (window-holds? now decoded)
+       "missed" (boolean (and ends_at (not (.isAfter ends_at now))))})))
+
+(defn- block-doc
+  "One block of the plan, projected, with its spans and its decisions
+  — or nil when the grant conceals the block. `current` is whether
+  this is the block under the clock; `seam` is the context's own
+  closing sentence, carried on the block as the ref's `:carry`."
+  [ctx current-bid spans-by-block raw]
+  (when-some [{:keys [decoded body]} (projected ctx :block raw)]
+    (let [d (:data decoded)
+          bid (str (:id raw))]
+      {"id" bid
+       "self" (get body "self")
+       "context_name" (some-> (:context_name d) str)
+       "stance" (some-> (:stance d) str not-empty)
+       "seam" (some-> (:context_seam d) str not-empty)
+       "state" (name (state-of raw))
+       "current" (= bid current-bid)
+       "spans" (into [] (keep #(span-doc ctx %)) (get spans-by-block bid))
+       "decisions" (into [] (keep #(decision-doc ctx %)) (block-decisions ctx bid))})))
+
+(defn- defaults-doc
+  "What the plan WOULD materialise for this shape: the active contexts
+  whose `default_shapes` hold it, in `default_order` then name, each
+  with its clock windows as the template spells them. Read over
+  `context` rows through the reader's visibility, and nothing is
+  written — the plan-mode screen shows these and offers the create
+  door; the door does the minting."
+  [ctx shape]
+  (let [vis (:visibility ctx)
+        field (fn [m k] (or (get m k) (get m (name k))))]
+    (->> (rows-of ctx :context {:state "active"} 500)
+         (filter #(some #{shape} (map str (get-in % [:data :default_shapes]))))
+         (filter #(or (nil? vis) ((:row? vis) :context (str (:id %)))))
+         (sort-by (juxt #(long (or (get-in % [:data :default_order]) 0))
+                        #(str (get-in % [:data :name]))))
+         (mapv (fn [c]
+                 {"context_name" (str (get-in c [:data :name]))
+                  "order" (get-in c [:data :default_order])
+                  "spans" (mapv (fn [w] {"from" (str (field w :from))
+                                        "to" (str (field w :to))})
+                                (get-in c [:data :default_spans]))})))))
+
+(defn- day-doc
+  "The `day` key, or nil when this engine holds no day plan.
+
+  `mode` is `execute` when the reader has a plan for today that is set,
+  or drafting with at least one block the reader can see; `plan`
+  otherwise — no plan, a bare drafting plan, or a plan the grant
+  conceals (concealed is absent, and absent reads as no plan). `plan`
+  carries the plan's projected doors; `blocks` every block of it with
+  its windows and decisions, in window order; `current_block_id` names
+  the one under the clock — the same block `current-block` carded, by
+  the same arithmetic. `defaults` rides only in plan mode; `create` is
+  the plan's create door as the collection advertises it, projected
+  through the grant, whatever the mode — a house that may plan may
+  plan tomorrow too."
+  [ctx recipe]
+  (when (dayplan-kinds? ctx)
+    (let [day (:day ctx)
+          plan-raw (reader-plan ctx)
+          plan (when plan-raw (projected ctx :day_plan plan-raw))
+          pid (when plan (str (:id plan-raw)))
+          spans (if pid (plan-spans ctx pid) [])
+          spans-by-block (group-by #(str (get-in % [:data :block_id])) spans)
+          cur-bid (when pid
+                    (some-> (current-span ctx spans) (get-in [:data :block_id]) str))
+          first-start (fn [b]
+                        (or (some-> (get spans-by-block (str (:id b)))
+                                    first (get-in [:data :starts_at]) str)
+                            "~"))
+          blocks (when pid
+                   (into []
+                         (keep #(block-doc ctx cur-bid spans-by-block %))
+                         (sort-by (juxt first-start #(str (:id %)))
+                                  (rows-of ctx :block {:plan_id pid} 500))))
+          mode (if (and plan (or (= :set (state-of plan-raw)) (seq blocks)))
+                 "execute"
+                 "plan")
+          create (coll/create-affordance (get (resources ctx) :day_plan)
+                                         (:visibility ctx))]
+      (cond-> {"mode" mode
+               "date" day
+               "zone" (:zone recipe "UTC")
+               "plan" (when plan
+                        (let [{:keys [decoded body]} plan]
+                          {"self" (get body "self")
+                           "state" (name (state-of plan-raw))
+                           "shape" (some-> (get-in decoded [:data :shape]) str)
+                           "actions" (get body "actions")
+                           "meta" (get body "meta")}))
+               "current_block_id" cur-bid
+               "blocks" (or blocks [])
+               "create" (when create
+                          (assoc (p/wire-value create)
+                                 "display" {"label" "Plan today"}))}
+        (= "plan" mode) (assoc "defaults" (defaults-doc ctx (weekday-shape day)))))))
 
 (def populations
   "Every population this engine can name, and the whole of what a
@@ -6995,6 +7216,11 @@
         ;; knocks on, and the requests this reader already has open —
         ;; see crown-doc
         crown (crown-doc ctx cards archive-only?)
+        ;; the day's skeleton (waymark-i89n.5, for .8): plan it or
+        ;; execute it, and the rows each mode needs — see day-doc. Nil
+        ;; on an engine without the day plan, and the key below stays
+        ;; the date string it has always been.
+        day-key (day-doc ctx recipe)
         recipe-doc (cond-> (update (recipe-view recipe) "lines"
                                    (fn [ls] (mapv (fn [l]
                                                     (merge l (get counts (get l "line"))))
@@ -7154,6 +7380,9 @@
               ;; absent on the daily order, because the daily order is
               ;; the absence of a draw and not a draw with a name
               draw (assoc :draw draw)
+              ;; …and the day, as an object carrying the same date
+              ;; string under `date`, where the engine holds the plan
+              day-key (assoc :day day-key)
               preview (assoc :preview preview)
               views (assoc :views views)
               reasons (assoc :reasons reasons)
