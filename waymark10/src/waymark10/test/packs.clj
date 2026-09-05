@@ -6717,6 +6717,11 @@
   [ctx]
   (let [eng (:engine ctx)
         recipe (:feed eng feed/default-recipe)
+        ;; the now SECTION is a promise of a recipe that carries the
+        ;; line; the engine under test may run the default recipe,
+        ;; which does not — then the day key alone carries the block
+        now-line? (boolean (some #(= :current_block (:population %))
+                                 (:order recipe)))
         today (feed/today eng recipe)
         zone (:zone recipe "UTC")
         ^java.time.Instant now ((:now-fn eng))
@@ -6890,12 +6895,13 @@
                   (pr-str (json ctx set-resp))))
 
        ;; (2)
-       (and after (not= "now" (str (:section (first (feed-cards after))))))
+       (and after now-line?
+            (not= "now" (str (:section (first (feed-cards after))))))
        (conj (str "feed: with a set plan and a block under the clock the FIRST"
                   " section is now, above the crown; read "
                   (pr-str (mapv :section (take 3 (feed-cards after))))))
 
-       (and after (not= wanted card-ids))
+       (and after now-line? (not= wanted card-ids))
        (conj (str "feed: the now section is the current block's planned"
                   " decisions in the ORDER the person wrote — expected "
                   (pr-str wanted) ", read " (pr-str card-ids)))

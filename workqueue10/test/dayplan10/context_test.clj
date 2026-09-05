@@ -106,28 +106,28 @@
 ;; ── § 1 the wall at create ──────────────────────────────────────────
 
 (deftest two-templates-of-one-shape-never-share-a-minute
-  (create! (template "Shop" ["workday" "off"] ["19:00" "21:00"]))
-  (testing "a second template of the shape reaching into the Shop's window is refused, naming it"
-    (let [r (refusal #(create! (template "Evening" ["off"] ["20:00" "22:00"])))]
+  (create! (template "CT shop" ["workday" "off"] ["19:00" "21:00"]))
+  (testing "a second template of the shape reaching into the CT shop's window is refused, naming it"
+    (let [r (refusal #(create! (template "CT evening" ["off"] ["20:00" "22:00"])))]
       (is (= "no-overlap-in-shape" (:guard r)))
-      (is (re-find #"20:00–22:00 overlaps Shop's 19:00–21:00" (:detail r))
+      (is (re-find #"20:00–22:00 overlaps CT shop's 19:00–21:00" (:detail r))
           "the refusal names the window in the way and whose it is")
-      (is (re-find #"retire or revise Shop" (:detail r))
+      (is (re-find #"retire or revise CT shop" (:detail r))
           "…and what would make the door available")
-      (is (nil? (some #(when (= "Evening" (get-in % [:data :name])) %)
+      (is (nil? (some #(when (= "CT evening" (get-in % [:data :name])) %)
                       (dev/rows *eng* :context)))
           "nothing landed")))
   (testing "the shape is what is shared: a day off and a workday may occupy the same hour"
-    (create! (template "Rest" ["off"] ["09:00" "12:00"]))
-    (is (some? (create! (template "Workday" ["workday"] ["09:00" "12:00"])))))
-  (testing "a window that ends where the Shop's begins is a seam, not a collision"
-    (is (nil? (refusal #(create! (template "Dinner" ["off"] ["18:00" "19:00"])))))))
+    (create! (template "CT rest" ["off"] ["09:00" "12:00"]))
+    (is (some? (create! (template "CT workday" ["workday"] ["09:00" "12:00"])))))
+  (testing "a window that ends where the CT shop's begins is a seam, not a collision"
+    (is (nil? (refusal #(create! (template "CT dinner" ["off"] ["18:00" "19:00"])))))))
 
 ;; ── § 2 retire opens the door, restore meets the wall ───────────────
 
 (deftest retiring-the-template-in-the-way-opens-the-door
-  (let [errands (create! (template "Errands" ["workday"] ["06:00" "07:00"]))
-        late (template "Late shift" ["workday"] ["06:30" "07:30"])]
+  (let [errands (create! (template "CT errands" ["workday"] ["06:00" "07:00"]))
+        late (template "CT late shift" ["workday"] ["06:30" "07:30"])]
     (is (= "no-overlap-in-shape" (:guard (refusal #(create! late)))))
     (act! (:id errands) :retire nil)
     (is (= :retired (state-of (:id errands))))
@@ -136,8 +136,8 @@
       (testing "the retired template cannot come back into the window it left"
         (let [r (refusal #(act! (:id errands) :restore nil))]
           (is (= "restores-clear-of-the-shape" (:guard r)))
-          (is (re-find #"06:00–07:00 overlaps Late shift's 06:30–07:30" (:detail r)))
-          (is (re-find #"retire or revise Late shift" (:detail r)))
+          (is (re-find #"06:00–07:00 overlaps CT late shift's 06:30–07:30" (:detail r)))
+          (is (re-find #"retire or revise CT late shift" (:detail r)))
           (is (= :retired (state-of (:id errands))) "the refusal moved nothing")))
       (testing "moving the late shift clear lets Errands back in"
         (act! (:id shift) :revise {:default_spans [{:from "07:00" :to "08:00"}]})
@@ -150,12 +150,12 @@
 ;; ── § 3 revise judges the template as it would stand ────────────────
 
 (deftest revise-is-held-to-the-template-it-would-leave-standing
-  (let [gym (create! (template "Gym" ["off"] ["14:00" "15:00"]))
-        calls (create! (template "Calls" ["workday"] ["14:00" "15:00"]))]
+  (let [gym (create! (template "CT gym" ["off"] ["14:00" "15:00"]))
+        calls (create! (template "CT calls" ["workday"] ["14:00" "15:00"]))]
     (testing "naming only the shapes is still judged against the windows kept"
       (let [r (refusal #(act! (:id calls) :revise {:default_shapes ["workday" "off"]}))]
         (is (= "no-overlap-in-shape" (:guard r)))
-        (is (re-find #"14:00–15:00 overlaps Gym's 14:00–15:00" (:detail r)))
+        (is (re-find #"14:00–15:00 overlaps CT gym's 14:00–15:00" (:detail r)))
         (is (= ["workday"] (get-in (dev/row *eng* :context (:id calls)) [:data :default_shapes]))
             "the refusal moved nothing")))
     (testing "a revise that moves the window into another's is refused too"
