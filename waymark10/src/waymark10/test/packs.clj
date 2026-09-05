@@ -6851,7 +6851,18 @@
 
        (and plan-id (nil? block-id))
        (conj (str "feed: the plan materialised no block for " (pr-str cname)
-                  " — the context's shape is today's (" shape ")"))
+                  " — the context's shape is today's (" shape "); the plan as"
+                  " made " (pr-str (select-keys (json ctx plan-made)
+                                                [:state :shape :date :self]))
+                  ", the context as made "
+                  (pr-str (select-keys (json ctx ctx-made)
+                                       [:state :default_shapes :default_spans :self]))
+                  ", every block of the plan "
+                  (pr-str (mapv #(select-keys % [:self :context_name :context_id :state])
+                                (items-of ctx (req ctx :get (str "/api/blocks?plan_id="
+                                                                 plan-id)
+                                                   nil as-member))))
+                  ", planned spans skipped " (pr-str skips)))
 
        (and block-id (not= 201 (:status span-made)))
        (conj (str "feed: a span around now on the probe's block answered "
