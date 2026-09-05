@@ -73,7 +73,10 @@
 (defn- materialise-blocks
   "A blank shape takes the weekday's; then one block per active context
   of the shape, born WITH its windows — the block's create births the
-  spans, so a span's block_id reads a real parent."
+  spans, so a span's block_id reads a real parent. The spans cannot
+  collide by construction: context's no-overlap-in-shape holds that
+  two active templates of one shape never share a minute, so the
+  windows this reads are clear of each other before any is minted."
   [row ctx]
   (let [^LocalDate date (get-in row [:data :date])
         shape (or (get-in row [:data :shape]) (shape-of date))]

@@ -8,7 +8,11 @@
   - context's :create carries windows the schema can only call
     five-character strings; the guard wants HH:MM pairs in order, so a
     generated body would refuse — a hand-written example, with a
-    fresh name each time because names are :unique.
+    fresh name each time because names are :unique, and a fresh
+    ONE-MINUTE WINDOW each time because two active templates of one
+    shape may not share a minute (context's no-overlap-in-shape): the
+    walked contexts, and the ones the block, span and decision
+    examples mint, each take the next minute of the night.
   - day_plan's :create is :unique over (member, date), and the
     walker's seeded generation would mint the same body twice — a
     fresh member per call.
@@ -37,7 +41,8 @@
             [waymark10.server.store.postgres :as pg]
             [waymark10.test.db :as db]
             [waymark10.test.factories :as fac]
-            [waymark10.test.suite :as suite]))
+            [waymark10.test.suite :as suite])
+  (:import (java.time LocalTime)))
 
 ;; ── the world ───────────────────────────────────────────────────────
 
@@ -74,11 +79,27 @@
 (defn- mk! [eng kind body]
   (:row (inv/create! eng kind body {:principal (fac/walker-principal)})))
 
+;; every context this file mints takes a window of its own: two active
+;; templates of one shape may not share a minute (context's
+;; no-overlap-in-shape), and every walked one stays active. One minute
+;; each, counted up from 01:00 — clear of the feed pack's 00:00–00:01
+;; probe (packs.clj :feed/current-block) and, for the hundreds of
+;; contexts a run could mint, of the daytime and evening windows the
+;; declared scenarios and the day-plan tests spell
+(def ^:private minute-seq (atom 0))
+
+(defn- fresh-window!
+  "The next one-minute window of the night, as the template spells it:
+  {:from \"01:07\" :to \"01:08\"}."
+  []
+  (let [^LocalTime from (.plusMinutes (LocalTime/of 1 0) (long (swap! minute-seq inc)))]
+    {:from (str from) :to (str (.plusMinutes from 1))}))
+
 (fac/example-input! :context :create
   (fn [_]
     {:name (str "Walked context " (random-uuid))
      :default_shapes ["workday"]
-     :default_spans [{:from "09:00" :to "12:00"} {:from "13:00" :to "17:00"}]
+     :default_spans [(fresh-window!)]
      :default_order 1}))
 
 (fac/example-input! :day_plan :create
@@ -93,18 +114,18 @@
     (let [plan (mk! eng :day_plan {:date plan-date :member (str (random-uuid))})
           context (mk! eng :context {:name (str "Walked block context " (random-uuid))
                                      :default_shapes ["off"]
-                                     :default_spans [{:from "19:00" :to "21:00"}]
+                                     :default_spans [(fresh-window!)]
                                      :default_order 5})]
       {:plan_id (:id plan) :context_id (:id context)})))
 
 ;; a span by hand: its block's plan is a workday plan whose walked
-;; contexts occupy the daytime, so the example opens late
+;; contexts occupy the small hours, so the example opens late
 (fac/example-input! :span :create
   (fn [eng]
     (let [plan (mk! eng :day_plan {:date plan-date :member (str (random-uuid))})
           context (mk! eng :context {:name (str "Walked span context " (random-uuid))
                                      :default_shapes ["off"]
-                                     :default_spans [{:from "19:00" :to "21:00"}]
+                                     :default_spans [(fresh-window!)]
                                      :default_order 5})
           block (mk! eng :block {:plan_id (:id plan) :context_id (:id context)})]
       {:block_id (:id block) :plan_id (:id plan)
@@ -118,7 +139,7 @@
     (let [plan (mk! eng :day_plan {:date plan-date :member (str (random-uuid))})
           context (mk! eng :context {:name (str "Walked decision context " (random-uuid))
                                      :default_shapes ["off"]
-                                     :default_spans [{:from "19:00" :to "21:00"}]
+                                     :default_spans [(fresh-window!)]
                                      :default_order 5})
           block (mk! eng :block {:plan_id (:id plan) :context_id (:id context)})]
       {:block_id (:id block) :kind "work" :text "Walked decision" :order 1})))
