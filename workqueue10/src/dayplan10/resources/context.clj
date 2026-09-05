@@ -171,17 +171,39 @@
    :actions
    {:revise
     {:from #{:active} :to :active
+     ;; the authored fields again, each optional: what is named
+     ;; overwrites, what is left out stands
      :input [:map
-             [:name {:optional true} [:maybe [:string {:min 1 :max 80}]]]
-             [:default_shapes {:optional true}
+             [:name {:optional true
+                     :x-display {:label "Name"
+                                 :help "What the house calls this stretch of the day."}}
+              [:maybe [:string {:min 1 :max 80}]]]
+             [:default_shapes {:optional true
+                               :x-display {:label "Which kinds of day"
+                                           :help "The shapes of day this context is part of by default."
+                                           :choices {"workday" "A workday"
+                                                     "off" "A day off"}}}
               [:maybe [:vector {:min 1} [:enum "workday" "off"]]]]
-             [:default_spans {:optional true}
+             [:default_spans {:optional true
+                              :x-display {:label "Usual windows"
+                                          :help "The clock windows, HH:MM pairs in order — 09:00 to 12:00, then 13:00 to 17:00."}}
               [:maybe [:vector {:min 1} window-form]]]
-             [:default_order {:optional true} [:maybe [:int {:min 0 :max 1000}]]]
-             [:with {:optional true} [:maybe [:vector :waymark/ref]]]
-             [:seam {:optional true :x-display {:widget "prose"}}
+             [:default_order {:optional true
+                              :x-display {:label "Order in the day"
+                                          :help "Where the block sits among the day's blocks — lower comes first."}}
+              [:maybe [:int {:min 0 :max 1000}]]]
+             [:with {:optional true
+                     :x-display {:label "Usually with"
+                                 :help "The members usually in this block."}}
+              [:maybe [:vector :waymark/ref]]]
+             [:seam {:optional true
+                     :x-display {:widget "prose"
+                                 :label "Seam sentence"
+                                 :help "What the block reads when its work is done."}}
               [:maybe [:string {:max 240}]]]
-             [:feed_recipe_id {:optional true :kind :feed_recipe}
+             [:feed_recipe_id {:optional true :kind :feed_recipe
+                               :x-display {:label "Own recipe"
+                                           :help "A feed recipe for this block's own section; nothing consults it yet."}}
               [:maybe :waymark/ref]]]
      :guards [windows-read-as-clock-times]
      :handler revise-template

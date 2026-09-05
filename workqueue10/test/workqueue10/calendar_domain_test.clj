@@ -115,8 +115,10 @@
     (is (contains? domains "calendar")
         (str "the well-known's domains: " (pr-str domains)))
     (testing "and it joins the domains that were already there"
-      ;; :evenings joined with the consolidation cleanup (waymark-26j)
-      (is (= #{"queue" "media" "chores" "meals" "calendar" "evenings"}
+      ;; :evenings joined with the consolidation cleanup (waymark-26j);
+      ;; :day with the day plan (waymark-i89n) — the household's one
+      ;; engine, domain by domain
+      (is (= #{"queue" "media" "chores" "meals" "calendar" "evenings" "day"}
              domains)))))
 
 ;; ── the birth: scheduling onto the family calendar ──────────────────
