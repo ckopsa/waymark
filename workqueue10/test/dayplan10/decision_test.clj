@@ -97,7 +97,7 @@
   nil)
 
 (def ^:private colton
-  (t/principal {:id "colton" :type :person :display "Colton"}))
+  (t/principal {:id "colton" :type :human :display "Colton"}))
 
 (defn- create! [kind body]
   (:row (inv/create! *eng* kind body {:principal colton})))

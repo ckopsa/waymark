@@ -433,6 +433,11 @@
                                             :help "What the day made of this decision — the original text stands beside it."}}
                    [:string {:min 1 :max 240}]]]
      :handler record-change
+     ;; changed_to is empty in every state this door runs from — a
+     ;; first value welded onto a blank, not a rewrite — so the
+     ;; edit-shape heuristic is waived rather than answered with a
+     ;; prefill of nothing (waymark-01f's own case)
+     :waives #{:edit-shape}
      :safety {:idempotent true :reversible false :confirm false
               :one-way "Changing keeps both sentences — what was decided and what it became — and ends the decision as changed."}
      :display {:label "Change" :order 5}}}})

@@ -791,10 +791,6 @@
                                          (thread-sources)
                                          (calendar-adapter)
                                          (connections/fan-reporter engine-ref))
-                             ;; what handlers and guards may read of the
-                             ;; wiring: the home_assistant feature token
-                             ;; and the caller behind it (waymark-i89n.4)
-                             :services (services ha-src)
                              ;; the calendar's adapter is no confluence,
                              ;; so its health arrives kind-level through
                              ;; the mirror's own pass hook
@@ -821,12 +817,16 @@
                              ;; (WAYMARK10_OIDC_*); absent env = the
                              ;; dev-header resolver, unchanged
                              :oidc (oidc/from-env)
-                             ;; the hashed disposition's salt
+                             ;; what handlers and guards may read of the
+                             ;; wiring: the home_assistant feature token
+                             ;; and the caller behind it (waymark-i89n.4),
+                             ;; and the hashed disposition's salt
                              ;; (waymark-rci) — a real secret in
                              ;; production; absent = the dev constant
-                             :services {:field-hash-salt
-                                        (System/getenv
-                                         "WAYMARK10_FIELD_HASH_SALT")}}))
+                             :services (assoc (services ha-src)
+                                              :field-hash-salt
+                                              (System/getenv
+                                               "WAYMARK10_FIELD_HASH_SALT"))}))
         ;; the in-process sources' late binding: delivered BEFORE
         ;; start! wakes the discovery runner
         _ (reset! engine-ref eng)
