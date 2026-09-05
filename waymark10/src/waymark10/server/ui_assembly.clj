@@ -21,6 +21,7 @@
    "waymark10/ui/133-deck.js"          ; VIEW_RENDERERS.deck (registry: 110)
    "waymark10/ui/134-feed.js"          ; VIEW_RENDERERS.feed (registry: 110)
    "waymark10/ui/135-feed-screen.js"   ; renderFeedScreen (dispatch: 110)
+   "waymark10/ui/137-day.js"           ; renderLanding + dayHeader (dispatch: 110, 135)
    "waymark10/ui/136-dashboard.js"     ; renderDashboard (dispatch: 110)
    "waymark10/ui/140-links-access.js"
    "waymark10/ui/150-values-parts.js"

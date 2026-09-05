@@ -166,6 +166,24 @@
     font-size: 14px; flex: 1 1 auto; }
   html[data-ui="mobile"] .feed-head h2 { font-size: 17px; }
   html[data-ui="mobile"] .feed-seam-say { font-size: 16px; }
+  /* the day (waymark-i89n.8), the screen a phone opens on: full-bleed
+     like the posts, the one chip a whole thumb wide, the timeline a
+     row you can scrub with a finger */
+  html[data-ui="mobile"] .day-head { margin: 0 -10px; padding: 12px 12px 8px; }
+  html[data-ui="mobile"] .day-head .day-name { font-size: 24px; }
+  html[data-ui="mobile"] .day-decision { padding: 9px 0; }
+  html[data-ui="mobile"] .day-verbs { flex: 1 1 100%; margin-left: 0; }
+  html[data-ui="mobile"] .day-verbs a.chip.verb,
+  html[data-ui="mobile"] .day-verbs button.chip.verb { min-height: 42px;
+    font-size: 14.5px; flex: 1 1 auto; justify-content: center; }
+  html[data-ui="mobile"] .day-verbs button.chip.verb.small { min-height: 36px;
+    font-size: 13px; flex: 0 1 auto; }
+  html[data-ui="mobile"] .day-timeline { flex-wrap: nowrap; overflow-x: auto;
+    padding-bottom: 4px; -webkit-overflow-scrolling: touch; }
+  html[data-ui="mobile"] .day-tl-block { min-height: 36px; flex: 0 0 auto; }
+  html[data-ui="mobile"] .day-tl-verbs { flex: 0 0 auto; }
+  html[data-ui="mobile"] .day-shape button.chip { min-height: 38px;
+    font-size: 14px; flex: 1 1 auto; }
 
   /* ── dashboard screen (mobile): one column, tighter panels ──────── */
   html[data-ui="mobile"] .slot-grid { grid-template-columns: 1fr; gap: 10px; }
