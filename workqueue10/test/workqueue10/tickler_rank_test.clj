@@ -302,7 +302,7 @@
           ;; the member turns their record on and has been shown A three
           ;; mornings running with nothing done
           (let [doc (feed-as who)
-                day (str (:day doc))
+                day (let [d (:day doc)] (if (map? d) (str (:date d)) (str d)))
                 ca (fridge-card doc a)
                 on (req :post "/api/feed_view_consents" {} (human who))]
             (is (= 201 (:status on)) (pr-str (json on)))

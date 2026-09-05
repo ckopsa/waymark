@@ -1113,7 +1113,7 @@
             (is (says-of ca "you are not recording")))
           ;; the member turns their record on and has been shown A three
           ;; mornings running with nothing done
-          (let [day (str (:day doc))
+          (let [day (let [d (:day doc)] (if (map? d) (str (:date d)) (str d)))
                 on (req :post "/api/feed_view_consents" {} (human who))]
             (is (= 201 (:status on)) (pr-str (json on)))
             (reset! switch (id-of on))
