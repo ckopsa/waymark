@@ -418,10 +418,15 @@ await waitFor(`[...document.querySelectorAll("button")].some(b => b.textContent.
 await evaljs(`[...document.querySelectorAll("button")].find(b => b.textContent.trim() === "Reopen").click(); true`);
 await waitFor(`document.querySelector("dialog[open]")`, "reopen dialog");
 await evaljs(`[...document.querySelectorAll("dialog[open] .dlgfoot button")].at(-1).click(); true`);
-await waitFor(`document.querySelector("#toast button[data-undo]")`, "undo button in the toast");
-ok("a reverse action in the post-action envelope becomes the undo affordance",
-   await evaljs(`document.querySelector("#toast button[data-undo]").textContent
-                 .includes("undo") &&
+/* the toast is a receipt; the way back is an ENTRY in the undo stack
+   (waymark-qmo6), a real node with the reverse door's own label — not
+   the string "[object HTMLDivElement]" the stack rendered until
+   waymark-q1an spread the array into append */
+await waitFor(`document.querySelector("#undostack .undoitem button[data-undo]")`, "undo entry in the stack");
+ok("a reverse action in the post-action envelope becomes an entry in the undo stack",
+   await evaljs(`document.querySelector("#undostack .undoitem button[data-undo]").textContent
+                 .includes("Finalize") &&
+                 !document.querySelector("#undostack").textContent.includes("[object") &&
                  document.querySelector("#toast").textContent.includes("reopen ✓")`));
 await waitFor(`document.querySelector(".statechip")?.textContent === "draft"`, "plan draft again");
 /* restore: the later runs expect a planned plan is not required — leave draft;
