@@ -161,7 +161,9 @@
                     :waymark/ref]
                    [:windows {:optional true
                               :x-display {:label "Windows"
-                                          :help "The windows the block opens with, each a start and an end on the day; leave it empty to add spans one at a time."}}
+                                          :help "The windows the block opens with, each a start and an end on the day; leave it empty to add spans one at a time."
+                                          ;; waymark-1nns: a list of maps has no sub-form yet
+                                          :spelled-by-hand "A list of windows is a list of maps, which no sub-form offers yet: each entry is a starts_at and an ends_at instant. Leave it empty and add spans one at a time from the block instead."}}
                     [:maybe [:vector window-form]]]]
    :create-guards [on-an-open-days-plan]
    :scenarios [a-block-sits-on-a-plan-that-exists]

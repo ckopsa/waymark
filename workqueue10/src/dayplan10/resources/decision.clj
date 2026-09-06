@@ -299,7 +299,10 @@
     [:maybe [:string {:min 1 :max 120}]]]
    [:data {:optional true
            :x-display {:label "Service data"
-                       :help "The service call's data — {entity_id light.porch}."}}
+                       :help "The service call's data — {entity_id light.porch}."
+                       ;; waymark-1nns: the one honest JSON box on a household
+                       ;; form — whatever the service takes
+                       :spelled-by-hand "Whatever the Home Assistant service takes — {\"entity_id\": \"light.porch\"} — and only its documentation can spell the keys; a link or a note never needs this."}}
     [:maybe [:map-of :keyword :any]]]
    [:text {:optional true
            :x-display {:label "Note"

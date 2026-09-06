@@ -313,7 +313,9 @@
                                                     "off" "A day off"}}}
              [:vector {:min 1} [:enum "workday" "off"]]]
             [:default_spans {:x-display {:label "Usual windows"
-                                         :help "The clock windows this context usually occupies — 09:00 to 12:00, then 13:00 to 17:00. A plan mints one span per window on its date."}}
+                                         :help "The clock windows this context usually occupies — 09:00 to 12:00, then 13:00 to 17:00. A plan mints one span per window on its date."
+                                         ;; waymark-1nns: a list of maps has no sub-form yet
+                                         :spelled-by-hand "A list of windows is a list of maps, which no sub-form offers yet: each entry is a from and a to as the clock reads them, [{\"from\": \"09:00\", \"to\": \"12:00\"}], in order and not overlapping."}}
              [:vector {:min 1} window-form]]
             [:default_order {:sort :default
                              :x-display {:label "Order in the day"
@@ -358,7 +360,8 @@
               [:maybe [:vector {:min 1} [:enum "workday" "off"]]]]
              [:default_spans {:optional true
                               :x-display {:label "Usual windows"
-                                          :help "The clock windows, HH:MM pairs in order — 09:00 to 12:00, then 13:00 to 17:00."}}
+                                          :help "The clock windows, HH:MM pairs in order — 09:00 to 12:00, then 13:00 to 17:00."
+                                          :spelled-by-hand "A list of windows is a list of maps, which no sub-form offers yet: each entry is a from and a to as the clock reads them, [{\"from\": \"09:00\", \"to\": \"12:00\"}], in order and not overlapping."}}
               [:maybe [:vector {:min 1} window-form]]]
              [:default_order {:optional true
                               :x-display {:label "Order in the day"
