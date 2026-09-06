@@ -98,7 +98,10 @@ function fieldWidget(name, rawProp, value) {
        (waymark-au42) — the JSON box is for the object nobody labelled */
     if (prop.properties && Object.keys(prop.properties).length)
       return subformWidget(name, prop, value);
-    return el("textarea", {name, "data-array": "json", placeholder: "JSON object"},
+    /* the declaration's own reason a person spells this (waymark-2hd0,
+       :x-display {:spelled-by-hand "…"}) is the box's placeholder */
+    return el("textarea", {name, "data-array": "json",
+                           placeholder: xd["spelled-by-hand"] || "JSON object"},
       value !== undefined && value !== null ? JSON.stringify(value, null, 1) : "");
   }
   return el("input", {type: "text", name, value: value ?? "",

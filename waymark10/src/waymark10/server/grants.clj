@@ -596,6 +596,9 @@
              [:string {:min 1 :max 128}]]
             [:scope {:examples [scope-example]
                      :x-display {:label "What it opens"
+                                 ;; waymark-2hd0: a list of maps has no
+                                 ;; sub-form yet; the box wears this
+                                 :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
                                  :help "The leash, entry by entry: a kind, the actions allowed on it, and optionally the rows, fields and filter that narrow it. Everything not named here stays shut."}}
              scope-schema]
             [:expires_at {:optional true
@@ -930,6 +933,7 @@
              [:maybe :waymark/ref]]
             [:scope {:examples [scope-example]
                      :x-display {:label "What you are asking for"
+                                 :spelled-by-hand "A scope is a list of entries — a kind, its actions, the rows, fields and filter that narrow it — and a list of maps has no sub-form yet: the example above is the whole shape, and the chips beside the box offer every kind and action name."
                                  :help "The leash you want, entry by entry: a kind, the actions on it, and optionally the rows, fields and filter that narrow it. Ask for the least that does the job — an approver reads this."}}
              scope-schema]]
    :filterable {:grant_id #{:eq}}

@@ -1,6 +1,6 @@
 (ns waymark10.usability-test
-  "The usability battery (waymark-0ee; waymark-9u10's sixth): six policies, each proved
-  twice — a declaration that earns the warning and reads the fix in
+  "The usability battery (waymark-0ee; waymark-9u10's sixth; waymark-2hd0's
+  seventh): seven policies, each proved twice — a declaration that earns the warning and reads the fix in
   it, and a compliant declaration the battery has nothing to say
   about. The silent case is the load-bearing one: a policy that
   cannot be satisfied is a policy nobody can act on."
@@ -458,3 +458,105 @@
 
   (testing "the compliant kind, with its pairs, has nothing owing"
     (is (= [] (warns compliant "cheap-reverse")))))
+
+;; ── 7 · spelled by hand ─────────────────────────────────────────────
+
+(defn- annotate-door
+  "The compliant kind with one more self-loop that takes `input` — the
+  door every case below bends."
+  [input & [more]]
+  (assoc-in compliant [:actions :annotate]
+            (merge {:from #{:pending} :to :pending
+                    :input input
+                    :safety {:idempotent true :reversible false :confirm false
+                             :one-way "A note is a note."}
+                    :display {:label "Annotate"}}
+                   more)))
+
+(deftest spelled-by-hand-warns-where-only-a-json-box-could-ask
+  (let [ws (warns (annotate-door
+                   [:map
+                    [:extras {:x-display {:label "Extras" :help "Anything else."}}
+                     [:map-of :keyword :any]]
+                    [:blob {:x-display {:label "Blob" :help "Whatever it is."}}
+                     :any]
+                    [:rows {:x-display {:label "Rows" :help "Some rows."}}
+                     [:vector [:map [:n :int]]]]
+                    [:tags {:x-display {:label "Tags" :help "A few words."}}
+                     [:vector :string]]
+                    [:when {:optional true :x-display {:label "When" :help "The day."}}
+                     [:maybe :waymark/date]]])
+                  "spelled-by-hand")]
+    (is (= 1 (count ws)) "one sentence per door, every box listed")
+    (is (str/includes? (first ws) "action annotate asks for [:extras :blob :rows]")
+        "the list of scalars and the date are forms; the three boxes are named")
+    (is (str/includes? (first ws) "declare the keys as a nested :map")))
+
+  (testing "a nested map with declared fields is a sub-form, not a box"
+    (is (= [] (warns (annotate-door
+                      [:map
+                       [:launch {:x-display {:label "Launch" :help "What Go does."}}
+                        [:map
+                         [:type {:x-display {:label "What Go does"
+                                             :choices {"href" "Opens a link"
+                                                       "text" "Shows a note"}}}
+                          [:enum "href" "text"]]
+                         [:href {:optional true
+                                 :x-display {:label "Link" :help "The address."}}
+                          [:maybe [:string {:max 500}]]]]]])
+                     "spelled-by-hand"))))
+
+  (testing "the sentence that says why a person spells it is the waiver, at either level"
+    (is (= [] (warns (annotate-door
+                      [:map
+                       [:data {:x-display {:label "Service data"
+                                           :help "What the call takes."
+                                           :spelled-by-hand "Whatever the Home Assistant service takes — only its documentation can spell the keys."}}
+                        [:map-of :keyword :any]]
+                       [:launch {:x-display {:label "Launch" :help "What Go does."}}
+                        [:map
+                         [:type {:x-display {:label "What Go does"
+                                             :choices {"service" "Fires a service"}}}
+                          [:enum "service"]]
+                         [:data {:optional true
+                                 :x-display {:label "Service data"
+                                             :spelled-by-hand "Whatever the service takes."}}
+                          [:maybe [:map-of :keyword :any]]]]]])
+                     "spelled-by-hand")))
+    (is (= 1 (count (warns (annotate-door
+                            [:map
+                             [:launch {:x-display {:label "Launch" :help "What Go does."}}
+                              [:map
+                               [:type {:x-display {:label "What Go does"
+                                                   :choices {"service" "Fires a service"}}}
+                                [:enum "service"]]
+                               [:data {:optional true
+                                       :x-display {:label "Service data"}}
+                                [:maybe [:map-of :keyword :any]]]]]])
+                           "spelled-by-hand")))
+        "a nested box with no sentence makes the whole map a box"))
+
+  (testing "a hidden field is nobody's form, and a concealed door owes a human nothing"
+    (is (= [] (warns (annotate-door
+                      [:map [:blob {:x-display {:label "Blob" :hidden true}} :any]])
+                     "spelled-by-hand")))
+    (is (= [] (warns (annotate-door
+                      [:map [:blob {:x-display {:label "Blob"}} :any]]
+                      {:guards [machinery-only]})
+                     "spelled-by-hand")))))
+
+(deftest display-prose-reaches-into-a-nested-map
+  ;; waymark-2hd0: the sub-form renders each nested field under its
+  ;; own label, so an unlabelled sub-field is the same bare token one
+  ;; level down
+  (let [ws (warns (annotate-door
+                   [:map
+                    [:launch {:x-display {:label "Launch" :help "What Go does."}}
+                     [:map
+                      [:type {:x-display {:label "What Go does"
+                                          :choices {"href" "Opens a link"}}}
+                       [:enum "href"]]
+                      [:href {:optional true} [:maybe [:string {:max 500}]]]]]])
+                  "display-prose")]
+    (is (= 1 (count ws)))
+    (is (str/includes? (first ws) "no :x-display :label on [:launch.href]"))))

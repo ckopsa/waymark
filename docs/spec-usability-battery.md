@@ -984,3 +984,52 @@ seasons report's aging — now read `:over` as well, so a restorable
 ending does not count as work still open. `plan.abandoned` and
 `prep_task.cancelled` stay tombs: both sit behind a confirm gate, and the
 plan's cascades a cancel through its prep tasks. The tally is zero.
+
+## Amendment — the seventh policy, spelled by hand (waymark-2hd0)
+
+The owner, adding a decision on a phone, met a field labelled **Launch**
+whose widget was a textarea reading "JSON object": *I don't think it's fair
+to ask me to put together a JSON object.* It was not. The declaration had
+labelled every sub-field of the launch and the projection carried the labels
+to the wire; the generic form threw them away, turning any object-typed
+property into a JSON box whether or not it had declared keys. That half is
+a renderer bug, fixed in waymark-au42: a nested map with declared properties
+now renders as a **sub-form** of its own labelled widgets, named
+`parent.child` and folded back into one object on submit.
+
+*Is there a similar rule where we can catch that with the guidelines?* Not
+that bug — no declaration-time rule can see a client discarding what the
+wire carried; its guard is the assembly test. But the declaration CAN see
+the honest cases of the same experience: a field whose shape no form can
+offer except as a box that wants JSON.
+
+### 7 · Spelled by hand — a field a form can offer, or a sentence saying why not
+
+For every human-invokable door, create included, each demanding field must
+be **formable**: a scalar, an enum, a const, a ref, a date, a list of
+scalars, or a nested map whose every field is itself formable. What fails
+is a map with no declared keys (`:map-of`), a bare `:any`, or a list of
+maps. `[spelled-by-hand]` warns once per door, listing the fields, and
+names the two fixes:
+
+- **declare the keys** as a nested `:map`, so every client renders a
+  sub-form — the launch's own shape; or
+- **say why a person spells it**: `:x-display {:spelled-by-hand "…"}`, a
+  sentence, which the policy accepts at either level and the generic form
+  wears as the JSON box's placeholder. The waiver is a sentence rather
+  than a flag for the same reason `:one-way` is: a reason written down is
+  a reason read. Service data on a Home Assistant launch is the honest
+  case — whatever the service takes, and only its documentation can spell
+  the keys.
+
+`display-prose` learns to descend at the same time: a sub-field of a nested
+map with no `:x-display :label` is listed as `parent.child`, because the
+sub-form renders it under that label or under its bare token.
+
+### The first run
+
+Recorded from CI's reading once the policy lands; the framework's own
+free-form fields carry their sentences in the same change (the tally pin
+keeps every enrolled kind silent), and the applications' three — the
+decision's service data, the hypothesis's atoms, the outcome piece's
+prepared map — follow in their own change so each sentence is read.

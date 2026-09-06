@@ -1,7 +1,9 @@
 (ns waymark10.usability
-  "The usability battery: six declaration-time policies that hold
+  "The usability battery: seven declaration-time policies that hold
   every kind to inputs a person can actually answer (waymark-0ee),
-  and to endings a person can come back from (waymark-9u10).
+  to endings a person can come back from (waymark-9u10), and to
+  fields a form can offer rather than a box that wants JSON
+  (waymark-2hd0).
 
   The motivating complaint, recorded so the policies keep their
   reason: creating a saved view offered no hints for the right and
@@ -19,6 +21,8 @@
       4 gesture duties          a swipe is short, cheap and undoable
       5 card completeness       a row can name itself
       6 cheap reverses          a costless ending has a way back
+      7 spelled by hand         a field a form can offer, or a sentence
+                                saying why a person spells it
 
   WHY THIS IS NOT waymark10.checks. The fail-fast gate in
   waymark10.checks runs inside `defresource`, at import, and prints
@@ -109,6 +113,22 @@
           (schema/entry-map form))))
 
 (defn- listing [ks] (str "[" (str/join " " (map (comp str keyword name) ks)) "]"))
+
+(defn- unwrap-maybe
+  "The non-null arm of a projected property: `[:maybe X]` reaches the
+  wire as oneOf/anyOf beside a null, and a form judges by X."
+  [prop]
+  (if-some [alts (and (map? prop) (or (:oneOf prop) (:anyOf prop)))]
+    (or (first (remove #(= "null" (:type %)) alts)) prop)
+    prop))
+
+(defn- object-with-fields
+  "The projected property when it is a map with declared keys — the
+  shape the generic form renders as a sub-form — else nil."
+  [prop]
+  (let [p (unwrap-maybe prop)]
+    (when (and (map? p) (= "object" (:type p)) (seq (:properties p)))
+      p)))
 
 ;; ── 1 · effort honesty ──────────────────────────────────────────────
 
@@ -293,6 +313,18 @@
                                               (demand/field-class k prop #{}))
                                              (blank-box? prop))]
                               k)
+                   ;; a nested map's own fields (waymark-2hd0): the
+                   ;; sub-form renders each under its label, so an
+                   ;; unlabelled sub-field is the same bare token one
+                   ;; level down — read off the projection, where the
+                   ;; nested entry's :x-display already rode
+                   unlabelled-sub (for [[k _ prop] es
+                                        :let [o (object-with-fields prop)]
+                                        :when o
+                                        [sk sp] (:properties o)
+                                        :when (nil? (get-in sp [:x-display :label]))]
+                                    (keyword (str (name k) "." (name sk))))
+                   unlabelled (concat unlabelled unlabelled-sub)
                    tokenised (for [[k {:keys [properties]} prop] es
                                    :when (and (seq (:enum prop))
                                               (empty? (get-in properties
@@ -543,11 +575,75 @@
 
 ;; ── the battery ─────────────────────────────────────────────────────
 
+;; ── 7 · spelled by hand ─────────────────────────────────────────────
+
+(def ^:private scalar-types #{"string" "integer" "number" "boolean"})
+
+(defn- formable?
+  "Can a generic form OFFER this projected property — a widget a person
+  fills without spelling structure? A scalar, an enum, a const, a list
+  of scalars, or a nested map whose every field is itself formable. A
+  map with no declared keys, a bare :any, a list of maps: no — the one
+  widget left is a box that wants JSON. A sub-field carrying its own
+  :spelled-by-hand sentence has answered for itself."
+  [prop]
+  (let [p (unwrap-maybe prop)
+        t (:type p)]
+    (boolean
+     (and (map? p)
+          (or (contains? p :enum)
+              (contains? p :const)
+              (contains? scalar-types t)
+              (and (= "array" t)
+                   (let [it (unwrap-maybe (:items p))]
+                     (and (map? it)
+                          (or (contains? it :enum)
+                              (contains? scalar-types (:type it))))))
+              (and (= "object" t)
+                   (seq (:properties p))
+                   (every? (fn [[_ sp]]
+                             (or (get-in sp [:x-display :spelled-by-hand])
+                                 (formable? sp)))
+                           (:properties p))))))))
+
+(defn spelled-by-hand
+  "A field no form can offer except as a box that wants JSON — a map
+  with no declared keys, a bare :any, a list of maps — is a person
+  being asked to spell structure. The renderer that once did this to a
+  labelled nested map was a bug (waymark-au42); the fields this policy
+  names are the ones the declaration itself left that way. The fix is
+  the field's own: declare the keys as a nested :map, so every client
+  renders a sub-form, or say why a person spells it — :x-display
+  {:spelled-by-hand \"…\"} — and the box wears the sentence as its
+  placeholder. The waiver is a sentence rather than a flag for the
+  same reason :one-way is: a reason written down is a reason read."
+  [r]
+  (into []
+        (keep (fn [door]
+                (when (human-invokable? door)
+                  (let [boxes (for [[k {:keys [properties]} prop]
+                                    (demanding-entries r door)
+                                    :when (and prop
+                                               (nil? (get-in properties
+                                                             [:x-display :spelled-by-hand]))
+                                               (not (formable? prop)))]
+                                k)]
+                    (when (seq boxes)
+                      (str "[spelled-by-hand] " (where-of door) " asks for "
+                           (listing boxes) " in a shape no form can offer"
+                           " except as a box that wants JSON — a map with no"
+                           " declared keys, a bare :any, a list of maps;"
+                           " declare the keys as a nested :map so every client"
+                           " renders a sub-form, or say why a person spells it"
+                           " in :x-display {:spelled-by-hand \"…\"} and the box"
+                           " wears the sentence"))))))
+        (doors r)))
+
 (def policies
-  "The six, in the beads' order — a vector so the report reads the
-  same way twice and a seventh policy arrives visibly."
+  "The seven, in the beads' order — a vector so the report reads the
+  same way twice and an eighth policy arrives visibly."
   [#'effort-honesty #'display-prose #'composition-scaffolding
-   #'gesture-duties #'card-completeness #'cheap-reverse])
+   #'gesture-duties #'card-completeness #'cheap-reverse #'spelled-by-hand])
 
 (defn warnings
   "Every usability opinion this battery holds about one normalized

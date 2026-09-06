@@ -693,7 +693,9 @@
              ;; outcomes once applied
              [:report {:optional true :x-display {:hidden true}}
               [:maybe [:vector [:map-of :keyword :any]]]]
-             [:tally {:optional true :x-display {:raw true}}
+             [:tally {:optional true
+                      :x-display {:raw true :label "Tally"
+                                  :spelled-by-hand "The per-outcome counts the checker wrote — outcome word to count, never a form's own words."}}
               [:maybe [:map-of :keyword :int]]]
              [:checked_at {:optional true} [:maybe :waymark/instant]]
              [:applied_at {:optional true} [:maybe :waymark/instant]]]

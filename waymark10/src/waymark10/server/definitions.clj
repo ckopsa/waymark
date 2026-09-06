@@ -264,10 +264,14 @@
                                  :help "The sha256 of the canonical projection below — the whole reason a revision can be recognised rather than described."}}
              [:string {:min 64 :max 64}]]
             ;; the canonical projection, verbatim — the record IS the law
-            [:fingerprint {:x-display {:label "The law itself, canonically"}}
+            ;; waymark-2hd0: the deploy writes every free-form field on
+            ;; this kind; the sentences say so where a form would ask
+            [:fingerprint {:x-display {:label "The law itself, canonically"
+                                       :spelled-by-hand "The canonical projection of the declaration, written by the deploy at boot — a tree only the fingerprinter spells."}}
              :any]
             [:diff {:optional true
-                    :x-display {:label "What moved since the last revision"}}
+                    :x-display {:label "What moved since the last revision"
+                                :spelled-by-hand "The canonical diff between two projections, written by the deploy beside the fingerprint."}}
              :any]
             [:diff_class {:x-display
                           {:label "What kind of change this is"
@@ -282,7 +286,8 @@
                                :help "The line a reviewer reads first — what moved and why, not how. The diff below says how."}}
              [:maybe [:string {:max 120}]]]
             [:population {:optional true
-                          :x-display {:label "The rows a pilot governs"}}
+                          :x-display {:label "The rows a pilot governs"
+                                      :spelled-by-hand "The pilot's population as the pilot door recorded it — the filter or the forward-only mark, never a form's own words."}}
              :any]
             [:deploy_note {:optional true
                            :x-display
@@ -295,7 +300,8 @@
             ;; the blast-radius report (batch C) — written by the
             ;; measure lifecycle as maintenance, never by a handler
             [:measure {:optional true
-                       :x-display {:label "Blast-radius report"}}
+                       :x-display {:label "Blast-radius report"
+                                   :spelled-by-hand "Written by the measure lifecycle as maintenance, never by a hand."}}
              :any]]
    :filterable {:state #{:eq :in}
                 :target_kind #{:eq :in}}
@@ -311,7 +317,8 @@
                     [:where {:optional true
                              :x-display
                              {:label "Which rows the pilot governs"
-                              :help "A filter over the kind's own fields — the slice that lives under the new law while everything else keeps the current one."}}
+                              :help "A filter over the kind's own fields — the slice that lives under the new law while everything else keeps the current one."
+                              :spelled-by-hand "Field=value pairs as one map, in the collection query grammar the kind's own filterable fields speak — the same grammar a saved view's where speaks."}}
                      :any]
                     [:after {:optional true
                              :x-display
