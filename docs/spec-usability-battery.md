@@ -890,3 +890,61 @@ about:
   (`:waives`) for these five. If one of them turns out to be wrong somewhere it
   should be *narrowed*, not waived — a warning with an escape hatch stops being
   read as an opinion and starts being read as a chore.
+
+## Amendment — the sixth policy, cheap reverses, and `:final` (waymark-9u10)
+
+The owner's rule after the first planned Sunday, 2026-09-06: *if it costs
+nothing to undo, we should be able to undo.* `checks/check-one-way` already
+demands a `:one-way` sentence on every non-reversible door, and a sentence
+about meaning passes it — `decision.finish` said "Done is the record; a
+finished decision stays finished" while the declaration showed no cost at
+all and no door out of `done`.
+
+### 6 · Cheap reverses — a costless ending has a way back
+
+For every state-changing, non-reversible door a person can meet:
+
+- a **visible cost** is a `:handler`, an `:input`, a confirm gate, an
+  `:owns` cascade naming the door, a push-on-write mirror on the kind, or
+  a `:final` sentence;
+- a **way back** is any door out of the landing state, to anywhere the row
+  can still be acted on.
+
+`[cheap-reverse]` warns when neither holds, naming the fix. Declared
+terminal is not a reason — it is the claim being questioned. The `:one-way`
+sentence is not a silencer — the one-way check requires it everywhere, so
+it carries no signal about cost. A door the clock opens (a guard reading
+`:now`) is exempt: nobody undoes the time.
+
+### `:final` — an ending that is final on purpose
+
+An ending is final on purpose when reopening it would make the record lie,
+and there are three ways that happens: **the world moved** (a day closed, a
+session finished), **something was built on it** (a replacement piece
+minted, the current law served on from its stored trees), or **it holds a
+second sentence** (decision's `change`). Everything else is a filing
+decision — retire, decline, remove, dismiss on a catalog row — and wants a
+restore door.
+
+Before this amendment the only way to make a cost visible was a handler,
+which is wrong for the first two shapes: the door does nothing, the cost is
+in what reopening would assert. So `:safety` grows `:final`, a sentence
+that must say what would lie. The policy accepts it as a visible cost; it
+excludes `:reversible` and stands in for `:one-way`; `checks/check-final`
+refuses it beside any door out of the landing state, the same way
+`:one-way` is refused beside `:reversible`, so the word cannot be pasted on
+to silence the warning while a restore door quietly exists; the envelope
+and the MCP action digest print it, so an agent reading the door sees why
+there is no way back.
+
+### The first run
+
+Sixteen doors across the house, every one a declared tomb with no visible
+cost and no way out: `chore.retire`, `day.close`, `day_plan.close`,
+`definition.withdraw`, `evening_plan.archive`, `evening_session.finish`,
+`ingredient.decline` and `.retire`, `meal.decline`, `meal_line.remove`,
+`outcome_piece.rework`, `plan.complete`, `prep_task.complete`,
+`product.dismiss`, `substitution.decline` and `.retire`. This PR closes two
+— `decision.finish` gets `reopen`, `definition.withdraw` gets `:final` —
+and the rest are the next audit's fix-list: by the taxonomy above, six
+want a `:final` sentence and ten want a restore door.

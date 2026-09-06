@@ -473,8 +473,10 @@
 ;; So this policy reads what the declaration can SEE, and the sentence
 ;; is not a silencer: the one-way check requires it everywhere, so it
 ;; carries no signal about cost. Two things silence it — a visible
-;; cost, or a door out of the landing state — and one thing exempts a
-;; door: the clock opened it.
+;; cost (a handler, an input, a confirm gate, a cascade, a push, or a
+;; :final sentence, which check-final holds honest), or a door out of
+;; the landing state — and one thing exempts a door: the clock opened
+;; it.
 
 (defn- visible-costs
   "What the declaration itself shows a door doing beyond moving the
@@ -485,6 +487,11 @@
     (:handler a) (conj "a handler")
     (:input a) (conj "an input")
     (get-in a [:safety :confirm]) (conj "a confirm gate")
+    ;; :final (types/safety): the author's sentence for an ending
+    ;; that is final on purpose — the world moved, something was
+    ;; built on it, or it holds a second sentence — held honest by
+    ;; checks/check-final, which refuses it beside a door out
+    (get-in a [:safety :final]) (conj "a declared finality")
     ;; :owns is normalized to a VECTOR of edge maps (resource.clj's
     ;; aggregate sugar), each carrying its :on {owner-action child-action}
     (some (fn [edge] (and (map? edge) (contains? (:on edge) (:name a))))

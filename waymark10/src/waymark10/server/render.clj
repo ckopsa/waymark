@@ -306,7 +306,8 @@
       (assoc :safety (cond-> {:idempotent (boolean (:idempotent safety))
                               :reversible (boolean (:reversible safety))
                               :confirm (boolean (:confirm safety))}
-                       (:fence safety) (assoc :fence true)))
+                       (:fence safety) (assoc :fence true)
+                       (:final safety) (assoc :final (:final safety))))
       ;; the demand class (batch A): derived from the folded schema,
       ;; envelope-only — never fingerprinted
       true

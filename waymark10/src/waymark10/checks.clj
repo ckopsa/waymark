@@ -157,13 +157,31 @@
 (defn- check-one-way [r]
   (doseq [a (machine/actions-seq r)]
     (let [s (:safety a)]
-      (when-not (or (:reversible s) (:confirm s) (:one-way s))
+      (when-not (or (:reversible s) (:confirm s) (:one-way s) (:final s))
         ;; self-loops are exempt: re-doing is its own undo
         (when (some #(not= % (:to a)) (:from a))
           (err r :one-way
                (str "action " (:name a) " is irreversible, unconfirmed, and "
                     "leaves the current state — a silent one-way door; declare "
                     ":one-way (acknowledged), :confirm, or an honest reverse")))))))
+
+(defn- check-final
+  "A door declaring :final says no door leads back out of where it
+  lands (waymark-9u10). One that does makes the sentence a lie — and
+  a :final pasted on beside a quiet restore door would silence the
+  cheap-reverse policy for nothing — so the two are refused together."
+  [r]
+  (doseq [a (machine/actions-seq r)
+          :when (get-in a [:safety :final])]
+    (let [to (:to a)
+          out (->> (machine/actions-seq r)
+                   (filter #(and (contains? (:from %) to) (not= (:to %) to)))
+                   (map :name) sort vec)]
+      (when (seq out)
+        (err r :final
+             (str "action " (:name a) " declares :final — an ending with no "
+                  "way back — but " out " lead" (when (= 1 (count out)) "s")
+                  " out of " to "; drop the sentence or the door"))))))
 
 ;; ── guards ──────────────────────────────────────────────────────────
 
@@ -1214,7 +1232,7 @@
          (mapcat #(% rmap))
          [check-tokens check-reachability check-terminal-no-exit
           check-allow-undo
-          check-reversible check-one-way check-guard-declarations
+          check-reversible check-one-way check-final check-guard-declarations
           check-guard-templates check-create-guards check-closure
           check-handler-signatures check-opaque-residue
           check-summary-template check-waive-tokens

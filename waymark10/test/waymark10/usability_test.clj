@@ -411,7 +411,7 @@
       (update :actions dissoc :reopen)
       (update-in [:actions :finish] dissoc :undo)
       (assoc-in [:actions :finish :safety]
-                {:idempotent true :confirm false
+                {:idempotent true :reversible false :confirm false
                  :one-way "Done is the record; a finished errand stays finished."})))
 
 (deftest cheap-reverse-warns-when-a-costless-door-leads-nowhere
@@ -436,9 +436,16 @@
   (testing "a door out — to anywhere the row can still be acted on — is a way back"
     (is (= [] (warns (assoc-in tomb [:actions :shelve]
                                {:from #{:done} :to :dropped
-                                :safety {:idempotent true :confirm false
+                                :safety {:idempotent true :reversible false
+                                         :confirm false
                                          :one-way "Shelved; Back on returns it."}
                                 :display {:label "Shelve"}})
+                     "cheap-reverse"))))
+
+  (testing "a :final sentence is the author's visible cost — an ending
+            final on purpose, held honest by checks/check-final"
+    (is (= [] (warns (assoc-in tomb [:actions :finish :safety :final]
+                               "The errand's day is over; reopening would claim it never ran.")
                      "cheap-reverse"))))
 
   (testing "the clock's door is exempt — nobody undoes the time"

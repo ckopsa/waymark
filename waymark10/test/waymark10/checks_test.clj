@@ -513,3 +513,23 @@
   (is (= [] (:waymark10/warnings (meta fx/meal))))
   (is (= :plan (:kind fx/plan)))
   (is (= [] (:waymark10/warnings (meta fx/plan)))))
+
+(deftest final-excludes-a-way-back
+  ;; waymark-9u10: :final says no door leads back out; a door that does
+  ;; makes the sentence a lie, and a :final pasted on beside a quiet
+  ;; restore door would silence the cheap-reverse policy for nothing
+  (breaks :final
+          (-> base
+              (assoc :states [:open :closed])
+              ;; closed is no tomb here, so terminal-no-exit stays quiet
+              ;; and the refusal under test is :final's own
+              (assoc :terminal #{})
+              (assoc :actions
+                     {:finish {:from #{:open} :to :closed
+                               :safety {:idempotent true :reversible false
+                                        :confirm false
+                                        :final "Closing is final."}}
+                      :reopen {:from #{:closed} :to :open
+                               :safety {:idempotent true :reversible false
+                                        :confirm false
+                                        :one-way "Reopening is cheap."}}}))))
