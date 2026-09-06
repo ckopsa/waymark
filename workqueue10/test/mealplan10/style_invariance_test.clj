@@ -853,11 +853,17 @@
   ;; sentence retired, its law now the sum option itself — an
   ;; intentional law change whose promote backfill restamps the
   ;; stored 0s
-  {:meal      "fafa6d152fa12f33f1ef2a66109ab9c939e518da872d9343027fb3a0e0df9390"
+  ;; re-pinned 2026-09-06 (waymark-e6bj): retired left :terminal for
+  ;; :over {:let-go #{:retired}} and restore walks it back — an
+  ;; intentional law change, not style drift
+  {:meal      "e7fcf84baedab0ba11ae3b35e399d0df43dfa179e6a6360345fb528cc7db2796"
    ;; re-pinned 2026-07-24: :date gained :filter #{:eq :range} — the
    ;; day board's related join (one engine since waymark-bwu.2) needs
-   ;; the promoted column; an intentional law change, not style drift
-   :prep_task "5c1327a83e776803fa294dd8beb871e0c766a59d840628fa31aa7a8eae8d9463"})
+   ;; the promoted column; an intentional law change, not style drift.
+   ;; Re-pinned again 2026-09-06 (waymark-e6bj): done left :terminal
+   ;; for :over {:accomplished #{:done} :let-go #{:cancelled}} and
+   ;; reopen walks it back — an intentional law change, not style drift
+   :prep_task "ba3a159402e7eb112787a87f04649df7b871efde9b75e3159eefe43c19ece324"})
 
 (deftest the-canonical-residue-hashes-are-pinned-as-literals
   (is (= (:meal the-canonical-hashes) (hash-of-resource meal/meal)))
