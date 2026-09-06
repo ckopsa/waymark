@@ -788,7 +788,9 @@
                        (get-in a [:safety :consequence])
                        (assoc :consequence (get-in a [:safety :consequence]))
                        (get-in a [:safety :one-way])
-                       (assoc :one_way (get-in a [:safety :one-way])))}
+                       (assoc :one_way (get-in a [:safety :one-way]))
+                       (get-in a [:safety :final])
+                       (assoc :final (get-in a [:safety :final])))}
       input-js (assoc :input input-js)
       (seq (:display a)) (assoc :display (:display a)))))
 

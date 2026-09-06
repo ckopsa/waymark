@@ -55,8 +55,17 @@
   transaction is a different sentence). Every origin's sentence must
   be written — a state without one is a blind confirm from that state.
   The render layer selects by the row's CURRENT state; the fingerprint
-  is untouched (consequence sentences are advertisement, never law)."
-  [{:keys [idempotent reversible confirm fence consequence one-way]
+  is untouched (consequence sentences are advertisement, never law).
+
+  :final (waymark-9u10) is the sentence for an ending that is final
+  ON PURPOSE — reopening would make the record lie: the world moved
+  (a day closed), something was built on it (a replacement minted),
+  or it holds a second sentence. It excludes :reversible, stands in
+  for :one-way where the door is unconfirmed, and checks/check-final
+  refuses it beside a door out of the landing state — the word cannot
+  be pasted on to silence the cheap-reverse policy while a way back
+  quietly exists."
+  [{:keys [idempotent reversible confirm fence consequence one-way final]
     :as s}]
   (doseq [k [:idempotent :reversible :confirm]]
     (when-not (boolean? (get s k))
@@ -84,12 +93,17 @@
     (throw (definition-error
             ":one-way acknowledges an irreversible, unconfirmed door; it excludes :reversible and :confirm")))
   (when one-way (acknowledged! one-way ":one-way"))
+  (when final (acknowledged! final ":final"))
+  (when (and final reversible)
+    (throw (definition-error
+            ":final names an ending with no way back; it excludes :reversible")))
   (cond-> {:idempotent idempotent
            :reversible reversible
            :confirm confirm
            :fence (boolean fence)}
     consequence (assoc :consequence consequence)
-    one-way (assoc :one-way one-way)))
+    one-way (assoc :one-way one-way)
+    final (assoc :final final)))
 
 ;; ── principals and context ──────────────────────────────────────────
 

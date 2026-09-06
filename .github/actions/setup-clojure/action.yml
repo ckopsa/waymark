@@ -56,23 +56,29 @@ runs:
     # once — two of them then ran on a half-written JDK ("Unable to
     # load TZDB time-zone rules", "Could not link verifier"). A
     # GitHub-hosted image carries 17 and still gets 21 from here.
-    - name: Is a JDK 21 already on this runner?
-      id: jdk
-      shell: bash
-      run: |
-        if java -version 2>&1 | grep -qE 'version "21\.'; then
-          echo "have=true" >> "$GITHUB_OUTPUT"
-          echo "jdk already present: $(java -version 2>&1 | head -1)"
-        else
-          echo "have=false" >> "$GITHUB_OUTPUT"
-        fi
-
+    # THE JDK IS PINNED, NOT FOUND. This step used to skip itself when
+    # the runner already had a JDK 21 on PATH, which on the self-hosted
+    # runners meant Ubuntu's openjdk-21 package — whatever build apt
+    # last installed. 2026-09-06: five JVM crashes in an hour on those
+    # runners, all on 21.0.12+8-1-24.04-Ubuntu, every one a different
+    # frame inside the C2 compiler (Symbol::decrement_refcount,
+    # DataLayout::data_in, Compile::remove_speculative_types,
+    # PhaseChaitin::interfere_with_live, PhaseIterGVN::
+    # add_users_to_worklist), while the same commits ran green on the
+    # same host hours earlier. A toolchain the host owns is a toolchain
+    # nobody pinned. Temurin from setup-java's tool cache is the same
+    # binary on a self-hosted runner and a GitHub-hosted one — the
+    # promise the Clojure CLI step below already makes.
     - name: Install JDK
-      if: steps.jdk.outputs.have != 'true'
       uses: actions/setup-java@v4
       with:
         distribution: temurin
         java-version: "21"
+        check-latest: false
+
+    - name: Which JDK
+      shell: bash
+      run: java -version 2>&1 | head -2
 
     - name: Install Clojure CLI
       shell: bash

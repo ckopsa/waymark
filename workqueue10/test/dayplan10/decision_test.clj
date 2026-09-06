@@ -275,11 +275,17 @@
           "the decision said this, the day said that, and both are kept"))
     (testing "changed is a tomb"
       (is (= :wrong-state (:problem (refusal #(act! :decision (:id d) :start nil))))))
-    (testing "done is reached from planned as well as started, and stays done"
+    (testing "done is reached from planned as well as started, and reopen
+              leads back out (waymark-9u10: finishing cost nothing the
+              declaration can see, so done is no tomb)"
       (let [d2 (decide! block {:text "The porch railing" :order 2})]
         (act! :decision (:id d2) :finish nil)
         (is (= :done (:state (row :decision (:id d2)))))
-        (is (some? (refusal #(act! :decision (:id d2) :start nil))))))
+        (is (some? (refusal #(act! :decision (:id d2) :start nil)))
+            "Go is not a door out of done — Reopen is")
+        (act! :decision (:id d2) :reopen nil)
+        (is (= :planned (:state (row :decision (:id d2))))
+            "reopened, the verdict is a fresh Go")))
     (testing "skip is undone by reopen, from planned or started"
       (let [d3 (decide! block {:text "The gutters" :order 3})]
         (act! :decision (:id d3) :start nil)

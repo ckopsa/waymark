@@ -456,6 +456,17 @@ about the room. `:over` reads `done` and `changed` as accomplished and
 `skipped` as let go, so the feed's `work-over?` needs no new vocabulary, and
 a `started` decision is still work.
 
+*Amended 2026-09-06 (waymark-9u10).* `done` was declared a tomb beside
+`changed`, and the first planned Sunday asked what that cost: nothing the
+declaration could see — `finish` has no handler, no input, no cascade, no
+push — and no door led out of `done`. The owner's rule, now the framework's
+sixth usability policy (`[cheap-reverse]`, `waymark10.usability`): *if it
+costs nothing to undo, we should be able to undo.* So `done` is no longer
+terminal, `reopen` leads back from `done` as it does from `skipped`, landing
+on `planned` (the verdict is a fresh Go), and `changed` stays the one tomb,
+because it holds two sentences and a door out would unsay one. The `:over`
+reading is unchanged: `done` is still the work accomplished.
+
 ## The forks decided, with reasons
 
 ### (a) Spans are rows, not a vector on the block

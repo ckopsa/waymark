@@ -1,0 +1,48 @@
+name: jvm-crash-report
+description: >-
+  When a JVM died under a job, print the crash report's head and the
+  host facts it recorded, and keep the hs_err / replay files as an
+  artifact — so a SIGSEGV in libjvm is root-caused from the run, not
+  guessed at. 2026-09-06: five crashes in an hour on the self-hosted
+  runners, every one a different C2 frame, and the only evidence the
+  logs kept was the eight-line banner.
+
+inputs:
+  name:
+    description: Artifact name suffix, unique per job (v4 refuses duplicates)
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: JVM crash report
+      shell: bash
+      run: |
+        set -uo pipefail
+        found=0
+        while IFS= read -r f; do
+          found=1
+          echo "::group::$f — the banner"
+          sed -n '1,40p' "$f"
+          echo "::endgroup::"
+          echo "::group::$f — the host as the JVM saw it"
+          grep -E -A2 '^(OS:|uname:|OS uptime:|load average:|CPU:|Memory:|MemTotal|MemFree|MemAvailable|SwapTotal|SwapFree|container \(cgroup\)|memory_limit|cpu_quota)' "$f" \
+            | head -80 || true
+          echo "::endgroup::"
+          echo "::group::$f — the thread and the method it was compiling"
+          sed -n '/^Current thread/,/^$/p;/^Current CompileTask/,/^$/p' "$f" | head -40
+          echo "::endgroup::"
+        done < <(find . -name 'hs_err_pid*.log' 2>/dev/null)
+        if [ "$found" = 0 ]; then
+          echo "no hs_err_pid*.log under $(pwd): the JVM did not crash — read the failure above as a test's"
+        fi
+        java -version 2>&1 | head -1 || true
+    - name: Keep the crash files
+      uses: actions/upload-artifact@v4
+      with:
+        name: jvm-crash-${{ inputs.name }}
+        path: |
+          **/hs_err_pid*.log
+          **/replay_pid*.log
+        if-no-files-found: ignore
+        retention-days: 14

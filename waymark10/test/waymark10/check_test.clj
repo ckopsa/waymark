@@ -15,8 +15,10 @@
 
 (r/defresource probe
   {:kind :check_probe
+   ;; waymark-9u10: a compliant kind's costless ending has a way back,
+   ;; so closed is a resting state, not a tomb
    :initial :open
-   :terminal #{:closed}
+   :terminal #{}
    :summary "{data.name} · {state}"
    :label-template "{data.name}"
    :schema [:map [:name {:x-display {:label "Name"
@@ -24,7 +26,10 @@
                   [:string {:min 1 :max 50}]]]
    :flow [[:open :close :closed
            {:one-way "Closing records completion; nothing external changes."
-            :display {:label "Close"}}]]})
+            :display {:label "Close"}}]
+          [:closed :reopen :open
+           {:one-way "Reopening puts it back in play; Close records it again."
+            :display {:label "Reopen"}}]]})
 
 ;; The probe above with its prose taken away — the stand-in for a kind
 ;; nobody declared that the battery reaches anyway. It exists because

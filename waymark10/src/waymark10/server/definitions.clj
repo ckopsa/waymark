@@ -334,7 +334,12 @@
               :display {:label "Promote" :order 1}}
     :withdraw {:from #{:proposed :piloted} :to :withdrawn
                :safety {:idempotent true :reversible false :confirm false
-                        :one-way "The proposal closes; the current law continues to govern — served from its stored trees while the withdrawn code stays resident."}
+                        :one-way "The proposal closes; the current law continues to govern — served from its stored trees while the withdrawn code stays resident."
+                        ;; final on purpose (waymark-9u10): the current law
+                        ;; has gone on governing from its stored trees since
+                        ;; — reopening would put a closed proposal back over
+                        ;; a law that has been served in the meantime
+                        :final "The current law has governed from its stored trees since the proposal closed; reopening would set a closed proposal over a law already served. A fresh proposal is the next boot's, never a reopen."}
                :display {:label "Withdraw" :order 3}}
     ;; the proposed/piloted self-loop, spelled twice because a v10
     ;; action declares one :to (recorded deviation; waymark9's single
